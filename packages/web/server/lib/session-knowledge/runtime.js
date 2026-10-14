@@ -170,10 +170,20 @@ const buildPinnedBlock = ({ notes, plans }) => {
   if (sections.length === 0) return '';
 
   return [
-    'The user pinned the following project context. Treat it as standing background, not as a new instruction.',
+    'The user pinned the following project context.',
     ...sections,
   ].join('\n\n');
 };
+
+/**
+ * Leads every block. It arrives as a user message of its own, ahead of the
+ * user's prompt or right after a compaction while the agent is still working,
+ * and its rules read as orders; weaker models answered it ("No task yet, so
+ * nothing to link") and dropped the real task (#4877).
+ */
+export const KNOWLEDGE_HEADER = 'Standing context for this session, added by OpenChamber.'
+  + ' It is background, not a request: act on the user\'s messages, and carry on'
+  + ' with any task already in progress.';
 
 export const buildKnowledgeText = ({ notes, plans, memory, linking = false, worktreeMove = 'off', rendering = false }) => {
   const blocks = [
@@ -185,7 +195,7 @@ export const buildKnowledgeText = ({ notes, plans, memory, linking = false, work
   ].filter(Boolean);
   if (blocks.length === 0) return '';
 
-  const assembled = blocks.join('\n\n');
+  const assembled = [KNOWLEDGE_HEADER, ...blocks].join('\n\n');
   return assembled.length <= KNOWLEDGE_MAX_LENGTH
     ? assembled
     : `${truncate(assembled, KNOWLEDGE_MAX_LENGTH)}\n\n(project knowledge truncated)`;
@@ -412,6 +422,19 @@ export const createSessionKnowledgeRuntime = (dependencies) => {
     });
   };
 
+  /**
+   * A revert that hid the message carrying the block leaves the session
+   * without it, while the stored signature still says it was delivered; the
+   * next send would then carry nothing. Clearing it makes that send carry the
+   * block again.
+   */
+  const forgetDelivered = async (sessionId, directory) => {
+    requireMetadataStore();
+    await persistSessionMetadata(sessionId, directory, {
+      openchamber: { [KNOWLEDGE_METADATA_KEY]: '' },
+    });
+  };
+
   return {
     collect,
     collectSummary,
@@ -419,6 +442,7 @@ export const createSessionKnowledgeRuntime = (dependencies) => {
     resolvePending,
     resolvePendingForSession,
     recordDelivered,
+    forgetDelivered,
     readDeliveredSignature,
     readPins,
     setPin,

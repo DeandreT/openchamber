@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 
-import { RENDER_PAGE_GUIDANCE, SESSION_LINK_GUIDANCE, WORKTREE_MOVE_GUIDANCE, buildKnowledgeSignature, buildKnowledgeText, createSessionKnowledgeRuntime } from './runtime.js';
+import { SESSION_KNOWLEDGE_HEADER } from '../../../../ui/src/lib/sessionKnowledgeApi.ts';
+import { KNOWLEDGE_HEADER, RENDER_PAGE_GUIDANCE, SESSION_LINK_GUIDANCE, WORKTREE_MOVE_GUIDANCE, buildKnowledgeSignature, buildKnowledgeText, createSessionKnowledgeRuntime } from './runtime.js';
 
 const DIRECTORY = '/work/project';
 const PROJECT_ID = 'path_project';
@@ -65,7 +66,7 @@ describe('when to link', () => {
     const { text, signature } = await runtime.resolvePending(DIRECTORY, '', { notes: [], plans: [] });
 
     // The worktree rule rides with the tool, in its asking form by default.
-    expect(text).toBe(`${SESSION_LINK_GUIDANCE}\n\n${WORKTREE_MOVE_GUIDANCE.ask}`);
+    expect(text).toBe(`${KNOWLEDGE_HEADER}\n\n${SESSION_LINK_GUIDANCE}\n\n${WORKTREE_MOVE_GUIDANCE.ask}`);
     expect(signature).toBe('l:on|w:ask');
     expect((await runtime.resolvePending(DIRECTORY, signature, { notes: [], plans: [] })).text).toBe('');
   });
@@ -91,7 +92,7 @@ describe('when to draw a page', () => {
     const runtime = createRuntime({ ...bare, isPageRenderingAvailable: async () => true });
     const { text, signature } = await runtime.resolvePending(DIRECTORY, '', { notes: [], plans: [] });
 
-    expect(text).toBe(RENDER_PAGE_GUIDANCE);
+    expect(text).toBe(`${KNOWLEDGE_HEADER}\n\n${RENDER_PAGE_GUIDANCE}`);
     expect(text).toContain('Do not use it for a few numbers');
     expect(signature).toBe('r:on');
     expect((await runtime.resolvePending(DIRECTORY, signature, { notes: [], plans: [] })).text).toBe('');
@@ -116,7 +117,7 @@ describe('when to move into a worktree', () => {
   test('asks by default, and when the setting cannot be read', async () => {
     for (const isWorktreeMoveWithoutAsking of [undefined, async () => false, async () => { throw new Error('settings unreadable'); }]) {
       const { text, signature } = await runtimeWith({ isWorktreeMoveWithoutAsking }).resolvePending(DIRECTORY, '', { notes: [], plans: [] });
-      expect(text).toBe(`${SESSION_LINK_GUIDANCE}\n\n${WORKTREE_MOVE_GUIDANCE.ask}`);
+      expect(text).toBe(`${KNOWLEDGE_HEADER}\n\n${SESSION_LINK_GUIDANCE}\n\n${WORKTREE_MOVE_GUIDANCE.ask}`);
       expect(signature).toBe('l:on|w:ask');
     }
   });
@@ -134,6 +135,8 @@ describe('what the session is owed', () => {
   test('carries pinned notes, pinned plan bodies, and the memory index', async () => {
     const { text } = await createRuntime().resolvePending(DIRECTORY, '', PINS);
 
+    // It arrives as a user message of its own, so it says first that it is no request (#4877).
+    expect(text.startsWith(`${KNOWLEDGE_HEADER}\n\n`)).toBe(true);
     expect(text).toContain('Pinned note body.');
     expect(text).toContain('Migration plan');
     expect(text).toContain('Plan body.');
@@ -367,6 +370,28 @@ describe('reading what a session was told', () => {
       directory: DIRECTORY,
       patch: { openchamber: { knowledge_context_delivered: 'sig-1' } },
     }]);
+  });
+
+  test('a revert that hid the block makes the session owe it again', async () => {
+    const store = createMetadataStub();
+    const runtime = createRuntime(store);
+    const first = await runtime.resolvePendingForSession('ses_a', DIRECTORY);
+    await runtime.recordDelivered('ses_a', DIRECTORY, first.signature);
+    expect((await runtime.resolvePendingForSession('ses_a', DIRECTORY)).text).toBe('');
+
+    await runtime.forgetDelivered('ses_a', DIRECTORY);
+
+    // Pins are kept: only the delivery record goes.
+    expect(store.patches.at(-1)).toEqual({
+      sessionId: 'ses_a',
+      directory: DIRECTORY,
+      patch: { openchamber: { knowledge_context_delivered: '' } },
+    });
+    expect((await runtime.resolvePendingForSession('ses_a', DIRECTORY)).text).toBe(first.text);
+  });
+
+  test('the client spots the block by the same first line the server writes', () => {
+    expect(SESSION_KNOWLEDGE_HEADER).toBe(KNOWLEDGE_HEADER);
   });
 
   test('says so plainly when no metadata store is wired', async () => {

@@ -26,6 +26,7 @@ import { useInlineCommentDraftStore, type InlineCommentDraftTarget } from "@/sto
 import { materializeSessionSnapshots } from "./materialization"
 import { sessionEvents } from "@/lib/sessionEvents"
 import { fileTreeChanges } from "@/lib/fileTreeChanges"
+import { SESSION_KNOWLEDGE_HEADER, forgetSessionKnowledgeDelivered } from "@/lib/sessionKnowledgeApi"
 import {
   getOriginalSessionID,
   getSessionMetadata,
@@ -2591,6 +2592,13 @@ export async function revertToMessage(sessionId: string, messageId: string): Pro
     // Stage only: the messages disappear behind the revert marker while the
     // dock offers Commit (finalize) or Clear (bring them back).
     await opencodeClient.stageRevert(sessionId, revertMessageID, { directory })
+    // The cut takes the synthetic messages before the prompt along, the
+    // project knowledge block among them. Unless the server forgets it was
+    // delivered, the resend goes out without it (#4877).
+    const hidesKnowledge = messagesFrom(messages, revertMessageID).some((message) => (
+      message.role === "synthetic" && message.text.startsWith(SESSION_KNOWLEDGE_HEADER)
+    ))
+    if (hidesKnowledge) await forgetSessionKnowledgeDelivered(directory, sessionId)
     const revertedSession = await opencodeClient.getSession(sessionId, directory)
     const current = store.getState()
     const updated = [...current.session]

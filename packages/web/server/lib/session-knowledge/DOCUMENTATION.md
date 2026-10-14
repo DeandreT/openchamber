@@ -37,14 +37,23 @@ must re-send it, not merely renaming one.
 
 | Moment | Delivery |
 |---|---|
-| A message from the UI | synthetic part on that message |
-| A scheduled task, a session the agent dispatched | synthetic part on that prompt |
-| After compaction | its own `prompt_async`, alongside the pinned messages |
+| A message from the UI | synthetic message admitted right before that message |
+| A scheduled task, a session the agent dispatched | synthetic message admitted right before that prompt |
+| After compaction | its own synthetic message, alongside the pinned messages |
 
-The first two attach to an outgoing message because there is one. Compaction has
-none, which is why it re-sends on its own — and it travels with
-`context-obligatory`'s pinned messages in a single turn, since two synthetic
-messages back to back read as the agent being interrupted twice.
+OpenCode 2 has no synthetic parts inside a prompt, so the block is always a
+message of its own, admitted with `resume: false`. The first two go in just
+ahead of an outgoing message because there is one. Compaction has none, which is
+why it re-sends on its own — and it travels with `context-obligatory`'s pinned
+messages in a single message, since two synthetic messages back to back read as
+the agent being interrupted twice.
+
+The model reads that message as one from the user, and its rules read as orders.
+After an automatic compaction the agent keeps working with the block as the
+newest user message and no prompt after it, and weaker models answered it ("No
+task yet, so nothing to link") instead of doing the work (#4877). Every block
+therefore opens with `KNOWLEDGE_HEADER`, which says it is background and that
+the agent acts on the user's messages and carries on with work in progress.
 
 ## Failure behaviour
 
@@ -69,6 +78,17 @@ already has.
 Delivery is recorded only after the send is accepted. Recording it when the text
 is handed over would leave a failed send believing the agent had context it never
 received.
+
+A revert cuts the transcript at the synthetic messages before the reverted
+prompt, so it can take the block along while the stored signature still says it
+was delivered. The client's `revertToMessage` checks the cut for a synthetic
+message starting with the header (`SESSION_KNOWLEDGE_HEADER` in
+`ui/src/lib/sessionKnowledgeApi.ts`, pinned to `KNOWLEDGE_HEADER` by this
+module's test) and calls `POST /api/session-knowledge/forget`, which clears the
+signature and keeps the pins. The resend then carries the block again. Clearing
+the revert afterwards leaves the block in the transcript twice, which costs some
+context and nothing else. Blocks sent before the header existed are not
+recognised.
 
 ## When to link
 
