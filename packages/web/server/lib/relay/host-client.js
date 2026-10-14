@@ -14,6 +14,11 @@ import { redactSensitiveText } from '../source-control/url-redaction.js';
 
 const BACKOFF_BASE_MS = 1000;
 const BACKOFF_CAP_MS = 30000;
+// The relay closes a control socket with 4001 when another host holding the
+// same identity connects: a copied data dir, a second machine, a container
+// replica. Reconnecting after the usual 1 s evicts that host in turn, and the
+// pair trade the slot every second for as long as both run.
+const CONTROL_REPLACED_RECONNECT_MS = 60_000;
 // A data socket dial that never opens is retried while the relay still reports
 // its client: the relay holds the client and buffers its frames, and sends no
 // new `connected` for it. Without a retry the client waits for the relay's 15 s
@@ -370,9 +375,9 @@ export const startRelayHost = ({ relayUrl, identity, localPort, getLocalPort, on
     }
   };
 
-  const scheduleReconnect = () => {
+  const scheduleReconnect = (minDelayMs = 0) => {
     if (stopped || reconnectTimer) return;
-    const delay = Math.min(BACKOFF_BASE_MS * 2 ** consecutiveFailures, BACKOFF_CAP_MS);
+    const delay = Math.max(minDelayMs, Math.min(BACKOFF_BASE_MS * 2 ** consecutiveFailures, BACKOFF_CAP_MS));
     consecutiveFailures += 1;
     setState('reconnecting');
     reconnectTimer = setTimeout(() => {
@@ -447,7 +452,7 @@ export const startRelayHost = ({ relayUrl, identity, localPort, getLocalPort, on
       // Data sockets ride their own relay connections; the relay keeps clients
       // alive through a 30 s control-reconnect grace window, so leave them up.
       cancelRedials();
-      scheduleReconnect();
+      scheduleReconnect(code === RelayCloseCode.ControlReplaced ? CONTROL_REPLACED_RECONNECT_MS : 0);
     });
   };
 
