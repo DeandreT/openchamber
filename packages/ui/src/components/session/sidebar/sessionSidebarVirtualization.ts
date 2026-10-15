@@ -28,7 +28,7 @@ const SECTION_SPACING_ESTIMATE = { 'pb-2': 8, 'pb-1.5': 6 } as const;
 type SectionSpacing = keyof typeof SECTION_SPACING_ESTIMATE;
 
 /**
- * Rows that share a kind and surface context render at the same height apart
+ * Rows that share a kind, surface context and density render at the same height apart
  * from their trailing section gap, so one measured row tells the size of every
  * unmeasured one, with whatever gap it ends up having. The virtualizer
  * compensates the scroll position whenever a row above the viewport measures
@@ -36,11 +36,11 @@ type SectionSpacing = keyof typeof SECTION_SPACING_ESTIMATE;
  * user's scroll gesture.
  */
 export const sessionSidebarRowSizeKey = (row: SessionSidebarRow): string => (
-  `${row.kind}:${'renderContext' in row ? row.renderContext : ''}`
+  `${row.kind}:${'renderContext' in row ? row.renderContext : ''}:${row.estimateSize}`
 );
 
 /**
- * The virtualizer's key for a row: its own key plus its trailing section gap.
+ * The virtualizer's key includes the row's density and trailing section gap.
  * A header's gap depends on the row after it, so closing or opening the header
  * changes its height without changing its key; under the plain key the
  * virtualizer would keep the old measured height until the resize observer
@@ -48,7 +48,7 @@ export const sessionSidebarRowSizeKey = (row: SessionSidebarRow): string => (
  * key takes the size estimate above, exact once a row like it was measured.
  */
 export const sessionSidebarRowVirtualKey = (row: SessionSidebarRow, nextRow: SessionSidebarRow | undefined): string => (
-  `${row.key}|${sectionSpacingAfter(row, nextRow) ?? ''}`
+  `${row.key}|${sectionSpacingAfter(row, nextRow) ?? ''}|${row.estimateSize}`
 );
 
 /**

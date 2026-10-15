@@ -127,16 +127,15 @@ export type SessionSidebarRowModelArgs = {
   /** Every non-archived root project session with its project, in lifecycle order. */
   timelineItems?: readonly SessionSidebarActivityItem[];
   /**
-   * Pinned sessions and sessions in work, already ordered and
-   * search-filtered. Each zone renders as its own block at the top, and its
-   * sessions stay under their project too. Search lists each of them once,
-   * in its zone.
+   * Pinned sessions and sessions in work, already ordered and search-filtered.
+   * Pinned sessions render only in their zone. Sessions in work also remain
+   * under their project outside search.
    */
   pinnedItems?: readonly SessionSidebarActivityItem[];
   workItems?: readonly SessionSidebarActivityItem[];
   /** Every session listed in the Pinned or In work zone. */
   zoneSessionIds?: ReadonlySet<string>;
-  /** Pinned and In work rows in the Tree view: two lines when set, one otherwise. */
+  /** Timeline and zone rows show their second line when set. */
   detailedZoneRows?: boolean;
   foldersMap: SessionFoldersMap;
   groupSearchDataByGroup: WeakMap<SessionGroup, GroupSearchData>;
@@ -319,9 +318,9 @@ export const buildSessionSidebarRowModel = (args: SessionSidebarRowModelArgs): S
   const search = args.mode === 'search';
   const pinned = args.pinnedSessionIds instanceof Set ? args.pinnedSessionIds : new Set(args.pinnedSessionIds);
   const inZone = args.zoneSessionIds ?? EMPTY_ZONE_SESSION_IDS;
-  // A pinned session or one in work also stays in its project; only search
-  // lists it once, in its zone, so its count and rows agree.
-  const isMovedToZone = (sessionId: string): boolean => search && inZone.has(sessionId);
+  const pinnedInZone = new Set((args.pinnedItems ?? []).map((item) => item.node.session.id));
+  // A hidden Pinned section supplies no items, so its sessions remain in projects.
+  const isMovedToZone = (sessionId: string): boolean => pinnedInZone.has(sessionId) || (search && inZone.has(sessionId));
   let searchMatchCount = 0;
 
   const authoritativeRoots = [
@@ -381,7 +380,7 @@ export const buildSessionSidebarRowModel = (args: SessionSidebarRowModelArgs): S
     push({
       kind: 'run',
       key: keyFor(`${options.containerKey}:run:${entry.run.key}`),
-      estimateSize: isTwoLineTimelineContext(options.renderContext) ? TIMELINE_SESSION_ESTIMATE : SESSION_ESTIMATE,
+      estimateSize: isTwoLineTimelineContext(options.renderContext) && args.detailedZoneRows ? TIMELINE_SESSION_ESTIMATE : SESSION_ESTIMATE,
       run: entry.run,
       depth: options.baseDepth ?? 0,
       laneNodes: Object.freeze([...entry.lanes]),
@@ -414,7 +413,7 @@ export const buildSessionSidebarRowModel = (args: SessionSidebarRowModelArgs): S
       push({
         kind: 'session',
         key: rowKey,
-        estimateSize: isTwoLineTimelineContext(options.renderContext) ? TIMELINE_SESSION_ESTIMATE : SESSION_ESTIMATE,
+        estimateSize: isTwoLineTimelineContext(options.renderContext) && args.detailedZoneRows ? TIMELINE_SESSION_ESTIMATE : SESSION_ESTIMATE,
         node: current.node,
         blockingBadgeSessionScopes: current.depth === baseDepth
           ? options.getBlockingBadgeSessionScopes?.(current.node.session.id) ?? options.blockingBadgeSessionScopes

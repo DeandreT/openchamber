@@ -285,11 +285,10 @@ export function SidebarHeader(props: Props): React.ReactNode {
         setShowWorkSection(!showWorkSection);
         void updateDesktopSettings({ sidebarShowWorkSection: !showWorkSection });
       }) : null}
-      {/* List rows always carry two lines; Tree keeps Pinned and In work on one unless asked. */}
-      {!timelineView ? toggleItem('sessions.sidebar.header.displayMode.detailedZoneRows', detailedZoneRows, () => {
+      {toggleItem('sessions.sidebar.header.displayMode.detailedZoneRows', detailedZoneRows, () => {
         setDetailedZoneRows(!detailedZoneRows);
         void updateDesktopSettings({ sidebarDetailedZoneRows: !detailedZoneRows });
-      }) : null}
+      })}
     </>);
   }
   if (!isSingleProjectMode) {

@@ -6,6 +6,7 @@ import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { useUIStore } from '@/stores/useUIStore';
+import { useSessionDisplayStore } from '@/stores/useSessionDisplayStore';
 import type { MultiRunSummary } from '@/lib/multirun/runs';
 import type { SessionNode } from '../types';
 import { isTwoLineTimelineContext, type SessionSidebarRenderContext } from '../sessionSidebarRowModel';
@@ -66,9 +67,11 @@ function RunSidebarRowComponent({
   // The Tree view's Pinned and In work rows are flat too, on one line.
   const isOneLineRow = renderContext === 'mixed-compact';
   const isTimelineRow = isTwoLineTimelineContext(renderContext) || isOneLineRow;
+  const detailedRows = useSessionDisplayStore((state) => state.detailedZoneRows);
+  const compactRow = isOneLineRow || !detailedRows;
   // Only Pinned and In work mix projects; under a project header the row needs no icon.
   const timelineProject = useProjectsStore(React.useCallback((state) => (
-    renderContext === 'timeline-mixed' && projectId ? state.projects.find((entry) => entry.id === projectId) ?? null : null
+    (renderContext === 'timeline-mixed' || renderContext === 'mixed-compact') && projectId ? state.projects.find((entry) => entry.id === projectId) ?? null : null
   ), [renderContext, projectId]));
   const laneCount = run.lanes.length;
   const laneCountLabel = laneCount === 1
@@ -95,13 +98,14 @@ function RunSidebarRowComponent({
         style={{ paddingInlineStart: isOneLineRow ? sessionTreeRowPaddingLeft(depth) : TIMELINE_ROW_LEFT_PX }}
         className={cn(
           'group relative my-0.5 flex w-full cursor-pointer items-center rounded-md pe-2.5 text-start focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
-          isOneLineRow ? 'gap-1.5 py-1' : 'py-1.5',
+          isOneLineRow && 'gap-1.5',
+          compactRow ? 'py-1' : 'py-1.5',
           isActive ? 'bg-interactive-selection/70 text-interactive-selection-foreground' : 'hover:bg-interactive-hover/60',
         )}
       >
         {isOneLineRow ? <span className="inline-flex h-3.5 w-3.5 flex-shrink-0 items-center justify-center">{activity}</span> : null}
         <SessionTimelineRowBody
-          compact={isOneLineRow}
+          compact={compactRow}
           project={timelineProject}
           projectLabel={projectLabel}
           title={run.title}
