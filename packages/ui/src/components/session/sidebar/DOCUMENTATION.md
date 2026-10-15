@@ -86,7 +86,7 @@ In work, and Timeline use this same ownership resolver; rows keep the session's
 own directory while taking display ownership (project id, labels) from the
 index.
 
-Web and desktop show managed Chats, then In work, then the projects. There is
+Web and desktop show managed Chats, then Pinned, In work, and the projects. There is
 no Recent zone any more (removed 2026-10): In work holds the sessions being
 worked on, and the timeline view answers "what was I doing". Chats use
 their shared managed root for folders and never expose worktree actions. Project
@@ -218,12 +218,13 @@ default) shows it. With the zone hidden its sessions stay in their projects.
 in its project group and folders, in both views, so it appears in two places.
 Search lists it once, in the work block. Chats are never in work
 and offer no Track action. An empty zone is not rendered. In List, rows use
-`renderContext: 'timeline-mixed'`: two lines, the project's icon before the
-branch. In Tree they use `'mixed-compact'` by default: one line like a Chats
+`renderContext: 'timeline-mixed'` and default to one line, with the project icon
+before the title and the provider logo beside the time. Detailed rows adds the
+branch line. In Tree they use `'mixed-compact'` by default: one line like a Chats
 row, the PR or issue as a coloured mark without its number (its tooltip lists
-the links), the branch, project and model in the whole-row tooltip. The display
+the links), and the branch in the whole-row tooltip. The display
 menu's Detailed rows toggle (`detailedZoneRows`, `sidebarDetailedZoneRows`, per
-surface, off by default, offered in Tree only) gives Tree the two-line rows.
+surface, off by default, offered in both desktop views) enables the two-line rows.
 Both never expand, with subsessions feeding the badges; a run row there opens
 its overview. Search
 keeps a root whose subsession matches (`sessionTreeMatchesSidebarQuery`): those
@@ -273,13 +274,17 @@ The display menu's Show pinned section toggle (`showPinnedSection`,
 activity zone between Chats and In work, in both views. It lists pinned
 top-level, unarchived project sessions in the shared lifecycle order; pinned
 chats stay pinned at the top of Chats. A pinned session in work is listed in
-Pinned only. Like In work, its sessions also stay in their projects, search
-lists each of them once, in the zone (`zoneSessionIds` carries both zones' ids),
+Pinned only. Its sessions have no duplicate project or folder occurrence while
+the Pinned section is enabled, including when that section is collapsed.
+Hiding the section restores those occurrences without changing pin or folder
+membership. In work retains its project occurrence outside search. Search
+lists each session once, in its zone (`zoneSessionIds` carries both zones' ids),
 and the rows follow the same render context. Its rows show no pin marker,
 because the header already says they are pinned; In work rows show it only
 while the zone is hidden, since otherwise no pinned session reaches In work. Pins are the device-local
 `useSessionPinnedStore`, so the zone differs between devices. The phone sheet
-mirrors both toggles: its display menu offers Show pinned section and, in
+mirrors both toggles: its separate renderer retains project occurrences for
+pinned sessions. Its display menu offers Show pinned section and, in
 Tree, Detailed rows, and its Pinned and In work sections render
 `MobileTimelineRows` with `compact` in Tree unless detailed rows are on. VS Code
 shows no section toggles, so it has no Pinned zone and its In work rows stay on
@@ -293,7 +298,7 @@ pair as the changes file tree). VS Code has no switch and always renders
 `projects`. The display menu opens with Select sessions, then the view, then
 the project sort, worktree sort and project display as submenus that name the
 current choice (Tree only; VS Code keeps the project sort), then the section
-toggles (Chats, Pinned, In work) and, in Tree, Detailed rows, then Collapse
+toggles (Chats, Pinned, In work), Detailed rows, then Collapse
 all / Expand all.
 
 - Chats rows are one line in both views. In List they render with
@@ -320,8 +325,8 @@ all / Expand all.
   headers are shared too, with the same hover actions and menu.
 - Below Chats, Pinned and In work it renders one project
   header per project followed by that project's non-archived root sessions
-  from every worktree and space, in the shared lifecycle order with pinned
-  sessions first. Projects keep the manual order whatever the stored project
+  from every worktree and space, excluding sessions in the Pinned zone.
+  When that zone is hidden, pinned sessions sort first. Projects keep the manual order whatever the stored project
   sort: dragging a header is the timeline's only sort, and the display menu
   hides both sort sections. A project reveals 7 sessions, 7 more per Show more
   (`timelineProjectContainerKey`); collapsing it, from its header or Collapse
@@ -351,11 +356,14 @@ all / Expand all.
   shows the branch, using the live
   project root branch for root-directory sessions and the worktree branch
   otherwise.
-- A timeline row has two lines of fixed height (20px and 16px); the second is
-  rendered even when empty, so rows without a branch match their neighbours
-  and nothing shifts when a branch or badge arrives. The first holds the title and, on the right,
-  the action indicator, pin, done hint, status icon and time (the elapsed
-  counter during a turn); hover actions cover that cluster. The second line
+- Timeline rows default to one line. In mixed-project zones the project icon
+  precedes the title; the action indicator, pin, done hint, status, provider logo
+  and time share its trailing cluster. Branch labels remain available in the
+  whole-row tooltip. Detailed rows restores two fixed-height lines (20px and
+  16px), including an empty detail line to keep neighbouring rows aligned.
+  The first holds the title and, on the right, the action indicator, pin, done
+  hint, status icon and time (the elapsed counter during a turn); hover actions
+  cover that cluster. The second line
   holds the branch (or the space's name) and ends with the state cluster: goal
   glyph, PR (or the zombie warning), permission/question badges, provider
   logo. In `timeline-mixed` rows it opens with the project's icon, which names
@@ -482,9 +490,9 @@ matching and ordering. Search does not fetch sessions or broaden list membership
   without waiting for an unrelated render. Archived groups must not add a
   nested virtualizer.
 - An unmeasured row is estimated at the measured height of a row with the same
-  kind and render context (`sessionSidebarRowSizeKey`, kept without the
+  kind, render context and density estimate (`sessionSidebarRowSizeKey`, kept without the
   trailing section gap) plus its own gap as measured, falling back to the
-  model estimate. The virtualizer keys each row with its gap
+  model estimate. The virtualizer keys each row with its gap and density estimate
   (`sessionSidebarRowVirtualKey`): a header gains or loses its gap as it
   closes or opens, and under its plain key the old measured height would hold
   until the resize observer reported, so the rows below hopped a frame later. The virtualizer corrects the

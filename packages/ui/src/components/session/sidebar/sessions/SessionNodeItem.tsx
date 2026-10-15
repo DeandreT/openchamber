@@ -403,9 +403,10 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
       return project.label?.trim() || formatDirectoryName(normalizePath(project.path) ?? project.path, null) || project.path;
     }, [projectId, secondaryMeta?.projectLabel]),
   );
-  // Flat rows: no tree gutter, live state on the right. Chats and the Tree
-  // view's Pinned and In work rows keep it on one line.
-  const isOneLineTimelineRow = renderContext === 'timeline-chat' || renderContext === 'tree-chat' || renderContext === 'mixed-compact';
+  const detailedRows = useSessionDisplayStore((state) => state.detailedZoneRows);
+  // List rows keep their flat geometry when the detail line is hidden.
+  const isOneLineTimelineRow = renderContext === 'timeline-chat' || renderContext === 'tree-chat' || renderContext === 'mixed-compact'
+    || (isTwoLineTimelineContext(renderContext) && !detailedRows);
   const isTimelineRow = isTwoLineTimelineContext(renderContext) || isOneLineTimelineRow;
   // The Tree view's one-line Chats, Pinned and In work rows never expand, but
   // they keep the tree's slot and geometry, so their state reads down the
@@ -416,14 +417,14 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   const isZoneRow = renderContext === 'timeline-mixed' || renderContext === 'mixed-compact';
   const pinnedSectionShown = useSessionDisplayStore((state) => state.showPinnedSection);
   const hidePinnedMarker = isZoneRow && pinnedSectionShown;
-  // Two-line rows in Pinned and In work show the project's own icon; the row
+  // Rows in Pinned and In work show the project's own icon; the row
   // reads exactly that one project record, and `find` keeps the reference
   // stable between renders.
   const timelineProject = useProjectsStore(
     React.useCallback((state) => {
-      if (renderContext !== 'timeline-mixed' || !projectId) return null;
+      if (!isZoneRow || !projectId) return null;
       return state.projects.find((entry) => entry.id === projectId) ?? null;
-    }, [renderContext, projectId]),
+    }, [isZoneRow, projectId]),
   );
   const tooltipProjectLabel = secondaryMeta?.projectLabel
     ?? (projectLabelFromStore ? formatProjectLabel(projectLabelFromStore) : null);
@@ -1658,7 +1659,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   // one-line form, with the session's live state and time on the right.
   const rowBody = (
     <SessionTimelineRowBody
-      compact={!isTwoLineTimelineContext(renderContext)}
+      compact={!isTwoLineTimelineContext(renderContext) || !detailedRows}
       project={timelineProject}
       projectLabel={tooltipProjectLabel}
       title={renderHighlightedText(sessionTitle, normalizedSessionSearchQuery)}

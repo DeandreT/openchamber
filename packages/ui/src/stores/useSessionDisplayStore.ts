@@ -29,7 +29,7 @@ type SessionDisplayStore = {
   showWorkSection: boolean;
   /** The Pinned block above In work; off by default. Hidden, pinned sessions stay in their projects. */
   showPinnedSection: boolean;
-  /** Pinned and In work rows in the Tree view: one line by default, two with branch, PR and model when set. */
+  /** Desktop List and zone rows: one line by default, two with branch details when set. */
   detailedZoneRows: boolean;
   // VS Code only: the compact webview keeps archived buckets inline because it
   // has no room for the full Archive page. Web/desktop ignore this flag and

@@ -48,7 +48,7 @@ type Props = {
   /** Jev's "looks done" check: it sits in the time cluster, where the hover
       Done action appears, left of the status dot so the dot stays by the time. */
   doneHint?: React.ReactNode;
-  /** Provider of the session's model; its logo closes the second line. */
+  /** Provider logo follows the title in compact rows and closes the detail line. */
   providerId?: string | null;
   /** Reserves room for permanently shown action buttons on the title line. */
   metaPaddingClass?: string;
@@ -123,6 +123,7 @@ export const SessionTimelineRowBody: React.FC<Props> = ({
   // cluster: the hover actions overlay that cluster, and anything placed
   // after it would sit underneath them.
   const meta = <span className={cn('ms-auto flex flex-shrink-0 items-center gap-1 transition-opacity', metaPaddingClass, hideMetaOnHoverClass)}>
+    {compact ? metaLineLead : null}
     {compact ? goal : null}
     {compact ? zombieIndicator ?? prBadge : null}
     {compact ? badges : null}
@@ -130,6 +131,7 @@ export const SessionTimelineRowBody: React.FC<Props> = ({
     {pinnedMarker}
     {doneHint}
     {statusDot}
+    {compact && providerId ? <ProviderLogo providerId={providerId} className="h-3 w-3 flex-shrink-0 opacity-45" /> : null}
     <span className="typography-micro leading-none text-muted-foreground/50 tabular-nums">{timeSlot}</span>
   </span>;
   const titleLine = (
@@ -137,6 +139,7 @@ export const SessionTimelineRowBody: React.FC<Props> = ({
   );
   if (compact) {
     return <div className={cn('@container relative flex w-full min-w-0 items-center gap-1', actionsReserveClass)}>
+      {project ? <TimelineProjectIcon project={project} label={projectLabel} /> : null}
       {titleLine}
       {meta}
     </div>;

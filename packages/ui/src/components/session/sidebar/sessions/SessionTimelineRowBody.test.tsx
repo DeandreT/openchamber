@@ -9,7 +9,7 @@ let root: Root;
 const descriptors = new Map<string, PropertyDescriptor | undefined>();
 beforeEach(() => {
   browser = new Window({ url: 'http://localhost' });
-  for (const [key, value] of Object.entries({ window: browser, document: browser.document, navigator: browser.navigator, HTMLElement: browser.HTMLElement, IS_REACT_ACT_ENVIRONMENT: true })) {
+  for (const [key, value] of Object.entries({ window: browser, document: browser.document, navigator: browser.navigator, HTMLElement: browser.HTMLElement, Element: browser.Element, Node: browser.Node, IS_REACT_ACT_ENVIRONMENT: true })) {
     descriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, { value, configurable: true });
   }
@@ -28,7 +28,7 @@ afterEach(async () => {
 
 const title = 'درخواست پاسخ فارسی با React';
 
-const renderRow = (compact: boolean) => root.render(<SessionTimelineRowBody
+const renderRow = (compact: boolean, overrides: Partial<React.ComponentProps<typeof SessionTimelineRowBody>> = {}) => root.render(<SessionTimelineRowBody
   compact={compact}
   project={null}
   projectLabel={null}
@@ -43,6 +43,7 @@ const renderRow = (compact: boolean) => root.render(<SessionTimelineRowBody
   zombieIndicator={null}
   badges={null}
   hideMetaOnHoverClass=""
+  {...overrides}
 />);
 
 // A truncated title in an LTR box clips an RTL title's beginning, because its
@@ -52,5 +53,22 @@ for (const compact of [true, false]) {
     await act(async () => renderRow(compact));
     const element = Array.from(document.querySelectorAll('div')).find((node) => node.textContent === title);
     expect(element?.getAttribute('dir')).toBe('auto');
+  });
+}
+
+for (const compact of [true, false]) {
+  test(`project and provider marks follow the selected row density (compact: ${compact})`, async () => {
+    await act(async () => renderRow(compact, {
+      project: { id: 'workspace' },
+      projectLabel: 'Workspace',
+      providerId: 'openai',
+    }));
+    const titleElement = document.querySelector('[dir="auto"]');
+    const projectMark = document.querySelector('[aria-label="Workspace"]');
+    const providerMark = document.querySelector('img[alt="openai logo"]');
+    expect(projectMark).not.toBeNull();
+    expect(providerMark).not.toBeNull();
+    expect(titleElement?.parentElement?.contains(projectMark)).toBe(compact);
+    expect(titleElement?.parentElement?.contains(providerMark)).toBe(compact);
   });
 }

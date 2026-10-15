@@ -8,6 +8,7 @@ import { buildMultiRunIndex } from '@/lib/multirun/runs';
 import { withMultiRunMembership } from '@/lib/multirun/identity';
 import { getPinnedSessionKey } from '@/stores/useSessionPinnedStore';
 import { getRuntimeKey } from '@/lib/runtime-switch';
+import { sessionSidebarRowSizeKey, sessionSidebarRowVirtualKey } from './sessionSidebarVirtualization';
 
 const timelineItem = (id: string, overrides: Partial<SessionSidebarActivityItem> = {}): SessionSidebarActivityItem => ({
   node: { session: session(id), children: [], worktree: null },
@@ -107,7 +108,7 @@ describe('buildSessionSidebarRowModel', () => {
     expect(zoneRow?.kind === 'session' && zoneRow.renderContext).toBe('timeline-mixed');
   });
 
-  test('Pinned opens above In work and its sessions stay in their project', () => {
+  test('Pinned opens above In work and removes its project duplicate', () => {
     const input = args([project([group([node('pinned'), node('working')])])]);
     input.pinnedItems = [timelineItem('pinned')];
     input.workItems = [timelineItem('working')];
@@ -120,7 +121,80 @@ describe('buildSessionSidebarRowModel', () => {
           : []
     ));
 
-    expect(order).toEqual(['pinned', 'mixed-compact:pinned', 'work', 'mixed-compact:working', 'project:pinned', 'project:working']);
+    expect(order).toEqual(['pinned', 'mixed-compact:pinned', 'work', 'mixed-compact:working', 'project:working']);
+  });
+
+  for (const viewMode of ['projects', 'timeline'] as const) {
+    test(`${viewMode} keeps a pinned session in its project when Pinned is hidden`, () => {
+      const input = args([project([group([node('pinned'), node('other')])])]);
+      input.viewMode = viewMode;
+      input.timelineItems = [timelineItem('pinned'), timelineItem('other')];
+      input.pinnedSessionIds = pinnedIds('pinned');
+
+      const model = buildSessionSidebarRowModel(input);
+      expect(model.rows.filter((row) => row.kind === 'session' && row.node.session.id === 'pinned')).toHaveLength(1);
+      expect(model.rows.some((row) => row.kind === 'activity-header' && row.activityKey === 'pinned')).toBe(false);
+    });
+
+    test(`${viewMode} keeps Pinned exclusive while its section is collapsed`, () => {
+      const input = args([project([group([node('pinned'), node('other')])])]);
+      input.viewMode = viewMode;
+      input.timelineItems = [timelineItem('pinned'), timelineItem('other')];
+      input.pinnedItems = [timelineItem('pinned')];
+      input.zoneSessionIds = new Set(['pinned']);
+      input.collapsedActivities = new Set(['pinned']);
+
+      const model = buildSessionSidebarRowModel(input);
+      expect(model.rows.some((row) => row.kind === 'session' && row.node.session.id === 'pinned')).toBe(false);
+      expect(model.sessionById.has('pinned')).toBe(true);
+
+      input.pinnedItems = [];
+      input.zoneSessionIds = new Set();
+      const unpinned = buildSessionSidebarRowModel(input);
+      expect(unpinned.rows.filter((row) => row.kind === 'session' && row.node.session.id === 'pinned')).toHaveLength(1);
+    });
+  }
+
+  test('a pinned folder session has one row without changing folder membership', () => {
+    const input = args([project([group([node('pinned'), node('other')])])]);
+    input.foldersMap = { '/repo': [{ id: 'saved', name: 'Saved', createdAt: 1, sessionIds: ['pinned'] }] };
+    input.pinnedItems = [timelineItem('pinned')];
+    input.zoneSessionIds = new Set(['pinned']);
+
+    const model = buildSessionSidebarRowModel(input);
+    expect(model.rows.filter((row) => row.kind === 'session' && row.node.session.id === 'pinned')).toHaveLength(1);
+    expect(model.selectionEntries.filter((entry) => entry.id === 'pinned')).toHaveLength(1);
+    expect(input.foldersMap['/repo'][0].sessionIds).toEqual(['pinned']);
+  });
+
+  test('a large timeline spends its project reveal limit on unpinned sessions', () => {
+    const input = args([project([group([])])]);
+    input.viewMode = 'timeline';
+    input.timelineItems = Array.from({ length: 2000 }, (_, index) => timelineItem(`session-${index}`));
+    input.pinnedItems = input.timelineItems.slice(0, 22);
+    input.zoneSessionIds = new Set(input.pinnedItems.map((item) => item.node.session.id));
+
+    const model = buildSessionSidebarRowModel(input);
+    const sessions = model.rows.filter((row) => row.kind === 'session');
+    expect(sessions).toHaveLength(29);
+    expect(new Set(sessions.map((row) => row.node.session.id)).size).toBe(29);
+    expect(sessions.filter((row) => row.renderContext === 'timeline')).toHaveLength(7);
+  });
+
+  test('compact and detailed timeline rows use distinct estimates and measurement keys', () => {
+    const input = args([project([group([])])]);
+    input.viewMode = 'timeline';
+    input.timelineItems = [timelineItem('one')];
+    input.detailedZoneRows = false;
+    const compact = buildSessionSidebarRowModel(input).rows.find((row) => row.kind === 'session');
+    input.detailedZoneRows = true;
+    const detailed = buildSessionSidebarRowModel(input).rows.find((row) => row.kind === 'session');
+    if (!compact || !detailed) throw new Error('Missing timeline row');
+
+    expect(compact.estimateSize).toBe(32);
+    expect(detailed.estimateSize).toBe(52);
+    expect(sessionSidebarRowSizeKey(compact)).not.toBe(sessionSidebarRowSizeKey(detailed));
+    expect(sessionSidebarRowVirtualKey(compact, undefined)).not.toBe(sessionSidebarRowVirtualKey(detailed, undefined));
   });
 
   test('search lists a pinned session once, in Pinned', () => {
