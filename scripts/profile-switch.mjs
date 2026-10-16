@@ -528,6 +528,10 @@ const main = async () => {
 
     const traceEvents = []
     client.on("Tracing.dataCollected", ({ value }) => { for (const event of value ?? []) traceEvents.push(event) })
+    if (options.extraCategories.includes("disabled-by-default-devtools.timeline.invalidationTracking")) {
+      // Per-node React stacks can fill the trace buffer before the warm switch.
+      await client.send("Runtime.setMaxCallStackSizeToCapture", { size: 8 })
+    }
     await client.send("Profiler.setSamplingInterval", { interval: 250 })
     await client.send("Profiler.start")
     const categories = [...new Set(["devtools.timeline", "disabled-by-default-devtools.timeline", "blink.user_timing", ACCESSIBILITY_CATEGORY, ...options.extraCategories])]
