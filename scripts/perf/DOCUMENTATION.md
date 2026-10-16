@@ -793,6 +793,34 @@ tree against `HEAD` is an A/A run: it measures the noise floor of the machine.
 table from saved runs, and compares any two directories of run directories
 named `<scenario>-<n>`, such as an ablation batch against its control.
 
+## Failed browser navigation captures
+
+Web startup and heap captures keep bounded document diagnostics: navigation
+command results, frame and loader IDs, document status, and the terminal
+`loadingFinished` or `loadingFailed` event. A failed request is finished for
+byte accounting; `unfinished: 0` does not establish success. Network summaries
+also report a separate `failed` count.
+
+Heap writes `heap-summary.json` for failed attempts as well as successful ones.
+`valid` describes whether all measurement stages completed. `phase`, `rows`,
+`hovered`, `opened`, partial readings, and cleanup errors remain available when
+an attempt fails. Cleanup errors do not replace the original capture failure.
+Compare only completed attempts with matching workload counts.
+
+`Page.loadEventFired` remains an uncorrelated load signal. The diagnostic frame,
+loader, and lifecycle records allow an unrelated document load to be identified;
+the signal alone does not prove application readiness. Result-level navigation
+errors fail the attempt, and both the command and load wait are observed from
+the start so a timeout cannot become an unhandled rejection.
+
+Before teardown, a failed attempt takes one page-state snapshot with a 3-second
+bound. It records readiness, node/script counts, recorder presence when relevant,
+and whether the origin/path match the requested page. Diagnostic records omit
+URLs, query strings, headers, document text, and arbitrary browser exception
+messages. Startup records failed recorder evaluations separately from absent
+recorder data. Original failed artifacts stay available when a later run passes;
+the profilers do not retry navigation automatically.
+
 ## Attribution
 
 Timings come from the production build. Names come from the diagnostic build

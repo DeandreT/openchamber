@@ -234,6 +234,11 @@ export class CdpClient {
     return () => listeners.delete(listener)
   }
 
+  onClose(listener) {
+    this.socket.addEventListener("close", listener)
+    return () => this.socket.removeEventListener("close", listener)
+  }
+
   once(method, timeoutMs = 15_000) {
     return new Promise((resolveEvent, reject) => {
       const timeout = setTimeout(() => {
@@ -256,4 +261,89 @@ export class CdpClient {
 export const evaluateValue = async (client, expression) => {
   const result = await client.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true })
   return result.result?.value ?? null
+}
+
+// Diagnostic text contains protocol failures only. Browser exception messages
+// and arbitrary server text can contain document content or credentials.
+export const captureError = (error) => {
+  const message = error instanceof Error ? error.message : String(error)
+  const networkCode = message.match(/\bnet::ERR_[A-Z0-9_]+\b/)?.[0]
+  if (networkCode) return networkCode
+  if (error instanceof Error && /^E[A-Z0-9_]+$/.test(error.code ?? "")) return error.code
+  if (/^(CDP [A-Za-z.]+ got no reply within \d+s|CDP connection closed|Timed out waiting for [A-Za-z.]+|Navigation command failed|Page evaluation failed)$/.test(message)) return message
+  return error instanceof Error ? error.name : "Capture error"
+}
+
+/** Preserve result-level failures and observe both waits from the outset.
+ * The load event remains the profiler's existing, uncorrelated load signal.
+ * Frame/loader evidence is recorded separately; it is not proof of readiness.
+ */
+export const navigateForCapture = async (client, method, params, diagnostic, { waitForLoad = true, timeoutMs = 60_000 } = {}) => {
+  let finished = false
+  let timer
+  let removeLoad = () => {}
+  let removeClose = () => {}
+  diagnostic.command = method
+  diagnostic.result = null
+  diagnostic.loadEvent = null
+  try {
+    const loaded = waitForLoad ? new Promise((resolveLoad) => {
+      removeLoad = client.on("Page.loadEventFired", (event) => {
+        if (finished || diagnostic.loadEvent) return
+        diagnostic.loadEvent = { timestamp: event.timestamp ?? null }
+        resolveLoad()
+      })
+    }) : Promise.resolve()
+    const closed = new Promise((_, reject) => {
+      removeClose = client.onClose(() => reject(new Error("CDP connection closed")))
+    })
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Timed out waiting for ${waitForLoad ? "Page.loadEventFired" : method}`)), timeoutMs)
+    })
+    const command = Promise.resolve().then(() => client.send(method, params, { timeoutMs })).then((result) => {
+      if (finished) return
+      diagnostic.result = {
+        frameId: result.frameId ?? null,
+        loaderId: result.loaderId ?? null,
+        errorText: result.errorText ? captureError(result.errorText) : null,
+        isDownload: result.isDownload ?? false,
+      }
+      if (result.errorText) throw new Error(result.errorText.match(/\bnet::ERR_[A-Z0-9_]+\b/)?.[0] ?? "Navigation command failed")
+    })
+    await Promise.race([Promise.all([command, loaded]), closed, timeout])
+  } catch (error) {
+    diagnostic.error = captureError(error)
+    throw error
+  } finally {
+    finished = true
+    clearTimeout(timer)
+    removeLoad()
+    removeClose()
+  }
+}
+
+/** One bounded, content-free snapshot before a failed capture tears down. */
+export const capturePageState = async (client, expectedUrl, recorderName = null) => {
+  try {
+    const result = await client.send("Runtime.evaluate", {
+      expression: `(() => {
+        const expected = new URL(${JSON.stringify(expectedUrl)});
+        return {
+          protocol: location.protocol,
+          sameOrigin: location.origin === expected.origin,
+          expectedPath: location.pathname === expected.pathname,
+          browserError: location.protocol === 'chrome-error:',
+          readyState: document.readyState,
+          domNodes: document.getElementsByTagName('*').length,
+          scripts: document.scripts.length,
+          recorderPresent: ${recorderName ? `Boolean(window[${JSON.stringify(recorderName)}])` : "null"}
+        };
+      })()`,
+      returnByValue: true,
+    }, { timeoutMs: 3_000 })
+    if (result.exceptionDetails) return { evaluationError: "Page evaluation failed" }
+    return result.result?.value ?? { evaluationError: "No page-state value" }
+  } catch (error) {
+    return { evaluationError: captureError(error) }
+  }
 }

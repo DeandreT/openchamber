@@ -9,6 +9,7 @@
  */
 
 import { round } from "./metrics.mjs"
+import { captureError } from "./cdp.mjs"
 
 // Path segments that identify an entity rather than a route.
 const ID_SEGMENT = [
@@ -126,11 +127,13 @@ export const summarizeRequests = (entries, baseUrl) => {
   let decodedBytes = 0
   let unfinished = 0
   let cached = 0
+  let failed = 0
   for (const entry of entries) {
     const encoded = entry.encoded ?? entry.streamedEncoded
     encodedBytes += encoded
     decodedBytes += entry.decoded
     if (entry.finishedAt === null) unfinished += 1
+    if (entry.failed) failed += 1
     if (entry.fromCache || entry.fromServiceWorker) cached += 1
     const pattern = `${entry.method} ${endpointPattern(entry.url, baseUrl)}`
     const group = groups.get(pattern) ?? { endpoint: pattern, count: 0, encodedBytes: 0, decodedBytes: 0 }
@@ -146,7 +149,71 @@ export const summarizeRequests = (entries, baseUrl) => {
     encodedKb: round(encodedBytes / 1024, 1),
     decodedKb: round(decodedBytes / 1024, 1),
     unfinished,
+    failed,
     cached,
     byEndpoint: [...groups.values()].sort((left, right) => right.decodedBytes - left.decodedBytes || right.count - left.count),
+  }
+}
+
+/** Bounded main-document evidence without URLs, headers or payloads. */
+export const createNavigationRecorder = (client, expectedUrl) => {
+  const expected = new URL(expectedUrl)
+  const documents = new Map()
+  const frames = []
+  const lifecycle = []
+  let mainFrameId = null
+  let droppedDocuments = 0
+  const location = (url) => {
+    try {
+      const parsed = new URL(url)
+      return { protocol: parsed.protocol, sameOrigin: parsed.origin === expected.origin, expectedPath: parsed.pathname === expected.pathname }
+    } catch { return { invalid: true } }
+  }
+  const append = (list, value) => {
+    if (list.length === 24) list.shift()
+    list.push(value)
+  }
+  const subscriptions = [
+    client.on("Page.frameNavigated", ({ frame }) => {
+      if (!frame.parentId) mainFrameId = frame.id
+      append(frames, { frameId: frame.id, loaderId: frame.loaderId, main: !frame.parentId, location: location(frame.url) })
+    }),
+    client.on("Page.lifecycleEvent", (event) => {
+      if (event.name !== "load" && event.name !== "DOMContentLoaded" && event.name !== "init") return
+      append(lifecycle, { name: event.name, frameId: event.frameId, loaderId: event.loaderId, timestamp: event.timestamp })
+    }),
+    client.on("Network.requestWillBeSent", (event) => {
+      if (event.type !== "Document") return
+      if (!documents.has(event.requestId) && documents.size === 24) {
+        documents.delete(documents.keys().next().value)
+        droppedDocuments += 1
+      }
+      documents.set(event.requestId, {
+        requestId: event.requestId, frameId: event.frameId, loaderId: event.loaderId,
+        location: location(event.request.url), status: null, failed: false, terminalEvents: [],
+        redirected: Boolean(event.redirectResponse),
+      })
+    }),
+    client.on("Network.responseReceived", (event) => {
+      const entry = documents.get(event.requestId)
+      if (entry) entry.status = event.response.status
+    }),
+    client.on("Network.loadingFinished", (event) => {
+      const entry = documents.get(event.requestId)
+      if (entry) append(entry.terminalEvents, { type: "finished", encodedBytes: event.encodedDataLength, timestamp: event.timestamp })
+    }),
+    client.on("Network.loadingFailed", (event) => {
+      const entry = documents.get(event.requestId)
+      if (entry) {
+        entry.failed = true
+        append(entry.terminalEvents, {
+          type: "failed", cancelled: Boolean(event.canceled), error: captureError(event.errorText), timestamp: event.timestamp,
+        })
+      }
+    }),
+  ]
+  return {
+    read: () => ({ mainFrameId, droppedDocuments, documents: [...documents.values()].map((entry) => ({ ...entry, main: mainFrameId === null ? null : entry.frameId === mainFrameId })), frames: [...frames], lifecycle: [...lifecycle] }),
+    stop: () => subscriptions.forEach((unsubscribe) => unsubscribe()),
   }
 }

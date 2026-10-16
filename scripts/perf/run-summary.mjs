@@ -17,12 +17,14 @@ export const readSummary = (directory) => {
 /** Reasons a run measured nothing, from the validity flags the profilers write. */
 export const invalidReasons = (data) => {
   const reasons = []
+  if (data.valid === false) reasons.push("capture did not complete")
   if (data.renderedStream === false) reasons.push("never rendered the stream")
   if (data.assistantResponse && data.assistantResponse.responded === false) reasons.push("no assistant response")
   if (data.reachedIdle === false) reasons.push("never reached idle")
   if (data.instrumented !== false && data.metrics?.taskCount === 0) reasons.push("trace had no tasks")
   if (data.frameLiveness && Number(data.frameLiveness.framesPerSecond ?? data.frameLiveness) < 10) reasons.push("renderer throttled")
-  if (Array.isArray(data.failures) && data.failures.length > 0 && data.runs === data.failures.length) reasons.push("every launch failed")
+  const failureCount = Array.isArray(data.failures) ? data.failures.length : data.failures
+  if (failureCount > 0 && data.runs === failureCount) reasons.push("every launch failed")
   if (data.rows === 0) reasons.push("no sidebar rows")
   if (data.editorFound === false) reasons.push("composer editor not found")
   if (data.toggleValidity?.ok === false) reasons.push(`toggle validity failed: ${data.toggleValidity.failures.join("; ")}`)
