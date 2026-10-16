@@ -31,7 +31,7 @@ import {
   worktreeMapsEqual,
   type ProjectRef,
 } from '@/lib/worktrees/worktreeManager';
-import { resolveProjectForCreatedSession, resolveProjectsForWorktreeChange } from '@/lib/worktrees/worktreeTopologyRefresh';
+import { resolveProjectsForSessionDirectories, resolveProjectsForWorktreeChange } from '@/lib/worktrees/worktreeTopologyRefresh';
 import type { WorktreeMetadata } from '@/types/worktree';
 import { checkIsGitRepository } from '@/lib/gitApi';
 import { useSessionDisplayStore } from '@/stores/useSessionDisplayStore';
@@ -598,16 +598,17 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
       }
     };
 
-    return subscribeOpenchamberEvents((event) => {
+    const refreshSessionDirectories = (directories: readonly string[]) => {
+      const registeredProjects = useProjectsStore.getState().projects;
+      const affectedProjects = resolveProjectsForSessionDirectories(directories, registeredProjects);
+      // A move can follow worktree creation before the normal listing expires.
+      // This path force-lists even when the destination has no known owner yet.
+      refreshProjects(affectedProjects ?? registeredProjects);
+    };
+    const unsubscribeMoves = sessionEvents.onMoved(refreshSessionDirectories);
+    const unsubscribeControl = subscribeOpenchamberEvents((event) => {
       if (event.type === 'session-created') {
-        // A new session can only have changed its own project's worktrees.
-        // When its project is not certain, every project is discovered.
-        const project = resolveProjectForCreatedSession(event.directory, useProjectsStore.getState().projects);
-        if (!project) {
-          requestWorktreeDiscovery();
-          return;
-        }
-        refreshProjects([project]);
+        refreshSessionDirectories([event.directory]);
         return;
       }
       if (event.type !== 'worktree-changed') return;
@@ -616,6 +617,10 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
       // has seen; refresh each registered project among them exactly once.
       refreshProjects(resolveProjectsForWorktreeChange(event.directories));
     });
+    return () => {
+      unsubscribeMoves();
+      unsubscribeControl();
+    };
   }, [isVSCode, worktreeRefreshDependencies]);
 
   return (

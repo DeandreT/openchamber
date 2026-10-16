@@ -34,6 +34,7 @@ import { buildActiveSessionNode, useSessionProjectCollection } from './sessionCo
 import { useChildStoreManager } from '@/sync/sync-context';
 import { useGlobalSyncStore } from '@/sync/global-sync-store';
 import { createSessionOwnershipIndex } from '../sessions/sessionOwnership';
+import { buildSidebarChatGroup, projectSidebarChats } from '../sessions/sessionChatProjection';
 import { useProjectSessionLists } from '../projects/useProjectSessionLists';
 import { useSessionSidebarSections } from '../projects/useSessionSidebarSections';
 import { SessionPrefetchProvider } from './useSessionPrefetch';
@@ -49,7 +50,6 @@ import type { SidebarViewMode } from '@/stores/useSessionDisplayStore';
 import { holdOrder, rankByLatestActivity } from './projectSort';
 import type { DeleteSessionConfirmState } from '../sessions/useSessionActions';
 import { useExpandedParents } from '../sessions/useExpandedParents';
-import { getChatsRootFromDirectory, isChatDirectoryPath } from '@/lib/chatDirectories';
 import { useChatsRoot } from '@/hooks/useChatsRoot';
 import { isCapacitorApp } from '@/lib/platform';
 import { countSessionTreeQueryMatches, deriveTimelineActivityItems, pruneSessionTreeForSidebarQuery, sessionTreeMatchesSidebarQuery } from '../recent/activitySections';
@@ -79,12 +79,6 @@ const EMPTY_TIMELINE_ITEMS: ReturnType<typeof deriveTimelineActivityItems> = [];
 /** Top-level sessions listed in the Pinned and In work zones. */
 type ZoneSessions = { pinned: readonly Session[]; work: readonly Session[] };
 const EMPTY_ZONE_SESSIONS: ZoneSessions = { pinned: [], work: [] };
-
-const isRootSession = (session: Session): boolean => {
-  // SAFETY: OpenCode attaches parentID to hierarchical session records,
-  // although the SDK's base Session type does not currently declare it.
-  return !(session as Session & { parentID?: string | null }).parentID;
-};
 
 type Project = {
   id: string;
@@ -191,6 +185,10 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     () => createSessionOwnershipIndex(collection.sessions, topology.projects, topology.availableWorktreesByProject, topology.isVSCode, collection.archivedSessions, authoritativeProjects, spaceList),
     [authoritativeProjects, collection.archivedSessions, collection.sessions, spaceList, topology.availableWorktreesByProject, topology.isVSCode, topology.projects],
   );
+  const chatProjection = React.useMemo(
+    () => projectSidebarChats(collection.orderedSessions, ownership, topology.isVSCode),
+    [collection.orderedSessions, ownership, topology.isVSCode],
+  );
   const [visibleSessionCountByGroup, setVisibleSessionCountByGroup] = React.useState<Map<string, number>>(new Map());
   const [visibleActivityCountByKey, setVisibleActivityCountByKey] = React.useState<Map<string, number>>(new Map());
   const showMoreGroupSessions = React.useCallback((groupId: string, currentVisibleCount: number, increment = 7) => {
@@ -232,9 +230,9 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
   const singleProjectMode = supportsSingleProjectMode && projectDisplayMode === 'single';
   const timelineMode = view.sidebarViewMode === 'timeline' && !topology.isVSCode;
   const runIndex = React.useMemo(() => buildMultiRunIndex(
-    collection.rootSessions,
+    chatProjection.projectSessions.filter((session) => !session.parentID),
     (session) => normalizePath(topology.worktreeMetadata.get(session.id)?.projectDirectory ?? session.directory ?? null),
-  ), [collection.rootSessions, topology.worktreeMetadata]);
+  ), [chatProjection.projectSessions, topology.worktreeMetadata]);
   // Grouping only needs membership. Keeping the map stable while membership is
   // unchanged keeps every project section cached across ordinary updates.
   const runMembershipRef = React.useRef<{ signature: string; map: ReadonlyMap<string, string> } | null>(null);
@@ -278,38 +276,19 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     spacesByProject,
     runKeyBySessionId,
   });
-  const { getSessionsForProject, getArchivedSessionsForProject } = useProjectSessionLists({ ownership });
+  const getSessionsForProject = React.useCallback(
+    (projectId: string) => chatProjection.projectSessionsByProject.get(projectId) ?? [],
+    [chatProjection.projectSessionsByProject],
+  );
+  const { getArchivedSessionsForProject } = useProjectSessionLists({ ownership });
   const knownChatsRoot = useChatsRoot();
   // Built before the sections hook runs, because that hook owns the search data
   // for every group the sidebar renders — the chats group included. A group the
   // hook never sees renders an empty list while a search is active.
   const chatGroup = React.useMemo<SessionGroup | null>(() => {
     if (topology.isVSCode) return null;
-    const chatsRoot = knownChatsRoot
-      ?? collection.chatSessions.map((session) => getChatsRootFromDirectory(session.directory)).find(Boolean)
-      ?? null;
-    if (!chatsRoot) return null;
-    const folderScopes = Array.from(new Set([
-      chatsRoot,
-      ...collection.chatSessions.map((session) => normalizePath(session.directory ?? null)).filter(Boolean),
-    ])).filter((directory): directory is string => Boolean(directory))
-      .map((directory) => ({ scopeKey: directory, directory }));
-    return {
-      id: 'managed-chats',
-      label: '',
-      branch: null,
-      description: null,
-      isMain: true,
-      worktree: null,
-      directory: chatsRoot,
-      folderScopeKey: chatsRoot,
-      folderScopes,
-      draftTarget: 'chat',
-      sessions: collection.chatSessions
-        .filter((session) => !session.time?.archived && isRootSession(session))
-        .map((session) => buildActiveSessionNode(collection.childrenMap, session)),
-    };
-  }, [collection.chatSessions, collection.childrenMap, knownChatsRoot, topology.isVSCode]);
+    return buildSidebarChatGroup(chatProjection.chatSessions, collection.childrenMap, knownChatsRoot);
+  }, [chatProjection.chatSessions, collection.childrenMap, knownChatsRoot, topology.isVSCode]);
   const standaloneGroups = React.useMemo<SessionGroup[]>(
     () => chatGroup ? [chatGroup] : EMPTY_STANDALONE_GROUPS,
     [chatGroup],
@@ -392,9 +371,9 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
       return groups === section.groups ? section : { ...section, groups };
     });
     // "Recent" needs the sessions, which only exist from here on.
-    const ranked = rankByLatestActivity(sections, view.projectSortOrder, (section) => section.project.id, ownership.sessionsByProject);
+    const ranked = rankByLatestActivity(sections, view.projectSortOrder, (section) => section.project.id, chatProjection.projectSessionsByProject);
     return [...(heldProjectOrder && holdsProjectOrder ? holdOrder(ranked, heldProjectOrder, (section) => section.project.id) : ranked)];
-  }, [getOrderedGroups, heldProjectOrder, holdsProjectOrder, ownership.sessionsByProject, sectionsForSidebarRender, view.projectSortOrder, worktreeSortOrder]);
+  }, [chatProjection.projectSessionsByProject, getOrderedGroups, heldProjectOrder, holdsProjectOrder, sectionsForSidebarRender, view.projectSortOrder, worktreeSortOrder]);
   React.useEffect(() => {
     shownProjectOrderRef.current = orderedSectionsForRender.map((section) => section.project.id);
   }, [orderedSectionsForRender]);
@@ -403,7 +382,7 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
   const timelineItems = React.useMemo(() => {
     if (!timelineMode) return EMPTY_TIMELINE_ITEMS;
     const rootIds = new Set(collection.rootSessions.map((session) => session.id));
-    const sessions = collection.orderedSessions.filter((session) => rootIds.has(session.id) && !session.time?.archived);
+    const sessions = chatProjection.projectSessions.filter((session) => rootIds.has(session.id));
     const badgeScopesBySessionId = new Map<string, ReturnType<typeof selectBlockingBadgeSessionScopes>>();
     const locations = resolveSidebarSessionLocations({
       sessions,
@@ -430,7 +409,7 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
       query: view.hasSessionSearchQuery ? view.normalizedSessionSearchQuery : '',
     });
     return items.map((item) => ({ ...item, blockingBadgeSessionScopes: badgeScopesBySessionId.get(item.node.session.id) }));
-  }, [collection.childrenMap, collection.orderedSessions, collection.rootSessions, ownership.bySessionId, spaceLabelById, timelineMode, topology.availableWorktreesByProject, topology.gitBranches, topology.projectRootBranches, topology.projects, view.hasSessionSearchQuery, view.homeDirectory, view.normalizedSessionSearchQuery]);
+  }, [chatProjection.projectSessions, collection.childrenMap, collection.rootSessions, ownership.bySessionId, spaceLabelById, timelineMode, topology.availableWorktreesByProject, topology.gitBranches, topology.projectRootBranches, topology.projects, view.hasSessionSearchQuery, view.homeDirectory, view.normalizedSessionSearchQuery]);
 
   // Pinned sessions and sessions in work: top-level, unarchived project
   // sessions (Chats are plain conversations and keep their pins in Chats), in
@@ -449,14 +428,14 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     if (!showWork && !showPinnedSection) return EMPTY_ZONE_SESSIONS;
     const pinned: Session[] = [];
     const work: Session[] = [];
-    for (const session of collection.orderedSessions) {
-      if (session.parentID || session.time?.archived || isChatDirectoryPath(session.directory)) continue;
+    for (const session of chatProjection.projectSessions) {
+      if (session.parentID) continue;
       if (showPinnedSection && isSessionPinned(collection.pinnedSessionIds, session.directory, session.id)) pinned.push(session);
       else if (showWork && isSessionInWork(session)) work.push(session);
     }
     if (pinned.length === 0 && work.length === 0) return EMPTY_ZONE_SESSIONS;
     return { pinned, work };
-  }, [collection.orderedSessions, collection.pinnedSessionIds, sessionWorkEnabled, showPinnedSection, showWorkSection]);
+  }, [chatProjection.projectSessions, collection.pinnedSessionIds, sessionWorkEnabled, showPinnedSection, showWorkSection]);
   const workSessions = zoneSessions.work;
   const zoneSessionIds = React.useMemo(
     () => new Set([...zoneSessions.pinned, ...zoneSessions.work].map((session) => session.id)),

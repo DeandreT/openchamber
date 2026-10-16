@@ -88,3 +88,13 @@ describe('sessionEvents Git refresh hints', () => {
     expect(hints).toEqual([{ directory: '/repo' }]);
   });
 });
+
+test('move listeners receive the authoritative destination until they unsubscribe', () => {
+  const moves: Array<readonly string[]> = [];
+  const unsubscribe = sessionEvents.onMoved((directories) => moves.push(directories));
+  const move = ['C:/worktrees/feature'];
+  sessionEvents.notifyMoved(move);
+  unsubscribe();
+  sessionEvents.notifyMoved(move);
+  expect(moves).toEqual([move]);
+});

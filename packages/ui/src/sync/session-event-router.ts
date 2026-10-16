@@ -11,6 +11,7 @@ import { getRuntimeKey, subscribeRuntimeEndpointWillChange } from "@/lib/runtime
 import { streamPerfCount, streamPerfMark } from "@/stores/utils/streamDebug"
 import { stripSessionDiffSnapshots } from "./sanitize"
 import { shouldSkipStaleSessionEvent } from "./session-event-freshness"
+import { sessionEvents } from "@/lib/sessionEvents"
 
 const pendingGlobalSessionUpdates = new Map<string, { runtimeKey: string; session: Session }>()
 
@@ -64,6 +65,7 @@ export const applySessionEventsToGlobalSessions = (payloads: readonly SyncEvent[
   const store = useGlobalSessionsStore.getState()
   const overlay = new Map(store.entityById)
   const mutations: GlobalSessionMutation[] = []
+  let movedSessions: Map<string, string> | undefined
   let flushedRecency = false
 
   const appendUpsert = (session: Session): void => {
@@ -110,6 +112,10 @@ export const applySessionEventsToGlobalSessions = (payloads: readonly SyncEvent[
       } else {
         pendingGlobalSessionUpdates.delete(sessionID)
         appendUpsert(session)
+        if (patch.directory && patch.directory !== currentSession.directory) {
+          movedSessions ??= new Map()
+          movedSessions.set(sessionID, patch.directory)
+        }
         streamPerfCount("ui.global_sessions.event_update_immediate")
       }
       continue
@@ -119,6 +125,7 @@ export const applySessionEventsToGlobalSessions = (payloads: readonly SyncEvent[
       const { sessionID } = payload.properties
       pendingGlobalSessionUpdates.delete(sessionID)
       overlay.delete(sessionID)
+      movedSessions?.delete(sessionID)
       mutations.push({ type: "remove", sessionId: sessionID })
     }
   }
@@ -127,6 +134,11 @@ export const applySessionEventsToGlobalSessions = (payloads: readonly SyncEvent[
   if (flushedRecency) streamPerfMark("global_sessions.event_update_flush")
   store.applySessionMutations(mutations)
   streamPerfCount("ui.global_sessions.event_update_publication")
+  if (!movedSessions?.size) return
+  // Native agent moves bypass OpenChamber's creation/worktree control events.
+  // Publish only accepted directory changes, after the global list owns them.
+  if (runtimeKey !== getRuntimeKey()) return
+  sessionEvents.notifyMoved([...new Set(movedSessions.values())])
 }
 
 export const applySessionEventToGlobalSessions = (payload: SyncEvent): void => {

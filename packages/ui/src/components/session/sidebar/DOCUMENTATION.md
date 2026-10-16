@@ -80,16 +80,32 @@ from that bridge: it is shared by every session whose directory resolves to no
 configured root (non-git directories, `C:/`, subagent workspaces), so mapping it
 would file unrelated sessions under whichever project owns the id. This fallback
 changes display ownership, not the session's real directory used for routing.
-Records with no resolved owner have no guaranteed project group. VS Code keeps
-exact workspace-directory scope and does not use the fallback. The mobile sheet,
-In work, and Timeline use this same ownership resolver; rows keep the session's
-own directory while taking display ownership (project id, labels) from the
-index.
+`sessions/sessionChatProjection.ts` keeps unowned root conversations in Chats
+until configured topology or canonical metadata resolves a project owner. The
+fallback follows the root's active descendants across directories and keeps
+fallback roots out of duplicate project, Pinned and In work rows. Owned children
+retain their existing project entry because Chats rows do not expand. It never promotes children
+whose parent is missing, archived or a temporary `/btw` session. It does not
+register projects, change the selected project, relocate sessions or classify
+their real directories as managed Chat directories. Resolved conversations leave
+the fallback on the next ownership projection. Chats visibility and collapse
+preferences still apply. VS Code keeps exact workspace-directory scope and
+does not use the fallback. Desktop and the mobile sheet share this projection;
+rows and pin identities keep the session's real directory.
+Desktop search expands the fallback Chat tree and suppresses its owned child
+duplicates in project search results, so each matching session is counted once.
+When Chats is hidden, those children keep their project search entries.
+
+Native agent moves also request worktree discovery after the global session
+batch accepts its new directories. Known registered owners are refreshed once;
+an unknown destination requests discovery across registered repositories.
+Unavailable metadata or failed topology discovery leaves the fallback reachable.
 
 Web and desktop show managed Chats, then Pinned, In work, and the projects. There is
 no Recent zone any more (removed 2026-10): In work holds the sessions being
 worked on, and the timeline view answers "what was I doing". Chats use
-their shared managed root for folders and never expose worktree actions. Project
+their shared managed root for folders; fallback rows retain their original
+directory folder scopes. Managed Chat directories never expose worktree actions. Project
 display can be all projects or one selected project. The mobile sessions sheet
 (`apps/MobileSessionsSheet.tsx`) partitions the same way through
 `partitionSidebarSessions` and lists Chats as a collapsible section above the

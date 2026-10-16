@@ -1,6 +1,7 @@
 import { resolveProjectRef } from '@/lib/worktreeSessionCreator';
 import {
   listProjectWorktrees,
+  getRepositoryWorktreeRoot,
   partitionWorktreesByRegisteredProject,
   preserveClientTrackedWorktreeStatus,
   replaceRepositoryWorktrees,
@@ -8,8 +9,13 @@ import {
   type ProjectRef,
 } from '@/lib/worktrees/worktreeManager';
 import { normalizePath } from '@/lib/pathNormalization';
+import { getRuntimeKey } from '@/lib/runtime-switch';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import type { WorktreeMetadata } from '@/types/worktree';
+
+let refreshRevision = 0;
+let pendingRefreshes = 0;
+const latestRefreshByRepository = new Map<string, number>();
 
 /**
  * Registered projects that own any of the directories a `worktree-changed`
@@ -27,13 +33,13 @@ export const resolveProjectsForWorktreeChange = (directories: readonly string[])
 };
 
 /**
- * The registered project a newly created session certainly belongs to: the
+ * The registered project a created or moved session certainly belongs to: the
  * project whose root is the session's directory, or the owner of a known
  * worktree that holds it. A directory that only sits under a registered
  * folder can be a worktree nobody has listed yet, of that project or of
  * another one, so it resolves to `null` and the caller runs full discovery.
  */
-export const resolveProjectForCreatedSession = (
+const resolveProjectForSessionDirectory = (
   directory: string,
   projects: ReadonlyArray<ProjectRef>,
 ): ProjectRef | null => {
@@ -52,6 +58,20 @@ export const resolveProjectForCreatedSession = (
   return null;
 };
 
+/** Unknown destinations require discovery; known owners are refreshed once. */
+export const resolveProjectsForSessionDirectories = (
+  directories: readonly string[],
+  projects: ReadonlyArray<ProjectRef>,
+): ProjectRef[] | null => {
+  const affectedProjects = new Map<string, ProjectRef>();
+  for (const directory of directories) {
+    const project = resolveProjectForSessionDirectory(directory, projects);
+    if (!project) return null;
+    affectedProjects.set(project.id, project);
+  }
+  return [...affectedProjects.values()];
+};
+
 /**
  * Refresh the published worktree topology for every registered project a
  * `worktree-changed` event touches, bypassing the listing cache. Used by the
@@ -66,37 +86,65 @@ export const refreshWorktreeTopologyForChange = async (
   directories: readonly string[],
   isCancelled: () => boolean = () => false,
 ): Promise<void> => {
+  const runtimeKey = getRuntimeKey();
   const affectedProjects = resolveProjectsForWorktreeChange(directories);
   if (affectedProjects.length === 0) return;
-
-  const listings = await Promise.all(affectedProjects.map(async (project) => {
-    try {
-      return { project, worktrees: await listProjectWorktrees(project, { force: true }) };
-    } catch {
-      return null;
-    }
-  }));
-  if (isCancelled()) return;
-
-  const published = useSessionUIStore.getState().availableWorktreesByProject;
-  let worktreesByProject: Map<string, WorktreeMetadata[]> | null = null;
-  for (const listing of listings) {
-    if (!listing) continue;
-    worktreesByProject = replaceRepositoryWorktrees(
-      worktreesByProject ?? published,
-      listing.project.path,
-      listing.worktrees,
-    );
+  const revision = ++refreshRevision;
+  const repositoryKey = (root: string) => JSON.stringify([runtimeKey, root]);
+  const initialTopology = useSessionUIStore.getState().availableWorktreesByProject;
+  pendingRefreshes += 1;
+  for (const project of affectedProjects) {
+    const key = repositoryKey(getRepositoryWorktreeRoot(initialTopology, project.path, []));
+    latestRefreshByRepository.set(key, revision);
   }
-  if (!worktreesByProject) return;
+  try {
+    const listings = await Promise.all(affectedProjects.map(async (project) => {
+      try {
+        return { project, worktrees: await listProjectWorktrees(project, { force: true }) };
+      } catch {
+        return null;
+      }
+    }));
+    if (isCancelled() || runtimeKey !== getRuntimeKey()) return;
 
-  const partitioned = preserveClientTrackedWorktreeStatus(
-    partitionWorktreesByRegisteredProject(projects, worktreesByProject),
-    published,
-  );
-  if (worktreeMapsEqual(partitioned, published)) return;
-  useSessionUIStore.setState({
-    availableWorktrees: [...partitioned.values()].flat(),
-    availableWorktreesByProject: partitioned,
-  });
+    const published = useSessionUIStore.getState().availableWorktreesByProject;
+    let worktreesByProject: Map<string, WorktreeMetadata[]> | null = null;
+    for (const listing of listings) {
+      if (!listing) continue;
+      const key = repositoryKey(getRepositoryWorktreeRoot(worktreesByProject ?? published, listing.project.path, listing.worktrees));
+      if ((latestRefreshByRepository.get(key) ?? 0) > revision) continue;
+      latestRefreshByRepository.set(key, revision);
+      worktreesByProject = replaceRepositoryWorktrees(
+        worktreesByProject ?? published,
+        listing.project.path,
+        listing.worktrees,
+      );
+    }
+    if (!worktreesByProject) return;
+
+    const partitioned = preserveClientTrackedWorktreeStatus(
+      partitionWorktreesByRegisteredProject(projects, worktreesByProject),
+      published,
+    );
+    if (worktreeMapsEqual(partitioned, published)) return;
+    useSessionUIStore.setState({
+      availableWorktrees: [...partitioned.values()].flat(),
+      availableWorktreesByProject: partitioned,
+    });
+  } finally {
+    // Retain the newer repository revision while any older batch can return,
+    // including one started through another registered checkout of that repo.
+    pendingRefreshes -= 1;
+    if (pendingRefreshes === 0) latestRefreshByRepository.clear();
+  }
+};
+
+/** A native session move may enter a linked worktree not discovered yet. */
+export const refreshWorktreeTopologyForSessionDirectories = async (
+  projects: ReadonlyArray<ProjectRef>,
+  directories: readonly string[],
+  isCancelled: () => boolean = () => false,
+): Promise<void> => {
+  const affectedProjects = resolveProjectsForSessionDirectories(directories, projects) ?? projects;
+  await refreshWorktreeTopologyForChange(projects, affectedProjects.map((project) => project.path), isCancelled);
 };
