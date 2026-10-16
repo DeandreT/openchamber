@@ -30,6 +30,7 @@ import {
   worktreeMapsEqual,
 } from '@/lib/worktrees/worktreeManager';
 import { refreshWorktreeTopologyForChange } from '@/lib/worktrees/worktreeTopologyRefresh';
+import { useSessionMoveWorktreeRefresh } from '@/lib/worktrees/useSessionMoveWorktreeRefresh';
 import { subscribeOpenchamberEvents } from '@/lib/openchamberEvents';
 import type { WorktreeMetadata } from '@/types/worktree';
 import { CHAT_DRAFT_PROJECT_ID } from '@/lib/chatDirectories';
@@ -241,6 +242,8 @@ const MiniChatBootstrap: React.FC<{ config: MiniChatConfig }> = ({ config }) => 
       unsubscribe();
     };
   }, [projects]);
+
+  useSessionMoveWorktreeRefresh(projects);
 
   // Dismiss the HTML splash (see mini-chat.html) once the real content is ready,
   // so the window doesn't flash through white/connecting states. Fades out when

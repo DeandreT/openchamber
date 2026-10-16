@@ -411,20 +411,13 @@ export const partitionWorktreesByRegisteredProject = (
 const isClientTrackedWorktreeStatus = (status: WorktreeMetadata['worktreeStatus']): boolean =>
   status === 'pending' || status === 'invalid';
 
-/**
- * Replace the worktree buckets of one repository with a freshly listed set.
- *
- * A registered project may itself be a linked worktree, so every bucket whose
- * repository root matches the refreshed one is replaced together; buckets of
- * other repositories keep their references. An empty refreshed set removes the
- * repository's buckets.
- */
-export const replaceRepositoryWorktrees = (
+/** Canonical identity shared by repository replacement and refresh ordering. */
+export const getRepositoryWorktreeRoot = (
   worktreesByProject: ReadonlyMap<string, WorktreeMetadata[]>,
   projectPath: string,
-  refreshedWorktrees: WorktreeMetadata[],
+  refreshedWorktrees: readonly WorktreeMetadata[],
   fallbackRepositoryRoot?: string | null,
-): Map<string, WorktreeMetadata[]> => {
+): string => {
   const normalizedProjectPath = normalizePath(projectPath);
   const existingProjectWorktrees = worktreesByProject.get(normalizedProjectPath) ?? [];
   const refreshedRepositoryRoot = refreshedWorktrees.find(
@@ -433,13 +426,26 @@ export const replaceRepositoryWorktrees = (
   const existingRepositoryRoot = existingProjectWorktrees.find(
     (worktree) => normalizePath(worktree.projectDirectory ?? null),
   )?.projectDirectory;
-  const repositoryRoot = normalizePath(
+  return normalizePath(
     refreshedRepositoryRoot
       ?? existingRepositoryRoot
       ?? fallbackRepositoryRoot
       ?? normalizedProjectPath,
   );
+};
 
+/**
+ * Replace every registered bucket of one canonical repository together.
+ * Unrelated buckets keep their references; an empty listing removes the repo.
+ */
+export const replaceRepositoryWorktrees = (
+  worktreesByProject: ReadonlyMap<string, WorktreeMetadata[]>,
+  projectPath: string,
+  refreshedWorktrees: WorktreeMetadata[],
+  fallbackRepositoryRoot?: string | null,
+): Map<string, WorktreeMetadata[]> => {
+  const normalizedProjectPath = normalizePath(projectPath);
+  const repositoryRoot = getRepositoryWorktreeRoot(worktreesByProject, projectPath, refreshedWorktrees, fallbackRepositoryRoot);
   const next = new Map(worktreesByProject);
   const matchingProjectPaths = new Set<string>([normalizedProjectPath]);
   for (const [candidatePath, worktrees] of next) {

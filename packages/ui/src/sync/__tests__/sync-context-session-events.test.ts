@@ -1,6 +1,7 @@
-import { beforeEach, describe, expect, mock, test } from "bun:test"
+import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test"
 import type { SyncEvent } from "@/lib/opencode/events"
 import type { Session } from "@/lib/opencode/model"
+import { sessionEvents } from "@/lib/sessionEvents"
 
 let currentSessions: Session[] = []
 const upsertedSessions: Session[] = []
@@ -8,11 +9,17 @@ const removedSessionIds: string[] = []
 let mutationCalls = 0
 let runtimeKey = "runtime-a"
 let runtimeWillChange: (() => void) | null = null
+let onMutation: (() => void) | null = null
+let unsubscribeMoves: (() => void) | undefined
+const movedSessions: string[] = []
 
 mock.module("@/stores/useGlobalSessionsStore", () => ({
   mergeSessionDirectoryMetadata: (session: Session) => session,
   isGlobalSessionRecencyOnlyUpdate: (existing: Session, incoming: Session) => (
-    existing.title === incoming.title && existing.time?.updated !== incoming.time?.updated
+    existing.title === incoming.title
+    && existing.directory === incoming.directory
+    && existing.projectID === incoming.projectID
+    && existing.time?.updated !== incoming.time?.updated
   ),
   useGlobalSessionsStore: {
     getState: () => ({
@@ -36,6 +43,7 @@ mock.module("@/stores/useGlobalSessionsStore", () => ({
           if (mutation.type === "upsert") upsertedSessions.push(mutation.session)
           else removedSessionIds.push(mutation.sessionId)
         }
+        onMutation?.()
       },
     }),
   },
@@ -91,7 +99,16 @@ describe("applySessionEventToGlobalSessions", () => {
     upsertedSessions.length = 0
     removedSessionIds.length = 0
     mutationCalls = 0
+    onMutation = null
+    movedSessions.length = 0
+    unsubscribeMoves = sessionEvents.onMoved((directories) => {
+      for (const directory of directories) {
+        expect(upsertedSessions.some((session) => session.directory === directory)).toBe(true)
+      }
+      movedSessions.push(...directories)
+    })
   })
+  afterEach(() => unsubscribeMoves?.())
 
   test("skips stale global session.patched echoes after a newer rename", () => {
     currentSessions = [buildSession("New Title", { created: 1, updated: 20 })]
@@ -170,6 +187,78 @@ describe("applySessionEventToGlobalSessions", () => {
 
     expect(mutationCalls).toBe(1)
     expect(upsertedSessions).toHaveLength(1_000)
+    expect(movedSessions).toEqual([])
+  })
+
+  test("announces a native move after publishing its destination, without repeating an echo", () => {
+    currentSessions = [{ ...buildSession("Moving", { created: 1, updated: 10 }), directory: "/chats/session" }]
+    const move: SyncEvent = {
+      type: "session.patched",
+      properties: { sessionID: "ses_1", patch: { directory: "/worktrees/feature", projectID: "repo", time: { updated: 20 } } },
+    }
+
+    applySessionEventToGlobalSessions(move)
+    expect(movedSessions).toEqual(["/worktrees/feature"])
+
+    currentSessions = [...upsertedSessions]
+    applySessionEventToGlobalSessions(move)
+    expect(movedSessions).toHaveLength(1)
+  })
+
+  test("stale moves and unknown partial records announce no topology change", () => {
+    const move: SyncEvent = {
+      type: "session.patched",
+      properties: { sessionID: "ses_1", patch: { directory: "/stale", time: { updated: 10 } } },
+    }
+    applySessionEventToGlobalSessions(move)
+    currentSessions = [{ ...buildSession("Newer", { created: 1, updated: 20 }), directory: "/current" }]
+    applySessionEventToGlobalSessions(move)
+    expect(movedSessions).toEqual([])
+    expect(upsertedSessions).toEqual([])
+  })
+
+  test("coalesces moves within one batch and drops a move followed by deletion", () => {
+    currentSessions = [{ ...buildSession("Moving", { created: 1, updated: 1 }), directory: "/source" }]
+    const moveTo = (directory: string, updated: number): SyncEvent => ({
+      type: "session.patched",
+      properties: { sessionID: "ses_1", patch: { directory, time: { updated } } },
+    })
+
+    applySessionEventsToGlobalSessions([moveTo("/intermediate", 2), moveTo("/destination", 3)])
+    expect(mutationCalls).toBe(1)
+    expect(movedSessions).toEqual(["/destination"])
+
+    movedSessions.length = 0
+    applySessionEventsToGlobalSessions([moveTo("/deleted", 4), buildDeleteEvent("ses_1")])
+    expect(movedSessions).toEqual([])
+  })
+
+  test("a runtime switch during publication cannot announce a move in the next runtime", () => {
+    currentSessions = [{ ...buildSession("Moving", { created: 1, updated: 1 }), directory: "/source" }]
+    onMutation = () => { runtimeKey = "runtime-b" }
+
+    applySessionEventToGlobalSessions({
+      type: "session.patched",
+      properties: { sessionID: "ses_1", patch: { directory: "/destination" } },
+    })
+
+    expect(movedSessions).toEqual([])
+  })
+
+  test("a moved subtree requests destination discovery once per published batch", () => {
+    currentSessions = Array.from({ length: 200 }, (_, index) => ({
+      ...buildSession("Moving", { created: 1, updated: 1 }), id: `ses_${index}`, directory: "/source",
+    }))
+    const moves: SyncEvent[] = currentSessions.map((session) => ({
+      type: "session.patched",
+      properties: { sessionID: session.id, patch: { directory: "/destination", time: { updated: 2 } } },
+    }))
+
+    applySessionEventsToGlobalSessions(moves)
+
+    expect(mutationCalls).toBe(1)
+    expect(upsertedSessions).toHaveLength(200)
+    expect(movedSessions).toEqual(["/destination"])
   })
 
   test("consumes only the matching bulk archive echo", () => {

@@ -321,6 +321,12 @@ export const buildSessionSidebarRowModel = (args: SessionSidebarRowModelArgs): S
   const pinnedInZone = new Set((args.pinnedItems ?? []).map((item) => item.node.session.id));
   // A hidden Pinned section supplies no items, so its sessions remain in projects.
   const isMovedToZone = (sessionId: string): boolean => pinnedInZone.has(sessionId) || (search && inZone.has(sessionId));
+  const chatSearchData = args.chatGroup ? args.groupSearchDataByGroup.get(args.chatGroup) : undefined;
+  const chatSearchIds = search && chatSearchData?.hasMatch
+    ? new Set(indexNodes(chatSearchData.filteredNodes).preorderIds)
+    : EMPTY_ZONE_SESSION_IDS;
+  const isListedElsewhere = (group: SessionGroup, sessionId: string): boolean => isMovedToZone(sessionId)
+    || (group !== args.chatGroup && chatSearchIds.has(sessionId));
   let searchMatchCount = 0;
 
   const authoritativeRoots = [
@@ -456,8 +462,9 @@ export const buildSessionSidebarRowModel = (args: SessionSidebarRowModelArgs): S
   const groupSearchMatches = (group: SessionGroup): number => {
     const searchData = args.groupSearchDataByGroup.get(group);
     if (searchData?.hasMatch !== true) return 0;
-    const movedToZone = inZone.size > 0 ? searchData.filteredNodes.filter((node) => isMovedToZone(node.session.id)) : [];
-    const sessionMatches = Math.max(0, searchData.matchedSessionCount - countSessionSearchMatches(movedToZone, args.normalizedQuery));
+    const listedElsewhere = inZone.size > 0 || chatSearchIds.size > 0
+      ? searchData.filteredNodes.filter((node) => isListedElsewhere(group, node.session.id)) : [];
+    const sessionMatches = Math.max(0, searchData.matchedSessionCount - countSessionSearchMatches(listedElsewhere, args.normalizedQuery));
     return sessionMatches + searchData.folderNameMatchCount + (searchData.groupMatches ? 1 : 0);
   };
 
@@ -475,7 +482,7 @@ export const buildSessionSidebarRowModel = (args: SessionSidebarRowModelArgs): S
       searchMatchCount += matches;
     }
     const sourceNodes = (search ? searchData?.filteredNodes ?? [] : group.sessions)
-      .filter((node) => !isMovedToZone(node.session.id))
+      .filter((node) => !isListedElsewhere(group, node.session.id))
       .sort((left, right) => compareNodes(left, right, pinned, args.sessionOrderIndex));
     const indexed = indexNodes(sourceNodes);
     const selectionPoolOffset = selectionDescendantIds.length;

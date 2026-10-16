@@ -60,6 +60,7 @@ import {
   worktreeMapsEqual,
 } from '@/lib/worktrees/worktreeManager';
 import { refreshWorktreeTopologyForChange } from '@/lib/worktrees/worktreeTopologyRefresh';
+import { useSessionMoveWorktreeRefresh } from '@/lib/worktrees/useSessionMoveWorktreeRefresh';
 import { useUIStore } from '@/stores/useUIStore';
 import { closeTopmostBackLayer } from '@/lib/mobileBackLayers';
 import { useUpdateStore } from '@/stores/useUpdateStore';
@@ -1280,6 +1281,8 @@ function MobileAppContent({ apis }: MobileAppProps) {
       unsubscribe();
     };
   }, [isConnected, projects]);
+
+  useSessionMoveWorktreeRefresh(projects, isConnected);
 
   React.useEffect(() => {
     if (!error) return;

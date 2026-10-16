@@ -22,12 +22,14 @@ type SessionCreateRequest = {
 
 type DeleteListener = (request: SessionDeleteRequest) => void;
 type CreateListener = (request: SessionCreateRequest) => void;
+type MoveListener = (directories: readonly string[]) => void;
 type DirectoryListener = () => void;
 type GitRefreshHint = { directory: string; paths?: string[] };
 type GitRefreshListener = (hint: GitRefreshHint) => void;
 
 const deleteListeners = new Set<DeleteListener>();
 const createListeners = new Set<CreateListener>();
+const moveListeners = new Set<MoveListener>();
 const directoryListeners = new Set<DirectoryListener>();
 const gitRefreshListeners = new Set<GitRefreshListener>();
 // Shell and code-mode scripts can touch the worktree too, so they count
@@ -63,6 +65,16 @@ export const sessionEvents = {
   requestCreate(payload?: SessionCreateRequest) {
     const request = payload ?? {};
     createListeners.forEach((listener) => listener(request));
+  },
+  onMoved(listener: MoveListener) {
+    moveListeners.add(listener);
+    return () => {
+      moveListeners.delete(listener);
+    };
+  },
+  /** Accepted move destinations from one published session batch, deduplicated. */
+  notifyMoved(directories: readonly string[]) {
+    moveListeners.forEach((listener) => listener(directories));
   },
   onDirectoryRequest(listener: DirectoryListener) {
     directoryListeners.add(listener);

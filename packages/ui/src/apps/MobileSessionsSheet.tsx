@@ -53,6 +53,7 @@ import { getDescendantIds, partitionSidebarSessions } from '@/components/session
 import { rankByLatestActivity, sortProjectsByOrder } from '@/components/session/sidebar/list/projectSort';
 import { collectSessionSubtreeIds, runSessionSubtreeAction, type SessionSubtreeAction } from '@/components/session/sidebar/sessions/sessionSubtreeActions';
 import { createSessionOwnershipIndex } from '@/components/session/sidebar/sessions/sessionOwnership';
+import { projectSidebarChats } from '@/components/session/sidebar/sessions/sessionChatProjection';
 import { useSidebarSpaces, useSpacesStore, type SpaceMark } from '@/lib/spaces/spaces-store';
 import { SpaceGroupStatus } from '@/components/session/spaces/SpaceGroupStatus';
 import { resolveSidebarSessionLocations } from '@/components/session/sidebar/recent/sessionLocation';
@@ -1036,13 +1037,30 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     [childrenBySessionId],
   );
 
-  // Managed Chats (sessions under ~/.config/openchamber/chats) are not owned
-  // by any registered project; they get their own section above the project
-  // tree, the same split the desktop sidebar makes. Temporary /btw forks are
-  // dropped here as well.
-  const { projectSessions, chatSessions } = React.useMemo(
+  // Resolve project ownership before projecting Chats. Unowned conversations
+  // stay reachable there until configured topology or canonical metadata resolves.
+  const partition = React.useMemo(
     () => partitionSidebarSessions(sessions, false),
     [sessions],
+  );
+  const spaceList = useSidebarSpaces();
+  const spaces = React.useMemo(() => new Map(spaceList.map((space) => [space.id, space])), [spaceList]);
+  const spaceLabelById = React.useMemo(
+    () => new Map(spaceList.map((space) => [space.id, space.name || t('sessions.sidebar.grouping.spaceUnnamed')])),
+    [spaceList, t],
+  );
+  const sessionOwnership = React.useMemo(() => createSessionOwnershipIndex(
+    partition.projectSessions,
+    projectsMeta.map((project) => ({ id: project.id, normalizedPath: project.path })),
+    new Map(projectsMeta.map((project) => [project.path, project.worktrees])),
+    false,
+    [],
+    authoritativeProjects,
+    spaceList,
+  ), [authoritativeProjects, partition.projectSessions, projectsMeta, spaceList]);
+  const { projectSessions, chatSessions, projectSessionsByProject } = React.useMemo(
+    () => projectSidebarChats(sessions, sessionOwnership, false),
+    [sessions, sessionOwnership],
   );
 
   // Sessions in work, with their subsessions, get their own section under
@@ -1054,46 +1072,27 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
   const workSessionIds = React.useMemo(() => {
     const ids = new Set<string>();
     if (!sessionWorkEnabled || !showWorkSection) return ids;
-    for (const session of sessions) {
-      if (getParentId(session) || isChatDirectoryPath(getSessionDirectory(session)) || !isSessionInWork(session)) continue;
+    for (const session of projectSessions) {
+      if (getParentId(session) || !isSessionInWork(session)) continue;
       ids.add(session.id);
       for (const id of getDescendantIds(childrenBySessionId, session.id)) ids.add(id);
     }
     return ids;
-  }, [childrenBySessionId, sessionWorkEnabled, sessions, showWorkSection]);
+  }, [childrenBySessionId, projectSessions, sessionWorkEnabled, showWorkSection]);
   // Pinned project sessions, with their subsessions, get their own section
   // above In work while the display panel shows it; a pinned session in work
   // is listed there only. Pinned chats stay at the top of Chats.
   const pinnedZoneSessionIds = React.useMemo(() => {
     const ids = new Set<string>();
     if (!showPinnedSection) return ids;
-    for (const session of sessions) {
+    for (const session of projectSessions) {
       const directory = getSessionDirectory(session);
-      if (getParentId(session) || isChatDirectoryPath(directory) || !isSessionPinned(pinnedSessionIds, directory || null, session.id)) continue;
+      if (getParentId(session) || !isSessionPinned(pinnedSessionIds, directory || null, session.id)) continue;
       ids.add(session.id);
       for (const id of getDescendantIds(childrenBySessionId, session.id)) ids.add(id);
     }
     return ids;
-  }, [childrenBySessionId, pinnedSessionIds, sessions, showPinnedSection]);
-  const sectionChatSessions = React.useMemo(
-    () => (workSessionIds.size > 0 ? chatSessions.filter((session) => !workSessionIds.has(session.id)) : chatSessions),
-    [chatSessions, workSessionIds],
-  );
-  const spaceList = useSidebarSpaces();
-  const spaces = React.useMemo(() => new Map(spaceList.map((space) => [space.id, space])), [spaceList]);
-  const spaceLabelById = React.useMemo(
-    () => new Map(spaceList.map((space) => [space.id, space.name || t('sessions.sidebar.grouping.spaceUnnamed')])),
-    [spaceList, t],
-  );
-  const sessionOwnership = React.useMemo(() => createSessionOwnershipIndex(
-    projectSessions,
-    projectsMeta.map((project) => ({ id: project.id, normalizedPath: project.path })),
-    new Map(projectsMeta.map((project) => [project.path, project.worktrees])),
-    false,
-    [],
-    authoritativeProjects,
-    spaceList,
-  ), [authoritativeProjects, projectSessions, projectsMeta, spaceList]);
+  }, [childrenBySessionId, pinnedSessionIds, projectSessions, showPinnedSection]);
   // Multi-runs render as one row that opens their overview; their lanes list
   // under the project root instead of each lane's worktree, like the sidebar.
   const runIndex = React.useMemo(() => buildMultiRunIndex(projectSessions, (session) => {
@@ -1125,8 +1124,8 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     path: '',
     worktree: null,
     space: null,
-    sessions: orderSessionsByLifecycleScopes(sectionChatSessions, pinnedSessionIds, sessionOrderRanks),
-  }), [pinnedSessionIds, sectionChatSessions, sessionOrderRanks]);
+    sessions: orderSessionsByLifecycleScopes(chatSessions, pinnedSessionIds, sessionOrderRanks),
+  }), [chatSessions, pinnedSessionIds, sessionOrderRanks]);
   // Pins are keyed by runtime, directory and id, so the timeline's
   // "pinned chats always show" rule needs the plain ids of the pinned ones.
   const pinnedChatIds = React.useMemo(() => new Set(
@@ -1156,8 +1155,8 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
   }), [pinnedSessionIds, pinnedZoneSessionIds, sessionOrderRanks, sessions, workSessionIds]);
   const chatsBucketKey = `${CHAT_DRAFT_PROJECT_ID}::${CHAT_DRAFT_PROJECT_ID}`;
   const chatRootCount = React.useMemo(
-    () => sectionChatSessions.filter((session) => !getParentId(session)).length,
-    [sectionChatSessions],
+    () => chatSessions.filter((session) => !getParentId(session)).length,
+    [chatSessions],
   );
 
   const normalizedQuery = query.trim().toLowerCase();
@@ -1179,7 +1178,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
   }, [open]);
 
   const projectNodes = React.useMemo<ProjectNode[]>(() => {
-    const nodes: ProjectNode[] = rankByLatestActivity(projectsMeta, projectSortOrder, (project) => project.id, sessionOwnership.sessionsByProject).map((project) => ({
+    const nodes: ProjectNode[] = rankByLatestActivity(projectsMeta, projectSortOrder, (project) => project.id, projectSessionsByProject).map((project) => ({
       project,
       buckets: [] as WorktreeBucket[],
       isActive: project.id === activeProjectId,
@@ -1235,7 +1234,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
     }
 
     return nodes;
-  }, [activeProjectId, pinnedSessionIds, projectSortOrder, projectsMeta, runIndex, projectSessions, sessionOrderRanks, sessionOwnership, spaceList, spaces, t]);
+  }, [activeProjectId, pinnedSessionIds, projectSortOrder, projectsMeta, runIndex, projectSessions, projectSessionsByProject, sessionOrderRanks, sessionOwnership, spaceList, spaces, t]);
 
   const normalizedDirectory = normalizePath(currentDirectory);
 
@@ -1486,7 +1485,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
   /** Track / Done for a top-level row while the feature is on. */
   const workActionFor = (session: Session): MobileSessionWorkAction | undefined => {
     if (!sessionWorkEnabled || getParentId(session) || isChatDirectoryPath(getSessionDirectory(session))) return undefined;
-    const inWork = workSessionIds.has(session.id);
+    const inWork = isSessionInWork(session);
     return { inWork, onToggle: () => { void handleToggleWork(session, inWork); } };
   };
 
@@ -1650,7 +1649,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
   const searchSessionMatches = React.useMemo(() => {
     if (!normalizedQuery) return [] as Session[];
     return orderSessionsByLifecycleScopes(
-      sessions.filter((session) => {
+      [...projectSessions, ...chatSessions].filter((session) => {
         // Subsessions are implementation noise in a flat search list — only
         // top-level sessions are searchable.
         if (getParentId(session)) return false;
@@ -1661,7 +1660,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       pinnedSessionIds,
       sessionOrderRanks,
     );
-  }, [normalizedQuery, pinnedSessionIds, projectsMeta, sessionOrderRanks, sessionOwnership, sessions]);
+  }, [chatSessions, normalizedQuery, pinnedSessionIds, projectSessions, projectsMeta, sessionOrderRanks, sessionOwnership]);
 
   const searchProjectMatches = React.useMemo<ProjectMeta[]>(() => {
     if (!normalizedQuery) return [];
