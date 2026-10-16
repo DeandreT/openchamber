@@ -52,7 +52,11 @@ const EMPTY_ROW_MESSAGE_IDS: readonly string[] = [];
 //   • `maintainVisibleContentPosition` preserves the read position when older
 //     history is prepended, replacing the manual anchor-hold and the mobile
 //     quiet-window prepend deferral.
-const TIMELINE_ESTIMATED_ENTRY_SIZE = 320;
+
+// Start with a small tail window until measurement replaces this hint. A short
+// estimate mounts several off-screen rich turns, paying for their Markdown DOM
+// and layout before the list can learn how tall they are.
+const TIMELINE_ESTIMATED_ENTRY_SIZE = 2000;
 
 // Presentation-only props forwarded to the scroll container the list renders.
 // Deliberately narrow: the list owns scroll and layout callbacks on that

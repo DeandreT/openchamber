@@ -469,6 +469,12 @@ bun run profile:switch -- --url http://127.0.0.1:4599 --title "perf: long 120" -
 `--render-probe` counts renders across the switches after the last page load
 (with `--cold-reload`, the last cycle) and prints them per switch.
 
+With `--extra-categories disabled-by-default-devtools.timeline.invalidationTracking`,
+the switch profiler limits recorded JavaScript stacks to eight frames. Full React
+stacks for every node can overwhelm the trace buffer before the warm switch.
+Check that all planned switch marks survived; invalidation captures are for
+attribution, and ordinary production captures supply timing comparisons.
+
 `--sessions a,b,c` picks the rows to click; the default is the first rows in
 the sidebar, so pass explicit ids or titles to compare runs across days. The
 row must be present in the sidebar; the command fails rather than measuring a
