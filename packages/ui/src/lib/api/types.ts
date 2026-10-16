@@ -2030,6 +2030,16 @@ export interface ClientAuthAPI {
   // Direct transports the server can be reached on, for the create-device dialog.
   // LAN reflects the server's actual bind, independent of the UI origin.
   getPairingTransports(): Promise<{ local: string | null; lan: string | null; relayAvailable: boolean }>;
+  // This server's relay host. `identityConflict` is true while another copy of
+  // its data dir, usually on another machine, keeps taking the relay slot.
+  getRelayHostStatus(): Promise<RelayHostStatus>;
+  // Gives this server its own relay identity. Devices paired through the relay
+  // keep reaching the other copy until they are paired here again.
+  resetRelayIdentity(): Promise<RelayHostStatus>;
+}
+
+export interface RelayHostStatus {
+  identityConflict: boolean;
 }
 
 export type LinearUserSummary = {

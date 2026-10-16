@@ -39,6 +39,15 @@ the user can want independently:
   draw a page*). The description lists the theme variables the chat injects
   (`packages/ui/src/components/chat/message/parts/htmlRender.ts`); change both
   together.
+  With `awaitAnswer` the call waits for the user's answer on the page. The
+  plugin sends the call id (`context.id`) with the callback so the server can
+  find the waiting call when the chat answers it, and copies the answer into
+  the call's metadata (`metadata.openchamber.answer`), so every client shows
+  the page as answered. While the call waits, OpenCode holds any chat message
+  for that session until the call returns, so the plugin registers a
+  `session.prompt` hook: a prompt for the session, from any sender, aborts the
+  waiting call, which returns `{ answered: false, reason: "chat" }`, and the
+  agent reads the message next.
 
 Both default to on, are toggled in Settings → General → OpenChamber Tools, and take
 effect in the running OpenCode within a couple of seconds — OpenChamber rewrites

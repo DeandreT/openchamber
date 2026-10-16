@@ -15,10 +15,12 @@ import { webSearchI18n } from './websearch.i18n';
 import { isolatedSpacesI18n } from './isolated-spaces.i18n';
 import { sourceBoardI18n } from './source-board.i18n';
 import { projectActionsI18n } from './project-actions.i18n';
+import { gitIdentityEditorI18n } from './git-identity-editor.i18n';
 import { environmentI18n } from './environment.i18n';
 import { providersI18n } from './providers.i18n';
 import { mcpGridI18n } from './mcp-grid.i18n';
 import { pluginsGridI18n } from './plugins-grid.i18n';
+import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict: Record<I18nKey, string> = {
   "opencodeCompatibility.bundled": "OpenCode는 OpenChamber에 포함되어 있습니다. OpenCode v2를 사용하려면 OpenChamber를 업데이트하세요.",
@@ -143,10 +145,12 @@ export const dict: Record<I18nKey, string> = {
   ...isolatedSpacesI18n.ko,
   ...sourceBoardI18n.ko,
   ...projectActionsI18n.ko,
+  ...gitIdentityEditorI18n.ko,
   ...environmentI18n.ko,
   ...providersI18n.ko,
   ...mcpGridI18n.ko,
   ...pluginsGridI18n.ko,
+  ...integrationsCatalogI18n['ko'],
   'terminalView.actions.attachSelection': '선택한 출력 첨부',
   'terminalView.actions.copySelection': '선택한 출력 복사',
   'terminalView.toast.selectionCopied': '출력을 복사했습니다',
@@ -689,6 +693,8 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.session.work.markDone': '완료로 표시',
   'sessions.sidebar.session.work.doneSuggested': '완료된 것 같습니다',
   'sessions.sidebar.session.work.updateFailed': '세션을 업데이트할 수 없습니다',
+  'sessions.sidebar.session.pin.pinFailed': '세션을 고정할 수 없습니다',
+  'sessions.sidebar.session.pin.unpinFailed': '세션 고정을 해제할 수 없습니다',
   'chat.work.doneHint.text': '이 작업은 완료된 것 같습니다.',
   'chat.work.doneHint.action': '완료로 표시',
   'chat.work.reviewHint.text': '변경 사항을 검토할 준비가 되었습니다.',
@@ -812,6 +818,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.group.pr.status.mergeConflicts': '병합 충돌',
   'sessions.sidebar.group.pr.status.mergeBlocked': '병합 차단됨',
   'sessions.sidebar.group.pr.status.checksFailing': '검사 실패',
+  'sessions.sidebar.group.pr.status.checksRunning': '검사 실행 중',
   'sessions.sidebar.group.issue.status.open': 'Issue 열림',
   'sessions.sidebar.group.issue.status.completed': '완료됨',
   'sessions.sidebar.group.issue.status.notPlanned': '계획 없음',

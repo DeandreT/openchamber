@@ -47,7 +47,7 @@ import { formatTimestampForDisplay } from './timeFormat';
 import { ToolRevealOnMount } from './parts/ToolRevealOnMount';
 import { StaticToolRow } from './parts/ProgressiveGroup';
 import { isExpandableTool } from './parts/toolRenderUtils';
-import { HtmlRenderFrame, ShownPage } from './parts/HtmlRenderFrame';
+import { ShownPage } from './parts/HtmlRenderFrame';
 import { renderedPage } from '@/lib/opencode/tools';
 import { LiveActivityCollapse } from '../components/LiveActivityCollapse';
 import { ActivityRowSkipContext, isActivityRowPart, isToolRowShown } from '../lib/turns/activityRows';
@@ -80,8 +80,8 @@ const getDisplayFileName = (file: string): string => {
     return segments.at(-1) ?? file;
 };
 
-const CHANGED_FILE_CHIP_CLASS_NAME = 'inline-flex max-w-full items-center gap-1.5 rounded-lg border border-border/30 bg-muted/30 px-2 py-1 text-xs text-muted-foreground';
-const CHANGED_FILE_CHIP_HOVER_CLASS_NAME = 'transition-colors hover:border-border/60 hover:bg-interactive-hover';
+const CHANGED_FILE_CHIP_CLASS_NAME = 'inline-flex max-w-full items-center gap-1.5 rounded-lg oc-tile px-2 py-1 text-xs text-muted-foreground';
+const CHANGED_FILE_CHIP_HOVER_CLASS_NAME = 'oc-tile-hover';
 const CHANGED_FILE_CHIP_STYLE = { lineHeight: 'round(1.35em, 1px)' };
 const CHANGED_FILE_CHIP_BUTTON_CLASS_NAME = 'inline-flex h-8 max-w-full cursor-pointer items-center rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-[var(--interactive-focus-ring)]';
 
@@ -1730,12 +1730,9 @@ const AssistantMessageBody = React.memo(({
 
                 // A page the agent showed is drawn in place of its row. With
                 // Activity collapsed, the final answer draws it instead.
-                const page = toolPart.state.status === 'completed'
-                    ? renderedPage(toolPart.tool, toolPart.state.input, toolPart.state.metadata)
-                    : null;
-                if (page) {
+                if (renderedPage(toolPart.tool, toolPart.state)) {
                     if (!hoistedPages?.has(toolPart.id)) {
-                        rendered.push(<HtmlRenderFrame key={`page-${toolPart.id}`} partId={toolPart.id} html={page.html} title={page.title} />);
+                        rendered.push(<ShownPage key={`page-${toolPart.id}`} part={toolPart} />);
                     }
                     i++;
                     continue;
@@ -2144,7 +2141,7 @@ const AssistantMessageBody = React.memo(({
                     {renderedParts}
                     {showErrorMessage && (
                         <FadeInOnReveal key="assistant-error">
-                            <div className="group/assistant-text relative mt-3 max-w-full break-words rounded-2xl border border-[var(--status-info-border)] bg-[var(--status-info-background)] px-4 py-3 text-base leading-relaxed">
+                            <div className="group/assistant-text relative mt-3 max-w-full break-words rounded-2xl bg-[var(--status-info-background)] px-4 py-3 text-base leading-relaxed">
                                 <div className="flex items-center gap-3">
                                     <Icon name="information" className="size-4 shrink-0 text-[var(--status-info)]" />
                                     <div className="min-w-0 flex-1 break-words">

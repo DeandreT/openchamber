@@ -315,6 +315,59 @@ describe('subagent finish with subagent notifications off', () => {
   });
 });
 
+describe('input-needed notification for a page that waits for an answer', () => {
+  it('notifies like a form, with the page title as the ask, and opens its session', async () => {
+    vi.useFakeTimers();
+    const emitDesktopNotification = vi.fn(() => true);
+    const sendApnsToAllUiSessions = vi.fn(async () => undefined);
+    const runtime = createNotificationTriggerRuntime({
+      readSettingsFromDisk: async () => ({ nativeNotificationsEnabled: true, notificationMode: 'always', notifyOnQuestion: true }),
+      buildTemplateVariables: async () => ({ session_name: 'Sidebar cleanup' }),
+      resolveNotificationTemplate: (template, variables) => template.replace('{last_message}', variables.last_message ?? ''),
+      shouldApplyResolvedTemplateMessage: () => true,
+      emitDesktopNotification,
+      broadcastUiNotification: vi.fn(),
+      sendPushToAllUiSessions: vi.fn(async () => undefined),
+      sendApnsToAllUiSessions,
+      isAnyInteractiveClientVisible: () => false,
+    });
+
+    await runtime.maybeSendPushForTrigger({
+      type: 'openchamber:page-waiting',
+      properties: { sessionID: 'ses_1', directory: '/repo', page: { id: 'call_1', title: 'Pick a session row layout' } },
+    });
+    await vi.advanceTimersByTimeAsync(600);
+    vi.useRealTimers();
+
+    expect(emitDesktopNotification.mock.calls[0][0]).toMatchObject({
+      kind: 'question', title: 'Input needed', body: 'Pick a session row layout', sessionId: 'ses_1', directory: '/repo', tag: 'question-ses_1',
+    });
+    expect(sendApnsToAllUiSessions.mock.calls[0][0].sealed).toEqual({ title: 'Sidebar cleanup', body: 'Question: Pick a session row layout' });
+  });
+
+  it('stays quiet when question notifications are off', async () => {
+    vi.useFakeTimers();
+    const emitDesktopNotification = vi.fn(() => true);
+    const runtime = createNotificationTriggerRuntime({
+      readSettingsFromDisk: async () => ({ nativeNotificationsEnabled: true, notificationMode: 'always', notifyOnQuestion: false }),
+      buildTemplateVariables: async () => ({}),
+      resolveNotificationTemplate: () => '',
+      shouldApplyResolvedTemplateMessage: () => false,
+      emitDesktopNotification,
+      broadcastUiNotification: vi.fn(),
+      sendPushToAllUiSessions: vi.fn(async () => undefined),
+      sendApnsToAllUiSessions: vi.fn(async () => undefined),
+      isAnyInteractiveClientVisible: () => false,
+    });
+
+    await runtime.maybeSendPushForTrigger({ type: 'openchamber:page-waiting', properties: { sessionID: 'ses_1', page: { id: 'call_1', title: 'Pick' } } });
+    await vi.advanceTimersByTimeAsync(600);
+    vi.useRealTimers();
+
+    expect(emitDesktopNotification).not.toHaveBeenCalled();
+  });
+});
+
 describe('input-needed notification for an MCP elicitation', () => {
   it('opens the app, since the form belongs to no session', async () => {
     vi.useFakeTimers();

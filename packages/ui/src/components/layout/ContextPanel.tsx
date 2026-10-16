@@ -7,6 +7,7 @@ import { ContextMenuItem, ContextMenuSeparator } from '@/components/ui/context-m
 import { SortableTabsStrip } from '@/components/ui/sortable-tabs-strip';
 import { PullRequestView } from '@/components/views/PullRequestView';
 import { lazyWithChunkRecovery } from '@/lib/chunkLoadRecovery';
+import { getDisambiguatingFolders } from '@/lib/path-utils';
 
 // Heavy views stay on-demand (same as MainLayout): importing GitView or the
 // plan statically pulls their stacks into the eager startup graph even when
@@ -24,6 +25,8 @@ import { useI18n } from '@/lib/i18n';
 import { useBrowserFaviconStore } from '@/stores/useBrowserFaviconStore';
 import { clampContextEditorTreeWidth, useUIStore, type ContextPanelMode } from '@/stores/useUIStore';
 import { useChildStoreManager } from '@/sync/sync-context';
+import { useSessionTurnActivity } from '@/sync/global-session-status';
+import { SessionActivityIndicator } from '@/components/session/SessionActivityIndicator';
 import { ContextPanelContent } from './ContextSidebarTab';
 import { browserUrlLabel } from '@/lib/browser/url';
 import { Icon } from "@/components/icon/Icon";
@@ -191,8 +194,17 @@ const ContextGuestIcon: React.FC<{ mode: ContextPanelMode }> = ({ mode }) => {
   return <GuestIcon icon={surface?.icon ?? FALLBACK_GUEST_ICON} iconSrc={surface?.iconSrc} className="h-3.5 w-3.5" />;
 };
 
+// A chat tab shows its session's live activity in place of the chat icon, so a
+// strip of many subagent chats tells the running ones from the idle ones.
+const ChatTabIcon: React.FC<{ sessionId: string }> = ({ sessionId }) => {
+  const activity = useSessionTurnActivity(sessionId);
+  return activity
+    ? <SessionActivityIndicator state={activity} className="h-3.5 w-3.5" />
+    : <Icon name="chat-4" className="h-3.5 w-3.5" />;
+};
+
 const getTabIcon = (
-  tab: { mode: ContextPanelMode; targetPath: string | null },
+  tab: { mode: ContextPanelMode; targetPath: string | null; dedupeKey?: string },
   faviconByOrigin: Record<string, string> = {},
 ): React.ReactNode | undefined => {
   if (tab.mode === 'file') {
@@ -230,7 +242,10 @@ const getTabIcon = (
   }
 
   if (tab.mode === 'chat') {
-    return <Icon name="chat-4" className="h-3.5 w-3.5" />;
+    const sessionId = getSessionIDFromDedupeKey(tab.dedupeKey);
+    return sessionId
+      ? <ChatTabIcon sessionId={sessionId} />
+      : <Icon name="chat-4" className="h-3.5 w-3.5" />;
   }
 
   if (isPluginContextPanelMode(tab.mode)) {
@@ -715,19 +730,25 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
     [activeTab, tabs],
   );
 
-  const tabItems = React.useMemo(() => activeModeTabs.map((tab) => {
-    const rawLabel = getTabLabel(tab, sessionTitleById, tabT);
-    const label = truncateTabLabel(rawLabel, CONTEXT_TAB_LABEL_MAX_CHARS);
-    const tabPathLabel = getRelativePathLabel(tab.targetPath, effectiveDirectory);
-    return {
-      id: tab.id,
-      label,
-      icon: getTabIcon(tab, faviconByOrigin),
-      title: tabPathLabel ? `${rawLabel}: ${tabPathLabel}` : rawLabel,
-      closeLabel: t('contextPanel.tab.closeTabAria', { label }),
-      preview: tab.preview,
-    };
-  }), [activeModeTabs, effectiveDirectory, faviconByOrigin, sessionTitleById, t, tabT]);
+  const tabItems = React.useMemo(() => {
+    const fileFolders = getDisambiguatingFolders(activeModeTabs
+      .filter((tab) => tab.mode === 'file')
+      .map((tab) => getRelativePathLabel(tab.targetPath, effectiveDirectory)));
+    return activeModeTabs.map((tab) => {
+      const rawLabel = getTabLabel(tab, sessionTitleById, tabT);
+      const label = truncateTabLabel(rawLabel, CONTEXT_TAB_LABEL_MAX_CHARS);
+      const tabPathLabel = getRelativePathLabel(tab.targetPath, effectiveDirectory);
+      return {
+        id: tab.id,
+        label,
+        labelFolder: tab.mode === 'file' ? fileFolders.get(tabPathLabel) : undefined,
+        icon: getTabIcon(tab, faviconByOrigin),
+        title: tabPathLabel ? `${rawLabel}: ${tabPathLabel}` : rawLabel,
+        closeLabel: t('contextPanel.tab.closeTabAria', { label }),
+        preview: tab.preview,
+      };
+    });
+  }, [activeModeTabs, effectiveDirectory, faviconByOrigin, sessionTitleById, t, tabT]);
 
   const activeNonChatContent = activeTab?.mode === 'context'
         ? <ContextPanelHeaderSlotProvider value={headerSlotEl}><ContextPanelContent /></ContextPanelHeaderSlotProvider>

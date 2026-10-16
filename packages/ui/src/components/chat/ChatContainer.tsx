@@ -539,6 +539,8 @@ const ChatViewport = React.memo(({
             )}
             ref={timelineRootRef}
             aria-hidden={isDesktopExpandedInput}
+            // The message column keeps clear of the prompt rail (typography.css).
+            data-prompt-rail={showPromptNavigator && promptTurnIds.length >= 2 ? '' : undefined}
         >
             <div className="absolute inset-0">
                 <MessageList

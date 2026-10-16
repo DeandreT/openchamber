@@ -39,7 +39,7 @@ const CheckRunDetails: React.FC<{
         </div>
       ) : null}
       {run.output?.text ? (
-        <div className="rounded border border-border/40 bg-transparent px-2 py-2 typography-micro text-muted-foreground whitespace-pre-wrap break-words max-h-48 overflow-y-auto">
+        <div className="rounded oc-tile-inset px-2 py-2 typography-micro text-muted-foreground whitespace-pre-wrap break-words max-h-48 overflow-y-auto">
           {run.output.text}
         </div>
       ) : null}
@@ -53,7 +53,7 @@ const CheckRunDetails: React.FC<{
           </div>
           <div className="space-y-1">
             {annotations.slice(0, 20).map((annotation, idx) => (
-              <div key={`${annotation.path || 'file'}:${annotation.startLine || idx}:${idx}`} className="rounded border border-[var(--status-error-border)] bg-[var(--status-error-background)]/40 px-2 py-2">
+              <div key={`${annotation.path || 'file'}:${annotation.startLine || idx}:${idx}`} className="rounded bg-[var(--status-error-background)]/60 px-2 py-2">
                 <div className="typography-micro break-words text-[var(--status-error)]">
                   {annotation.title || annotation.level || 'Issue'}
                   {annotation.path ? ` · ${annotation.path}` : ''}
@@ -101,7 +101,7 @@ const CheckRunDetails: React.FC<{
                     {step.conclusion ? <span className="ms-auto flex-shrink-0">{step.conclusion}</span> : null}
                   </button>
                   <CollapsibleContent>
-                    <div className="ms-6 mt-1 rounded border border-border/40 bg-transparent px-2 py-2 typography-micro text-muted-foreground space-y-1">
+                    <div className="ms-6 mt-1 rounded oc-tile-inset px-2 py-2 typography-micro text-muted-foreground space-y-1">
                       {step.number !== undefined ? <div>{t('gitView.pr.checks.stepLabel')}: {step.number}</div> : null}
                       {step.status ? <div>{t('gitView.pr.checks.statusLabel')}: {step.status}</div> : null}
                       {step.conclusion ? <div>{t('gitView.pr.checks.conclusionLabel')}: {step.conclusion}</div> : null}
@@ -148,7 +148,7 @@ export const CheckRunList: React.FC<{
         ? formatElapsedDuration(run.startedAt, undefined, now)
         : formatElapsedDuration(run.startedAt, run.completedAt);
       return (
-        <div key={runKey} className={cn('rounded-md border border-border/40', failed && 'border-[var(--status-error-border)]')}>
+        <div key={runKey} className={cn('rounded-md', failed ? 'bg-[var(--status-error-background)]/60' : 'oc-tile')}>
           <button
             type="button"
             disabled={!hasDetails}

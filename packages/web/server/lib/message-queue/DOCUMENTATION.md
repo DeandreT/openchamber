@@ -213,6 +213,11 @@ by the route family's 50 MB JSON limit.
 ## UI ownership
 
 `packages/ui/src/stores/messageQueueStore.ts` is the projection: see its
-section in `packages/ui/src/stores/DOCUMENTATION.md`. VS Code intentionally
+section in `packages/ui/src/stores/DOCUMENTATION.md`. A session in an isolated
+space is queued in this module inside that space, not on the host: the host's
+runtime sees the host's events only and never delivers into a space. The host
+forwards the space's `openchamber:message-queue.updated` changes to the
+browsers, see "Sessions and events" in
+`packages/web/server/lib/spaces/DOCUMENTATION.md`. VS Code intentionally
 does not use this module; with all OpenChamber webviews closed, queued
 messages there are not delivered.

@@ -162,7 +162,7 @@ function DropdownMenuContent({
   };
 
   return (
-    <BaseMenu.Portal container={portalToBody ? undefined : portalContext?.portalContainer || undefined}>
+    <BaseMenu.Portal className="contents" container={portalToBody ? undefined : portalContext?.portalContainer || undefined}>
       <BaseMenu.Positioner
         sideOffset={sideOffset}
         align={align}
@@ -340,7 +340,7 @@ function DropdownMenuSubContent({
   };
 
   return (
-    <BaseMenu.Portal container={portalContext?.portalContainer || undefined}>
+    <BaseMenu.Portal className="contents" container={portalContext?.portalContainer || undefined}>
       <BaseMenu.Positioner className="z-50">
         <BaseMenu.Popup
           data-slot="dropdown-menu-sub-content"

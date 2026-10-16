@@ -15,10 +15,12 @@ import { webSearchI18n } from './websearch.i18n';
 import { isolatedSpacesI18n } from './isolated-spaces.i18n';
 import { sourceBoardI18n } from './source-board.i18n';
 import { projectActionsI18n } from './project-actions.i18n';
+import { gitIdentityEditorI18n } from './git-identity-editor.i18n';
 import { environmentI18n } from './environment.i18n';
 import { providersI18n } from './providers.i18n';
 import { mcpGridI18n } from './mcp-grid.i18n';
 import { pluginsGridI18n } from './plugins-grid.i18n';
+import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict: Record<I18nKey, string> = {
   "opencodeCompatibility.bundled": "OpenCode 随 OpenChamber 一起提供。请更新 OpenChamber 以获取 OpenCode v2。",
@@ -143,10 +145,12 @@ export const dict: Record<I18nKey, string> = {
   ...isolatedSpacesI18n['zh-CN'],
   ...sourceBoardI18n['zh-CN'],
   ...projectActionsI18n['zh-CN'],
+  ...gitIdentityEditorI18n['zh-CN'],
   ...environmentI18n['zh-CN'],
   ...providersI18n['zh-CN'],
   ...mcpGridI18n['zh-CN'],
   ...pluginsGridI18n['zh-CN'],
+  ...integrationsCatalogI18n['zh-CN'],
   'terminalView.actions.attachSelection': '附加所选输出',
   'terminalView.actions.copySelection': '复制所选输出',
   'terminalView.toast.selectionCopied': '已复制输出',
@@ -513,8 +517,8 @@ export const dict: Record<I18nKey, string> = {
   'sessions.scheduledTasks.editor.enabled.label': '已启用',
   'sessions.scheduledTasks.editor.goal.label': '作为目标运行',
   'sessions.scheduledTasks.editor.goal.aria': '将此任务作为智能体持续推进直至完成的目标运行',
-  'sessions.scheduledTasks.editor.goal.budgetLabel': '令牌预算',
-  'sessions.scheduledTasks.editor.goal.budgetAria': '用令牌预算限制该目标',
+  'sessions.scheduledTasks.editor.goal.budgetLabel': '词元预算',
+  'sessions.scheduledTasks.editor.goal.budgetAria': '用词元预算限制该目标',
   'sessions.scheduledTasks.editor.permissionAutoAccept.label': '自动接受权限',
   'sessions.scheduledTasks.editor.permissionAutoAccept.aria': '启动任务会话时启用权限自动接受',
   'sessions.scheduledTasks.editor.actions.closeAria': '关闭',
@@ -689,6 +693,8 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.session.work.markDone': '标记为完成',
   'sessions.sidebar.session.work.doneSuggested': '看起来已完成',
   'sessions.sidebar.session.work.updateFailed': '无法更新会话',
+  'sessions.sidebar.session.pin.pinFailed': '无法置顶会话',
+  'sessions.sidebar.session.pin.unpinFailed': '无法取消置顶会话',
   'chat.work.doneHint.text': '这项工作看起来已完成。',
   'chat.work.doneHint.action': '标记为完成',
   'chat.work.reviewHint.text': '更改已可查看。',
@@ -812,6 +818,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.group.pr.status.mergeConflicts': '存在合并冲突',
   'sessions.sidebar.group.pr.status.mergeBlocked': '合并被阻止',
   'sessions.sidebar.group.pr.status.checksFailing': '检查未通过',
+  'sessions.sidebar.group.pr.status.checksRunning': '检查进行中',
   'sessions.sidebar.group.issue.status.open': 'Issue 已打开',
   'sessions.sidebar.group.issue.status.completed': '已完成',
   'sessions.sidebar.group.issue.status.notPlanned': '不计划处理',
@@ -1462,7 +1469,7 @@ export const dict: Record<I18nKey, string> = {
   'contextRail.surface.pr.description': '创建、审查并合并当前分支的拉取请求',
   'contextRail.surface.mr.description': '创建、审查并合并当前分支的合并请求',
   'contextRail.surface.notes.description': '项目的笔记、待办、计划和智能体记忆',
-  'contextRail.surface.context.description': '会话上下文与令牌用量',
+  'contextRail.surface.context.description': '会话上下文与词元用量',
   'contextRail.surface.browser.description': '内置网页浏览器',
   'contextRail.surface.preview.description': '开发服务器预览',
   'contextRail.surface.chat.description': '并排打开的会话',
@@ -1996,7 +2003,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.goal.dialog.titleManage': '会话目标',
   'chat.goal.dialog.objectiveLabel': '目标',
   'chat.goal.dialog.objectivePlaceholder': '描述智能体应达到并验证的最终状态…',
-  'chat.goal.dialog.budgetLabel': '令牌预算',
+  'chat.goal.dialog.budgetLabel': '词元预算',
   'chat.goal.dialog.evaluationModelLabel': '评估模型',
   'chat.goal.status.active': '进行中',
   'chat.goal.status.evaluating': '评估中…',
@@ -2004,8 +2011,8 @@ export const dict: Record<I18nKey, string> = {
   'chat.goal.status.blocked': '已阻塞',
   'chat.goal.status.budgetLimited': '已达预算',
   'chat.goal.status.complete': '已完成',
-  'chat.goal.usage.tokens': '{used} 令牌',
-  'chat.goal.usage.tokensWithBudget': '{used}/{budget} 令牌',
+  'chat.goal.usage.tokens': '{used} 词元',
+  'chat.goal.usage.tokensWithBudget': '{used}/{budget} 词元',
   'chat.goal.usage.turns': '{turns} 次续跑',
   'chat.goal.action.pause': '暂停',
   'chat.goal.action.resume': '继续',

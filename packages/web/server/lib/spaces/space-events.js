@@ -8,14 +8,25 @@
 // space's root or a session id of the host's drops it. When a connection is made the host
 // asks the space for its live status and enters it the same way. A gap is reported to the
 // clients as `openchamber:space-stream`, so a client re-reads that one space.
+//
+// A second connection per space reads its OpenChamber control stream for one kind of event, a
+// change to a session's message queue: the queue of a space's session lives in that space's
+// server, which sees its OpenCode go idle and delivers. Each change passes the same rules and goes
+// to the browsers marked with the space's id; a connection announces itself as
+// `openchamber:space-queue-stream`, so a client re-reads that space's queue after a gap.
 
 import { Readable } from 'node:stream';
 
 import { z } from 'zod';
 
-import { createUpstreamSseReader } from '../event-stream/upstream-reader.js';
+import { UPSTREAM_STALL_TIMEOUT_CONCURRENT_MS, createUpstreamSseReader } from '../event-stream/upstream-reader.js';
 
 const EVENT_PATH = '/api/event';
+const CONTROL_PATH = '/api/openchamber/events';
+const QUEUE_UPDATED = 'openchamber:message-queue.updated';
+// The control stream inside is quiet but for a heartbeat every 25 seconds, so a quiet minute is
+// a dead stream; the reader's default of 20 seconds would drop and remake a healthy idle one.
+const QUEUE_STALL_TIMEOUT_MS = UPSTREAM_STALL_TIMEOUT_CONCURRENT_MS;
 const STATUS_PATH = '/api/sessions/status';
 const STATUS_TIMEOUT_MS = 10_000;
 const MAX_STATUS_BYTES = 4 * 1024 * 1024;
@@ -29,6 +40,19 @@ export const reconnectDelayAfter = (failures) => Math.min(RECONNECT_CAP_MS, RECO
 const liveStatusSchema = z.object({ status: z.enum(['busy', 'idle']) });
 const statusSchema = z.object({ sessions: z.record(z.string(), z.unknown()).default({}) }).passthrough();
 const eventPayloadSchema = z.object({ location: z.object({ directory: z.string() }).passthrough().optional() }).passthrough();
+// A queue change inside, rebuilt from these fields only; the items are the space's own, carried for display.
+const queueUpdateSchema = z.object({
+  type: z.literal(QUEUE_UPDATED),
+  properties: z.object({
+    revision: z.number(),
+    session: z.object({
+      sessionId: z.string(),
+      directory: z.string(),
+      items: z.array(z.unknown()),
+      sendingId: z.string().nullable(),
+    }),
+  }),
+});
 
 /** Reads a whole body up to a cap, as text. */
 const readBody = (response, cap) => new Promise((resolve, reject) => {
@@ -49,9 +73,11 @@ const readBody = (response, cap) => new Promise((resolve, reject) => {
 
 /**
  * `requestInside(spaceId, { path, headers, timeoutMs })` is the dispatcher's; `index` the
- * session index; `hub` the global event hub. `stallTimeoutMs` and `now` are for the tests.
+ * session index; `hub` the global event hub; `broadcastUiEvent` the host's control stream, and
+ * without it no queue connection is made. `stallTimeoutMs`, `queueStallTimeoutMs` and `now` are
+ * for the tests.
  */
-export function createSpaceEventSources({ requestInside, index, hub, logger = console, stallTimeoutMs, now = Date.now }) {
+export function createSpaceEventSources({ requestInside, index, hub, broadcastUiEvent = null, logger = console, stallTimeoutMs, queueStallTimeoutMs = QUEUE_STALL_TIMEOUT_MS, now = Date.now }) {
   const sources = new Map();
 
   const inject = (spaceId, payload, directory) => hub.injectEvent({ payload, directory, spaceId });
@@ -77,9 +103,9 @@ export function createSpaceEventSources({ requestInside, index, hub, logger = co
     }
   };
 
-  /** The event stream inside, over the dispatcher's channel, in the shape the reader expects. */
-  const fetchInside = (spaceId) => async (_url, { headers, signal }) => {
-    const response = await requestInside(spaceId, { path: EVENT_PATH, headers });
+  /** A stream inside, over the dispatcher's channel, in the shape the reader expects. */
+  const fetchInside = (spaceId, path) => async (_url, { headers, signal }) => {
+    const response = await requestInside(spaceId, { path, headers });
     const stop = () => response.destroy();
     if (signal?.aborted) { stop(); throw new Error('aborted'); }
     signal?.addEventListener('abort', stop, { once: true });
@@ -94,7 +120,7 @@ export function createSpaceEventSources({ requestInside, index, hub, logger = co
     const source = { failures: 0, everConnected: false, reader: null, controller };
     source.reader = createUpstreamSseReader({
       signal: controller.signal,
-      fetchImpl: fetchInside(spaceId),
+      fetchImpl: fetchInside(spaceId, EVENT_PATH),
       stallTimeoutMs,
       reconnectDelayMs: () => reconnectDelayAfter(source.failures),
       buildUrl: () => new URL(`http://space${EVENT_PATH}`),
@@ -120,8 +146,43 @@ export function createSpaceEventSources({ requestInside, index, hub, logger = co
         logger.warn?.(`[spaces] event stream of space ${spaceId}: ${error?.type ?? 'error'} ${error?.status ?? error?.error?.code ?? ''}`.trim());
       },
     });
+    if (broadcastUiEvent) source.queueReader = startQueueReader(spaceId, controller.signal);
     sources.set(spaceId, source);
     void source.reader.start();
+  };
+
+  /** A queue change of a space's session, to the browsers, when the space may speak for that session. */
+  const forwardQueueUpdate = (spaceId, payload) => {
+    const parsed = queueUpdateSchema.safeParse(payload);
+    if (!parsed.success) return;
+    const { revision, session } = parsed.data.properties;
+    if (!index.acceptSpaceQueueSession(spaceId, session.sessionId, session.directory)) return;
+    broadcastUiEvent({ type: QUEUE_UPDATED, properties: { revision, session, spaceId } });
+  };
+
+  const startQueueReader = (spaceId, signal) => {
+    const state = { failures: 0 };
+    const reader = createUpstreamSseReader({
+      signal,
+      fetchImpl: fetchInside(spaceId, CONTROL_PATH),
+      stallTimeoutMs: queueStallTimeoutMs,
+      reconnectDelayMs: () => reconnectDelayAfter(state.failures),
+      buildUrl: () => new URL(`http://space${CONTROL_PATH}`),
+      onConnect() {
+        state.failures = 0;
+        broadcastUiEvent({ type: 'openchamber:space-queue-stream', properties: { spaceId, status: 'connected' } });
+      },
+      onDisconnect() { state.failures += 1; },
+      onEvent({ payload }) {
+        if (payload?.type === QUEUE_UPDATED) forwardQueueUpdate(spaceId, payload);
+      },
+      onError(error) {
+        if (signal.aborted) return;
+        logger.warn?.(`[spaces] control stream of space ${spaceId}: ${error?.type ?? 'error'} ${error?.status ?? error?.error?.code ?? ''}`.trim());
+      },
+    });
+    void reader.start();
+    return reader;
   };
 
   const stop = (spaceId) => {
@@ -130,6 +191,7 @@ export function createSpaceEventSources({ requestInside, index, hub, logger = co
     sources.delete(spaceId);
     source.controller.abort();
     source.reader.stop();
+    source.queueReader?.stop();
   };
 
   return {

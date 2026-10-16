@@ -109,14 +109,17 @@ const contextComponents: SessionTabMenuComponents = {
 const SessionTabItem: React.FC<{
   tab: SessionTab;
   isActive: boolean;
+  /** The replaceable preview tab: italic title, pinned by double-click. */
+  isPreview: boolean;
   suppressControls: boolean;
   onSelect: (tab: SessionTab) => void;
+  onPin: (id: string) => void;
   onClose: (id: string) => void;
   renderMenu: (args: SessionTabMenuArgs) => React.ReactNode;
   closeOtherTabs: (id: string) => void;
   onMenuOpenChangeComplete?: (open: boolean) => void;
   children?: React.ReactNode;
-}> = ({ tab, isActive, suppressControls, onSelect, onClose, renderMenu, closeOtherTabs, onMenuOpenChangeComplete, children }) => {
+}> = ({ tab, isActive, isPreview, suppressControls, onSelect, onPin, onClose, renderMenu, closeOtherTabs, onMenuOpenChangeComplete, children }) => {
   const { t } = useI18n();
   const [menuOpen, setMenuOpen] = React.useState(false);
   // Keeps the overlay (the dropdown's anchor) mounted through the close animation.
@@ -167,6 +170,7 @@ const SessionTabItem: React.FC<{
                   aria-selected={isActive}
                   tabIndex={isActive ? undefined : 0}
                   onClick={isActive ? undefined : () => onSelect(tab)}
+                  onDoubleClick={isPreview ? () => onPin(tab.id) : undefined}
                   onKeyDown={isActive ? undefined : (event) => {
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault();
@@ -206,6 +210,8 @@ const SessionTabItem: React.FC<{
                     <div className={cn(
                       'min-w-0 flex-1 overflow-hidden whitespace-nowrap',
                       !suppressControls && 'session-tab-title',
+                      // Not while renaming: the rename field stays upright.
+                      isPreview && !suppressControls && 'italic',
                     )}
                     >
                       {/* Same box as the active content the header renders
@@ -295,8 +301,8 @@ const SessionTabItem: React.FC<{
 /**
  * The header's horizontal working set of sessions (web/desktop only).
  *
- * Every session the user opens joins the strip once; the tab whose session is
- * current renders `children` — the header's title/rename block — inside a
+ * A session the user opens shows in the italic preview tab until pinned (see
+ * `useSessionTabsStore`); the tab whose session is current renders `children` — the header's title/rename block — inside a
  * selected pill. Closing a tab only removes it from the strip; closing the
  * active one activates its neighbour. Ids whose session has not loaded (or
  * was archived/deleted) stay in the store but do not render, so a partial
@@ -315,7 +321,9 @@ export const SessionTabsStrip: React.FC<{
   // The horizontal strategy assumes later tabs sit further right; RTL uses real rects.
   const isRtl = direction === 'rtl';
   const tabIds = useSessionTabsStore((state) => state.tabIds);
+  const previewTabId = useSessionTabsStore((state) => state.previewTabId);
   const ensureTab = useSessionTabsStore((state) => state.ensureTab);
+  const pinTab = useSessionTabsStore((state) => state.pinTab);
   const closeOtherTabs = useSessionTabsStore((state) => state.closeOtherTabs);
   const reorderTabs = useSessionTabsStore((state) => state.reorderTabs);
 
@@ -323,8 +331,9 @@ export const SessionTabsStrip: React.FC<{
   const setCurrentSession = useSessionUIStore((state) => state.setCurrentSession);
   const activeSessions = useGlobalSessionsStore((state) => state.activeSessions);
 
-  // Opening a session anywhere (sidebar, palette, deep link) adds its tab. The
-  // lanes of one multi-run share a tab: opening another lane reuses it.
+  // Opening a session anywhere (sidebar, palette, deep link) shows it in the
+  // preview tab. The lanes of one multi-run share a tab: opening another lane
+  // reuses it.
   const currentRunMemberIds = useMultiRunMemberIds(currentSessionId);
   React.useEffect(() => {
     if (currentSessionId) ensureTab(currentSessionId, currentRunMemberIds);
@@ -445,8 +454,10 @@ export const SessionTabsStrip: React.FC<{
                 key={tab.id}
                 tab={tab}
                 isActive={tab.id === currentSessionId}
+                isPreview={tab.id === previewTabId}
                 suppressControls={tab.id === currentSessionId && suppressActiveTabControls}
                 onSelect={handleSelect}
+                onPin={pinTab}
                 onClose={handleClose}
                 renderMenu={renderMenu}
                 closeOtherTabs={handleCloseOthers}

@@ -35,7 +35,19 @@ export type SortableTabsStripItem = {
   closeLabel?: string;
   /** A replaceable preview tab; its label is italic, as in VS Code. */
   preview?: boolean;
+  /** Dimmed folder shown before the label, telling apart files that share a
+      name. Such a tab is never width-capped, so the folder stays whole. */
+  labelFolder?: string;
 };
+
+const TabLabelText: React.FC<{ item: SortableTabsStripItem }> = ({ item }) => (
+  item.labelFolder ? (
+    // A file path reads left to right in every UI language.
+    <span dir="ltr">
+      <span className="text-muted-foreground opacity-70">{item.labelFolder}/</span>{item.label}
+    </span>
+  ) : <>{item.label}</>
+);
 
 type SortableTabsStripProps = {
   items: SortableTabsStripItem[];
@@ -472,7 +484,7 @@ export const SortableTabsStrip: React.FC<SortableTabsStripProps> = ({
           usesActivePillIndicator && 'pill-tabs__track',
           usesActivePillIndicator && (activePillInsetClassName ?? 'gap-0.5 py-0.5'),
           useUnderlineIndicator && 'items-center overflow-y-hidden',
-          showPillTrackBackground && 'rounded-lg bg-[color-mix(in_srgb,var(--foreground)_4%,transparent)] p-0.5 gap-0.5',
+          showPillTrackBackground && 'oc-recessed rounded-lg bg-[color-mix(in_srgb,var(--foreground)_4%,transparent)] p-0.5 gap-0.5',
           isScrollable
             ? 'overflow-x-auto scrollbar-none'
             : 'overflow-x-hidden',
@@ -484,12 +496,10 @@ export const SortableTabsStrip: React.FC<SortableTabsStripProps> = ({
         {usesActivePillIndicator && pillRect ? (
           <div
             className={cn(
+              // Light themes paint elevated darker than the canvas, so the
+              // raised pill takes the canvas colour there to stand above the track.
               // oxlint-disable-next-line openchamber/no-physical-sides -- positioned from offsetLeft, which is physical in either direction
-              'pointer-events-none absolute left-0 top-0 z-0 rounded-md bg-[var(--surface-elevated)]',
-              // Lifted card look: hairline edge plus a soft ambient shadow rather
-              // than a hard border, so the pill reads as raised above the track.
-              'border border-[color-mix(in_srgb,var(--foreground)_7%,transparent)]',
-              'shadow-[0_1px_2px_color-mix(in_srgb,var(--foreground)_10%,transparent),0_2px_6px_color-mix(in_srgb,var(--foreground)_6%,transparent)]',
+              'oc-raised pointer-events-none absolute left-0 top-0 z-0 rounded-md bg-[var(--surface-background)] dark:bg-[var(--surface-elevated)]',
               shouldAnimateActivePill && pillTransitionEnabled
                 && (nonCompositedIndicator ? 'pill-tabs__indicator--is-animated-layout' : 'pill-tabs__indicator--is-animated')
             )}
@@ -607,14 +617,14 @@ export const SortableTabsStrip: React.FC<SortableTabsStripProps> = ({
                       ? useIntrinsicPillSizing
                         ? 'shrink-0 whitespace-nowrap px-3 text-center'
                         : isScrollable
-                          ? 'max-w-56 shrink-0 px-3 text-center'
+                          ? cn(!item.labelFolder && 'max-w-56', 'shrink-0 px-3 text-center')
                           : (showInactiveIconOnly
                             ? 'px-2 !min-w-0 text-center'
                             : useIntrinsicActiveTab
                               ? 'shrink-0 whitespace-nowrap px-3 text-center'
                               : 'px-3 text-center')
                       : isScrollable
-                        ? 'max-w-56 justify-start truncate px-3 text-start'
+                        ? cn(!item.labelFolder && 'max-w-56', 'justify-start truncate px-3 text-start')
                         : 'w-full justify-center truncate px-3 text-center',
                     usesActivePillIndicator
                       // 24px buttons in a 2px-padded track: the switch is
@@ -658,7 +668,7 @@ export const SortableTabsStrip: React.FC<SortableTabsStripProps> = ({
                           ) : null}
                         </span>
                       ) : null}
-                      {shouldShowLabel ? <span className={cn('animated-tabs__label truncate', item.preview && 'italic')}>{item.label}</span> : null}
+                      {shouldShowLabel ? <span className={cn('animated-tabs__label truncate', item.preview && 'italic')}><TabLabelText item={item} /></span> : null}
                     </>
                   ) : (
                     <span className={cn('flex min-w-0 flex-nowrap items-center gap-1.5', !isScrollable && 'justify-center')}>
@@ -690,7 +700,7 @@ export const SortableTabsStrip: React.FC<SortableTabsStripProps> = ({
                           ) : null}
                         </span>
                       ) : null}
-                      <span className={cn('truncate leading-[1.2]', item.preview && 'italic')}>{item.label}</span>
+                      <span className={cn('truncate leading-[1.2]', item.preview && 'italic')}><TabLabelText item={item} /></span>
                     </span>
                   )}
                 </button>

@@ -15,10 +15,12 @@ import { webSearchI18n } from './websearch.i18n';
 import { isolatedSpacesI18n } from './isolated-spaces.i18n';
 import { sourceBoardI18n } from './source-board.i18n';
 import { projectActionsI18n } from './project-actions.i18n';
+import { gitIdentityEditorI18n } from './git-identity-editor.i18n';
 import { environmentI18n } from './environment.i18n';
 import { providersI18n } from './providers.i18n';
 import { mcpGridI18n } from './mcp-grid.i18n';
 import { pluginsGridI18n } from './plugins-grid.i18n';
+import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict: Record<I18nKey, string> = {
   "opencodeCompatibility.bundled": "OpenCode 隨 OpenChamber 一起提供。請更新 OpenChamber 以取得 OpenCode v2。",
@@ -143,10 +145,12 @@ export const dict: Record<I18nKey, string> = {
   ...isolatedSpacesI18n['zh-TW'],
   ...sourceBoardI18n['zh-TW'],
   ...projectActionsI18n['zh-TW'],
+  ...gitIdentityEditorI18n['zh-TW'],
   ...environmentI18n['zh-TW'],
   ...providersI18n['zh-TW'],
   ...mcpGridI18n['zh-TW'],
   ...pluginsGridI18n['zh-TW'],
+  ...integrationsCatalogI18n['zh-TW'],
   'terminalView.actions.attachSelection': '附加所選輸出',
   'terminalView.actions.copySelection': '複製所選輸出',
   'terminalView.toast.selectionCopied': '已複製輸出',
@@ -541,8 +545,8 @@ export const dict: Record<I18nKey, string> = {
   'sessions.scheduledTasks.editor.enabled.label': '已啟用',
   'sessions.scheduledTasks.editor.goal.label': '作為目標執行',
   'sessions.scheduledTasks.editor.goal.aria': '將此任務作為代理持續推進直至完成的目標執行',
-  'sessions.scheduledTasks.editor.goal.budgetLabel': '權杖預算',
-  'sessions.scheduledTasks.editor.goal.budgetAria': '以權杖預算限制該目標',
+  'sessions.scheduledTasks.editor.goal.budgetLabel': '詞元預算',
+  'sessions.scheduledTasks.editor.goal.budgetAria': '以詞元預算限制該目標',
   'sessions.scheduledTasks.editor.permissionAutoAccept.label': '自動接受權限',
   'sessions.scheduledTasks.editor.permissionAutoAccept.aria': '啟動任務工作階段時啟用權限自動接受',
   'sessions.scheduledTasks.editor.actions.closeAria': '關閉',
@@ -709,6 +713,8 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.session.work.markDone': '標記為完成',
   'sessions.sidebar.session.work.doneSuggested': '看起來已完成',
   'sessions.sidebar.session.work.updateFailed': '無法更新工作階段',
+  'sessions.sidebar.session.pin.pinFailed': '無法釘選工作階段',
+  'sessions.sidebar.session.pin.unpinFailed': '無法取消釘選工作階段',
   'chat.work.doneHint.text': '這項工作看起來已完成。',
   'chat.work.doneHint.action': '標記為完成',
   'chat.work.reviewHint.text': '變更已可檢視。',
@@ -832,6 +838,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.group.pr.status.mergeConflicts': '存在合併衝突',
   'sessions.sidebar.group.pr.status.mergeBlocked': '合併被阻止',
   'sessions.sidebar.group.pr.status.checksFailing': '檢查未通過',
+  'sessions.sidebar.group.pr.status.checksRunning': '檢查進行中',
   'sessions.sidebar.group.issue.status.open': 'Issue 已開啟',
   'sessions.sidebar.group.issue.status.completed': '已完成',
   'sessions.sidebar.group.issue.status.notPlanned': '不計畫處理',
@@ -1481,7 +1488,7 @@ export const dict: Record<I18nKey, string> = {
   'contextRail.surface.pr.description': '建立、審查並合併目前分支的提取請求',
   'contextRail.surface.mr.description': '建立、審查並合併目前分支的合併請求',
   'contextRail.surface.notes.description': '專案的筆記、待辦、計畫與代理記憶',
-  'contextRail.surface.context.description': '工作階段情境與權杖用量',
+  'contextRail.surface.context.description': '工作階段情境與詞元用量',
   'contextRail.surface.browser.description': '內建網頁瀏覽器',
   'contextRail.surface.preview.description': '開發伺服器預覽',
   'contextRail.surface.chat.description': '並排開啟的工作階段',
@@ -2005,7 +2012,7 @@ export const dict: Record<I18nKey, string> = {
   'chat.goal.dialog.titleManage': '工作階段目標',
   'chat.goal.dialog.objectiveLabel': '目標',
   'chat.goal.dialog.objectivePlaceholder': '描述代理應達成並驗證的最終狀態…',
-  'chat.goal.dialog.budgetLabel': '權杖預算',
+  'chat.goal.dialog.budgetLabel': '詞元預算',
   'chat.goal.dialog.evaluationModelLabel': '評估模型',
   'chat.goal.status.active': '進行中',
   'chat.goal.status.evaluating': '評估中…',
@@ -2013,8 +2020,8 @@ export const dict: Record<I18nKey, string> = {
   'chat.goal.status.blocked': '已受阻',
   'chat.goal.status.budgetLimited': '已達預算',
   'chat.goal.status.complete': '已完成',
-  'chat.goal.usage.tokens': '{used} 權杖',
-  'chat.goal.usage.tokensWithBudget': '{used}/{budget} 權杖',
+  'chat.goal.usage.tokens': '{used} 詞元',
+  'chat.goal.usage.tokensWithBudget': '{used}/{budget} 詞元',
   'chat.goal.usage.turns': '{turns} 次續跑',
   'chat.goal.action.pause': '暫停',
   'chat.goal.action.resume': '繼續',

@@ -42,11 +42,12 @@
 
 import { spawn, spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, readdirSync } from "node:fs"
+import { rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import process from "node:process"
 
-import { CdpClient, createPageTarget, launchChrome, reservePort, resolveChrome, wait } from "./perf/cdp.mjs"
+import { CdpClient, createPageTarget, launchChrome, reservePort, resolveChrome, stopChrome, wait } from "./perf/cdp.mjs"
 import { round } from "./perf/metrics.mjs"
 import { createNetworkRecorder, summarizeRequests } from "./perf/network.mjs"
 import { buildStartupProbeSource, STARTUP_PROBE_GLOBAL } from "./perf/startup-probe.mjs"
@@ -597,7 +598,7 @@ const launchOnce = async ({ build, run, layout, env, cdpPort, options, outputDir
 // One web launch: a fresh Chrome loads the URL; every milestone is measured
 // in the page against its own navigation start, so there is no polling error.
 const launchWebOnce = async ({ run, options, chrome, profileDir }) => {
-  if (options.cache === "cold") rmSync(profileDir, { recursive: true, force: true })
+  if (options.cache === "cold") await rm(profileDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
   mkdirSync(profileDir, { recursive: true })
   const port = await reservePort()
   const browser = launchChrome({ chrome, profileDir, port, headless: !options.headed })
@@ -663,8 +664,8 @@ const launchWebOnce = async ({ run, options, chrome, profileDir }) => {
   } catch (caught) {
     error = caught?.message ?? String(caught)
   } finally {
+    await stopChrome(browser, client)
     client?.close()
-    browser.kill()
     await wait(300)
   }
   const marks = recorder?.marks ?? {}
@@ -791,7 +792,7 @@ const mainWeb = async (options) => {
   mkdirSync(outputDir, { recursive: true })
   const chrome = resolveChrome(options.chrome)
   const profileDir = resolve(options.home ?? join(tmpdir(), "openchamber-bench-startup-web"))
-  rmSync(profileDir, { recursive: true, force: true })
+  await rm(profileDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
   console.log(`web: ${options.url}, cache: ${options.cache}, runs: ${options.runs} (+${options.warmup} warm-up)`)
   const samples = []
   for (let run = 1 - options.warmup; run <= options.runs; run += 1) {
@@ -804,7 +805,7 @@ const mainWeb = async (options) => {
     // A warm-up that fails is a broken build, not a discarded launch.
     if (run >= 1 || sample.error) samples.push(sample)
   }
-  rmSync(profileDir, { recursive: true, force: true })
+  await rm(profileDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
   const valid = samples.filter((sample) => !sample.error)
   const summaries = { A: summarize(valid) }
   const failures = samples.length - valid.length

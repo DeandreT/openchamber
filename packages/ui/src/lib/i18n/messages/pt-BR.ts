@@ -15,10 +15,12 @@ import { webSearchI18n } from './websearch.i18n';
 import { isolatedSpacesI18n } from './isolated-spaces.i18n';
 import { sourceBoardI18n } from './source-board.i18n';
 import { projectActionsI18n } from './project-actions.i18n';
+import { gitIdentityEditorI18n } from './git-identity-editor.i18n';
 import { environmentI18n } from './environment.i18n';
 import { providersI18n } from './providers.i18n';
 import { mcpGridI18n } from './mcp-grid.i18n';
 import { pluginsGridI18n } from './plugins-grid.i18n';
+import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict: Record<I18nKey, string> = {
   "opencodeCompatibility.bundled": "O OpenCode está incluído no OpenChamber. Atualize o OpenChamber para obter o OpenCode v2.",
@@ -153,10 +155,12 @@ export const dict: Record<I18nKey, string> = {
   ...isolatedSpacesI18n['pt-BR'],
   ...sourceBoardI18n['pt-BR'],
   ...projectActionsI18n['pt-BR'],
+  ...gitIdentityEditorI18n['pt-BR'],
   ...environmentI18n['pt-BR'],
   ...providersI18n['pt-BR'],
   ...mcpGridI18n['pt-BR'],
   ...pluginsGridI18n['pt-BR'],
+  ...integrationsCatalogI18n['pt-BR'],
   'terminalView.actions.attachSelection': 'Anexar saída selecionada',
   'terminalView.actions.copySelection': 'Copiar saída selecionada',
   'terminalView.toast.selectionCopied': 'Saída copiada',
@@ -690,6 +694,8 @@ export const dict: Record<I18nKey, string> = {
   "sessions.sidebar.session.work.markDone": "Marcar como concluído",
   "sessions.sidebar.session.work.doneSuggested": "Parece concluído",
   "sessions.sidebar.session.work.updateFailed": "Não foi possível atualizar a sessão",
+  "sessions.sidebar.session.pin.pinFailed": "Não foi possível fixar a sessão",
+  "sessions.sidebar.session.pin.unpinFailed": "Não foi possível desafixar a sessão",
   "chat.work.doneHint.text": "Este trabalho parece concluído.",
   "chat.work.doneHint.action": "Marcar como concluído",
   "chat.work.reviewHint.text": "As alterações estão prontas para revisão.",
@@ -813,6 +819,7 @@ export const dict: Record<I18nKey, string> = {
   "sessions.sidebar.group.pr.status.mergeConflicts": "Conflitos de merge",
   "sessions.sidebar.group.pr.status.mergeBlocked": "Merge bloqueado",
   "sessions.sidebar.group.pr.status.checksFailing": "Checks falhando",
+  "sessions.sidebar.group.pr.status.checksRunning": "Checks em execução",
   "sessions.sidebar.group.issue.status.open": "Issue aberta",
   "sessions.sidebar.group.issue.status.completed": "Concluída",
   "sessions.sidebar.group.issue.status.notPlanned": "Não planejada",

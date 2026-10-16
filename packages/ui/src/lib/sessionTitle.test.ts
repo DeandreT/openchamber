@@ -266,6 +266,20 @@ describe('generation lifecycle', () => {
     } finally { globalThis.fetch = originalFetch; configureRuntimeUrlResolver({ apiBaseUrl: '' }); }
   });
 
+  test('asks the server inside the space for a session in an isolated space', async () => {
+    const paths: string[] = [];
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = async (input, init) => {
+      paths.push(new URL(new Request(input, init).url).pathname);
+      return Response.json({ text: 'A useful title' });
+    };
+    configureRuntimeUrlResolver({ apiBaseUrl: 'http://session-title.test' });
+    try {
+      await generateSessionTitle({ turns, currentTitle: 'Original', directory: '/spaces/a1b2c3d4e5f6/repo', signal: new AbortController().signal });
+      expect(paths).toEqual(['/api/spaces/a1b2c3d4e5f6/small-model/generate']);
+    } finally { globalThis.fetch = originalFetch; configureRuntimeUrlResolver({ apiBaseUrl: '' }); }
+  });
+
   test('saves only after generation and a fresh metadata read', async () => {
     const events: string[] = [];
     await generateAndSaveSessionTitle({

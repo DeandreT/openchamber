@@ -14,7 +14,12 @@ import {
   OPENCHAMBER_WEB_ACTION_DEFINITIONS,
   OPENCHAMBER_WEB_ACTIONS,
 } from '../openchamber-control/actions.js';
-import { RENDER_PAGE_MAX_HTML_LENGTH, RENDER_PAGE_MAX_TITLE_LENGTH, RENDER_PAGE_WHEN } from '../openchamber-control/render-page.js';
+import {
+  RENDER_PAGE_CLOSED_IN_CHAT_NOTE,
+  RENDER_PAGE_MAX_HTML_LENGTH,
+  RENDER_PAGE_MAX_TITLE_LENGTH,
+  RENDER_PAGE_WHEN,
+} from '../openchamber-control/render-page.js';
 import { createCallbackAddress } from './callback-address.js';
 
 const TOOL_SCHEMA_VERSION = 1;
@@ -165,6 +170,7 @@ const NOTIFY_PARAMETER_PROPERTIES = {
 const RENDER_PARAMETER_PROPERTIES = {
   html: { type: 'string', description: `One complete, self-contained HTML document, at most ${RENDER_PAGE_MAX_HTML_LENGTH} characters` },
   title: { type: 'string', description: `Short name for the page, at most ${RENDER_PAGE_MAX_TITLE_LENGTH} characters` },
+  awaitAnswer: { type: 'boolean', description: 'Wait for the user to answer on the page; the call returns their answer' },
 };
 
 // The linking rule leads: stated only inside the session.link action, an
@@ -193,12 +199,13 @@ const NOTIFY_TOOL_DESCRIPTION = "Send the user a notification through OpenChambe
 // The variables are the ones packages/ui/src/components/chat/message/parts/htmlRender.ts
 // injects; change both together.
 const RENDER_TOOL_DESCRIPTION = [
-  "Show the user a finished HTML page (a chart, table, diagram, comparison or mockup) inline in the chat.",
+  "Show the user a finished HTML page (a chart, table, diagram, comparison or mockup) inline in the chat, or ask them to choose on one (awaitAnswer, below).",
   RENDER_PAGE_WHEN,
-  "Call it before you write your final reply. The user already sees the page above that reply, so the reply does not announce it, say where it is or restate it; add only what the page does not say.",
-  "The page can be interactive with its own script: hover tooltips on a chart, tabs, toggles, sorting or filtering a table. On a phone a tap shows a hover tooltip and the page is about 360px wide, so place tooltips and popups inside the page, flipping them to the other side near an edge. It cannot send anything back to you or the chat, so put nothing on it that waits for an answer.",
+  "Call a page that only shows right before you write your final reply. The user already sees the page above that reply, so the reply does not announce it, say where it is or restate it; add only what the page does not say.",
+  "The page can be interactive with its own script: hover tooltips on a chart, tabs, toggles, sorting or filtering a table. On a phone a tap shows a hover tooltip and the page is about 360px wide, so place tooltips and popups inside the page, flipping them to the other side near an edge.",
+  "To ask the user something a page shows better than text (pick one of several layouts or designs, tune values, choose or order many items), set awaitAnswer: the call waits until the user answers on the page and returns their summary and data, so call it at the point where you need the choice, in the middle of the work if that is where it falls, and continue from the answer. Ask a yes/no or one short choice in text. Give that page one clear button whose click calls openchamber.submit(data, summary): data is the JSON your next step needs, summary is the choice in a few words of the user's language, shown under the page. submit returns a promise; disable the button once it resolves. submit only works from a click on a page that waits, so a page without awaitAnswer has no submit button. If the user writes in the chat instead, the call returns answered: false and their message follows. After an answer, the page loads with openchamber.answer set to the data it sent, so it can show the choice. The base stylesheet has classes in the app's look for such a page; use them instead of styling your own: .oc-options (a grid of options), .oc-option on a <button> (an option card; set aria-pressed=\"true\" on the chosen one) and .oc-button (the button that sends).",
   "Write one self-contained document with inline <style> and <script>. Draw charts with inline SVG or your own script: remote scripts and stylesheets do not load in every OpenChamber client. Images must be https URLs or data: URLs. The page runs in a sandbox with no access to OpenChamber, the network session or local files; links open in the user's browser.",
-  "The page sits on the chat's own background, as wide as the reply column (about 720px on desktop, about 360px on phones), and the frame grows to the page's height up to 1200px, then scrolls. Leave html, body and the outermost element without a background color, use a fluid width with no horizontal padding on the outermost element and nothing wider than the column (stack or wrap on narrow widths, and give a wide table its own overflow-x:auto box rather than making the whole page scroll sideways), and add no outer card, border or banner title: the page is part of your reply. A box that needs its own background gets at least 16px of padding and var(--radius) corners. Give charts fixed pixel heights, and never use 100vh or height:100% on html or body.",
+  "The page sits on the chat's own background, as wide as the reply column (about 720px on desktop, about 360px on phones), and the frame takes the page's full height, so keep the page as short as its content allows. Leave html, body and the outermost element without a background color, use a fluid width with no horizontal padding on the outermost element and nothing wider than the column (stack or wrap on narrow widths, and give a wide table its own overflow-x:auto box rather than making the whole page scroll sideways), and add no outer card, border or banner title: the page is part of your reply. Set a box apart by tone, never by a border, the way the app does: background color-mix(in srgb, var(--foreground) 4%, transparent), the next step (6%) for a box inside it, at least 16px of padding and var(--radius) corners. Draw a line only where it means something, such as a divider between sections. Give charts fixed pixel heights, and never use 100vh or height:100% on html or body.",
   "OpenChamber sets its active theme as CSS custom properties on :root and updates them live when the user switches theme: --background, --foreground, --muted, --muted-foreground, --card, --card-foreground, --border, --primary, --primary-foreground, --destructive, --warning, --success, --info, --code-background, --code-foreground, --chart-1 to --chart-6 (categorical series), --radius, --font-sans, --font-mono. Style with them so the page matches the app in light and dark themes; a base stylesheet already sets the page's text color and font from them.",
 ].join(' ');
 
@@ -257,6 +264,47 @@ const createResult = ({ ok, action, data, error, exitCode }) => ({
 });
 
 /**
+ * A page that waits for the user's answer (render.page with awaitAnswer)
+ * holds its call open. A message the user writes in the chat meanwhile would
+ * sit behind that call: OpenCode delivers it only after the call returns. So
+ * the call registers itself under its session, and the plugin's prompt hook
+ * (createPluginSource) aborts it the moment any prompt for that session
+ * arrives, whichever way it was sent. The call then returns "answered in the
+ * chat" and the agent reads the message next.
+ */
+const ANSWER_WAIT_SETUP = String.raw`        const chatController = new AbortController()
+        const waiting = args.awaitAnswer === true
+        if (waiting) {
+          const set = pagesWaitingForChat.get(context.sessionID) ?? new Set()
+          set.add(chatController)
+          pagesWaitingForChat.set(context.sessionID, set)
+        }
+        const releaseWait = () => {
+          const set = pagesWaitingForChat.get(context.sessionID)
+          if (!set) return
+          set.delete(chatController)
+          if (set.size === 0) pagesWaitingForChat.delete(context.sessionID)
+        }
+        const waitSignal = AbortSignal.any([context.signal, chatController.signal].filter(Boolean))
+`;
+
+// The answer also lands in the call's metadata, which OpenCode stores and
+// syncs, so every client shows the page as answered after a reload.
+const ANSWER_METADATA = String.raw`, ...(result.ok === true && result.data && typeof result.data.answer === "object" && result.data.answer !== null ? { answer: result.data.answer } : {})`;
+
+const ANSWER_WAIT_RELEASE = String.raw` finally {
+          releaseWait()
+        }`;
+
+const ANSWER_CLOSED_IN_CHAT = String.raw`
+          if (chatController.signal.aborted && !context.signal?.aborted) {
+            const answer = { answered: false, reason: "chat" }
+            const payload = { schemaVersion: ${TOOL_SCHEMA_VERSION}, ok: true, action: args.action, data: { answer, note: ${JSON.stringify(RENDER_PAGE_CLOSED_IN_CHAT_NOTE)} } }
+            await progress({ ok: true })
+            return { content: JSON.stringify(payload), metadata: { openchamber: { schemaVersion: ${TOOL_SCHEMA_VERSION}, action: args.action, description: title, ok: true, answer } } }
+          }`;
+
+/**
  * One template, one entry per enabled capability.
  *
  * Both tools speak to the same callback with the same envelope; only the action
@@ -274,7 +322,7 @@ const createResult = ({ ok, action, data, error, exitCode }) => ({
  * answer with an empty completion instead of an error, and the `oneOf` branches
  * are what carry the per-action descriptions the model reads.
  */
-const createToolEntry = ({ name, description, definitions, parameters, codeMode }) => String.raw`    tools.add({
+const createToolEntry = ({ name, description, definitions, parameters, codeMode, answers = false }) => String.raw`    tools.add({
       name: ${JSON.stringify(name)},
       description: ${JSON.stringify(description)},
       // OpenCode 2 puts a plugin tool behind its Code Mode execute tool
@@ -323,7 +371,7 @@ const createToolEntry = ({ name, description, definitions, parameters, codeMode 
         if (!endpoint || !token) {
           return failure({ schemaVersion: ${TOOL_SCHEMA_VERSION}, ok: false, action: args.action, error: { message: "OpenChamber managed tool connection is unavailable" } })
         }
-
+${answers ? ANSWER_WAIT_SETUP : ''}
         try {
           const response = await fetch(endpoint, {
             method: "POST",
@@ -335,19 +383,19 @@ const createToolEntry = ({ name, description, definitions, parameters, codeMode 
             // session id goes over instead and OpenChamber resolves the
             // directory on its own side. The signal fires when the session is
             // aborted, so the OpenChamber side stops the action too.
-            body: JSON.stringify({ input: args, sessionID: context.sessionID, tool: ${JSON.stringify(name)} }),
-            signal: context.signal,
+            body: JSON.stringify({ input: args, sessionID: context.sessionID, callID: context.id, tool: ${JSON.stringify(name)} }),
+            signal: ${answers ? 'waitSignal' : 'context.signal'},
           })
           const content = await response.text()
           let result = null
           try { result = JSON.parse(content) } catch {}
           const valid = result?.schemaVersion === ${TOOL_SCHEMA_VERSION} && typeof result?.ok === "boolean" && typeof result?.action === "string"
           await progress({ ok: valid && result.ok === true })
-          if (valid) return { content, metadata: { openchamber: { schemaVersion: ${TOOL_SCHEMA_VERSION}, action: args.action, description: title, ok: result.ok === true } } }
+          if (valid) return { content, metadata: { openchamber: { schemaVersion: ${TOOL_SCHEMA_VERSION}, action: args.action, description: title, ok: result.ok === true${answers ? ANSWER_METADATA : ''} } } }
           return failure({ schemaVersion: ${TOOL_SCHEMA_VERSION}, ok: false, action: args.action, error: { message: "OpenChamber returned an invalid response", kind: "runtime", status: response.status } })
-        } catch (error) {
+        } catch (error) {${answers ? ANSWER_CLOSED_IN_CHAT : ''}
           return failure({ schemaVersion: ${TOOL_SCHEMA_VERSION}, ok: false, action: args.action, error: { message: error instanceof Error ? error.message : String(error), kind: "runtime" } })
-        }
+        }${answers ? ANSWER_WAIT_RELEASE : ''}
       },
     })
 `;
@@ -406,6 +454,7 @@ const createPluginSource = ({ includeControl, includeWeb, includeMemory, include
       definitions: OPENCHAMBER_RENDER_ACTION_DEFINITIONS,
       parameters: RENDER_PARAMETER_PROPERTIES,
       codeMode,
+      answers: true,
     }));
   }
 
@@ -424,12 +473,18 @@ const createPluginSource = ({ includeControl, includeWeb, includeMemory, include
   }
 }
 
+// Session id -> abort controllers of the calls whose page waits for an answer.
+const pagesWaitingForChat = new Map()
+
 export default {
   id: ${JSON.stringify(PLUGIN_ID)},
   setup: async (ctx) => {
     exemptCallbackFromProxy()
     await ctx.tool.transform((tools) => {
-${entries.join('')}    })
+${entries.join('')}    })${includeRender ? `
+    await ctx.session.hook("prompt", (event) => {
+      for (const controller of pagesWaitingForChat.get(event.sessionID) ?? []) controller.abort()
+    })` : ''}
   },
 }
 `;
@@ -545,9 +600,13 @@ export const createAgentToolRuntime = (dependencies) => {
     try {
       // The calling session scopes browser actions to that session's page.
       const contextSessionId = knowledgeAction ? sessionID : asNonEmptyString(payload.contextSessionId) ?? sessionID;
-      const data = await executeAction(action, { ...payload.input, action }, contextDirectory, contextSessionId
-        ? { ...options, contextSessionId }
-        : options);
+      // The call id lets a page that waits for an answer be found again
+      // when the user answers it.
+      const contextCallId = asNonEmptyString(payload.callID);
+      const actionOptions = { ...options };
+      if (contextSessionId) actionOptions.contextSessionId = contextSessionId;
+      if (contextCallId) actionOptions.contextCallId = contextCallId;
+      const data = await executeAction(action, { ...payload.input, action }, contextDirectory, actionOptions);
       return createResult({ ok: true, action, data });
     } catch (error) {
       return createResult({

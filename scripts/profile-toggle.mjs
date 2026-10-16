@@ -32,7 +32,7 @@ import { join, resolve } from "node:path"
 import process from "node:process"
 
 import { ACCESSIBILITY_CATEGORY, accessibilityInWindow, accessibilityState, describeAccessibility, FORCE_ACCESSIBILITY_ARGS } from "./perf/accessibility.mjs"
-import { CdpClient, createPageTarget, evaluateValue, launchChrome, reservePort, resolveChrome, resolveProfileDir, wait } from "./perf/cdp.mjs"
+import { CdpClient, createPageTarget, evaluateValue, launchChrome, reservePort, resolveChrome, resolveProfileDir, stopChrome, wait } from "./perf/cdp.mjs"
 import { summarizeCpuProfile } from "./perf/cpu-profile.mjs"
 import { percentile, round } from "./perf/metrics.mjs"
 import { buildRenderProbeSource, printRenderProbe, readRenderProbe, RENDER_PROBE_GLOBAL, summarizeRenderProbe } from "./perf/render-probe.mjs"
@@ -825,9 +825,9 @@ const main = async () => {
       process.exitCode = 1
     }
   } finally {
+    await stopChrome(chromeProcess, client)
     client?.close()
-    chromeProcess.kill()
-    profile.removeAfter(chromeProcess)
+    await profile.remove()
   }
 }
 

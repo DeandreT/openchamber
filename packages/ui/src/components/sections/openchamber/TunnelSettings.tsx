@@ -6,7 +6,6 @@ import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { Icon } from "@/components/icon/Icon";
 import { requestFileAccess, type DesktopSettings } from '@/lib/desktop';
 import { loadDesktopSettings, updateDesktopSettings } from '@/lib/persistence';
@@ -16,7 +15,7 @@ import { openExternalUrl } from '@/lib/url';
 import { getRuntimeApiBaseUrl } from '@/lib/runtime-switch';
 import { formatTimeForPreference } from '@/lib/timeFormat';
 import { useUIStore, type TimeFormatPreference } from '@/stores/useUIStore';
-import { SettingsSection, SettingsGroupTitle, SETTINGS_FIELD_LABEL_CLASS, SETTINGS_CALLOUT_TITLE_CLASS, SETTINGS_DESCRIPTION_CLASS } from '@/components/sections/shared/SettingsSection';
+import { SettingsChipGroup, SettingsSection, SettingsGroupTitle, SETTINGS_FIELD_LABEL_CLASS, SETTINGS_CALLOUT_TITLE_CLASS, SETTINGS_DESCRIPTION_CLASS } from '@/components/sections/shared/SettingsSection';
 import { SettingsInfoHint } from '@/components/sections/shared/SettingsInfoHint';
 
 type TunnelState =
@@ -1254,7 +1253,7 @@ export const TunnelSettings: React.FC = () => {
       <div className="space-y-6">
       {renderedSessionRecords.length > 0 && (
         <section className="space-y-2 px-2 pb-2 pt-0">
-          <div className="rounded-lg border border-[var(--status-info-border)] bg-[var(--status-info-background)]/30 p-3">
+          <div className="rounded-lg bg-[var(--status-info-background)]/60 p-3">
             <div className="mb-2 flex items-center gap-2">
               <Icon name="information" className="size-4 text-[var(--status-info)]" />
               <p className={SETTINGS_CALLOUT_TITLE_CLASS}>{t('settings.openchamber.tunnel.section.redeemedAccessLinks')}</p>
@@ -1280,10 +1279,10 @@ export const TunnelSettings: React.FC = () => {
                 return (
                   <div
                     key={record.sessionId}
-                    className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded border border-[var(--surface-subtle)] bg-[var(--surface-elevated)] px-2 py-1.5"
+                    className="flex flex-wrap items-center gap-x-2 gap-y-1 oc-tile-inset rounded px-2 py-1.5"
                   >
                     <Icon name="checkbox-blank-circle-fill" className={cn('size-2.5 shrink-0', statusDotClass)} />
-                    <span className={cn('typography-micro rounded border px-1.5 py-0.5 uppercase', modeBadgeClass)}>
+                    <span className={cn('typography-micro rounded px-1.5 py-0.5 uppercase', modeBadgeClass)}>
                       {modeLabel}
                     </span>
                     <span className="typography-meta text-muted-foreground/80">
@@ -1306,7 +1305,7 @@ export const TunnelSettings: React.FC = () => {
 
       {state === 'not-available' && (
         <section className="space-y-2 px-2 pb-2 pt-0">
-          <div className="flex items-start gap-2 rounded-lg border border-[var(--status-warning)]/30 bg-[var(--status-warning)]/5 p-3">
+          <div className="flex items-start gap-2 rounded-lg bg-[var(--status-warning)]/10 p-3">
             <Icon name="error-warning" className="mt-0.5 size-4 shrink-0 text-[var(--status-warning)]" />
             <div className="space-y-1">
               <p className={SETTINGS_CALLOUT_TITLE_CLASS}>
@@ -1357,29 +1356,19 @@ export const TunnelSettings: React.FC = () => {
 
             <div data-settings-item="tunnel.type" className="space-y-1.5">
               <p className={SETTINGS_FIELD_LABEL_CLASS}>{t('settings.openchamber.tunnel.field.tunnelType')}</p>
-              <div className="flex flex-wrap items-center gap-1">
-                {tunnelModeOptions.map((option) => (
-                  <Tooltip key={option.value}>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="chip"
-                        size="xs"
-                        aria-pressed={tunnelMode === option.value}
-                        className="!font-normal"
-                        onClick={() => {
-                          void handleModeChange(option.value);
-                        }}
-                        disabled={isSavingMode || state === 'starting' || state === 'stopping'}
-                      >
-                        {tUnsafe(option.labelKey)}
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent sideOffset={8} className="max-w-xs">
-                      {tUnsafe(option.tooltipKey)}
-                    </TooltipContent>
-                  </Tooltip>
-                ))}
-              </div>
+              <SettingsChipGroup
+                value={tunnelMode}
+                aria-label={t('settings.openchamber.tunnel.field.tunnelType')}
+                onChange={(mode) => {
+                  void handleModeChange(mode);
+                }}
+                options={tunnelModeOptions.map((option) => ({
+                  value: option.value,
+                  label: tUnsafe(option.labelKey),
+                  tooltip: tUnsafe(option.tooltipKey),
+                  disabled: isSavingMode || state === 'starting' || state === 'stopping',
+                }))}
+              />
             </div>
           </div>
 
@@ -1430,7 +1419,7 @@ export const TunnelSettings: React.FC = () => {
           </div>
 
           {tunnelMode === 'quick' && (
-            <div className="rounded-lg border border-[var(--status-warning)]/35 bg-[var(--status-warning)]/10 p-3">
+            <div className="rounded-lg bg-[var(--status-warning)]/10 p-3">
               <div className="flex items-start gap-2">
                 <Icon name="error-warning" className="mt-0.5 size-4 shrink-0 text-[var(--status-warning)]" />
                 <div>
@@ -1448,9 +1437,9 @@ export const TunnelSettings: React.FC = () => {
           )}
 
           {tunnelMode === 'managed-remote' && (
-            <div data-settings-item="tunnel.managed-remote" className="space-y-2 rounded-lg border border-[var(--interactive-border)] bg-[var(--surface-elevated)] p-3">
+            <div data-settings-item="tunnel.managed-remote" className="oc-tile space-y-2 rounded-lg p-3">
               {typeof suggestedConnectorPort === 'number' && (
-                <div className="rounded-md border border-[var(--status-info-border)] bg-[var(--status-info-background)]/35 px-2 py-1.5">
+                <div className="rounded-md bg-[var(--status-info-background)]/60 px-2 py-1.5">
                   <p className="typography-meta text-[var(--status-info)]">
                     {t('settings.openchamber.tunnel.note.cloudflareConnectorTarget')} <code>http://localhost:{suggestedConnectorPort}</code>
                   </p>
@@ -1472,7 +1461,7 @@ export const TunnelSettings: React.FC = () => {
               </div>
 
               {managedRemoteTunnelPresets.length > 0 ? (
-                <div className="overflow-hidden rounded-md border border-[var(--surface-subtle)]">
+                <div className="oc-tile-inset overflow-hidden rounded-md">
                   {managedRemoteTunnelPresets.map((preset, index) => {
                     const rowToken = sessionTokensByPresetId[preset.id] || '';
                     const hasSavedToken = savedTokenPresetIds.has(preset.id);
@@ -1481,7 +1470,7 @@ export const TunnelSettings: React.FC = () => {
                     return (
                       <div
                         key={preset.id}
-                        className={cn(index < managedRemoteTunnelPresets.length - 1 && 'border-b border-[var(--surface-subtle)]')}
+                        className={cn(index < managedRemoteTunnelPresets.length - 1 && 'border-b border-[var(--interactive-border)]')}
                       >
                         <Collapsible
                           open={isOpen}
@@ -1576,7 +1565,7 @@ export const TunnelSettings: React.FC = () => {
               )}
 
               {isAddingPreset && (
-                <div className="space-y-2 rounded-md border border-[var(--surface-subtle)] p-2">
+                <div className="oc-tile-inset space-y-2 rounded-md p-2">
                   <Input
                     value={newPresetName}
                     onChange={(event) => setNewPresetName(event.target.value)}
@@ -1648,7 +1637,7 @@ export const TunnelSettings: React.FC = () => {
           )}
 
           {tunnelMode === 'managed-local' && (
-            <div data-settings-item="tunnel.managed-local-config" className="space-y-2 rounded-lg border border-[var(--interactive-border)] bg-[var(--surface-elevated)] p-3">
+            <div data-settings-item="tunnel.managed-local-config" className="oc-tile space-y-2 rounded-lg p-3">
               <div className="space-y-1.5">
                 <p className={SETTINGS_FIELD_LABEL_CLASS}>{t('settings.openchamber.tunnel.field.configurationFile')}</p>
                 <input
@@ -1714,7 +1703,7 @@ export const TunnelSettings: React.FC = () => {
 
           {!isSelectedModeTunnelReady && (
             <div data-settings-item="tunnel.start" className="space-y-6">
-              <div className="rounded-lg border border-[var(--status-info-border)] bg-[var(--status-info-background)] p-3">
+              <div className="rounded-lg bg-[var(--status-info-background)] p-3">
                 <div className="flex items-start gap-2">
                   <Icon name="information" className="mt-0.5 size-4 shrink-0 text-[var(--status-info)]" />
                   <div className="space-y-1">
@@ -1791,7 +1780,7 @@ export const TunnelSettings: React.FC = () => {
               )}
 
               {willReplaceActiveTunnel && (
-                <div className="rounded-lg border border-[var(--status-warning-border)] bg-[var(--status-warning-background)] p-3">
+                <div className="rounded-lg bg-[var(--status-warning-background)] p-3">
                   <div className="flex items-start gap-2">
                     <Icon name="error-warning" className="mt-0.5 size-4 shrink-0 text-[var(--status-warning)]" />
                     <p className="typography-meta text-[var(--status-warning)]">
@@ -1857,7 +1846,7 @@ export const TunnelSettings: React.FC = () => {
                   </p>
                 </div>
 
-                <div className="flex flex-col items-center gap-2 rounded-lg border border-border/50 bg-[var(--surface-elevated)] p-4">
+                <div className="flex flex-col items-center gap-2 oc-tile rounded-lg p-4">
                   {qrDataUrl
                     ? <img src={qrDataUrl} alt={t('settings.openchamber.tunnel.field.connectQrAlt')} className="size-48" />
                     : <div className="size-48 rounded bg-muted/30" />}

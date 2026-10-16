@@ -20,7 +20,7 @@ import { writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import process from "node:process"
 
-import { CdpClient, createPageTarget, evaluateValue, launchChrome, reservePort, resolveChrome, resolveProfileDir, wait } from "./perf/cdp.mjs"
+import { CdpClient, createPageTarget, evaluateValue, launchChrome, reservePort, resolveChrome, resolveProfileDir, stopChrome, wait } from "./perf/cdp.mjs"
 import { percentile, round } from "./perf/metrics.mjs"
 
 const HELP = `Usage: bun run profile:composer -- [options]
@@ -184,9 +184,9 @@ const main = async () => {
     for (const [reason, count] of summary.topInvalidations.slice(0, 10)) console.log(`  ${String(count).padStart(6)}  ${reason}`)
     console.log(`\nSaved to ${output}`)
   } finally {
+    await stopChrome(chrome, client)
     client?.close()
-    chrome.kill("SIGTERM")
-    profile.removeAfter(chrome)
+    await profile.remove()
   }
 }
 

@@ -152,6 +152,22 @@ const openchamberNotificationSchema = z.object({
     .partial(),
 })
 
+// A page an agent showed that waits for the user's answer; the server holds
+// the waiting call, so it announces both ends of the wait.
+const openchamberPageWaitingSchema = z.object({
+  type: z.literal("openchamber:page-waiting"),
+  properties: z.object({
+    sessionID: z.string().min(1),
+    directory: z.string().min(1).nullable().catch(null),
+    page: z.object({ id: z.string().min(1), title: z.string() }),
+  }),
+})
+
+const openchamberPageSettledSchema = z.object({
+  type: z.literal("openchamber:page-settled"),
+  properties: z.object({ sessionID: z.string().min(1), pageID: z.string().min(1) }),
+})
+
 // The host's announcement of an isolated space's event connection. It is not an event of any
 // session, so it never enters a directory queue; the pipeline hands it to its owner.
 const openchamberSpaceStreamSchema = z.object({
@@ -259,6 +275,14 @@ function translateOpenchamberEvent(type: string, payload: unknown): SyncEvent | 
     case "openchamber:permission-auto-accept.updated": {
       const parsed = openchamberAutoAcceptSchema.safeParse(payload)
       return parsed.success ? { type: "openchamber.permission-auto-accept", properties: parsed.data.properties } : null
+    }
+    case "openchamber:page-waiting": {
+      const parsed = openchamberPageWaitingSchema.safeParse(payload)
+      return parsed.success ? { type: "openchamber.page-waiting", properties: parsed.data.properties } : null
+    }
+    case "openchamber:page-settled": {
+      const parsed = openchamberPageSettledSchema.safeParse(payload)
+      return parsed.success ? { type: "openchamber.page-settled", properties: parsed.data.properties } : null
     }
     case "openchamber:permission-auto-accept.left-for-user": {
       const parsed = openchamberLeftForUserSchema.safeParse(payload)

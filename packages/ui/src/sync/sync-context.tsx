@@ -96,7 +96,7 @@ import {
   setSessionParentResolver,
   useGlobalSessionStatusStore,
 } from "./global-session-status"
-import { applyGlobalBlockingRequestEvents } from "./global-blocking-requests"
+import { applyGlobalBlockingRequestEvents, applyWaitingPageEvent, useGlobalBlockingRequestsStore } from "./global-blocking-requests"
 import { applyBackgroundShellEvents, directoriesWithRunningShells, refreshBackgroundShells } from "./background-shells"
 import {
   CHAT_LOCATION_RELEASE_DELAY_MS,
@@ -1793,6 +1793,26 @@ const notifyFormCreated = (form: FormRequest, directory: string): void => {
   })
 }
 
+/**
+ * The in-app toast a form gets, for a page an agent showed that waits for the
+ * user's answer: shown while the user looks at another session, dismissed
+ * once the page stops waiting. The native notification comes from the server.
+ */
+const notifyWaitingPage = (event: Extract<SyncEvent, { type: "openchamber.page-waiting" | "openchamber.page-settled" }>): void => {
+  if (event.type === "openchamber.page-settled") {
+    toast.dismiss(`page-${event.properties.sessionID}:${event.properties.pageID}`)
+    return
+  }
+  const { sessionID, page } = event.properties
+  const directory = event.properties.directory ?? resolveCachedSessionDirectory(sessionID)
+  if (!directory || isViewedInCurrentSession(directory, sessionID)) return
+  toast.info(page.title, {
+    id: `page-${sessionID}:${page.id}`,
+    description: FORM_TOAST_DESCRIPTION,
+    action: { label: "Open session", onClick: () => openSessionFromToast(sessionID, directory) },
+  })
+}
+
 // Blocking requests in a directory without a store still deserve the in-app
 // toast: the sidebar row and tray approvals need the directory store, but the
 // toast only needs the request and where to open it. VS Code keeps its
@@ -1855,6 +1875,15 @@ export function handleEvent(
 
   if (payload.type === "openchamber.permission-left-for-user") {
     showPermissionLeftForUser(payload.properties)
+    return
+  }
+
+  // A page that waits for the user's answer lives only in the cross-directory
+  // index: no directory store holds it, since OpenCode never hears of the wait.
+  if (payload.type === "openchamber.page-waiting" || payload.type === "openchamber.page-settled") {
+    if (expectedRuntimeKey !== getRuntimeKey()) return
+    applyWaitingPageEvent(payload, resolveCachedSessionDirectory)
+    notifyWaitingPage(payload)
     return
   }
 
@@ -3548,11 +3577,14 @@ export function useSessionBlockingRequests(
   const getSnapshot = React.useCallback(() => {
     let hasPermission = false
     let hasForm = false
+    // Pages that wait for the user's answer are only in the cross-directory
+    // index; they count as a form.
+    const indexed = useGlobalBlockingRequestsStore.getState().bySession
     for (const { sessionIDs, store } of scopedStores) {
       const { permission: permissions, form: forms } = store.getState()
       for (const sessionID of sessionIDs) {
         hasPermission ||= Boolean(permissions[sessionID]?.length)
-        hasForm ||= Boolean(forms[sessionID]?.length)
+        hasForm ||= Boolean(forms[sessionID]?.length) || Boolean(indexed.get(sessionID)?.pages.length)
       }
     }
     const previous = snapshotRef.current
@@ -3564,10 +3596,14 @@ export function useSessionBlockingRequests(
     return next
   }, [scopedStores])
   const subscribe = React.useCallback((notify: () => void) => {
-    const unsubscribers = scopedStores.flatMap(({ sessionIDs, store }) => [
-      subscribeDirectoryPermissions(store, sessionIDs, notify),
-      subscribeDirectoryForms(store, sessionIDs, notify),
-    ])
+    const unsubscribers = [
+      ...scopedStores.flatMap(({ sessionIDs, store }) => [
+        subscribeDirectoryPermissions(store, sessionIDs, notify),
+        subscribeDirectoryForms(store, sessionIDs, notify),
+      ]),
+      // Rare writes; getSnapshot keeps the same object when nothing changed.
+      useGlobalBlockingRequestsStore.subscribe(notify),
+    ]
     return () => {
       for (const unsubscribe of unsubscribers) unsubscribe()
     }

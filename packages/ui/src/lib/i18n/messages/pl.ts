@@ -15,10 +15,12 @@ import { webSearchI18n } from './websearch.i18n';
 import { isolatedSpacesI18n } from './isolated-spaces.i18n';
 import { sourceBoardI18n } from './source-board.i18n';
 import { projectActionsI18n } from './project-actions.i18n';
+import { gitIdentityEditorI18n } from './git-identity-editor.i18n';
 import { environmentI18n } from './environment.i18n';
 import { providersI18n } from './providers.i18n';
 import { mcpGridI18n } from './mcp-grid.i18n';
 import { pluginsGridI18n } from './plugins-grid.i18n';
+import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict: Record<I18nKey, string> = {
   "opencodeCompatibility.bundled": "OpenCode jest dołączony do OpenChamber. Zaktualizuj OpenChamber, aby uzyskać OpenCode v2.",
@@ -143,10 +145,12 @@ export const dict: Record<I18nKey, string> = {
   ...isolatedSpacesI18n.pl,
   ...sourceBoardI18n.pl,
   ...projectActionsI18n.pl,
+  ...gitIdentityEditorI18n.pl,
   ...environmentI18n.pl,
   ...providersI18n.pl,
   ...mcpGridI18n.pl,
   ...pluginsGridI18n.pl,
+  ...integrationsCatalogI18n['pl'],
   'terminalView.actions.attachSelection': 'Dołącz zaznaczone dane wyjściowe',
   'terminalView.actions.copySelection': 'Kopiuj zaznaczone dane wyjściowe',
   'terminalView.toast.selectionCopied': 'Skopiowano dane wyjściowe',
@@ -512,6 +516,8 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.session.work.markDone': 'Oznacz jako gotowe',
   'sessions.sidebar.session.work.doneSuggested': 'Wygląda na gotowe',
   'sessions.sidebar.session.work.updateFailed': 'Nie udało się zaktualizować sesji',
+  'sessions.sidebar.session.pin.pinFailed': 'Nie udało się przypiąć sesji',
+  'sessions.sidebar.session.pin.unpinFailed': 'Nie udało się odpiąć sesji',
   'chat.work.doneHint.text': 'Ta praca wygląda na skończoną.',
   'chat.work.doneHint.action': 'Oznacz jako gotowe',
   'chat.work.reviewHint.text': 'Zmiany są gotowe do przejrzenia.',
@@ -812,6 +818,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.group.pr.status.mergeConflicts': 'Konflikty scalania',
   'sessions.sidebar.group.pr.status.mergeBlocked': 'Scalanie zablokowane',
   'sessions.sidebar.group.pr.status.checksFailing': 'Sprawdzenia nie przeszły',
+  'sessions.sidebar.group.pr.status.checksRunning': 'Sprawdzenia w toku',
   'sessions.sidebar.group.issue.status.open': 'Zgłoszenie otwarte',
   'sessions.sidebar.group.issue.status.completed': 'Ukończone',
   'sessions.sidebar.group.issue.status.notPlanned': 'Nieplanowane',

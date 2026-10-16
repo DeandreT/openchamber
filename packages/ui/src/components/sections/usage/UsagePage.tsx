@@ -204,7 +204,7 @@ export const UsagePage: React.FC = () => {
           UI consumer left; shown here it labeled DeepSeek with Claude's
           rate-limit message. */}
       {selectedProviderError && (
-        <div className="mb-8 rounded-lg border border-[var(--status-error-border)] bg-[var(--status-error-background)] px-4 py-3">
+        <div className="mb-8 rounded-lg bg-[var(--status-error-background)] px-4 py-3">
           <p className="typography-ui-label font-medium text-[var(--status-error)]">{t('settings.usage.page.state.refreshFailedTitle')}</p>
           <p className="typography-meta text-[var(--status-error)]/80 mt-1">{selectedProviderError}</p>
         </div>
@@ -212,7 +212,7 @@ export const UsagePage: React.FC = () => {
 
       {/* Providers with an inline credentials form don't need the "go to Providers" banner — the form IS the fix. */}
       {selectedResult && !selectedResult.configured && !hasCredentialsForm && (
-        <div className="mb-8 rounded-lg border border-[var(--status-warning-border)] bg-[var(--status-warning-background)] px-4 py-3">
+        <div className="mb-8 rounded-lg bg-[var(--status-warning-background)] px-4 py-3">
           {/* Claude usage comes from Claude Code's own login, which Providers cannot add. */}
           {selectedProviderId === 'claude' ? (
             <>

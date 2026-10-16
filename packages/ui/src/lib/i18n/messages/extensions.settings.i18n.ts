@@ -1389,7 +1389,7 @@ export const extensionsSettingsI18n = {
     'settings.extensions.dialog.approve': '允许并启用',
     'settings.extensions.dialog.decline': '移除',
     'settings.extensions.capability.prompt': '在你的会话中发送消息',
-    'settings.extensions.capability.prompt.detail': '会消耗令牌，并可能运行工具。',
+    'settings.extensions.capability.prompt.detail': '会消耗词元，并可能运行工具。',
     'settings.extensions.capability.sessions': '访问项目和会话',
     'settings.extensions.capability.sessions.detail': '列出项目、工作树和会话状态。在任何已添加的项目中创建和打开会话，包括新工作树。不会读取对话内容。',
     'settings.extensions.capability.service': '运行本地服务',

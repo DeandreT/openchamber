@@ -41,7 +41,7 @@ const TOOL_ROW_TEXT_INSET_CLASS = 'ps-[3.75rem]';
 const ToolRow: React.FC<ToolRowProps> = ({ icon, title, summary, info, ariaLabel, checked, onChange, settingsItem }) => (
   <div data-settings-item={settingsItem} className="flex items-center gap-3 px-4 py-3">
     {/* The switch alone says "off": dimming the row would read as disabled. */}
-    <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-muted)] text-foreground">
+    <span className="flex size-8 shrink-0 items-center justify-center oc-tile-inset rounded-lg text-foreground">
       <Icon name={icon} className="size-4" />
     </span>
     <div className="min-w-0 flex-1">
@@ -171,7 +171,7 @@ export const OpenChamberToolsSettings: React.FC = () => {
 
   return (
     <SettingsSection title={t('settings.openchamber.tools.title')}>
-      <div className="max-w-[44rem] divide-y divide-[var(--interactive-border)] rounded-xl border border-[var(--interactive-border)] bg-[var(--surface-elevated)]">
+      <div className="max-w-[44rem] oc-tile divide-y divide-[var(--interactive-border)] rounded-xl">
         {/* One group, so no divider separates the control tool from its own setting. */}
         <div>
           <ToolRow

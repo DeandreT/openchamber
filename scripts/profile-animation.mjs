@@ -25,7 +25,7 @@ import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import process from "node:process"
 
-import { CdpClient, createPageTarget, launchChrome, reservePort, resolveChrome, resolveProfileDir, wait } from "./perf/cdp.mjs"
+import { CdpClient, createPageTarget, launchChrome, reservePort, resolveChrome, resolveProfileDir, stopChrome, wait } from "./perf/cdp.mjs"
 import { metricMap, round } from "./perf/metrics.mjs"
 import { createProcessCpuSampler, openBrowserClient } from "./perf/process-cpu.mjs"
 
@@ -229,10 +229,10 @@ const main = async () => {
       )
     }
   } finally {
+    await stopChrome(chromeProcess, browserClient ?? client)
     client?.close()
     browserClient?.close()
-    if (!chromeProcess.killed) chromeProcess.kill("SIGTERM")
-    profile.removeAfter(chromeProcess)
+    await profile.remove()
     server.close()
   }
 }

@@ -8,10 +8,12 @@
 
 import { spawn } from "node:child_process"
 import { createServer } from "node:net"
-import { existsSync, mkdtempSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync } from "node:fs"
+import { rm } from "node:fs/promises"
 import { platform, tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import process from "node:process"
+import { stopProcessTree } from "./process-tree.mjs"
 
 export const wait = (milliseconds) => new Promise((resolveWait) => setTimeout(resolveWait, milliseconds))
 
@@ -130,17 +132,13 @@ const ANTI_THROTTLING_ARGS = [
  * carried one run's (and one build's) state into the next.
  */
 export const resolveProfileDir = (explicit, name) => {
-  if (explicit) return { dir: resolve(explicit), temporary: false, removeAfter: () => {} }
+  if (explicit) return { dir: resolve(explicit), temporary: false, remove: async () => {} }
   const dir = mkdtempSync(join(tmpdir(), `openchamber-perf-${name}-`))
   return {
     dir,
     temporary: true,
-    /** Removes the profile when `chromeProcess` exits (now, if it already has). */
-    removeAfter: (chromeProcess) => {
-      const remove = () => rmSync(dir, { recursive: true, force: true })
-      if (!chromeProcess || chromeProcess.exitCode !== null || chromeProcess.signalCode !== null) remove()
-      else chromeProcess.once("exit", remove)
-    },
+    // Async removal lets process/socket cleanup finish while Windows releases files.
+    remove: () => rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }),
   }
 }
 
@@ -157,6 +155,25 @@ export const launchChrome = ({ chrome, profileDir, port, headless, extraArgs = [
   ]
   if (headless) args.unshift("--headless=new", "--disable-gpu")
   return spawn(chrome, args, { stdio: "ignore" })
+}
+
+/** Close the owned browser even when its Windows launcher has already exited. */
+export const stopChrome = async (chromeProcess, client) => {
+  // Attached desktop windows belong to the caller, not the profiler.
+  if (!chromeProcess) return
+  if (client) await client.send("Browser.close", {}, { timeoutMs: 5000 }).catch(() => {})
+  if (chromeProcess.exitCode !== null || chromeProcess.signalCode !== null) return
+  // Browser.close schedules shutdown. Killing it here interrupts child cleanup.
+  await new Promise((resolveExit) => {
+    const onExit = () => { clearTimeout(timer); resolveExit() }
+    const timer = setTimeout(() => {
+      chromeProcess.off("exit", onExit)
+      resolveExit()
+    }, 5000)
+    chromeProcess.once("exit", onExit)
+  })
+  if (chromeProcess.exitCode === null) await stopProcessTree(chromeProcess)
+  chromeProcess.unref?.()
 }
 
 export class CdpClient {

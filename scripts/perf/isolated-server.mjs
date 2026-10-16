@@ -25,6 +25,7 @@ import process from "node:process"
 
 import { wait } from "./cdp.mjs"
 import { fixtureProviderConfig } from "./fixture-provider.mjs"
+import { stopProcessTree } from "./process-tree.mjs"
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..")
 const FIXTURE_SCRIPT = join(REPO_ROOT, "scripts/perf/fixture-provider.mjs")
@@ -84,34 +85,12 @@ const waitForPort = async (port, timeoutMs, child) => {
   return false
 }
 
-/** Child PIDs of a process, read before stopping it. */
-const childPids = (pid) => {
-  try {
-    return execFileSync("pgrep", ["-P", String(pid)], { encoding: "utf8" }).split("\n").map(Number).filter(Boolean)
-  } catch {
-    return []
-  }
-}
-
-const alive = (pid) => {
-  try { process.kill(pid, 0); return true } catch { return false }
-}
-
-/** Stops a process tree this module started: the process group, then any child left. */
-const stopTree = async (child) => {
-  if (!child.pid || child.exitCode !== null) return []
-  const children = childPids(child.pid)
-  try { process.kill(-child.pid, "SIGTERM") } catch { child.kill("SIGTERM") }
-  for (let attempt = 0; attempt < 40 && alive(child.pid); attempt += 1) await wait(250)
-  for (const pid of children) if (alive(pid)) process.kill(pid, "SIGTERM")
-  return children
-}
-
 /** Starts the fixture provider unless one already listens on `port`. */
 export const startFixture = async ({ port, logFile }) => {
   if (await portInUse(port)) return { pid: null, reused: true, stop: async () => undefined }
   const child = spawn(process.execPath, [FIXTURE_SCRIPT, String(port)], {
     detached: true,
+    windowsHide: true,
     stdio: ["ignore", logFile ? "pipe" : "ignore", logFile ? "pipe" : "ignore"],
     env: isolatedEnv(),
   })
@@ -121,10 +100,10 @@ export const startFixture = async ({ port, logFile }) => {
     child.stderr.pipe(log)
   }
   if (!(await waitForPort(port, 15_000, child))) {
-    await stopTree(child)
+    await stopProcessTree(child)
     throw new Error(`The fixture provider did not start on port ${port}${logFile ? `; see ${logFile}` : ""}.`)
   }
-  return { pid: child.pid, reused: false, stop: () => stopTree(child) }
+  return { pid: child.pid, reused: false, stop: () => stopProcessTree(child) }
 }
 
 /** The main chunk a build's index.html loads, or null. */
@@ -152,6 +131,31 @@ const writeSettings = (state, project) => {
     lastDirectory: project,
     defaultModel: "perf/stream-300cps",
   }, null, 2))
+}
+
+/** Isolate both Node's Windows home lookup and OpenCode's XDG paths. */
+export const isolatedServerEnv = ({ state, dist, config, opencodeBinary, inherited = process.env }) => {
+  const home = join(state, "home")
+  const env = {}
+  // Keep OS process-launch essentials, without provider credentials or app state.
+  for (const [key, value] of Object.entries(inherited)) {
+    if (/^(path|pathext|systemroot|windir|comspec|shell|lang|user|username|temp|tmp|tmpdir)$/i.test(key)) env[key] = value
+  }
+  Object.assign(env, {
+    HOME: home,
+    USERPROFILE: home,
+    APPDATA: join(home, "AppData", "Roaming"),
+    LOCALAPPDATA: join(home, "AppData", "Local"),
+    XDG_CONFIG_HOME: join(state, "config"),
+    XDG_DATA_HOME: join(state, "data"),
+    XDG_CACHE_HOME: join(state, "cache"),
+    XDG_STATE_HOME: join(state, "xdg-state"),
+    OPENCHAMBER_DATA_DIR: join(state, "oc-data"),
+    OPENCHAMBER_DIST_DIR: dist,
+    OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
+  })
+  if (opencodeBinary) env.OPENCODE_BINARY = opencodeBinary
+  return env
 }
 
 /**
@@ -183,23 +187,13 @@ export const startIsolatedServer = async ({ repo, dist, state, project, port, fi
   ensureProject(project)
   writeSettings(state, project)
   const config = { ...fixtureProviderConfig(fixturePort), model: "perf/stream-300cps", small_model: "perf/stream-1200cps", autoupdate: false, share: "disabled" }
-  const env = {
-    HOME: join(state, "home"),
-    USER: process.env.USER ?? "",
-    PATH: process.env.PATH ?? "",
-    SHELL: process.env.SHELL ?? "/bin/sh",
-    TMPDIR: process.env.TMPDIR ?? "/tmp",
-    LANG: process.env.LANG ?? "en_US.UTF-8",
-    OPENCHAMBER_DATA_DIR: join(state, "oc-data"),
-    OPENCHAMBER_DIST_DIR: dist,
-    OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
-  }
-  if (opencodeBinary) env.OPENCODE_BINARY = opencodeBinary
+  const env = isolatedServerEnv({ state, dist, config, opencodeBinary })
   const child = spawn(process.execPath, [join(repo, "packages/web/bin/cli.js"), "serve", "--port", String(port), "--foreground"], {
     cwd: project,
     env,
     // Its own process group, so stopping it stops the OpenCode it manages.
     detached: true,
+    windowsHide: true,
     stdio: ["ignore", logFile ? "pipe" : "ignore", logFile ? "pipe" : "ignore"],
   })
   if (logFile) {
@@ -208,7 +202,7 @@ export const startIsolatedServer = async ({ repo, dist, state, project, port, fi
     child.stderr.pipe(log)
   }
   const url = `http://127.0.0.1:${port}`
-  const stop = () => stopTree(child)
+  const stop = () => stopProcessTree(child)
   const deadline = Date.now() + 120_000
   let ready = false
   while (Date.now() < deadline && child.exitCode === null) {
