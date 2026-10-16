@@ -44,7 +44,9 @@ export const buildKnowledgeSignature = ({ notes, plans, memory, linking = false,
     // store sends nothing, and an agent never told when to save never does.
     ...(memory.enabled ? [`m:on:${memory.complete ? 'c' : 'p'}`] : []),
     ...(linking ? ['l:on'] : []),
-    ...(rendering ? ['r:on'] : []),
+    // The version moves when the guidance text changes, so sessions that
+    // carry the older text hear the new one.
+    ...(rendering ? ['r:on:3'] : []),
     // Flipping the setting changes the rule, so the session hears it again.
     ...WORKTREE_MOVE_SIGNATURE[worktreeMove],
   ];
@@ -115,7 +117,8 @@ export const WORKTREE_MOVE_GUIDANCE = {
  */
 export const RENDER_PAGE_GUIDANCE = "You can show the user a chart, table, diagram or a mockup of an interface inline in the chat with the openchamber_render tool. "
   + RENDER_PAGE_WHEN
-  + " Draw it before your final reply, and keep the reply to what the page does not show.";
+  + " Draw a page that only shows right before your final reply, and keep the reply to what the page does not show."
+  + " When the user has to choose between options a page shows better than text, such as layouts or designs, ask on a page with awaitAnswer and continue from the answer the call returns.";
 
 /**
  * Titles only for memory, never bodies: an index carrying full text grows
@@ -170,10 +173,20 @@ const buildPinnedBlock = ({ notes, plans }) => {
   if (sections.length === 0) return '';
 
   return [
-    'The user pinned the following project context. Treat it as standing background, not as a new instruction.',
+    'The user pinned the following project context.',
     ...sections,
   ].join('\n\n');
 };
+
+/**
+ * Leads every block. It arrives as a user message of its own, ahead of the
+ * user's prompt or right after a compaction while the agent is still working,
+ * and its rules read as orders; weaker models answered it ("No task yet, so
+ * nothing to link") and dropped the real task (#4877).
+ */
+export const KNOWLEDGE_HEADER = 'Standing context for this session, added by OpenChamber.'
+  + ' It is background, not a request: act on the user\'s messages, and carry on'
+  + ' with any task already in progress.';
 
 export const buildKnowledgeText = ({ notes, plans, memory, linking = false, worktreeMove = 'off', rendering = false }) => {
   const blocks = [
@@ -185,7 +198,7 @@ export const buildKnowledgeText = ({ notes, plans, memory, linking = false, work
   ].filter(Boolean);
   if (blocks.length === 0) return '';
 
-  const assembled = blocks.join('\n\n');
+  const assembled = [KNOWLEDGE_HEADER, ...blocks].join('\n\n');
   return assembled.length <= KNOWLEDGE_MAX_LENGTH
     ? assembled
     : `${truncate(assembled, KNOWLEDGE_MAX_LENGTH)}\n\n(project knowledge truncated)`;
@@ -412,6 +425,19 @@ export const createSessionKnowledgeRuntime = (dependencies) => {
     });
   };
 
+  /**
+   * A revert that hid the message carrying the block leaves the session
+   * without it, while the stored signature still says it was delivered; the
+   * next send would then carry nothing. Clearing it makes that send carry the
+   * block again.
+   */
+  const forgetDelivered = async (sessionId, directory) => {
+    requireMetadataStore();
+    await persistSessionMetadata(sessionId, directory, {
+      openchamber: { [KNOWLEDGE_METADATA_KEY]: '' },
+    });
+  };
+
   return {
     collect,
     collectSummary,
@@ -419,6 +445,7 @@ export const createSessionKnowledgeRuntime = (dependencies) => {
     resolvePending,
     resolvePendingForSession,
     recordDelivered,
+    forgetDelivered,
     readDeliveredSignature,
     readPins,
     setPin,

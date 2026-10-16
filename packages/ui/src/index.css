@@ -1659,9 +1659,9 @@ html:not(.dark) .chat-scroll {
   width: 100%;
   padding-right: 5.25rem;
   border: 0;
-  border-bottom: 1px solid var(--interactive-border);
   border-radius: 0;
-  background: var(--surface-muted);
+  /* A tone step above the code body, not a ruled strip. */
+  background: color-mix(in srgb, var(--foreground) 4%, transparent);
 }
 
 /* Disable Streamdown's code block virtualization and keep block chrome fixed */
@@ -1679,8 +1679,9 @@ html:not(.dark) .chat-scroll {
   overflow: hidden;
   --foreground: var(--syntax-foreground);
   color: var(--foreground);
-  background: var(--syntax-background);
-  border: 1px solid var(--interactive-border);
+  /* Flat, separated from the page by tone. The small mix keeps the block
+     visible in themes whose code background equals the page. */
+  background: color-mix(in srgb, var(--syntax-foreground) 3%, var(--syntax-background));
   border-radius: 0.75rem;
 }
 

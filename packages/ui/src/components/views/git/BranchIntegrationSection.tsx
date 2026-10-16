@@ -177,7 +177,7 @@ export const BranchIntegrationSection: React.FC<BranchIntegrationSectionProps> =
     <div className="space-y-3">
       <div
         ref={logContainerRef}
-        className="rounded-lg border border-border bg-muted/30 p-3 max-h-48 overflow-y-auto"
+        className="rounded-lg oc-tile p-3 max-h-48 overflow-y-auto"
       >
         <div className="space-y-2">
           {operationLogs.map((log, index) => (
@@ -240,10 +240,10 @@ export const BranchIntegrationSection: React.FC<BranchIntegrationSectionProps> =
             type="button"
             onClick={() => setOperation('merge')}
             className={cn(
-              'flex flex-col items-start gap-1 rounded-lg border p-3 text-start transition-colors',
+              'flex flex-col items-start gap-1 rounded-lg p-3 text-start',
               operation === 'merge'
-                ? 'border-border bg-interactive-selection text-interactive-selection-foreground'
-                : 'border-border hover:border-border/80 hover:bg-interactive-hover'
+                ? 'bg-interactive-selection text-interactive-selection-foreground'
+                : 'oc-tile oc-tile-hover'
             )}
           >
             <div className="flex items-center gap-2">
@@ -268,10 +268,10 @@ export const BranchIntegrationSection: React.FC<BranchIntegrationSectionProps> =
             type="button"
             onClick={() => setOperation('rebase')}
             className={cn(
-              'flex flex-col items-start gap-1 rounded-lg border p-3 text-start transition-colors',
+              'flex flex-col items-start gap-1 rounded-lg p-3 text-start',
               operation === 'rebase'
-                ? 'border-border bg-interactive-selection text-interactive-selection-foreground'
-                : 'border-border hover:border-border/80 hover:bg-interactive-hover'
+                ? 'bg-interactive-selection text-interactive-selection-foreground'
+                : 'oc-tile oc-tile-hover'
             )}
           >
             <div className="flex items-center gap-2">
@@ -362,7 +362,7 @@ export const BranchIntegrationSection: React.FC<BranchIntegrationSectionProps> =
 
       {/* Summary */}
       {selectedBranch ? (
-        <div className="rounded-lg bg-muted/50 p-3">
+        <div className="rounded-lg oc-tile p-3">
           <p className="typography-meta text-muted-foreground">
             {operation === 'merge' ? (
               <>

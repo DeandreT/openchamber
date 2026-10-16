@@ -1206,9 +1206,8 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
 
             return (
                 <div
-                    className="tool-output-surface rounded-xl border p-2 space-y-2"
+                    className="tool-output-surface rounded-xl p-2 space-y-2"
                     style={{
-                        borderColor: 'var(--status-error-border)',
                         backgroundColor: 'var(--status-error-background)',
                     }}
                 >
@@ -1221,7 +1220,7 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
                         </div>
                         <div className="space-y-1">
                             {diagnosticSection.diagnostics.map((diagnostic, index) => (
-                                <div key={`${diagnosticSection.displayPath}:${diagnostic.line}:${diagnostic.character}:${index}`} className="rounded-md border px-2 py-1" style={{ borderColor: 'var(--status-error-border)', backgroundColor: 'var(--surface-elevated)' }}>
+                                <div key={`${diagnosticSection.displayPath}:${diagnostic.line}:${diagnostic.character}:${index}`} className="oc-tile-inset rounded-md px-2 py-1">
                                     <div className="flex items-start gap-2 min-w-0">
                                         <span className="typography-micro shrink-0" style={{ color: 'var(--status-error)' }}>
                                             [{diagnostic.line}:{diagnostic.character}]
@@ -1282,10 +1281,9 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
                 return (
                     <div>
                         <div className="typography-meta font-medium text-muted-foreground mb-1">{t('chat.toolPart.error')}</div>
-                        <div className="typography-meta p-2 rounded-xl border" style={{
+                        <div className="typography-meta p-2 rounded-xl" style={{
                             backgroundColor: 'var(--status-error-background)',
                             color: 'var(--status-error)',
-                            borderColor: 'var(--status-error-border)',
                         }}>
                             {coerceToText(state.error)}
                         </div>
@@ -1309,7 +1307,7 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
                                 {Array.isArray(q.options) && q.options.length > 0 ? (
                                     <div className="flex flex-wrap gap-1 mt-0.5">
                                         {q.options.map((opt) => (
-                                            <span key={coerceToText(opt.label)} className="typography-micro px-1.5 py-0.5 rounded bg-muted/30 border border-border/30 text-muted-foreground">
+                                            <span key={coerceToText(opt.label)} className="typography-micro px-1.5 py-0.5 rounded oc-tile-inset text-muted-foreground">
                                                 {coerceToText(opt.label)}
                                             </span>
                                         ))}
@@ -1533,10 +1531,9 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
                     {state.status === 'error' && 'error' in state && (
                         <div>
                             <div className="typography-meta font-medium text-muted-foreground/80 mb-1">{t('chat.toolPart.error')}</div>
-                            <div className="typography-meta p-2 rounded-xl border" style={{
+                            <div className="typography-meta p-2 rounded-xl" style={{
                                 backgroundColor: 'var(--status-error-background)',
                                 color: 'var(--status-error)',
-                                borderColor: 'var(--status-error-border)',
                             }}>
                                 {coerceToText(state.error)}
                             </div>

@@ -28,7 +28,7 @@ import { fileURLToPath } from "node:url"
 import process from "node:process"
 
 import { ACCESSIBILITY_CATEGORY, accessibilityInWindow, accessibilityState, describeAccessibility, FORCE_ACCESSIBILITY_ARGS } from "./perf/accessibility.mjs"
-import { CdpClient, createPageTarget, evaluateValue, findPageTarget, launchChrome, reservePort, resolveChrome, resolveProfileDir, wait } from "./perf/cdp.mjs"
+import { CdpClient, createPageTarget, evaluateValue, findPageTarget, launchChrome, reservePort, resolveChrome, resolveProfileDir, stopChrome, wait } from "./perf/cdp.mjs"
 import { buildIdleProbeSource, IDLE_PROBE_GLOBAL } from "./perf/idle-probe.mjs"
 import { summarizeCpuProfile } from "./perf/cpu-profile.mjs"
 import { growthPerSecond, longestTaskInWindow, metricMap, round, summarizeFrameBudget, summarizeLongTasks, summarizeThreads, summarizeTraceEvents } from "./perf/metrics.mjs"
@@ -1054,10 +1054,10 @@ const main = async () => {
       process.exitCode = 1
     }
   } finally {
+    await stopChrome(chromeProcess, browserClient ?? client)
     client?.close()
     browserClient?.close()
-    if (chromeProcess && !chromeProcess.killed) chromeProcess.kill("SIGTERM")
-    profile?.removeAfter(chromeProcess)
+    await profile?.remove()
   }
 }
 

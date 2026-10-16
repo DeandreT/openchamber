@@ -37,6 +37,8 @@
  */
 
 import { createServer } from "node:http"
+import { resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import process from "node:process"
 
 const FIXTURE_PROVIDER_ID = "perf"
@@ -352,7 +354,7 @@ export const fixtureProviderConfig = (port) => ({
   },
 })
 
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const port = Number(process.argv[2] ?? 4601)
   if (process.argv.includes("--print-config")) {
     console.log(JSON.stringify(fixtureProviderConfig(port)))

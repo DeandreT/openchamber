@@ -83,6 +83,7 @@ export const reportSessionKnowledgeDelivered = async (
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ directory, sessionId, signature }),
+        directory,
       });
     } catch {
       // Only means the block may be sent once more.
@@ -91,6 +92,36 @@ export const reportSessionKnowledgeDelivered = async (
   deliveryReports.set(sessionId, report);
   await report;
   if (deliveryReports.get(sessionId) === report) deliveryReports.delete(sessionId);
+};
+
+/**
+ * The line every block opens with: `KNOWLEDGE_HEADER` in
+ * `packages/web/server/lib/session-knowledge/runtime.js`, whose test pins this
+ * copy to it. A synthetic message starting with it carries the block.
+ */
+export const SESSION_KNOWLEDGE_HEADER = 'Standing context for this session, added by OpenChamber.'
+  + ' It is background, not a request: act on the user\'s messages, and carry on'
+  + ' with any task already in progress.';
+
+/**
+ * After a revert hid the message carrying the block. Without this the server
+ * still believes the session holds it and the next send carries nothing.
+ */
+export const forgetSessionKnowledgeDelivered = async (
+  directory: string | null | undefined,
+  sessionId: string,
+): Promise<void> => {
+  if (!directory) return;
+  invalidateSummary(directory, sessionId);
+  try {
+    await runtimeFetch('/api/session-knowledge/forget', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ directory, sessionId }),
+    });
+  } catch {
+    // Only means the next send goes without the block, as it did before.
+  }
 };
 
 export interface SessionKnowledgeSummary {
@@ -180,6 +211,7 @@ export const setSessionProjectContextPin = async (
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ directory, sessionId, kind, id, pinned }),
+      directory,
     });
     if (!response.ok) return null;
     return sessionProjectContextPinsResponseSchema.parse(await response.json()).pins;

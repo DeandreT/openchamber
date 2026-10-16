@@ -87,7 +87,7 @@ export const AgentSelector: React.FC<AgentSelectorProps> = ({
                     <button
                         type="button"
                         className={cn(
-                            'flex w-full items-center justify-between rounded-lg border border-border/40 px-2 py-1.5 text-start',
+                            'flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-start',
                             !agentName ? 'bg-interactive-selection text-interactive-selection-foreground' : 'text-foreground hover:bg-interactive-hover'
                         )}
                         onClick={() => {
@@ -108,7 +108,7 @@ export const AgentSelector: React.FC<AgentSelectorProps> = ({
                                 key={agent.name}
                                 type="button"
                                 className={cn(
-                                    'flex w-full items-center justify-between rounded-lg border border-border/40 px-2 py-1.5 text-start',
+                                    'flex w-full items-center justify-between rounded-lg px-2 py-1.5 text-start',
                                     isSelected ? 'bg-interactive-selection text-interactive-selection-foreground' : 'text-foreground hover:bg-interactive-hover'
                                 )}
                                 onClick={() => {

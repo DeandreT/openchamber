@@ -288,7 +288,7 @@ export const AboutSettings: React.FC<AboutSettingsProps> = ({ initialUpdateDialo
         <p className="typography-meta text-muted-foreground">
           {t('settings.openchamber.about.serviceManagerUpdate', { version: info?.version || '' })}
         </p>
-        <div className="flex items-center gap-2 rounded-md border border-border bg-surface-elevated/50 p-1 ps-3">
+        <div className="flex items-center gap-2 oc-tile-inset rounded-md p-1 ps-3">
           <code className="flex-1 overflow-x-auto whitespace-nowrap font-mono text-sm text-foreground">{command}</code>
           <Button
             type="button"
@@ -500,7 +500,7 @@ export const AboutSettings: React.FC<AboutSettingsProps> = ({ initialUpdateDialo
         )}
 
         {[update.error, remoteHostUpdate?.error].filter(Boolean).map((error) => (
-          <p key={error} className="rounded-xl border border-[var(--status-error-border)] bg-[var(--status-error-background)] px-3 py-2 typography-meta text-[var(--status-error)]">
+          <p key={error} className="rounded-xl bg-[var(--status-error-background)] px-3 py-2 typography-meta text-[var(--status-error)]">
             {error}
           </p>
         ))}

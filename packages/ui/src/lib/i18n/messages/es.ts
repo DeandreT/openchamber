@@ -15,10 +15,12 @@ import { webSearchI18n } from './websearch.i18n';
 import { isolatedSpacesI18n } from './isolated-spaces.i18n';
 import { sourceBoardI18n } from './source-board.i18n';
 import { projectActionsI18n } from './project-actions.i18n';
+import { gitIdentityEditorI18n } from './git-identity-editor.i18n';
 import { environmentI18n } from './environment.i18n';
 import { providersI18n } from './providers.i18n';
 import { mcpGridI18n } from './mcp-grid.i18n';
 import { pluginsGridI18n } from './plugins-grid.i18n';
+import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict: Record<I18nKey, string> = {
   "opencodeCompatibility.bundled": "OpenCode viene incluido en OpenChamber. Actualiza OpenChamber para obtener OpenCode v2.",
@@ -153,10 +155,12 @@ export const dict: Record<I18nKey, string> = {
   ...isolatedSpacesI18n.es,
   ...sourceBoardI18n.es,
   ...projectActionsI18n.es,
+  ...gitIdentityEditorI18n.es,
   ...environmentI18n.es,
   ...providersI18n.es,
   ...mcpGridI18n.es,
   ...pluginsGridI18n.es,
+  ...integrationsCatalogI18n['es'],
   'terminalView.actions.attachSelection': 'Adjuntar salida seleccionada',
   'terminalView.actions.copySelection': 'Copiar salida seleccionada',
   'terminalView.toast.selectionCopied': 'Salida copiada',
@@ -690,6 +694,8 @@ export const dict: Record<I18nKey, string> = {
   "sessions.sidebar.session.work.markDone": "Marcar como hecho",
   "sessions.sidebar.session.work.doneSuggested": "Parece terminado",
   "sessions.sidebar.session.work.updateFailed": "No se pudo actualizar la sesión",
+  "sessions.sidebar.session.pin.pinFailed": "No se pudo anclar la sesión",
+  "sessions.sidebar.session.pin.unpinFailed": "No se pudo desanclar la sesión",
   "chat.work.doneHint.text": "Este trabajo parece terminado.",
   "chat.work.doneHint.action": "Marcar como hecho",
   "chat.work.reviewHint.text": "Los cambios están listos para revisar.",
@@ -813,6 +819,7 @@ export const dict: Record<I18nKey, string> = {
   "sessions.sidebar.group.pr.status.mergeConflicts": "Conflictos de merge",
   "sessions.sidebar.group.pr.status.mergeBlocked": "Fusión bloqueada",
   "sessions.sidebar.group.pr.status.checksFailing": "Checks fallidos",
+  "sessions.sidebar.group.pr.status.checksRunning": "Checks en curso",
   "sessions.sidebar.group.issue.status.open": "Issue abierto",
   "sessions.sidebar.group.issue.status.completed": "Completado",
   "sessions.sidebar.group.issue.status.notPlanned": "No planificado",

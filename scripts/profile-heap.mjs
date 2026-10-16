@@ -12,13 +12,13 @@
  * sessions only when they serve the same server state.
  */
 
-import { mkdirSync, rmSync } from "node:fs"
-import { writeFile } from "node:fs/promises"
+import { mkdirSync } from "node:fs"
+import { rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import process from "node:process"
 
-import { CdpClient, createPageTarget, evaluateValue, launchChrome, reservePort, resolveChrome, wait } from "./perf/cdp.mjs"
+import { CdpClient, createPageTarget, evaluateValue, launchChrome, reservePort, resolveChrome, stopChrome, wait } from "./perf/cdp.mjs"
 import { metricMap, round } from "./perf/metrics.mjs"
 import { expandProjects, expandSessionLists } from "./perf/scenario.mjs"
 
@@ -69,7 +69,7 @@ const main = async () => {
   const output = resolve(options.output ?? join("artifacts", `heap-profile-${new Date().toISOString().replace(/[:.]/g, "-")}`))
   const profileDir = options.profileDir ?? join(tmpdir(), `openchamber-perf-heap-${process.pid}`)
   // Retained documents in a reused profile inflate the heap of later runs.
-  rmSync(profileDir, { recursive: true, force: true })
+  await rm(profileDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
   mkdirSync(profileDir, { recursive: true })
   mkdirSync(output, { recursive: true })
   const port = await reservePort()
@@ -147,10 +147,10 @@ const main = async () => {
     if (opened < plan.length) console.warn(`WARNING: ${plan.length - opened} rows disappeared before they could be opened.`)
     await reading("afterClicks")
   } finally {
+    await stopChrome(chrome, client)
     client?.close()
-    chrome.kill()
     await wait(500)
-    rmSync(profileDir, { recursive: true, force: true })
+    await rm(profileDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
   }
   await writeFile(join(output, "heap-summary.json"), JSON.stringify(summary, null, 2))
   console.log(`Saved to ${output}`)

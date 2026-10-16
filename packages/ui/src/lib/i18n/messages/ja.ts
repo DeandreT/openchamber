@@ -15,10 +15,12 @@ import { webSearchI18n } from './websearch.i18n';
 import { isolatedSpacesI18n } from './isolated-spaces.i18n';
 import { sourceBoardI18n } from './source-board.i18n';
 import { projectActionsI18n } from './project-actions.i18n';
+import { gitIdentityEditorI18n } from './git-identity-editor.i18n';
 import { environmentI18n } from './environment.i18n';
 import { providersI18n } from './providers.i18n';
 import { mcpGridI18n } from './mcp-grid.i18n';
 import { pluginsGridI18n } from './plugins-grid.i18n';
+import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict: Record<I18nKey, string> = {
   "opencodeCompatibility.bundled": "OpenCode は OpenChamber に同梱されています。OpenCode v2 を利用するには OpenChamber を更新してください。",
@@ -143,10 +145,12 @@ export const dict: Record<I18nKey, string> = {
   ...isolatedSpacesI18n.ja,
   ...sourceBoardI18n.ja,
   ...projectActionsI18n.ja,
+  ...gitIdentityEditorI18n.ja,
   ...environmentI18n.ja,
   ...providersI18n.ja,
   ...mcpGridI18n.ja,
   ...pluginsGridI18n.ja,
+  ...integrationsCatalogI18n['ja'],
   'terminalView.actions.attachSelection': '選択した出力を添付',
   'terminalView.actions.copySelection': '選択した出力をコピー',
   'terminalView.toast.selectionCopied': '出力をコピーしました',
@@ -689,6 +693,8 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.session.work.markDone': '完了にする',
   'sessions.sidebar.session.work.doneSuggested': '完了したようです',
   'sessions.sidebar.session.work.updateFailed': 'セッションを更新できませんでした',
+  'sessions.sidebar.session.pin.pinFailed': 'セッションをピン留めできませんでした',
+  'sessions.sidebar.session.pin.unpinFailed': 'セッションのピン留めを解除できませんでした',
   'chat.work.doneHint.text': 'この作業は完了したようです。',
   'chat.work.doneHint.action': '完了にする',
   'chat.work.reviewHint.text': '変更を確認する準備ができました。',
@@ -812,6 +818,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.group.pr.status.mergeConflicts': 'マージ競合',
   'sessions.sidebar.group.pr.status.mergeBlocked': 'マージブロック中',
   'sessions.sidebar.group.pr.status.checksFailing': 'チェック失敗',
+  'sessions.sidebar.group.pr.status.checksRunning': 'チェック実行中',
   'sessions.sidebar.group.issue.status.open': 'Issue公開中',
   'sessions.sidebar.group.issue.status.completed': '完了',
   'sessions.sidebar.group.issue.status.notPlanned': '対応予定なし',

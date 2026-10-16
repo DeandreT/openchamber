@@ -14,20 +14,18 @@ import { SettingsInfoHint } from './SettingsInfoHint';
  * so a rem-based cap (`max-w-48`) stays 192px while the label inside it grows,
  * and the value clips at 150–200% interface font size. `ch` is measured
  * against the trigger's own `typography-ui-label` font, so the cap grows with
- * the setting. Below `@xl` the field row stacks and the control is plain
- * `w-full`, so on narrow panes the cap is the only thing keeping the
- * trigger from spanning the pane.
+ * the setting.
  *
- * The cap is deliberately tight: every settings picker shares it so a column
- * of dropdowns reads as one width, and long values truncate inside instead
- * of stretching the trigger across the pane.
+ * A trigger hugs its value, the chevron right after it, so a short value is a
+ * short button rather than a wide box with the chevron pushed to its edge.
+ * The cap keeps a long value from stretching across the pane; it truncates.
  */
-const SETTINGS_TRIGGER_WIDTH_CLASS = 'w-full min-w-[16ch] max-w-[28ch]';
+const SETTINGS_TRIGGER_WIDTH_CLASS = 'w-fit max-w-[28ch]';
 
-/** Settings select trigger: full column width in stacked cells; capped in field rows via parent. */
+/** Settings select trigger in stacked cells. */
 export const SETTINGS_SELECT_TRIGGER_CLASS = SETTINGS_TRIGGER_WIDTH_CLASS;
 
-/** Fixed-width select used inside full-width SettingsFieldRow control columns. */
+/** Settings select trigger in SettingsFieldRow control columns. */
 export const SETTINGS_SELECT_ROW_TRIGGER_CLASS = SETTINGS_TRIGGER_WIDTH_CLASS;
 
 /**
@@ -553,7 +551,10 @@ interface SettingsChipGroupProps<T extends string> {
   'aria-label'?: string;
 }
 
-/** Compact chip / segmented enum picker. */
+/**
+ * Compact segmented enum picker, drawn like the active-pill tab strip: the
+ * options sit in a recessed track and the chosen one is raised out of it.
+ */
 export function SettingsChipGroup<T extends string>({
   value,
   options,
@@ -565,18 +566,29 @@ export function SettingsChipGroup<T extends string>({
     <div
       role="group"
       aria-label={ariaLabel}
-      className={cn('flex flex-wrap items-center gap-1', className)}
+      className={cn(
+        'oc-recessed inline-flex max-w-full flex-wrap items-center gap-0.5 rounded-lg bg-[color-mix(in_srgb,var(--foreground)_4%,transparent)] p-0.5',
+        className,
+      )}
     >
       {options.map((option) => {
+        const selected = value === option.value;
         const chip = (
           <Button
             key={option.value}
             type="button"
-            variant="chip"
+            variant="ghost"
             size="xs"
             disabled={option.disabled}
-            aria-pressed={value === option.value}
-            className="!font-normal"
+            aria-pressed={selected}
+            className={cn(
+              '!font-normal',
+              selected
+                // Light themes paint elevated darker than the canvas, so the
+                // raised option takes the canvas colour there, like the tab pill.
+                ? 'oc-raised bg-[var(--surface-background)] text-foreground hover:bg-[var(--surface-background)] dark:bg-[var(--surface-elevated)] dark:hover:bg-[var(--surface-elevated)]'
+                : 'text-muted-foreground hover:bg-transparent hover:text-foreground',
+            )}
             onClick={() => onChange(option.value)}
           >
             {option.label}

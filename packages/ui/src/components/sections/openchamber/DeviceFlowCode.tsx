@@ -18,7 +18,7 @@ export const DeviceFlowCode: React.FC<{
 }> = ({ code, description, openLabel, onOpen, onCancel, disabled = false }) => {
   const { t } = useI18n();
   return (
-    <div className="space-y-3 rounded-md border border-[var(--surface-subtle)] bg-[var(--surface-muted)] p-3">
+    <div className="oc-tile-inset space-y-3 rounded-md p-3">
       <div className="space-y-1">
         <SettingsGroupTitle>{t('settings.github.page.flow.title')}</SettingsGroupTitle>
         <p className="typography-meta text-muted-foreground">{description}</p>

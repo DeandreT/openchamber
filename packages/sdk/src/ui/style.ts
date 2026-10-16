@@ -46,7 +46,6 @@ const hover = v('interactive-hover', 'transparent');
 const active = v('interactive-active', 'transparent');
 const selection = v('interactive-selection', 'transparent');
 const selectionFg = v('interactive-selection-foreground', 'inherit');
-const focus = v('interactive-focus-ring', 'currentColor');
 const primary = v('primary', 'currentColor');
 const primaryText = v('primary-text', 'inherit');
 const errorText = v('error-text', 'inherit');
@@ -61,7 +60,18 @@ const mix = (color: string, pct: number, base = 'transparent'): string => (
   `color-mix(in srgb, ${color} ${pct}%, ${base})`
 );
 
-const focusRing = `box-shadow: 0 0 0 2px ${focus};`;
+/** Keyboard focus draws no ring, like the app: the focused control takes the hover fill. */
+const focusFill = `background-image: linear-gradient(${hover}, ${hover});`;
+
+/**
+ * The app's `oc-field` and `oc-raised` edges in their theme-neutral form: the guest
+ * document does not know whether the theme is light or dark, so it skips the dark
+ * theme's lit top and sheen. A field sits pressed in and recolours only its hairline.
+ */
+const field = (edge: string): string => `box-shadow: inset 0 0 0 1px ${edge}, inset 0 1px 2px 0 rgb(0 0 0 / 0.05);`;
+const raised = `box-shadow: inset 0 0 0 1px ${mix(fg, 10)}, 0 1px 2px 0 rgb(0 0 0 / 0.12);`;
+/** Tinted buttons keep their border and take a lit top line and a short shadow, like the app's `oc-raised-button`. */
+const litButton = `box-shadow: inset 0 1px 0 0 rgb(255 255 255 / 0.12), 0 1px 2px 0 rgb(0 0 0 / 0.14);`;
 
 const tone = (name: 'success' | 'warning' | 'error' | 'info'): string => {
   const color = v(`status-${name}`, 'currentColor');
@@ -101,7 +111,7 @@ textarea.oc-sdk-input { height: auto; padding: 8px 10px; resize: vertical; }
 .oc-sdk-search[data-active="true"] .oc-sdk-search-clear { display: inline-flex; }
 
 .oc-sdk-select { position: relative; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.oc-sdk-trigger { display: inline-flex; align-items: center; gap: 6px; width: 100%; min-width: 0; height: 28px; padding: 0 10px; border: 1px solid transparent; font-size: 0.8125rem; text-align: left; }
+.oc-sdk-trigger { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; width: auto; max-width: 100%; min-width: 0; height: 28px; padding: 0 10px; border: 1px solid transparent; font-size: 0.8125rem; text-align: left; }
 .oc-sdk-trigger-value { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .oc-sdk-trigger-chevron { flex: 0 0 auto; }
 .oc-sdk-popup { position: fixed; z-index: 50; display: flex; flex-direction: column; gap: 2px; min-width: 160px; max-width: calc(100vw - 16px); max-height: min(320px, calc(100vh - 16px)); overflow: auto; padding: 4px; border: 1px solid transparent; }
@@ -181,7 +191,8 @@ textarea.oc-sdk-input { height: auto; padding: 8px 10px; resize: vertical; }
  */
 export const GUEST_UI_LOOK_CSS = `
 .oc-sdk { color: ${fg}; font-family: ${font}; }
-.oc-sdk :focus-visible { outline: none; ${focusRing} }
+.oc-sdk :focus-visible, .oc-sdk:focus-visible { outline: none; }
+.oc-sdk :where(button, a[href], [role="button"], [role="tab"], [role="option"]):focus-visible, button.oc-sdk:focus-visible { ${focusFill} }
 .oc-sdk-mono { font-family: ${mono}; }
 .oc-sdk-muted { color: ${muted}; }
 ${tone('success')}${tone('warning')}${tone('error')}${tone('info')}
@@ -189,30 +200,29 @@ ${tone('success')}${tone('warning')}${tone('error')}${tone('info')}
 
 .oc-sdk-btn { border-radius: ${controlRadius}; transition: background 150ms ease-out, color 150ms ease-out; }
 .oc-sdk-btn[data-size="xs"] { border-radius: ${smallRadius}; }
-.oc-sdk-btn[data-variant="default"] { color: ${primaryText}; background: ${mix(primary, 10, bg)}; border-color: ${mix(primary, 12)}; }
+.oc-sdk-btn[data-variant="default"] { color: ${primaryText}; background: ${mix(primary, 10, bg)}; border-color: ${mix(primary, 12)}; ${litButton} }
 .oc-sdk-btn[data-variant="default"]:hover { background: ${mix(primary, 16, bg)}; }
-.oc-sdk-btn[data-variant="default"]:active { background: ${mix(primary, 22, bg)}; }
+.oc-sdk-btn[data-variant="default"]:active { background: ${mix(primary, 22, bg)}; box-shadow: none; }
 .oc-sdk-btn[data-variant="secondary"] { background: ${secondary}; color: var(--oc-fg); }
 .oc-sdk-btn[data-variant="secondary"]:hover { background-image: linear-gradient(${hover}, ${hover}); }
 .oc-sdk-btn[data-variant="secondary"]:active { background-image: linear-gradient(${active}, ${active}); }
-.oc-sdk-btn[data-variant="outline"] { background: ${elevated}; color: ${elevatedFg}; border-color: ${border}; }
+.oc-sdk-btn[data-variant="outline"] { background: ${elevated}; color: ${elevatedFg}; border-color: transparent; ${raised} }
 .oc-sdk-btn[data-variant="outline"]:hover { background-image: linear-gradient(${hover}, ${hover}); }
-.oc-sdk-btn[data-variant="outline"]:active { background-image: linear-gradient(${active}, ${active}); }
+.oc-sdk-btn[data-variant="outline"]:active { background-image: linear-gradient(${active}, ${active}); box-shadow: inset 0 0 0 1px ${mix(fg, 10)}; }
 .oc-sdk-btn[data-variant="ghost"] { background: transparent; }
 .oc-sdk-btn[data-variant="ghost"]:hover { background: ${hover}; }
 .oc-sdk-btn[data-variant="ghost"]:active { background: ${active}; }
-.oc-sdk-btn[data-variant="destructive"] { --oc-sdk-tone: ${v('status-error', 'red')}; color: ${errorText}; background: ${mix('var(--oc-sdk-tone)', 7, bg)}; border-color: ${mix('var(--oc-sdk-tone)', 12)}; }
+.oc-sdk-btn[data-variant="destructive"] { --oc-sdk-tone: ${v('status-error', 'red')}; color: ${errorText}; background: ${mix('var(--oc-sdk-tone)', 7, bg)}; border-color: ${mix('var(--oc-sdk-tone)', 12)}; ${litButton} }
 .oc-sdk-btn[data-variant="destructive"]:hover { background: ${mix('var(--oc-sdk-tone)', 9, bg)}; }
-.oc-sdk-btn[data-variant="destructive"]:active { background: ${mix('var(--oc-sdk-tone)', 11, bg)}; }
+.oc-sdk-btn[data-variant="destructive"]:active { background: ${mix('var(--oc-sdk-tone)', 11, bg)}; box-shadow: none; }
 
 .oc-sdk-field-note { color: ${muted}; }
 .oc-sdk-field[data-invalid="true"] .oc-sdk-field-note { color: ${errorText}; }
-.oc-sdk-input { border-radius: ${controlRadius}; background: ${elevated}; color: ${elevatedFg}; box-shadow: inset 0 0 0 1px ${mix(border, 60)}; transition: background 150ms ease-out, box-shadow 150ms ease-out; }
+.oc-sdk-input { border-radius: ${controlRadius}; background: ${elevated}; color: ${elevatedFg}; ${field(mix(fg, 10))} transition: background 150ms ease-out; }
 .oc-sdk-input::placeholder { color: ${muted}; }
 .oc-sdk-input:hover:not(:focus) { background-image: linear-gradient(${hover}, ${hover}); }
-.oc-sdk-input:focus, .oc-sdk-input:focus-visible { box-shadow: inset 0 0 0 2px ${focus}; }
-.oc-sdk-field[data-invalid="true"] .oc-sdk-input { box-shadow: inset 0 0 0 1px ${v('status-error', 'red')}; }
-.oc-sdk-field[data-invalid="true"] .oc-sdk-input:focus { box-shadow: inset 0 0 0 2px ${v('status-error', 'red')}; }
+.oc-sdk-input:focus, .oc-sdk-input:focus-visible { ${field(mix(fg, 26))} }
+.oc-sdk-field[data-invalid="true"] .oc-sdk-input, .oc-sdk-field[data-invalid="true"] .oc-sdk-input:focus { ${field(v('status-error', 'red'))} }
 .oc-sdk-input[data-mono="true"] { font-family: ${mono}; }
 
 .oc-sdk-search-icon { color: ${muted}; }
@@ -220,7 +230,7 @@ ${tone('success')}${tone('warning')}${tone('error')}${tone('info')}
 .oc-sdk-search-clear { border-radius: ${smallRadius}; color: ${muted}; }
 .oc-sdk-search-clear:hover { background: ${hover}; color: ${fg}; }
 
-.oc-sdk-trigger { border-color: ${border}; border-radius: ${controlRadius}; background: ${elevated}; color: ${elevatedFg}; transition: background 150ms ease-out; }
+.oc-sdk-trigger { border-color: transparent; border-radius: ${controlRadius}; background: ${elevated}; color: ${elevatedFg}; ${raised} transition: background 150ms ease-out; }
 .oc-sdk-trigger:hover { background-image: linear-gradient(${hover}, ${hover}); }
 .oc-sdk-trigger[aria-expanded="true"] { background-image: linear-gradient(${active}, ${active}); }
 .oc-sdk-trigger-value[data-empty="true"] { color: ${muted}; }
@@ -245,14 +255,15 @@ ${tone('success')}${tone('warning')}${tone('error')}${tone('info')}
 .oc-sdk-check[aria-checked="true"] .oc-sdk-check-thumb { background: ${primary}; }
 .oc-sdk-check[aria-checked="true"] .oc-sdk-check-thumb::after { transform: translateX(16px); }
 .oc-sdk-check:focus-visible { box-shadow: none; }
-.oc-sdk-check:focus-visible .oc-sdk-check-box, .oc-sdk-check:focus-visible .oc-sdk-check-thumb { ${focusRing} }
+.oc-sdk-check:focus-visible .oc-sdk-check-box, .oc-sdk-check:focus-visible .oc-sdk-check-thumb { ${focusFill} }
 .oc-sdk-check-desc { color: ${muted}; }
 
 .oc-sdk-tabs { border-radius: 10px; }
-.oc-sdk-tabs[data-track="true"] { background: ${mix(fg, 4)}; }
+.oc-sdk-tabs[data-track="true"] { background: ${mix(fg, 4)}; box-shadow: inset 0 1px 2px 0 rgb(0 0 0 / 0.16); }
 .oc-sdk-tab { border-radius: 8px; color: ${muted}; transition: color 150ms ease-out, background 150ms ease-out; }
 .oc-sdk-tab:hover { color: ${fg}; }
 .oc-sdk-tab[aria-selected="true"] { color: ${selectionFg}; background: ${selection}; border-color: ${border}; }
+.oc-sdk-tabs[data-track="true"] .oc-sdk-tab[aria-selected="true"] { color: ${elevatedFg}; background: ${elevated}; border-color: transparent; ${raised} }
 .oc-sdk-tab-count { color: ${muted}; }
 
 .oc-sdk-badge { border-radius: 9999px; background: ${hover}; color: ${muted}; }

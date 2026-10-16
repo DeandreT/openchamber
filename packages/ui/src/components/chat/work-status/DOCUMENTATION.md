@@ -11,8 +11,8 @@ without a name is unreadable at a glance, which is what an unlabelled stream of
 values degenerates into.
 
 Rows are grouped into **named sections**, one component each, composed in
-order by `WorkStatusPanel`. The separator between them is a
-`:not(:first-child)` CSS rule rather than a prop, because every section renders
+order by `WorkStatusPanel`. They are parted by space alone, no rule. The gap
+is a `:not(:first-child)` CSS rule rather than a prop, because every section renders
 conditionally; passing "am I first?" down would mean each one tracking what the
 sections above it decided to render.
 

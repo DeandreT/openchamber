@@ -14,10 +14,12 @@ import { webSearchI18n } from './websearch.i18n';
 import { isolatedSpacesI18n } from './isolated-spaces.i18n';
 import { sourceBoardI18n } from './source-board.i18n';
 import { projectActionsI18n } from './project-actions.i18n';
+import { gitIdentityEditorI18n } from './git-identity-editor.i18n';
 import { environmentI18n } from './environment.i18n';
 import { providersI18n } from './providers.i18n';
 import { mcpGridI18n } from './mcp-grid.i18n';
 import { pluginsGridI18n } from './plugins-grid.i18n';
+import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict = {
   "opencodeCompatibility.bundled": "OpenCode, OpenChamber ile birlikte gelir. OpenCode v2 için OpenChamber’ı güncelleyin.",
@@ -81,10 +83,12 @@ export const dict = {
   ...isolatedSpacesI18n.tr,
   ...sourceBoardI18n.tr,
   ...projectActionsI18n.tr,
+  ...gitIdentityEditorI18n.tr,
   ...environmentI18n.tr,
   ...providersI18n.tr,
   ...mcpGridI18n.tr,
   ...pluginsGridI18n.tr,
+  ...integrationsCatalogI18n['tr'],
   'terminalView.actions.attachSelection': 'Seçili çıktıyı ekle',
   'terminalView.actions.copySelection': 'Seçili çıktıyı kopyala',
   'terminalView.toast.selectionCopied': 'Çıktı kopyalandı',
@@ -598,6 +602,8 @@ export const dict = {
   'sessions.sidebar.session.work.markDone': 'Tamamlandı olarak işaretle',
   'sessions.sidebar.session.work.doneSuggested': 'Tamamlanmış görünüyor',
   'sessions.sidebar.session.work.updateFailed': 'Oturum güncellenemedi',
+  'sessions.sidebar.session.pin.pinFailed': 'Oturum sabitlenemedi',
+  'sessions.sidebar.session.pin.unpinFailed': 'Oturumun sabitlemesi kaldırılamadı',
   'chat.work.doneHint.text': 'Bu iş tamamlanmış görünüyor.',
   'chat.work.doneHint.action': 'Tamamlandı olarak işaretle',
   'chat.work.reviewHint.text': 'Değişiklikler incelenmeye hazır.',
@@ -721,6 +727,7 @@ export const dict = {
   'sessions.sidebar.group.pr.status.mergeConflicts': 'Merge çakışmaları',
   'sessions.sidebar.group.pr.status.mergeBlocked': 'Merge engellendi',
   'sessions.sidebar.group.pr.status.checksFailing': 'Check\'ler başarısız',
+  'sessions.sidebar.group.pr.status.checksRunning': 'Check\'ler çalışıyor',
   'sessions.sidebar.group.issue.status.open': 'Issue açık',
   'sessions.sidebar.group.issue.status.completed': 'Tamamlandı',
   'sessions.sidebar.group.issue.status.notPlanned': 'Planlanmadı',

@@ -64,6 +64,18 @@ OpenCode and the fixture provider on Ctrl-C. Pass `--dir tmp/perf-serve/project`
 to the session commands. Every command except `profile:animation` and
 `profile:startup` without `--url` needs a running server.
 
+On Windows, `profile:serve` sets `USERPROFILE`, `APPDATA`, `LOCALAPPDATA` and
+the XDG directories under its state directory as well as `HOME`. Its child
+environment retains OS launch variables and excludes inherited provider keys
+and application credentials. Pass `--opencode-binary` with the installed
+desktop's `resources/opencode-cli/opencode.exe` path. Shutdown discovers the
+server's descendants through Windows process information before stopping them.
+Captures using `perf/cdp.mjs` request `Browser.close`, allow graceful shutdown, and stop
+the owned process tree if it remains alive. Temporary Chrome profiles are
+removed asynchronously with bounded retries so Windows can release their file
+handles. A browser supplied through `--attach` is never closed by the capture.
+Use the same explicit `--chrome` binary for both sides of a comparison.
+
 ## Running An Isolated Copy
 
 Any server, dev shell or Electron an agent starts for a check runs beside the

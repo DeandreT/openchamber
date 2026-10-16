@@ -14,10 +14,12 @@ import { webSearchI18n } from './websearch.i18n';
 import { isolatedSpacesI18n } from './isolated-spaces.i18n';
 import { sourceBoardI18n } from './source-board.i18n';
 import { projectActionsI18n } from './project-actions.i18n';
+import { gitIdentityEditorI18n } from './git-identity-editor.i18n';
 import { environmentI18n } from './environment.i18n';
 import { providersI18n } from './providers.i18n';
 import { mcpGridI18n } from './mcp-grid.i18n';
 import { pluginsGridI18n } from './plugins-grid.i18n';
+import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict = {
   'opencodeCompatibility.bundled': 'OpenCode מגיע יחד עם OpenChamber. יש לעדכן את OpenChamber כדי לקבל את OpenCode v2.',
@@ -663,6 +665,8 @@ export const dict = {
   'sessions.sidebar.session.work.markDone': 'סמן כהושלם',
   'sessions.sidebar.session.work.doneSuggested': 'נראה שהושלם',
   'sessions.sidebar.session.work.updateFailed': 'לא ניתן היה לעדכן את ההפעלה',
+  'sessions.sidebar.session.pin.pinFailed': 'לא ניתן היה להצמיד את ההפעלה',
+  'sessions.sidebar.session.pin.unpinFailed': 'לא ניתן היה לבטל את הצמדת ההפעלה',
   'chat.work.doneHint.text': 'נראה שהעבודה הזו הושלמה.',
   'chat.work.doneHint.action': 'סמן כהושלם',
   'chat.work.reviewHint.text': 'השינויים מוכנים לסקירה.',
@@ -786,6 +790,7 @@ export const dict = {
   'sessions.sidebar.group.pr.status.mergeConflicts': 'התנגשויות מיזוג',
   'sessions.sidebar.group.pr.status.mergeBlocked': 'המיזוג חסום',
   'sessions.sidebar.group.pr.status.checksFailing': 'בדיקות נכשלות',
+  'sessions.sidebar.group.pr.status.checksRunning': 'בדיקות רצות',
   'sessions.sidebar.group.issue.status.open': 'Issue פתוח',
   'sessions.sidebar.group.issue.status.completed': 'הושלם',
   'sessions.sidebar.group.issue.status.notPlanned': 'לא מתוכנן',
@@ -3771,10 +3776,12 @@ export const dict = {
   ...isolatedSpacesI18n.he,
   ...sourceBoardI18n.he,
   ...projectActionsI18n.he,
+  ...gitIdentityEditorI18n.he,
   ...environmentI18n.he,
   ...providersI18n.he,
   ...mcpGridI18n.he,
   ...pluginsGridI18n.he,
+  ...integrationsCatalogI18n['he'],
   'settings.usage.page.state.claudeSignedOutTitle': 'לא מחובר ל-Claude Code',
   'settings.usage.page.state.claudeSignInCommand': 'יש להריץ את הפקודה הזו במסוף:',
   'settings.openchamber.visual.field.confirmFileTreeMove': 'אישור לפני העברת קבצים',

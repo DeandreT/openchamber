@@ -14,10 +14,12 @@ import { webSearchI18n } from './websearch.i18n';
 import { isolatedSpacesI18n } from './isolated-spaces.i18n';
 import { sourceBoardI18n } from './source-board.i18n';
 import { projectActionsI18n } from './project-actions.i18n';
+import { gitIdentityEditorI18n } from './git-identity-editor.i18n';
 import { environmentI18n } from './environment.i18n';
 import { providersI18n } from './providers.i18n';
 import { mcpGridI18n } from './mcp-grid.i18n';
 import { pluginsGridI18n } from './plugins-grid.i18n';
+import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict = {
   "opencodeCompatibility.bundled": "OpenCode is bundled with OpenChamber. Update OpenChamber to get OpenCode v2.",
@@ -142,10 +144,12 @@ export const dict = {
   ...isolatedSpacesI18n.en,
   ...sourceBoardI18n.en,
   ...projectActionsI18n.en,
+  ...gitIdentityEditorI18n.en,
   ...environmentI18n.en,
   ...providersI18n.en,
   ...mcpGridI18n.en,
   ...pluginsGridI18n.en,
+  ...integrationsCatalogI18n['en'],
   'terminalView.actions.attachSelection': 'Attach selected output',
   'terminalView.actions.copySelection': 'Copy selected output',
   'terminalView.toast.selectionCopied': 'Output copied',
@@ -688,6 +692,8 @@ export const dict = {
   'sessions.sidebar.session.work.markDone': 'Mark done',
   'sessions.sidebar.session.work.doneSuggested': 'Looks done',
   'sessions.sidebar.session.work.updateFailed': 'Couldn\'t update the session',
+  'sessions.sidebar.session.pin.pinFailed': 'Couldn\'t pin the session',
+  'sessions.sidebar.session.pin.unpinFailed': 'Couldn\'t unpin the session',
   'chat.work.doneHint.text': 'This work looks done.',
   'chat.work.doneHint.action': 'Mark done',
   'chat.work.reviewHint.text': 'Changes are ready to look over.',
@@ -811,6 +817,7 @@ export const dict = {
   'sessions.sidebar.group.pr.status.mergeConflicts': 'Merge conflicts',
   'sessions.sidebar.group.pr.status.mergeBlocked': 'Merge blocked',
   'sessions.sidebar.group.pr.status.checksFailing': 'Checks failing',
+  'sessions.sidebar.group.pr.status.checksRunning': 'Checks running',
   'sessions.sidebar.group.issue.status.open': 'Issue open',
   'sessions.sidebar.group.issue.status.completed': 'Completed',
   'sessions.sidebar.group.issue.status.notPlanned': 'Not planned',

@@ -278,6 +278,19 @@ switches reject stale completions. Full-snapshot revisions also cover omitted
 sessions, so a delayed mutation response cannot resurrect a cleared queue;
 session events newer than that snapshot survive reconciliation.
 
+A session in an isolated space has its queue in that space's own server, which
+sees the space's OpenCode go idle and delivers. Every request about such a
+session's queue names its directory, which sends it to the space; the host's
+snapshot owns only the host's sessions, and each space's snapshot, read with
+`refreshSpaceQueue`, owns only that space's. The two number their revisions
+apart, so snapshot revisions are kept per runtime and owner. The host forwards
+a space's queue changes on the same control stream, marked with `spaceId`, and
+a change applies only to a session of that space. `message-queue-sync.ts`
+reads a space's queue when the space first appears in the spaces store, when
+the host announces `openchamber:space-queue-stream` after following that
+space's queue again, and on every reconnect of the control stream. A space
+that cannot be read keeps what was last known of its queue.
+
 Mutations are optimistic and then settled on the server's copy; failed
 round-trips re-read instead of guessing. Empty legacy events without a directory
 clear all projections of their session in that runtime. Projection items carry

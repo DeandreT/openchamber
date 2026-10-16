@@ -37,6 +37,8 @@ interface ProviderOAuthMethodsProps {
   directory?: string | null;
   /** Layout only — the caller owns separation from whatever sits above. */
   className?: string;
+  /** Start the only sign-in method on mount, for a sign-in the user just asked for elsewhere. */
+  autoStart?: boolean;
 }
 
 type Flow =
@@ -75,6 +77,7 @@ export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
   onConnected,
   directory,
   className,
+  autoStart = false,
 }) => {
   const { t } = useI18n();
   const sdk = React.useCallback(
@@ -222,6 +225,15 @@ export const ProviderOAuthMethods: React.FC<ProviderOAuthMethodsProps> = ({
     setFieldValues(defaultFieldValues(fields));
     setFlow({ phase: 'prompting', methodID: method.id, fields, error: null });
   };
+
+  const autoStartedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!autoStart || autoStartedRef.current || methods.length !== 1) return;
+    autoStartedRef.current = true;
+    beginConnect(methods[0]);
+    // Once per mount: a later render must not restart a sign-in the user cancelled.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoStart, methods]);
 
   const submitFields = (method: SignInMethod) => {
     if (flow.phase !== 'prompting') {

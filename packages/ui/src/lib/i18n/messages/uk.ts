@@ -15,10 +15,12 @@ import { webSearchI18n } from './websearch.i18n';
 import { isolatedSpacesI18n } from './isolated-spaces.i18n';
 import { sourceBoardI18n } from './source-board.i18n';
 import { projectActionsI18n } from './project-actions.i18n';
+import { gitIdentityEditorI18n } from './git-identity-editor.i18n';
 import { environmentI18n } from './environment.i18n';
 import { providersI18n } from './providers.i18n';
 import { mcpGridI18n } from './mcp-grid.i18n';
 import { pluginsGridI18n } from './plugins-grid.i18n';
+import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict: Record<I18nKey, string> = {
   "opencodeCompatibility.bundled": "OpenCode входить до складу OpenChamber. Оновіть OpenChamber, щоб отримати OpenCode v2.",
@@ -153,10 +155,12 @@ export const dict: Record<I18nKey, string> = {
   ...isolatedSpacesI18n.uk,
   ...sourceBoardI18n.uk,
   ...projectActionsI18n.uk,
+  ...gitIdentityEditorI18n.uk,
   ...environmentI18n.uk,
   ...providersI18n.uk,
   ...mcpGridI18n.uk,
   ...pluginsGridI18n.uk,
+  ...integrationsCatalogI18n['uk'],
   'terminalView.actions.attachSelection': 'Прикріпити вибраний вивід',
   'terminalView.actions.copySelection': 'Скопіювати вибраний вивід',
   'terminalView.toast.selectionCopied': 'Вивід скопійовано',
@@ -690,6 +694,8 @@ export const dict: Record<I18nKey, string> = {
   "sessions.sidebar.session.work.markDone": "Позначити готовим",
   "sessions.sidebar.session.work.doneSuggested": "Схоже, готово",
   "sessions.sidebar.session.work.updateFailed": "Не вдалося оновити сесію",
+  "sessions.sidebar.session.pin.pinFailed": "Не вдалося закріпити сесію",
+  "sessions.sidebar.session.pin.unpinFailed": "Не вдалося відкріпити сесію",
   "chat.work.doneHint.text": "Схоже, тут усе готово.",
   "chat.work.doneHint.action": "Позначити готовим",
   "chat.work.reviewHint.text": "Зміни готові до перегляду.",
@@ -813,6 +819,7 @@ export const dict: Record<I18nKey, string> = {
   "sessions.sidebar.group.pr.status.mergeConflicts": "Конфлікти злиття",
   "sessions.sidebar.group.pr.status.mergeBlocked": "Злиття заблоковано",
   "sessions.sidebar.group.pr.status.checksFailing": "Перевірки не пройшли",
+  "sessions.sidebar.group.pr.status.checksRunning": "Перевірки тривають",
   "sessions.sidebar.group.issue.status.open": "Issue відкрито",
   "sessions.sidebar.group.issue.status.completed": "Виконано",
   "sessions.sidebar.group.issue.status.notPlanned": "Не заплановано",

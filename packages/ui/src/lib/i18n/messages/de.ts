@@ -14,10 +14,12 @@ import { webSearchI18n } from './websearch.i18n';
 import { isolatedSpacesI18n } from './isolated-spaces.i18n';
 import { sourceBoardI18n } from './source-board.i18n';
 import { projectActionsI18n } from './project-actions.i18n';
+import { gitIdentityEditorI18n } from './git-identity-editor.i18n';
 import { environmentI18n } from './environment.i18n';
 import { providersI18n } from './providers.i18n';
 import { mcpGridI18n } from './mcp-grid.i18n';
 import { pluginsGridI18n } from './plugins-grid.i18n';
+import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict = {
   "opencodeCompatibility.bundled": "OpenCode ist in OpenChamber enthalten. Aktualisieren Sie OpenChamber, um OpenCode v2 zu erhalten.",
@@ -142,10 +144,12 @@ export const dict = {
   ...isolatedSpacesI18n.de,
   ...sourceBoardI18n.de,
   ...projectActionsI18n.de,
+  ...gitIdentityEditorI18n.de,
   ...environmentI18n.de,
   ...providersI18n.de,
   ...mcpGridI18n.de,
   ...pluginsGridI18n.de,
+  ...integrationsCatalogI18n['de'],
   'common.language.german': 'Deutsch',
   'common.loading': 'Wird geladen...',
   'common.unavailable': 'Nicht verfügbar',
@@ -610,6 +614,8 @@ export const dict = {
   'sessions.sidebar.session.work.markDone': 'Als erledigt markieren',
   'sessions.sidebar.session.work.doneSuggested': 'Sieht erledigt aus',
   'sessions.sidebar.session.work.updateFailed': 'Sitzung konnte nicht aktualisiert werden',
+  'sessions.sidebar.session.pin.pinFailed': 'Sitzung konnte nicht angeheftet werden',
+  'sessions.sidebar.session.pin.unpinFailed': 'Sitzung konnte nicht losgelöst werden',
   'chat.work.doneHint.text': 'Diese Arbeit scheint erledigt.',
   'chat.work.doneHint.action': 'Als erledigt markieren',
   'chat.work.reviewHint.text': 'Die Änderungen sind bereit zur Durchsicht.',
@@ -717,6 +723,7 @@ export const dict = {
   'sessions.sidebar.group.pr.status.mergeConflicts': 'Zusammenführungskonflikte',
   'sessions.sidebar.group.pr.status.mergeBlocked': 'Zusammenführung blockiert',
   'sessions.sidebar.group.pr.status.checksFailing': 'Checks fehlgeschlagen',
+  'sessions.sidebar.group.pr.status.checksRunning': 'Checks laufen',
   'sessions.sidebar.group.issue.status.open': 'Issue offen',
   'sessions.sidebar.group.issue.status.completed': 'Erledigt',
   'sessions.sidebar.group.issue.status.notPlanned': 'Nicht geplant',

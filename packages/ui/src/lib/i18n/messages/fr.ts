@@ -14,10 +14,12 @@ import { webSearchI18n } from './websearch.i18n';
 import { isolatedSpacesI18n } from './isolated-spaces.i18n';
 import { sourceBoardI18n } from './source-board.i18n';
 import { projectActionsI18n } from './project-actions.i18n';
+import { gitIdentityEditorI18n } from './git-identity-editor.i18n';
 import { environmentI18n } from './environment.i18n';
 import { providersI18n } from './providers.i18n';
 import { mcpGridI18n } from './mcp-grid.i18n';
 import { pluginsGridI18n } from './plugins-grid.i18n';
+import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict = {
   "opencodeCompatibility.bundled": "OpenCode est inclus dans OpenChamber. Mettez OpenChamber à jour pour obtenir OpenCode v2.",
@@ -142,10 +144,12 @@ export const dict = {
   ...isolatedSpacesI18n.fr,
   ...sourceBoardI18n.fr,
   ...projectActionsI18n.fr,
+  ...gitIdentityEditorI18n.fr,
   ...environmentI18n.fr,
   ...providersI18n.fr,
   ...mcpGridI18n.fr,
   ...pluginsGridI18n.fr,
+  ...integrationsCatalogI18n['fr'],
   'terminalView.actions.attachSelection': 'Joindre la sortie sélectionnée',
   'terminalView.actions.copySelection': 'Copier la sortie sélectionnée',
   'terminalView.toast.selectionCopied': 'Sortie copiée',
@@ -510,6 +514,8 @@ export const dict = {
   'sessions.sidebar.session.work.markDone': 'Marquer comme terminé',
   'sessions.sidebar.session.work.doneSuggested': 'Semble terminé',
   'sessions.sidebar.session.work.updateFailed': 'Impossible de mettre à jour la session',
+  'sessions.sidebar.session.pin.pinFailed': 'Impossible d\'épingler la session',
+  'sessions.sidebar.session.pin.unpinFailed': 'Impossible de désépingler la session',
   'chat.work.doneHint.text': 'Ce travail semble terminé.',
   'chat.work.doneHint.action': 'Marquer comme terminé',
   'chat.work.reviewHint.text': 'Les modifications sont prêtes à être relues.',
@@ -633,6 +639,7 @@ export const dict = {
   'sessions.sidebar.group.pr.status.mergeConflicts': 'Conflits de fusion',
   'sessions.sidebar.group.pr.status.mergeBlocked': 'Fusion bloquée',
   'sessions.sidebar.group.pr.status.checksFailing': 'Vérifications en échec',
+  'sessions.sidebar.group.pr.status.checksRunning': 'Vérifications en cours',
   'sessions.sidebar.group.issue.status.open': 'Issue ouverte',
   'sessions.sidebar.group.issue.status.completed': 'Terminée',
   'sessions.sidebar.group.issue.status.notPlanned': 'Non planifiée',

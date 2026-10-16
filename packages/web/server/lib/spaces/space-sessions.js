@@ -223,6 +223,20 @@ export function createSpaceSessionIndex({ logger = console } = {}) {
       }
       return true;
     },
+    /**
+     * Whether a space may speak for the queue of one session: the session lies under the space's
+     * root and is neither the host's nor one another space holds. Claims nothing.
+     */
+    acceptSpaceQueueSession(spaceId, sessionId, directory) {
+      let code = null;
+      if (!directorySchema.safeParse(directory).success || !isDirectoryOfSpace(directory, spaceId)) code = SPACE_DROP_CODES.eventOutsideRoot;
+      else if (!idSchema.safeParse(sessionId).success) code = SPACE_DROP_CODES.malformed;
+      else if (isHostSessionId(sessionId)) code = SPACE_DROP_CODES.eventHostSession;
+      else if ((claimedBy(sessionId) ?? spaceId) !== spaceId) code = SPACE_DROP_CODES.claimed;
+      if (code === null) return true;
+      logger.warn?.(`[spaces] dropped a queue update of space ${spaceId}: ${code}`);
+      return false;
+    },
     /** Every space's last accepted list with its state, for the merge. */
     snapshot() {
       return Array.from(spaces.values(), (entry) => ({ spaceId: entry.spaceId, state: entry.state, records: entry.records }));

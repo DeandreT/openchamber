@@ -14,10 +14,12 @@ import { webSearchI18n } from './websearch.i18n';
 import { isolatedSpacesI18n } from './isolated-spaces.i18n';
 import { sourceBoardI18n } from './source-board.i18n';
 import { projectActionsI18n } from './project-actions.i18n';
+import { gitIdentityEditorI18n } from './git-identity-editor.i18n';
 import { environmentI18n } from './environment.i18n';
 import { providersI18n } from './providers.i18n';
 import { mcpGridI18n } from './mcp-grid.i18n';
 import { pluginsGridI18n } from './plugins-grid.i18n';
+import { integrationsCatalogI18n } from './integrations-catalog.i18n';
 
 export const dict = {
   'opencodeCompatibility.bundled': 'يأتي OpenCode مضمّنًا مع OpenChamber. حدّث OpenChamber للحصول على OpenCode v2.',
@@ -663,6 +665,8 @@ export const dict = {
   'sessions.sidebar.session.work.markDone': 'تعليم كمنجزة',
   'sessions.sidebar.session.work.doneSuggested': 'تبدو منجزة',
   'sessions.sidebar.session.work.updateFailed': 'تعذّر تحديث الجلسة',
+  'sessions.sidebar.session.pin.pinFailed': 'تعذّر تثبيت الجلسة',
+  'sessions.sidebar.session.pin.unpinFailed': 'تعذّر إلغاء تثبيت الجلسة',
   'chat.work.doneHint.text': 'يبدو أن هذا العمل قد أُنجز.',
   'chat.work.doneHint.action': 'تعليم كمنجزة',
   'chat.work.reviewHint.text': 'التغييرات جاهزة للمراجعة.',
@@ -786,6 +790,7 @@ export const dict = {
   'sessions.sidebar.group.pr.status.mergeConflicts': 'تعارضات دمج',
   'sessions.sidebar.group.pr.status.mergeBlocked': 'الدمج محظور',
   'sessions.sidebar.group.pr.status.checksFailing': 'فحوصات فاشلة',
+  'sessions.sidebar.group.pr.status.checksRunning': 'الفحوصات قيد التشغيل',
   'sessions.sidebar.group.issue.status.open': 'مشكلة مفتوحة',
   'sessions.sidebar.group.issue.status.completed': 'مكتملة',
   'sessions.sidebar.group.issue.status.notPlanned': 'غير مخطط لها',
@@ -3771,10 +3776,12 @@ export const dict = {
   ...isolatedSpacesI18n.ar,
   ...sourceBoardI18n.ar,
   ...projectActionsI18n.ar,
+  ...gitIdentityEditorI18n.ar,
   ...environmentI18n.ar,
   ...providersI18n.ar,
   ...mcpGridI18n.ar,
   ...pluginsGridI18n.ar,
+  ...integrationsCatalogI18n['ar'],
   'settings.usage.page.state.claudeSignedOutTitle': 'لم يتم تسجيل الدخول إلى Claude Code',
   'settings.usage.page.state.claudeSignInCommand': 'شغّل هذا الأمر في الطرفية:',
   'settings.openchamber.visual.field.confirmFileTreeMove': 'التأكيد قبل نقل الملفات',

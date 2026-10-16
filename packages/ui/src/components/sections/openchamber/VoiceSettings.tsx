@@ -36,7 +36,7 @@ import { disposePreviewAudio } from './voicePreviewAudio';
 import { toast } from '@/components/ui';
 import type { VoiceApiKeyKind } from '@/lib/voiceKeysApi';
 
-const VOICE_TEXT_INPUT_CLASS = 'oc-surface-elevated w-full h-7 rounded-lg border border-input bg-surface-elevated px-2 typography-ui-label text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring focus:border-interactive-border-focus';
+const VOICE_TEXT_INPUT_CLASS = 'oc-surface-elevated oc-raised oc-field w-full h-7 rounded-lg bg-surface-elevated px-2 typography-ui-label text-foreground placeholder:text-muted-foreground focus:outline-none';
 
 const LOCAL_STT_MODELS = [
     {
@@ -1027,7 +1027,7 @@ export const VoiceSettings: React.FC = () => {
                                 value={voiceProvider}
                                 onChange={setVoiceProvider}
                                 aria-label={t('settings.voice.page.field.provider')}
-                                className="w-full gap-1.5 sm:gap-2"
+                                className="w-fit"
                                 options={[
                                     { value: 'browser', label: t('settings.voice.page.provider.browser') },
                                     { value: 'local', label: t('settings.voice.page.provider.local') },
@@ -1275,7 +1275,7 @@ export const VoiceSettings: React.FC = () => {
                                     value={ttsInputMode}
                                     onChange={setTtsInputMode}
                                     aria-label={t('settings.voice.page.field.ttsInputMode')}
-                                    className="w-full gap-1.5 sm:gap-2"
+                                    className="w-fit"
                                     options={[
                                         { value: 'sanitized', label: t('settings.voice.page.field.ttsInputModeSanitized') },
                                         { value: 'raw', label: t('settings.voice.page.field.ttsInputModeRaw') },
@@ -1324,7 +1324,7 @@ export const VoiceSettings: React.FC = () => {
                                 value={sttProvider}
                                 onChange={setSttProvider}
                                 aria-label={t('settings.voice.page.field.provider')}
-                                className="w-full gap-1.5 sm:gap-2"
+                                className="w-fit"
                                 options={[
                                     { value: 'local', label: t('settings.voice.page.provider.local') },
                                     { value: 'openai-compatible', label: t('settings.voice.page.provider.server') },

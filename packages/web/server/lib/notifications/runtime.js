@@ -326,6 +326,24 @@ export const createNotificationTriggerRuntime = (deps) => {
     return false;
   };
 
+  // v2 replaced questions with forms: the form's title is the ask, and the
+  // first field carries the detail a question used to put in its body.
+  const readFormAsk = (payload) => {
+    const form = payload.properties?.form;
+    const header = typeof form?.title === 'string' ? form.title.trim() : '';
+    const firstField = Array.isArray(form?.fields) ? form.fields[0] : null;
+    const fieldTitle = typeof firstField?.title === 'string' ? firstField.title.trim() : '';
+    const fieldDescription = typeof firstField?.description === 'string' ? firstField.description.trim() : '';
+    return { header, questionText: fieldDescription || fieldTitle };
+  };
+
+  // A waiting page's title says what it asks; the notification title stays
+  // the generic "Input needed".
+  const readPageAsk = (payload) => {
+    const title = payload.properties?.page?.title;
+    return { header: '', questionText: typeof title === 'string' ? title.trim() : '' };
+  };
+
   const extractSessionIdFromPayload = (payload) => {
     if (!payload || typeof payload !== 'object') return null;
     const props = payload.properties;
@@ -624,7 +642,13 @@ export const createNotificationTriggerRuntime = (deps) => {
       return;
     }
 
-    if (payload.type === 'form.created' && sessionId) {
+    // A form, and a page an agent shows that waits for the user's answer
+    // (render.page with awaitAnswer, announced by this server), both mean the
+    // agent waits for the user, so they notify the same way.
+    const ask = payload.type === 'form.created' ? readFormAsk(payload)
+      : payload.type === 'openchamber:page-waiting' ? readPageAsk(payload)
+        : null;
+    if (ask && sessionId) {
       const existingTimer = pushQuestionDebounceTimers.get(sessionId);
       if (existingTimer) {
         clearTimeout(existingTimer);
@@ -642,14 +666,7 @@ export const createNotificationTriggerRuntime = (deps) => {
           return;
         }
 
-        // v2 replaced questions with forms: the form's title is the ask, and
-        // the first field carries the detail a question used to put in its body.
-        const form = payload.properties?.form;
-        const header = typeof form?.title === 'string' ? form.title.trim() : '';
-        const firstField = Array.isArray(form?.fields) ? form.fields[0] : null;
-        const fieldTitle = typeof firstField?.title === 'string' ? firstField.title.trim() : '';
-        const fieldDescription = typeof firstField?.description === 'string' ? firstField.description.trim() : '';
-        const questionText = fieldDescription || fieldTitle;
+        const { header, questionText } = ask;
         // An MCP elicitation belongs to the whole directory: OpenCode files it
         // under the `global` sentinel, which no session record carries, so the
         // notification opens the app instead of a session that cannot load.
