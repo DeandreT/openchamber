@@ -8,7 +8,7 @@
  * settle: the app loaded, after resting the pointer on each of the first N
  * rows (the hover-prefetch path), and after clicking through the same rows.
  *
- * The rows are the first N in sidebar order, so two builds visit the same
+ * The sessions are the first N distinct IDs in sidebar order, so two builds visit the same
  * sessions only when they serve the same server state.
  */
 
@@ -27,11 +27,11 @@ import { expandProjects, expandSessionLists } from "./perf/scenario.mjs"
 const HELP = `Usage: bun run profile:heap -- [options]
 
 Reads the JS heap, DOM nodes and listeners after GC: loaded, after hovering
-the first N sidebar session rows, and after opening each of them.
+the first N distinct sidebar sessions, and after opening each of them.
 
 Options:
   --url <url>              OpenChamber URL (default: http://localhost:3000)
-  --count <n>              Sidebar rows to visit (default: 20)
+  --count <n>              Distinct sidebar sessions to visit (default: 20)
   --hover <ms>             Pointer rest per row (default: 600)
   --dwell <ms>             Time on each opened session (default: 2000)
   --settle <seconds>       Wait after load (default: 12)
@@ -65,6 +65,9 @@ const parseArgs = (argv) => {
   if (!Number.isInteger(options.count) || options.count < 1) throw new Error("--count must be a positive integer")
   return options
 }
+
+// A pinned or projected session can appear in more than one sidebar section.
+export const planHeapSessions = (rows, count) => [...new Set(rows.filter(Boolean))].slice(0, count)
 
 const main = async () => {
   const options = parseArgs(process.argv.slice(2))
@@ -121,7 +124,8 @@ const main = async () => {
       console.log(`${name.padEnd(12)} heap ${entry.usedMb} MB  DOM nodes ${entry.domNodes}  listeners ${entry.listeners}`)
     }
     const rows = (await evaluateValue(client, `[...document.querySelectorAll('[data-session-row]')].map((el) => el.getAttribute('data-session-row'))`)) ?? []
-    const plan = rows.slice(0, options.count)
+    const plan = planHeapSessions(rows, options.count)
+    summary.sessionIds = plan
     summary.rows = plan.length
     if (plan.length === 0) throw new Error("The sidebar rendered no session rows; the scenario never ran.")
     if (plan.length < options.count) console.warn(`WARNING: only ${plan.length} sidebar rows; asked for ${options.count}. Compare only runs with the same row count.`)

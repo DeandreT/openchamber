@@ -1,4 +1,3 @@
-import { spaceApiPath } from '@/lib/spaces/space-route';
 import React from 'react';
 import { runtimeFetch } from '@/lib/runtime-fetch';
 
@@ -31,6 +30,7 @@ import { CodeMirrorEditor } from '@/components/ui/CodeMirrorEditor';
 import { GoToLineDialog } from './GoToLineDialog';
 import { DocumentSymbolsPanel } from './DocumentSymbolsPanel';
 import { GitignoredToggleButton } from '@/components/layout/GitignoredToggleButton';
+import { useZoneInteractive } from '@/components/layout/zoneInteractiveContext';
 import { MarkdownPreviewSearch } from './MarkdownPreviewSearch';
 import { PreviewToggleButton } from './PreviewToggleButton';
 import { createFileContentPoller } from './fileContentPoller';
@@ -103,6 +103,8 @@ import { useDirectoryShowHidden } from '@/lib/directoryShowHidden';
 import { useFilesViewShowGitignored } from '@/lib/filesViewShowGitignored';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
+import { useDraftSpaceTarget } from '@/lib/spaces/useDraftSpaceTarget';
+import { panelContentDirectory } from '@/lib/spaces/space-creation-requests';
 import { FileTypeIcon } from '@/components/icons/FileTypeIcon';
 import { cancelWhenLayoutSettled, runWhenLayoutSettled } from '@/lib/layoutAnimation';
 import {
@@ -323,7 +325,8 @@ const ScrollingFileName: React.FC<{ name: string; folder?: string }> = ({ name, 
     <span ref={containerRef} className="relative block min-w-0 flex-1 overflow-hidden whitespace-nowrap">
       <span ref={textRef} aria-hidden="true" className="invisible absolute whitespace-nowrap">{text}</span>
       {overflowing ? (
-        <span className="open-file-name-marquee-track">
+        // Keyed by the file, so each newly opened name scrolls past once.
+        <span key={`${folder}/${name}`} className="open-file-name-marquee-track">
           <span className="open-file-name-marquee-item">{text}</span>
           <span className="open-file-name-marquee-item" aria-hidden="true">{text}</span>
         </span>
@@ -834,9 +837,14 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   const alwaysShowActions = isMobile || isTablet;
   const showHidden = useDirectoryShowHidden();
   const showGitignored = useFilesViewShowGitignored();
+  const zoneInteractive = useZoneInteractive();
 
-  const currentDirectory = useEffectiveDirectory() ?? '';
+  // The panel's tabs belong to the open view's folder; the files come from it too, except in a
+  // draft waiting for a new space, which shows the space's (`panelContentDirectory`).
+  const panelDirectory = useEffectiveDirectory() ?? '';
+  const currentDirectory = panelContentDirectory(useDraftSpaceTarget(), panelDirectory) ?? '';
   const root = normalizePath(currentDirectory.trim());
+  const panelRoot = normalizePath(panelDirectory.trim());
   const treeEnabled = isMobile || mode === 'full';
   const treeActive = treeEnabled && visible;
   const runtimeKey = useGitStore((state) => state.runtimeKey);
@@ -1685,7 +1693,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
 
       // Open tabs and the editor, unsaved edits included, follow the new name.
       try {
-        const result = await moveWorkspacePath(files, root, oldPath, newPath);
+        const result = await moveWorkspacePath(files, { tabs: panelRoot, files: root }, oldPath, newPath);
         if (result === 'moved') {
           toast.success(t('sidebarFilesTree.toast.renamedSuccessfully'));
           await refreshDirectory(parentDir);
@@ -1744,7 +1752,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
     }
 
     done();
-  }, [activeDialog, dialogData, dialogInputValue, files, refreshDirectory, isMobile, removeOpenPathsByPrefix, root, selectedFile?.path, setSelectedPath, t]);
+  }, [activeDialog, dialogData, dialogInputValue, files, panelRoot, refreshDirectory, isMobile, removeOpenPathsByPrefix, root, selectedFile?.path, setSelectedPath, t]);
 
   React.useEffect(() => {
     if (!currentDirectory) {
@@ -3313,6 +3321,12 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
       return;
     }
 
+    // The jump focuses the editor, which does nothing inside a zone that is
+    // still opening (inert); it runs once the zone settles.
+    if (!zoneInteractive) {
+      return;
+    }
+
     const view = editorViewRef.current;
     if (!view) {
       scheduleNavigationRetry();
@@ -3380,10 +3394,12 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
     setPendingFileNavigation,
     textViewMode,
     toFileNode,
+    zoneInteractive,
   ]);
 
   React.useEffect(() => {
-    if (!pendingFileFocusPath || !root) {
+    // Focus inside a zone that is still opening (inert) does nothing.
+    if (!pendingFileFocusPath || !root || !zoneInteractive) {
       return;
     }
 
@@ -3428,6 +3444,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
     selectedFile?.path,
     setPendingFileFocusPath,
     textViewMode,
+    zoneInteractive,
   ]);
 
   const nudgeEditorSelectionAboveKeyboard = React.useCallback((view: EditorView | null) => {
@@ -3590,8 +3607,8 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   // user edits count: loading or syncing a file also changes the document.
   const pinPreviewOnEditRef = React.useRef<() => void>(() => {});
   pinPreviewOnEditRef.current = () => {
-    if (!selectedFile?.path || !root) return;
-    const directoryKey = normalizeContextPanelDirectoryKey(root);
+    if (!selectedFile?.path || !panelRoot) return;
+    const directoryKey = normalizeContextPanelDirectoryKey(panelRoot);
     const state = useUIStore.getState();
     const previewTab = state.contextPanelByDirectory[directoryKey]?.tabs
       .find((tab) => tab.preview && tab.targetPath === selectedFile.path);
@@ -3788,7 +3805,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
     : '';
 
   const pdfSrc = selectedFile?.path && usesRawAssetUrl && pdfAssetAuthKey && pdfAssetAuthReadyKey === pdfAssetAuthKey
-    ? getRuntimeUrlResolver().authenticatedAsset(spaceApiPath('/api/fs/raw', root), {
+    ? getRuntimeUrlResolver().authenticatedAsset('/api/fs/raw', {
       path: selectedFile.path,
       allowOutsideWorkspace: selectedFileReadOptions.allowOutsideWorkspace ? 'true' : undefined,
       directory: root || undefined,
@@ -4022,9 +4039,9 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   // desktop the context panel owns the tab, on mobile the files surface
   // consumes the same pending focus path.
   const openLinkedFile = React.useCallback((absolutePath: string) => {
-    if (!root) return;
-    useUIStore.getState().openContextFile(root, absolutePath);
-  }, [root]);
+    if (!panelRoot) return;
+    useUIStore.getState().openContextFile(panelRoot, absolutePath);
+  }, [panelRoot]);
   const markdownLocalAssetsActive = isMarkdown && mdViewMode === 'preview' && !fileLoading;
   const markdownColorScheme = currentTheme.metadata.variant === 'light' ? 'light' : 'dark';
   useMarkdownLocalAssets({
@@ -4295,37 +4312,41 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
       }
     }
 
-    secondaryActions.push({
-      id: 'open-in-app',
-      label: t('filesView.editor.openInDesktopApp'),
-      icon: <Icon name="file-transfer" className="size-4" />,
-      submenu: openInAppMenuItems,
-      button: (
-        <DropdownMenu onOpenChange={handleToolbarDropdownOpenChange}>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <span className="inline-flex">
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="size-6 p-0 text-foreground opacity-100 hover:bg-transparent focus-visible:bg-transparent active:bg-transparent"
-                    title={t('filesView.editor.openInDesktopApp')}
-                    aria-label={t('filesView.editor.openInDesktopApp')}
-                  >
-                    <Icon name="file-transfer" className="size-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-              </span>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" sideOffset={6}>{t('filesView.editor.openInDesktopApp')}</TooltipContent>
-          </Tooltip>
-          <DropdownMenuContent align="end" className="w-56 max-h-[70vh] overflow-y-auto">
-            {openInAppMenuItems}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      ),
-    });
+    // Every item hands the path to this machine's OS. A remote server, WSL
+    // included, keeps its files elsewhere, so the menu would only fail there.
+    if (isDesktopLocalOriginActive()) {
+      secondaryActions.push({
+        id: 'open-in-app',
+        label: t('filesView.editor.openInDesktopApp'),
+        icon: <Icon name="file-transfer" className="size-4" />,
+        submenu: openInAppMenuItems,
+        button: (
+          <DropdownMenu onOpenChange={handleToolbarDropdownOpenChange}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="inline-flex">
+                  <DropdownMenuTrigger asChild>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="size-6 p-0 text-foreground opacity-100 hover:bg-transparent focus-visible:bg-transparent active:bg-transparent"
+                      title={t('filesView.editor.openInDesktopApp')}
+                      aria-label={t('filesView.editor.openInDesktopApp')}
+                    >
+                      <Icon name="file-transfer" className="size-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                </span>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" sideOffset={6}>{t('filesView.editor.openInDesktopApp')}</TooltipContent>
+            </Tooltip>
+            <DropdownMenuContent align="end" className="w-56 max-h-[70vh] overflow-y-auto">
+              {openInAppMenuItems}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ),
+      });
+    }
 
     if (isMarkdown && getMdViewMode() === 'preview' && showMessageTTSButtons) {
       const ttsLabel = isTTSPlaying ? t('filesView.tts.stopSpeaking') : t('filesView.tts.readAloud');
@@ -4344,7 +4365,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
                 aria-label={ttsLabel}
                 onClick={toggleTTS}
               >
-                <Icon name="volume-up" className={cn('size-4', isTTSPlaying && 'animate-pulse text-[var(--primary-text)]')} />
+                <Icon name="volume-up" className={cn('size-4', isTTSPlaying && 'text-[var(--primary-text)]')} />
               </Button>
             </TooltipTrigger>
             <TooltipContent sideOffset={8}>{ttsLabel}</TooltipContent>
@@ -5511,7 +5532,9 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   );
 
   return (
-    <div className="flex h-full min-h-0 overflow-hidden bg-background relative">
+    // Marks Files as a surface with its own Cmd/Ctrl+F, so Changes and the
+    // walkthrough leave the key alone while focus is in here.
+    <div data-find-surface="" className="flex h-full min-h-0 overflow-hidden bg-background relative">
       <Dialogs
         activeDialog={activeDialog}
         dialogData={dialogData}

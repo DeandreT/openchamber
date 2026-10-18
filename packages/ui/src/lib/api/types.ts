@@ -1165,6 +1165,8 @@ export interface GitAPI {
     resolvedWorktreeRoot: string | null;
     resolvedCwd: string | null;
   }>;
+  /** Where `directory` sits inside its checkout (`ai`, or `''` at the root); rejects when unknown. */
+  resolveRepositoryPrefix?(directory: string): Promise<string>;
   /** Phase 1: canonicalize a directory to full worktree state */
   canonicalizeWorktreeState?(directory: string): Promise<{
     worktreeRoot: string | null;
@@ -1240,6 +1242,40 @@ export interface FileSearchResult {
   preview?: string[];
 }
 
+/** Find in files: lines of workspace files containing a text or a regular expression. */
+export interface FileContentSearchQuery {
+  directory: string;
+  query: string;
+  regex: boolean;
+  limit?: number;
+  includeHidden?: boolean;
+  respectGitignore?: boolean;
+  signal?: AbortSignal;
+}
+
+export interface FileContentSearchMatch {
+  path: string;
+  relativePath: string;
+  line: number;
+  /** 1-based column of the first match on the line, in UTF-16 code units. */
+  column: number;
+  /** The line, without indentation and cut to what a result row can show. */
+  text: string;
+  /** `[start, end)` offsets of the matches inside `text`. */
+  ranges: Array<[number, number]>;
+  /** `text` begins after the line's start, so the row shows an ellipsis first. */
+  cutStart: boolean;
+}
+
+/** Why a search returned fewer matches than exist: the limit or the server's deadline. */
+export type FileContentSearchStop = 'limit' | 'deadline';
+
+export type FileContentSearchOutcome =
+  | { status: 'ok'; matches: FileContentSearchMatch[]; stopped: FileContentSearchStop | null }
+  | { status: 'invalid-pattern'; message: string }
+  /** The server has no ripgrep to search with. */
+  | { status: 'unavailable' };
+
 export interface CommandExecResult {
   command: string;
   success: boolean;
@@ -1264,6 +1300,12 @@ interface FileReadOptions {
 export interface FilesAPI {
   listDirectory(path: string, options?: ListDirectoryOptions): Promise<DirectoryListResult>;
   search(payload: FileSearchQuery): Promise<FileSearchResult[]>;
+  /**
+   * Find in files. Absent on runtimes without it (VS Code has its own
+   * search), so the files tree offers the mode only when it is here.
+   * Resolves to the search outcome; rejects on a transport or server failure.
+   */
+  searchContents?(payload: FileContentSearchQuery): Promise<FileContentSearchOutcome>;
   createDirectory(path: string): Promise<{ success: boolean; path: string }>;
   statFile?(path: string, options?: FileReadOptions): Promise<{ path: string; isFile: boolean; size: number; mtimeMs?: number }>;
   readFile?(path: string, options?: FileReadOptions): Promise<{ content: string; path: string }>;
@@ -1805,6 +1847,29 @@ export type GitHubReferencesResult =
       total: number;
     };
 
+/** Why a folder asked for in a search across repositories was left out of it. */
+export type GitHubReferencesAcrossSkip = 'no-repo' | 'disconnected' | 'invalid-context' | 'error';
+
+/**
+ * One page of issues or PRs across several repositories, each read through its
+ * own bound context: a folder that holds repositories, listed all at once.
+ * Repositories read with the same account are searched together; one folder
+ * that cannot be read is reported in `repositories` and never empties the rest.
+ */
+export type GitHubReferencesAcrossResult = {
+  /** Newest activity first. `directory` is the context folder the item was read through, for its preview and actions. */
+  items: Array<GitHubReference & { directory: string }>;
+  /** Opaque; null on the last page. */
+  cursor: string | null;
+  hasMore: boolean;
+  total: number;
+  /** Every folder asked for, in the order asked: its GitHub repository, or why it was left out. */
+  repositories: Array<
+    | { directory: string; status: 'included'; repo: GitHubRepoRef }
+    | { directory: string; status: GitHubReferencesAcrossSkip }
+  >;
+};
+
 export type GitHubRepoUpstreamResult = {
   connected: boolean;
   isFork: boolean;
@@ -1940,6 +2005,13 @@ export interface SourceControlAPI {
 
   /** GitHub only: one page of issues or PRs for the reference picker. Throws on failure. */
   githubReferences(context: SourceControlReadContext, options: GitHubReferencesOptions): Promise<GitHubReferencesResult>;
+  /**
+   * GitHub only: one page of issues or PRs across up to 100 repositories, each
+   * read through its own context. Absent where the runtime cannot. Throws when
+   * the whole request fails (rate limit, network); a single folder that cannot
+   * be read is reported in the result instead.
+   */
+  githubReferencesAcross?(contexts: SourceControlReadContext[], options: GitHubReferencesOptions): Promise<GitHubReferencesAcrossResult>;
   /** GitHub only: comments of one item the picker previews, and a PR's size, review and checks. Throws on failure. */
   githubReferenceDetail(context: SourceControlReadContext, item: GitHubPullRequestRef): Promise<GitHubReferenceDetailResult>;
   /** GitHub only: checks and mergeability of up to 30 listed PRs, for their colour. Throws on failure. */

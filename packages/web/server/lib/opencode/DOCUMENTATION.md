@@ -3,6 +3,8 @@
 ## Purpose
 This module provides OpenCode server integration utilities for the web server runtime, including configuration management and provider authentication.
 
+Diagnostic logging for the timeline export (`proxy.js` error lines, the lifecycle journal, the local diagnostics route in `core-routes.js`) is described in `../diagnostics/DOCUMENTATION.md`.
+
 ## Entrypoints and structure
 - `packages/web/server/lib/opencode/index.js`: public entrypoint (currently baseline placeholder).
 - `packages/web/server/lib/opencode/auth.js`: provider authentication file operations.
@@ -12,7 +14,7 @@ This module provides OpenCode server integration utilities for the web server ru
 - `packages/web/server/lib/opencode/cli-entry-runtime.js`: CLI entrypoint runtime that detects direct execution, parses CLI options, and starts server bootstrap.
 - `packages/web/server/lib/opencode/routes.js`: OpenCode/provider settings and auth-related route registration.
 - `packages/web/server/lib/opencode/v1-migration-topup.js`: re-arms OpenCode's own V1 -> V2 session import for V1 sessions changed by 1.x after the last completed import; runs only before a managed spawn. See "v1-migration-topup.js" below.
-- `packages/web/server/lib/opencode/lifecycle.js`: OpenCode process lifecycle runtime (startup, restart, readiness, health monitoring). After readiness it warms the last-used directory only (first entry of the `getWarmupDirectories` dep, best-effort) because OpenCode initializes each directory lazily on first request and that cost would otherwise be paid by the user's first interactive session open. It warms no other projects: on OpenCode 2 the first directory-scoped read boots that location's whole MCP fleet. The warmed directory is also `getDefaultOpenCodeDirectory()`, the scope for server-side reads that have no directory of their own (integrations in `auth.js`, the small model's model and provider lists, the agent check after a restart): v2 answers a location read without one for its own working directory, the user's home for a managed OpenCode, and would start an MCP fleet there. While no warmed directory is usable (no project open), the getter answers the `noProjectDirectory` dep instead, the managed chats root, which the UI also works in then. The getter revalidates that directory on every read: once it is no longer a readable directory (deleted, moved, replaced by a file, or stripped of read/execute permission) it is never sent, and the lifecycle advances to another directory the warm pass validated or re-reads `getWarmupDirectories` (coalesced, with a short cooldown) so a currently-valid `lastDirectory` replaces the stale one. A stale cached path would otherwise make every directory-scoped read answer `500 FileSystem.realPath ... ENOENT` — the failure that took the quota credential read down with it.
+- `packages/web/server/lib/opencode/lifecycle.js`: OpenCode process lifecycle runtime (startup, restart, readiness, health monitoring). It records each lifecycle transition (launch, ready, exit, restart, health failure and recovery, external connect) as a fixed action in the process-local diagnostic journal (`../diagnostics/server-journal.js`), which the diagnostic timeline exports; the journal never holds stderr, paths or error text. After readiness it warms the last-used directory only (first entry of the `getWarmupDirectories` dep, best-effort) because OpenCode initializes each directory lazily on first request and that cost would otherwise be paid by the user's first interactive session open. It warms no other projects: on OpenCode 2 the first directory-scoped read boots that location's whole MCP fleet. The warmed directory is also `getDefaultOpenCodeDirectory()`, the scope for server-side reads that have no directory of their own (integrations in `auth.js`, the small model's model and provider lists, the agent check after a restart): v2 answers a location read without one for its own working directory, the user's home for a managed OpenCode, and would start an MCP fleet there. While no warmed directory is usable (no project open), the getter answers the `noProjectDirectory` dep instead, the managed chats root, which the UI also works in then. The getter revalidates that directory on every read: once it is no longer a readable directory (deleted, moved, replaced by a file, or stripped of read/execute permission) it is never sent, and the lifecycle advances to another directory the warm pass validated or re-reads `getWarmupDirectories` (coalesced, with a short cooldown) so a currently-valid `lastDirectory` replaces the stale one. A stale cached path would otherwise make every directory-scoped read answer `500 FileSystem.realPath ... ENOENT` — the failure that took the quota credential read down with it.
 - The managed OpenCode's environment also carries the user's variables from Settings and from `opencode service set env` (`getUserEnvironment`, see `../environment`), over the inherited environment and under everything OpenChamber sets for OpenCode itself; enterprise mode passes none. `getManagedOpenCodeProcessEnv()` therefore includes them, so a provider key given this way is visible to the credential reader like any other variable OpenCode reports.
 - `packages/web/server/lib/opencode/provider-env-aliases.js`: mirrors known provider credential env aliases into the managed OpenCode process environment (for example `GEMINI_API_KEY` → `GOOGLE_GENERATIVE_AI_API_KEY`) so OpenCode connection detection and the upstream AI SDK agree on the same key names. Canonical implementation shared by web lifecycle and the VS Code managed spawn path (`packages/vscode/src/provider-env-aliases.ts` re-exports this module).
 - `packages/web/server/lib/opencode/env-runtime.js`: OpenCode CLI/binary resolution and shell environment runtime.
@@ -27,6 +29,7 @@ This module provides OpenCode server integration utilities for the web server ru
 - `packages/web/server/lib/opencode/snippets.js`: opencode-snippets-compatible snippet file CRUD, discovery, and hashtag expansion.
 - `packages/web/server/lib/opencode/cli-options.js`: CLI/environment option parsing for server startup arguments.
 - `packages/web/server/lib/opencode/core-routes.js`: server status/system routes, auth/access guard routes, and settings utility route registration.
+- `packages/web/server/lib/opencode/managed-process-stop.js`: how the lifecycle stops its managed OpenCode on Windows: closes the `serve --stdio` lease, waits a bounded grace period, then force-kills the tree (see the teardown paragraph below). Also owns `hasChildProcessExited` and `waitForChildProcessClose`.
 - `packages/web/server/lib/opencode/shutdown-runtime.js`: graceful shutdown orchestration runtime for watcher/session/guest-services/terminal/process/server teardown.
 - `packages/web/server/lib/opencode/npm-registry-config.js`: resolves npm package metadata requests from inherited npm registry settings or the user's `.npmrc`, including scoped registries and matching bearer/basic HTTP authentication.
 - `packages/web/server/lib/opencode/server-startup-runtime.js`: server listen/startup tunnel flow and process/signal handler orchestration runtime.
@@ -40,6 +43,7 @@ This module provides OpenCode server integration utilities for the web server ru
 - `packages/web/server/lib/agent-tool/runtime.js`: managed OpenCode custom-tool materialization, environment injection, same-machine authentication (loopback, or the bound address for a concrete bind), and fixed CLI action dispatch.
 - `packages/web/server/lib/opencode/managed-plugin-config.js`: the `OPENCODE_CONFIG_CONTENT` merge used only on the fallback path, when the user's own environment owns `OPENCODE_CONFIG`.
 - `packages/web/server/lib/opencode/managed-config-file.js`: the managed OpenCode config layer — materializes the enabled OpenChamber plugins (agent tools, system prompt optimizer) and publishes them in a file OpenCode watches.
+- `packages/web/server/lib/opencode/instance-dir.js`: this server's own folder under `<data-dir>/run/instances/<pid>/` for the files its managed OpenCode reads, and removal of folders left by servers that are gone.
 
 ### Managed plugins on OpenCode 2.x
 A configured plugin must be a DIRECTORY holding a `package.json` that resolves an
@@ -226,6 +230,8 @@ Hard rules, verified against v2.0.8 (the completion stamp against v2.0.16)
 - `writeConfig(config, filePath)`: Writes config with automatic backup, replacing the file atomically through `writeFileAtomic` so a watcher or a crash never sees a partial config. Refuses to overwrite an existing non-empty file that fails the same JSONC parse check. Existing files are edited structurally instead of being re-serialized whole, so comments, formatting, and line endings outside the changed values survive; changed arrays are replaced whole, comment-only files keep their comments with the serialized config appended below, and the edited text must re-parse to exactly the intended config or the write falls back to a normalized rewrite (never an invalid file).
 - `getJsonEntrySource(layers, sectionKind, entryName)`: Resolves which config layer provides an entry. `sectionKind` is `agents`, `commands`, `providers`, or `mcp`, and both the v2 and the v1 spelling are searched (v2 wins). The result carries `sectionKey` (the spelling that actually held the entry) and `legacy`, so a writer can rewrite the same file in v2 shape. A failed custom or user layer throws `INVALID_JSONC` instead of treating that file as empty. A failed project layer is skipped so a valid user/custom entry can still be found.
 - `getJsonWriteTarget(layers, preferredScope)`: Determines write target for config updates. Throws `INVALID_JSONC` when the chosen target file is the unparseable layer.
+- `getFolderConfigPaths(workingDirectory)`: Every `opencode.json(c)` and `.opencode/opencode.json(c)` OpenCode 2 finds walking up from the project folder to the filesystem root, lowest priority first in OpenCode's order (`core/src/config/discovery.ts`): plain files outermost folder first, `.jsonc` after `.json`, then the `.opencode/` files the same way. Global config files are left out. Only MCP reads use it so far; agents, commands and providers still read the single project file.
+- `getProjectConfigCandidates(workingDirectory)`, `getLayerError(layers, filePath)`: The project folder's own config files, and the parse error `readConfigLayers` recorded for one file.
 - `getAncestors(startDir, stopDir)`, `findWorktreeRoot(startDir)`: Git worktree helpers.
 - `isPromptFileReference(value)`, `resolvePromptFilePath(reference)`, `writePromptFile(filePath, content)`: Prompt file reference handling.
 - `walkSkillMdFiles(rootDir)`: Async. Recursively finds all SKILL.md files at any depth, following links and skipping a link back to its own ancestor. Sibling directories are read in parallel, at most 8 file-system calls at once, and the result keeps depth-first readdir order: discovery lets a later file win a duplicate name, so the order is part of the contract.
@@ -302,7 +308,7 @@ Installer output is discarded, not forwarded to clients or logs.
 
 ## Public exports (prompt-response.js)
 
-`prompt-response.js` rejects a successful HTML app-shell response at server-owned dispatch boundaries. Raw prompt, context-restoration, and queue sends call `assertPromptResponse`; the session-route and scheduled-task SDK factories call `assertOpenCodeApiResponse` before the SDK decodes the body. The SDK still owns declared error statuses and their bodies. A rejected dispatch must not remove a queued item or record its project knowledge as delivered.
+`prompt-response.js` rejects a successful HTML app-shell response at server-owned dispatch boundaries. Raw prompt, context-restoration, and queue sends call `assertPromptResponse`; the session-route and scheduled-task SDK factories call `assertOpenCodeApiResponse` before the SDK decodes the body. The SDK still owns declared error statuses and their bodies. A rejected dispatch must not remove a queued item.
 
 ## Public exports (session-activity.js)
 - `hasWorkingDescendants(id, statuses)` is the queue delivery check returned by the probe. It follows the running sessions' parent links through at most 8 ancestors. Reads share one timeout and each session record is read once per check. Failed or malformed records and cycles return `null` unless another chain proves a running descendant; a chain deeper than 8 counts as unrelated, matching the UI's `MAX_SUBAGENT_DEPTH`. Parent links are refreshed on the next check. The direct-child check used by other consumers keeps its existing behavior.
@@ -386,9 +392,17 @@ health-probe errors close that child before retrying. Shutdown cancels further
 startup attempts. Closing a process is single-flight and unregisters it only
 after it exits.
 
-On Windows, managed teardown invokes the existing tree termination command
-before terminating the root. Calling `child.kill()` first loses the ancestry
-needed to find Git, shell, and MCP descendants. On POSIX, the managed child
+On Windows, the managed OpenCode runs as `opencode serve --stdio` with a piped
+stdin, and teardown first closes that stdin (`managed-process-stop.js`).
+OpenCode reads EOF as the end of its ownership lease and shuts down the way
+SIGTERM makes it on POSIX: running turns end as cancelled, so a chat waiting on
+a question does not reopen as still working (#4988), and OpenCode stops its MCP
+servers with their process trees. If OpenCode has not exited within 5 seconds,
+teardown falls back to the tree termination command, which runs before the root
+is terminated: calling `child.kill()` first loses the ancestry needed to find
+Git, shell, and MCP descendants. `--stdio` prints its readiness line as
+`{"url":"..."}`; the lifecycle accepts it next to `server listening on`. On
+POSIX, the managed child
 starts in its own process group and teardown escalates against that group even
 if the root has already exited. A tool ignoring SIGTERM must not survive just
 because the server closed its own pipes. The
@@ -553,7 +567,7 @@ normalizer applies.
 | Agents | `agents` | `agent` |
 | Commands | `commands` | `command` |
 | Providers | `providers` | `provider` |
-| MCP servers | `mcp.servers` | `mcp.<name>` (each layer normalized on its own, then custom > project > user; a raw merge would let a user-file `mcp.servers.<name>` shadow a project-file `mcp.<name>` override) |
+| MCP servers | `mcp.servers` | `mcp.<name>` (each file normalized on its own, then OpenCode's order: folder files from `getFolderConfigPaths` > custom > user; a raw merge would let a user-file `mcp.servers.<name>` shadow a project-file `mcp.<name>` override) |
 | Plugins | `plugins` | `plugin` (including `[spec, options]` tuples) |
 | Permissions | `permissions` rule array | `permission` map, `tools` map |
 
@@ -718,7 +732,13 @@ with a `CommandEntity`.
 `subtask` is accepted as the v1 name for `subagent`.
 
 `GET /api/config/mcp` — array of `McpEntity` extended with
-`{ name, scope, sectionKey, legacy }`.
+`{ name, scope, sectionKey, legacy }`. Servers come from the global files,
+`OPENCODE_CONFIG`, and every folder file OpenCode reads for the project,
+parent folders included. `scope` is `project` only for the project folder's
+own files; a parent folder's server reads as `user`. `PATCH` and `DELETE`
+write the file whose definition OpenCode uses, a parent folder's file
+included; a broken folder file is skipped, a broken global or custom file
+fails the request.
 `GET /api/config/mcp/:name` — one such entry, or 404.
 `POST` / `PATCH` / `DELETE /api/config/mcp/:name` — body is an `McpEntity`
 (plus `scope` on create). Answers `{ success: true, message, path }`.
@@ -762,6 +782,7 @@ headers }` or v1 `{ npm, options }`. The stored entry is always a
    - `POST /auth/passkey/register/options`
    - `POST /auth/passkey/register/verify`
    - `GET /api/passkeys`
+   - `PATCH /api/passkeys/:id`
    - `DELETE /api/passkeys/:id`
    - `POST /api/auth/reset`
    - `GET /connect`
@@ -774,7 +795,7 @@ headers }` or v1 `{ npm, options }`. The stored entry is always a
   - conditional JSON body parser behavior for `/api/*` vs non-API requests
   - URL-encoded parser setup
   - request logging middleware
-  - `dependencies.skipBodyParsing(req)` names a request both parsers leave alone, so its body reaches its route untouched; the isolated-spaces dispatcher uses it for `/api/spaces/<id>/...`, which it streams into a space
+  - `dependencies.skipBodyParsing(req)` names a request both parsers leave alone, so its body reaches its route untouched; the isolated-spaces dispatcher uses it for a request to a space, by the space directory its query or headers name or by the `/api/spaces/<id>/...` prefix, which it streams into a space
 
 ## Public exports (cli-options.js)
 - `parseServeCliOptions(options)`: parses serve CLI flags and environment-derived defaults:
@@ -959,6 +980,7 @@ The VS Code extension owns its separate Git and proxy implementation.
   - Can still create its own `/api/event` reader when no shared hub is provided, which keeps module tests and isolated reuse simple.
   - Reuses event-stream parsing, `Last-Event-ID`, stall timeout, and reconnect behavior.
   - Translates each v2 wire event through `lib/event-stream/translate-v2.js` before handing it to notification/session side effects, so those consumers keep speaking the server's own event vocabulary.
+  - Calls `onPayload(payload, { spaceId })`: `spaceId` is the isolated space an event came from, `null` for the host's own. A space's session exists only in the OpenCode inside that space, so a consumer that reads a session must read it there.
 
 ## Storage and configuration
 - Provider auth: read from the running OpenCode over `GET /api/credential` (2.0.20+); OpenCode 2.x owns credentials.
@@ -991,7 +1013,21 @@ OpenChamber injects its own OpenCode plugins through a file it owns rather than
 through the process environment, because an environment variable cannot change
 under a running child.
 
-- Contract: the managed child gets `OPENCODE_CONFIG=<data-dir>/opencode.managed.json`.
+- Contract: the managed child gets `OPENCODE_CONFIG=<data-dir>/run/instances/<server-pid>/opencode.managed.json`.
+  Each server writes the file and the agent-tool plugin in its own folder
+  (`instance-dir.js`): several servers can share one data dir, and with shared
+  paths each overwrote the other's files, so an agent saw tools from one server
+  while its calls went to another (#4470). On start a server removes the
+  folders of servers whose pid is gone; a live server's folder is never touched.
+  The pid check assumes every server on the data dir runs in one PID
+  namespace: two containers sharing a data dir through a bind mount see each
+  other's pids as gone, so a starting server can remove a live peer's folder,
+  and that peer's OpenCode loses its managed tools until the next settings
+  write or restart.
+  The old shared `<data-dir>/agent-tool/` and `<data-dir>/opencode.managed.json`
+  stay on disk on purpose: an older OpenChamber running on the same data dir
+  still reads and writes them, so deleting them as stale breaks that server's
+  agent tools.
   The file contains only `plugins`: `-opencode.browser` first, then the absolute
   directory of every OpenChamber plugin currently switched on. OpenCode's
   built-in browser tools need OpenCode's own desktop app to attach a browser;

@@ -1270,7 +1270,7 @@ export class GhosttyTerminalSurface {
     }
     this.clearPrimedCopy();
     const wordShortcut = this.core.encodeMacWordShortcut(event, navigator.platform);
-    const data = wordShortcut ?? this.core.encodeKey(event);
+    const data = wordShortcut ?? this.core.encodeKey(event, navigator.platform);
     if (data.length === 0) return;
     // A shortcut emits shell input rather than the physical key. Suppress its
     // release even if the program enables Kitty event reporting before keyup.
@@ -1289,7 +1289,7 @@ export class GhosttyTerminalSurface {
     }
     // Ghostty's encoder only emits release codes when the terminal enabled the
     // Kitty report-event-types flag, so legacy sessions send nothing here.
-    const data = this.core.encodeKey(event, 'release');
+    const data = this.core.encodeKey(event, navigator.platform, 'release');
     if (data.length === 0) return;
     event.preventDefault();
     event.stopPropagation();

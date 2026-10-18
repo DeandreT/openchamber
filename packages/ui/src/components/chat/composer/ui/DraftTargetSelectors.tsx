@@ -67,6 +67,8 @@ export interface DraftTargetProps {
     showBranchSelector: boolean;
     onProjectChange: (projectId: string) => void;
     onDirectoryChange: (directory: string) => void;
+    /** Re-reads the branch and worktree data behind the picker, throttled by the owner. */
+    onRefreshTarget?: () => void;
     /**
      * Opens the create dialog of an isolated space; absent where the entry is not offered: while
      * the feature's switch is off, and always in VS Code (decision 16 of the design).
@@ -154,6 +156,7 @@ function DraftTargetSelectorsView(props: DraftTargetProps) {
         showBranchSelector,
         onProjectChange,
         onDirectoryChange,
+        onRefreshTarget,
         onCreateSpace,
         onCreateCustomWorktree,
         theme,
@@ -214,6 +217,7 @@ function DraftTargetSelectorsView(props: DraftTargetProps) {
     useKeybind('open_draft_worktree_picker', () => {
         if (!showBranchSelector) return false;
         worktreeTriggerRef.current?.focus();
+        onRefreshTarget?.();
         setOpenPicker('worktree');
     });
 
@@ -422,6 +426,9 @@ function DraftTargetSelectorsView(props: DraftTargetProps) {
                     open={openPicker === 'worktree'}
                     onOpenChange={(open, details) => {
                         keyboardCloseRef.current = !open && details.event.type === 'keydown';
+                        if (open) {
+                            onRefreshTarget?.();
+                        }
                         setOpenPicker(open ? 'worktree' : null);
                     }}
                     onValueChange={handleDirectoryChange}

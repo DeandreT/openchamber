@@ -1,4 +1,4 @@
-import { spaceApiPath, spaceIdOfDirectory } from '@/lib/spaces/space-route';
+import { spaceIdOfDirectory } from '@/lib/spaces/space-route';
 import { z } from 'zod';
 import type {
   GitStatus,
@@ -791,8 +791,8 @@ function buildUrl(
   const query: Record<string, string | number | boolean | undefined> = { ...params };
   if (directory) query.directory = directory;
 
-  // A directory inside an isolated space addresses that space's git.
-  return getRuntimeUrlResolver().api(spaceApiPath(path, directory), query);
+  // The `directory` query also sends a request about a space's directory to that space's git.
+  return getRuntimeUrlResolver().api(path, query);
 }
 
 type ProjectOverviewField = 'repo' | 'status' | 'root' | 'worktrees';
@@ -1100,6 +1100,25 @@ export async function getGitStatus(directory: string, options?: { mode?: 'light'
 export async function resolveGitPrimaryRoot(directory: string): Promise<{ root: string }> {
   const overview = await readProjectOverview(directory, 'root');
   return { root: overview.root ? overview.root : directory };
+}
+
+/**
+ * Where `directory` sits inside its repository's checkout: `ai` for `<checkout>/ai`,
+ * an empty string at the checkout root. Rejects when the answer is unavailable, so
+ * a caller never takes a failed read for "at the root".
+ */
+export async function resolveGitRepositoryPrefix(directory: string): Promise<string> {
+  const response = await runtimeFetch(buildUrl(`${API_BASE}/toplevel`, directory));
+  if (!response.ok) {
+    throw new Error(`Failed to resolve the repository folder: ${response.statusText}`);
+  }
+  // SAFETY: the route answers `{ root, prefix }`; a body that is not that object leaves `prefix` undefined, and anything but a string is rejected below.
+  const payload = await response.json().catch(() => ({})) as { prefix?: string | null };
+  // A missing or null prefix is a failed read, not "at the root".
+  if (payload.prefix === undefined || payload.prefix === null) {
+    throw new Error('The server did not report the repository folder');
+  }
+  return payload.prefix;
 }
 
 export async function resolveGitTopLevel(directory: string): Promise<{ root: string }> {

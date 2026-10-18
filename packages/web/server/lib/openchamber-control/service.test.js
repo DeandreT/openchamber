@@ -259,6 +259,19 @@ describe('OpenChamber control service', () => {
     });
   });
 
+  it('passes the files to carry through to the move', async () => {
+    const moveToWorktree = vi.fn(async () => ({}));
+    const { service } = createService({ sessionService: { moveToWorktree } });
+
+    await service.execute('session.moveToWorktree', { worktree: 'fix', carry: ['src/a.ts'] }, '/repo', { contextSessionId: 'ses_me' });
+
+    expect(moveToWorktree).toHaveBeenCalledWith('ses_me', {
+      directory: '/repo',
+      worktree: { name: 'fix' },
+      carry: ['src/a.ts'],
+    });
+  });
+
   it('moves a named session from where that session lives', async () => {
     const moveToWorktree = vi.fn(async () => ({}));
     const { service, client } = createService({ sessionService: { moveToWorktree } });
@@ -798,6 +811,27 @@ describe('browser capture', () => {
     expect(request).toHaveBeenLastCalledWith('browser.capture', {}, expect.objectContaining({
       context: { directory, sessionId: null },
     }));
+  });
+});
+
+describe('browser close', () => {
+  const createCloseService = () => {
+    const request = vi.fn(async () => ({ closed: true, tabId: 'tab-1' }));
+    const { service } = createService({ browserControl: { request } });
+    return { service, request };
+  };
+
+  it('forwards the tab the agent named, trimmed', async () => {
+    const { service, request } = createCloseService();
+    const result = await service.execute('browser.close', { tabId: ' tab-1 ' }, '/repo');
+    expect(request).toHaveBeenCalledWith('browser.close', { tabId: 'tab-1' }, expect.anything());
+    expect(result).toEqual({ closed: true, tabId: 'tab-1' });
+  });
+
+  it('forwards a close with no tab, so the browser closes the session\'s own', async () => {
+    const { service, request } = createCloseService();
+    await service.execute('browser.close', {}, '/repo');
+    expect(request).toHaveBeenCalledWith('browser.close', {}, expect.anything());
   });
 });
 

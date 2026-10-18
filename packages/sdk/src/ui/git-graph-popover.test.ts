@@ -1,6 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-// The SDK package does not own the DOM test dependency; reuse the workspace fixture.
-import { Window } from '../../../ui/node_modules/happy-dom';
+import { Window } from '../../../ui/tests/dom';
 
 import type { HostReadyContext } from '../contract.ts';
 import type { HostClient } from '../host.ts';

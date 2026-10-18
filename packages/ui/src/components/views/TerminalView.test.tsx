@@ -5,6 +5,9 @@ import { Window } from 'happy-dom';
 
 import type { TerminalHandlers } from '@/lib/api/types';
 import { useTerminalStore } from '@/stores/useTerminalStore';
+import { noteSpaceCreationRequest, resetSpaceCreationRequests } from '@/lib/spaces/space-creation-requests';
+import type { SpaceEntry } from '@/lib/spaces/spaces-api';
+import { useSpacesStore } from '@/lib/spaces/spaces-store';
 
 let effectiveDirectory = '/repo';
 const openContextPreviewCalls: Array<[string, string]> = [];
@@ -36,7 +39,13 @@ const runtimeApis = {
 };
 const i18n = { t: (key: string) => key };
 
-const sessionUiState = {
+// The two fields the view reads: a selected session, or an open draft and what it waits for.
+type SessionUiState = {
+  currentSessionId: string | null;
+  newSessionDraft: { open: boolean; pendingWorktreeRequestId: string | null } | null;
+};
+
+const sessionUiState: SessionUiState = {
   currentSessionId: 'session-1',
   newSessionDraft: null,
 };
@@ -233,6 +242,40 @@ describe('TerminalView project action tab indicator', () => {
   afterEach(async () => {
     await act(async () => root.unmount());
     useTerminalStore.getState().clearAll();
+    sessionUiState.currentSessionId = 'session-1';
+    sessionUiState.newSessionDraft = null;
+    resetSpaceCreationRequests();
+    useSpacesStore.getState().resetForRuntimeSwitch();
+  });
+
+  test('a draft waiting for a new space opens no shell until the space runs, then opens it in the space', async () => {
+    const space: SpaceEntry = {
+      id: 'a1b2c3d4e5f6', name: 'Fix login', placeId: 'docker', machine: null,
+      projectDirectory: '/repo', projectFolder: { path: '/repo', found: null }, directory: '/spaces/a1b2c3d4e5f6/repo',
+      state: 'preparing', stoppedIdle: false, step: 'creating', failure: null, network: { mode: 'allowlist', domains: [] },
+      grants: [], access: null, needsAccess: [], accessFailures: [], damage: null, setup: null,
+    };
+    // The draft stays on the project's folder while its chip names the space.
+    sessionUiState.currentSessionId = null;
+    sessionUiState.newSessionDraft = { open: true, pendingWorktreeRequestId: 'worktree_space' };
+    noteSpaceCreationRequest('worktree_space', space.id);
+    useSpacesStore.getState().addJourneyEntry(space);
+
+    await act(async () => root.render(React.createElement(TerminalView, { visible: true })));
+    await flushEffects();
+    expect(host.textContent).toContain('spaces.draft.preparing');
+    expect(createSessionCalls).toEqual([]);
+
+    await act(async () => useSpacesStore.getState().addJourneyEntry({ ...space, state: 'running', step: null }));
+    await flushEffects();
+    expect(ensureDirectoryCalls).toEqual(['/spaces/a1b2c3d4e5f6/repo']);
+    expect(host.querySelector('[data-terminal-viewport]')?.getAttribute('data-session-key')?.startsWith('/spaces/a1b2c3d4e5f6/repo::')).toBe(true);
+
+    // What the panel hands to the draft stays on the draft's folder.
+    const tabId = useTerminalStore.getState().getDirectoryState('/spaces/a1b2c3d4e5f6/repo')!.tabs[0]!.id;
+    await act(async () => useTerminalStore.getState().setTabPreviewUrl('/spaces/a1b2c3d4e5f6/repo', tabId, 'https://preview.example.test'));
+    host.querySelector<HTMLElement>('[title="terminalView.preview.openTitle"]')?.click();
+    expect(openContextPreviewCalls).toEqual([['/repo', 'https://preview.example.test']]);
   });
 
   test('closing the last tab closes the surface instead of only replacing the tab', async () => {
@@ -270,7 +313,7 @@ describe('TerminalView project action tab indicator', () => {
     expect(useTerminalStore.getState().getDirectoryState('/repo')!.tabs).toHaveLength(2);
   });
 
-  test('shows a spinner only for active project-action tabs and keeps terminal or action icons elsewhere', async () => {
+  test('shows the shared spinner while a project action starts, runs or stops, and its own icon otherwise', async () => {
     await act(async () => {
       root.render(React.createElement(TerminalView, { visible: false }));
     });
@@ -278,17 +321,19 @@ describe('TerminalView project action tab indicator', () => {
     const tabs = Array.from(host.querySelectorAll('[data-tab-id]'));
     expect(tabs).toHaveLength(3);
 
-    const interactiveTab = tabs.find((tab) => tab.querySelector('[data-tab-label]')?.textContent === 'Interactive');
-    const runningActionTab = tabs.find((tab) => tab.querySelector('[data-tab-label]')?.textContent === 'Build');
-    const exitedActionTab = tabs.find((tab) => tab.querySelector('[data-tab-label]')?.textContent === 'Deploy');
+    const tab = (label: string) => tabs.find((entry) => entry.querySelector('[data-tab-label]')?.textContent === label);
 
-    expect(interactiveTab?.querySelector('[data-icon]')?.getAttribute('data-icon')).toBe('terminal');
-    expect(runningActionTab?.querySelector('[data-icon]')?.getAttribute('data-icon')).toBe('loader-4');
-    expect(runningActionTab?.querySelector('[data-icon]')?.className).toContain('animate-spin');
-    expect(runningActionTab?.querySelector('[data-icon]')?.className).toContain('motion-reduce:animate-none');
-    expect(runningActionTab?.querySelector('[data-icon]')?.className).toContain('text-muted-foreground');
-    expect(exitedActionTab?.querySelector('[data-icon]')?.getAttribute('data-icon')).toBe('play');
-    expect(host.querySelectorAll('[data-icon="loader-4"]').length).toBe(1);
+    expect(tab('Interactive')?.querySelector('[data-icon]')?.getAttribute('data-icon')).toBe('terminal');
+    expect(tab('Build')?.querySelector('[data-spinner]')).not.toBeNull();
+    expect(tab('Deploy')?.querySelector('[data-icon]')?.getAttribute('data-icon')).toBe('play');
+    expect(host.querySelectorAll('.animate-spin').length).toBe(0);
+
+    const buildTabId = useTerminalStore.getState().getDirectoryState('/repo')!.tabs.find((entry) => entry.label === 'Build')!.id;
+    await act(async () => {
+      useTerminalStore.getState().setTabLifecycle('/repo', buildTabId, 'stopping');
+    });
+
+    expect(host.querySelectorAll('[data-spinner]').length).toBe(1);
   });
 
   test('uses the explicit terminal directory for terminal tabs and session creation while preview ownership stays on the host directory', async () => {

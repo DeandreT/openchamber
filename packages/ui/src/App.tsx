@@ -1,5 +1,6 @@
 import { OpenCodeCompatibilityGate } from '@/components/update/OpenCodeCompatibilityGate';
 import React from 'react';
+import { startDiagnosticCapture } from '@/lib/diagnostics/capture';
 import { AppStartupOverlay } from '@/components/ui/AppStartupOverlay';
 import { MainLayout } from '@/components/layout/MainLayout';
 import { AppLinkConfirmDialog } from '@/components/chat/AppLinkConfirmDialog';
@@ -164,8 +165,8 @@ const StartupInitializationRecovery: React.FC<{
     <div className="flex h-full flex-col items-center overflow-y-auto bg-background px-6 py-6 text-foreground">
       <div className="my-auto flex w-full max-w-xl shrink-0 flex-col items-center gap-4 text-center">
         <div className="flex flex-col gap-2">
-          <h1 className="typography-title text-foreground">{t('startup.initRecovery.title')}</h1>
-          <p className="typography-body text-muted-foreground">{t(getInitRecoveryDescriptionKey(diagnostics, failure))}</p>
+          <h1 className="typography-h1 text-foreground">{t('startup.initRecovery.title')}</h1>
+          <p className="typography-markdown text-muted-foreground">{t(getInitRecoveryDescriptionKey(diagnostics, failure))}</p>
         </div>
         {failureMessage && (
           <dl className="w-full min-w-0 text-start" aria-live="polite">
@@ -202,6 +203,7 @@ type AppProps = {
 };
 
 function App({ apis }: AppProps) {
+  React.useEffect(() => startDiagnosticCapture(), []);
   React.useEffect(() => {
     markStartupTrace('App:mounted');
     if (startupTraceEnabled()) {

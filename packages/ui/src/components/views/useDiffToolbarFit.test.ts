@@ -60,6 +60,25 @@ describe('fitToolbar', () => {
     expect(steps()).toEqual([]);
   });
 
+  test('takes a toolbar\'s own steps and ignores truncated text it was not told to watch', () => {
+    const fit = { steps: ['data-step-one', 'data-step-two', 'data-step-three'] };
+    const header = document.createElement('div');
+    header.appendChild(base);
+    const widthAt = () => (header.hasAttribute('data-step-two') ? 240 : header.hasAttribute('data-step-one') ? 400 : 560);
+    Object.defineProperty(header, 'clientWidth', { get: () => available });
+    Object.defineProperty(header, 'scrollWidth', { get: () => Math.max(available, widthAt()) });
+    baseClipped = () => true;
+    const taken = () => fit.steps.filter((step) => header.hasAttribute(step));
+
+    available = 600;
+    fitToolbar(header, fit);
+    expect(taken()).toEqual([]);
+
+    available = 300;
+    fitToolbar(header, fit);
+    expect(taken()).toEqual(['data-step-one', 'data-step-two']);
+  });
+
   test('collapses labels before a branch name is clipped', () => {
     available = 600;
     baseClipped = (row) => !row.hasAttribute('data-diff-toolbar-compact-walkthrough');

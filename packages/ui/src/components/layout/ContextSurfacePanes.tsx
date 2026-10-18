@@ -6,11 +6,15 @@ import { BrowserPane } from '@/components/browser/BrowserPane';
 import { ChatView } from '@/components/views/ChatView';
 import { Icon } from '@/components/icon/Icon';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
+import { useDraftSpaceTarget } from '@/lib/spaces/useDraftSpaceTarget';
+import { panelContentDirectory } from '@/lib/spaces/space-creation-requests';
+import { spaceIdOfDirectory } from '@/lib/spaces/space-route';
+import { SpacePreparing } from '@/components/session/spaces/SpacePreparing';
 import { resolvePlanRequestOwner } from '@/hooks/useProjectContextOwner';
 import { isRightToLeft, useI18n } from '@/lib/i18n';
 import { resolveProjectContextId } from '@/lib/projectContextApi';
 import { cn } from '@/lib/utils';
-import { registerBrowserOpener, registerSleepingBrowserTab, setShownBrowserTab } from '@/lib/browser/controlClient';
+import { registerBrowserCloser, registerBrowserOpener, registerSleepingBrowserTab, setShownBrowserTab } from '@/lib/browser/controlClient';
 import { subscribeOpenchamberEvents } from '@/lib/openchamberEvents';
 import { useGuestsStore } from '@/lib/guests/store';
 import { guestHasSharedSurface, guestSurfaceDocking, type GuestSurfaceDocking } from '@/lib/guests/surfaces';
@@ -35,7 +39,10 @@ import { startZoneDragGesture } from './zoneDrag';
 import { ZoneSurfaceDragContext } from './zoneSurfaceDragContext';
 import { useZoneHostsStore } from './zoneHosts';
 import { useRightSlotStore } from './rightSlot';
-import { useOpenUntilSettled } from './useOpenUntilSettled';
+import { useOpenUntilSettled, useOpenWhenSettled } from './useOpenUntilSettled';
+import { isZoneExposed, ZoneInteractiveContext } from './zoneInteractiveContext';
+import { PauseClock } from '@/components/ui/pause-clock';
+import { DockedPanelSurfaceContext } from '@/hooks/usePageColors';
 
 // Heavy views stay on-demand (same as MainLayout): importing DiffView/FilesView
 // or the walkthrough statically pulls the CodeMirror and @pierre/diffs stacks
@@ -226,20 +233,29 @@ const EditorTreeColumn: React.FC<{ visible: boolean; active: boolean; fill?: boo
 const ZonePane: React.FC<{
   zone: ContextZone;
   isOpen: boolean;
+  interactive: boolean;
+  /** The zone's frame is inert at opacity 0 (`contentHidden`). */
+  hidden: boolean;
   directoryKey: string;
   className?: string;
   children: React.ReactNode;
-}> = ({ zone, isOpen, directoryKey, className, children }) => {
+}> = ({ zone, isOpen, interactive, hidden, directoryKey, className, children }) => {
   const closeContextZone = useUIStore((state) => state.closeContextZone);
   const handleKeyDownCapture = React.useCallback((event: React.KeyboardEvent<HTMLElement>) => {
     closeZoneOnEscape(event, isOpen, () => {
       if (directoryKey) closeContextZone(directoryKey, zone);
     }, event.currentTarget.closest('[data-context-zone]'));
   }, [closeContextZone, directoryKey, isOpen, zone]);
+  // A closed zone keeps its panes mounted at opacity 0; their spinners,
+  // blinks and counters stand still until it opens again.
   return (
     <MovablePane zone={zone}>
       <div className={className} onKeyDownCapture={handleKeyDownCapture}>
-        {children}
+        <DockedPanelSurfaceContext.Provider value>
+          <ZoneInteractiveContext.Provider value={interactive}>
+            <PauseClock paused={!isOpen || hidden}>{children}</PauseClock>
+          </ZoneInteractiveContext.Provider>
+        </DockedPanelSurfaceContext.Provider>
       </div>
     </MovablePane>
   );
@@ -263,6 +279,12 @@ export const ContextSurfacePanes: React.FC = () => {
     [effectiveDirectory],
   );
   const panelState = useUIStore((state) => (directoryKey ? state.contextPanelByDirectory[directoryKey] : undefined));
+  // A draft waiting for a new space keeps its tabs here, under the project's folder, while what they
+  // show comes from the space: nothing while the space is made, the space once it runs.
+  const draftSpace = useDraftSpaceTarget();
+  const spacePreparing = draftSpace?.kind === 'preparing';
+  const draftSpaceDirectory = draftSpace?.kind === 'ready' ? draftSpace.directory : null;
+  const contentDirectory = panelContentDirectory(draftSpace, effectiveDirectory) ?? '';
   const placement = useUIStore((state) => state.contextSurfaceZones);
   const contextPanelByDirectory = useUIStore((state) => state.contextPanelByDirectory);
   const closeContextPanelTab = useUIStore((state) => state.closeContextPanelTab);
@@ -302,6 +324,18 @@ export const ContextSurfacePanes: React.FC = () => {
     bottom: useOpenUntilSettled(zones.bottom.isOpen),
   };
   const contentHidden = (zone: ContextZone): boolean => !settledShown[zone];
+  // When the frame lifts its card's `inert` (ContextPanel, the same rule);
+  // surfaces that focus themselves wait for it.
+  const settledOpen = {
+    left: useOpenWhenSettled(zones.left.isOpen),
+    right: useOpenWhenSettled(zones.right.isOpen),
+    bottom: useOpenWhenSettled(zones.bottom.isOpen),
+  };
+  const interactive = {
+    left: isZoneExposed(zones.left.isOpen, settledOpen.left, zones.left.activeTab?.mode),
+    right: isZoneExposed(zones.right.isOpen, settledOpen.right, zones.right.activeTab?.mode),
+    bottom: isZoneExposed(zones.bottom.isOpen, settledOpen.bottom, zones.bottom.activeTab?.mode),
+  };
 
   // The zone each keep-alive surface lives in, and what that zone shows.
   const zoneFor = (mode: Parameters<typeof zoneOfMode>[1]) => {
@@ -339,6 +373,16 @@ export const ContextSurfacePanes: React.FC = () => {
     if (tabId) wakeBrowserTab(tabId);
     return tabId;
   }), [directoryKey, openAgentBrowserTab, wakeBrowserTab]);
+  // Lets an agent close a tab it opened. controlClient has already checked the
+  // tab belongs to the calling session; this only performs the panel close, so
+  // the strip, the zone, and the webview process all settle the way a click on
+  // the tab's own close button does.
+  React.useEffect(() => registerBrowserCloser((directory, tabId) => {
+    const tabs = useUIStore.getState().contextPanelByDirectory[directory]?.tabs;
+    if (!tabs?.some((tab) => tab.id === tabId && tab.mode === 'browser')) return false;
+    closeContextPanelTab(directory, tabId);
+    return true;
+  }), [closeContextPanelTab]);
   // The agent asked for a file to be shown. It opens in front of whatever tab
   // the user had, on purpose: the agent is pointing at a result, and the prior
   // tab is one click away.
@@ -369,11 +413,15 @@ export const ContextSurfacePanes: React.FC = () => {
 
   const fileActiveTab = fileZone.activeTab;
   React.useEffect(() => {
-    if (!directoryKey || fileActiveTab?.mode !== 'file' || !fileActiveTab.targetPath) {
+    if (!contentDirectory || fileActiveTab?.mode !== 'file' || !fileActiveTab.targetPath) {
       return;
     }
-    setSelectedFilePath(directoryKey, fileActiveTab.targetPath, { allowOutsideRoot: true });
-  }, [directoryKey, fileActiveTab, setSelectedFilePath]);
+    // The editor reads its file under the folder the panel shows. A draft waiting for a space
+    // shows only the space's files, so a tab opened on this computer's before stays empty; and a
+    // tab the draft opened in the space stays empty in the project's other chats.
+    const sameSide = spaceIdOfDirectory(fileActiveTab.targetPath) === spaceIdOfDirectory(contentDirectory);
+    setSelectedFilePath(normalizeContextPanelDirectoryKey(contentDirectory), fileActiveTab.targetPath, { allowOutsideRoot: !draftSpace && sameSide });
+  }, [contentDirectory, draftSpace, fileActiveTab, setSelectedFilePath]);
 
   const hasOpenEditorFile = React.useMemo(
     () => tabs.some((tab) => tab.mode === 'file' && tab.targetPath),
@@ -443,6 +491,7 @@ export const ContextSurfacePanes: React.FC = () => {
     openContextPanelTab(directoryKey, {
       mode: 'diff',
       targetPath: diffActiveTab.targetPath,
+      targetDirectory: diffActiveTab.targetDirectory,
       stagedDiff: nextScope === 'staged',
       diffScope: nextScope,
     });
@@ -495,7 +544,7 @@ export const ContextSurfacePanes: React.FC = () => {
   );
   // Keep-alive: the walkthrough holds reading progress and scroll position that
   // a remount would silently throw away.
-  const hasWalkthroughTab = React.useMemo(() => tabs.some((tab) => tab.mode === 'walkthrough'), [tabs]);
+  const walkthroughTab = React.useMemo(() => tabs.find((tab) => tab.mode === 'walkthrough') ?? null, [tabs]);
   const pluginTabs = React.useMemo(() => tabs.filter((tab) => isPluginContextPanelMode(tab.mode)), [tabs]);
   const guests = useGuestsStore((state) => state.guests);
   const surfaceGuestIds = React.useMemo(
@@ -527,11 +576,15 @@ export const ContextSurfacePanes: React.FC = () => {
       {hasFileTabs ? (
         <ZonePane
           zone={fileZone.zone}
+          interactive={interactive[fileZone.zone]}
           isOpen={fileZone.isOpen}
+          hidden={contentHidden(fileZone.zone)}
           directoryKey={directoryKey}
           className={cn('absolute inset-0 flex', fileTreeSide === 'left' && 'flex-row-reverse', isFileTabActive ? 'flex' : 'hidden')}
         >
-          {hasOpenEditorFile || !contextEditorTreeVisible ? (
+          {spacePreparing ? (
+            <div className="h-full min-w-0 flex-1"><SpacePreparing /></div>
+          ) : hasOpenEditorFile || !contextEditorTreeVisible ? (
             // Hidden rather than unmounted so a hidden editor keeps its state.
             <div className={cn('h-full min-w-0 flex-1', hasOpenEditorFile && !showsEditor && 'hidden')}>
               {hasOpenEditorFile ? (
@@ -545,14 +598,14 @@ export const ContextSurfacePanes: React.FC = () => {
               )}
             </div>
           ) : null}
-          <EditorTreeColumn visible={contextEditorTreeVisible} active={fileZone.isOpen && isFileTabActive} fill={!showsEditor} side={fileTreeSide} />
+          {spacePreparing ? null : <EditorTreeColumn visible={contextEditorTreeVisible} active={fileZone.isOpen && isFileTabActive} fill={!showsEditor} side={fileTreeSide} />}
         </ZonePane>
       ) : null}
       {chatActiveTab && activeChatSessionID && activeChatPinnedSession ? (
         // The chat renders in this app, pinned to its session: it shares
         // the app's connection, stores and theme, and opens like a session
         // switch instead of booting a second app.
-        <ZonePane key={chatActiveTab.id} zone={chatZone.zone} isOpen={chatZone.isOpen} directoryKey={directoryKey} className="absolute inset-0 bg-background">
+        <ZonePane key={chatActiveTab.id} zone={chatZone.zone} interactive={interactive[chatZone.zone]} isOpen={chatZone.isOpen} hidden={contentHidden(chatZone.zone)} directoryKey={directoryKey} className="absolute inset-0 bg-background">
           <section
             aria-label={t('contextPanel.iframe.sessionChatTitle', { sessionID: activeChatSessionID })}
             className="h-full"
@@ -566,6 +619,8 @@ export const ContextSurfacePanes: React.FC = () => {
       ) : null}
       {loadedBrowserTabs.map((tab) => {
         const shown = tab.directory === directoryKey && browserZone.activeTab?.id === tab.id;
+        // A tab of the draft on screen browses the space it waits for once the space runs.
+        const siteDirectory = tab.directory === directoryKey ? draftSpaceDirectory ?? tab.directory : tab.directory;
         return (
           <ZonePane
             // Keyed by the directory as well: a tab of the next directory with the
@@ -575,20 +630,29 @@ export const ContextSurfacePanes: React.FC = () => {
             // session instead of the space's own.
             key={`${tab.directory}\u0000${tab.id}`}
             zone={browserZone.zone}
+            interactive={interactive[browserZone.zone]}
             isOpen={browserZone.isOpen}
+            hidden={contentHidden(browserZone.zone)}
             directoryKey={directoryKey}
             // Invisible rather than display:none, so a background tab the agent
             // is working keeps its layout and its snapshots read a real page.
             className={cn('absolute inset-0', !shown && 'invisible pointer-events-none')}
           >
             <div className="h-full" aria-hidden={!shown || undefined}>
-              <BrowserPane
-                initialUrl={tab.targetPath ?? ''}
-                directory={tab.directory}
-                tabID={tab.id}
-                ownerSessionId={tab.ownerSessionId}
-                visible={shown && browserZone.isOpen}
-              />
+              <PauseClock paused={!shown}>
+              {tab.directory === directoryKey && spacePreparing ? <SpacePreparing /> : (
+                <BrowserPane
+                  // Remounted when the space starts: its page runs in the space's own session.
+                  key={siteDirectory}
+                  initialUrl={tab.targetPath ?? ''}
+                  directory={tab.directory}
+                  siteDirectory={siteDirectory}
+                  tabID={tab.id}
+                  ownerSessionId={tab.ownerSessionId}
+                  visible={shown && browserZone.isOpen}
+                />
+              )}
+              </PauseClock>
             </div>
           </ZonePane>
         );
@@ -599,13 +663,16 @@ export const ContextSurfacePanes: React.FC = () => {
           <ZonePane
             key={tab.id}
             zone={diffZone.zone}
+            interactive={interactive[diffZone.zone]}
             isOpen={diffZone.isOpen}
+            hidden={contentHidden(diffZone.zone)}
             directoryKey={directoryKey}
             className={cn('absolute inset-0', !active && 'hidden')}
           >
             <React.Suspense fallback={null}>
               <ContextPanelHeaderSlotProvider value={headerSlotFor(diffZone.zone, active)}>
-                <DiffView
+                {spacePreparing && !tab.targetDirectory ? <SpacePreparing /> : <DiffView
+                  directory={tab.targetDirectory ?? draftSpaceDirectory}
                   visible={diffZone.isOpen && active}
                   hideStackedFileSidebar
                   stackedDefaultCollapsedAll
@@ -615,7 +682,7 @@ export const ContextSurfacePanes: React.FC = () => {
                   onDiffScopeChange={handleDiffScopeChange}
                   targetFilePath={tab.targetPath}
                   flushContent
-                />
+                />}
               </ContextPanelHeaderSlotProvider>
             </React.Suspense>
           </ZonePane>
@@ -624,7 +691,9 @@ export const ContextSurfacePanes: React.FC = () => {
       {terminalTab ? (
         <ZonePane
           zone={terminalZone.zone}
+          interactive={interactive[terminalZone.zone]}
           isOpen={terminalZone.isOpen}
+          hidden={contentHidden(terminalZone.zone)}
           directoryKey={directoryKey}
           className={cn('absolute inset-0', terminalZone.activeTab?.mode === 'terminal' ? 'block' : 'hidden')}
         >
@@ -639,16 +708,18 @@ export const ContextSurfacePanes: React.FC = () => {
           </ContextPanelHeaderSlotProvider>
         </ZonePane>
       ) : null}
-      {hasWalkthroughTab ? (
+      {walkthroughTab ? (
         <ZonePane
           zone={walkthroughZone.zone}
+          interactive={interactive[walkthroughZone.zone]}
           isOpen={walkthroughZone.isOpen}
+          hidden={contentHidden(walkthroughZone.zone)}
           directoryKey={directoryKey}
           className={cn('absolute inset-0', walkthroughZone.activeTab?.mode === 'walkthrough' ? 'block' : 'hidden')}
         >
           <React.Suspense fallback={null}>
             <ContextPanelHeaderSlotProvider value={headerSlotFor(walkthroughZone.zone, walkthroughZone.activeTab?.mode === 'walkthrough')}>
-              <WalkthroughView directory={effectiveDirectory} visible={walkthroughZone.isOpen && walkthroughZone.activeTab?.mode === 'walkthrough'} />
+              <WalkthroughView directory={walkthroughTab.targetDirectory ?? effectiveDirectory} visible={walkthroughZone.isOpen && walkthroughZone.activeTab?.mode === 'walkthrough'} />
             </ContextPanelHeaderSlotProvider>
           </React.Suspense>
         </ZonePane>
@@ -671,7 +742,9 @@ export const ContextSurfacePanes: React.FC = () => {
           <ZonePane
             key={tab.id}
             zone={pluginZone.zone}
+            interactive={interactive[pluginZone.zone]}
             isOpen={pluginZone.isOpen}
+            hidden={contentHidden(pluginZone.zone)}
             directoryKey={directoryKey}
             className={cn('absolute inset-0', shown ? 'block' : 'hidden')}
           >

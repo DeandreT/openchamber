@@ -32,7 +32,7 @@ import {
   type StructuredError,
   type TokenUsageInfo,
 } from "./model"
-import { projectUserParts, structuredErrorText, toolAttachments, toolOutputText } from "./projection"
+import { projectInboxMessage, structuredErrorText, toolAttachments, toolOutputText } from "./projection"
 import { runningShellFromWire, type RunningShell, type ShellEnd } from "./background-shell"
 
 // ---------------------------------------------------------------------------
@@ -151,9 +151,10 @@ export type SyncEvent =
   // OpenChamber's own server frames that ride the same stream.
   | { type: "openchamber.notification"; properties: OpenchamberNotification }
   // `modes` is the policy; `sessions` is its on/off view for clients from before the modes.
-  | { type: "openchamber.permission-auto-accept"; properties: { sessions: Record<string, boolean>; modes?: Record<string, "ask" | "safety" | "auto">; revision?: number } }
+  // `spaceId` marks the policy of that isolated space, forwarded by the host.
+  | { type: "openchamber.permission-auto-accept"; properties: { sessions: Record<string, boolean>; modes?: Record<string, "ask" | "safety" | "auto">; revision?: number; spaceId?: string } }
   /** The server did not answer this request on the user's behalf: it waits for the user. */
-  | { type: "openchamber.permission-left-for-user"; properties: { permissionId: string; sessionId: string; directory: string | null } }
+  | { type: "openchamber.permission-left-for-user"; properties: { permissionId: string; sessionId: string; directory: string | null; spaceId?: string } }
   /** A page an agent showed waits for the user's answer (render.page with awaitAnswer). */
   | { type: "openchamber.page-waiting"; properties: { sessionID: string; directory: string | null; page: { id: string; title: string } } }
   /** That page stopped waiting: answered, answered in the chat, or its turn ended. */
@@ -370,51 +371,21 @@ export function translateWireEvent(event: OpenCodeEvent): SyncEvent[] {
     // --- user input ---------------------------------------------------------
 
     case "session.inbox.enqueued": {
-      const item = event.data.item
-      const messageID = event.data.inboxID
-      if (item.type === "user") {
-        return [
-          {
-            type: "message.updated",
-            properties: {
-              info: compact({
-                id: messageID,
-                sessionID: event.data.sessionID,
-                role: "user",
-                time: { created: event.created },
-                metadata: item.payload.metadata,
-              }),
-            },
-          },
-          {
-            type: "message.parts.replaced",
-            properties: {
-              sessionID: event.data.sessionID,
-              messageID,
-              parts: projectUserParts(item.payload, { sessionID: event.data.sessionID, messageID, created: event.created }),
-            },
-          },
-        ]
-      }
-      if (item.type === "synthetic") {
-        return [
-          {
-            type: "message.updated",
-            properties: {
-              info: compact({
-                id: messageID,
-                sessionID: event.data.sessionID,
-                role: "synthetic",
-                time: { created: event.created },
-                text: item.payload.text,
-                description: item.payload.description,
-                metadata: item.payload.metadata,
-              }),
-            },
-          },
-        ]
-      }
-      return []
+      const projected = projectInboxMessage(event.data.item, {
+        sessionID: event.data.sessionID,
+        messageID: event.data.inboxID,
+        created: event.created,
+      })
+      if (!projected) return []
+      const updated: SyncEvent = { type: "message.updated", properties: { info: projected.info } }
+      if (!projected.parts) return [updated]
+      return [
+        updated,
+        {
+          type: "message.parts.replaced",
+          properties: { sessionID: event.data.sessionID, messageID: event.data.inboxID, parts: projected.parts },
+        },
+      ]
     }
     case "session.inbox.delivered":
       return [messagePatch(event.data.sessionID, event.data.inboxID, { time: { created: event.created } })]

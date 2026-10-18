@@ -49,7 +49,6 @@ const MANAGED_PLUGIN_SETTINGS_KEYS = new Set([
   'agentNotifyToolEnabled',
   'agentRenderToolEnabled',
   'agentToolsCodeMode',
-  'agentWorktreeMoveWithoutAsking',
 ]);
 
 export const createSettingsRuntime = (deps) => {
@@ -74,6 +73,7 @@ export const createSettingsRuntime = (deps) => {
     onManagedPluginSettingsChanged = async () => {},
     onMessageSearchEnabledChanged = () => {},
     onMessageSearchReasoningChanged = () => {},
+    onPermissionDefaultModeChanged = () => {},
   } = deps;
 
   let persistSettingsLock = Promise.resolve();
@@ -1161,6 +1161,9 @@ export const createSettingsRuntime = (deps) => {
       }
       if (changedKeys.includes('messageSearchReasoningEnabled')) {
         onMessageSearchReasoningChanged(next.messageSearchReasoningEnabled === true);
+      }
+      if (changedKeys.includes('permissionDefaultMode') && next.permissionDefaultMode !== current.permissionDefaultMode) {
+        onPermissionDefaultModeChanged(next.permissionDefaultMode);
       }
       return formatSettingsResponse(next);
     });

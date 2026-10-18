@@ -35,7 +35,9 @@ other.
   origin; payload provenance is ignored. Plans are handed out as file paths
   (`list`, and the answer to `save`), never as text: the agent reads a plan
   and makes small edits, such as ticking a step, with its own file tools, and
-  `save` creates or replaces one whole. The actions answer `403` while
+  `save` creates or replaces one whole. `expected` guards a replacement only:
+  a save that carries it without an `id` is a 400, never a silently ignored
+  conflict check. The actions answer `403` while
   `agentKnowledgeToolEnabled` is `false`. `show` checks the plan exists and
   sends `openchamber:plan-open-request` to every connected window, like
   `file.open`; every layout opens the plan the way a click in the Project
@@ -57,6 +59,10 @@ other.
   (`trackWaitingPage` in `../opencode/session-runtime.js`), broadcasts
   `openchamber:page-waiting` / `openchamber:page-settled` to the clients, and
   sends the same "Input needed" notification a form gets.
+  `renderPageImageSources` lists the local images a page names by absolute
+  path (in quotes or a CSS `url()`, PNG, JPEG, GIF or WebP, at most 12). The
+  image grant route (`../markdown-image-grants/`) allows exactly those, and the
+  chat reads them with the same rule.
 - `routes.js` is the authenticated CLI HTTP adapter. It forwards one action,
   preserves service status and partial-result details, and propagates request
   cancellation. It also carries the chat's answer to a waiting page.
@@ -117,11 +123,38 @@ other.
   is required, `branch` and `startRef` are optional, and `existingBranch`
   checks out a branch that already exists in place of both. The worktree is made by
   the same `createWorktree` pipeline as `session.create`, waits for the same
-  bootstrap, then the checkout's uncommitted changes travel in one git stash
-  applied by hash, and the session is moved last through OpenCode's
+  bootstrap, then the uncommitted changes of the files named in `carry`
+  travel in one git stash applied by hash (nothing moves without it), and the
+  session is moved last through OpenCode's
   `session.move`. A failure after the worktree exists removes it again and
   puts the changes back; when restoring fails too, the error names the stash
   so nothing is lost. A 409 means the changes did not apply on the start ref.
+- A session created in a new worktree (`session.create` with `worktree` or
+  `pullRequest`) or moved into one (`session.moveToWorktree`) starts in the same
+  folder of that worktree as the project opens on in its repository: a project
+  at `repo/ai` starts in `<worktree>/ai`, a project at the repository root
+  starts at the worktree root (`../openchamber-sessions/worktree-start-directory.js`,
+  the folder from `git rev-parse --show-prefix` through `resolveWorktreeTopLevel`).
+  The result's `directory` is that folder and `worktree.path` stays the checkout
+  root. When the checkout lacks the folder, it cannot be checked, or git cannot
+  report the project's folder, the session starts at the worktree root and the
+  result carries `startDirectoryFallback` (`missing`, `unverified` or `unknown`).
+  The field is for API callers; the OpenChamber UI does not read it, because it
+  resolves its own start folder and shows its own warning. `unknown` also covers a
+  failed git read: `resolveWorktreeTopLevel` answers without a `prefix` then,
+  which is never taken for "the project is at the repository root". For a move,
+  the project is the registered project whose path contains the session's
+  directory inside the same checkout (the longest one), so a session in
+  `repo/ai/src` follows `repo/ai`. A session in another worktree, `<wtA>/ai/src`,
+  lies in no project path; its folder in that checkout (`ai/src`) picks the
+  longest registered project of the primary checkout whose folder holds it, so it
+  also follows `repo/ai` when `repo` is registered too. A project around a
+  worktree placed inside the repository folder (`repo/.worktrees/a`) does not
+  count as containing it. The UI applies the same rule
+  (`projectPathForCheckoutFolder`). A requested agent or model is validated in the
+  directory the request names, the project's own folder, as before: a new worktree
+  does not exist yet, and its start folder mirrors that one. Git work (carrying
+  changes, removal) stays on the worktree root.
 - Default agents resolve from the owning project before global settings and
   OpenCode defaults. Directory-based requests identify the project before
   creating a worktree; existing linked worktrees resolve through Git's primary
@@ -176,3 +209,9 @@ other.
   used as a path. The result also states how to present the image, because chat
   renders the image paths written in a finished answer below that message —
   saving the file is not what shows it to anyone.
+- `browser.close` removes a browser tab the calling session opened, and is
+  refused for any other tab, including the user's own tab an action without
+  `tabId` might otherwise fall back to (`../browser-control/DOCUMENTATION.md`).
+  Closing is panel state, so the client that owns the tab performs it through a
+  registered closer, not the page view; the server only validates `tabId` and
+  forwards the action like the rest.

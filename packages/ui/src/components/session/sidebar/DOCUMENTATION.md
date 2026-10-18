@@ -72,8 +72,8 @@ store is at version 10 (v10 dropped the Recent toggle): missing preferences inhe
 while an explicitly saved choice survives reload.
 
 Full-app active records remain in the collection when their directory is no
-longer in known topology, such as a deleted worktree. Grouping first uses exact
-configured project/worktree ownership. It may then use authoritative OpenCode
+longer in known topology, such as a deleted worktree. Grouping first uses
+configured project/worktree ownership, matching a directory inside a worktree to that worktree. It may then use authoritative OpenCode
 project metadata only when that project's canonical worktree maps to a
 configured project root. OpenCode's catch-all `global` project id is excluded
 from that bridge: it is shared by every session whose directory resolves to no
@@ -182,7 +182,7 @@ bootstrap work. Selection and activity subscriptions stay session-scoped so a
 structural list update does not make every row observe unrelated streaming
 updates.
 
-Session-row permission and form badges read the relevant directory-store buckets and show only whether something waits, without a count: one form can hold many questions, and a number that does not drop as the user answers them reads as wrong. A collapsed row covers its own pending requests and those of the descendants it hides; an expanded row covers only its own. Flat Timeline rows carry badge-only scopes from their full session tree while keeping their rendered node childless, so selection, search, and row nesting do not change. The lookup never bootstraps a directory; an unbootstrapped directory contributes nothing until live state arrives. Mobile rows show the same icon-only badges from the cross-directory index (`apps/usePendingRequests.ts`). A page an agent shows that waits for the user's answer has no directory-store bucket, so the row lookup also reads it from the cross-directory index and shows it as a form.
+Session-row permission and form badges read the relevant directory-store buckets and show only whether something waits, without a count: one form can hold many questions, and a number that does not drop as the user answers them reads as wrong. A collapsed row covers its own pending requests and those of the descendants it hides; an expanded row covers only its own. Flat Timeline rows carry badge-only scopes from their full session tree while keeping their rendered node childless, so selection, search, and row nesting do not change. The lookup never bootstraps a directory, so an unbootstrapped directory's store holds only live requests; until that store completes a bootstrap, the row lookup also reads forms from the cross-directory index, which the host seed fills at load, so a question already waiting in a project this client never opened still shows after a reload. Mobile rows show the same icon-only badges from the cross-directory index (`apps/usePendingRequests.ts`). A page an agent shows that waits for the user's answer has no directory-store bucket, so the row lookup also reads it from the cross-directory index and shows it as a form.
 
 Session menus share `SessionAiRenameMenuItem` with header tabs and the
 single-session header. AI renaming uses the same leading spinner as a worktree
@@ -383,9 +383,11 @@ all / Expand all.
   `buildActiveSessionTreeFromCache`, which builds the active tree from the
   global cache and stops at an archived session, as the project tree does. The
   export offers its sub-agent tasks dialog from that tree.
-- `worktreeIndex.ts` is the shared exact worktree index (normalized keys,
+- `worktreeIndex.ts` is the shared worktree index (normalized keys,
   project-root exclusion, first-wins dedupe) for In work and the timeline, project
-  grouping, and the session switcher. `recent/sessionLocation.ts` is the single
+  grouping, and the session switcher. A session in `<worktree>/sub` resolves to
+  its worktree through `findPrefixWorktreeEntry` (longest path wins); the group
+  key stays the worktree root. `recent/sessionLocation.ts` is the single
   owner of a session's project, directory, worktree and branch label: it resolves
   the project through the session ownership index first (managed worktrees live
   outside the project path), falls back to a path-prefix match, and finds the

@@ -12,11 +12,13 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { getPrStatusLabel } from '../prStatusLabel';
 import { Button } from '@/components/ui/button';
 import { Icon } from "@/components/icon/Icon";
+import { Spinner } from "@/components/ui/spinner";
 import { FileTreeChevron } from '@/components/views/files/FileTreeRowParts';
 import { sessionTreeRowPaddingLeft } from '../sessions/sessionTreeGeometry';
 import { cn } from '@/lib/utils';
 import { sessionEvents } from '@/lib/sessionEvents';
 import { useUIStore } from '@/stores/useUIStore';
+import { useProjectsStore } from '@/stores/useProjectsStore';
 import { SessionFolderItem } from '../../SessionFolderItem';
 import type { SortableDragHandleProps } from './sortableItems';
 import { DroppableFolderWrapper, SessionFolderDndScope } from '../folders/sessionFolderDnd';
@@ -39,7 +41,7 @@ import { useFreshestSourceControlVisualSummaryForBranch } from '@/stores/useGitH
 type FolderScope = { scopeKey: string; directory: string | null };
 import { getLinkedSidebarIssues, type LinkedSidebarIssue } from '@/lib/linkedIssues';
 import { buildSessionIssueItems } from '../sessions/sessionPrSummaries';
-import { useOpenOnBoard } from '@/components/sourceBoard/openOnBoard';
+import { useOpenTrackerItem } from '@/components/sourceBoard/openTrackerItem';
 import { SIDEBAR_REF_TOOLTIP_CLOSE_DELAY_MS, SidebarRefLinks, type SidebarRefLink } from '../sessions/SidebarRefLinks';
 import { useI18n } from '@/lib/i18n';
 import { useChildStoreManager } from '@/sync/sync-context';
@@ -320,7 +322,7 @@ const EMPTY_GROUP_ISSUES: readonly LinkedSidebarIssue[] = [];
 
 function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNode {
   const { t } = useI18n();
-  const openOnBoard = useOpenOnBoard();
+  const openTrackerItem = useOpenTrackerItem();
   const spaceTakesNoNewSession = useSpaceTakesNoNewSession(props.group.space?.id);
   const spaceLineSpeaks = useSpacesStore((state) => {
     const spaceId = props.group.space?.id;
@@ -363,6 +365,13 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
     setFolderRenameDraft,
     clearFolderRename,
   } = props;
+  // Chips open their link in the Tracker through this group's project. The
+  // project's root path resolves there without the live worktree map, which a
+  // worktree group's own directory does not until its topology arrives.
+  const projectDirectory = useProjectsStore((state) =>
+    projectId ? state.projects.find((entry) => entry.id === projectId)?.path ?? null : null,
+  );
+  const boardDirectory = projectDirectory ?? group.directory ?? null;
   const toggleFolderCollapse = useSessionFoldersStore((state) => state.toggleFolderCollapse);
   const renameFolder = useSessionFoldersStore((state) => state.renameFolder);
   const deleteFolder = useSessionFoldersStore((state) => state.deleteFolder);
@@ -1066,7 +1075,7 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
             : bootstrapLoading
               ? (
                 <span className="inline-flex items-center gap-1.5">
-                  <Icon name="loader-4" className="size-3 animate-spin" />
+                  <Spinner className="size-3" />
                   {t('sessions.sidebar.group.empty.loadingSessions')}
                 </span>
               )
@@ -1174,7 +1183,7 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
                 <span className="flex w-full min-w-0 items-center gap-0.5">
                   {headerSlot(worktreeRemoving ? (
                     <span className="inline-flex h-3.5 w-3.5 shrink-0 items-center justify-center text-muted-foreground" title={t('sessions.sidebar.group.worktreeRemoving')} role="status" aria-label={t('sessions.sidebar.group.worktreeRemoving')}>
-                      <Icon name="loader-4" className="h-3.5 w-3.5 animate-spin" />
+                      <Spinner className="h-3.5 w-3.5" />
                     </span>
                   ) : (
                     <Icon name={group.space ? 'box-3' : 'git-branch'}
@@ -1204,7 +1213,7 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
                       onKeyDown={(event) => event.stopPropagation()}
                       onClick={(event) => {
                         event.stopPropagation();
-                        if (groupPrSummary.url) openOnBoard(groupPrSummary.url, group.directory ?? null, event);
+                        if (groupPrSummary.url) openTrackerItem(groupPrSummary.url, boardDirectory, event);
                       }}
                     >
                       {groupPrReference}
@@ -1227,7 +1236,7 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
                         event.stopPropagation();
                         // The `+N` only counts the others; the tooltip lists them.
                         if (event.target instanceof Element && event.target.closest('[data-ref-more]')) return;
-                        openOnBoard(primaryGroupIssue.url, group.directory ?? null, event);
+                        openTrackerItem(primaryGroupIssue.url, boardDirectory, event);
                       }}
                     >
                       <Icon name={primaryGroupIssue.icon} className="h-3 w-3" />
@@ -1263,11 +1272,11 @@ function SessionGroupSectionBase(props: SessionGroupSectionProps): React.ReactNo
       </TooltipTrigger>
       {groupPrLinks.length > 0 ? (
         <TooltipContent side="right" sideOffset={8} className="max-w-xs">
-          <SidebarRefLinks items={groupPrLinks} directory={group.directory ?? null} />
+          <SidebarRefLinks items={groupPrLinks} directory={boardDirectory} />
         </TooltipContent>
       ) : !groupPrSummary && primaryGroupIssue ? (
         <TooltipContent side="right" sideOffset={8} className="max-w-xs">
-          <SidebarRefLinks items={groupIssueItems} directory={group.directory ?? null} />
+          <SidebarRefLinks items={groupIssueItems} directory={boardDirectory} />
         </TooltipContent>
       ) : null}
       </Tooltip>
