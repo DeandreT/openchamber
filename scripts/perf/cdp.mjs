@@ -124,6 +124,20 @@ const ANTI_THROTTLING_ARGS = [
   "--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling",
 ]
 
+const removeTemporaryProfile = async (dir) => {
+  // Bun 1.4.3 does not honor fs.rm's retry options on a Windows file lock.
+  // Keep the same bounded, linear backoff for both supported runtimes.
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rm(dir, { recursive: true, force: true })
+      return
+    } catch (error) {
+      if (attempt === 20 || !["EBUSY", "EPERM", "ENOTEMPTY", "EMFILE", "ENFILE"].includes(error.code)) throw error
+      await wait((attempt + 1) * 100)
+    }
+  }
+}
+
 /**
  * The Chrome profile for one run. `--profile-dir` keeps a directory the caller
  * owns; without it every run gets a fresh temporary profile, removed once
@@ -137,8 +151,7 @@ export const resolveProfileDir = (explicit, name) => {
   return {
     dir,
     temporary: true,
-    // Async removal lets process/socket cleanup finish while Windows releases files.
-    remove: () => rm(dir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 }),
+    remove: () => removeTemporaryProfile(dir),
   }
 }
 
@@ -278,7 +291,7 @@ export const captureError = (error) => {
  * The load event remains the profiler's existing, uncorrelated load signal.
  * Frame/loader evidence is recorded separately; it is not proof of readiness.
  */
-export const navigateForCapture = async (client, method, params, diagnostic, { waitForLoad = true, timeoutMs = 60_000 } = {}) => {
+export const navigateForCapture = async (client, method, params, diagnostic, { waitForLoad = true, timeoutMs = 60_000, recorder = null } = {}) => {
   let finished = false
   let timer
   let removeLoad = () => {}
@@ -300,7 +313,10 @@ export const navigateForCapture = async (client, method, params, diagnostic, { w
     const timeout = new Promise((_, reject) => {
       timer = setTimeout(() => reject(new Error(`Timed out waiting for ${waitForLoad ? "Page.loadEventFired" : method}`)), timeoutMs)
     })
-    const command = Promise.resolve().then(() => client.send(method, params, { timeoutMs })).then((result) => {
+    const command = Promise.resolve().then(() => {
+      recorder?.recordCommand("command-sent", diagnostic)
+      return client.send(method, params, { timeoutMs })
+    }).then((result) => {
       if (finished) return
       diagnostic.result = {
         frameId: result.frameId ?? null,
@@ -308,11 +324,13 @@ export const navigateForCapture = async (client, method, params, diagnostic, { w
         errorText: result.errorText ? captureError(result.errorText) : null,
         isDownload: result.isDownload ?? false,
       }
+      recorder?.recordCommand("command-result", diagnostic)
       if (result.errorText) throw new Error(result.errorText.match(/\bnet::ERR_[A-Z0-9_]+\b/)?.[0] ?? "Navigation command failed")
     })
     await Promise.race([Promise.all([command, loaded]), closed, timeout])
   } catch (error) {
     diagnostic.error = captureError(error)
+    recorder?.recordCommand("navigation-error", diagnostic)
     throw error
   } finally {
     finished = true
@@ -320,6 +338,34 @@ export const navigateForCapture = async (client, method, params, diagnostic, { w
     removeLoad()
     removeClose()
   }
+}
+
+// Every attempt owns a result, including partial measurements and failures.
+// Cleanup proceeds independently and cannot replace the original capture error.
+export const recordCaptureAttempt = async ({ summary, run, onFailure, cleanup, persist }) => {
+  let failure = null
+  summary.valid = false
+  summary.cleanupErrors = []
+  try {
+    await run()
+    summary.valid = true
+  } catch (error) {
+    failure = error
+    summary.error = captureError(error)
+    try { await onFailure() } catch (snapshotError) { summary.snapshotError = captureError(snapshotError) }
+  } finally {
+    for (const release of cleanup) {
+      try { await release() } catch (error) {
+        summary.cleanupErrors.push(captureError(error))
+        failure ??= error
+      }
+    }
+    try { await persist(summary) } catch (error) {
+      if (failure) throw new AggregateError([failure, error], "Capture failed and its result could not be saved")
+      throw error
+    }
+  }
+  if (failure) throw failure
 }
 
 /** One bounded, content-free snapshot before a failed capture tears down. */

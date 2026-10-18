@@ -1,12 +1,30 @@
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
-import { captureError, capturePageState, navigateForCapture, stopChrome } from './cdp.mjs';
+import { captureError, capturePageState, navigateForCapture, recordCaptureAttempt, resolveProfileDir, stopChrome } from './cdp.mjs';
 import { createNavigationRecorder, createNetworkRecorder, summarizeRequests } from './network.mjs';
-import { recordHeapAttempt } from '../profile-heap.mjs';
 
 test('profiling an attached browser never closes it', async () => {
   await stopChrome(null, { send: () => assert.fail('The attached browser belongs to the user') });
+});
+
+test('temporary profile cleanup removes owned data and preserves an explicit profile', async () => {
+  const retained = await mkdtemp(join(tmpdir(), 'profile-owner-'));
+  const temporary = resolveProfileDir(null, 'profile-owner');
+  try {
+    for (const dir of [retained, temporary.dir]) await writeFile(join(dir, 'data'), 'keep');
+    await resolveProfileDir(retained, 'profile-owner').remove();
+    assert.equal(await readFile(join(retained, 'data'), 'utf8'), 'keep');
+    await temporary.remove();
+    await assert.rejects(readFile(join(temporary.dir, 'data')), { code: 'ENOENT' });
+    await temporary.remove();
+  } finally {
+    await rm(retained, { recursive: true, force: true });
+    await rm(temporary.dir, { recursive: true, force: true });
+  }
 });
 
 test('owned browser finishes graceful shutdown before process termination', async () => {
@@ -60,7 +78,7 @@ const attempt = async (client, options = {}) => {
   let cleanupCalls = 0;
   let error;
   try {
-    await recordHeapAttempt({
+    await recordCaptureAttempt({
       summary,
       run: () => navigateForCapture(client, 'Page.navigate', { url: 'http://localhost/' }, summary.navigation, { timeoutMs: 20, ...options }),
       onFailure: async () => { snapshots += 1; },
@@ -135,7 +153,7 @@ test('cleanup and snapshot failures do not replace the original failure or preve
   const summary = { phase: 'reload' };
   let writes = 0;
   let secondCleanup = false;
-  await assert.rejects(recordHeapAttempt({
+  await assert.rejects(recordCaptureAttempt({
     summary,
     run: async () => { throw original; },
     onFailure: async () => { throw new Error('Snapshot unavailable'); },
@@ -204,4 +222,89 @@ test('page-state snapshot is bounded and discards page exception content', async
   client.reply = async () => { throw new Error('http://user:secret@localhost/private?token=secret'); };
   assert.deepEqual(await capturePageState(client, 'http://localhost/'), { evaluationError: 'Error' });
   assert.equal(captureError('Private document text'), 'Capture error');
+});
+
+test('navigation receipts retain replay, live starts, command identity and clock anchors in receipt order', async () => {
+  const client = new CaptureClient();
+  const url = 'http://localhost/private?token=secret';
+  const recorder = createNavigationRecorder(client, url);
+  client.emit('Page.lifecycleEvent', { name: 'load', frameId: 'main', loaderId: 'old', timestamp: 1 });
+  client.reply = async () => {
+    client.emit('Page.frameRequestedNavigation', { frameId: 'main', url, reason: 'scriptInitiated', disposition: 'currentTab' });
+    client.emit('Page.frameStartedNavigating', { frameId: 'main', loaderId: 'new', url, navigationType: 'differentDocument' });
+    client.emit('Network.requestWillBeSent', { requestId: 'request', frameId: 'main', loaderId: 'new', type: 'Document', request: { url }, timestamp: 100, wallTime: 2000 });
+    client.emit('Network.loadingFailed', { requestId: 'request', canceled: true, errorText: 'net::ERR_ABORTED', timestamp: 101 });
+    return { frameId: 'main', loaderId: 'new', errorText: 'net::ERR_ABORTED' };
+  };
+  await assert.rejects(navigateForCapture(client, 'Page.navigate', { url }, { phase: 'park-navigation' }, { recorder, waitForLoad: false }), /net::ERR_ABORTED/);
+  const data = recorder.read();
+  assert.deepEqual(data.events.map(event => event.type), [
+    'lifecycle', 'command-sent', 'navigation-requested', 'navigation-started',
+    'document-started', 'document-failed', 'command-result', 'navigation-error',
+  ]);
+  assert.deepEqual(data.events.map(event => event.sequence), [1, 2, 3, 4, 5, 6, 7, 8]);
+  assert.ok(data.events.every(event => Number.isFinite(event.receivedAtMs)));
+  assert.equal(data.events[1].phase, 'park-navigation');
+  assert.equal(data.events[3].loaderId, 'new');
+  assert.equal(data.events[3].navigationType, 'differentDocument');
+  assert.equal(data.events[6].result.loaderId, 'new');
+  assert.equal(data.events[6].result.errorText, 'net::ERR_ABORTED');
+  assert.equal(data.documents[0].timestamp, 100);
+  assert.equal(data.documents[0].wallTime, 2000);
+  assert.equal(data.mainFrameId, null, 'A start does not establish a committed main frame');
+  assert.ok(!JSON.stringify(data).includes('secret'));
+  assert.ok(!JSON.stringify(data).includes('/private'));
+  recorder.stop();
+  assert.equal(client.listenerCount('Page.frameStartedNavigating'), 0);
+  assert.equal(client.listenerCount('Page.frameRequestedNavigation'), 0);
+});
+
+test('load timeout is recorded separately from a document cancellation', async () => {
+  const client = new CaptureClient();
+  const recorder = createNavigationRecorder(client, 'http://localhost/');
+  client.reply = async () => {
+    client.emit('Network.requestWillBeSent', { requestId: 'request', type: 'Document', request: { url: 'http://localhost/' } });
+    return { frameId: 'main', loaderId: 'new' };
+  };
+  const result = await attempt(client, { recorder });
+  assert.equal(result.summary.valid, false);
+  assert.equal(result.summary.navigation.result.errorText, null);
+  const data = recorder.read();
+  assert.equal(data.events.at(-1).type, 'navigation-error');
+  assert.equal(data.events.at(-1).error, 'Timed out waiting for Page.loadEventFired');
+  assert.equal(data.documents[0].failed, false);
+  assert.deepEqual(data.documents[0].terminalEvents, []);
+  recorder.stop();
+});
+
+test('ordered receipts stay bounded with explicit loss and preserve sequence across eviction', () => {
+  const client = new CaptureClient();
+  const recorder = createNavigationRecorder(client, 'http://localhost/');
+  for (let index = 0; index < 150; index += 1) {
+    client.emit('Page.frameStartedNavigating', { frameId: 'main', loaderId: String(index), url: 'http://localhost/' });
+  }
+  const data = recorder.read();
+  assert.equal(data.events.length, 128);
+  assert.equal(data.droppedEvents, 22);
+  assert.equal(data.events[0].sequence, 23);
+  assert.equal(data.events.at(-1).sequence, 150);
+  recorder.stop();
+});
+
+test('a failed capture keeps completed workload entries alongside the failing phase', async () => {
+  for (const summary of [
+    { phase: 'switch-2', switches: [{ index: 0, visible: 300 }, { index: 1, visible: 400 }] },
+    { phase: 'line-3', linesTyped: 2 },
+  ]) {
+    const original = structuredClone(summary);
+    const saved = [];
+    await assert.rejects(recordCaptureAttempt({
+      summary,
+      run: async () => { throw new Error('net::ERR_ABORTED'); },
+      onFailure: async () => {},
+      cleanup: [],
+      persist: async result => saved.push(structuredClone(result)),
+    }), /net::ERR_ABORTED/);
+    assert.deepEqual(saved, [{ ...original, valid: false, cleanupErrors: [], error: 'net::ERR_ABORTED' }]);
+  }
 });

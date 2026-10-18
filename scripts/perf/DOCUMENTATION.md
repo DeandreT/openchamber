@@ -72,8 +72,11 @@ desktop's `resources/opencode-cli/opencode.exe` path. Shutdown discovers the
 server's descendants through Windows process information before stopping them.
 Captures using `perf/cdp.mjs` request `Browser.close`, allow graceful shutdown, and stop
 the owned process tree if it remains alive. Temporary Chrome profiles are
-removed asynchronously with bounded retries so Windows can release their file
-handles. A browser supplied through `--attach` is never closed by the capture.
+removed asynchronously with 20 linearly delayed retries for busy-file errors.
+The delay starts at 100 ms, totaling at most 21 seconds of retry delays; failure
+after that remains a cleanup error. The helper implements these retries because
+Bun 1.4.3 ignores `fs.rm` retry options on Windows locks. A browser supplied
+through `--attach` is never closed by the capture.
 Use the same explicit `--chrome` binary for both sides of a comparison.
 
 ## Running An Isolated Copy
@@ -801,16 +804,18 @@ named `<scenario>-<n>`, such as an ablation batch against its control.
 
 ## Failed browser navigation captures
 
-Web startup and heap captures keep bounded document diagnostics: navigation
+Web startup, heap, switch and composer captures keep bounded document diagnostics: navigation
 command results, frame and loader IDs, document status, and the terminal
 `loadingFinished` or `loadingFailed` event. A failed request is finished for
 byte accounting; `unfinished: 0` does not establish success. Network summaries
 also report a separate `failed` count.
 
-Heap writes `heap-summary.json` for failed attempts as well as successful ones.
-`valid` describes whether all measurement stages completed. `phase`, `rows`,
-`hovered`, `opened`, partial readings, and cleanup errors remain available when
-an attempt fails. Cleanup errors do not replace the original capture failure.
+Heap, switch and composer write their summary for failed attempts as well as
+successful ones. `valid` describes whether all measurement stages completed.
+`phase`, navigation attempts, completed switches or typed-line counts, partial
+readings, and cleanup errors remain available when an attempt fails. Switch
+captures record whether accessibility was requested separately from measured
+accessibility activity. Cleanup errors do not replace the original capture failure.
 Compare only completed attempts with matching workload counts.
 
 `Page.loadEventFired` remains an uncorrelated load signal. The diagnostic frame,
@@ -826,6 +831,21 @@ URLs, query strings, headers, document text, and arbitrary browser exception
 messages. Startup records failed recorder evaluations separately from absent
 recorder data. Original failed artifacts stay available when a later run passes;
 the profilers do not retry navigation automatically.
+
+`documents.events` retains up to 128 events in receipt order, with increasing
+`sequence` values, host `receivedAtMs` timestamps and a `droppedEvents` count.
+It includes command send/result/error, `Page.frameStartedNavigating`, observed
+renderer navigation requests, document requests and terminal events, frame
+commits and lifecycle milestones. Document-start records keep CDP `timestamp`
+and `wallTime` together to relate browser monotonic time to wall-clock time.
+
+Receipt order does not establish browser causality. Enabling lifecycle events
+can replay old milestones; a navigation-start notification can arrive after an
+old request was cancelled. Multiple starts can belong to one navigation, and
+missing events cannot exclude activity before attachment or evicted records.
+`ERR_ABORTED` identifies cancellation but not its owner. A load-event timeout
+alone does not establish cancellation. Attribution needs an explicit link to
+the browser operation that replaced, discarded or stopped the aborted loader.
 
 ## Attribution
 
@@ -1027,13 +1047,13 @@ be a measurement, never a disabled instrument.
 
 | File | Responsibility |
 |---|---|
-| `cdp.mjs` | Chrome launch, target discovery, minimal CDP client. Owns the anti-throttling launch flags and the per-run temporary Chrome profile (`resolveProfileDir`); `profile:browser` alone keeps a reusable profile, for a manually driven session. |
+| `cdp.mjs` | Chrome launch, target discovery, minimal CDP client, bounded navigation waits and capture-attempt persistence. Owns the anti-throttling launch flags and the per-run temporary Chrome profile (`resolveProfileDir`); `profile:browser` alone keeps a reusable profile, for a manually driven session. |
 | `metrics.mjs` | Metric derivations shared by the profilers: growth rates, percentiles, long-task, frame-budget, windowed longest-task, trace-event and per-thread summaries. |
 | `process-cpu.mjs` | CPU per process from cumulative counters: Chrome through browser-level `SystemInfo`, the server and its OpenCode child through `ps`. Unresolved processes are reported as missing, never as zero. |
 | `fixture-provider.mjs` | Deterministic OpenAI-compatible provider: one fixed document at a rate chosen by model name. |
 | `seed-long-session.mjs` | Builds a long session (default 120 turns) through the `openchamber session` CLI and the fixture provider's seeding models. |
 | `aggregate-runs.mjs` | Median, p95, min and max per metric over repeated single-run captures, excluding runs whose validity flags say they measured nothing. |
-| `network.mjs` | Request and byte accounting over the CDP Network domain, grouped by endpoint pattern. |
+| `network.mjs` | Request and byte accounting over the CDP Network domain, grouped by endpoint pattern; bounded document and navigation evidence in receipt order. |
 | `startup-probe.mjs` | Page-side startup recorder: React mounted, splash and overlay gone, composer usable, model picker, and the app's startup trace marks. |
 | `cpu-profile.mjs` | Aggregates `Profiler.stop()` output into self time per function. |
 | `idle-probe.mjs` | Page-side instrumentation installed before application code runs; attributes scheduled work to the call site that scheduled it. Must never change observable behaviour. |
