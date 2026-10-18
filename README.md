@@ -154,6 +154,10 @@ OpenChamber is an independent project and is not affiliated with the OpenCode te
 
 ## Contributing
 
+The fork's native Rust desktop design is in
+[Native Rust desktop architecture](docs/rust-desktop/ARCHITECTURE.md), with
+[implementation stages](docs/rust-desktop/IMPLEMENTATION.md) for the GPUI client.
+
 Bug fixes and small improvements are welcome as PRs. Features and behavior changes start in an [Ideas discussion](https://github.com/openchamber/openchamber/discussions/categories/ideas) so we agree on the product side before anyone writes code. Read [CONTRIBUTING.md](./CONTRIBUTING.md) before opening a PR; it has the setup, the review contract, and what happens to large unplanned PRs. Documentation authoring guidance lives in [`packages/docs`](packages/docs/README.md).
 
 Bugs go to [issues](https://github.com/openchamber/openchamber/issues/new/choose). Questions go to [Q&A discussions](https://github.com/openchamber/openchamber/discussions/categories/q-a).
