@@ -35,11 +35,11 @@ import { join, resolve } from "node:path"
 import process from "node:process"
 
 import { ACCESSIBILITY_CATEGORY, accessibilityInWindow, accessibilityState, describeAccessibility, FORCE_ACCESSIBILITY_ARGS } from "./perf/accessibility.mjs"
-import { CdpClient, createPageTarget, evaluateValue, launchChrome, reservePort, resolveChrome, resolveProfileDir, stopChrome, wait } from "./perf/cdp.mjs"
+import { CdpClient, capturePageState, createPageTarget, evaluateValue, launchChrome, navigateForCapture, recordCaptureAttempt, reservePort, resolveChrome, resolveProfileDir, stopChrome, wait } from "./perf/cdp.mjs"
 import { summarizeCpuProfile } from "./perf/cpu-profile.mjs"
 import { expandProjects, expandSessionLists } from "./perf/scenario.mjs"
 import { percentile, round } from "./perf/metrics.mjs"
-import { createNetworkRecorder, endpointPattern, summarizeRequests } from "./perf/network.mjs"
+import { createNavigationRecorder, createNetworkRecorder, endpointPattern, summarizeRequests } from "./perf/network.mjs"
 import { buildRenderProbeSource, printRenderProbe, readRenderProbe, RENDER_PROBE_GLOBAL, summarizeRenderProbe } from "./perf/render-probe.mjs"
 import { rendererMainThread } from "./perf/trace-analysis.mjs"
 
@@ -459,17 +459,21 @@ const main = async () => {
 
   const port = await reservePort()
   const chromeProcess = launchChrome({ chrome, profileDir: profile.dir, port, headless: options.headless, extraArgs: options.forceAccessibility ? FORCE_ACCESSIBILITY_ARGS : [] })
+  const summary = { recordedAt: new Date().toISOString(), label: options.label, url: options.url, phase: "setup", navigation: [], switches: [], forceAccessibility: options.forceAccessibility }
   let client
-  try {
+  let navigationRecorder
+  const run = async () => {
     const target = await createPageTarget(port)
     client = new CdpClient(target.webSocketDebuggerUrl)
     await client.connect()
+    navigationRecorder = createNavigationRecorder(client, options.url)
     await Promise.all([
       client.send("Page.enable"),
       client.send("Runtime.enable"),
       client.send("Profiler.enable"),
       client.send("Network.enable", { maxTotalBufferSize: 0, maxResourceBufferSize: 0 }),
     ])
+    await client.send("Page.setLifecycleEventsEnabled", { enabled: true })
     await client.send("Network.setBypassServiceWorker", { bypass: true })
     await client.send("Emulation.setDeviceMetricsOverride", { width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false })
     // The app's render counters are off by default; the flag is read at load.
@@ -488,21 +492,25 @@ const main = async () => {
 
     // Opens the app parked on `parkId`, so the session it restores is not one
     // of the plan and the first click on every planned session is cold.
+    const navigate = async (phase, url) => {
+      summary.phase = phase
+      const navigation = { phase }
+      summary.navigation.push(navigation)
+      await navigateForCapture(client, "Page.navigate", { url }, navigation, { recorder: navigationRecorder })
+    }
     const loadPage = async (parkId) => {
       const url = new URL(options.url)
       if (parkId) url.searchParams.set("session", parkId)
-      const loaded = client.once("Page.loadEventFired", 60_000)
-      await client.send("Page.navigate", { url: url.toString() })
-      await loaded
+      await navigate("park-navigation", url.toString())
+      summary.phase = "settle"
       console.log(`Loaded ${options.url}${parkId ? ` parked on ${parkId}` : ""}; settling for ${options.settle}s.`)
       await wait(options.settle * 1000)
       const expanded = await expandSessionLists(client)
       if (expanded > 0) await wait(3000)
     }
 
-    let loaded = client.once("Page.loadEventFired", 60_000)
-    await client.send("Page.navigate", { url: options.url })
-    await loaded
+    await navigate("initial-navigation", options.url)
+    summary.phase = "expand-projects"
     await expandProjects(client)
     await loadPage(options.park)
 
@@ -537,7 +545,7 @@ const main = async () => {
     const categories = [...new Set(["devtools.timeline", "disabled-by-default-devtools.timeline", "blink.user_timing", ACCESSIBILITY_CATEGORY, ...options.extraCategories])]
     await client.send("Tracing.start", { transferMode: "ReportEvents", categories: categories.join(",") })
 
-    const switches = []
+    const switches = summary.switches
     let index = 0
     // A reload starts a fresh page and probe, so the probe covers the switches
     // after the last load; without --cold-reload that is every switch.
@@ -557,6 +565,7 @@ const main = async () => {
       }
       const visitedThisLoad = cycle === 0 || options.coldReload ? new Set() : null
       for (const id of [...plan, ...plan]) {
+        summary.phase = `switch-${index}`
         const visit = visitedThisLoad ? (visitedThisLoad.has(id) ? "warm" : "cold") : "warm"
         visitedThisLoad?.add(id)
         const box = await evaluateValue(client, `(() => {
@@ -604,6 +613,7 @@ const main = async () => {
       }
     }
 
+    summary.phase = "collect-trace"
     if (options.renderProbe) await evaluateValue(client, `globalThis[${JSON.stringify(RENDER_PROBE_GLOBAL)}]?.stop()`)
     const renderProbeRaw = options.renderProbe ? await readRenderProbe((expression) => evaluateValue(client, expression)) : null
     const tracingComplete = client.once("Tracing.tracingComplete", 120_000)
@@ -637,12 +647,9 @@ const main = async () => {
     })`)
     if (Number(frameLiveness) < 20) console.warn(`Warning: the renderer produced ${frameLiveness} frames/s; it may have been throttled.`)
 
-    const summary = {
-      recordedAt: new Date().toISOString(),
-      label: options.label,
+    Object.assign(summary, {
       injectedScript: options.injectScript,
       renderProbe: renderProbeRaw ? { ...summarizeRenderProbe(JSON.parse(renderProbeRaw)), switches: probedSwitches } : null,
-      url: options.url,
       sessions: plan,
       park,
       repeat: options.repeat,
@@ -653,8 +660,8 @@ const main = async () => {
       ...summarizeSwitches(switches, titles),
       switches,
       cpuProfile: summarizeCpuProfile(profile),
-    }
-    await writeFile(join(output, "switch-summary.json"), JSON.stringify(summary, null, 2))
+    })
+    summary.phase = "write-artifacts"
     await writeFile(join(output, "trace.json"), JSON.stringify({ traceEvents }))
     await writeFile(join(output, "cpu-profile.cpuprofile"), JSON.stringify(profile))
     if (renderProbeRaw) await writeFile(join(output, "render-probe.json"), renderProbeRaw)
@@ -678,7 +685,6 @@ const main = async () => {
     if (summary.invalidSwitches > 0) console.warn(`Warning: ${summary.invalidSwitches} switch(es) never acknowledged or never showed content; they are excluded from the statistics.`)
     if (summary.renderProbe) printRenderProbe(summary.renderProbe, { perUnit: { label: "switch", count: probedSwitches } })
     if (baseline) printComparison(summary, baseline)
-    console.log(`Artifacts written to ${output}`)
 
     const failures = []
     if (options.budgetAck !== null && summary.warm && summary.warm.ack.median > options.budgetAck) failures.push(`warm ack median ${summary.warm.ack.median}ms exceeds ${options.budgetAck}ms`)
@@ -692,11 +698,26 @@ const main = async () => {
       console.error(`Budget exceeded: ${failures.join("; ")}`)
       process.exitCode = 1
     }
-  } finally {
-    await stopChrome(chromeProcess, client)
-    client?.close()
-    await profile.remove()
+    summary.phase = "complete"
   }
+  await recordCaptureAttempt({
+    summary,
+    run,
+    onFailure: async () => {
+      if (client) summary.pageState = await capturePageState(client, options.url)
+    },
+    cleanup: [
+      () => {
+        if (navigationRecorder) summary.documents = navigationRecorder.read()
+        navigationRecorder?.stop()
+      },
+      () => stopChrome(chromeProcess, client),
+      () => client?.close(),
+      () => profile.remove(),
+    ],
+    persist: result => writeFile(join(output, "switch-summary.json"), JSON.stringify(result, null, 2)),
+  })
+  console.log(`Artifacts written to ${output}`)
 }
 
 main().catch((error) => {

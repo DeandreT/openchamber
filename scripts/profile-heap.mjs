@@ -19,7 +19,7 @@ import { join, resolve } from "node:path"
 import process from "node:process"
 import { fileURLToPath } from "node:url"
 
-import { CdpClient, captureError, capturePageState, createPageTarget, evaluateValue, launchChrome, navigateForCapture, reservePort, resolveChrome, stopChrome, wait } from "./perf/cdp.mjs"
+import { CdpClient, capturePageState, createPageTarget, evaluateValue, launchChrome, navigateForCapture, recordCaptureAttempt, reservePort, resolveChrome, stopChrome, wait } from "./perf/cdp.mjs"
 import { metricMap, round } from "./perf/metrics.mjs"
 import { createNavigationRecorder } from "./perf/network.mjs"
 import { expandProjects, expandSessionLists } from "./perf/scenario.mjs"
@@ -66,34 +66,6 @@ const parseArgs = (argv) => {
   return options
 }
 
-// A failed scenario still owns a result. Cleanup failures are separate from the
-// original capture error, and every cleanup stage gets its chance to run.
-export const recordHeapAttempt = async ({ summary, run, onFailure, cleanup, persist }) => {
-  let failure = null
-  summary.valid = false
-  summary.cleanupErrors = []
-  try {
-    await run()
-    summary.valid = true
-  } catch (error) {
-    failure = error
-    summary.error = captureError(error)
-    try { await onFailure() } catch (snapshotError) { summary.snapshotError = captureError(snapshotError) }
-  } finally {
-    for (const release of cleanup) {
-      try { await release() } catch (error) {
-        summary.cleanupErrors.push(captureError(error))
-        failure ??= error
-      }
-    }
-    try { await persist(summary) } catch (error) {
-      if (failure) throw new AggregateError([failure, error], "Capture failed and its result could not be saved")
-      throw error
-    }
-  }
-  if (failure) throw failure
-}
-
 const main = async () => {
   const options = parseArgs(process.argv.slice(2))
   const output = resolve(options.output ?? join("artifacts", `heap-profile-${new Date().toISOString().replace(/[:.]/g, "-")}`))
@@ -119,13 +91,13 @@ const main = async () => {
     summary.phase = "initial-navigation"
     const initialNavigation = { phase: summary.phase }
     summary.navigation.push(initialNavigation)
-    await navigateForCapture(client, "Page.navigate", { url: options.url }, initialNavigation)
+    await navigateForCapture(client, "Page.navigate", { url: options.url }, initialNavigation, { recorder: navigationRecorder })
     summary.phase = "expand-projects"
     await expandProjects(client)
     summary.phase = "reload"
     const reload = { phase: summary.phase }
     summary.navigation.push(reload)
-    await navigateForCapture(client, "Page.reload", {}, reload)
+    await navigateForCapture(client, "Page.reload", {}, reload, { recorder: navigationRecorder })
     summary.phase = "settle"
     console.log(`Loaded ${options.url}; settling for ${options.settle}s.`)
     await wait(options.settle * 1000)
@@ -187,7 +159,7 @@ const main = async () => {
     await reading("afterClicks")
     summary.phase = "complete"
   }
-  await recordHeapAttempt({
+  await recordCaptureAttempt({
     summary,
     run,
     onFailure: async () => {

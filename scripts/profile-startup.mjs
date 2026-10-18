@@ -630,7 +630,7 @@ const launchWebOnce = async ({ run, options, chrome, profileDir }) => {
     await client.send("Page.addScriptToEvaluateOnNewDocument", { source: buildStartupProbeSource({ modelLabel: options.modelLabel }) })
     navigatedAt = Date.now()
     diagnostic.phase = "initial-navigation"
-    await navigateForCapture(client, "Page.navigate", { url: options.url }, diagnostic.navigation, { waitForLoad: false, timeoutMs: options.timeoutMs })
+    await navigateForCapture(client, "Page.navigate", { url: options.url }, diagnostic.navigation, { waitForLoad: false, timeoutMs: options.timeoutMs, recorder: navigationRecorder })
     diagnostic.phase = "startup-recorder"
     const deadline = navigatedAt + options.timeoutMs
     while (Date.now() < deadline) {

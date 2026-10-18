@@ -20,8 +20,9 @@ import { writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import process from "node:process"
 
-import { CdpClient, createPageTarget, evaluateValue, launchChrome, reservePort, resolveChrome, resolveProfileDir, stopChrome, wait } from "./perf/cdp.mjs"
+import { CdpClient, capturePageState, createPageTarget, evaluateValue, launchChrome, navigateForCapture, recordCaptureAttempt, reservePort, resolveChrome, resolveProfileDir, stopChrome, wait } from "./perf/cdp.mjs"
 import { percentile, round } from "./perf/metrics.mjs"
+import { createNavigationRecorder } from "./perf/network.mjs"
 
 const HELP = `Usage: bun run profile:composer -- [options]
 
@@ -79,31 +80,34 @@ const main = async () => {
   const port = await reservePort()
   const chrome = launchChrome({ chrome: resolveChrome(options.chrome), profileDir: profile.dir, port, headless: options.headless })
   const events = []
+  const summary = { recordedAt: new Date().toISOString(), label: options.label, url: url.toString(), phase: "setup", navigation: {}, requestedLines: options.lines, linesTyped: 0 }
   let client
-  try {
+  let navigationRecorder
+  const run = async () => {
     const target = await createPageTarget(port)
     client = new CdpClient(target.webSocketDebuggerUrl)
     await client.connect()
-    await Promise.all([client.send("Page.enable"), client.send("Runtime.enable")])
+    navigationRecorder = createNavigationRecorder(client, url)
+    await Promise.all([client.send("Page.enable"), client.send("Runtime.enable"), client.send("Network.enable")])
+    await client.send("Page.setLifecycleEventsEnabled", { enabled: true })
     await client.send("Network.setBypassServiceWorker", { bypass: true }).catch(() => undefined)
     await client.send("Emulation.setDeviceMetricsOverride", { width: 1600, height: 1000, deviceScaleFactor: 1, mobile: false })
-    const loaded = client.once("Page.loadEventFired", 60_000)
-    await client.send("Page.navigate", { url: url.toString() })
-    await loaded
+    summary.phase = "initial-navigation"
+    await navigateForCapture(client, "Page.navigate", { url: url.toString() }, summary.navigation, { recorder: navigationRecorder })
+    summary.phase = "settle"
     console.log(`Loaded ${url}; settling for ${options.settle}s.`)
     await wait(options.settle * 1000)
 
+    summary.phase = "focus-editor"
     const page = await evaluateValue(client, `(() => {
       const editor = ${EDITOR}
       if (!editor) return null
       editor.focus()
       return { elements: document.querySelectorAll("*").length, messages: document.querySelectorAll("[data-message-id]").length }
     })()`)
-    if (!page) {
-      const summary = { recordedAt: new Date().toISOString(), label: options.label, url: url.toString(), editorFound: false }
-      await writeFile(join(output, "composer-summary.json"), JSON.stringify(summary, null, 2))
-      throw new Error("No editable composer on the page; the scenario never ran.")
-    }
+    summary.editorFound = Boolean(page)
+    if (!page) throw new Error("No editable composer on the page; the scenario never ran.")
+    summary.page = page
     console.log(`Composer focused; ${page.elements} elements, ${page.messages} messages mounted.`)
 
     client.on("Tracing.dataCollected", ({ value }) => { for (const event of value ?? []) events.push(event) })
@@ -114,16 +118,19 @@ const main = async () => {
     await wait(1000)
     const key = (type, extra = {}) => client.send("Input.dispatchKeyEvent", { type, key: "Enter", code: "Enter", windowsVirtualKeyCode: 13, modifiers: SHIFT, ...extra })
     for (let line = 1; line <= options.lines; line += 1) {
+      summary.phase = `line-${line}`
       await client.send("Input.insertText", { text: `line ${line} of a multi-line draft` })
       await wait(500)
       await evaluateValue(client, `performance.mark("composer:newline-${line}")`)
       await key("rawKeyDown")
       await key("char", { text: "\r" })
       await key("keyUp")
+      summary.linesTyped = line
       await wait(700)
       // The window ends here, before the next line's text is typed.
       await evaluateValue(client, `performance.mark("composer:settled-${line}")`)
     }
+    summary.phase = "collect-trace"
     const done = client.once("Tracing.tracingComplete", 60_000)
     await client.send("Tracing.end")
     await done
@@ -156,13 +163,7 @@ const main = async () => {
       const reason = `${event.name} ${data.reason ?? ""} ${data.changedAttribute ?? ""}${data.changedPseudo ?? ""} ${data.nodeName ?? ""}`.replace(/\s+/g, " ").trim()
       invalidations.set(reason, (invalidations.get(reason) ?? 0) + 1)
     }
-    const summary = {
-      recordedAt: new Date().toISOString(),
-      label: options.label,
-      url: url.toString(),
-      editorFound: true,
-      page,
-      linesTyped: options.lines,
+    Object.assign(summary, {
       editorLines,
       medianPerLine: {
         recalcs: percentile(perLine.map((entry) => entry.recalcs), 0.5),
@@ -172,8 +173,7 @@ const main = async () => {
       },
       perLine,
       topInvalidations: [...invalidations].sort((left, right) => right[1] - left[1]).slice(0, 25),
-    }
-    await writeFile(join(output, "composer-summary.json"), JSON.stringify(summary, null, 2))
+    })
 
     if (perLine.length !== options.lines) console.warn(`WARNING: ${perLine.length} line marks for ${options.lines} lines; the trace may be incomplete.`)
     if (editorLines < options.lines) console.warn(`WARNING: the editor holds ${editorLines} lines after ${options.lines} Shift+Enter presses; new lines may not have been inserted.`)
@@ -182,12 +182,26 @@ const main = async () => {
     console.log(`median per line: ${summary.medianPerLine.recalcs} recalcs, ${summary.medianPerLine.elements} elements, ${summary.medianPerLine.ms} ms (page has ${page.elements} elements)`)
     console.log("\nTop invalidations:")
     for (const [reason, count] of summary.topInvalidations.slice(0, 10)) console.log(`  ${String(count).padStart(6)}  ${reason}`)
-    console.log(`\nSaved to ${output}`)
-  } finally {
-    await stopChrome(chrome, client)
-    client?.close()
-    await profile.remove()
+    summary.phase = "complete"
   }
+  await recordCaptureAttempt({
+    summary,
+    run,
+    onFailure: async () => {
+      if (client) summary.pageState = await capturePageState(client, url)
+    },
+    cleanup: [
+      () => {
+        if (navigationRecorder) summary.documents = navigationRecorder.read()
+        navigationRecorder?.stop()
+      },
+      () => stopChrome(chrome, client),
+      () => client?.close(),
+      () => profile.remove(),
+    ],
+    persist: result => writeFile(join(output, "composer-summary.json"), JSON.stringify(result, null, 2)),
+  })
+  console.log(`\nSaved to ${output}`)
 }
 
 main().catch((error) => {
