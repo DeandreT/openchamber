@@ -27,6 +27,7 @@ import { spaceProjectPath } from './layout.js';
 import { createSpaceManager } from './manager.js';
 import { createSpaceRecords } from './space-records.js';
 import { createSpaceEventSources } from './space-events.js';
+import { createSpaceFetch } from './space-fetch.js';
 import { createSpaceOpenCode } from './space-opencode.js';
 import { createSpaceSessionIndex, mergeSessionLists } from './space-sessions.js';
 import { createSpaceWebSocketForwarder } from './websocket.js';
@@ -125,7 +126,8 @@ export function readOrCreateOwner(dataDir) {
  * process, injectable for the same reason. `listProjectDirectories` answers the host's registered
  * project paths, so a space's project label can be resolved to the project it was made for;
  * without it every space is marked as of an unknown project. `readIdleStop` and `saveIdleStop`
- * read and keep the user's idle stop setting in the host's settings. `archive` is the chat archive
+ * read and keep the user's idle stop setting in the host's settings, and `readPermissionDefault`
+ * reads the permission mode a new chat starts in from them, `{ mode }`. `archive` is the chat archive
  * of `space-archive.js`, which a delete saves the space's chats to; without it they go with it.
  * `readHostLogin(provider)` reads the host's own browser login for a provider from the host's
  * OpenCode, for a login grant, and `renewHostLogin(provider, exchange)` replaces it with the one
@@ -146,6 +148,7 @@ export function createSpacesHost({
   listProjectDirectories = async () => [],
   readIdleStop,
   saveIdleStop,
+  readPermissionDefault,
   archive = null,
   readHostLogin = getStoredLogin,
   renewHostLogin = renewStoredLogin,
@@ -340,6 +343,7 @@ export function createSpacesHost({
     hostProviders: hostProviders ?? createHostProviders({ readStoredKey: async (providerId) => (await getProviderAuth(providerId))?.key ?? null, hostEnvironment }),
     readIdleStop,
     saveIdleStop,
+    readPermissionDefault,
     announce: (spaceId, payload) => { hub?.injectEvent({ payload, directory: 'global', spaceId }); },
     onSpacesChanged: () => { void refresh().catch(() => {}); },
     logger,
@@ -411,6 +415,8 @@ export function createSpacesHost({
     dispatcher,
     index,
     journey,
+    /** A `fetch` for the host's own reads of one space's sessions, for its notifications. */
+    openCodeFetchFor: createSpaceFetch({ requestInside: dispatcher.requestInside }),
     /** The places a space can be made on, for the funnel. */
     places: () => registry.list(),
     /** What gets Docker going on this computer, and the action that does it, for the local place. */
@@ -429,11 +435,12 @@ export function createSpacesHost({
     upgradeHandler: (...args) => sockets?.upgradeHandler(...args),
     /**
      * Follows the spaces: an event connection for each, into the host's hub, and the host's own ids
-     * from its events; with `broadcastUiEvent`, the host's control stream, also each space's queue changes.
+     * from its events; with `broadcastUiEvent`, the host's control stream, also each space's queue
+     * changes, and with `broadcastGlobalUiEvent`, its notification stream, each space's permission modes.
      */
-    startEvents: (globalEventHub, { broadcastUiEvent = null } = {}) => {
+    startEvents: (globalEventHub, { broadcastUiEvent = null, broadcastGlobalUiEvent = null } = {}) => {
       hub = globalEventHub;
-      events = createSpaceEventSources({ requestInside: dispatcher.requestInside, index, hub: globalEventHub, broadcastUiEvent, logger, now });
+      events = createSpaceEventSources({ requestInside: dispatcher.requestInside, index, hub: globalEventHub, broadcastUiEvent, broadcastGlobalUiEvent, logger, now });
       unsubscribeHostEvents = globalEventHub.subscribeEvent((event) => { if (event.spaceId === null) index.observeHostEvent(event.payload); });
       followTimer = setTimer(() => { void follow(); }, FOLLOW_INTERVAL_MS);
       followTimer?.unref?.();
@@ -448,10 +455,10 @@ export function createSpacesHost({
     /** For the proxy: the merged session list, or the host's own when no space exists. */
     mergeSessionList,
     /** For the body parsers: a request to a space keeps its body for the space. */
-    skipsBodyParsing: (req) => dispatcher.isSpaceRequestPath(req.path),
+    skipsBodyParsing: (req) => dispatcher.isSpaceRequest(req),
     /** For the directory gate: the reason a directory is refused on the host, or null. */
     refuseDirectory: (candidate) => (dispatcher.isSpaceDirectory(candidate)
-      ? 'A directory under /spaces/ belongs to an isolated space and is addressed as /api/spaces/<id>/... only'
+      ? 'A directory under /spaces/ belongs to an isolated space and is named in the query or the directory header of a request to it'
       : null),
     close: () => {
       if (followTimer !== null) clearTimer(followTimer);

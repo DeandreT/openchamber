@@ -5,10 +5,18 @@ navigation, expanded sections and editor state. Its `visible` prop combines
 the panel's open state with the selected tab. Hiding via CSS alone does not
 pause React effects.
 
-A closing panel's content fades out and leaves the accessibility tree
-(`aria-hidden`, `inert`) only when the close animation ends
-(`useOpenUntilSettled`); opening shows it at once. The file editor's view
-counts as hidden from the same moment, and while hidden the docked
+A panel's content fades in and out with the toggle, but turns inert and
+unclickable only when the closing animation ends, and an opening zone leaves
+`inert` only when its animation ends too (`useOpenWhenSettled`): those
+properties are inherited, so flipping them restyles the whole surface, and
+with an accessibility client on adds it to the tree, in the frame the
+animation needed to start. The file editor leaves `inert` at once instead, in
+the commit that puts its DOM back; out of `inert` in place, it cost a 300 ms
+frame (`isZoneExposed`). A surface that focuses itself on being shown waits
+for its zone to turn interactive (`useZoneInteractive`), since focus inside an
+inert card is lost. Closing, the file editor's view counts as hidden from the
+moment the animation ends (`useOpenUntilSettled`); opening shows it at once.
+While hidden the docked
 `CodeMirrorEditor` is `detached`: its DOM is out of the document, its state
 and scroll position kept, and it comes back on show. Hiding the editor in
 place instead (`aria-hidden`, `inert`, `display: none`, `content-visibility`)
@@ -24,7 +32,10 @@ measurement and keyboard navigation on visibility. Hidden refresh hints retain
 only dirty paths scoped to runtime and directory; reopening invalidates those
 paths and requests fresh status. Completed range diffs remain cached while
 pending reservations are cancelled and retried on resume. Hidden tabs never
-consume another tab's pending navigation request.
+consume another tab's pending navigation request. A collapsed file entry is
+passed `visible: false` whatever the view's state, and its callbacks keep their
+identity, so showing or hiding the view re-renders only the expanded entries
+(every entry of a 150-file change re-rendered on each panel open before).
 
 A Changes tab opened without a scope (the context rail, multirun) stores
 `diffScope: null`, and `DiffView` opens it on Branch whenever the Branch scope
@@ -46,8 +57,82 @@ command costs no patch reads, and an edit costs one for the edited file. A
 listing without revisions falls back to the status revision for every file.
 Desktop Changes and mobile Changes share this.
 
+## Nested repositories
+
+A folder inside the project that holds its own `.git` and is not a submodule
+is one `dir/` row in the parent's status; its diff read answers
+`nested_repository`. Its Changes entry then reads that repository's own status
+and lists its changed files, each diff read from that repository when the row
+opens, read-only: no stage, discard or hunk actions. "Open as project" adds the
+folder as a project and opens a new session draft in it, where the Git panel
+commits. The listing reads again when the entry's `contentRevision` moves.
+Mobile Changes still shows only the note for such a row.
+
+## Find in changes
+
+Changes and the walkthrough search their whole changeset from one bar
+(`diffFind/`). Cmd/Ctrl+F opens it through the `find_in_file` registration,
+which declines while the surface is hidden, while another surface's text field
+holds focus, and for a key pressed inside another element marked
+`data-find-surface` (Files carries it too); Files, the Markdown preview and the
+chat composer then keep the key. A Cmd/Ctrl-click on a word opens the bar on
+that word and lands on the next occurrence after the clicked one, told apart by
+side, since a deletion and an addition row can share a line number and offset.
+
+`useDiffFind` owns the query, the matches and the reads; `useDiffFindSurface`
+connects it to the viewers on screen. Each surface hands it a source per file
+whose `load` reads what the viewer shows: the side (staged or unstaged), the
+whitespace mode, a file's full contents once its collapsed context was
+expanded, a pull request file rebuilt from both sides. A nested repository's row
+resolves to that repository's files, read from that repository and keyed by the
+row path plus their own path, the key their viewers register under. Reads run
+one at a time while the bar is open, and the active match is followed by what it
+points at, so a file landing or re-read ahead of it does not move the view. A read that fails is counted in the bar
+and read again the next time the bar opens, so one unreadable file never turns
+into a silent zero. A file Git no longer has, or a folder it keeps as one row,
+has nothing to search.
+
+Matches are painted as `<mark>` elements in the viewer's shadow root, tinted
+from `--status-warning`. The library replaces rows when it renders, so the marks
+are re-applied from `onPostRender` and from the shadow-root observer, and the
+surgery drains its own mutation records so it never schedules itself. A jump
+moves the line into view only once its row is rendered: a virtualized diff is
+first moved to the line's estimated position, then the rendered row is centered.
+The jump keeps trying for a few seconds and starts over when the viewer for the
+match mounts, so a file that is still loading, or behind the large-diff gate the
+jump lifts, is still reached. In the walkthrough a mounted run is reached by the
+line scroll alone: the step jump pins the step's header to the top and holds it
+there while the stream settles, away from a match deep in a long step. Marks
+wrap each text node of a match inside its own syntax token, so clearing them
+gives a row back its exact structure.
+
+### Why the search reads files itself and not the viewers' data
+
+Most files of a changeset are collapsed and have never been read, so their
+matches have to come from somewhere other than a mounted viewer. Each source's
+`revision` names what its data depends on, so the bar re-reads a file exactly
+when the viewer would show something different.
+
 `WalkthroughView` gates discovery and source loading while retaining generated
 results and any explicitly started generation job.
+
+One walkthrough of one target (reading and generating it, its model and
+language, what blocks it, where the reader is) lives in
+`walkthrough/useWalkthroughReview.ts`. `WalkthroughView` picks the target in
+the context panel; the phone's Changes picks it from its own mode and source
+and pushes `MobileWalkthroughScreen` (`apps/`) over its list. Both lay the same
+review out with the controls in `walkthrough/WalkthroughControls.tsx`, so a
+walkthrough behaves the same on every surface. The panel header never wraps:
+`useToolbarFit` collapses it in steps (labels, then the options into "More",
+then the step arrows and Generate, then the scope label), with the CSS in
+`index.css`.
+
+The Git panel header (`git/GitHeader.tsx`) collapses the same way. The
+repository picker truncates down to its icon and chevron first, then the
+branch picker; their names sit in a grid track with no minimum, so neither
+picker shrinks past its icons. Only while the pickers still overflow their slot
+does the sync button drop its word, and at the narrowest widths its counts;
+its tooltip names both. The panel keeps its 320 px minimum.
 
 ## Large text files
 
@@ -60,6 +145,10 @@ snapshot and draft, and restores the detected line ending on save. Preview
 limits must never truncate a writable draft or its dirty-comparison baseline.
 Large code previews render the current draft and hash its full content only
 while previewing, so same-length edits in the middle invalidate cached output.
+
+Markdown plan previews use the file preview's local-asset handling. Relative
+images resolve from the plan file's directory, including personal plans stored
+under the OpenChamber data directory and repository plans in a custom folder.
 
 ## JSON tree previews
 
@@ -110,6 +199,14 @@ PR mode with the shared selection. Picking a PR never generates a walkthrough.
 
 Web, Electron, hosted mobile and Capacitor use the server route. VS Code keeps
 PR comparison unavailable, like the other server-backed comparison modes.
+
+A PR of another project, opened from the Tracker or the board, keeps that
+project's folder on its Changes or walkthrough tab (`directory` on both views).
+The views then key everything by that folder: the binding the PR is read
+through, the selection and the hand-off between them. Changes shows only that
+PR there, without the scope switch, the last turn, review or opening files,
+which belong to the session on screen. The rail's own Changes and walkthrough
+return to the panel's project (`lib/surfaces/DOCUMENTATION.md`, Tracker).
 
 Mobile Changes uses the same expansion for branch, commit and PR files: the
 patch opens with 3 lines of context, and expanding reads that file in full once

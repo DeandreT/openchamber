@@ -224,18 +224,16 @@ export function createSpaceSessionIndex({ logger = console } = {}) {
       return true;
     },
     /**
-     * Whether a space may speak for the queue of one session: the session lies under the space's
-     * root and is neither the host's nor one another space holds. Claims nothing.
+     * Why a space may not speak for one session in its own state, its queue or its permission
+     * mode: the session is the host's or one another space holds, or a directory given lies
+     * outside the space's root. Null when it may. Claims nothing.
      */
-    acceptSpaceQueueSession(spaceId, sessionId, directory) {
-      let code = null;
-      if (!directorySchema.safeParse(directory).success || !isDirectoryOfSpace(directory, spaceId)) code = SPACE_DROP_CODES.eventOutsideRoot;
-      else if (!idSchema.safeParse(sessionId).success) code = SPACE_DROP_CODES.malformed;
-      else if (isHostSessionId(sessionId)) code = SPACE_DROP_CODES.eventHostSession;
-      else if ((claimedBy(sessionId) ?? spaceId) !== spaceId) code = SPACE_DROP_CODES.claimed;
-      if (code === null) return true;
-      logger.warn?.(`[spaces] dropped a queue update of space ${spaceId}: ${code}`);
-      return false;
+    spaceSessionDropCode(spaceId, sessionId, directory = null) {
+      if (directory !== null && (!directorySchema.safeParse(directory).success || !isDirectoryOfSpace(directory, spaceId))) return SPACE_DROP_CODES.eventOutsideRoot;
+      if (!idSchema.safeParse(sessionId).success) return SPACE_DROP_CODES.malformed;
+      if (isHostSessionId(sessionId)) return SPACE_DROP_CODES.eventHostSession;
+      if ((claimedBy(sessionId) ?? spaceId) !== spaceId) return SPACE_DROP_CODES.claimed;
+      return null;
     },
     /** Every space's last accepted list with its state, for the merge. */
     snapshot() {

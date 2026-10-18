@@ -79,6 +79,7 @@ import { useChatColumnActions } from '@/components/chat/chatColumnSession';
 import { useStreamingTextThrottle } from '../../hooks/useStreamingTextThrottle';
 import { getStreamingOutputAppend, getToolOutput } from './toolOutput';
 import { toAbsoluteFilePath } from '@/lib/path-utils';
+import { hasTextSelectionInside } from '@/lib/textSelection';
 import {
     executeOutputTruncation,
     executeScript,
@@ -128,16 +129,19 @@ interface ToolPartProps {
     animateTailText?: boolean;
 }
 
+// A finished run shows tenths; a running one counts whole seconds on the
+// shared 1 s tick, so a live row redraws once a second, in step with the
+// session list's counter.
 const formatDuration = (start: number, end?: number, now: number = Date.now()) => {
-    const duration = Math.max(0, (end ?? now) - start);
-    const seconds = duration / 1000;
-
-    const displaySeconds = seconds < 0.05 && end !== undefined ? 0.1 : seconds;
-    return `${displaySeconds.toFixed(1)}s`;
+    if (end === undefined) {
+        return `${Math.floor(Math.max(0, now - start) / 1000)}s`;
+    }
+    const seconds = Math.max(0, end - start) / 1000;
+    return `${Math.max(0.1, seconds).toFixed(1)}s`;
 };
 
 const LiveDuration: React.FC<{ start: number; end?: number; active: boolean }> = ({ start, end, active }) => {
-    const now = useDurationTickerNow(active, 250);
+    const now = useDurationTickerNow(active);
 
     return <>{formatDuration(start, end, now)}</>;
 };
@@ -1756,6 +1760,9 @@ const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subage
         }
 
         event.stopPropagation();
+        if (hasTextSelectionInside(event.currentTarget)) {
+            return;
+        }
         const rawPath = getApplyPatchFilePath(file);
         const displayPath = rawPath ? getRelativePath(rawPath, currentDirectory) : '';
         openApplyPatchFileInEditor({
@@ -1804,6 +1811,12 @@ const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subage
         } else {
             onToggle(part.id);
         }
+    };
+
+    const handleMainRowClick = (event: React.MouseEvent<HTMLDivElement>) => {
+        // Selecting the tool title must not open the file or toggle the row.
+        if (hasTextSelectionInside(event.currentTarget)) return;
+        handleMainClick(event);
     };
 
     const handleMainKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
@@ -1885,7 +1898,7 @@ const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subage
                     'group/tool flex gap-1.5 pe-2 ps-px py-1.5 rounded-xl',
                     isMultiFileApplyPatch ? 'flex-wrap items-start cursor-pointer' : 'items-center cursor-pointer',
                 )}
-                onClick={isMultiFileApplyPatch ? () => onToggle(part.id) : handleMainClick}
+                onClick={isMultiFileApplyPatch ? () => onToggle(part.id) : handleMainRowClick}
                 onKeyDown={isMultiFileApplyPatch ? (event) => {
                     if (event.target !== event.currentTarget) return;
                     if (event.key !== 'Enter' && event.key !== ' ') return;

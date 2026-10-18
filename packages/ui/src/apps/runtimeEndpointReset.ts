@@ -1,7 +1,7 @@
 import { useSpacesStore } from '@/lib/spaces/spaces-store';
 import { useSpaceArchivesStore } from '@/lib/spaces/space-archives';
 import { resetSpaceModelAccess } from '@/lib/spaces/space-model-access';
-import { resetSpaceCreationRequests } from '@/lib/spaces/space-creation';
+import { resetSpaceCreationRequests } from '@/lib/spaces/space-creation-requests';
 import { useGuestsStore } from '@/lib/guests/store';
 import { useGuestOauthStore } from '@/lib/guests/oauth-store';
 import { opencodeClient } from '@/lib/opencode/client';

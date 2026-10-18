@@ -23,7 +23,7 @@ import { useChildStoreManager } from '@/sync/sync-context';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import type { ProjectSortOrder, WorktreeSortOrder } from '@/stores/useSessionDisplayStore';
 import { streamPerfCount } from '@/stores/utils/streamDebug';
-import { Icon } from '@/components/icon/Icon';
+import { Spinner } from '@/components/ui/spinner';
 import { SessionSidebarFolderItem } from '../folders/SessionSidebarFolderItem';
 import { SessionTreeItem } from '../sessions/SessionTreeItem';
 import { RunSidebarRow } from '../sessions/RunSidebarRow';
@@ -49,6 +49,7 @@ import { isSessionPinned } from '@/lib/sessionPins';
 import { isSessionBusyNow } from '@/sync/session-actions';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { isSessionInWork } from '@/lib/sessionWorkMetadata';
+import { useOpenProjectOnBoard } from '@/components/sourceBoard/openTrackerItem';
 
 type SessionProjectScrollerState = Pick<SessionGroupSectionProps,
   | 'editingId'
@@ -137,6 +138,7 @@ function SessionProjectScrollerComponent({ model, view, actions }: Props): React
   const showDeletionDialog = useUIStore((state) => state.showDeletionDialog);
   // A project's isolated spaces page: while the feature's switch is on, and never in VS Code (decision 16).
   const spacesPageAvailable = useUIStore((state) => state.isolatedSpacesEnabled) && !isVSCodeRuntime();
+  const openProjectOnBoard = useOpenProjectOnBoard();
   const [folderDeleteConfirm, setFolderDeleteConfirm] = React.useState<DeleteFolderConfirmState>(null);
   const [stickyIdentity, setStickyIdentity] = React.useState<string | null>(null);
   const [focusedRowKey, setFocusedRowKey] = React.useState<string | null>(null);
@@ -271,7 +273,7 @@ function SessionProjectScrollerComponent({ model, view, actions }: Props): React
     }
     return <div className="relative py-1 text-start typography-micro text-muted-foreground" style={{ paddingInlineStart: row.flat ? FLAT_TEXT_INSET_PX : sessionTreeTextInset(row.depth ?? 0) }}>
       <span className="inline-flex flex-wrap items-center gap-1.5">
-        {row.status.state === 'loading' ? <Icon name="loader-4" className="size-3 animate-spin" /> : null}
+        {row.status.state === 'loading' ? <Spinner className="size-3" /> : null}
         {label}
         {row.status.canGrantAccess ? <Button variant="link" size="xs" className="h-auto p-0 typography-micro" onClick={() => void grant()}>{t('sessions.sidebar.group.empty.grantAccess')}</Button> : null}
         {row.status.state !== 'loading' ? <Button variant="link" size="xs" className="h-auto p-0 typography-micro" onClick={retry}>{t('sessions.sidebar.group.empty.retry')}</Button> : null}
@@ -357,6 +359,7 @@ function SessionProjectScrollerComponent({ model, view, actions }: Props): React
         }}
         onManageWorktrees={() => actions.openWorktreesPage(project.id)}
         onManageSpaces={spacesPageAvailable ? () => useUIStore.getState().setSpacesPageProjectId(project.id) : undefined}
+        onOpenSourceBoard={openProjectOnBoard ? () => openProjectOnBoard(project.id) : undefined}
         onOpenFolder={project.normalizedPath && files.revealPath ? () => openProjectFolder(project.normalizedPath) : undefined}
         onRenameStart={() => actions.openProjectEditDialog(project.id)}
         onArchiveAll={() => void requestArchiveAll(label, row.section.groups)}
@@ -469,7 +472,7 @@ function SessionProjectScrollerComponent({ model, view, actions }: Props): React
     return <div className="py-1 text-start typography-micro text-muted-foreground" style={{ paddingInlineStart: rowTextInset }}>
       {t('sessions.sidebar.group.empty.noArchivedSessions')}
     </div>;
-  }, [actions, deleteFolder, files, model, openProjectFolder, projectPickerOptions, renameFolder, renderStatus, requestArchiveAll, showDeletionDialog, spacesPageAvailable, t, toggleFolderCollapse, view]);
+  }, [actions, deleteFolder, files, model, openProjectFolder, openProjectOnBoard, projectPickerOptions, renameFolder, renderStatus, requestArchiveAll, showDeletionDialog, spacesPageAvailable, t, toggleFolderCollapse, view]);
 
   const structuralIds = React.useMemo(() => model.rowModel.rows.flatMap((row) => {
     if (row.kind === 'project-header') return activeDrag?.kind === 'group' ? [] : [row.section.project.id];

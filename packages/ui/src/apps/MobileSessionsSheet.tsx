@@ -66,11 +66,13 @@ import {
   listProjectWorktrees,
   partitionWorktreesByRegisteredProject,
 } from '@/lib/worktrees/worktreeManager';
+import { findWorktreeHoldingDirectory } from '@/lib/worktrees/worktreePaths';
 import { useWorktreeRemoving } from '@/lib/worktrees/worktreeRemovalState';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useGitAllBranches, useGitStore } from '@/stores/useGitStore';
 import { runBackgroundNetworkTask } from '@/lib/background-network';
 import { refreshGlobalSessions, useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
+import { seedGlobalSessionStatusFromHost } from '@/sync/host-session-status-seed';
 import { useMobileSessionExpansionStore } from '@/stores/useMobileSessionExpansionStore';
 import { useMobileSessionTreeStore } from '@/stores/useMobileSessionTreeStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
@@ -244,8 +246,8 @@ const pathBelongsToRoot = (path: string, root: string): boolean => {
   );
 };
 
-const findExactWorktreeMatch = (project: ProjectMeta, normalizedDirectory: string): WorktreeMetadata | null => (
-  project.worktrees.find((worktree) => normalizePath(worktree.path) === normalizedDirectory) ?? null
+const findProjectWorktreeMatch = (project: ProjectMeta, normalizedDirectory: string): WorktreeMetadata | null => (
+  findWorktreeHoldingDirectory(project.worktrees, normalizedDirectory) ?? null
 );
 
 const sessionMatchesQuery = (session: Session, projectLabel: string, query: string): boolean =>
@@ -913,7 +915,12 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       setConfirmingRemoveProjectId(null);
       return;
     }
-    void refreshGlobalSessions(liveSessions);
+    // The mobile shell has no global poller, so this load is also where the
+    // host seed runs, as the poller runs it after each load elsewhere: a
+    // question or permission already waiting at startup is otherwise missing
+    // from the cross-directory index the rows read. The seed resolves
+    // directories from the list just loaded, so it runs after it.
+    void refreshGlobalSessions(liveSessions).then(() => seedGlobalSessionStatusFromHost());
     // intentionally only on open transition — session events keep the list current after that
     // oxlint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -1216,7 +1223,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       if (!owner) continue;
       const node = nodes.find((entry) => entry.project.id === owner.projectId);
       if (!node) continue;
-      const matchedWorktree = findExactWorktreeMatch(node.project, owner.scopeDirectory);
+      const matchedWorktree = findProjectWorktreeMatch(node.project, owner.scopeDirectory);
       // An isolated space is a bucket of its own, named after the space.
       const space = owner.kind === 'space' && owner.spaceId ? spaces.get(owner.spaceId) ?? null : null;
       const bucket = space
@@ -1436,7 +1443,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       // session picked from search is actually visible — and the open-time
       // auto-scroll can land on it — the next time the drawer opens.
       setProjectExpanded(project.id, true);
-      const worktree = findExactWorktreeMatch(project, owner?.scopeDirectory ?? '');
+      const worktree = findProjectWorktreeMatch(project, owner?.scopeDirectory ?? '');
       if (worktree) setWorktreeExpanded(`${project.id}::${normalizePath(worktree.path)}`, true);
     }
     void setCurrentSession(session.id, directory);
@@ -1610,7 +1617,7 @@ export const MobileSessionsSheet: React.FC<MobileSessionsSheetProps> = ({ open, 
       if (!project) return getProjectLabel(directory) || directory;
       const space = owner?.kind === 'space' && owner.spaceId ? spaces.get(owner.spaceId) : undefined;
       if (space) return `${project.label} · ${space.name || t('sessions.sidebar.grouping.spaceUnnamed')}`;
-      const matchedWorktree = findExactWorktreeMatch(project, owner?.scopeDirectory ?? '');
+      const matchedWorktree = findProjectWorktreeMatch(project, owner?.scopeDirectory ?? '');
       if (matchedWorktree?.branch) return `${project.label} · ${matchedWorktree.branch}`;
       return project.label;
     },

@@ -9,6 +9,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Icon } from "@/components/icon/Icon";
+import { Spinner } from "@/components/ui/spinner";
 import type { GitRemote } from '@/lib/gitApi';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
@@ -77,8 +78,8 @@ export const SyncActions: React.FC<SyncActionsProps> = ({
   // "Publish" on a fresh contributor PR reads as unpublished work; this one
   // only ever pushes to a destination picked in the dialog.
   const publishLabel = t(choosesPushDestination ? 'gitView.publish.pushTo' : 'gitView.publish.title');
-  const primaryLabel = [
-    publish ? publishLabel : t('gitView.sync.sync'),
+  const primaryWord = publish ? publishLabel : t('gitView.sync.sync');
+  const primaryCounts = [
     behindCount > 0 ? `↓${behindCount}` : null,
     aheadCount > 0 ? `↑${aheadCount}` : null,
   ].filter(Boolean).join(' ');
@@ -117,11 +118,21 @@ export const SyncActions: React.FC<SyncActionsProps> = ({
               aria-label={publish ? publishLabel : t('gitView.sync.syncChanges')}
             >
               {syncAction === 'sync' || syncAction === 'publish' ? (
-                <Icon name="loader-4" className="size-4 animate-spin" />
+                <Spinner className="size-4" />
               ) : (
                 <Icon name="refresh" className="size-4" />
               )}
-              <span className="whitespace-nowrap tabular-nums">{primaryLabel}</span>
+              {/* A narrow Git panel header hides the word
+                  (`sync-actions__label`, index.css), then, only if that is
+                  not enough, the counts too (`sync-actions__text`); the
+                  tooltip names the action and the counts. */}
+              {primaryCounts ? (
+                <span className="sync-actions__text whitespace-nowrap tabular-nums">
+                  <span className="sync-actions__label">{primaryWord}</span> {primaryCounts}
+                </span>
+              ) : (
+                <span className="sync-actions__text sync-actions__label whitespace-nowrap">{primaryWord}</span>
+              )}
             </button>
           </span>
         </TooltipTrigger>
@@ -205,7 +216,7 @@ export const SyncActions: React.FC<SyncActionsProps> = ({
                     title={t('gitView.header.removeRemoteTitle', { name: remote.name })}
                   >
                     {removingRemoteName === remote.name ? (
-                      <Icon name="loader-4" className="size-3.5 animate-spin" />
+                      <Spinner className="size-3.5" />
                     ) : (
                       <Icon name="close" className="size-3.5" />
                     )}

@@ -61,7 +61,7 @@ export const WorkStatusUsageSection: React.FC = () => {
   // so this is safe to run on every connection change.
   React.useEffect(() => {
     if (!isInitialized) return;
-    void runBackgroundNetworkTask(() => ensureQuotasLoadedForRuntime());
+    void runBackgroundNetworkTask(() => ensureQuotasLoadedForRuntime(), 'active-session');
   }, [ensureQuotasLoadedForRuntime, isInitialized]);
 
   React.useEffect(() => {

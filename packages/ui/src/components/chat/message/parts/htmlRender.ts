@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import type { ChatQuoteAnchor } from '@/lib/chatQuoteAnchor';
 import type { JsonValue } from '@/lib/opencode/model';
 import { getReadableThemeColors } from '@/lib/theme/readableColors';
 import type { Theme } from '@/types/theme';
@@ -37,6 +38,20 @@ const SIZE_MESSAGE = `${MESSAGE_PREFIX}size`;
 const OPEN_LINK_MESSAGE = `${MESSAGE_PREFIX}open-link`;
 const KEY_MESSAGE = `${MESSAGE_PREFIX}key`;
 const ANSWER_STATE_MESSAGE = `${MESSAGE_PREFIX}answer-state`;
+const SELECTION_MESSAGE = `${MESSAGE_PREFIX}selection`;
+// Escape pressed in the page while it has a reported selection: the host
+// closes the selection menu, as Escape does for a selection in the chat.
+const SELECTION_ESCAPE_MESSAGE = `${MESSAGE_PREFIX}selection-escape`;
+const MARK_CLICK_MESSAGE = `${MESSAGE_PREFIX}mark-click`;
+// From the host: drop the page's own selection, paint these quote marks, and
+// scroll to and flash one quote.
+const CLEAR_SELECTION_MESSAGE = `${MESSAGE_PREFIX}clear-selection`;
+const MARKS_MESSAGE = `${MESSAGE_PREFIX}marks`;
+const REVEAL_MESSAGE = `${MESSAGE_PREFIX}reveal`;
+// The longest selection a page reports; the bootstrap cuts at this length.
+const HTML_RENDER_SELECTION_MAX_LENGTH = 20_000;
+// How long a revealed quote flashes; the same as the chat's own flash.
+const HTML_RENDER_FLASH_DURATION_MS = 1600;
 
 export interface HtmlRenderTheme {
     appearance: 'light' | 'dark';
@@ -119,6 +134,9 @@ export function htmlRenderTheme(theme: Theme, metrics: HtmlRenderMetrics): HtmlR
             '--radius': `${metrics.rem * 0.5625}px`,
             '--font-sans': metrics.sans,
             '--font-mono': metrics.mono,
+            // Not listed for agents: the fill of a quote mark the chat paints
+            // in the page (see BASE_CSS), the same as the chat's own marks.
+            '--oc-quote-mark': interactive.selection,
         },
     };
 }
@@ -154,6 +172,7 @@ const OPTION_CSS = '.oc-options{display:grid;gap:12px;grid-template-columns:repe
 // vertical one would also stop a vertical swipe from reaching the chat.
 const BASE_CSS = 'html{background:transparent;color:var(--foreground);font-family:var(--font-sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%;scrollbar-width:none;overflow-x:auto;overscroll-behavior-x:none}'
     + 'html::-webkit-scrollbar{display:none}body{margin:0}a{color:var(--primary)}code,kbd,pre,samp{font-family:var(--font-mono)}img,svg,video,canvas{max-width:100%}'
+    + '::highlight(oc-chat-quote),::highlight(oc-chat-quote-focus),::highlight(oc-chat-quote-flash){background-color:var(--oc-quote-mark,rgba(127,127,127,.35))}'
     + OPTION_CSS;
 
 const CSS_VARIABLE_NAME = /^--[a-z0-9-]+$/;
@@ -171,7 +190,18 @@ function themeCss(theme: HtmlRenderTheme): string {
 // own <style> element rather than setting inline properties, so the page's
 // own :root rules still win. The height it reports is the document's content
 // height: the root's box when the page is shorter than the frame, its scroll
-// height when the page is taller.
+// height when the page is taller. Either way it reaches down to where the
+// body's content ends, overflow included (unless the body clips it), and to
+// the lowest absolutely positioned element that is not inside a box that
+// scrolls or clips (from the set the tooltip check below keeps; a fixed one
+// sits in the frame's own viewport and adds no height). The root's scroll
+// height counts content past the root's box only while the frame is shorter
+// than where it ends, so a tooltip parked below the page's last block, or a
+// block taller than the box it sits in, made the frame grow to it, then
+// shrink back to the root's box, on every frame for as long as the page was
+// shown. The body's own scroll height does not depend on the frame's. It is
+// measured before the page's own `zoom`, so it is scaled by the body's drawn
+// height over its layout height to match the box it is added to.
 //
 // A page that fits its frame cannot scroll at all. A document that can scroll
 // keeps a touch that starts on it: on a phone, a swipe over a page that fit
@@ -185,6 +215,31 @@ function themeCss(theme: HtmlRenderTheme): string {
 // is added while the key dispatches, so it runs after every listener the page
 // has and sees whether one of them took the key.
 //
+// The app cannot read a selection inside the frame, so the bootstrap reports
+// it: the selected text and its box in the frame's viewport once it settles (on
+// mouse up, or after a pause for keyboard and touch selections; not while the
+// mouse is down), and an empty text when the selection is gone. The host shows
+// the chat's selection menu from it. The report also carries the selection as
+// a quote anchor (text, 32 characters either side, start offset) measured in
+// the text stream of the page's own body, the same algorithm as
+// lib/chatQuoteAnchor.ts, so the quote can be found again. When the app takes
+// the selection over, the host posts a clear message: the page drops its
+// selection and, having reset its last report first, does not echo that back.
+// Escape the page left alone is passed on only while a reported selection
+// stands, so the host closes the menu as Escape does in the chat; with no
+// selection, Escape stays the page's own.
+//
+// Quotes the user commented on are painted back into the page. The host posts
+// the marks (id, anchor, whether drawn stronger) whenever they change and when
+// the frame loads; the page re-finds each by its text, as the chat does for
+// its own messages, and paints them with the CSS Custom Highlight API (colored
+// by --oc-quote-mark; see BASE_CSS). It repaints when the DOM changes. A click
+// reports the mark under it with its box, or an empty id for a click on no
+// mark, so the host can open or close the mark's popover. A reveal message
+// scrolls one anchor into view and flashes it. In the chat the frame is as
+// tall as the page; the browser carries that scroll on to the chat around the
+// frame, so the quote comes into view there too.
+//
 // A tooltip or popup the page positions itself can stick out past the frame,
 // where the frame cuts it off (on a phone the column is about 360px). Every
 // absolutely or fixed positioned element that is partly inside and partly out
@@ -197,12 +252,41 @@ function themeCss(theme: HtmlRenderTheme): string {
 const BOOTSTRAP_SCRIPT = `(function(){var s=document.getElementById("oc-html-render-theme");if(!s||window.parent===window)return;var B=${JSON.stringify(BASE_CSS)};`
     + `window.addEventListener("message",function(e){var d=e.data;if(e.source!==window.parent||!d||d.type!==${JSON.stringify(THEME_MESSAGE)}||!d.variables||typeof d.variables!=="object")return;var c=":root{color-scheme:"+(d.appearance==="light"?"light":"dark")+";";for(var k in d.variables){if(/^--[a-z0-9-]+$/.test(k))c+=k+":"+String(d.variables[k]).replace(/[;{}<>]/g,"")+";";}s.textContent=c+"}"+B;});`
     + `document.addEventListener("click",function(e){var t=e.target,a=t&&t.closest?t.closest("a[href]"):null,u;if(!a)return;try{u=new URL(a.getAttribute("href"),document.baseURI);}catch(x){return;}if(!/^https?:$/.test(u.protocol))return;e.preventDefault();window.parent.postMessage({type:${JSON.stringify(OPEN_LINK_MESSAGE)},url:u.href},"*");},true);`
-    + `var h,z=function(){var r=document.documentElement,v=Math.ceil(r.scrollHeight>r.clientHeight?r.scrollHeight:r.getBoundingClientRect().height);r.style.overflowY=v>window.innerHeight+1?"auto":"hidden";if(v===h)return;h=v;window.parent.postMessage({type:${JSON.stringify(SIZE_MESSAGE)},height:v},"*");};window.addEventListener("resize",z);`
+    + `var h,z=function(){var r=document.documentElement,d=document.body,v=r.scrollHeight>r.clientHeight?r.scrollHeight:r.getBoundingClientRect().height,i,b;`
+    + `if(d&&!/^(?:hidden|clip|scroll|auto)$/.test(getComputedStyle(d).overflowY)){b=d.getBoundingClientRect();b=b.top+window.scrollY+(d.clientTop+d.scrollHeight)*(d.offsetHeight?b.height/d.offsetHeight:1);if(b>v)v=b;}if(N){N=0;W();}`
+    + `for(i=0;i<P.length;i++){b=P[i].getBoundingClientRect();if(getComputedStyle(P[i]).position==="absolute"&&(b.width||b.height)&&b.bottom+window.scrollY>v)v=b.bottom+window.scrollY;}v=Math.ceil(v);r.style.overflowY=v>window.innerHeight+1?"auto":"hidden";if(v===h)return;h=v;window.parent.postMessage({type:${JSON.stringify(SIZE_MESSAGE)},height:v},"*");};window.addEventListener("resize",z);`
     + `if(window.ResizeObserver){var o=new ResizeObserver(z);o.observe(document.documentElement);document.addEventListener("DOMContentLoaded",function(){if(document.body)o.observe(document.body);});}`
     + `document.addEventListener("DOMContentLoaded",z);window.addEventListener("load",z);`
     + `window.addEventListener("keydown",function(e){var t=e.composedPath()[0],f;if(!e.isTrusted||e.isComposing||!(e.metaKey||e.ctrlKey)||/^[acvxyz]$/i.test(e.key)&&!e.altKey||t&&(t.isContentEditable||/^(?:INPUT|TEXTAREA|SELECT)$/.test(t.tagName)))return;`
     + `f=function(v){window.removeEventListener("keydown",f);if(v!==e||e.defaultPrevented)return;window.parent.postMessage({type:${JSON.stringify(KEY_MESSAGE)},key:e.key,code:e.code,metaKey:e.metaKey,ctrlKey:e.ctrlKey,shiftKey:e.shiftKey,altKey:e.altKey,repeat:e.repeat},"*");};`
     + `window.addEventListener("keydown",f);setTimeout(function(){window.removeEventListener("keydown",f);});},true);`
+    + `var SL="",ST=0,SD=0,SF=function(f){clearTimeout(ST);ST=0;var s=window.getSelection(),t=s?s.toString().trim().slice(0,${HTML_RENDER_SELECTION_MAX_LENGTH}):"",r={top:0,left:0,width:0,height:0},b,a=null;`
+    + `if(t&&s.rangeCount){b=s.getRangeAt(0).getBoundingClientRect();r={top:b.top,left:b.left,width:b.width,height:b.height};a=AK(s.getRangeAt(0));}else t="";`
+    + `if(t===SL&&!(f&&t))return;SL=t;window.parent.postMessage({type:${JSON.stringify(SELECTION_MESSAGE)},text:t,rect:r,anchor:a},"*");};`
+    + `document.addEventListener("selectionchange",function(){if(SD)return;clearTimeout(ST);ST=setTimeout(SF,200);});`
+    + `document.addEventListener("mousedown",function(){SD=1;},true);document.addEventListener("mouseup",function(){SD=0;clearTimeout(ST);ST=setTimeout(function(){SF(1);},10);},true);`
+    + `window.addEventListener("keydown",function(e){var f;if(e.key!=="Escape"||!SL||!e.isTrusted||e.isComposing)return;f=function(v){window.removeEventListener("keydown",f);if(v!==e||e.defaultPrevented)return;window.parent.postMessage({type:${JSON.stringify(SELECTION_ESCAPE_MESSAGE)}},"*");};`
+    + `window.addEventListener("keydown",f);setTimeout(function(){window.removeEventListener("keydown",f);});},true);`
+    + `var AM=[],AR=[],AF=0,AY=0,AT=function(){return document.body?document.body.textContent||"":"";},`
+    + `AO=function(n,o){var r=document.createRange();r.setStart(document.body,0);r.setEnd(n,o);return r.toString().length;},`
+    + `AK=function(g){var b=document.body,t,x,a,e;if(!b||!b.contains(g.startContainer)||!b.contains(g.endContainer))return null;t=AT();a=AO(g.startContainer,g.startOffset);e=AO(g.endContainer,g.endOffset);x=t.slice(a,e);`
+    + `if(!x.trim()||x.length>${HTML_RENDER_SELECTION_MAX_LENGTH})return null;return{text:x,prefix:t.slice(Math.max(0,a-32),a),suffix:t.slice(e,e+32),start:a};},`
+    + `AL=function(t,a){var o=[],i=a.text?t.indexOf(a.text):-1,c;for(;i!==-1&&o.length<200;i=t.indexOf(a.text,i+1))o.push(i);if(o.length<2)return o.length?o[0]:-1;if(!a.prefix&&!a.suffix)return -1;`
+    + `c=o.filter(function(i){return i>=a.prefix.length&&t.startsWith(a.prefix,i-a.prefix.length)&&t.startsWith(a.suffix,i+a.text.length);});return c.length?c.reduce(function(m,i){return Math.abs(i-a.start)<Math.abs(m-a.start)?i:m;}):-1;},`
+    + `AQ=function(a){var s=AL(AT(),a),e=s+a.text.length,g=document.createRange(),w,n,o=0,k=0,l;if(s<0)return null;w=document.createTreeWalker(document.body,4);`
+    + `while(n=w.nextNode()){l=n.data.length;if(!k&&s<o+l){g.setStart(n,s-o);k=1;}if(k&&e<=o+l){g.setEnd(n,e-o);return g;}o+=l;}return null;},`
+    + `AV=function(m){var a=m&&m.anchor;return!!a&&typeof m.id==="string"&&typeof a.text==="string"&&typeof a.prefix==="string"&&typeof a.suffix==="string"&&typeof a.start==="number";},`
+    + `AH=function(n,r){if(!window.Highlight||!window.CSS||!CSS.highlights)return;if(r.length)CSS.highlights.set(n,new Highlight(...r));else CSS.highlights.delete(n);},`
+    + `AP=function(){var m=[],f=[],i,r;AR=[];for(i=0;i<AM.length;i++){r=AQ(AM[i].anchor);if(!r)continue;AR.push({id:AM[i].id,range:r});m.push(r);if(AM[i].focused)f.push(r);}AH("oc-chat-quote",m);AH("oc-chat-quote-focus",f);};`
+    + `window.addEventListener("message",function(e){var d=e.data,g;if(e.source!==window.parent||!d)return;`
+    + `if(d.type===${JSON.stringify(CLEAR_SELECTION_MESSAGE)}){SL="";clearTimeout(ST);g=window.getSelection();if(g)g.removeAllRanges();}`
+    + `else if(d.type===${JSON.stringify(MARKS_MESSAGE)}&&Array.isArray(d.marks)){AM=d.marks.filter(AV);AP();}`
+    + `else if(d.type===${JSON.stringify(REVEAL_MESSAGE)}&&AV({id:"",anchor:d.anchor})){g=AQ(d.anchor);if(!g)return;(g.startContainer.parentElement||document.body).scrollIntoView({block:"center",inline:"nearest"});`
+    + `AH("oc-chat-quote-flash",[g]);clearTimeout(AF);AF=setTimeout(function(){AH("oc-chat-quote-flash",[]);},${HTML_RENDER_FLASH_DURATION_MS});}});`
+    + `new MutationObserver(function(){if(AM.length){clearTimeout(AY);AY=setTimeout(AP,100);}}).observe(document.documentElement,{subtree:true,childList:true,characterData:true});`
+    + `document.addEventListener("click",function(e){var g=window.getSelection(),x=e.clientX,y=e.clientY,i,j,c,b=null,k="";if(!AR.length||g&&!g.isCollapsed)return;`
+    + `for(i=0;i<AR.length&&!b;i++){c=AR[i].range.getClientRects();for(j=0;j<c.length;j++){if(x>=c[j].left&&x<=c[j].right&&y>=c[j].top&&y<=c[j].bottom){k=AR[i].id;b=AR[i].range.getBoundingClientRect();break;}}}`
+    + `window.parent.postMessage({type:${JSON.stringify(MARK_CLICK_MESSAGE)},id:k,rect:b?{top:b.top,left:b.left,width:b.width,height:b.height}:{top:y,left:x,width:0,height:0}},"*");});`
     + `var P=[],Q=0,N=1,C=function(e){for(var a=e.parentElement;a&&a!==document.body;a=a.parentElement){var o=getComputedStyle(a);if(o.overflowX!=="visible"||o.overflowY!=="visible")return 1;}return 0;},`
     + `W=function(){P=[];var a=document.body?document.body.getElementsByTagName("*"):[];for(var i=0;i<a.length&&i<5000;i++){var p=getComputedStyle(a[i]).position;if((p==="absolute"||p==="fixed")&&!C(a[i]))P.push(a[i]);}},`
     + `F=function(){Q=0;if(N){N=0;W();}var w=document.documentElement.clientWidth;for(var i=0;i<P.length;i++){var e=P[i],x=e.__ocx||0,y=e.__ocy||0,r=e.getBoundingClientRect(),l=r.left-x,g=r.right-x,t=r.top-y,b=r.bottom-y,nx=0,ny=0;if(!r.width&&!r.height)continue;`
@@ -303,6 +387,19 @@ export const htmlRenderSubmitReply = (id: JsonRpcId, error?: string) => (error =
     ? { jsonrpc: '2.0', id, result: {} }
     : { jsonrpc: '2.0', id, error: { code: -32000, message: error } });
 
+export const htmlRenderClearSelectionMessage = () => ({ type: CLEAR_SELECTION_MESSAGE });
+
+// An anchor goes to the page as its text and context only: which page it is
+// means nothing inside it.
+const pageAnchor = ({ text, prefix, suffix, start }: ChatQuoteAnchor) => ({ text, prefix, suffix, start });
+
+export const htmlRenderMarksMessage = (marks: readonly HtmlRenderMark[]) => ({
+    type: MARKS_MESSAGE,
+    marks: marks.map(({ id, anchor, focused }) => ({ id, anchor: pageAnchor(anchor), focused })),
+});
+
+export const htmlRenderRevealMessage = (anchor: ChatQuoteAnchor) => ({ type: REVEAL_MESSAGE, anchor: pageAnchor(anchor) });
+
 const keyChordSchema = z.object({
     key: z.string().min(1).max(32),
     code: z.string().max(32),
@@ -322,16 +419,54 @@ export interface HtmlRenderSubmission {
     data: JsonValue;
 }
 
+const selectionRectSchema = z.object({
+    top: z.number().finite(),
+    left: z.number().finite(),
+    width: z.number().finite().min(0),
+    height: z.number().finite().min(0),
+});
+
+// The anchor a page measured in its own body; the host adds which page it is.
+const pageAnchorSchema = z.object({
+    text: z.string().min(1).max(HTML_RENDER_SELECTION_MAX_LENGTH),
+    prefix: z.string().max(64),
+    suffix: z.string().max(64),
+    start: z.number().int().min(0),
+});
+
 type HtmlRenderFrameMessage =
     | { kind: 'size'; height: number }
     | { kind: 'open-link'; url: string }
     | { kind: 'key'; chord: HtmlRenderKeyChord }
-    | { kind: 'submit'; id: JsonRpcId; submission: HtmlRenderSubmission };
+    | { kind: 'submit'; id: JsonRpcId; submission: HtmlRenderSubmission }
+    // An empty text means the selection is gone. No anchor: the selection
+    // could not be anchored (it reaches outside the body, or is too long).
+    | { kind: 'selection'; text: string; rect: z.infer<typeof selectionRectSchema>; anchor?: Omit<ChatQuoteAnchor, 'page'> }
+    // An empty id is a click on no mark; the rect is then the click's point.
+    | { kind: 'selection-escape' }
+    | { kind: 'mark-click'; id: string; rect: z.infer<typeof selectionRectSchema> };
+
+/** A quote mark the host asks a page to paint. */
+export interface HtmlRenderMark {
+    id: string;
+    anchor: ChatQuoteAnchor;
+    /** Drawn stronger: hovered in the composer chips, or its popover is open. */
+    focused: boolean;
+}
 
 const frameMessageSchema = z.discriminatedUnion('type', [
     z.object({ type: z.literal(SIZE_MESSAGE), height: z.number().positive() }),
     z.object({ type: z.literal(OPEN_LINK_MESSAGE), url: z.string().regex(/^https?:\/\//i) }),
     keyChordSchema.extend({ type: z.literal(KEY_MESSAGE) }),
+    z.object({
+        type: z.literal(SELECTION_MESSAGE),
+        text: z.string().max(HTML_RENDER_SELECTION_MAX_LENGTH),
+        rect: selectionRectSchema,
+        // A page the anchor of which cannot be read still gets its menu.
+        anchor: pageAnchorSchema.nullish().catch(null),
+    }),
+    z.object({ type: z.literal(SELECTION_ESCAPE_MESSAGE) }),
+    z.object({ type: z.literal(MARK_CLICK_MESSAGE), id: z.string().max(200), rect: selectionRectSchema }),
 ]);
 
 // MCP Apps `ui/message`. Only text content is read; the summary is its text.
@@ -365,6 +500,15 @@ export function readHtmlRenderFrameMessage(event: Pick<MessageEvent, 'data'>): H
     const message = parsed.data;
     if (message.type === SIZE_MESSAGE) return { kind: 'size', height: message.height };
     if (message.type === OPEN_LINK_MESSAGE) return { kind: 'open-link', url: message.url };
+    if (message.type === SELECTION_MESSAGE) {
+        const text = message.text.trim();
+        const selection: Extract<HtmlRenderFrameMessage, { kind: 'selection' }> = { kind: 'selection', text, rect: message.rect };
+        // Only a selection with text carries an anchor.
+        if (text && message.anchor) selection.anchor = message.anchor;
+        return selection;
+    }
+    if (message.type === SELECTION_ESCAPE_MESSAGE) return { kind: 'selection-escape' };
+    if (message.type === MARK_CLICK_MESSAGE) return { kind: 'mark-click', id: message.id, rect: message.rect };
     // Only a chord with Cmd or Ctrl: the page never passes plain typing on,
     // and a page that tried to must not reach the app's single-key handling.
     if (!message.metaKey && !message.ctrlKey) return null;

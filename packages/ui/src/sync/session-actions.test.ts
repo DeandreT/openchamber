@@ -45,6 +45,10 @@ let unarchiveBatchResponse: MockRouteResponse = {
   status: 404,
   body: { error: 'not found' },
 }
+let linksRouteResponse: MockRouteResponse = {
+  status: 404,
+  body: { error: 'not found' },
+}
 let activeStatusSnapshot: Record<string, SessionStatus> | null = {}
 let readActiveStatusSnapshot: (directory?: string | null) => Promise<Record<string, SessionStatus> | null> = async () => activeStatusSnapshot
 const deletedCleanupIdentities: Array<{ runtimeKey: string; directory: string; sessionId: string }> = []
@@ -277,7 +281,11 @@ mock.module("@/lib/runtime-fetch", () => ({
     const payload = JSON.parse(String(init?.body ?? "{}"))
     openchamberRouteRequests.push({ path, body: payload })
     beforeArchiveRouteResolve?.(path)
-    const answer = path.endsWith("/unarchive") ? unarchiveBatchResponse : archiveBatchResponse
+    const answer = path.endsWith("/unarchive")
+      ? unarchiveBatchResponse
+      : path.endsWith("/links")
+        ? linksRouteResponse
+        : archiveBatchResponse
     return new Response(JSON.stringify(answer.body), {
       status: answer.status,
       headers: { "content-type": "application/json" },
@@ -379,7 +387,7 @@ mock.module("./sync-refs", () => ({
 import { INITIAL_STATE } from "./types"
 import type { DirectoryStore } from "./child-store"
 import type { Message, Part, Session, SessionStatus } from "@/lib/opencode/model"
-import { SESSION_KNOWLEDGE_HEADER } from "@/lib/sessionKnowledgeApi"
+import type { LinkedIssue } from "@/lib/linkedIssues"
 
 type OptimisticAddCall = { sessionID: string; directory?: string | null; message: Message; parts: Part[] }
 type OptimisticRemoveCall = { sessionID: string; directory?: string | null; messageID: string }
@@ -843,14 +851,15 @@ describe("confirmed session removal", () => {
   })
 })
 
-describe("archiving a batch through the server", () => {
-  const liveSession = (id: string, metadata?: Record<string, unknown>): Session => ({
-    id,
-    directory: "/test/project",
-    time: { created: 1 },
-    ...(metadata ? { metadata } : {}),
-  } as unknown as Session)
+/** A minimal active-session record: enough for the actions' store mirroring. */
+const liveSession = (id: string, metadata?: Record<string, unknown>): Session => ({
+  id,
+  directory: "/test/project",
+  time: { created: 1 },
+  ...(metadata ? { metadata } : {}),
+} as unknown as Session)
 
+describe("archiving a batch through the server", () => {
   const archivedSession = (id: string) => ({ id, archivedAt: 2 })
 
   beforeEach(() => {
@@ -996,6 +1005,123 @@ describe("archiving a batch through the server", () => {
     expect(result).toEqual({ archivedIds: [], failedIds: ["session-a"] })
     expect(source.getState().session.map((item) => item.id)).toEqual(["session-a"])
     expect(globalUpsertedSessionBatches).toEqual([])
+  })
+})
+
+describe("linking items through the server", () => {
+  const issue: LinkedIssue = {
+    id: "owner/repo#12",
+    number: 12,
+    title: "Rail badge count",
+    url: "https://github.com/owner/repo/issues/12",
+    kind: "issue",
+    author: "someone",
+    linkedAt: 1,
+  }
+  const guestEntry: LinkedIssue = {
+    id: "guest:linear:ENG-1",
+    providerId: "linear",
+    identifier: "ENG-1",
+    title: "Spec",
+    url: "https://linear.app/openchamber/issue/ENG-1",
+    kind: "guest",
+    thread: "issue",
+    linkedAt: 2,
+  }
+
+  beforeEach(() => {
+    replyCalls.length = 0
+    globalUpsertedSessions.length = 0
+    registeredSessionDirectories.length = 0
+    openchamberRouteRequests.length = 0
+    linksRouteResponse = { status: 404, body: { error: "not found" } }
+  })
+
+  test("sends the operation to the links route and mirrors the answer into the stores", async () => {
+    // The metadata is what the server answered, not a list the client computed
+    // from its own read.
+    const metadata = { openchamber: { linked_issues: [issue, guestEntry] } }
+    linksRouteResponse = { status: 200, body: { metadata } }
+    const source = createStore({}, { session: [liveSession("session-a")] })
+    const { setLinkedIssue, setActionRefs } = await import("./session-actions")
+    setActionRefs(createChildStores([["/test/project", source]]), () => "/test/project")
+
+    const updated = await setLinkedIssue("session-a", "/test/project", guestEntry, true)
+
+    expect(openchamberRouteRequests).toHaveLength(1)
+    expect(openchamberRouteRequests[0].path).toBe("/api/openchamber/sessions/session-a/links")
+    expect(openchamberRouteRequests[0].body).toEqual({ entries: [guestEntry], linked: true })
+    // No session read is spent computing the list.
+    expect(replyCalls.filter((call) => call.method === "session.get")).toEqual([])
+    expect(updated.metadata).toEqual(metadata)
+    expect(globalUpsertedSessions).toHaveLength(1)
+    expect(globalUpsertedSessions[0]).toMatchObject({ id: "session-a", metadata })
+    expect(source.getState().session[0]?.metadata).toEqual(metadata)
+    expect(registeredSessionDirectories.some((entry) => entry.sessionID === "session-a" && entry.directory === "/test/project")).toBe(true)
+  })
+
+  test("adds every item of a batch in one request", async () => {
+    const metadata = { openchamber: { linked_issues: [issue, guestEntry] } }
+    linksRouteResponse = { status: 200, body: { metadata } }
+    const source = createStore({}, { session: [liveSession("session-a")] })
+    const { addLinkedIssues, setActionRefs } = await import("./session-actions")
+    setActionRefs(createChildStores([["/test/project", source]]), () => "/test/project")
+
+    await addLinkedIssues("session-a", "/test/project", [issue, guestEntry])
+
+    expect(openchamberRouteRequests).toHaveLength(1)
+    expect(openchamberRouteRequests[0].body).toEqual({ entries: [issue, guestEntry], linked: true })
+  })
+
+  test("reads the record only for display when no store holds it yet", async () => {
+    const metadata = { openchamber: { linked_issues: [issue] } }
+    linksRouteResponse = { status: 200, body: { metadata } }
+    const record = liveSession("session-x")
+    sessionRecords.set("session-x", record)
+    const { setLinkedIssue } = await import("./session-actions")
+
+    const updated = await setLinkedIssue("session-x", "/test/project", issue, true)
+
+    // The read feeds the mirrored record only, and happens before the request:
+    // the link list is the server's.
+    expect(replyCalls.filter((call) => call.method === "session.get")).toHaveLength(1)
+    expect(openchamberRouteRequests).toHaveLength(1)
+    expect(updated.metadata).toEqual(metadata)
+    expect(updated.id).toBe("session-x")
+  })
+
+  test("rejects before any network write when the display read fails for a session no store holds", async () => {
+    const { setLinkedIssue, addLinkedIssues } = await import("./session-actions")
+
+    // No store holds the session and the client cannot read it: the action
+    // must reject before the links request leaves, so a rejection never
+    // reports a link that landed on the server.
+    await expect(setLinkedIssue("session-never-read", "/test/project", issue, true))
+      .rejects.toThrow("SessionNotFoundError")
+    await expect(addLinkedIssues("session-never-read", "/test/project", [issue]))
+      .rejects.toThrow("SessionNotFoundError")
+    expect(openchamberRouteRequests).toHaveLength(0)
+    expect(globalUpsertedSessions).toEqual([])
+  })
+
+  test("rejects when the server cannot serve the route, like the callers' catch expects", async () => {
+    linksRouteResponse = { status: 501, body: { error: "not supported in VS Code" } }
+    const { setLinkedIssue, setActionRefs } = await import("./session-actions")
+    setActionRefs(createChildStores([["/test/project", createStore({})]]), () => "/test/project")
+
+    await expect(setLinkedIssue("session-a", "/test/project", issue, true))
+      .rejects.toThrow("session link update failed")
+    expect(globalUpsertedSessions).toEqual([])
+  })
+
+  test("treats a malformed answer as unavailable instead of as a success", async () => {
+    linksRouteResponse = { status: 200, body: { nope: true } }
+    const { setLinkedIssue, setActionRefs } = await import("./session-actions")
+    setActionRefs(createChildStores([["/test/project", createStore({})]]), () => "/test/project")
+
+    await expect(setLinkedIssue("session-a", "/test/project", issue, true))
+      .rejects.toThrow("session link update failed")
+    expect(globalUpsertedSessions).toEqual([])
   })
 })
 
@@ -1416,6 +1542,34 @@ describe("optimisticSend target directory", () => {
     expect(currentStore.getState().session_status["session-new"]).toBe(undefined)
   })
 
+  test("marks the prompt as being sent until its request settles, accepted or rejected", async () => {
+    const targetStore = createStore({})
+    const childStores = createChildStores([["/target/project", targetStore]])
+    const { optimisticSend, setActionRefs, setOptimisticRefs } = await import("./session-actions")
+    const { hasPromptInFlight } = await import("./prompts-in-flight")
+    setActionRefs(childStores, () => "/target/project")
+    setOptimisticRefs(() => {}, () => {})
+
+    let inFlightDuringSend = false
+    await optimisticSend({
+      sessionId: "session-cold",
+      directory: "/target/project",
+      content: "hello",
+      send: async () => { inFlightDuringSend = hasPromptInFlight("session-cold") },
+    })
+    expect(inFlightDuringSend).toBe(true)
+    expect(hasPromptInFlight("session-cold")).toBe(false)
+
+    await expect(optimisticSend({
+      sessionId: "session-cold",
+      directory: "/target/project",
+      content: "again",
+      send: async () => { throw new Error("rejected") },
+    })).rejects.toThrow("rejected")
+    expect(hasPromptInFlight("session-cold")).toBe(false)
+    expect(targetStore.getState().session_status["session-cold"]?.type).toBe("idle")
+  })
+
   test("commits the new branch locally and discards its optimistic shadow when sending after a revert", async () => {
     const retainedMessage = { id: "msg_ffffffffffffRetained", role: "user", sessionID: "session-reverted", time: { created: 1 } } as Message
     const revertedMessage = { id: "msg_000000000000Reverted", role: "user", sessionID: "session-reverted", time: { created: 2 } } as Message
@@ -1597,80 +1751,40 @@ describe("optimisticSend target directory", () => {
     expect(removed).toEqual(ids)
   })
 
-  test("shows the prompt before late leading context resolves and admits that context first", async () => {
+  test("shows the prompt before the knowledge write finishes, and sends only after it", async () => {
     const targetStore = createStore({})
     const childStores = createChildStores([["/target/project", targetStore]])
     const added: Message[] = []
-    const removed: string[] = []
-    let sent: { messageID: string; contextIDs: Array<string | undefined>; texts: string[] } | null = null
-    let resolveLeading: (value: { text: string } | null) => void = () => {}
-    const leadingContext = new Promise<{ text: string } | null>((resolve) => { resolveLeading = resolve })
+    let sent: { messageID: string; texts: string[] } | null = null
+    let finishWrite: () => void = () => {}
+    const ready = new Promise<void>((resolve) => { finishWrite = resolve })
 
     const { optimisticSend, setActionRefs, setOptimisticRefs } = await import("./session-actions")
     setActionRefs(childStores, () => "/target/project")
-    setOptimisticRefs(
-      (input) => {
-        added.push(input.message)
-      },
-      (input) => {
-        removed.push(input.messageID)
-      },
-    )
+    setOptimisticRefs((input) => { added.push(input.message) }, () => {})
 
     const sending = optimisticSend({
-      sessionId: "session-leading",
+      sessionId: "session-ready",
       directory: "/target/project",
       content: "hello",
       context: [{ text: "quoted" }],
-      leadingContext,
+      ready,
       send: async (messageID, context) => {
-        sent = { messageID, contextIDs: context.map((item) => item.id), texts: context.map((item) => item.text) }
-        throw new Error("rejected")
+        sent = { messageID, texts: context.map((item) => item.text) }
       },
     })
     for (let tick = 0; tick < 50 && !added.some((message) => message.role === "user"); tick += 1) {
       await Promise.resolve()
     }
 
-    // The bubble is on screen while the knowledge is still on its way, and
-    // nothing has been sent without it.
+    // The bubble is on screen while the knowledge is still being written, and
+    // nothing has been sent ahead of it.
     expect(added.map((message) => message.role)).toEqual(["synthetic", "user"])
     expect(sent).toBe(null)
 
-    resolveLeading({ text: "pinned knowledge" })
-    await expect(sending).rejects.toThrow("rejected")
-
-    expect(added.map((message) => message.role)).toEqual(["synthetic", "user", "synthetic"])
-    const [quoted, prompt, leading] = added.map((message) => message.id)
-    // Reserved before the other ids, so it still sorts first.
-    expect(leading < quoted && quoted < prompt).toBe(true)
-    expect(sent).toEqual({ messageID: prompt, contextIDs: [leading, quoted], texts: ["pinned knowledge", "quoted"] })
-    // A rejected send leaves no optimistic record behind, the late one included.
-    expect([...removed].sort()).toEqual([leading, quoted, prompt])
-  })
-
-  test("sends without a leading record when the late context is empty", async () => {
-    const targetStore = createStore({})
-    const childStores = createChildStores([["/target/project", targetStore]])
-    const added: Message[] = []
-    let sentContext: string[] | null = null
-
-    const { optimisticSend, setActionRefs, setOptimisticRefs } = await import("./session-actions")
-    setActionRefs(childStores, () => "/target/project")
-    setOptimisticRefs((input) => { added.push(input.message) }, () => {})
-
-    await optimisticSend({
-      sessionId: "session-leading-empty",
-      directory: "/target/project",
-      content: "hello",
-      leadingContext: Promise.resolve(null),
-      send: async (_messageID, context) => {
-        sentContext = context.map((item) => item.text)
-      },
-    })
-
-    expect(added.map((message) => message.role)).toEqual(["user"])
-    expect(sentContext).toEqual([])
+    finishWrite()
+    await sending
+    expect(sent).toEqual({ messageID: added[1].id, texts: ["quoted"] })
   })
 
   test("runs appendSubmissions once for an ambiguous confirmation", async () => {
@@ -2477,30 +2591,6 @@ describe("revertToMessage passes session directory", () => {
     expect(replyCalls.find((call) => call.method === "session.revert.stage")?.params.messageID).toBe("msg_ctx_1")
     expect((sessionStore.getState().session[0] as Session & { revert?: { messageID?: string } }).revert?.messageID).toBe("msg_ctx_1")
     expect(inputState.pendingInputText).toBe("edit this")
-    // No knowledge block was cut, so the server's delivery record stands.
-    expect(openchamberRouteRequests.some((request) => request.path === "/api/session-knowledge/forget")).toBe(false)
-  })
-
-  test("a cut that takes the project knowledge block makes the next send carry it again", async () => {
-    const session = sessionFixture("session-a")
-    sessionRecords.set(session.id, session)
-    const knowledge: Message = { id: "msg_knowledge", sessionID: "session-a", role: "synthetic", time: { created: 1 }, text: `${SESSION_KNOWLEDGE_HEADER}\n\nPinned note.` }
-    const targetMessage: Message = { id: "msg_1", sessionID: "session-a", role: "user", time: { created: 2 } }
-    const targetPart: Part = { id: "prt_1", sessionID: "session-a", messageID: "msg_1", type: "text", text: "first task" }
-    const sessionStore = createStore({}, {
-      session: [session],
-      message: { "session-a": [knowledge, targetMessage] },
-      part: { "msg_1": [targetPart] },
-    })
-    const { setActionRefs, revertToMessage } = await import("./session-actions")
-    setActionRefs(createChildStores([["/test/project", sessionStore]]), () => "/test/project")
-    openchamberRouteRequests.length = 0
-
-    await revertToMessage("session-a", "msg_1")
-
-    expect(replyCalls.find((call) => call.method === "session.revert.stage")?.params.messageID).toBe("msg_knowledge")
-    expect(openchamberRouteRequests.filter((request) => request.path === "/api/session-knowledge/forget"))
-      .toEqual([{ path: "/api/session-knowledge/forget", body: { directory: "/test/project", sessionId: "session-a" } }])
   })
 
   test("rolls back optimistic revert when the SDK returns an error", async () => {

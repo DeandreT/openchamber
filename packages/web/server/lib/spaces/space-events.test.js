@@ -245,7 +245,7 @@ describe('createSpaceEventSources: the queue connection', () => {
   it('keeps a quiet connection that hears the heartbeat, and remakes one that falls silent past its timeout', async () => {
     index = createSpaceSessionIndex({ logger });
     broadcast = [];
-    sources = createSpaceEventSources({ requestInside, index, hub: makeHub(), broadcastUiEvent: (event) => broadcast.push(event), logger, stallTimeoutMs: 0, queueStallTimeoutMs: 400 });
+    sources = createSpaceEventSources({ requestInside, index, hub: makeHub(), broadcastUiEvent: (event) => broadcast.push(event), logger, stallTimeoutMs: 0, stateStallTimeoutMs: 400 });
     sources.sync([ID]);
     expect(await until(() => Boolean(controlStream()))).toBe(true);
     const first = controlStream();
@@ -274,5 +274,77 @@ describe('createSpaceEventSources: the queue connection', () => {
     expect(await until(() => Boolean(controlStream()))).toBe(true);
     sources.sync([]);
     expect(await until(() => controlStream().destroyed)).toBe(true);
+  });
+});
+
+describe('createSpaceEventSources: the permission connection', () => {
+  const streams = [];
+  const requestInside = async (spaceId, request) => {
+    if (request.path === '/api/sessions/status') return jsonResponse(200, { sessions: {} });
+    const stream = sseResponse();
+    streams.push({ spaceId, path: request.path, stream });
+    return stream;
+  };
+  const logs = [];
+  const logger = { warn: (line) => logs.push(line) };
+  let index;
+  let sources;
+  let broadcast;
+
+  const start = () => {
+    index = createSpaceSessionIndex({ logger });
+    broadcast = [];
+    sources = createSpaceEventSources({ requestInside, index, hub: makeHub(), broadcastGlobalUiEvent: (event) => broadcast.push(event), logger, stallTimeoutMs: 0 });
+  };
+  const notificationStream = () => streams.find((entry) => entry.spaceId === ID && entry.path === '/api/notifications/stream')?.stream;
+  const write = (payload) => notificationStream().write(`data: ${JSON.stringify(payload)}\n\n`);
+
+  afterEach(() => {
+    sources?.close();
+    streams.length = 0;
+    logs.length = 0;
+  });
+
+  it('announces itself and forwards the space\'s modes for its own sessions only, marked with its id', async () => {
+    start();
+    index.observeHostRecords([{ id: 'host-1' }]);
+    index.acceptSpaceList(OTHER, [{ id: 'other-1', location: { directory: `/spaces/${OTHER}/repo` } }], { complete: true });
+    sources.sync([ID]);
+    expect(await until(() => Boolean(notificationStream()))).toBe(true);
+    expect(streams.map((entry) => entry.path)).not.toContain('/api/openchamber/events');
+    expect(await until(() => broadcast.length === 1)).toBe(true);
+    expect(broadcast[0]).toEqual({ type: 'openchamber:space-permission-stream', properties: { spaceId: ID, status: 'connected' } });
+
+    // The stream inside opens with its own session token: it is never passed on.
+    write({ type: 'openchamber:notification-stream-ready', properties: { uiToken: 'inside-token' } });
+    write({
+      type: 'openchamber:permission-auto-accept.updated',
+      properties: { sessions: { mine: true, 'host-1': true, 'other-1': true, quiet: false }, modes: { mine: 'auto', 'host-1': 'auto', 'other-1': 'auto', quiet: 'ask' }, revision: 7 },
+    });
+    expect(await until(() => broadcast.length === 2)).toBe(true);
+    expect(broadcast[1]).toEqual({
+      type: 'openchamber:permission-auto-accept.updated',
+      properties: { sessions: { mine: true, quiet: false }, modes: { mine: 'auto', quiet: 'ask' }, revision: 7, spaceId: ID },
+    });
+    expect(logs.filter((line) => line.includes('dropped a permission mode'))).toHaveLength(2);
+    expect(JSON.stringify(broadcast)).not.toContain('inside-token');
+  });
+
+  it('forwards a request the space left for the user, and drops one for a folder outside it or a session of the host', async () => {
+    start();
+    index.observeHostRecords([{ id: 'host-1' }]);
+    sources.sync([ID]);
+    expect(await until(() => Boolean(notificationStream()))).toBe(true);
+    const leftForUser = (permissionId, sessionId, directory) => ({ type: 'openchamber:permission-auto-accept.left-for-user', properties: { permissionId, sessionId, directory } });
+    write(leftForUser('p1', 'mine', '/home/me/project'));
+    write(leftForUser('p2', 'host-1', `/spaces/${ID}/repo`));
+    write(leftForUser('p3', 'mine', `/spaces/${ID}/repo`));
+    write(leftForUser('p4', 'mine', null));
+    expect(await until(() => broadcast.length === 3)).toBe(true);
+    expect(broadcast.slice(1)).toEqual([
+      { type: 'openchamber:permission-auto-accept.left-for-user', properties: { permissionId: 'p3', sessionId: 'mine', directory: `/spaces/${ID}/repo`, spaceId: ID } },
+      { type: 'openchamber:permission-auto-accept.left-for-user', properties: { permissionId: 'p4', sessionId: 'mine', directory: null, spaceId: ID } },
+    ]);
+    expect(logs.join('\n')).not.toContain('/home/me/project');
   });
 });

@@ -745,9 +745,6 @@ export const createSettingsHelpers = (dependencies) => {
     if (typeof candidate.agentToolsCodeMode === 'boolean') {
       result.agentToolsCodeMode = candidate.agentToolsCodeMode;
     }
-    if (candidate.agentWorktreeMoveWithoutAsking === true || candidate.agentWorktreeMoveWithoutAsking === false) {
-      result.agentWorktreeMoveWithoutAsking = candidate.agentWorktreeMoveWithoutAsking;
-    }
     if (typeof candidate.isolatedSpacesEnabled === 'boolean') {
       result.isolatedSpacesEnabled = candidate.isolatedSpacesEnabled;
     }
@@ -811,6 +808,9 @@ export const createSettingsHelpers = (dependencies) => {
     }
     if (typeof candidate.collapsibleUserMessages === 'boolean') {
       result.collapsibleUserMessages = candidate.collapsibleUserMessages;
+    }
+    if (candidate.stickyUserHeader === true || candidate.stickyUserHeader === false) {
+      result.stickyUserHeader = candidate.stickyUserHeader;
     }
     if (typeof candidate.promptNavigatorEnabled === 'boolean') {
       result.promptNavigatorEnabled = candidate.promptNavigatorEnabled;

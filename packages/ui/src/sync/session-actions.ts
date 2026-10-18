@@ -26,7 +26,6 @@ import { useInlineCommentDraftStore, type InlineCommentDraftTarget } from "@/sto
 import { materializeSessionSnapshots } from "./materialization"
 import { sessionEvents } from "@/lib/sessionEvents"
 import { fileTreeChanges } from "@/lib/fileTreeChanges"
-import { SESSION_KNOWLEDGE_HEADER, forgetSessionKnowledgeDelivered } from "@/lib/sessionKnowledgeApi"
 import {
   getOriginalSessionID,
   getSessionMetadata,
@@ -36,12 +35,12 @@ import {
 } from "@/lib/sessionReviewMetadata"
 import { withContextObligatoryMessage, type ContextObligatoryMessage } from "@/lib/contextObligatoryMessages"
 import { getBtwOriginalSessionID, getBtwSessionID, isBtwSession, withoutBtwSessionLink } from "@/lib/sessionBtwMetadata"
-import { withLinkedIssue, type LinkedIssue } from "@/lib/linkedIssues"
+import { type LinkedIssue } from "@/lib/linkedIssues"
 import { withSessionWorkState, type SessionWork } from "@/lib/sessionWorkMetadata"
 import { withSessionPinned } from "@/lib/sessionPins"
 import { getImperativeSessionMessageLoader } from "./session-message-loader"
 import { cleanupPersistedSessionState } from "./session-deletion-cleanup"
-import { requestSessionArchiveBatch, requestSessionMetadataUpdate, requestSessionUnarchiveBatch, type SessionArchiveStamp } from "./session-archive-batch"
+import { requestSessionArchiveBatch, requestSessionLinksUpdate, requestSessionMetadataUpdate, requestSessionUnarchiveBatch, type SessionArchiveStamp } from "./session-archive-batch"
 import { registerBulkArchiveEchoes, releaseBulkArchiveEchoes } from "./bulk-archive-echo"
 import { getRuntimeKey } from "@/lib/runtime-switch"
 import { isRelayModeActive } from "@/lib/relay/runtime-tunnel"
@@ -50,6 +49,7 @@ import { getStaleRunningToolMessageID } from "./materialization"
 import { promoteRestoredSessionOrdering } from "./session-ordering"
 import { normalizePath } from "@/lib/pathNormalization"
 import { mergeMessages } from "./optimistic"
+import { trackPromptInFlight } from "./prompts-in-flight"
 import { messagesBefore, messagesFrom } from "./message-ordering"
 import { deleteChatDirectory } from "@/lib/chatDirectories"
 import { createChatDraftIdentity } from "@/lib/chatDraftPersistence"
@@ -1118,28 +1118,66 @@ export async function patchSessionMetadata(
   return updated
 }
 
+/**
+ * Link or unlink one item on a session. The list transform lives on the
+ * OpenChamber server now, decided there from a fresh read inside the
+ * session's write queue: a UI request and an agent's `session.link` can no
+ * longer wipe each other, whichever write lands first.
+ */
 export async function setLinkedIssue(
   sessionId: string,
   directory: string | null | undefined,
   issue: LinkedIssue,
   linked: boolean,
 ): Promise<Session> {
-  return patchSessionMetadata(sessionId, directory, (metadata) =>
-    withLinkedIssue(metadata, issue, linked))
+  return updateLinkedIssues(sessionId, directory, [issue], linked)
 }
 
 /**
- * Link several items in one metadata write. Each write replaces the whole
- * link list, so separate concurrent `setLinkedIssue` calls would keep only
- * the last one's item.
+ * Link several items in one server operation: one write-queue turn applies
+ * all of them, reading and writing the record once.
  */
 export async function addLinkedIssues(
   sessionId: string,
   directory: string | null | undefined,
   issues: readonly LinkedIssue[],
 ): Promise<Session> {
-  return patchSessionMetadata(sessionId, directory, (metadata) =>
-    issues.reduce((current, issue) => withLinkedIssue(current, issue, true), metadata))
+  return updateLinkedIssues(sessionId, directory, issues, true)
+}
+
+async function updateLinkedIssues(
+  sessionId: string,
+  directory: string | null | undefined,
+  issues: readonly LinkedIssue[],
+  linked: boolean,
+): Promise<Session> {
+  const targetDirectory = directory ?? getSessionDirectory(sessionId)
+  // A session no store holds still needs a record for the mirroring, and the
+  // read can fail: taken before the write, a failed read rejects with nothing
+  // landed. The read is display-only — none of the link list comes from the
+  // client — so its ordering is free, and it must not turn into a report of
+  // a link that did land.
+  const heldBeforeRequest = getGlobalSessionSnapshot(sessionId) !== null
+    || findLiveSession(sessionId) !== null
+  const fallbackRecord = heldBeforeRequest
+    ? null
+    : await opencodeClient.getSession(sessionId, targetDirectory)
+  const result = await requestSessionLinksUpdate(sessionId, issues, linked, targetDirectory)
+  if (result.outcome !== "updated") throw new Error(`session link update failed: ${result.reason}`)
+  // The server answered with the merged metadata; the session record is
+  // display-only here. A session a store holds is mirrored from its snapshot
+  // as the response lands; a store-miss uses the record read before the
+  // request. A stale read can no longer corrupt the link list, since none of
+  // it comes from the client.
+  const record = fallbackRecord
+    ?? (getGlobalSessionSnapshot(sessionId) ?? findLiveSession(sessionId))
+    ?? await opencodeClient.getSession(sessionId, targetDirectory)
+  const updated: Session = { ...record, metadata: result.metadata }
+  useGlobalSessionsStore.getState().upsertSession(updated)
+  const sessionDirectory = updated.directory || targetDirectory
+  if (sessionDirectory) registerSessionDirectory(updated.id, sessionDirectory)
+  mirrorSessionIntoLiveStores(updated, sessionDirectory ?? undefined)
+  return updated
 }
 
 /**
@@ -1962,12 +2000,11 @@ export async function optimisticSend(input: {
   /** Context admitted ahead of the prompt; shown in the optimistic message until the server echoes it. */
   context?: SyntheticContextInput[]
   /**
-   * Context still being fetched, admitted ahead of `context` once it resolves
-   * (the session's project knowledge). The user message is inserted without
-   * waiting for it; only the request waits. Must not reject: it resolves to
-   * null when there is nothing to add.
+   * Work the request waits for (the session's project knowledge being written
+   * into it). The user message is inserted without waiting for it. Must not
+   * reject.
    */
-  leadingContext?: Promise<SyntheticContextInput | null>
+  ready?: Promise<void>
   appendSubmissions?: () => void
   onOptimisticInsert?: () => void
   onMessageID?: (messageID: string) => void
@@ -2034,9 +2071,6 @@ export async function optimisticSend(input: {
 
   // Context ids come first so they sort before the prompt the way the server
   // admits them. The client skips blank items, so they get no record here.
-  // The leading item's id is reserved now, before it is known, so it still
-  // sorts ahead of everything else when it arrives after the insert.
-  const leadingContextID = input.leadingContext ? ascendingId("msg") : null
   const context = (input.context ?? [])
     .filter((item) => item.text.trim())
     .map((item) => ({ ...item, id: ascendingId("msg") }))
@@ -2109,19 +2143,11 @@ export async function optimisticSend(input: {
     },
   })
 
+  const releasePrompt = trackPromptInFlight(input.sessionId)
   try {
-    let sentContext = context
-    if (input.leadingContext && leadingContextID) {
-      const leading = await input.leadingContext
-      if (leading?.text.trim()) {
-        const leadingItem = { ...leading, id: leadingContextID }
-        addSyntheticContext(leadingItem)
-        optimisticIDs.unshift(leadingContextID)
-        sentContext = [leadingItem, ...context]
-      }
-    }
+    await input.ready
     assertRuntimeUnchanged()
-    await input.send(messageID, sentContext)
+    await input.send(messageID, context)
   } catch (error) {
     const status = getErrorStatus(error)
     const ambiguousFailure = isAmbiguousSendFailure(error)
@@ -2197,6 +2223,8 @@ export async function optimisticSend(input: {
       },
     })
     throw error
+  } finally {
+    releasePrompt()
   }
 }
 
@@ -2613,13 +2641,6 @@ export async function revertToMessage(sessionId: string, messageId: string): Pro
     // Stage only: the messages disappear behind the revert marker while the
     // dock offers Commit (finalize) or Clear (bring them back).
     await opencodeClient.stageRevert(sessionId, revertMessageID, { directory })
-    // The cut takes the synthetic messages before the prompt along, the
-    // project knowledge block among them. Unless the server forgets it was
-    // delivered, the resend goes out without it (#4877).
-    const hidesKnowledge = messagesFrom(messages, revertMessageID).some((message) => (
-      message.role === "synthetic" && message.text.startsWith(SESSION_KNOWLEDGE_HEADER)
-    ))
-    if (hidesKnowledge) await forgetSessionKnowledgeDelivered(directory, sessionId)
     const revertedSession = await opencodeClient.getSession(sessionId, directory)
     const current = store.getState()
     const updated = [...current.session]

@@ -36,7 +36,7 @@ const DISABLED_BUILTIN_PLUGINS = ['-opencode.browser'];
  * @param {object} dependencies
  * @param {typeof import('node:fs/promises')} dependencies.fsPromises
  * @param {typeof import('node:path')} dependencies.path
- * @param {string} dependencies.dataDir OpenChamber data directory
+ * @param {string} dependencies.instanceDir this server's own directory (`instance-dir.js`)
  * @param {NodeJS.ProcessEnv} [dependencies.env] environment the managed child inherits
  * @param {object|null} [dependencies.agentToolRuntime]
  * @param {() => Promise<object|null>} dependencies.readSettings
@@ -45,19 +45,19 @@ const DISABLED_BUILTIN_PLUGINS = ['-opencode.browser'];
 export const createManagedConfigRuntime = ({
   fsPromises,
   path,
-  dataDir,
+  instanceDir,
   env = process.env,
   agentToolRuntime = null,
   readSettings,
   isAgentMemoryAvailable,
 }) => {
-  const filePath = path.join(dataDir, MANAGED_CONFIG_FILE_NAME);
+  const filePath = path.join(instanceDir, MANAGED_CONFIG_FILE_NAME);
 
   /** The user owns `OPENCODE_CONFIG` when their environment already set it. */
   const ownsConfigFile = () => (env.OPENCODE_CONFIG ?? '').trim().length === 0;
 
   const writeConfigFile = async (pluginDirectories) => {
-    await fsPromises.mkdir(dataDir, { recursive: true });
+    await fsPromises.mkdir(instanceDir, { recursive: true });
     const text = `${JSON.stringify({ plugins: [...DISABLED_BUILTIN_PLUGINS, ...pluginDirectories] }, null, 2)}\n`;
     // Temp + rename: OpenCode reacts to the write immediately, and a partial
     // read would make it drop every managed plugin until the next change.
@@ -85,13 +85,10 @@ export const createManagedConfigRuntime = ({
     const includeNotify = settings?.agentNotifyToolEnabled === true;
     const includeRender = settings?.agentRenderToolEnabled !== false;
     const codeMode = settings?.agentToolsCodeMode === true;
-    // Read into the control tool's description, so the rewrite that follows a
-    // toggle changes what the agent is told without a restart.
-    const worktreeMoveWithoutAsking = settings?.agentWorktreeMoveWithoutAsking === true;
 
     const directories = [];
     if (agentToolRuntime && (includeControl || includeWeb || includeMemory || includeKnowledge || includeNotify || includeRender)) {
-      directories.push(await agentToolRuntime.materializePlugin({ includeControl, includeWeb, includeMemory, includeKnowledge, includeNotify, includeRender, codeMode, worktreeMoveWithoutAsking }));
+      directories.push(await agentToolRuntime.materializePlugin({ includeControl, includeWeb, includeMemory, includeKnowledge, includeNotify, includeRender, codeMode }));
     }
     return directories;
   };

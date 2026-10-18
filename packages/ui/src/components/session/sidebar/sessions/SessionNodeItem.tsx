@@ -5,6 +5,7 @@ import React from 'react';
 import { SessionActivityIndicator } from '@/components/session/SessionActivityIndicator';
 import type { Session } from '@/lib/opencode/model';
 import { ContextMenu } from '@base-ui/react/context-menu';
+import { ContextMenu as ContextMenuRoot } from '@/components/ui/context-menu';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -52,7 +53,7 @@ import { sessionTreeRowPaddingLeft } from './sessionTreeGeometry';
 import { FileTreeChevron } from '@/components/views/files/FileTreeRowParts';
 import { formatProjectLabel, formatSessionCompactDateLabel, formatSessionDateLabel, normalizePath, renderHighlightedText } from '../utils';
 import { useProjectsStore } from '@/stores/useProjectsStore';
-import { useOpenOnBoard } from '@/components/sourceBoard/openOnBoard';
+import { useOpenTrackerItem } from '@/components/sourceBoard/openTrackerItem';
 import { RowMarkTooltip } from './RowMarkTooltip';
 import { SessionMenuItemHint } from '../../SessionMenuItemHint';
 import { SIDEBAR_REF_TOOLTIP_CLOSE_DELAY_MS, SidebarRefLinks, type SidebarRefLink } from './SidebarRefLinks';
@@ -558,11 +559,18 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   }, [linkedGitLabIssueStates, linkedIssueStates, linkedIssues, linkedLinearStates, linkedPrsWithoutState, prSummaries, t, uncolouredChanges]);
   const primaryRef = refLines[0] ?? null;
   const moreRefCount = Math.max(0, refLines.length - 1);
-  const openOnBoard = useOpenOnBoard();
+  const openTrackerItem = useOpenTrackerItem();
   const refBadgeLabel = refLines.map((line) => line.text).join(', ');
   const isActive = useSessionUIStore((state) => state.currentSessionId === session.id);
 
   const sessionDirectory = normalizePath(session.directory ?? null) ?? normalizePath(groupDirectory ?? null);
+  // Ref chips open their item in the Tracker through the row's project. The
+  // project's root path resolves without the live worktree map, which a
+  // session in a worktree outside the root does not until that map arrives.
+  const projectRootDirectory = useProjectsStore((state) =>
+    projectId ? state.projects.find((entry) => entry.id === projectId)?.path ?? null : null,
+  );
+  const trackerDirectory = projectRootDirectory ?? sessionDirectory;
   // Multi-select scope: sessions are flat per project, so selection groups by
   // project (falling back to the directory when no project is known) — a
   // selection must survive mixing sessions from different worktrees.
@@ -689,7 +697,6 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
     handleMenuOpenChange,
     handleContextMenuOpenChange,
     handleMenuOpenChangeComplete,
-    toggleMenu,
   } = useSessionRowMenuState({
     menuInstanceKey,
     contextMenuInstanceKey,
@@ -1083,19 +1090,18 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
     ? <Icon name="error-warning" className="h-4 w-4 text-status-warning" />
     : null;
 
+  // Base UI's trigger handlers open the menu, so it records the click and
+  // stays open when the pointer leaves it. A menu opened only through `open`
+  // has no open event, and Base UI closes it on pointer leave like a hover menu.
   const handleMenuTriggerClick = (event: React.MouseEvent<HTMLButtonElement>) => {
-    event.preventDefault();
     event.stopPropagation();
-    toggleMenu();
   };
 
   const handleMenuTriggerPointerDown = (event: React.PointerEvent<HTMLButtonElement>) => {
-    event.preventDefault();
     event.stopPropagation();
   };
 
   const handleMenuTriggerMouseDown = (event: React.MouseEvent<HTMLButtonElement>) => {
-    event.preventDefault();
     event.stopPropagation();
   };
 
@@ -1652,7 +1658,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
             event.stopPropagation();
             // The `+N` only counts the others; the tooltip lists them.
             if (event.target instanceof Element && event.target.closest('[data-ref-more]')) return;
-            if (primaryRef.url) openOnBoard(primaryRef.url, sessionDirectory, event);
+            if (primaryRef.url) openTrackerItem(primaryRef.url, trackerDirectory, event);
           }}
           onKeyDown={(event) => event.stopPropagation()}
         >
@@ -1665,7 +1671,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
         </button>
       </TooltipTrigger>
       <TooltipContent side="top" sideOffset={6} className="max-w-xs">
-        <SidebarRefLinks items={refLines} directory={sessionDirectory} />
+        <SidebarRefLinks items={refLines} directory={trackerDirectory} />
       </TooltipContent>
     </Tooltip>
   ) : null;
@@ -1786,7 +1792,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
   return (
     <React.Fragment key={session.id}>
       <DraggableSessionRow sessionId={session.id} dragKey={dragKey ?? sessionRowKey} ownerKey={folderOwnerKey ?? selectionScopeKey} sessionDirectory={sessionDirectory ?? null} sessionTitle={sessionTitle} archivedBucket={archivedBucket}>
-        <ContextMenu.Root open={isContextMenuOpen} onOpenChange={handleContextMenuOpenChange} onOpenChangeComplete={handleMenuOpenChangeComplete}>
+        <ContextMenuRoot open={isContextMenuOpen} onOpenChange={handleContextMenuOpenChange} onOpenChangeComplete={handleMenuOpenChangeComplete}>
           <ContextMenu.Trigger
             render={
               <div
@@ -1882,7 +1888,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
                         <span className="min-w-0 truncate">{tooltipBranchLabel}</span>
                       </div>
                     ) : null}
-                    {refLines.length > 0 ? <SidebarRefLinks items={refLines} directory={sessionDirectory} /> : null}
+                    {refLines.length > 0 ? <SidebarRefLinks items={refLines} directory={trackerDirectory} /> : null}
                     {currentRecap ? (
                       <p className="min-w-0 line-clamp-4 text-muted-foreground">{currentRecap}</p>
                     ) : null}
@@ -2004,7 +2010,7 @@ function SessionNodeItemComponent(props: SessionNodeItemProps): React.ReactNode 
           </div>
           </ContextMenu.Trigger>
           {contextMenuContent}
-        </ContextMenu.Root>
+        </ContextMenuRoot>
       </DraggableSessionRow>
       {hasChildren && isExpanded ? children : null}
       <Dialog open={exportDialogOpen} onOpenChange={setExportDialogOpen}>

@@ -9,11 +9,12 @@
 // asks the space for its live status and enters it the same way. A gap is reported to the
 // clients as `openchamber:space-stream`, so a client re-reads that one space.
 //
-// A second connection per space reads its OpenChamber control stream for one kind of event, a
-// change to a session's message queue: the queue of a space's session lives in that space's
-// server, which sees its OpenCode go idle and delivers. Each change passes the same rules and goes
-// to the browsers marked with the space's id; a connection announces itself as
-// `openchamber:space-queue-stream`, so a client re-reads that space's queue after a gap.
+// Two more connections per space read what the server inside keeps for the space's own sessions,
+// since it sees its OpenCode and acts on it: its control stream for changes to a session's message
+// queue, and its notification stream for the permission modes and the requests it left for the
+// user. Each change passes the same rules and goes to the browsers marked with the space's id, on
+// the host's stream that carries the host's own; each connection announces itself, so a client
+// re-reads that space's state after a gap.
 
 import { Readable } from 'node:stream';
 
@@ -23,10 +24,13 @@ import { UPSTREAM_STALL_TIMEOUT_CONCURRENT_MS, createUpstreamSseReader } from '.
 
 const EVENT_PATH = '/api/event';
 const CONTROL_PATH = '/api/openchamber/events';
+const NOTIFICATIONS_PATH = '/api/notifications/stream';
 const QUEUE_UPDATED = 'openchamber:message-queue.updated';
-// The control stream inside is quiet but for a heartbeat every 25 seconds, so a quiet minute is
-// a dead stream; the reader's default of 20 seconds would drop and remake a healthy idle one.
-const QUEUE_STALL_TIMEOUT_MS = UPSTREAM_STALL_TIMEOUT_CONCURRENT_MS;
+const MODES_UPDATED = 'openchamber:permission-auto-accept.updated';
+const LEFT_FOR_USER = 'openchamber:permission-auto-accept.left-for-user';
+// Both streams inside are quiet but for a heartbeat, every 25 and 20 seconds, so a quiet minute
+// is a dead stream; the reader's default of 20 seconds would drop and remake a healthy idle one.
+const SPACE_STATE_STALL_TIMEOUT_MS = UPSTREAM_STALL_TIMEOUT_CONCURRENT_MS;
 const STATUS_PATH = '/api/sessions/status';
 const STATUS_TIMEOUT_MS = 10_000;
 const MAX_STATUS_BYTES = 4 * 1024 * 1024;
@@ -41,6 +45,15 @@ const liveStatusSchema = z.object({ status: z.enum(['busy', 'idle']) });
 const statusSchema = z.object({ sessions: z.record(z.string(), z.unknown()).default({}) }).passthrough();
 const eventPayloadSchema = z.object({ location: z.object({ directory: z.string() }).passthrough().optional() }).passthrough();
 // A queue change inside, rebuilt from these fields only; the items are the space's own, carried for display.
+// The permission modes of the space's sessions and a request left for the user, rebuilt the same way.
+const modesUpdateSchema = z.object({
+  type: z.literal(MODES_UPDATED),
+  properties: z.object({ modes: z.record(z.string(), z.enum(['ask', 'safety', 'auto'])), revision: z.number() }),
+});
+const leftForUserSchema = z.object({
+  type: z.literal(LEFT_FOR_USER),
+  properties: z.object({ permissionId: z.string().min(1), sessionId: z.string().min(1), directory: z.string().nullable() }),
+});
 const queueUpdateSchema = z.object({
   type: z.literal(QUEUE_UPDATED),
   properties: z.object({
@@ -73,11 +86,11 @@ const readBody = (response, cap) => new Promise((resolve, reject) => {
 
 /**
  * `requestInside(spaceId, { path, headers, timeoutMs })` is the dispatcher's; `index` the
- * session index; `hub` the global event hub; `broadcastUiEvent` the host's control stream, and
- * without it no queue connection is made. `stallTimeoutMs`, `queueStallTimeoutMs` and `now` are
- * for the tests.
+ * session index; `hub` the global event hub; `broadcastUiEvent` the host's control stream and
+ * `broadcastGlobalUiEvent` its notification stream, and without one the connection that feeds it
+ * is not made. `stallTimeoutMs`, `stateStallTimeoutMs` and `now` are for the tests.
  */
-export function createSpaceEventSources({ requestInside, index, hub, broadcastUiEvent = null, logger = console, stallTimeoutMs, queueStallTimeoutMs = QUEUE_STALL_TIMEOUT_MS, now = Date.now }) {
+export function createSpaceEventSources({ requestInside, index, hub, broadcastUiEvent = null, broadcastGlobalUiEvent = null, logger = console, stallTimeoutMs, stateStallTimeoutMs = SPACE_STATE_STALL_TIMEOUT_MS, now = Date.now }) {
   const sources = new Map();
 
   const inject = (spaceId, payload, directory) => hub.injectEvent({ payload, directory, spaceId });
@@ -146,9 +159,33 @@ export function createSpaceEventSources({ requestInside, index, hub, broadcastUi
         logger.warn?.(`[spaces] event stream of space ${spaceId}: ${error?.type ?? 'error'} ${error?.status ?? error?.error?.code ?? ''}`.trim());
       },
     });
-    if (broadcastUiEvent) source.queueReader = startQueueReader(spaceId, controller.signal);
+    source.stateReaders = [];
+    if (broadcastUiEvent) {
+      source.stateReaders.push(startStateReader(spaceId, controller.signal, {
+        path: CONTROL_PATH,
+        announce: () => broadcastUiEvent({ type: 'openchamber:space-queue-stream', properties: { spaceId, status: 'connected' } }),
+        forward: (payload) => { if (payload?.type === QUEUE_UPDATED) forwardQueueUpdate(spaceId, payload); },
+      }));
+    }
+    if (broadcastGlobalUiEvent) {
+      source.stateReaders.push(startStateReader(spaceId, controller.signal, {
+        path: NOTIFICATIONS_PATH,
+        announce: () => broadcastGlobalUiEvent({ type: 'openchamber:space-permission-stream', properties: { spaceId, status: 'connected' } }),
+        forward: (payload) => {
+          if (payload?.type === MODES_UPDATED) forwardModesUpdate(spaceId, payload);
+          else if (payload?.type === LEFT_FOR_USER) forwardLeftForUser(spaceId, payload);
+        },
+      }));
+    }
     sources.set(spaceId, source);
     void source.reader.start();
+  };
+
+  /** Whether a space may speak for one of its sessions; a drop is logged as a code with the space id. */
+  const speaksFor = (spaceId, what, sessionId, directory = null) => {
+    const code = index.spaceSessionDropCode(spaceId, sessionId, directory);
+    if (code !== null) logger.warn?.(`[spaces] dropped ${what} of space ${spaceId}: ${code}`);
+    return code === null;
   };
 
   /** A queue change of a space's session, to the browsers, when the space may speak for that session. */
@@ -156,29 +193,54 @@ export function createSpaceEventSources({ requestInside, index, hub, broadcastUi
     const parsed = queueUpdateSchema.safeParse(payload);
     if (!parsed.success) return;
     const { revision, session } = parsed.data.properties;
-    if (!index.acceptSpaceQueueSession(spaceId, session.sessionId, session.directory)) return;
+    if (!speaksFor(spaceId, 'a queue update', session.sessionId, session.directory)) return;
     broadcastUiEvent({ type: QUEUE_UPDATED, properties: { revision, session, spaceId } });
   };
 
-  const startQueueReader = (spaceId, signal) => {
+  /**
+   * The space's permission modes, to the browsers, without the sessions it may not speak for.
+   * `sessions` is the on/off shape older clients read, rebuilt from the modes.
+   */
+  const forwardModesUpdate = (spaceId, payload) => {
+    const parsed = modesUpdateSchema.safeParse(payload);
+    if (!parsed.success) return;
+    const modes = {};
+    const sessions = {};
+    for (const [sessionId, mode] of Object.entries(parsed.data.properties.modes)) {
+      if (!speaksFor(spaceId, 'a permission mode', sessionId)) continue;
+      modes[sessionId] = mode;
+      sessions[sessionId] = mode !== 'ask';
+    }
+    broadcastGlobalUiEvent({ type: MODES_UPDATED, properties: { sessions, modes, revision: parsed.data.properties.revision, spaceId } });
+  };
+
+  /** A request the server inside left for the user, so the browsers show it after all. */
+  const forwardLeftForUser = (spaceId, payload) => {
+    const parsed = leftForUserSchema.safeParse(payload);
+    if (!parsed.success) return;
+    const { permissionId, sessionId, directory } = parsed.data.properties;
+    if (!speaksFor(spaceId, 'a request left for the user', sessionId, directory)) return;
+    broadcastGlobalUiEvent({ type: LEFT_FOR_USER, properties: { permissionId, sessionId, directory, spaceId } });
+  };
+
+  /** One stream inside that feeds a space's own state to the browsers, with its own backoff. */
+  const startStateReader = (spaceId, signal, { path, announce, forward }) => {
     const state = { failures: 0 };
     const reader = createUpstreamSseReader({
       signal,
-      fetchImpl: fetchInside(spaceId, CONTROL_PATH),
-      stallTimeoutMs: queueStallTimeoutMs,
+      fetchImpl: fetchInside(spaceId, path),
+      stallTimeoutMs: stateStallTimeoutMs,
       reconnectDelayMs: () => reconnectDelayAfter(state.failures),
-      buildUrl: () => new URL(`http://space${CONTROL_PATH}`),
+      buildUrl: () => new URL(`http://space${path}`),
       onConnect() {
         state.failures = 0;
-        broadcastUiEvent({ type: 'openchamber:space-queue-stream', properties: { spaceId, status: 'connected' } });
+        announce();
       },
       onDisconnect() { state.failures += 1; },
-      onEvent({ payload }) {
-        if (payload?.type === QUEUE_UPDATED) forwardQueueUpdate(spaceId, payload);
-      },
+      onEvent({ payload }) { forward(payload); },
       onError(error) {
         if (signal.aborted) return;
-        logger.warn?.(`[spaces] control stream of space ${spaceId}: ${error?.type ?? 'error'} ${error?.status ?? error?.error?.code ?? ''}`.trim());
+        logger.warn?.(`[spaces] stream ${path} of space ${spaceId}: ${error?.type ?? 'error'} ${error?.status ?? error?.error?.code ?? ''}`.trim());
       },
     });
     void reader.start();
@@ -191,7 +253,7 @@ export function createSpaceEventSources({ requestInside, index, hub, broadcastUi
     sources.delete(spaceId);
     source.controller.abort();
     source.reader.stop();
-    source.queueReader?.stop();
+    for (const reader of source.stateReaders) reader.stop();
   };
 
   return {

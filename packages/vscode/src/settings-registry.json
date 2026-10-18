@@ -168,9 +168,6 @@
     "agentToolsCodeMode": {
       "scope": "instance"
     },
-    "agentWorktreeMoveWithoutAsking": {
-      "scope": "instance"
-    },
     "agentMemoryToolEnabled": {
       "scope": "instance"
     },
@@ -346,6 +343,10 @@
     },
     "collapsibleUserMessages": {
       "scope": "profile"
+    },
+    "stickyUserHeader": {
+      "scope": "profile",
+      "perSurface": true
     },
     "promptNavigatorEnabled": {
       "scope": "profile",
@@ -760,6 +761,14 @@
       "local": true
     },
     "contextRailHiddenSurfaces": {
+      "scope": "device",
+      "local": true
+    },
+    "mobileWorkspaceTabOrder": {
+      "scope": "device",
+      "local": true
+    },
+    "mobileWorkspaceHiddenTabs": {
       "scope": "device",
       "local": true
     },

@@ -466,6 +466,19 @@ describe("classifyStreamPayload", () => {
       .toEqual({ kind: "space-setup", spaceId: "0123456789ab" })
     expect(classifyStreamPayload({ type: "openchamber:space-setup", properties: { spaceId: "bad" } }, undefined))
       .toEqual({ kind: "events", events: [] })
+    expect(classifyStreamPayload({ type: "openchamber:space-permission-stream", properties: { spaceId: "0123456789ab", status: "connected" } }, undefined))
+      .toEqual({ kind: "space-permission-stream", spaceId: "0123456789ab" })
+    expect(classifyStreamPayload({ type: "openchamber:space-permission-stream", properties: { spaceId: "bad", status: "connected" } }, undefined))
+      .toEqual({ kind: "events", events: [] })
+    // A space's policy and a request it left for the user keep the space's id for their owner.
+    expect(classifyStreamPayload({
+      type: "openchamber:permission-auto-accept.updated",
+      properties: { sessions: { ses_1: true }, modes: { ses_1: "auto" }, revision: 2, spaceId: "0123456789ab" },
+    }, undefined)).toMatchObject({ kind: "events", events: [{ event: { type: "openchamber.permission-auto-accept", properties: { spaceId: "0123456789ab" } } }] })
+    expect(classifyStreamPayload({
+      type: "openchamber:permission-auto-accept.left-for-user",
+      properties: { permissionId: "per_1", sessionId: "ses_1", directory: null, spaceId: "0123456789ab" },
+    }, undefined)).toMatchObject({ kind: "events", events: [{ event: { type: "openchamber.permission-left-for-user", properties: { spaceId: "0123456789ab" } } }] })
     expect(classifyStreamPayload({ type: "openchamber:session-archived", properties: { sessionID: "ses_1", archivedAt: 5 } }, "/frame"))
       .toMatchObject({ kind: "events", events: [{ directory: "/frame", event: { type: "session.patched" } }] })
     expect(classifyStreamPayload({ nothing: true }, undefined)).toEqual({ kind: "events", events: [] })

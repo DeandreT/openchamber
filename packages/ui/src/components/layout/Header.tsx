@@ -41,6 +41,8 @@ import {
 } from '@/components/ui/collapsible';
 import { SpaceAccessButton } from '@/components/session/spaces/SpaceAccessButton';
 import { SpaceApplyButton } from '@/components/session/spaces/SpaceApplyButton';
+import { useDraftSpaceTarget } from '@/lib/spaces/useDraftSpaceTarget';
+import { panelContentDirectory } from '@/lib/spaces/space-creation-requests';
 import { SessionSwitcherDropdown } from '@/components/session/SessionSwitcherDropdown';
 import { SessionTabsStrip, type SessionTabMenuArgs } from './SessionTabsStrip';
 import { SessionMenuItemHint } from '@/components/session/SessionMenuItemHint';
@@ -66,6 +68,8 @@ import { useMultiRunTitle } from '@/lib/multirun/useMultiRuns';
 import { buildSessionTreeMoveMessages, requestSessionTreeMove, useIsSessionWorktreeMovePending } from '@/lib/worktrees/sessionWorktreeMove';
 import { titlebarControlsWidthReaderRef } from './titlebarControlsWidth';
 import { useLayoutAnimationMs } from '@/hooks/useLayoutAnimationMs';
+import { LAYOUT_ANIMATION_EASING } from '@/lib/layoutAnimation';
+import { findWorktreeHoldingDirectory } from '@/lib/worktrees/worktreePaths';
 
 // Like the icon rail: muted at rest, full strength on hover, while its menu is
 // open or while what it controls is on, and no hover fill.
@@ -352,9 +356,12 @@ export const Header: React.FC = () => {
   const selectedSessionDirectory = useSessionUIStore((state) => state.currentSessionDirectory);
   const homeDirectory = useAppDirectoryStore((state) => state.homeDirectory);
 
+  // A draft waiting for a new space shows the space's branch and actions once it runs, and none
+  // of this computer's while it is made.
+  const draftSpace = useDraftSpaceTarget();
   const openDirectory = React.useMemo(() => {
-    return worktreeDirectory || sessionDirectory || draftDirectory;
-  }, [draftDirectory, sessionDirectory, worktreeDirectory]);
+    return worktreeDirectory || sessionDirectory || (panelContentDirectory(draftSpace, draftDirectory) ?? '');
+  }, [draftDirectory, draftSpace, sessionDirectory, worktreeDirectory]);
 
   const catalogWorktreeBranch = useSessionUIStore((state) => {
     const candidateDirectory = normalize(worktreeDirectory || sessionDirectory || '');
@@ -363,7 +370,7 @@ export const Header: React.FC = () => {
     }
 
     for (const worktrees of state.availableWorktreesByProject.values()) {
-      const match = worktrees.find((worktree) => normalize(worktree.path) === candidateDirectory);
+      const match = findWorktreeHoldingDirectory(worktrees, candidateDirectory);
       const branch = match?.branch?.trim();
       if (branch) {
         return branch;
@@ -1049,8 +1056,8 @@ export const Header: React.FC = () => {
           stays a window drag area. */}
       <div
         aria-hidden
-        className="shrink-0 self-stretch transition-[width] ease-out motion-reduce:transition-none"
-        style={{ width: headerInsetSpacerWidth, transitionDuration: `${layoutAnimationMs}ms` }}
+        className="shrink-0 self-stretch transition-[width] motion-reduce:transition-none"
+        style={{ width: headerInsetSpacerWidth, transitionDuration: `${layoutAnimationMs}ms`, transitionTimingFunction: LAYOUT_ANIMATION_EASING }}
       />
       {/* No-drag carve under the persistent TitlebarLeftControls overlay so its
           buttons stay clickable. Width animates with the sidebar so the session
@@ -1058,8 +1065,8 @@ export const Header: React.FC = () => {
       <div
         ref={titlebarControlsWidthReaderRef}
         aria-hidden
-        className="app-region-no-drag shrink-0 self-stretch transition-[width] ease-out motion-reduce:transition-none"
-        style={{ width: headerControlsSpacerWidth, transitionDuration: `${layoutAnimationMs}ms` }}
+        className="app-region-no-drag shrink-0 self-stretch transition-[width] motion-reduce:transition-none"
+        style={{ width: headerControlsSpacerWidth, transitionDuration: `${layoutAnimationMs}ms`, transitionTimingFunction: LAYOUT_ANIMATION_EASING }}
       />
       {/* Sidebar toggle + project actions live in the persistent
           TitlebarLeftControls overlay; the spacers above reserve its footprint
