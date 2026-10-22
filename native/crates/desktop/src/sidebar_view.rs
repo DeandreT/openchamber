@@ -8,6 +8,7 @@ use gpui_kit::{
 use openchamber_native_core::grouping::GroupLabel;
 use openchamber_native_core::sidebar_rows::{ActivityKey, EmptyKind, GroupLoadState, ShowControl};
 
+use crate::activation::on_activate;
 use crate::assets;
 use crate::locale::{self, Strings};
 use crate::sidebar_item::SidebarItem;
@@ -75,8 +76,8 @@ impl Workspace {
                 collapsed,
             } => {
                 let label = zone_label(&strings, *activity);
-                header_row(key, &palette, *collapsed, label, None)
-                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_collapsed(&item, cx)))
+                let row = header_row(key, &palette, *collapsed, label, None);
+                on_activate(row, cx, move |this, _, cx| this.toggle_collapsed(&item, cx))
                     .test_support()
                     .into_any_element()
             }
@@ -85,11 +86,13 @@ impl Workspace {
                 label,
                 collapsed,
                 ..
-            } => header_row(key, &palette, *collapsed, label.clone(), Some("folder"))
-                .text_color(palette.foreground)
-                .on_click(cx.listener(move |this, _, _, cx| this.toggle_collapsed(&item, cx)))
-                .test_support()
-                .into_any_element(),
+            } => {
+                let row = header_row(key, &palette, *collapsed, label.clone(), Some("folder"))
+                    .text_color(palette.foreground);
+                on_activate(row, cx, move |this, _, cx| this.toggle_collapsed(&item, cx))
+                    .test_support()
+                    .into_any_element()
+            }
             SidebarItem::Group {
                 key,
                 label,
@@ -103,11 +106,14 @@ impl Workspace {
                 } else {
                     chevron(*collapsed, &palette).into_any_element()
                 };
-                tree_row(key, &palette, 1, slot, false)
+                let row = tree_row(key, &palette, 1, slot, false)
+                    .role(Role::Button)
+                    .aria_label(text.clone())
+                    .aria_expanded(!*collapsed)
                     .h(px(SESSION_HEIGHT))
                     .child(icon_element(icon, &palette, palette.muted_foreground))
-                    .child(row_text(text, palette.muted_foreground))
-                    .on_click(cx.listener(move |this, _, _, cx| this.toggle_collapsed(&item, cx)))
+                    .child(row_text(text, palette.muted_foreground));
+                on_activate(row, cx, move |this, _, cx| this.toggle_collapsed(&item, cx))
                     .test_support()
                     .into_any_element()
             }
@@ -132,18 +138,18 @@ impl Workspace {
                     } else {
                         strings.get("sessions.sidebar.session.subsessions.expand")
                     };
-                    div()
+                    let button = div()
                         .id(SharedString::from(format!("{key}:chevron")))
                         .role(Role::Button)
                         .aria_label(label)
                         .aria_expanded(*expanded)
-                        .child(chevron(!*expanded, &palette))
-                        .on_click(cx.listener(move |this, _, _, cx| {
-                            cx.stop_propagation();
-                            this.toggle_expanded(&expansion_key, cx);
-                        }))
-                        .test_support()
-                        .into_any_element()
+                        .child(chevron(!*expanded, &palette));
+                    on_activate(button, cx, move |this, _, cx| {
+                        cx.stop_propagation();
+                        this.toggle_expanded(&expansion_key, cx);
+                    })
+                    .test_support()
+                    .into_any_element()
                 } else {
                     div().into_any_element()
                 };
@@ -157,7 +163,7 @@ impl Workspace {
                 } else {
                     palette.muted_foreground
                 };
-                tree_row(key, &palette, *depth, slot, selected)
+                let row = tree_row(key, &palette, *depth, slot, selected)
                     .role(Role::TreeItem)
                     .aria_label(title.clone())
                     .aria_selected(selected)
@@ -170,12 +176,12 @@ impl Workspace {
                     })
                     .when(*pinned && !streaming, |this| {
                         this.child(icon_element("pushpin", &palette, palette.muted_foreground))
-                    })
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.select_session(id.clone(), window, cx);
-                    }))
-                    .test_support()
-                    .into_any_element()
+                    });
+                on_activate(row, cx, move |this, window, cx| {
+                    this.select_session(id.clone(), window, cx);
+                })
+                .test_support()
+                .into_any_element()
             }
             SidebarItem::Show {
                 key,
@@ -187,12 +193,12 @@ impl Workspace {
                     ShowControl::More => strings.get("sessions.sidebar.group.showMore"),
                     ShowControl::Fewer => strings.get("sessions.sidebar.group.showFewer"),
                 };
-                notice_row(key, *depth, label.clone(), palette.muted_foreground)
+                let row = notice_row(key, *depth, label.clone(), palette.muted_foreground)
                     .role(Role::Button)
                     .aria_label(label)
                     .cursor_pointer()
-                    .hover(|style| style.text_color(palette.foreground))
-                    .on_click(cx.listener(move |this, _, _, cx| this.reveal(&item, cx)))
+                    .hover(|style| style.text_color(palette.foreground));
+                on_activate(row, cx, move |this, _, cx| this.reveal(&item, cx))
                     .test_support()
                     .into_any_element()
             }

@@ -5,6 +5,7 @@
 //! window shows deterministic synthetic data and makes no network or
 //! provider calls.
 
+mod activation;
 mod assets;
 mod composer_view;
 mod diagnostics;

@@ -231,15 +231,25 @@ export class CdpClient {
   // an hour with its own --timeout unable to fire. Generous enough for
   // Profiler.stop and Tracing.end on long captures.
   send(method, params = {}, { timeoutMs = 300_000 } = {}) {
+    return this.request({ method, params }, timeoutMs)
+  }
+
+  // A command for a target attached to this browser connection with
+  // `Target.setAutoAttach({ flatten: true })`.
+  sendSession(sessionId, method, params = {}, { timeoutMs = 300_000 } = {}) {
+    return this.request({ sessionId, method, params }, timeoutMs)
+  }
+
+  request(message, timeoutMs) {
     const id = this.nextId++
     return new Promise((resolveSend, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id)
-        reject(new Error(`CDP ${method} got no reply within ${Math.round(timeoutMs / 1000)}s`))
+        reject(new Error(`CDP ${message.method} got no reply within ${Math.round(timeoutMs / 1000)}s`))
       }, timeoutMs)
       const settle = (callback) => (value) => { clearTimeout(timer); callback(value) }
       this.pending.set(id, { resolve: settle(resolveSend), reject: settle(reject) })
-      this.socket.send(JSON.stringify({ id, method, params }))
+      this.socket.send(JSON.stringify({ id, ...message }))
     })
   }
 

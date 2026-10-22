@@ -2,9 +2,10 @@
 
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, KeyBinding, ParentElement, Render, Styled, Window,
-    actions, div, prelude::FluentBuilder,
+    actions, canvas, div, prelude::FluentBuilder,
 };
 
+use crate::diagnostics;
 use crate::locale::{self, Direction};
 use crate::theme::Palette;
 use crate::workspace::Workspace;
@@ -33,8 +34,8 @@ pub fn bind_keys(cx: &mut gpui_kit::App) {
 }
 
 impl Render for Workspace {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.record_frame_markers(window);
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let markers = self.take_frame_markers();
         let palette = cx.global::<Palette>().clone();
         let right_to_left = locale::strings(cx).direction() == Direction::RightToLeft;
         div()
@@ -67,5 +68,20 @@ impl Render for Workspace {
                     .child(self.render_transcript(&palette, cx))
                     .child(self.render_composer(&palette, cx)),
             )
+            .when(!markers.is_empty(), |this| {
+                // A zero-size canvas paints after the views above it in the same frame.
+                this.child(
+                    canvas(
+                        |_, _, _| {},
+                        move |_, _, _, _| {
+                            for (marker, started) in markers {
+                                let elapsed = started.map(|started| started.elapsed());
+                                diagnostics::mark(marker, elapsed, None);
+                            }
+                        },
+                    )
+                    .size_0(),
+                )
+            })
     }
 }
