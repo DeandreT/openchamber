@@ -1,0 +1,113 @@
+{
+  "$comment": "User-visible behavior the native desktop must match. Requirements only; results belong in private run reports. See docs/rust-desktop/PARITY.md.",
+  "groups": {
+    "shell": "Shell and navigation",
+    "sessions": "Sessions and projects",
+    "transcript": "Transcript",
+    "motion": "Transcript motion",
+    "composer": "Composer",
+    "runtime": "Runtime and host",
+    "restricted": "Restricted states"
+  },
+  "features": [
+    {
+      "id": "shell.startup-view",
+      "group": "shell",
+      "title": "The window after startup: no session selected, the new-session view with its project chooser, composer and starters",
+      "reference": ["packages/ui/src/components/chat/ChatContainer.tsx", "packages/ui/src/components/chat/composer"],
+      "states": ["loading", "loaded", "server unreachable"],
+      "scenarios": ["shell.startup"],
+      "coverage": "automated"
+    },
+    {
+      "id": "shell.header",
+      "group": "shell",
+      "title": "Title bar row: menu, sidebar toggle, new session, panel toggles and window controls",
+      "reference": ["packages/ui/src/components/layout/Header.tsx"],
+      "states": ["default", "hover", "focused", "sidebar hidden"],
+      "scenarios": ["shell.startup"],
+      "coverage": "automated"
+    },
+    {
+      "id": "shell.sidebar-toolbar",
+      "group": "shell",
+      "title": "Sidebar toolbar: view, schedule, archive and store icons; search, add project and display options",
+      "reference": ["packages/ui/src/components/session/sidebar/shell/SidebarHeader.tsx"],
+      "states": ["default", "hover", "search open"],
+      "scenarios": ["shell.startup"],
+      "coverage": "automated"
+    },
+    {
+      "id": "shell.sidebar-footer",
+      "group": "shell",
+      "title": "Sidebar footer: settings, usage, shortcuts, about and the runtime chip",
+      "reference": ["packages/ui/src/components/session/sidebar/shell"],
+      "states": ["local", "remote", "disconnected"],
+      "scenarios": ["shell.startup"],
+      "coverage": "automated"
+    },
+    {
+      "id": "shell.right-rail",
+      "group": "shell",
+      "title": "Right rail of panel toggles and the session context panel",
+      "reference": ["packages/ui/src/components/layout"],
+      "states": ["collapsed", "expanded"],
+      "scenarios": ["shell.startup"],
+      "coverage": "automated"
+    },
+    {
+      "id": "sessions.zones",
+      "group": "sessions",
+      "title": "Chats, Pinned and In work zones with headers, collapse state, loading and empty rows",
+      "reference": ["packages/ui/src/components/session/sidebar/sessionSidebarRowModel.ts"],
+      "states": ["loading", "empty", "collapsed", "expanded"],
+      "scenarios": ["shell.startup"],
+      "coverage": "automated"
+    },
+    {
+      "id": "sessions.project-timeline",
+      "group": "sessions",
+      "title": "Project sections in the default timeline view: header, sessions newest first, show more",
+      "reference": ["packages/ui/src/components/session/sidebar/SessionSidebarRows.tsx"],
+      "states": ["collapsed", "expanded", "long list"],
+      "scenarios": ["shell.startup"],
+      "coverage": "automated"
+    },
+    {
+      "id": "sessions.row",
+      "group": "sessions",
+      "title": "Session rows: full-width hit target, icon, title truncation, activity glyph and relative time, hover and selected treatment",
+      "reference": ["packages/ui/src/components/session/sidebar/sessions/SessionNodeItem.tsx"],
+      "states": ["default", "hover", "selected", "running", "unread"],
+      "scenarios": ["shell.startup", "sessions.select-pointer"],
+      "coverage": "automated"
+    },
+    {
+      "id": "sessions.select",
+      "group": "sessions",
+      "title": "Selecting a session by pointer, keyboard and accessibility action reveals its transcript and keeps drafts",
+      "reference": ["packages/ui/src/sync/session-navigation.ts"],
+      "states": ["unvisited", "visited", "loading", "failed"],
+      "scenarios": ["sessions.select-pointer"],
+      "coverage": "automated"
+    },
+    {
+      "id": "sessions.ordering",
+      "group": "sessions",
+      "title": "Zone and project ordering follows activity: a session moved or answered most recently comes first",
+      "reference": ["packages/ui/src/sync/session-ordering.ts"],
+      "states": ["after startup", "after a live transition", "after reload"],
+      "scenarios": ["shell.startup"],
+      "coverage": "automated"
+    },
+    {
+      "id": "runtime.connection-states",
+      "group": "runtime",
+      "title": "Connecting, reconnecting and failed connections keep the last valid state and explain the failure",
+      "reference": ["packages/ui/src/sync/event-pipeline.ts"],
+      "states": ["connecting", "reconnecting", "unreachable", "authentication required", "incompatible"],
+      "scenarios": [],
+      "coverage": "manual"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "$comment": "Parity scenarios. Rows are addressed by key prefix and title, never by seeded session IDs. See scripts/parity/DOCUMENTATION.md.",
+  "scenarios": [
+    {
+      "id": "shell.startup",
+      "feature": "shell.startup-view",
+      "description": "The window after startup on the seed: sidebar, startup view, composer and rails.",
+      "steps": [
+        { "capture": "startup" }
+      ]
+    },
+    {
+      "id": "sessions.select-pointer",
+      "feature": "sessions.select",
+      "description": "A pointer click on an In work row selects the session and reveals its transcript.",
+      "steps": [
+        { "click": { "zone": "activity:work:session:", "title": "parity: long" } },
+        { "settle": 1.5 },
+        { "capture": "selected" }
+      ]
+    }
+  ]
+}
