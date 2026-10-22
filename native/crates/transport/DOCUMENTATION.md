@@ -1,0 +1,92 @@
+# Native transport
+
+`openchamber-native-transport` connects the native desktop to one OpenChamber
+server. It owns the endpoint, service identity, authentication, requests, wire
+parsing and the global event stream, and hands the rest of the application
+core records (`SessionRecord`, `Message`) and domain events. No wire type
+leaves the crate. The contract and the reasons for a hand-written adapter are
+in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE_ADAPTER.md).
+
+## Structure
+
+| Module | Owns |
+| --- | --- |
+| `endpoint.rs` | The user-selected base URL, its path prefix and the `ws`/`wss` form of a route. |
+| `identity.rs` | `/health` parsing, API compatibility and capabilities. |
+| `credential.rs` | The credential a client sends; its `Debug` output is redacted. |
+| `client.rs` | `ServerClient`: identity probe, password login, session pages, message pages, whole messages and Chats roots. |
+| `wire.rs` | Serde shapes of the fields the client reads. Private. |
+| `projection.rs` | Wire records to core records, mirroring `packages/ui/src/lib/opencode/projection.ts`. Private. |
+| `event.rs` | Bridge frames to `ServerEvent`s, mirroring `lib/opencode/events.ts` and `sync/event-pipeline.ts`. |
+| `stream.rs` | `EventStream`: the reconnecting WebSocket subscription. |
+| `parity_tests.rs` | Differential tests against the official client's fixture. |
+
+`examples/probe.rs` exercises the crate against a running server and prints
+counts and identifiers only.
+
+## Invariants
+
+- The identity probe sends no credential. A server that does not answer an
+  OpenChamber identity is `NotOpenChamber`, and a server whose API range
+  excludes this client is `Incompatible`, before any credential is sent.
+- Redirects are never followed, by HTTP or WebSocket requests, so a credential
+  never moves to another origin.
+- A credential appears only in the `Authorization` header, marked sensitive.
+  It is never part of a URL, an error, a log line or `Debug` output.
+- Every failure is a distinct `TransportError`. None is an empty success; a
+  caller keeps its last valid state.
+- `all_sessions` walks every page or fails as a whole. A partial list has no
+  authority to remove sessions it did not reach.
+- A message page shorter than its limit is the oldest page, whatever cursor
+  the server still names.
+- Session and message routes send no directory header: the server resolves
+  the session's own location. Directory-scoped reads encode the directory as
+  `encodeURIComponent` does.
+- Message pages ask for part shells only when `/health` lists
+  `api.message-part-shells.v1`. `session_message` returns the whole message.
+- The event stream delivers through a bounded channel and waits for the
+  consumer instead of dropping events. Dropping `EventStream` stops the
+  subscription only; it never stops the server or a running turn.
+- Unmodelled event types become `ServerEvent::Unsupported` with their name
+  only, never a guessed state change.
+
+## Decisions
+
+### Why the WebSocket bridge and not OpenCode's event stream
+
+`/api/global/event/ws` carries OpenCode's events together with OpenChamber's
+own (archive, session metadata, live status, heartbeats) and replays from
+`lastEventId` after a reconnect. OpenCode's `/api/event` carries none of the
+OpenChamber events and does not replay. When replay cannot resume, the
+`ready` frame says so and the consumer reconciles affected scopes from
+authoritative reads.
+
+### Why part shells
+
+Finished tool results are most of a message page's bytes and show only when a
+row expands. A shelled page keeps everything a collapsed row reads and marks
+the left-out length in `PartContent::Tool::elided`; the row fetches the whole
+message when it needs the result. The core keeps any whole result it already
+holds (see its documentation).
+
+### Why differential fixtures
+
+`packages/ui/src/lib/native/transportFixtures.ts` drives the pinned
+`@opencode/client` against the recorded responses in
+`tests/fixtures/wire/`, records the requests it sends and projects the
+responses with the UI's own code. `parity_tests.rs` requires the same
+requests (path, query, directory and shells headers), the same projected
+sessions and messages, and the same older-page cursors. It also replays the
+recorded event frames and requires them to converge on the history the server
+returns for the same session. The fixture's own UI test fails when it is
+stale, so a client upgrade or projection change surfaces in both languages.
+
+### Recording wire samples
+
+Wire samples come from an isolated server (`bun run profile:serve`) seeded
+through `scripts/perf/seed-long-session.mjs` with the fixture provider's
+models, so their content is synthetic. Before a sample is checked in, every
+absolute path of the isolated project is replaced with
+`/home/synthetic/project`, and the sample must contain no other path of the
+recording machine. After replacing a sample, run
+`bun run native:transport-fixtures` and the transport tests.

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core", "crates/desktop"]
+members = ["crates/core", "crates/desktop", "crates/transport"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,9 +11,15 @@ publish = false
 
 [workspace.dependencies]
 openchamber-native-core = { path = "crates/core" }
+openchamber-native-transport = { path = "crates/transport" }
+futures-util = { version = "=0.3.34", default-features = false, features = ["std", "sink"] }
 gpui-kit = "=0.7.3"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
+reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "json", "charset"] }
+thiserror = "=2.0.21"
+tokio = { version = "=1.53.3", features = ["rt-multi-thread", "macros", "sync", "time", "net", "io-util"] }
+tokio-tungstenite = { version = "=0.30.0", features = ["rustls-tls-native-roots"] }
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["env-filter", "fmt", "std", "tracing-log"] }
 

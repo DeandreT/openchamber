@@ -37,6 +37,7 @@
     "settings-registry:generate": "bun run --cwd packages/ui src/lib/settings/registry-snapshot.ts",
     "native:fixtures": "bun run --cwd packages/ui src/lib/native/sidebarParityFixtures.ts",
     "native:resources": "bun run --cwd packages/ui src/lib/native/nativeResources.ts",
+    "native:transport-fixtures": "bun run --cwd packages/ui src/lib/native/transportFixtures.ts",
     "native:check": "cd native && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings",
     "native:test": "cd native && cargo test --workspace",
     "native:build": "cd native && cargo build --release -p openchamber-native-desktop",

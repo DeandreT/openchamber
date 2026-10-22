@@ -1,0 +1,1218 @@
+[
+ {
+  "type": "ready",
+  "scope": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b63c00001FAliRl966XFkq8",
+   "created": 1792691026944,
+   "type": "session.created",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "slug": "crisp-comet",
+    "version": "2.0.32",
+    "projectID": "global",
+    "location": {
+     "directory": "/home/synthetic/project"
+    },
+    "subpath": "",
+    "title": "native: recorded"
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 0,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b63c00001FAliRl966XFkq8",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b63c350016Ys4YoZqnHOX6G",
+   "created": 1792691026997,
+   "type": "project.updated",
+   "data": {
+    "id": "global",
+    "canonical": "/home/synthetic/project",
+    "vcs": "git",
+    "time": {
+     "created": 1792690890553,
+     "updated": 1792690890553,
+     "active": 1792691026990
+    },
+    "sandboxes": []
+   }
+  },
+  "eventId": "evt_164b63c350016Ys4YoZqnHOX6G",
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b6499b001gOrvxdwOOlYGAI",
+   "created": 1792691030427,
+   "type": "session.model.selected",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "model": {
+     "id": "stream-20000cps",
+     "providerID": "perf"
+    }
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 1,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b6499b001gOrvxdwOOlYGAI",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b649e8001cUN3zpDAaagulO",
+   "created": 1792691030504,
+   "type": "session.agent.selected",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "agent": "build"
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 2,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b649e8001cUN3zpDAaagulO",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b64a52001Dc6765P7eVIjSI",
+   "created": 1792691030610,
+   "type": "session.inbox.enqueued",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "inboxID": "msg_164b64a50001SM08pX22Ti9w61",
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "item": {
+     "type": "user",
+     "payload": {
+      "text": "Turn 1: explain the next part."
+     },
+     "delivery": "steer"
+    }
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 3,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b64a52001Dc6765P7eVIjSI",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b64a5a001ThFu7zbeKbhtiU",
+   "created": 1792691030618,
+   "type": "session.execution.started",
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH"
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 4,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b64a5a001ThFu7zbeKbhtiU",
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-status",
+   "properties": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "status": "busy",
+    "timestamp": 1792691030904,
+    "metadata": {},
+    "needsAttention": false
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-activity",
+   "properties": {
+    "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "phase": "busy"
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-activity",
+   "properties": {
+    "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "phase": "busy"
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-status",
+   "properties": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "status": "busy",
+    "timestamp": 1792691030905,
+    "metadata": {},
+    "needsAttention": false
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b64aa5001zxqmIDykrKpUhY",
+   "created": 1792691030693,
+   "metadata": {
+    "instructions": {
+     "initial": true
+    }
+   },
+   "type": "session.instructions.updated",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "delta": {
+     "core/codemode": "e6428fd7742161f6c3a6c86e53cbbe2c6e4dcc462bbf1a1a07bc4fcbeb9e0b0b",
+     "core/skill-guidance": "ac1e2e886a0f5ca132a6e4882fefe581bf99c1befdf1a30b946d676a2e24d1ac",
+     "core/date": "d903b8401d79ddb71d11815176e74fbbb54b53d5353ceebf23ac21fde48e2243",
+     "core/environment": "a037fb8e475d8cc2f2aafa60972ccaf7e59304cbdb8144fd1bfa6ffd402278d5",
+     "api/openchamber.checkout": "2bc9724aef9b1ec8201febdb19a48848644da7df2f6678e210c080d8e8af60b3",
+     "api/openchamber.guidance": "a33b6c876f4d062c4b0a3791df9462c8fa175f4dee6e955790273da4fdb61802"
+    }
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 5,
+    "version": 2
+   }
+  },
+  "eventId": "evt_164b64aa5001zxqmIDykrKpUhY",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b64ab2001FfIzTIFps8oOzt",
+   "created": 1792691030707,
+   "type": "session.inbox.delivered",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "inboxID": "msg_164b64a50001SM08pX22Ti9w61"
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 6,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b64ab2001FfIzTIFps8oOzt",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-metadata",
+   "properties": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "metadata": {
+     "openchamber": {
+      "work": {
+       "state": "open",
+       "openedAt": 1792691030946,
+       "openedBy": "auto"
+      }
+     }
+    }
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b64bab001og8TS3K0mnb5nI",
+   "created": 1792691030955,
+   "type": "session.metadata.updated",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "metadata": {
+     "openchamber": {
+      "work": {
+       "state": "open",
+       "openedAt": 1792691030946,
+       "openedBy": "auto"
+      }
+     }
+    }
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 7,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b64bab001og8TS3K0mnb5nI",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b64bb90011REqVnEwfBTJUB",
+   "created": 1792691030969,
+   "type": "session.step.started",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "agent": "build",
+    "model": {
+     "id": "stream-20000cps",
+     "providerID": "perf",
+     "variant": "default"
+    },
+    "assistantMessageID": "msg_164b64aee001nTYDQhVv2HEVZ9",
+    "snapshot": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+    "started": 1792691030867
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 8,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b64bb90011REqVnEwfBTJUB",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-status",
+   "properties": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "status": "busy",
+    "timestamp": 1792691031011,
+    "metadata": {},
+    "needsAttention": false
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-activity",
+   "properties": {
+    "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "phase": "busy"
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b64bc50017eDJp4iex6Rof8",
+   "created": 1792691030981,
+   "type": "session.text.started",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "assistantMessageID": "msg_164b64aee001nTYDQhVv2HEVZ9",
+    "ordinal": 0
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 9,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b64bc50017eDJp4iex6Rof8",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b64c77001yqSKjGcZ2nCFgU",
+   "created": 1792691031159,
+   "type": "session.text.delta",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "assistantMessageID": "msg_164b64aee001nTYDQhVv2HEVZ9",
+    "ordinal": 0,
+    "delta": "## 1. Executing a call in a bytecode virtual machine\n\nA bytecode virtual machine executes a function call by creating a new **activation record**, binding the\narguments, and transferring control to the callee's first instruction. The caller's state is preserved so that\nexecution resumes at the instruction after the call once the callee returns. Round 1 of this document\nrepeats the explanation so that the response is long enough to measure.\n\n1. The compiler emits a `CALL` instruction carrying the argument count.\n2. The interpreter pops the callee and its arguments from the operand stack.\n3. A frame is pushed holding the return address, the base pointer and the locals.\n4. The dispatch loop continues at the callee's entry point.\n\n```python\ndef call(vm, argc):\n    callee = vm.stack[-argc - 1]\n    "
+   }
+  },
+  "eventId": "evt_164b64c77001yqSKjGcZ2nCFgU",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b64ce9001oSEVjBi5ZvMdoH",
+   "created": 1792691031273,
+   "type": "session.text.delta",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "assistantMessageID": "msg_164b64aee001nTYDQhVv2HEVZ9",
+    "ordinal": 0,
+    "delta": "frame = Frame(callee, base=len(vm.stack) - argc, return_ip=vm.ip)\n    vm.frames.append(frame)\n    vm.ip = callee.entry\n```\n\n```rust\nfn call(&mut self, argc: usize) -> Result<(), VmError> {\n    let base = self.stack.len() - argc;\n    let callee = self.stack[base - 1].as_function()?;\n    self.frames.push(Frame { base, return_ip: self.ip, function: callee.clone() });\n    self.ip = callee.entry;\n    Ok(())\n}\n```\n\n```typescript\nfunction call(vm: Vm, argc: number): void {\n  const base = vm.stack.length - argc\n  const callee = asFunction(vm.stack[base - 1])\n  vm.frames.push({ base, returnIp: vm.ip, fn: callee })\n  vm.ip = callee.entry\n}\n```\n\n| Aspect | Stack machine | Register machine |\n|---|---|---|\n| Operands | implicit, on the operand stack | explicit register indices |\n| Instruction size | small | larger |\n| Instruction cou"
+   }
+  },
+  "eventId": "evt_164b64ce9001oSEVjBi5ZvMdoH",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b64d59001wfil7tNPxsVXMA",
+   "created": 1792691031385,
+   "type": "session.text.delta",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "assistantMessageID": "msg_164b64aee001nTYDQhVv2HEVZ9",
+    "ordinal": 0,
+    "delta": "nt | higher | lower |\n| Call setup | arguments already in place | arguments copied into a window |\n\nReturning reverses the sequence: the result is moved to where the caller expects it, the frame is popped, and\nthe instruction pointer is restored from the saved return address.\n\n## 2. Executing a call in a bytecode virtual machine\n\nA bytecode virtual machine executes a function call by creating a new **activation record**, binding the\narguments, and transferring control to the callee's first instruction. The caller's state is preserved so that\nexecution resumes at the instruction after the call once the callee returns. Round 2 of this document\nrepeats the explanation so that the response is long enough to measure.\n\n1. The compiler emits a `CALL` instruction carrying the argument count.\n2. The interpreter pops the callee and its arguments from the operand stack.\n3. A frame is pushed holding the return address, the base pointer and the locals.\n4. The dispatch loop continues at the callee's entry point.\n\n```python\ndef call(vm, argc):\n    callee = vm.stack[-argc - 1]\n    frame = Frame(callee, base=len(vm.stack) - argc, return_ip=vm.ip)\n    vm.frames.append(frame)\n    vm.ip = callee.entry\n```\n\n```rust\nfn call(&mut self, argc: usize) -> Res"
+   }
+  },
+  "eventId": "evt_164b64d59001wfil7tNPxsVXMA",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b64dc20019vhe1kLthyCQjr",
+   "created": 1792691031490,
+   "type": "session.text.delta",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "assistantMessageID": "msg_164b64aee001nTYDQhVv2HEVZ9",
+    "ordinal": 0,
+    "delta": "ult<(), VmError> {\n    let base = self.stack.len() - argc;\n    let callee = self.stack[base - 1].as_function()?;\n    self.frames.push(Frame { base, return_ip: self.ip, function: callee.clone() });\n    self.ip = callee.entry;\n    Ok(())\n}\n```\n\n```typescript\nfunction call(vm: Vm, argc: number): void {\n  const base = vm.stack.length - argc\n  const callee = asFunction(vm.stack[base - 1])\n  vm.frames.push({ base, returnIp: vm.ip, fn: callee })\n  vm.ip = callee.entry\n}\n```\n\n| Aspect | Stack machine | Register machine |\n|---|---|---|\n| Operands | implicit, on the operand stack | explicit register indices |\n| Instruction size | small | larger |\n| Instruction count | higher | lower |\n| Call setup | arguments already in place | arguments copied into a window |\n\nReturning reverses the sequence: the result is moved to where the caller expects it, the frame is popped, and\nthe instruction pointer is restored from the saved return address.\n\n## 3. Executing a call in a bytecode virtual machine\n\nA bytecode virtual machine executes a function call by creating a new **activation record**, binding the\narguments, and transferring control to the callee's first instruction. The caller's state is preserved so that\nexecution resumes at the instruction after the call once the callee returns. Round 3 of this document\nrepeats the explanation so that the response is long enough to measure.\n\n1. The compiler emits a `CALL` instruction carrying the argument count.\n2. The interpreter pops the callee and its arguments from the operand stack.\n3. A frame is pushed holding the r"
+   }
+  },
+  "eventId": "evt_164b64dc20019vhe1kLthyCQjr",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b64df7001K5gfROeMKZXHHk",
+   "created": 1792691031543,
+   "type": "session.text.delta",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "assistantMessageID": "msg_164b64aee001nTYDQhVv2HEVZ9",
+    "ordinal": 0,
+    "delta": "eturn address, the base pointer and the locals.\n4. The dispatch loop continues at the callee's entry point.\n\n```python\ndef call(vm, argc):\n    callee = vm.stack[-argc - 1]\n    frame = Frame(callee, base=len(vm.stack) - argc, return_ip=vm.ip)\n    vm.frames.append(frame)\n    vm.ip = callee.entry\n```\n\n```rust\nfn call(&mut self, argc: usize) -> Result<(), VmError> {\n    let base = self.stack.len() - argc;\n    let callee = self.stack[base - 1].as_function()?;\n    self.frames.push(Frame { base, return_ip: self.ip, function: callee.clone() });\n    self.ip = callee.entry;\n    Ok(())\n}\n```\n\n```typescript\nfunction call(vm: Vm, argc: number): void {\n  const base = vm.stack.length - argc\n  const callee = asFunction(vm.stack[base - 1])\n  vm.frames.push({ base, returnIp: vm.ip, fn: callee })\n  vm.ip = callee.entry\n}\n```\n\n| Aspect | Stack machine | Register machine |\n|---|---|---|\n| Operands | implicit, on the operand stack | explicit register indices |\n| Instruction size | small | larger |\n| Instruction count | higher | lower |\n| Call setup | arguments already in place | arguments copied into a window |\n\nReturning reverses the sequence: the result is moved to where the caller expects it, the frame is popped, and\nthe instruction pointer is restored from the saved return address.\n\n"
+   }
+  },
+  "eventId": "evt_164b64df7001K5gfROeMKZXHHk",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b64df80016CxQtpensVPg3b",
+   "created": 1792691031544,
+   "type": "session.text.ended",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "assistantMessageID": "msg_164b64aee001nTYDQhVv2HEVZ9",
+    "ordinal": 0,
+    "text": "## 1. Executing a call in a bytecode virtual machine\n\nA bytecode virtual machine executes a function call by creating a new **activation record**, binding the\narguments, and transferring control to the callee's first instruction. The caller's state is preserved so that\nexecution resumes at the instruction after the call once the callee returns. Round 1 of this document\nrepeats the explanation so that the response is long enough to measure.\n\n1. The compiler emits a `CALL` instruction carrying the argument count.\n2. The interpreter pops the callee and its arguments from the operand stack.\n3. A frame is pushed holding the return address, the base pointer and the locals.\n4. The dispatch loop continues at the callee's entry point.\n\n```python\ndef call(vm, argc):\n    callee = vm.stack[-argc - 1]\n    frame = Frame(callee, base=len(vm.stack) - argc, return_ip=vm.ip)\n    vm.frames.append(frame)\n    vm.ip = callee.entry\n```\n\n```rust\nfn call(&mut self, argc: usize) -> Result<(), VmError> {\n    let base = self.stack.len() - argc;\n    let callee = self.stack[base - 1].as_function()?;\n    self.frames.push(Frame { base, return_ip: self.ip, function: callee.clone() });\n    self.ip = callee.entry;\n    Ok(())\n}\n```\n\n```typescript\nfunction call(vm: Vm, argc: number): void {\n  const base = vm.stack.length - argc\n  const callee = asFunction(vm.stack[base - 1])\n  vm.frames.push({ base, returnIp: vm.ip, fn: callee })\n  vm.ip = callee.entry\n}\n```\n\n| Aspect | Stack machine | Register machine |\n|---|---|---|\n| Operands | implicit, on the operand stack | explicit register indices |\n| Instruction size | small | larger |\n| Instruction count | higher | lower |\n| Call setup | arguments already in place | arguments copied into a window |\n\nReturning reverses the sequence: the result is moved to where the caller expects it, the frame is popped, and\nthe instruction pointer is restored from the saved return address.\n\n## 2. Executing a call in a bytecode virtual machine\n\nA bytecode virtual machine executes a function call by creating a new **activation record**, binding the\narguments, and transferring control to the callee's first instruction. The caller's state is preserved so that\nexecution resumes at the instruction after the call once the callee returns. Round 2 of this document\nrepeats the explanation so that the response is long enough to measure.\n\n1. The compiler emits a `CALL` instruction carrying the argument count.\n2. The interpreter pops the callee and its arguments from the operand stack.\n3. A frame is pushed holding the return address, the base pointer and the locals.\n4. The dispatch loop continues at the callee's entry point.\n\n```python\ndef call(vm, argc):\n    callee = vm.stack[-argc - 1]\n    frame = Frame(callee, base=len(vm.stack) - argc, return_ip=vm.ip)\n    vm.frames.append(frame)\n    vm.ip = callee.entry\n```\n\n```rust\nfn call(&mut self, argc: usize) -> Result<(), VmError> {\n    let base = self.stack.len() - argc;\n    let callee = self.stack[base - 1].as_function()?;\n    self.frames.push(Frame { base, return_ip: self.ip, function: callee.clone() });\n    self.ip = callee.entry;\n    Ok(())\n}\n```\n\n```typescript\nfunction call(vm: Vm, argc: number): void {\n  const base = vm.stack.length - argc\n  const callee = asFunction(vm.stack[base - 1])\n  vm.frames.push({ base, returnIp: vm.ip, fn: callee })\n  vm.ip = callee.entry\n}\n```\n\n| Aspect | Stack machine | Register machine |\n|---|---|---|\n| Operands | implicit, on the operand stack | explicit register indices |\n| Instruction size | small | larger |\n| Instruction count | higher | lower |\n| Call setup | arguments already in place | arguments copied into a window |\n\nReturning reverses the sequence: the result is moved to where the caller expects it, the frame is popped, and\nthe instruction pointer is restored from the saved return address.\n\n## 3. Executing a call in a bytecode virtual machine\n\nA bytecode virtual machine executes a function call by creating a new **activation record**, binding the\narguments, and transferring control to the callee's first instruction. The caller's state is preserved so that\nexecution resumes at the instruction after the call once the callee returns. Round 3 of this document\nrepeats the explanation so that the response is long enough to measure.\n\n1. The compiler emits a `CALL` instruction carrying the argument count.\n2. The interpreter pops the callee and its arguments from the operand stack.\n3. A frame is pushed holding the return address, the base pointer and the locals.\n4. The dispatch loop continues at the callee's entry point.\n\n```python\ndef call(vm, argc):\n    callee = vm.stack[-argc - 1]\n    frame = Frame(callee, base=len(vm.stack) - argc, return_ip=vm.ip)\n    vm.frames.append(frame)\n    vm.ip = callee.entry\n```\n\n```rust\nfn call(&mut self, argc: usize) -> Result<(), VmError> {\n    let base = self.stack.len() - argc;\n    let callee = self.stack[base - 1].as_function()?;\n    self.frames.push(Frame { base, return_ip: self.ip, function: callee.clone() });\n    self.ip = callee.entry;\n    Ok(())\n}\n```\n\n```typescript\nfunction call(vm: Vm, argc: number): void {\n  const base = vm.stack.length - argc\n  const callee = asFunction(vm.stack[base - 1])\n  vm.frames.push({ base, returnIp: vm.ip, fn: callee })\n  vm.ip = callee.entry\n}\n```\n\n| Aspect | Stack machine | Register machine |\n|---|---|---|\n| Operands | implicit, on the operand stack | explicit register indices |\n| Instruction size | small | larger |\n| Instruction count | higher | lower |\n| Call setup | arguments already in place | arguments copied into a window |\n\nReturning reverses the sequence: the result is moved to where the caller expects it, the frame is popped, and\nthe instruction pointer is restored from the saved return address.\n\n"
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 10,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b64df80016CxQtpensVPg3b",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b64e010013bF4kiSmGS6hXd",
+   "created": 1792691031553,
+   "type": "session.step.streamed",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "assistantMessageID": "msg_164b64aee001nTYDQhVv2HEVZ9"
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 11,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b64e010013bF4kiSmGS6hXd",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b64e30001sTZ6yACzJuO7s0",
+   "created": 1792691031600,
+   "type": "session.step.ended",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "assistantMessageID": "msg_164b64aee001nTYDQhVv2HEVZ9",
+    "finish": "stop",
+    "rawFinish": "stop",
+    "cost": 0,
+    "tokens": {
+     "input": 1,
+     "output": 1436,
+     "reasoning": 0,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    },
+    "snapshot": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+    "files": []
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 12,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b64e30001sTZ6yACzJuO7s0",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b64e3c00115hcHd035XX0rc",
+   "created": 1792691031613,
+   "type": "session.usage.updated",
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "cost": 0,
+    "tokens": {
+     "input": 1,
+     "output": 1436,
+     "reasoning": 0,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   }
+  },
+  "eventId": "evt_164b64e3c00115hcHd035XX0rc",
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b64e42001oVJK6ByYm84Imq",
+   "created": 1792691031618,
+   "type": "session.execution.succeeded",
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH"
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 13,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b64e42001oVJK6ByYm84Imq",
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-status",
+   "properties": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "status": "idle",
+    "timestamp": 1792691031641,
+    "metadata": {},
+    "needsAttention": false
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-activity",
+   "properties": {
+    "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "phase": "idle"
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-activity",
+   "properties": {
+    "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "phase": "cooldown"
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-status",
+   "properties": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "status": "idle",
+    "timestamp": 1792691031643,
+    "metadata": {},
+    "needsAttention": false
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-activity",
+   "properties": {
+    "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "phase": "idle"
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b658d30017fJwOOyIBEcjOH",
+   "created": 1792691034323,
+   "type": "session.model.selected",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "model": {
+     "id": "code-20000cps",
+     "providerID": "perf"
+    },
+    "previous": {
+     "id": "stream-20000cps",
+     "providerID": "perf",
+     "variant": "default"
+    }
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 14,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b658d30017fJwOOyIBEcjOH",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b658f00015XgOXVE6DinD5Q",
+   "created": 1792691034352,
+   "type": "session.agent.selected",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "agent": "build",
+    "previous": "build"
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 15,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b658f00015XgOXVE6DinD5Q",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b65935001x1DhwCsJLdCF14",
+   "created": 1792691034421,
+   "type": "session.inbox.enqueued",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "inboxID": "msg_164b65932001DxhyM76Dl4xnCt",
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "item": {
+     "type": "user",
+     "payload": {
+      "text": "Turn 2: explain the next part."
+     },
+     "delivery": "steer"
+    }
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 16,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b65935001x1DhwCsJLdCF14",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b6593a001Cxu9amOn8m3vxG",
+   "created": 1792691034426,
+   "type": "session.execution.started",
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH"
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 17,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b6593a001Cxu9amOn8m3vxG",
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-status",
+   "properties": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "status": "busy",
+    "timestamp": 1792691034783,
+    "metadata": {},
+    "needsAttention": false
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-activity",
+   "properties": {
+    "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "phase": "busy"
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-activity",
+   "properties": {
+    "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "phase": "busy"
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-status",
+   "properties": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "status": "busy",
+    "timestamp": 1792691034783,
+    "metadata": {},
+    "needsAttention": false
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b6597e001Vy01C3sSgHHxs7",
+   "created": 1792691034494,
+   "type": "session.inbox.delivered",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "inboxID": "msg_164b65932001DxhyM76Dl4xnCt"
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 18,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b6597e001Vy01C3sSgHHxs7",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b65b01001cXC1OqalIhgsDY",
+   "created": 1792691034881,
+   "type": "session.step.started",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "agent": "build",
+    "model": {
+     "id": "code-20000cps",
+     "providerID": "perf",
+     "variant": "default"
+    },
+    "assistantMessageID": "msg_164b659d000171ZQZWj1JEOsAc",
+    "snapshot": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+    "started": 1792691034736
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 19,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b65b01001cXC1OqalIhgsDY",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-status",
+   "properties": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "status": "busy",
+    "timestamp": 1792691034982,
+    "metadata": {},
+    "needsAttention": false
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-activity",
+   "properties": {
+    "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "phase": "busy"
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b65b1e001QFbEuAqZv4gm56",
+   "created": 1792691034910,
+   "type": "session.text.started",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "assistantMessageID": "msg_164b659d000171ZQZWj1JEOsAc",
+    "ordinal": 0
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 20,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b65b1e001QFbEuAqZv4gm56",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b65b9f001tjMEAaZATbeeE1",
+   "created": 1792691035039,
+   "type": "session.text.delta",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "assistantMessageID": "msg_164b659d000171ZQZWj1JEOsAc",
+    "ordinal": 0,
+    "delta": "## Ownership index\n\nThe index below resolves an owner once per key and revision, then serves every later read from the cache.\n\n```typescript\ntype Entry = { ownerId: string; revision: number }\ntype Owner = { id: string; label: string; depth: number }\n\nconst ownerCache = new Map<string, Owner>()\n\n/** Resolves the owner of entry 1 and caches the answer. */\nexport function resolveOwner1(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":1\"\n  const cache"
+   }
+  },
+  "eventId": "evt_164b65b9f001tjMEAaZATbeeE1",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b65c09001kOIgBJOAoBslF2",
+   "created": 1792691035145,
+   "type": "session.text.delta",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "assistantMessageID": "msg_164b659d000171ZQZWj1JEOsAc",
+    "ordinal": 0,
+    "delta": "d = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 1) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 1 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 2 and caches the answer. */\nexport function resolveOwner2(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":2\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return ca"
+   }
+  },
+  "eventId": "evt_164b65c09001kOIgBJOAoBslF2",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b65c71001AZBgOvgtt6pKdd",
+   "created": 1792691035249,
+   "type": "session.text.delta",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "assistantMessageID": "msg_164b659d000171ZQZWj1JEOsAc",
+    "ordinal": 0,
+    "delta": "ched\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 2) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 2 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 3 and caches the answer. */\nexport function resolveOwner3(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":3\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 3) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 3 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 4 and caches the answer. */\nexport function resolveOwner4(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":4\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 4) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 4 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 5 and caches the answer. */\nexport function resolveOwner5(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":5\"\n  con"
+   }
+  },
+  "eventId": "evt_164b65c71001AZBgOvgtt6pKdd",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b65cd70017ENJ1AM2wk3O3I",
+   "created": 1792691035351,
+   "type": "session.text.delta",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "assistantMessageID": "msg_164b659d000171ZQZWj1JEOsAc",
+    "ordinal": 0,
+    "delta": "st cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 5) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 5 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 6 and caches the answer. */\nexport function resolveOwner6(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":6\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 6) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 6 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 7 and caches the answer. */\nexport function resolveOwner7(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":7\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 7) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 0 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 8 and caches the answer. */\nexport function resolveOwner8(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":8\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 8) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 1 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 9 and caches the answer. */\nexport function resolveOwner9(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":9\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 9) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 2 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 10 and caches the answer. */\nexport function resolveOwner10(entries: Map<string, Entry>, key: st"
+   }
+  },
+  "eventId": "evt_164b65cd70017ENJ1AM2wk3O3I",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b65d410017vmF6tEItBQkI8",
+   "created": 1792691035457,
+   "type": "session.text.delta",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "assistantMessageID": "msg_164b659d000171ZQZWj1JEOsAc",
+    "ordinal": 0,
+    "delta": "ring): Owner | undefined {\n  const cacheKey = key + \":10\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 10) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 3 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 11 and caches the answer. */\nexport function resolveOwner11(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":11\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 11) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 4 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 12 and caches the answer. */\nexport function resolveOwner12(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":12\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 12) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 5 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 13 and caches the answer. */\nexport function resolveOwner13(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":13\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 13) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 6 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 14 and caches the answer. */\nexport function resolveOwner14(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":14\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 14) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 0 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 15 and caches the answer. */\nexport function resolveOwner15(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":15\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 15) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 1 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 16 and caches the answer. */\nexport function resolveOwner16(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":16\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 16) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 2 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry "
+   }
+  },
+  "eventId": "evt_164b65d410017vmF6tEItBQkI8",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b65da2001UNXeRlFQ2saugj",
+   "created": 1792691035554,
+   "type": "session.text.delta",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "assistantMessageID": "msg_164b659d000171ZQZWj1JEOsAc",
+    "ordinal": 0,
+    "delta": "17 and caches the answer. */\nexport function resolveOwner17(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":17\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 17) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 3 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 18 and caches the answer. */\nexport function resolveOwner18(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":18\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 18) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 4 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 19 and caches the answer. */\nexport function resolveOwner19(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":19\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 19) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 5 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 20 and caches the answer. */\nexport function resolveOwner20(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":20\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 20) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 6 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 21 and caches the answer. */\nexport function resolveOwner21(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":21\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 21) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 0 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 22 and caches the answer. */\nexport function resolveOwner22(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":22\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 22) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 1 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n```\n\nEach function is independent, so the cache can be cleared per revision without touching the others.\n"
+   }
+  },
+  "eventId": "evt_164b65da2001UNXeRlFQ2saugj",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b65da7001y3QUcQHk9ttUqp",
+   "created": 1792691035559,
+   "type": "session.text.ended",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "assistantMessageID": "msg_164b659d000171ZQZWj1JEOsAc",
+    "ordinal": 0,
+    "text": "## Ownership index\n\nThe index below resolves an owner once per key and revision, then serves every later read from the cache.\n\n```typescript\ntype Entry = { ownerId: string; revision: number }\ntype Owner = { id: string; label: string; depth: number }\n\nconst ownerCache = new Map<string, Owner>()\n\n/** Resolves the owner of entry 1 and caches the answer. */\nexport function resolveOwner1(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":1\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 1) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 1 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 2 and caches the answer. */\nexport function resolveOwner2(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":2\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 2) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 2 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 3 and caches the answer. */\nexport function resolveOwner3(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":3\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 3) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 3 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 4 and caches the answer. */\nexport function resolveOwner4(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":4\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 4) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 4 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 5 and caches the answer. */\nexport function resolveOwner5(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":5\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 5) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 5 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 6 and caches the answer. */\nexport function resolveOwner6(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":6\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 6) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 6 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 7 and caches the answer. */\nexport function resolveOwner7(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":7\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 7) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 0 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 8 and caches the answer. */\nexport function resolveOwner8(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":8\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 8) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 1 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 9 and caches the answer. */\nexport function resolveOwner9(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":9\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 9) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 2 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 10 and caches the answer. */\nexport function resolveOwner10(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":10\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 10) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 3 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 11 and caches the answer. */\nexport function resolveOwner11(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":11\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 11) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 4 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 12 and caches the answer. */\nexport function resolveOwner12(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":12\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 12) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 5 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 13 and caches the answer. */\nexport function resolveOwner13(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":13\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 13) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 6 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 14 and caches the answer. */\nexport function resolveOwner14(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":14\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 14) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 0 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 15 and caches the answer. */\nexport function resolveOwner15(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":15\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 15) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 1 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 16 and caches the answer. */\nexport function resolveOwner16(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":16\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 16) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 2 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 17 and caches the answer. */\nexport function resolveOwner17(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":17\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 17) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 3 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 18 and caches the answer. */\nexport function resolveOwner18(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":18\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 18) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 4 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 19 and caches the answer. */\nexport function resolveOwner19(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":19\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 19) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 5 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 20 and caches the answer. */\nexport function resolveOwner20(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":20\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 20) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 6 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 21 and caches the answer. */\nexport function resolveOwner21(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":21\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 21) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 0 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 22 and caches the answer. */\nexport function resolveOwner22(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":22\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 22) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 1 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n```\n\nEach function is independent, so the cache can be cleared per revision without touching the others.\n"
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 21,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b65da7001y3QUcQHk9ttUqp",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b65db50010LCsBXN9ylTVZt",
+   "created": 1792691035574,
+   "type": "session.step.streamed",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "assistantMessageID": "msg_164b659d000171ZQZWj1JEOsAc"
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 22,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b65db50010LCsBXN9ylTVZt",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b65df5001uxRln6c6LNvYko",
+   "created": 1792691035637,
+   "type": "session.step.ended",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "assistantMessageID": "msg_164b659d000171ZQZWj1JEOsAc",
+    "finish": "stop",
+    "rawFinish": "stop",
+    "cost": 0,
+    "tokens": {
+     "input": 1,
+     "output": 2709,
+     "reasoning": 0,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    },
+    "snapshot": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+    "files": []
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 23,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b65df5001uxRln6c6LNvYko",
+  "directory": "/home/synthetic/project"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b65e12001yUDyeuhxhVvNnb",
+   "created": 1792691035666,
+   "type": "session.usage.updated",
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "cost": 0,
+    "tokens": {
+     "input": 2,
+     "output": 4145,
+     "reasoning": 0,
+     "cache": {
+      "read": 0,
+      "write": 0
+     }
+    }
+   }
+  },
+  "eventId": "evt_164b65e12001yUDyeuhxhVvNnb",
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "id": "evt_164b65e1a001NwFXRLBVFk7BwJ",
+   "created": 1792691035674,
+   "type": "session.execution.succeeded",
+   "data": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH"
+   },
+   "durable": {
+    "aggregateID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "seq": 24,
+    "version": 1
+   }
+  },
+  "eventId": "evt_164b65e1a001NwFXRLBVFk7BwJ",
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-status",
+   "properties": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "status": "idle",
+    "timestamp": 1792691035719,
+    "metadata": {},
+    "needsAttention": false
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-activity",
+   "properties": {
+    "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "phase": "idle"
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-activity",
+   "properties": {
+    "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "phase": "cooldown"
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-status",
+   "properties": {
+    "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "status": "idle",
+    "timestamp": 1792691035722,
+    "metadata": {},
+    "needsAttention": false
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:session-activity",
+   "properties": {
+    "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "phase": "idle"
+   }
+  },
+  "directory": "global"
+ },
+ {
+  "type": "event",
+  "payload": {
+   "type": "openchamber:heartbeat",
+   "timestamp": 1792691038490
+  },
+  "directory": "global"
+ }
+]

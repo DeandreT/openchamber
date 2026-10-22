@@ -150,6 +150,7 @@ impl Workspace {
         let body = match message.info.role {
             MessageRole::User => user_message(message, &palette),
             MessageRole::Assistant => assistant_message(message, &palette),
+            _ => notice_message(message, &palette),
         };
         div()
             .id(ElementId::Name(message.info.id.as_str().to_owned().into()))
@@ -191,6 +192,17 @@ fn user_message(message: &Message, palette: &Palette) -> AnyElement {
         .into_any_element()
 }
 
+/// A one-line record such as a switched agent or a finished turn.
+fn notice_message(message: &Message, palette: &Palette) -> AnyElement {
+    div()
+        .text_size(rems(META_SIZE))
+        .text_color(palette.muted_foreground)
+        .when_some(message.info.notice.clone(), |this, notice| {
+            this.child(notice)
+        })
+        .into_any_element()
+}
+
 fn assistant_message(message: &Message, palette: &Palette) -> AnyElement {
     let mut column = div().flex().flex_col().gap_2();
     for part in &message.parts {
@@ -227,6 +239,12 @@ fn assistant_message(message: &Message, palette: &Palette) -> AnyElement {
                     .text_size(rems(META_SIZE))
                     .text_color(palette.muted_foreground)
                     .child(filename.clone()),
+            ),
+            PartContent::Agent { name } => column.child(
+                div()
+                    .text_size(rems(META_SIZE))
+                    .text_color(palette.muted_foreground)
+                    .child(format!("@{name}")),
             ),
             PartContent::Unsupported { .. } => column,
         };

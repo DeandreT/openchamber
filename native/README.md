@@ -7,6 +7,7 @@ from the Bun `packages/*` workspace.
 | Crate | Owns |
 | --- | --- |
 | `crates/core` (`openchamber-native-core`) | Domain records, sidebar membership and rows, transcripts, drafts, scroll memory and synthetic workloads. Standard library only. See its [DOCUMENTATION.md](crates/core/DOCUMENTATION.md). |
+| `crates/transport` (`openchamber-native-transport`) | The connection to an OpenChamber server: endpoint, identity, authentication, requests, wire parsing and the global event stream. See its [DOCUMENTATION.md](crates/transport/DOCUMENTATION.md). |
 | `crates/desktop` (`openchamber-native-desktop`) | The GPUI Kit window, views, theme, locale and icon resources, diagnostics and application lifetime. See its [DOCUMENTATION.md](crates/desktop/DOCUMENTATION.md). |
 
 ## Toolchain
@@ -30,6 +31,7 @@ bun run native:dev       # debug build of the desktop, opened on synthetic data
 bun run native:build     # release build of the desktop
 bun run native:fixtures  # regenerate the TypeScript reference fixtures
 bun run native:resources # regenerate theme, locale and icon resources
+bun run native:transport-fixtures # regenerate the official-client transport fixtures
 ```
 
 The desktop reads these environment variables:
@@ -46,7 +48,10 @@ The desktop reads these environment variables:
 `crates/core/tests/fixtures/sidebar-projection.json`. `native:resources`
 resolves the built-in themes, exports the keys in
 `crates/desktop/resources/locale-keys.txt` for every locale and the glyphs in
-`crates/desktop/resources/icon-names.txt` from the icon sprite. The UI tests in
+`crates/desktop/resources/icon-names.txt` from the icon sprite.
+`native:transport-fixtures` drives the pinned `@opencode/client` against the
+recorded wire samples in `crates/transport/tests/fixtures/wire/` and rewrites
+`crates/transport/tests/fixtures/transport.json`. The UI tests in
 `packages/ui/src/lib/native/` fail when any generated file is stale.
 
 ## Accessibility on Linux

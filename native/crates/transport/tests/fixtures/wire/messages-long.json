@@ -1,0 +1,324 @@
+{
+ "data": [
+  {
+   "id": "msg_164b54bc9001ORh8q2f2ObA3So",
+   "time": {
+    "created": 1792690965449
+   },
+   "type": "idle",
+   "outcome": "succeeded"
+  },
+  {
+   "id": "msg_164b54927001wfaLclzRoAsaly",
+   "time": {
+    "created": 1792690964829,
+    "streamed": 1792690965407,
+    "completed": 1792690965437
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "unicode-20000cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "## 1. Чому рядок «важить» удвічі більше — and why it matters\n\nThe renderer receives every delta as a JavaScript string. A string that holds only Latin-1 characters is stored\none byte per character; the moment a single “curly quote”, an em dash — like this one — or a Cyrillic letter\narrives, the whole string becomes two bytes per character. Section 1 says it again so the response is long.\n\nКоли модель відповідає українською, кожен фрагмент тексту містить кирилицю, тож усі операції над рядком —\nконкатенація, пошук, розбиття на блоки Markdown — працюють із дворазовим представленням. Це не помилка,\nа властивість рушія V8, і її варто вимірювати на реальному тексті, а не на ASCII.\n\n- “Smart quotes” and ‘single ones’ … ellipses, and non-breaking spaces between numbers and units: 42 ms.\n- Списки з тире — звичайна річ: «лапки-ялинки», апостроф у слові «пам’ять», і знак № 1.\n- Mixed: the cache key «owner:1» is hashed — not compared — on every read.\n\n\n## 2. Чому рядок «важить» удвічі більше — and why it matters\n\nThe renderer receives every delta as a JavaScript string. A string that holds only Latin-1 characters is stored\none byte per character; the moment a single “curly quote”, an em dash — like this one — or a Cyrillic letter\narrives, the whole string becomes two bytes per character. Section 2 says it again so the response is long.\n\nКоли модель відповідає українською, кожен фрагмент тексту містить кирилицю, тож усі операції над рядком —\nконкатенація, пошук, розбиття на блоки Markdown — працюють із дворазовим представленням. Це не помилка,\nа властивість рушія V8, і її варто вимірювати на реальному тексті, а не на ASCII.\n\n- “Smart quotes” and ‘single ones’ … ellipses, and non-breaking spaces between numbers and units: 42 ms.\n- Списки з тире — звичайна річ: «лапки-ялинки», апостроф у слові «пам’ять», і знак № 2.\n- Mixed: the cache key «owner:2» is hashed — not compared — on every read.\n\n\nНижче — індекс власників, який тримає підписи в кеші:\n\n```typescript\ntype Entry = { ownerId: string; revision: number }\n\n// Кеш підписів: ключ — «запис→номер», значення — готовий рядок.\nconst labelCache = new Map<string, string>()\n\n/** Повертає власника запису 1 — і кешує відповідь. */\nexport function ownerLabel1(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→1\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 1\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 1)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n\n/** Повертає власника запису 2 — і кешує відповідь. */\nexport function ownerLabel2(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→2\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 2\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 2)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n\n/** Повертає власника запису 3 — і кешує відповідь. */\nexport function ownerLabel3(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→3\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 3\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 3)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n\n/** Повертає власника запису 4 — і кешує відповідь. */\nexport function ownerLabel4(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→4\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 4\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 4)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n\n/** Повертає власника запису 5 — і кешує відповідь. */\nexport function ownerLabel5(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→5\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 5\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 0)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n\n/** Повертає власника запису 6 — і кешує відповідь. */\nexport function ownerLabel6(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→6\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 6\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 1)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n\n/** Повертає власника запису 7 — і кешує відповідь. */\nexport function ownerLabel7(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→7\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 7\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 2)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n\n/** Повертає власника запису 8 — і кешує відповідь. */\nexport function ownerLabel8(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→8\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 8\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 3)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n\n/** Повертає власника запису 9 — і кешує відповідь. */\nexport function ownerLabel9(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→9\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 9\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 4)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n\n/** Повертає власника запису 10 — і кешує відповідь. */\nexport function ownerLabel10(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→10\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 10\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 0)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n\n/** Повертає власника запису 11 — і кешує відповідь. */\nexport function ownerLabel11(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→11\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 11\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 1)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n\n/** Повертає власника запису 12 — і кешує відповідь. */\nexport function ownerLabel12(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→12\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 12\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 2)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n```\n\n## 3. Чому рядок «важить» удвічі більше — and why it matters\n\nThe renderer receives every delta as a JavaScript string. A string that holds only Latin-1 characters is stored\none byte per character; the moment a single “curly quote”, an em dash — like this one — or a Cyrillic letter\narrives, the whole string becomes two bytes per character. Section 3 says it again so the response is long.\n\nКоли модель відповідає українською, кожен фрагмент тексту містить кирилицю, тож усі операції над рядком —\nконкатенація, пошук, розбиття на блоки Markdown — працюють із дворазовим представленням. Це не помилка,\nа властивість рушія V8, і її варто вимірювати на реальному тексті, а не на ASCII.\n\n- “Smart quotes” and ‘single ones’ … ellipses, and non-breaking spaces between numbers and units: 42 ms.\n- Списки з тире — звичайна річ: «лапки-ялинки», апостроф у слові «пам’ять», і знак № 3.\n- Mixed: the cache key «owner:3» is hashed — not compared — on every read.\n\n"
+    }
+   ],
+   "snapshot": {
+    "start": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+    "end": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+    "files": []
+   },
+   "finish": "stop",
+   "rawFinish": "stop",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 2263,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164b548870015yqub5Drq31CCa",
+   "time": {
+    "created": 1792690964738
+   },
+   "text": "Turn 12: explain the next part.",
+   "type": "user"
+  },
+  {
+   "id": "msg_164b547f6001Pbu47CSWEqpqea",
+   "time": {
+    "created": 1792690964470
+   },
+   "type": "agent-switched",
+   "agent": "build",
+   "previous": "build"
+  },
+  {
+   "id": "msg_164b547d9001g6ugV0OBEII2qK",
+   "time": {
+    "created": 1792690964441
+   },
+   "type": "model-switched",
+   "model": {
+    "id": "unicode-20000cps",
+    "providerID": "perf"
+   },
+   "previous": {
+    "id": "code-20000cps",
+    "providerID": "perf",
+    "variant": "default"
+   }
+  },
+  {
+   "id": "msg_164b54081001FdF1w6FKD7xdh0",
+   "time": {
+    "created": 1792690962561
+   },
+   "type": "idle",
+   "outcome": "succeeded"
+  },
+  {
+   "id": "msg_164b53cb5001xchppUZ2R5l5KO",
+   "time": {
+    "created": 1792690961617,
+    "streamed": 1792690962533,
+    "completed": 1792690962553
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "code-20000cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "## Ownership index\n\nThe index below resolves an owner once per key and revision, then serves every later read from the cache.\n\n```typescript\ntype Entry = { ownerId: string; revision: number }\ntype Owner = { id: string; label: string; depth: number }\n\nconst ownerCache = new Map<string, Owner>()\n\n/** Resolves the owner of entry 1 and caches the answer. */\nexport function resolveOwner1(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":1\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 1) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 1 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 2 and caches the answer. */\nexport function resolveOwner2(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":2\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 2) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 2 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 3 and caches the answer. */\nexport function resolveOwner3(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":3\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 3) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 3 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 4 and caches the answer. */\nexport function resolveOwner4(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":4\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 4) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 4 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 5 and caches the answer. */\nexport function resolveOwner5(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":5\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 5) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 5 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 6 and caches the answer. */\nexport function resolveOwner6(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":6\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 6) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 6 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 7 and caches the answer. */\nexport function resolveOwner7(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":7\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 7) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 0 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 8 and caches the answer. */\nexport function resolveOwner8(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":8\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 8) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 1 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 9 and caches the answer. */\nexport function resolveOwner9(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":9\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 9) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 2 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 10 and caches the answer. */\nexport function resolveOwner10(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":10\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 10) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 3 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 11 and caches the answer. */\nexport function resolveOwner11(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":11\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 11) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 4 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 12 and caches the answer. */\nexport function resolveOwner12(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":12\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 12) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 5 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 13 and caches the answer. */\nexport function resolveOwner13(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":13\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 13) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 6 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 14 and caches the answer. */\nexport function resolveOwner14(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":14\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 14) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 0 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 15 and caches the answer. */\nexport function resolveOwner15(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":15\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 15) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 1 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 16 and caches the answer. */\nexport function resolveOwner16(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":16\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 16) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 2 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 17 and caches the answer. */\nexport function resolveOwner17(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":17\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 17) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 3 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 18 and caches the answer. */\nexport function resolveOwner18(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":18\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 18) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 4 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 19 and caches the answer. */\nexport function resolveOwner19(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":19\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 19) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 5 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 20 and caches the answer. */\nexport function resolveOwner20(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":20\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 20) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 6 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 21 and caches the answer. */\nexport function resolveOwner21(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":21\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 21) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 0 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n\n/** Resolves the owner of entry 22 and caches the answer. */\nexport function resolveOwner22(entries: Map<string, Entry>, key: string): Owner | undefined {\n  const cacheKey = key + \":22\"\n  const cached = ownerCache.get(cacheKey)\n  if (cached) return cached\n  const entry = entries.get(key)\n  if (!entry || entry.revision < 22) return undefined\n  const owner = { id: entry.ownerId, label: \"owner-\" + entry.ownerId, depth: 1 }\n  ownerCache.set(cacheKey, owner)\n  return owner\n}\n```\n\nEach function is independent, so the cache can be cleared per revision without touching the others.\n"
+    }
+   ],
+   "snapshot": {
+    "start": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+    "end": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+    "files": []
+   },
+   "finish": "stop",
+   "rawFinish": "stop",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 2709,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164b53c89001L7zyVYmavkElkg",
+   "time": {
+    "created": 1792690961574
+   },
+   "text": "Turn 11: explain the next part.",
+   "type": "user"
+  },
+  {
+   "id": "msg_164b53c3e001ElZ8fqYjtQZO45",
+   "time": {
+    "created": 1792690961470
+   },
+   "type": "agent-switched",
+   "agent": "build",
+   "previous": "build"
+  },
+  {
+   "id": "msg_164b53c37001d2kPLFX5x3yWEH",
+   "time": {
+    "created": 1792690961463
+   },
+   "type": "model-switched",
+   "model": {
+    "id": "code-20000cps",
+    "providerID": "perf"
+   },
+   "previous": {
+    "id": "stream-20000cps",
+    "providerID": "perf",
+    "variant": "default"
+   }
+  },
+  {
+   "id": "msg_164b537570013YebCyFQDmu3ez",
+   "time": {
+    "created": 1792690960215
+   },
+   "type": "idle",
+   "outcome": "succeeded"
+  },
+  {
+   "id": "msg_164b53573001HtYUZK3QM71xub",
+   "time": {
+    "created": 1792690959772,
+    "streamed": 1792690960130,
+    "completed": 1792690960196
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "stream-20000cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "## 1. Executing a call in a bytecode virtual machine\n\nA bytecode virtual machine executes a function call by creating a new **activation record**, binding the\narguments, and transferring control to the callee's first instruction. The caller's state is preserved so that\nexecution resumes at the instruction after the call once the callee returns. Round 1 of this document\nrepeats the explanation so that the response is long enough to measure.\n\n1. The compiler emits a `CALL` instruction carrying the argument count.\n2. The interpreter pops the callee and its arguments from the operand stack.\n3. A frame is pushed holding the return address, the base pointer and the locals.\n4. The dispatch loop continues at the callee's entry point.\n\n```python\ndef call(vm, argc):\n    callee = vm.stack[-argc - 1]\n    frame = Frame(callee, base=len(vm.stack) - argc, return_ip=vm.ip)\n    vm.frames.append(frame)\n    vm.ip = callee.entry\n```\n\n```rust\nfn call(&mut self, argc: usize) -> Result<(), VmError> {\n    let base = self.stack.len() - argc;\n    let callee = self.stack[base - 1].as_function()?;\n    self.frames.push(Frame { base, return_ip: self.ip, function: callee.clone() });\n    self.ip = callee.entry;\n    Ok(())\n}\n```\n\n```typescript\nfunction call(vm: Vm, argc: number): void {\n  const base = vm.stack.length - argc\n  const callee = asFunction(vm.stack[base - 1])\n  vm.frames.push({ base, returnIp: vm.ip, fn: callee })\n  vm.ip = callee.entry\n}\n```\n\n| Aspect | Stack machine | Register machine |\n|---|---|---|\n| Operands | implicit, on the operand stack | explicit register indices |\n| Instruction size | small | larger |\n| Instruction count | higher | lower |\n| Call setup | arguments already in place | arguments copied into a window |\n\nReturning reverses the sequence: the result is moved to where the caller expects it, the frame is popped, and\nthe instruction pointer is restored from the saved return address.\n\n## 2. Executing a call in a bytecode virtual machine\n\nA bytecode virtual machine executes a function call by creating a new **activation record**, binding the\narguments, and transferring control to the callee's first instruction. The caller's state is preserved so that\nexecution resumes at the instruction after the call once the callee returns. Round 2 of this document\nrepeats the explanation so that the response is long enough to measure.\n\n1. The compiler emits a `CALL` instruction carrying the argument count.\n2. The interpreter pops the callee and its arguments from the operand stack.\n3. A frame is pushed holding the return address, the base pointer and the locals.\n4. The dispatch loop continues at the callee's entry point.\n\n```python\ndef call(vm, argc):\n    callee = vm.stack[-argc - 1]\n    frame = Frame(callee, base=len(vm.stack) - argc, return_ip=vm.ip)\n    vm.frames.append(frame)\n    vm.ip = callee.entry\n```\n\n```rust\nfn call(&mut self, argc: usize) -> Result<(), VmError> {\n    let base = self.stack.len() - argc;\n    let callee = self.stack[base - 1].as_function()?;\n    self.frames.push(Frame { base, return_ip: self.ip, function: callee.clone() });\n    self.ip = callee.entry;\n    Ok(())\n}\n```\n\n```typescript\nfunction call(vm: Vm, argc: number): void {\n  const base = vm.stack.length - argc\n  const callee = asFunction(vm.stack[base - 1])\n  vm.frames.push({ base, returnIp: vm.ip, fn: callee })\n  vm.ip = callee.entry\n}\n```\n\n| Aspect | Stack machine | Register machine |\n|---|---|---|\n| Operands | implicit, on the operand stack | explicit register indices |\n| Instruction size | small | larger |\n| Instruction count | higher | lower |\n| Call setup | arguments already in place | arguments copied into a window |\n\nReturning reverses the sequence: the result is moved to where the caller expects it, the frame is popped, and\nthe instruction pointer is restored from the saved return address.\n\n## 3. Executing a call in a bytecode virtual machine\n\nA bytecode virtual machine executes a function call by creating a new **activation record**, binding the\narguments, and transferring control to the callee's first instruction. The caller's state is preserved so that\nexecution resumes at the instruction after the call once the callee returns. Round 3 of this document\nrepeats the explanation so that the response is long enough to measure.\n\n1. The compiler emits a `CALL` instruction carrying the argument count.\n2. The interpreter pops the callee and its arguments from the operand stack.\n3. A frame is pushed holding the return address, the base pointer and the locals.\n4. The dispatch loop continues at the callee's entry point.\n\n```python\ndef call(vm, argc):\n    callee = vm.stack[-argc - 1]\n    frame = Frame(callee, base=len(vm.stack) - argc, return_ip=vm.ip)\n    vm.frames.append(frame)\n    vm.ip = callee.entry\n```\n\n```rust\nfn call(&mut self, argc: usize) -> Result<(), VmError> {\n    let base = self.stack.len() - argc;\n    let callee = self.stack[base - 1].as_function()?;\n    self.frames.push(Frame { base, return_ip: self.ip, function: callee.clone() });\n    self.ip = callee.entry;\n    Ok(())\n}\n```\n\n```typescript\nfunction call(vm: Vm, argc: number): void {\n  const base = vm.stack.length - argc\n  const callee = asFunction(vm.stack[base - 1])\n  vm.frames.push({ base, returnIp: vm.ip, fn: callee })\n  vm.ip = callee.entry\n}\n```\n\n| Aspect | Stack machine | Register machine |\n|---|---|---|\n| Operands | implicit, on the operand stack | explicit register indices |\n| Instruction size | small | larger |\n| Instruction count | higher | lower |\n| Call setup | arguments already in place | arguments copied into a window |\n\nReturning reverses the sequence: the result is moved to where the caller expects it, the frame is popped, and\nthe instruction pointer is restored from the saved return address.\n\n"
+    }
+   ],
+   "snapshot": {
+    "start": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+    "end": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+    "files": []
+   },
+   "finish": "stop",
+   "rawFinish": "stop",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 1436,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164b53531001qEt8WdBp5cErRz",
+   "time": {
+    "created": 1792690959699
+   },
+   "text": "Turn 10: explain the next part.",
+   "type": "user"
+  },
+  {
+   "id": "msg_164b534f7001yQmfTJjW8qDIE1",
+   "time": {
+    "created": 1792690959607
+   },
+   "type": "agent-switched",
+   "agent": "build",
+   "previous": "build"
+  },
+  {
+   "id": "msg_164b534ee001WdL8dZfhCkmi2p",
+   "time": {
+    "created": 1792690959598
+   },
+   "type": "model-switched",
+   "model": {
+    "id": "stream-20000cps",
+    "providerID": "perf"
+   },
+   "previous": {
+    "id": "unicode-20000cps",
+    "providerID": "perf",
+    "variant": "default"
+   }
+  },
+  {
+   "id": "msg_164b530cf001Bfw8fulS7c8Mw5",
+   "time": {
+    "created": 1792690958543
+   },
+   "type": "idle",
+   "outcome": "succeeded"
+  },
+  {
+   "id": "msg_164b52ed000103oiIvdJRw4gaB",
+   "time": {
+    "created": 1792690958060,
+    "streamed": 1792690958527,
+    "completed": 1792690958539
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "unicode-20000cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "## 1. Чому рядок «важить» удвічі більше — and why it matters\n\nThe renderer receives every delta as a JavaScript string. A string that holds only Latin-1 characters is stored\none byte per character; the moment a single “curly quote”, an em dash — like this one — or a Cyrillic letter\narrives, the whole string becomes two bytes per character. Section 1 says it again so the response is long.\n\nКоли модель відповідає українською, кожен фрагмент тексту містить кирилицю, тож усі операції над рядком —\nконкатенація, пошук, розбиття на блоки Markdown — працюють із дворазовим представленням. Це не помилка,\nа властивість рушія V8, і її варто вимірювати на реальному тексті, а не на ASCII.\n\n- “Smart quotes” and ‘single ones’ … ellipses, and non-breaking spaces between numbers and units: 42 ms.\n- Списки з тире — звичайна річ: «лапки-ялинки», апостроф у слові «пам’ять», і знак № 1.\n- Mixed: the cache key «owner:1» is hashed — not compared — on every read.\n\n\n## 2. Чому рядок «важить» удвічі більше — and why it matters\n\nThe renderer receives every delta as a JavaScript string. A string that holds only Latin-1 characters is stored\none byte per character; the moment a single “curly quote”, an em dash — like this one — or a Cyrillic letter\narrives, the whole string becomes two bytes per character. Section 2 says it again so the response is long.\n\nКоли модель відповідає українською, кожен фрагмент тексту містить кирилицю, тож усі операції над рядком —\nконкатенація, пошук, розбиття на блоки Markdown — працюють із дворазовим представленням. Це не помилка,\nа властивість рушія V8, і її варто вимірювати на реальному тексті, а не на ASCII.\n\n- “Smart quotes” and ‘single ones’ … ellipses, and non-breaking spaces between numbers and units: 42 ms.\n- Списки з тире — звичайна річ: «лапки-ялинки», апостроф у слові «пам’ять», і знак № 2.\n- Mixed: the cache key «owner:2» is hashed — not compared — on every read.\n\n\nНижче — індекс власників, який тримає підписи в кеші:\n\n```typescript\ntype Entry = { ownerId: string; revision: number }\n\n// Кеш підписів: ключ — «запис→номер», значення — готовий рядок.\nconst labelCache = new Map<string, string>()\n\n/** Повертає власника запису 1 — і кешує відповідь. */\nexport function ownerLabel1(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→1\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 1\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 1)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n\n/** Повертає власника запису 2 — і кешує відповідь. */\nexport function ownerLabel2(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→2\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 2\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 2)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n\n/** Повертає власника запису 3 — і кешує відповідь. */\nexport function ownerLabel3(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→3\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 3\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 3)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n\n/** Повертає власника запису 4 — і кешує відповідь. */\nexport function ownerLabel4(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→4\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 4\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 4)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n\n/** Повертає власника запису 5 — і кешує відповідь. */\nexport function ownerLabel5(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→5\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 5\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 0)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n\n/** Повертає власника запису 6 — і кешує відповідь. */\nexport function ownerLabel6(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→6\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 6\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 1)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n\n/** Повертає власника запису 7 — і кешує відповідь. */\nexport function ownerLabel7(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→7\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 7\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 2)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n\n/** Повертає власника запису 8 — і кешує відповідь. */\nexport function ownerLabel8(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→8\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 8\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 3)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n\n/** Повертає власника запису 9 — і кешує відповідь. */\nexport function ownerLabel9(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→9\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 9\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 4)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n\n/** Повертає власника запису 10 — і кешує відповідь. */\nexport function ownerLabel10(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→10\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 10\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 0)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n\n/** Повертає власника запису 11 — і кешує відповідь. */\nexport function ownerLabel11(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→11\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 11\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 1)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n\n/** Повертає власника запису 12 — і кешує відповідь. */\nexport function ownerLabel12(entries: Map<string, Entry>, key: string): string {\n  const cacheKey = key + \"→12\"\n  const cached = labelCache.get(cacheKey)\n  if (cached !== undefined) return cached\n  const entry = entries.get(key)\n  // Немає запису — повертаємо «невідомо», а не порожній рядок.\n  if (!entry) return \"невідомо — 12\"\n  const label = \"Власник “\" + entry.ownerId + \"” (рівень 2)\"\n  labelCache.set(cacheKey, label)\n  return label\n}\n```\n\n## 3. Чому рядок «важить» удвічі більше — and why it matters\n\nThe renderer receives every delta as a JavaScript string. A string that holds only Latin-1 characters is stored\none byte per character; the moment a single “curly quote”, an em dash — like this one — or a Cyrillic letter\narrives, the whole string becomes two bytes per character. Section 3 says it again so the response is long.\n\nКоли модель відповідає українською, кожен фрагмент тексту містить кирилицю, тож усі операції над рядком —\nконкатенація, пошук, розбиття на блоки Markdown — працюють із дворазовим представленням. Це не помилка,\nа властивість рушія V8, і її варто вимірювати на реальному тексті, а не на ASCII.\n\n- “Smart quotes” and ‘single ones’ … ellipses, and non-breaking spaces between numbers and units: 42 ms.\n- Списки з тире — звичайна річ: «лапки-ялинки», апостроф у слові «пам’ять», і знак № 3.\n- Mixed: the cache key «owner:3» is hashed — not compared — on every read.\n\n"
+    }
+   ],
+   "snapshot": {
+    "start": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+    "end": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+    "files": []
+   },
+   "finish": "stop",
+   "rawFinish": "stop",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 2263,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164b52eab001rZIFsQTU2DKsNw",
+   "time": {
+    "created": 1792690958020
+   },
+   "text": "Turn 9: explain the next part.",
+   "type": "user"
+  },
+  {
+   "id": "msg_164b52e7f0015uaG99UZ6iduWI",
+   "time": {
+    "created": 1792690957951
+   },
+   "type": "agent-switched",
+   "agent": "build",
+   "previous": "build"
+  },
+  {
+   "id": "msg_164b52e76001XRHfsb019rtmog",
+   "time": {
+    "created": 1792690957942
+   },
+   "type": "model-switched",
+   "model": {
+    "id": "unicode-20000cps",
+    "providerID": "perf"
+   },
+   "previous": {
+    "id": "code-20000cps",
+    "providerID": "perf",
+    "variant": "default"
+   }
+  }
+ ],
+ "cursor": {
+  "previous": "eyJpZCI6Im1zZ18xNjRiNTRiYzkwMDFPUmg4cTJmMk9iQTNTbyIsIm9yZGVyIjoiZGVzYyIsImRpcmVjdGlvbiI6InByZXZpb3VzIn0",
+  "next": "eyJpZCI6Im1zZ18xNjRiNTJlNzYwMDFYUkhmc2IwMTlydG1vZyIsIm9yZGVyIjoiZGVzYyIsImRpcmVjdGlvbiI6Im5leHQifQ"
+ }
+}

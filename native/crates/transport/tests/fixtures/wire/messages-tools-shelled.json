@@ -1,0 +1,1315 @@
+{
+ "data": [
+  {
+   "id": "msg_164c46f24001WEwc54DdMLEiQv",
+   "time": {
+    "created": 1792691957540
+   },
+   "type": "idle",
+   "outcome": "succeeded"
+  },
+  {
+   "id": "msg_164c4241e001WHGO3wFCOKk5zN",
+   "time": {
+    "created": 1792691938360,
+    "streamed": 1792691957517,
+    "completed": 1792691957533
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "agent-20tools-300cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "## 1. Executing a call in a bytecode virtual machine\n\nA bytecode virtual machine executes a function call by creating a new **activation record**, binding the\narguments, and transferring control to the callee's first instruction. The caller's state is preserved so that\nexecution resumes at the instruction after the call once the callee returns. Round 1 of this document\nrepeats the explanation so that the response is long enough to measure.\n\n1. The compiler emits a `CALL` instruction carrying the argument count.\n2. The interpreter pops the callee and its arguments from the operand stack.\n3. A frame is pushed holding the return address, the base pointer and the locals.\n4. The dispatch loop continues at the callee's entry point.\n\n```python\ndef call(vm, argc):\n    callee = vm.stack[-argc - 1]\n    frame = Frame(callee, base=len(vm.stack) - argc, return_ip=vm.ip)\n    vm.frames.append(frame)\n    vm.ip = callee.entry\n```\n\n```rust\nfn call(&mut self, argc: usize) -> Result<(), VmError> {\n    let base = self.stack.len() - argc;\n    let callee = self.stack[base - 1].as_function()?;\n    self.frames.push(Frame { base, return_ip: self.ip, function: callee.clone() });\n    self.ip = callee.entry;\n    Ok(())\n}\n```\n\n```typescript\nfunction call(vm: Vm, argc: number): void {\n  const base = vm.stack.length - argc\n  const callee = asFunction(vm.stack[base - 1])\n  vm.frames.push({ base, returnIp: vm.ip, fn: callee })\n  vm.ip = callee.entry\n}\n```\n\n| Aspect | Stack machine | Register machine |\n|---|---|---|\n| Operands | implicit, on the operand stack | explicit register indices |\n| Instruction size | small | larger |\n| Instruction count | higher | lower |\n| Call setup | arguments already in place | arguments copied into a window |\n\nReturning reverses the sequence: the result is moved to where the caller expects it, the frame is popped, and\nthe instruction pointer is restored from the saved return address.\n\n## 2. Executing a call in a bytecode virtual machine\n\nA bytecode virtual machine executes a function call by creating a new **activation record**, binding the\narguments, and transferring control to the callee's first instruction. The caller's state is preserved so that\nexecution resumes at the instruction after the call once the callee returns. Round 2 of this document\nrepeats the explanation so that the response is long enough to measure.\n\n1. The compiler emits a `CALL` instruction carrying the argument count.\n2. The interpreter pops the callee and its arguments from the operand stack.\n3. A frame is pushed holding the return address, the base pointer and the locals.\n4. The dispatch loop continues at the callee's entry point.\n\n```python\ndef call(vm, argc):\n    callee = vm.stack[-argc - 1]\n    frame = Frame(callee, base=len(vm.stack) - argc, return_ip=vm.ip)\n    vm.frames.append(frame)\n    vm.ip = callee.entry\n```\n\n```rust\nfn call(&mut self, argc: usize) -> Result<(), VmError> {\n    let base = self.stack.len() - argc;\n    let callee = self.stack[base - 1].as_function()?;\n    self.frames.push(Frame { base, return_ip: self.ip, function: callee.clone() });\n    self.ip = callee.entry;\n    Ok(())\n}\n```\n\n```typescript\nfunction call(vm: Vm, argc: number): void {\n  const base = vm.stack.length - argc\n  const callee = asFunction(vm.stack[base - 1])\n  vm.frames.push({ base, returnIp: vm.ip, fn: callee })\n  vm.ip = callee.entry\n}\n```\n\n| Aspect | Stack machine | Register machine |\n|---|---|---|\n| Operands | implicit, on the operand stack | explicit register indices |\n| Instruction size | small | larger |\n| Instruction count | higher | lower |\n| Call setup | arguments already in place | arguments copied into a window |\n\nReturning reverses the sequence: the result is moved to where the caller expects it, the frame is popped, and\nthe instruction pointer is restored from the saved return address.\n\n## 3. Executing a call in a bytecode virtual machine\n\nA bytecode virtual machine executes a function call by creating a new **activation record**, binding the\narguments, and transferring control to the callee's first instruction. The caller's state is preserved so that\nexecution resumes at the instruction after the call once the callee returns. Round 3 of this document\nrepeats the explanation so that the response is long enough to measure.\n\n1. The compiler emits a `CALL` instruction carrying the argument count.\n2. The interpreter pops the callee and its arguments from the operand stack.\n3. A frame is pushed holding the return address, the base pointer and the locals.\n4. The dispatch loop continues at the callee's entry point.\n\n```python\ndef call(vm, argc):\n    callee = vm.stack[-argc - 1]\n    frame = Frame(callee, base=len(vm.stack) - argc, return_ip=vm.ip)\n    vm.frames.append(frame)\n    vm.ip = callee.entry\n```\n\n```rust\nfn call(&mut self, argc: usize) -> Result<(), VmError> {\n    let base = self.stack.len() - argc;\n    let callee = self.stack[base - 1].as_function()?;\n    self.frames.push(Frame { base, return_ip: self.ip, function: callee.clone() });\n    self.ip = callee.entry;\n    Ok(())\n}\n```\n\n```typescript\nfunction call(vm: Vm, argc: number): void {\n  const base = vm.stack.length - argc\n  const callee = asFunction(vm.stack[base - 1])\n  vm.frames.push({ base, returnIp: vm.ip, fn: callee })\n  vm.ip = callee.entry\n}\n```\n\n| Aspect | Stack machine | Register machine |\n|---|---|---|\n| Operands | implicit, on the operand stack | explicit register indices |\n| Instruction size | small | larger |\n| Instruction count | higher | lower |\n| Call setup | arguments already in place | arguments copied into a window |\n\nReturning reverses the sequence: the result is moved to where the caller expects it, the frame is popped, and\nthe instruction pointer is restored from the saved return address.\n\n"
+    }
+   ],
+   "finish": "stop",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 1436,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164c422cf001JfI01Q6WJWl0lr",
+   "time": {
+    "created": 1792691938029,
+    "streamed": 1792691938268,
+    "completed": 1792691938308
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "agent-20tools-300cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Step 20 of 20: listing files that the answer should mention.\n\n"
+    },
+    {
+     "type": "tool",
+     "id": "call_fixture_20",
+     "name": "glob",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": ".agents/skills/*/SKILL.md"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": ""
+       }
+      ],
+      "metadata": {
+       "count": 0,
+       "truncated": false,
+       "openchamberContentShell": {
+        "chars": 14
+       }
+      }
+     },
+     "time": {
+      "created": 1792691938247,
+      "ran": 1792691938257,
+      "completed": 1792691938292
+     }
+    }
+   ],
+   "finish": "tool-calls",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 16,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164c421a2001FMXD6eIjNwOzxm",
+   "time": {
+    "created": 1792691937719,
+    "streamed": 1792691937948,
+    "completed": 1792691937975
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "agent-20tools-300cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Step 19 of 20: listing files that the answer should mention.\n\n"
+    },
+    {
+     "type": "tool",
+     "id": "call_fixture_19",
+     "name": "glob",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": "*.md"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": ""
+       }
+      ],
+      "metadata": {
+       "count": 0,
+       "truncated": false,
+       "openchamberContentShell": {
+        "chars": 14
+       }
+      }
+     },
+     "time": {
+      "created": 1792691937935,
+      "ran": 1792691937942,
+      "completed": 1792691937962
+     }
+    }
+   ],
+   "finish": "tool-calls",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 16,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164c42071001SP29PH3gnZx5DP",
+   "time": {
+    "created": 1792691937416,
+    "streamed": 1792691937646,
+    "completed": 1792691937677
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "agent-20tools-300cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Step 18 of 20: listing files that the answer should mention.\n\n"
+    },
+    {
+     "type": "tool",
+     "id": "call_fixture_18",
+     "name": "glob",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": "scripts/perf/*.mjs"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": ""
+       }
+      ],
+      "metadata": {
+       "count": 0,
+       "truncated": false,
+       "openchamberContentShell": {
+        "chars": 14
+       }
+      }
+     },
+     "time": {
+      "created": 1792691937632,
+      "ran": 1792691937639,
+      "completed": 1792691937661
+     }
+    }
+   ],
+   "finish": "tool-calls",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 16,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164c41f390013373eX2Slw146g",
+   "time": {
+    "created": 1792691937105,
+    "streamed": 1792691937341,
+    "completed": 1792691937368
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "agent-20tools-300cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Step 17 of 20: listing files that the answer should mention.\n\n"
+    },
+    {
+     "type": "tool",
+     "id": "call_fixture_17",
+     "name": "glob",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": "packages/*/package.json"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": ""
+       }
+      ],
+      "metadata": {
+       "count": 0,
+       "truncated": false,
+       "openchamberContentShell": {
+        "chars": 14
+       }
+      }
+     },
+     "time": {
+      "created": 1792691937324,
+      "ran": 1792691937333,
+      "completed": 1792691937356
+     }
+    }
+   ],
+   "finish": "tool-calls",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 16,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164c41d7c001M9FOaabD7cjk9S",
+   "time": {
+    "created": 1792691936695,
+    "streamed": 1792691937007,
+    "completed": 1792691937055
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "agent-20tools-300cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Step 16 of 20: listing files that the answer should mention.\n\n"
+    },
+    {
+     "type": "tool",
+     "id": "call_fixture_16",
+     "name": "glob",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": ".agents/skills/*/SKILL.md"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": ""
+       }
+      ],
+      "metadata": {
+       "count": 0,
+       "truncated": false,
+       "openchamberContentShell": {
+        "chars": 14
+       }
+      }
+     },
+     "time": {
+      "created": 1792691936947,
+      "ran": 1792691936998,
+      "completed": 1792691937043
+     }
+    }
+   ],
+   "finish": "tool-calls",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 16,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164c41c0a001lXkHS3nl91Lirt",
+   "time": {
+    "created": 1792691936300,
+    "streamed": 1792691936547,
+    "completed": 1792691936602
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "agent-20tools-300cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Step 15 of 20: listing files that the answer should mention.\n\n"
+    },
+    {
+     "type": "tool",
+     "id": "call_fixture_15",
+     "name": "glob",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": "*.md"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": ""
+       }
+      ],
+      "metadata": {
+       "count": 0,
+       "truncated": false,
+       "openchamberContentShell": {
+        "chars": 14
+       }
+      }
+     },
+     "time": {
+      "created": 1792691936526,
+      "ran": 1792691936538,
+      "completed": 1792691936569
+     }
+    }
+   ],
+   "finish": "tool-calls",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 16,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164c41a9c001Ok4bpCPtpJIZWw",
+   "time": {
+    "created": 1792691935940,
+    "streamed": 1792691936178,
+    "completed": 1792691936235
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "agent-20tools-300cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Step 14 of 20: listing files that the answer should mention.\n\n"
+    },
+    {
+     "type": "tool",
+     "id": "call_fixture_14",
+     "name": "glob",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": "scripts/perf/*.mjs"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": ""
+       }
+      ],
+      "metadata": {
+       "count": 0,
+       "truncated": false,
+       "openchamberContentShell": {
+        "chars": 14
+       }
+      }
+     },
+     "time": {
+      "created": 1792691936155,
+      "ran": 1792691936164,
+      "completed": 1792691936209
+     }
+    }
+   ],
+   "finish": "tool-calls",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 16,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164c41934001a3MDxne3e0TSvH",
+   "time": {
+    "created": 1792691935568,
+    "streamed": 1792691935829,
+    "completed": 1792691935873
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "agent-20tools-300cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Step 13 of 20: listing files that the answer should mention.\n\n"
+    },
+    {
+     "type": "tool",
+     "id": "call_fixture_13",
+     "name": "glob",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": "packages/*/package.json"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": ""
+       }
+      ],
+      "metadata": {
+       "count": 0,
+       "truncated": false,
+       "openchamberContentShell": {
+        "chars": 14
+       }
+      }
+     },
+     "time": {
+      "created": 1792691935786,
+      "ran": 1792691935801,
+      "completed": 1792691935856
+     }
+    }
+   ],
+   "finish": "tool-calls",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 16,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164c417b1001rC3QndTUfcE2ph",
+   "time": {
+    "created": 1792691935177,
+    "streamed": 1792691935452,
+    "completed": 1792691935509
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "agent-20tools-300cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Step 12 of 20: listing files that the answer should mention.\n\n"
+    },
+    {
+     "type": "tool",
+     "id": "call_fixture_12",
+     "name": "glob",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": ".agents/skills/*/SKILL.md"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": ""
+       }
+      ],
+      "metadata": {
+       "count": 0,
+       "truncated": false,
+       "openchamberContentShell": {
+        "chars": 14
+       }
+      }
+     },
+     "time": {
+      "created": 1792691935397,
+      "ran": 1792691935431,
+      "completed": 1792691935491
+     }
+    }
+   ],
+   "finish": "tool-calls",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 16,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164c4165f001k8wkTUiN1s2Fkm",
+   "time": {
+    "created": 1792691934843,
+    "streamed": 1792691935080,
+    "completed": 1792691935126
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "agent-20tools-300cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Step 11 of 20: listing files that the answer should mention.\n\n"
+    },
+    {
+     "type": "tool",
+     "id": "call_fixture_11",
+     "name": "glob",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": "*.md"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": ""
+       }
+      ],
+      "metadata": {
+       "count": 0,
+       "truncated": false,
+       "openchamberContentShell": {
+        "chars": 14
+       }
+      }
+     },
+     "time": {
+      "created": 1792691935060,
+      "ran": 1792691935070,
+      "completed": 1792691935109
+     }
+    }
+   ],
+   "finish": "tool-calls",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 16,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164c41523001MT9vtA4VuEX88I",
+   "time": {
+    "created": 1792691934524,
+    "streamed": 1792691934761,
+    "completed": 1792691934789
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "agent-20tools-300cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Step 10 of 20: listing files that the answer should mention.\n\n"
+    },
+    {
+     "type": "tool",
+     "id": "call_fixture_10",
+     "name": "glob",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": "scripts/perf/*.mjs"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": ""
+       }
+      ],
+      "metadata": {
+       "count": 0,
+       "truncated": false,
+       "openchamberContentShell": {
+        "chars": 14
+       }
+      }
+     },
+     "time": {
+      "created": 1792691934744,
+      "ran": 1792691934753,
+      "completed": 1792691934777
+     }
+    }
+   ],
+   "finish": "tool-calls",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 16,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164c413e0001ZJTo4KWUTQRj6D",
+   "time": {
+    "created": 1792691934206,
+    "streamed": 1792691934441,
+    "completed": 1792691934477
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "agent-20tools-300cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Step 9 of 20: listing files that the answer should mention.\n\n"
+    },
+    {
+     "type": "tool",
+     "id": "call_fixture_9",
+     "name": "glob",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": "packages/*/package.json"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": ""
+       }
+      ],
+      "metadata": {
+       "count": 0,
+       "truncated": false,
+       "openchamberContentShell": {
+        "chars": 14
+       }
+      }
+     },
+     "time": {
+      "created": 1792691934427,
+      "ran": 1792691934434,
+      "completed": 1792691934462
+     }
+    }
+   ],
+   "finish": "tool-calls",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 16,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164c41291001VCyJHkr65te5P2",
+   "time": {
+    "created": 1792691933861,
+    "streamed": 1792691934109,
+    "completed": 1792691934146
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "agent-20tools-300cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Step 8 of 20: listing files that the answer should mention.\n\n"
+    },
+    {
+     "type": "tool",
+     "id": "call_fixture_8",
+     "name": "glob",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": ".agents/skills/*/SKILL.md"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": ""
+       }
+      ],
+      "metadata": {
+       "count": 0,
+       "truncated": false,
+       "openchamberContentShell": {
+        "chars": 14
+       }
+      }
+     },
+     "time": {
+      "created": 1792691934076,
+      "ran": 1792691934097,
+      "completed": 1792691934131
+     }
+    }
+   ],
+   "finish": "tool-calls",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 16,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164c4114e001Vd0EvZXqb2uD1s",
+   "time": {
+    "created": 1792691933551,
+    "streamed": 1792691933786,
+    "completed": 1792691933819
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "agent-20tools-300cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Step 7 of 20: listing files that the answer should mention.\n\n"
+    },
+    {
+     "type": "tool",
+     "id": "call_fixture_7",
+     "name": "glob",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": "*.md"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": ""
+       }
+      ],
+      "metadata": {
+       "count": 0,
+       "truncated": false,
+       "openchamberContentShell": {
+        "chars": 14
+       }
+      }
+     },
+     "time": {
+      "created": 1792691933766,
+      "ran": 1792691933776,
+      "completed": 1792691933805
+     }
+    }
+   ],
+   "finish": "tool-calls",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 16,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164c40fe0001tK1lPCPt2ozvCf",
+   "time": {
+    "created": 1792691933181,
+    "streamed": 1792691933430,
+    "completed": 1792691933479
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "agent-20tools-300cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Step 6 of 20: listing files that the answer should mention.\n\n"
+    },
+    {
+     "type": "tool",
+     "id": "call_fixture_6",
+     "name": "glob",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": "scripts/perf/*.mjs"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": ""
+       }
+      ],
+      "metadata": {
+       "count": 0,
+       "truncated": false,
+       "openchamberContentShell": {
+        "chars": 14
+       }
+      }
+     },
+     "time": {
+      "created": 1792691933396,
+      "ran": 1792691933418,
+      "completed": 1792691933457
+     }
+    }
+   ],
+   "finish": "tool-calls",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 16,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164c40e80001zKQEzf7yFUXsC4",
+   "time": {
+    "created": 1792691932825,
+    "streamed": 1792691933074,
+    "completed": 1792691933123
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "agent-20tools-300cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Step 5 of 20: listing files that the answer should mention.\n\n"
+    },
+    {
+     "type": "tool",
+     "id": "call_fixture_5",
+     "name": "glob",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": "packages/*/package.json"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": ""
+       }
+      ],
+      "metadata": {
+       "count": 0,
+       "truncated": false,
+       "openchamberContentShell": {
+        "chars": 14
+       }
+      }
+     },
+     "time": {
+      "created": 1792691933041,
+      "ran": 1792691933065,
+      "completed": 1792691933096
+     }
+    }
+   ],
+   "finish": "tool-calls",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 16,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164c40d1e001hGUxxB8KxctChC",
+   "time": {
+    "created": 1792691932476,
+    "streamed": 1792691932730,
+    "completed": 1792691932775
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "agent-20tools-300cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Step 4 of 20: listing files that the answer should mention.\n\n"
+    },
+    {
+     "type": "tool",
+     "id": "call_fixture_4",
+     "name": "glob",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": ".agents/skills/*/SKILL.md"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": ""
+       }
+      ],
+      "metadata": {
+       "count": 0,
+       "truncated": false,
+       "openchamberContentShell": {
+        "chars": 14
+       }
+      }
+     },
+     "time": {
+      "created": 1792691932695,
+      "ran": 1792691932722,
+      "completed": 1792691932746
+     }
+    }
+   ],
+   "finish": "tool-calls",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 16,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164c40bd1001J9FvuA4riVss3j",
+   "time": {
+    "created": 1792691932141,
+    "streamed": 1792691932377,
+    "completed": 1792691932420
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "agent-20tools-300cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Step 3 of 20: listing files that the answer should mention.\n\n"
+    },
+    {
+     "type": "tool",
+     "id": "call_fixture_3",
+     "name": "glob",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": "*.md"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": ""
+       }
+      ],
+      "metadata": {
+       "count": 0,
+       "truncated": false,
+       "openchamberContentShell": {
+        "chars": 14
+       }
+      }
+     },
+     "time": {
+      "created": 1792691932355,
+      "ran": 1792691932365,
+      "completed": 1792691932403
+     }
+    }
+   ],
+   "finish": "tool-calls",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 16,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164c40a36001MhWCLP7G2cqVs3",
+   "time": {
+    "created": 1792691931746,
+    "streamed": 1792691932039,
+    "completed": 1792691932079
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "agent-20tools-300cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Step 2 of 20: listing files that the answer should mention.\n\n"
+    },
+    {
+     "type": "tool",
+     "id": "call_fixture_2",
+     "name": "glob",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": "scripts/perf/*.mjs"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": ""
+       }
+      ],
+      "metadata": {
+       "count": 0,
+       "truncated": false,
+       "openchamberContentShell": {
+        "chars": 14
+       }
+      }
+     },
+     "time": {
+      "created": 1792691931989,
+      "ran": 1792691932000,
+      "completed": 1792691932062
+     }
+    }
+   ],
+   "finish": "tool-calls",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 16,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164c4084f001t6X4jvnZdftt0c",
+   "time": {
+    "created": 1792691931291,
+    "streamed": 1792691931586,
+    "completed": 1792691931665
+   },
+   "type": "assistant",
+   "agent": "build",
+   "model": {
+    "id": "agent-20tools-300cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "content": [
+    {
+     "type": "text",
+     "text": "Step 1 of 20: listing files that the answer should mention.\n\n"
+    },
+    {
+     "type": "tool",
+     "id": "call_fixture_1",
+     "name": "glob",
+     "executed": false,
+     "state": {
+      "status": "completed",
+      "input": {
+       "pattern": "packages/*/package.json"
+      },
+      "content": [
+       {
+        "type": "text",
+        "text": ""
+       }
+      ],
+      "metadata": {
+       "count": 0,
+       "truncated": false,
+       "openchamberContentShell": {
+        "chars": 14
+       }
+      }
+     },
+     "time": {
+      "created": 1792691931546,
+      "ran": 1792691931572,
+      "completed": 1792691931642
+     }
+    }
+   ],
+   "finish": "tool-calls",
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 16,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   }
+  },
+  {
+   "id": "msg_164c407e4001V8frLikrLPKACZ",
+   "time": {
+    "created": 1792691931183
+   },
+   "text": "Turn 1: explain the next part.",
+   "type": "user"
+  },
+  {
+   "id": "msg_164c4074b00115cVMuPoiokPvq",
+   "time": {
+    "created": 1792691930955
+   },
+   "type": "agent-switched",
+   "agent": "build"
+  },
+  {
+   "id": "msg_164c4072a001MfDeZC7gF7znAH",
+   "time": {
+    "created": 1792691930922
+   },
+   "type": "model-switched",
+   "model": {
+    "id": "agent-20tools-300cps",
+    "providerID": "perf"
+   }
+  }
+ ],
+ "cursor": {
+  "previous": "eyJpZCI6Im1zZ18xNjRjNDZmMjQwMDFXRXdjNTREZE1MRWlRdiIsIm9yZGVyIjoiZGVzYyIsImRpcmVjdGlvbiI6InByZXZpb3VzIn0",
+  "next": "eyJpZCI6Im1zZ18xNjRjNDA3MmEwMDFNZkRlWkM3Z0Y3em5BSCIsIm9yZGVyIjoiZGVzYyIsImRpcmVjdGlvbiI6Im5leHQifQ"
+ }
+}
