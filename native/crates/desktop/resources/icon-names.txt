@@ -1,0 +1,19 @@
+# Icon sprite glyphs the native desktop draws. `bun run native:resources`
+# exports them into icons.json from packages/ui/src/components/icon/sprite.ts.
+add
+alert
+archive
+arrow-down-s
+arrow-right-s
+box-3
+checkbox-circle
+circle
+folder
+git-branch
+loader-4
+more-2
+pushpin
+robot
+send-plane-2
+stop
+terminal

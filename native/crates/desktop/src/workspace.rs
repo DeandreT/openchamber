@@ -1,0 +1,680 @@
+//! The offline workspace: synthetic sessions, selection, drafts, transcripts
+//! and the deterministic response stream.
+//!
+//! This entity owns application lifetime after `main` opens the window.
+//! Dropping it drops every playback task, which cancels the streams.
+
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
+use gpui_kit::component::input::{InputEvent, TextareaState};
+use gpui_kit::{
+    App, AppContext, Context, Entity, FocusHandle, FollowMode, ListAlignment, ListOffset,
+    ListState, Subscription, Task, Window, px,
+};
+use openchamber_native_core::chat_projection;
+use openchamber_native_core::draft::{Draft, DraftKey, DraftStore, DraftTarget};
+use openchamber_native_core::grouping::{self, GroupingContext, WorktreeSortOrder};
+use openchamber_native_core::ids::{MessageId, PartId, RuntimeId, SessionId};
+use openchamber_native_core::ordering::{ActivityPhase, OrderingMutation, SessionOrdering};
+use openchamber_native_core::ownership::{OwnershipInputs, SessionOwnershipIndex, Surface};
+use openchamber_native_core::scroll_memory::{ScrollKey, ScrollMemory, ScrollPosition};
+use openchamber_native_core::session::SessionRecord;
+use openchamber_native_core::sidebar_rows::{self, SidebarInputs, SidebarState};
+use openchamber_native_core::synthetic::{
+    self, ConversationShape, ResponseScript, SyntheticWorkspace, WorkloadSize,
+};
+use openchamber_native_core::transcript::{
+    Message, MessageInfo, Part, Role, Transcript, TranscriptChange, TranscriptEvent,
+};
+
+use crate::diagnostics::{self, Marker};
+use crate::locale;
+use crate::sidebar_item::SidebarItem;
+
+/// Delay between synthetic response chunks.
+const CHUNK_INTERVAL: Duration = Duration::from_millis(24);
+/// Pixels rendered beyond the viewport in either direction.
+const TRANSCRIPT_OVERDRAW: f32 = 800.0;
+const SIDEBAR_OVERDRAW: f32 = 300.0;
+
+/// A visited session's transcript and its retained scroll state.
+///
+/// The list state stays alive while the client runs, so returning to a
+/// session restores the exact message and pixel offset the reader left.
+pub struct OpenSession {
+    pub transcript: Transcript,
+    pub list: ListState,
+}
+
+pub struct Workspace {
+    pub(crate) data: SyntheticWorkspace,
+    pub(crate) active_sessions: Vec<SessionRecord>,
+    pub(crate) archived_sessions: Vec<SessionRecord>,
+    session_index: HashMap<SessionId, usize>,
+    runtime: RuntimeId,
+    ordering: SessionOrdering,
+    pub(crate) sidebar_state: SidebarState,
+    pub(crate) sidebar_items: Vec<SidebarItem>,
+    pub(crate) sidebar_list: ListState,
+    pub(crate) selected: Option<SessionId>,
+    pub(crate) open_sessions: HashMap<SessionId, OpenSession>,
+    drafts: DraftStore,
+    scroll_memory: ScrollMemory,
+    pub(crate) composer: Entity<TextareaState>,
+    composer_key: Option<DraftKey>,
+    playback: HashMap<SessionId, Task<()>>,
+    prompt_sequence: usize,
+    pub(crate) focus_handle: FocusHandle,
+    pending_switch: Option<Instant>,
+    startup_recorded: bool,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl Workspace {
+    pub fn new(size: WorkloadSize, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let data = SyntheticWorkspace::new(size);
+        let (archived_sessions, active_sessions): (Vec<SessionRecord>, Vec<SessionRecord>) = data
+            .sessions
+            .iter()
+            .cloned()
+            .partition(SessionRecord::is_archived);
+        let session_index = active_sessions
+            .iter()
+            .enumerate()
+            .map(|(index, session)| (session.id.clone(), index))
+            .collect();
+        let placeholder = locale::strings(cx).get("chat.chatInput.placeholder.chat");
+        let composer = cx.new(|cx| {
+            TextareaState::new(window, cx)
+                .auto_grow(1, 10)
+                .submit_on_enter(true)
+                .placeholder(placeholder)
+        });
+        let subscription = cx.subscribe_in(&composer, window, Self::on_composer_event);
+
+        let mut workspace = Self {
+            data,
+            active_sessions,
+            archived_sessions,
+            session_index,
+            runtime: RuntimeId::from("synthetic"),
+            ordering: SessionOrdering::new(),
+            sidebar_state: SidebarState::default(),
+            sidebar_items: Vec::new(),
+            sidebar_list: ListState::new(0, ListAlignment::Top, px(SIDEBAR_OVERDRAW)),
+            selected: None,
+            open_sessions: HashMap::new(),
+            drafts: DraftStore::new(),
+            scroll_memory: ScrollMemory::new(),
+            composer,
+            composer_key: None,
+            playback: HashMap::new(),
+            prompt_sequence: 0,
+            focus_handle: cx.focus_handle(),
+            pending_switch: None,
+            startup_recorded: false,
+            _subscriptions: vec![subscription],
+        };
+        workspace.rebuild_sidebar();
+        if let Some(first) = workspace.first_session_row() {
+            workspace.select_session(first, window, cx);
+        }
+        workspace
+    }
+
+    /// The selected session's record.
+    pub fn selected_session(&self) -> Option<&SessionRecord> {
+        let id = self.selected.as_ref()?;
+        self.session(id)
+    }
+
+    pub fn session(&self, id: &SessionId) -> Option<&SessionRecord> {
+        self.session_index
+            .get(id)
+            .and_then(|index| self.active_sessions.get(*index))
+    }
+
+    pub fn is_streaming(&self, id: &SessionId) -> bool {
+        self.playback.contains_key(id)
+    }
+
+    /// Rebuilds the sidebar rows from the core projection.
+    ///
+    /// The row at the top of the viewport keeps its position when rows are
+    /// inserted or removed elsewhere.
+    pub fn rebuild_sidebar(&mut self) {
+        let started = Instant::now();
+        let items = build_sidebar_items(
+            &self.data,
+            &self.active_sessions,
+            &self.archived_sessions,
+            &self.sidebar_state,
+            &mut self.ordering,
+        );
+        let elapsed = started.elapsed();
+        let top = self.sidebar_list.logical_scroll_top();
+        let anchor = self
+            .sidebar_items
+            .get(top.item_ix)
+            .map(|item| item.key().to_owned());
+        let count = items.len();
+        self.sidebar_items = items;
+        self.sidebar_list.reset(count);
+        let restored =
+            anchor.and_then(|key| self.sidebar_items.iter().position(|item| item.key() == key));
+        if let Some(item_ix) = restored {
+            self.sidebar_list.scroll_to(ListOffset {
+                item_ix,
+                offset_in_item: top.offset_in_item,
+            });
+        }
+        diagnostics::mark(Marker::SidebarRebuilt, Some(elapsed), Some(count));
+    }
+
+    fn first_session_row(&self) -> Option<SessionId> {
+        self.sidebar_items.iter().find_map(|item| match item {
+            SidebarItem::Session { session_id, .. } => Some(session_id.clone()),
+            _ => None,
+        })
+    }
+
+    /// Selects a session: saves the outgoing draft and position under their
+    /// captured identities, then restores the incoming ones before paint.
+    pub fn select_session(&mut self, id: SessionId, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected.as_ref() == Some(&id) {
+            self.focus_composer(window, cx);
+            return;
+        }
+        let Some(session) = self.session(&id) else {
+            return;
+        };
+        let next_key = session.directory.as_deref().and_then(|directory| {
+            DraftKey::new(
+                self.runtime.clone(),
+                directory,
+                DraftTarget::Session(id.clone()),
+            )
+        });
+        let started = Instant::now();
+        self.save_composer_draft(cx);
+        self.save_scroll_position();
+        self.selected = Some(id.clone());
+        self.ensure_open(&id);
+        self.composer_key = next_key;
+        self.restore_composer_draft(window, cx);
+        self.focus_composer(window, cx);
+        self.pending_switch = Some(started);
+        cx.notify();
+    }
+
+    /// Moves the selection through session rows in display order.
+    pub fn select_adjacent(&mut self, offset: isize, window: &mut Window, cx: &mut Context<Self>) {
+        let sessions: Vec<&SessionId> = self
+            .sidebar_items
+            .iter()
+            .filter_map(|item| match item {
+                SidebarItem::Session { session_id, .. } => Some(session_id),
+                _ => None,
+            })
+            .collect();
+        if sessions.is_empty() {
+            return;
+        }
+        let current = self
+            .selected
+            .as_ref()
+            .and_then(|selected| sessions.iter().position(|id| *id == selected));
+        let next = match current {
+            Some(index) => index.saturating_add_signed(offset).min(sessions.len() - 1),
+            None => 0,
+        };
+        let id = sessions[next].clone();
+        if let Some(row) = self.sidebar_items.iter().position(
+            |item| matches!(item, SidebarItem::Session { session_id, .. } if *session_id == id),
+        ) {
+            self.sidebar_list.scroll_to_reveal_item(row);
+        }
+        self.select_session(id, window, cx);
+    }
+
+    pub fn toggle_expanded(&mut self, expansion_key: &str, cx: &mut Context<Self>) {
+        self.sidebar_state.toggle_expanded(expansion_key);
+        self.rebuild_sidebar();
+        cx.notify();
+    }
+
+    pub fn toggle_collapsed(&mut self, item: &SidebarItem, cx: &mut Context<Self>) {
+        let state = &mut self.sidebar_state;
+        match item {
+            SidebarItem::Zone { activity, .. } => {
+                if !state.collapsed_activities.remove(activity) {
+                    state.collapsed_activities.insert(*activity);
+                }
+            }
+            SidebarItem::Project { project_id, .. } => {
+                if !state.collapsed_projects.remove(project_id) {
+                    state.collapsed_projects.insert(project_id.clone());
+                }
+            }
+            SidebarItem::Group { group_key, .. } => {
+                if !state.collapsed_groups.remove(group_key) {
+                    state.collapsed_groups.insert(group_key.clone());
+                }
+            }
+            _ => return,
+        }
+        self.rebuild_sidebar();
+        cx.notify();
+    }
+
+    pub fn reveal(&mut self, item: &SidebarItem, cx: &mut Context<Self>) {
+        let SidebarItem::Show {
+            control,
+            container_key,
+            current_count,
+            increment,
+            ..
+        } = item
+        else {
+            return;
+        };
+        self.sidebar_state
+            .reveal(container_key, *control, *current_count, *increment);
+        self.rebuild_sidebar();
+        cx.notify();
+    }
+
+    fn ensure_open(&mut self, id: &SessionId) {
+        if self.open_sessions.contains_key(id) {
+            return;
+        }
+        let transcript = Transcript::from_history(synthetic::conversation(
+            id,
+            ConversationShape::for_session(id),
+        ));
+        let list = ListState::new(
+            transcript.len(),
+            ListAlignment::Top,
+            px(TRANSCRIPT_OVERDRAW),
+        );
+        list.set_follow_mode(FollowMode::Tail);
+        let key = ScrollKey {
+            runtime: self.runtime.clone(),
+            session: id.clone(),
+        };
+        match self.scroll_memory.position(&key) {
+            ScrollPosition::FollowingTail => list.scroll_to_end(),
+            ScrollPosition::Anchored {
+                message_id,
+                offset_in_message,
+            } => {
+                if let Some(item_ix) = transcript.row_of(message_id) {
+                    list.scroll_to(ListOffset {
+                        item_ix,
+                        offset_in_item: px(*offset_in_message),
+                    });
+                }
+            }
+        }
+        self.open_sessions
+            .insert(id.clone(), OpenSession { transcript, list });
+    }
+
+    fn save_scroll_position(&mut self) {
+        let Some(id) = &self.selected else {
+            return;
+        };
+        let Some(open) = self.open_sessions.get(id) else {
+            return;
+        };
+        let position = if open.list.is_following_tail() {
+            ScrollPosition::FollowingTail
+        } else {
+            let top = open.list.logical_scroll_top();
+            match open.transcript.message(top.item_ix) {
+                Some(message) => ScrollPosition::Anchored {
+                    message_id: message.info.id.clone(),
+                    offset_in_message: f32::from(top.offset_in_item),
+                },
+                None => ScrollPosition::FollowingTail,
+            }
+        };
+        self.scroll_memory.save(
+            ScrollKey {
+                runtime: self.runtime.clone(),
+                session: id.clone(),
+            },
+            position,
+        );
+    }
+
+    fn save_composer_draft(&mut self, cx: &App) {
+        let Some(key) = self.composer_key.clone() else {
+            return;
+        };
+        let composer = self.composer.read(cx);
+        let draft = Draft {
+            text: composer.value().to_string(),
+            selection: composer.selected_range(),
+        };
+        self.drafts.save(key, draft);
+    }
+
+    fn restore_composer_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let draft = self
+            .composer_key
+            .as_ref()
+            .and_then(|key| self.drafts.get(key))
+            .cloned()
+            .unwrap_or_default();
+        self.composer.update(cx, |composer, cx| {
+            composer.set_value(draft.text.clone(), window, cx);
+            composer.set_selected_range(draft.selection.clone(), cx);
+        });
+    }
+
+    pub fn focus_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.composer
+            .update(cx, |composer, cx| composer.focus(window, cx));
+    }
+
+    fn on_composer_event(
+        &mut self,
+        _composer: &Entity<TextareaState>,
+        event: &InputEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let InputEvent::PressEnter { shift: false, .. } = event {
+            self.submit(window, cx);
+        }
+    }
+
+    /// Sends the composer text to the selected session's synthetic stream.
+    pub fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(session_id) = self.selected.clone() else {
+            return;
+        };
+        if self.is_streaming(&session_id) {
+            return;
+        }
+        let text = self.composer.read(cx).value().trim().to_owned();
+        if text.is_empty() {
+            return;
+        }
+        if let Some(key) = &self.composer_key {
+            let _ = self.drafts.take(key);
+        }
+        self.composer
+            .update(cx, |composer, cx| composer.set_value("", window, cx));
+
+        self.prompt_sequence += 1;
+        let sequence = self.prompt_sequence;
+        let now = synthetic_clock(sequence);
+        let user_id = MessageId::new(format!("{session_id}-local-{sequence:04}-user"));
+        let assistant_id = MessageId::new(format!("{session_id}-local-{sequence:04}-assistant"));
+        let part_id = PartId::new(format!("{assistant_id}-p0"));
+        let Some(open) = self.open_sessions.get_mut(&session_id) else {
+            return;
+        };
+        for message in [
+            Message {
+                info: MessageInfo {
+                    id: user_id.clone(),
+                    role: Role::User,
+                    created: now,
+                    completed: None,
+                },
+                parts: vec![Part::text(PartId::new(format!("{user_id}-p0")), text)],
+            },
+            Message {
+                info: MessageInfo {
+                    id: assistant_id.clone(),
+                    role: Role::Assistant,
+                    created: now,
+                    completed: None,
+                },
+                parts: vec![Part::text(part_id.clone(), String::new())],
+            },
+        ] {
+            if let TranscriptChange::Inserted { rows } = open.transcript.push(message) {
+                open.list.splice(rows.start..rows.start, rows.len());
+            }
+        }
+        open.list.scroll_to_end();
+        self.observe_phase(&session_id, ActivityPhase::Active, now);
+
+        let script = ResponseScript::new(sequence);
+        let playback_key = session_id.clone();
+        let task = cx.spawn(async move |this, cx| {
+            let started = Instant::now();
+            for chunk in script.chunks() {
+                cx.background_executor().timer(CHUNK_INTERVAL).await;
+                let applied = this.update(cx, |this, cx| {
+                    this.apply_delta(&session_id, &assistant_id, &part_id, chunk, cx);
+                });
+                if applied.is_err() {
+                    return;
+                }
+            }
+            let _ = this.update(cx, |this, cx| {
+                this.finish_playback(&session_id, &assistant_id, now, cx);
+            });
+            diagnostics::mark(
+                Marker::PlaybackCompleted,
+                Some(started.elapsed()),
+                Some(script.chunks().len()),
+            );
+        });
+        self.playback.insert(playback_key, task);
+        cx.notify();
+    }
+
+    /// Stops the selected session's stream, keeping the text received so far.
+    pub fn stop(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.selected.clone() else {
+            return;
+        };
+        if self.playback.remove(&id).is_some() {
+            self.observe_phase(
+                &id,
+                ActivityPhase::Settled,
+                synthetic_clock(self.prompt_sequence),
+            );
+            cx.notify();
+        }
+    }
+
+    fn apply_delta(
+        &mut self,
+        session_id: &SessionId,
+        message_id: &MessageId,
+        part_id: &PartId,
+        chunk: &str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(open) = self.open_sessions.get_mut(session_id) else {
+            return;
+        };
+        let change = open.transcript.apply(TranscriptEvent::PartDelta {
+            message_id: message_id.clone(),
+            part_id: part_id.clone(),
+            delta: chunk.to_owned(),
+        });
+        if let TranscriptChange::Updated { row } = change {
+            open.list.remeasure_items(row..row + 1);
+            cx.notify();
+        }
+    }
+
+    fn finish_playback(
+        &mut self,
+        session_id: &SessionId,
+        message_id: &MessageId,
+        started: i64,
+        cx: &mut Context<Self>,
+    ) {
+        self.playback.remove(session_id);
+        if let Some(open) = self.open_sessions.get_mut(session_id)
+            && let Some(row) = open.transcript.row_of(message_id)
+            && let Some(message) = open.transcript.message(row)
+        {
+            let mut info = message.info.clone();
+            info.completed = Some(started + 1);
+            let _ = open.transcript.apply(TranscriptEvent::MessageUpdated(info));
+        }
+        self.observe_phase(session_id, ActivityPhase::Settled, started + 1);
+        cx.notify();
+    }
+
+    fn observe_phase(&mut self, session_id: &SessionId, phase: ActivityPhase, now: i64) {
+        let changed = self.ordering.apply(
+            &[OrderingMutation::Observe {
+                session_id: session_id.clone(),
+                phase,
+            }],
+            now,
+        );
+        if changed {
+            self.rebuild_sidebar();
+        }
+    }
+
+    /// Records startup and switch markers once their frame has painted.
+    pub(crate) fn record_frame_markers(&mut self, window: &mut Window) {
+        if !self.startup_recorded {
+            self.startup_recorded = true;
+            window.on_next_frame(|_, _| {
+                diagnostics::mark(Marker::ContentPainted, None, None);
+                diagnostics::mark(Marker::ComposerUsable, None, None);
+            });
+        }
+        if let Some(started) = self.pending_switch.take() {
+            window.on_next_frame(move |_, _| {
+                diagnostics::mark(Marker::SwitchCompleted, Some(started.elapsed()), None);
+            });
+        }
+    }
+}
+
+/// Synthetic timestamps advance with each prompt, independent of the wall clock.
+fn synthetic_clock(sequence: usize) -> i64 {
+    1_790_000_000_000 + sequence as i64 * 60_000
+}
+
+/// Runs the core projection and snapshots its rows for rendering.
+fn build_sidebar_items(
+    data: &SyntheticWorkspace,
+    active: &[SessionRecord],
+    archived: &[SessionRecord],
+    state: &SidebarState,
+    ordering: &mut SessionOrdering,
+) -> Vec<SidebarItem> {
+    let ownership = SessionOwnershipIndex::build(&OwnershipInputs {
+        sessions: active,
+        archived_sessions: archived,
+        projects: &data.projects,
+        worktrees: &data.worktrees,
+        surface: Surface::Desktop,
+        ..OwnershipInputs::default()
+    });
+    let chats =
+        chat_projection::project(active, &ownership, Some(&data.chat_roots), Surface::Desktop);
+    let branches = HashMap::new();
+    let context = GroupingContext {
+        ownership: &ownership,
+        spaces: &[],
+        surface: Surface::Desktop,
+        worktree_sort: WorktreeSortOrder::Manual,
+        branches: &branches,
+    };
+    let mut sections = Vec::with_capacity(data.projects.len());
+    for project in &data.projects {
+        let mut sessions: Vec<&SessionRecord> = chats
+            .project_sessions_by_project
+            .get(&project.id)
+            .cloned()
+            .unwrap_or_default();
+        sessions.sort_by(|left, right| {
+            ordering.compare(
+                left,
+                right,
+                left.overlay.pinned_at.is_some(),
+                right.overlay.pinned_at.is_some(),
+            )
+        });
+        let worktrees = data
+            .worktrees
+            .iter()
+            .find(|entry| entry.project_path == project.path)
+            .map(|entry| entry.worktrees.as_slice())
+            .unwrap_or_default();
+        sections.push(grouping::build_project_section(
+            project, &sessions, worktrees, &context, ordering,
+        ));
+    }
+    let chat_group = grouping::build_chat_group(&chats.chat_sessions, Some(&data.chat_roots));
+    let (pinned, work) = sidebar_rows::zone_items(&sections, chat_group.as_ref(), ordering);
+    let group_status = HashMap::new();
+    let model = sidebar_rows::build(
+        &SidebarInputs {
+            chat_group: chat_group.as_ref(),
+            pinned: &pinned,
+            work: &work,
+            sections: &sections,
+            state,
+            group_status: &group_status,
+            show_only_main_workspace: false,
+            active_project_id: None,
+        },
+        ordering,
+    );
+    let project_paths: HashMap<_, _> = data
+        .projects
+        .iter()
+        .map(|project| (&project.id, project.path.as_str()))
+        .collect();
+    model
+        .rows
+        .iter()
+        .map(|row| SidebarItem::from_row(row, &project_paths))
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_representative_sidebar_projects_without_panicking() {
+        let data = SyntheticWorkspace::new(WorkloadSize::Representative);
+        let (archived, active): (Vec<SessionRecord>, Vec<SessionRecord>) = data
+            .sessions
+            .iter()
+            .cloned()
+            .partition(SessionRecord::is_archived);
+        let items = build_sidebar_items(
+            &data,
+            &active,
+            &archived,
+            &SidebarState::default(),
+            &mut SessionOrdering::new(),
+        );
+        assert!(
+            items
+                .iter()
+                .any(|item| matches!(item, SidebarItem::Zone { .. }))
+        );
+        assert!(
+            items
+                .iter()
+                .any(|item| matches!(item, SidebarItem::Project { .. }))
+        );
+        let mut keys: Vec<&str> = items.iter().map(SidebarItem::key).collect();
+        keys.sort_unstable();
+        let before = keys.len();
+        keys.dedup();
+        assert_eq!(before, keys.len(), "row keys must be unique");
+    }
+}

@@ -175,7 +175,8 @@ impl SyntheticWorkspace {
             };
             let archived = (index > 60 && random.chance(22)).then_some(updated + MINUTE_MS);
             let overlay = SessionOverlay {
-                pinned_at: (parent_id.is_none() && archived.is_none() && random.chance(1))
+                // Three or so pins in the representative workload, as a person keeps them.
+                pinned_at: (parent_id.is_none() && archived.is_none() && index % 757 == 24)
                     .then_some(updated),
                 in_work: parent_id.is_none()
                     && archived.is_none()
