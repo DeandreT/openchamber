@@ -6,8 +6,9 @@
 //! becomes `ServerEvent::Unsupported` with its name only, never a fabricated
 //! state change.
 
-use openchamber_native_core::ids::{MessageId, PartId, SessionId};
-use openchamber_native_core::session::{SessionKind, SessionOverlay, SessionRecord, SessionTime};
+use openchamber_native_core::ids::{MessageId, OpenCodeProjectId, PartId, SessionId};
+use openchamber_native_core::session::{LiveStatus, SessionPatch, SessionRecord, SessionTime};
+use openchamber_native_core::session_index::SessionChange;
 use openchamber_native_core::transcript::{
     MessageInfo, Part, PartContent, Role, ToolStatus, TranscriptEvent,
 };
@@ -15,28 +16,8 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::error::TransportError;
-use crate::projection::{overlay, part_ids};
-
-/// Live run state of a session.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum LiveStatus {
-    Busy,
-    Idle,
-    Retry,
-}
-
-/// A change to one session record.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct SessionPatch {
-    pub title: Option<String>,
-    pub updated: Option<i64>,
-    pub idle: Option<i64>,
-    /// `Some(None)` un-archives; `None` leaves the archive state alone.
-    pub archived: Option<Option<i64>>,
-    pub directory: Option<String>,
-    /// Replaces the OpenChamber overlay read from the full metadata.
-    pub overlay: Option<(SessionOverlay, SessionKind)>,
-}
+use crate::projection::{self, metadata_facts, part_ids};
+use crate::wire;
 
 /// One domain change announced by the server.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -68,6 +49,28 @@ pub enum ServerEvent {
     Unsupported {
         kind: String,
     },
+}
+
+impl ServerEvent {
+    /// The change this event makes to the global session index, if any.
+    ///
+    /// The end of a turn settles the session, so a deferred recency update
+    /// applies.
+    pub fn session_change(&self) -> Option<SessionChange> {
+        match self {
+            Self::SessionCreated(record) => Some(SessionChange::Created(record.clone())),
+            Self::SessionPatched { session_id, patch } => Some(SessionChange::Patched {
+                session_id: session_id.clone(),
+                patch: patch.clone(),
+            }),
+            Self::SessionDeleted { session_id } => Some(SessionChange::Deleted(session_id.clone())),
+            Self::SessionStatus {
+                session_id,
+                status: LiveStatus::Idle,
+            } => Some(SessionChange::Settled(session_id.clone())),
+            _ => None,
+        }
+    }
 }
 
 /// One decoded bridge frame.
@@ -183,27 +186,30 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
     };
 
     match kind {
-        "session.created" => vec![ServerEvent::SessionCreated(SessionRecord {
-            id: session_id.clone(),
-            parent_id: text("parentID")
-                .filter(|id| !id.is_empty())
-                .map(SessionId::from),
-            directory: data
-                .pointer("/location/directory")
-                .and_then(Value::as_str)
-                .map(str::to_owned),
-            title: text("title").unwrap_or_default().to_owned(),
-            time: SessionTime {
-                created,
-                updated: created,
-                idle: None,
-                archived: None,
-            },
-            project_id: text("projectID").map(Into::into),
-            project: None,
-            kind: overlay(data.get("metadata")).1,
-            overlay: overlay(data.get("metadata")).0,
-        })],
+        "session.created" => {
+            let facts = metadata_facts(data.get("metadata"));
+            vec![ServerEvent::SessionCreated(SessionRecord {
+                id: session_id.clone(),
+                parent_id: text("parentID")
+                    .filter(|id| !id.is_empty())
+                    .map(SessionId::from),
+                directory: data
+                    .pointer("/location/directory")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                title: text("title").unwrap_or_default().to_owned(),
+                time: SessionTime {
+                    created,
+                    updated: created,
+                    idle: None,
+                    archived: None,
+                },
+                project_id: text("projectID").map(Into::into),
+                project: None,
+                kind: facts.kind,
+                overlay: facts.overlay,
+            })]
+        }
         "session.deleted" => vec![ServerEvent::SessionDeleted { session_id }],
         "session.renamed" => vec![ServerEvent::SessionPatched {
             session_id: session_id.clone(),
@@ -216,10 +222,23 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
         "session.metadata.updated" => vec![ServerEvent::SessionPatched {
             session_id: session_id.clone(),
             patch: SessionPatch {
-                overlay: Some(overlay(data.get("metadata"))),
+                metadata: Some(metadata_facts(data.get("metadata"))),
                 ..SessionPatch::default()
             },
         }],
+        "session.usage.updated" => vec![ServerEvent::SessionPatched {
+            session_id: session_id.clone(),
+            patch: SessionPatch {
+                updated: Some(created),
+                ..SessionPatch::default()
+            },
+        }],
+        "session.status" => match data.pointer("/status/type").and_then(Value::as_str) {
+            Some("busy") => vec![status(LiveStatus::Busy)],
+            Some("retry") => vec![status(LiveStatus::Retry)],
+            Some("idle") => vec![status(LiveStatus::Idle)],
+            _ => Vec::new(),
+        },
         "session.moved" => {
             let directory = data
                 .pointer("/location/directory")
@@ -230,6 +249,7 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                     session_id: session_id.clone(),
                     patch: SessionPatch {
                         directory: directory.clone(),
+                        project_id: text("projectID").map(OpenCodeProjectId::from),
                         updated: Some(created),
                         ..SessionPatch::default()
                     },
@@ -285,29 +305,53 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
             let Some(inbox_id) = text("inboxID") else {
                 return Vec::new();
             };
-            if data.pointer("/item/type").and_then(Value::as_str) != Some("user") {
-                return Vec::new();
-            }
             let message_id = MessageId::from(inbox_id);
-            let prompt = data
-                .pointer("/item/payload/text")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
-            let mut events = vec![transcript(TranscriptEvent::MessageUpdated(MessageInfo {
+            let info = |role: Role, notice: Option<String>| MessageInfo {
                 id: message_id.clone(),
-                role: Role::User,
+                role,
                 created,
                 completed: None,
-                notice: None,
-            }))];
-            if !prompt.is_empty() {
-                events.push(transcript(TranscriptEvent::PartUpdated {
-                    message_id,
-                    part: Part::text(PartId::new(part_ids::text(inbox_id, 0)), prompt),
-                }));
+                notice,
+            };
+            let payload = data
+                .pointer("/item/payload")
+                .cloned()
+                .unwrap_or(Value::Null);
+            match data.pointer("/item/type").and_then(Value::as_str) {
+                Some("user") => {
+                    let Ok(user) = serde_json::from_value::<wire::UserBody>(payload) else {
+                        return vec![ServerEvent::Unsupported {
+                            kind: kind.to_owned(),
+                        }];
+                    };
+                    vec![
+                        transcript(TranscriptEvent::MessageUpdated(info(Role::User, None))),
+                        transcript(TranscriptEvent::PartsReplaced {
+                            message_id: message_id.clone(),
+                            parts: projection::user_parts(inbox_id, &user),
+                        }),
+                    ]
+                }
+                Some("synthetic") => {
+                    let notice = payload
+                        .get("text")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned);
+                    vec![transcript(TranscriptEvent::MessageUpdated(info(
+                        Role::Synthetic,
+                        notice,
+                    )))]
+                }
+                _ => Vec::new(),
             }
-            events
         }
+        "session.inbox.delivered" => match text("inboxID") {
+            Some(inbox_id) => vec![transcript(TranscriptEvent::MessageDelivered {
+                message_id: MessageId::from(inbox_id),
+                created,
+            })],
+            None => Vec::new(),
+        },
         "session.inbox.cancelled" => match text("inboxID") {
             Some(inbox_id) => vec![transcript(TranscriptEvent::MessageRemoved {
                 message_id: MessageId::from(inbox_id),
@@ -444,8 +488,22 @@ fn translate_openchamber(kind: &str, payload: &Value) -> Option<Vec<ServerEvent>
         ("openchamber:session-status", Some(session_id)) => {
             let status = match properties.get("status").and_then(Value::as_str) {
                 Some("busy") => LiveStatus::Busy,
-                Some("retry") => LiveStatus::Retry,
                 Some("idle") => LiveStatus::Idle,
+                // A retry without its attempt, message and next time is not a
+                // valid status, as `translateOpenchamberStatus` decides.
+                Some("retry")
+                    if properties
+                        .pointer("/metadata/attempt")
+                        .is_some_and(Value::is_number)
+                        && properties
+                            .pointer("/metadata/message")
+                            .is_some_and(Value::is_string)
+                        && properties
+                            .pointer("/metadata/next")
+                            .is_some_and(Value::is_number) =>
+                {
+                    LiveStatus::Retry
+                }
                 _ => return Some(Vec::new()),
             };
             vec![ServerEvent::SessionStatus { session_id, status }]
@@ -460,7 +518,7 @@ fn translate_openchamber(kind: &str, payload: &Value) -> Option<Vec<ServerEvent>
         ("openchamber:session-metadata", Some(session_id)) => vec![ServerEvent::SessionPatched {
             session_id,
             patch: SessionPatch {
-                overlay: Some(overlay(properties.get("metadata"))),
+                metadata: Some(metadata_facts(properties.get("metadata"))),
                 ..SessionPatch::default()
             },
         }],

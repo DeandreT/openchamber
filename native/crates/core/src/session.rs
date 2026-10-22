@@ -62,6 +62,43 @@ pub struct SessionRecord {
     pub overlay: SessionOverlay,
 }
 
+/// What a session's full metadata establishes for the client.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MetadataFacts {
+    pub overlay: SessionOverlay,
+    pub kind: SessionKind,
+}
+
+/// A change to fields of one session record, as live events report it.
+///
+/// Absent fields stay as they are.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SessionPatch {
+    pub title: Option<String>,
+    pub directory: Option<String>,
+    pub project_id: Option<OpenCodeProjectId>,
+    pub updated: Option<i64>,
+    pub idle: Option<i64>,
+    /// `Some(None)` restores an archived session.
+    pub archived: Option<Option<i64>>,
+    /// Replaces what the previous full metadata established.
+    pub metadata: Option<MetadataFacts>,
+}
+
+impl SessionPatch {
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
+/// Live run state of a session. Only the live channel reports it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LiveStatus {
+    Busy,
+    Idle,
+    Retry,
+}
+
 impl SessionRecord {
     /// Creates an active top-level conversation record.
     pub fn new(id: impl Into<SessionId>, directory: impl Into<String>) -> Self {
@@ -94,6 +131,57 @@ impl SessionRecord {
                 .as_ref()
                 .and_then(|project| path::normalize_optional(project.worktree.as_deref()))
         })
+    }
+
+    /// This record with `patch` applied, as `applyPatch` in
+    /// `packages/ui/src/sync/session-event-router.ts` applies it.
+    pub fn patched(&self, patch: &SessionPatch) -> Self {
+        let mut next = self.clone();
+        if let Some(title) = &patch.title {
+            next.title.clone_from(title);
+        }
+        if let Some(directory) = &patch.directory {
+            next.directory = Some(directory.clone());
+        }
+        if let Some(project_id) = &patch.project_id {
+            next.project_id = Some(project_id.clone());
+        }
+        if let Some(updated) = patch.updated {
+            next.time.updated = updated;
+        }
+        if let Some(idle) = patch.idle {
+            next.time.idle = Some(idle);
+        }
+        if let Some(archived) = patch.archived {
+            next.time.archived = archived;
+        }
+        if let Some(facts) = patch.metadata {
+            next.overlay = facts.overlay;
+            next.kind = facts.kind;
+        }
+        next
+    }
+
+    /// The time the record last changed: `updated`, else `created`.
+    pub fn recency(&self) -> i64 {
+        if self.time.updated != 0 {
+            self.time.updated
+        } else {
+            self.time.created
+        }
+    }
+
+    /// Whether `other` differs from this record only in recency, so the
+    /// sidebar's structure is the same for both.
+    pub fn same_structure(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.title == other.title
+            && self.parent_id == other.parent_id
+            && self.time.created == other.time.created
+            && self.time.archived == other.time.archived
+            && self.overlay == other.overlay
+            && self.kind == other.kind
+            && self.resolved_directory() == other.resolved_directory()
     }
 
     /// `projectID`, falling back to `project.id`.

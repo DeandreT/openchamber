@@ -4977,8 +4977,10 @@ version = "0.1.0"
 dependencies = [
  "gpui-kit",
  "openchamber-native-core",
+ "openchamber-native-transport",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
  "tracing-subscriber",
 ]

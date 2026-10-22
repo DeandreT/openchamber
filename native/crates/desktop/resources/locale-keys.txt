@@ -27,3 +27,15 @@ sessions.sidebar.session.untitled
 sessions.sidebar.session.subsessions.expand
 sessions.sidebar.session.subsessions.collapse
 sessions.sidebar.session.status.pinned
+chat.container.sessionLoadError.authDescription
+chat.container.sessionLoadError.description
+chat.container.sessionLoadError.title
+desktopHostSwitcher.startup.connectingTo
+onboarding.desktopRecovery.incompatibleServer.description
+onboarding.desktopRecovery.remoteUnreachable.description
+onboarding.remoteConnection.probe.authMessage
+onboarding.remoteConnection.probe.incompatibleMessage
+opencodeCompatibility.reconnecting
+sessionAuth.error.incorrectPassword
+sessions.sidebar.group.empty.loadFailed
+sessions.sidebar.group.empty.loadingSessions

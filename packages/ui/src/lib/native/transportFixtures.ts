@@ -17,12 +17,14 @@ import { fileURLToPath } from 'node:url';
 import { OpenCode } from '@opencode/client';
 import { z } from 'zod';
 
+import type { SessionPatch, SyncEvent } from '@/lib/opencode/events';
 import { projectMessages, projectSession } from '@/lib/opencode/projection';
-import type { Part, Session } from '@/lib/opencode/model';
+import { compact, type Metadata, type Part, type Session } from '@/lib/opencode/model';
 import { PART_SHELLS_HEADER, PART_SHELLS_VERSION, toolContentShellChars } from '@/lib/opencode/toolContentShells';
 import { isBtwSession } from '@/lib/sessionBtwMetadata';
 import { isSessionPinnedInMetadata } from '@/lib/sessionPins';
 import { isSessionInWork } from '@/lib/sessionWorkMetadata';
+import { classifyStreamPayload } from '@/sync/event-pipeline';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..', '..', '..', '..');
@@ -126,6 +128,73 @@ const normalizePart = (part: Part) => {
 const installedClientVersion = (): string =>
   z.object({ version: z.string() }).parse(JSON.parse(readFileSync(resolve(repoRoot, 'node_modules/@opencode/client/package.json'), 'utf8'))).version;
 
+type Overlay = { pinned: boolean; inWork: boolean; btw: boolean };
+
+/** One session-level effect, as the Rust parity test normalizes its events. */
+type SessionEffect =
+  | { type: 'created'; session: ReturnType<typeof normalizeSession> }
+  | {
+      type: 'patched';
+      sessionId: string;
+      title?: string;
+      directory?: string;
+      projectId?: string;
+      updated?: number;
+      idle?: number;
+      archived?: number | null;
+      overlay?: Overlay;
+    }
+  | { type: 'deleted'; sessionId: string }
+  | { type: 'status'; sessionId: string; status: string };
+
+const frameSchema = z.object({ type: z.string(), payload: z.unknown().optional(), directory: z.string().optional() });
+
+/**
+ * The session-level effects of the recorded frames, as the UI classifies them:
+ * session records, the patch fields the native index models, removals and
+ * live status. A patch that changes none of those fields is left out.
+ */
+const sessionEffects = (frames: string, base: Session) => {
+  const overlay = (metadata: Metadata | undefined): Overlay => {
+    const session = { ...base, metadata };
+    return { pinned: isSessionPinnedInMetadata(session), inWork: isSessionInWork(session), btw: isBtwSession(session) };
+  };
+  const patched = (sessionID: string, patch: SessionPatch): SessionEffect[] => {
+    const fields = compact({
+      title: patch.title,
+      directory: patch.directory,
+      projectId: patch.projectID,
+      updated: patch.time?.updated,
+      idle: patch.time?.idle,
+      archived: patch.time?.archived,
+      overlay: patch.metadata === undefined ? undefined : overlay(patch.metadata),
+    });
+    return Object.keys(fields).length > 0 ? [{ type: 'patched', sessionId: sessionID, ...fields }] : [];
+  };
+  const effects = (event: SyncEvent): SessionEffect[] => {
+    switch (event.type) {
+      case 'session.created':
+        return [{ type: 'created', session: normalizeSession(event.properties.info) }];
+      case 'session.patched':
+        return patched(event.properties.sessionID, event.properties.patch);
+      case 'session.deleted':
+        return [{ type: 'deleted', sessionId: event.properties.sessionID }];
+      case 'session.status':
+        return [{ type: 'status', sessionId: event.properties.sessionID, status: event.properties.status.type }];
+      case 'session.idle':
+      case 'session.error':
+        return [{ type: 'status', sessionId: event.properties.sessionID, status: 'idle' }];
+      default:
+        return [];
+    }
+  };
+  return z.array(frameSchema).parse(JSON.parse(frames)).flatMap((frame) => {
+    if (frame.type !== 'event') return [];
+    const classified = classifyStreamPayload(frame.payload, frame.directory);
+    return classified.kind === 'events' ? classified.events.flatMap(({ event }) => effects(event)) : [];
+  });
+};
+
 /** Renders the checked-in fixture with the official client and the UI projection. */
 export const renderTransportFixtures = async (): Promise<string> => {
   const requests: RecordedRequest[] = [];
@@ -171,6 +240,10 @@ export const renderTransportFixtures = async (): Promise<string> => {
       shelled: page(shelled, TOOLS_SESSION, 50),
     },
     wholeMessage: normalizeMessages([single], TOOLS_SESSION)[0],
+    sessionEvents: {
+      recorded: sessionEffects(readWire('frames-recorded'), projectSession(sessions.data[0])),
+      tools: sessionEffects(readWire('frames-tools'), projectSession(sessions.data[0])),
+    },
   };
   return `${JSON.stringify(fixture, null, 2)}\n`;
 };

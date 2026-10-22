@@ -1,15 +1,17 @@
 //! Requests to one OpenChamber server.
 
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use openchamber_native_core::chat_roots::ChatRoots;
 use openchamber_native_core::ids::{MessageId, SessionId};
-use openchamber_native_core::session::SessionRecord;
+use openchamber_native_core::ownership::{self, ConfiguredProject, WorktreeInfo};
+use openchamber_native_core::session::{LiveStatus, SessionRecord};
 use openchamber_native_core::transcript::Message;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use reqwest::{Method, RequestBuilder, Response, StatusCode, Url};
 use serde::de::DeserializeOwned;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::credential::Credential;
 use crate::endpoint::Endpoint;
@@ -26,6 +28,10 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// (`packages/web/server/lib/opencode/message-shells.js`).
 const PART_SHELLS_HEADER: &str = "x-openchamber-part-shells";
 const PART_SHELLS_VERSION: &str = "v1";
+/// The settings surface this client reads and writes.
+const SURFACE: &str = "desktop";
+/// Directories per worktree request; the server caps a batch.
+const WORKTREE_BATCH_SIZE: usize = 200;
 /// Label stored with a client token the server issues to this app.
 const CLIENT_LABEL: &str = "OpenChamber Native";
 
@@ -34,6 +40,50 @@ const CLIENT_LABEL: &str = "OpenChamber Native";
 pub struct SessionPage {
     pub sessions: Vec<SessionRecord>,
     pub next: Option<String>,
+}
+
+/// One project's worktree read.
+#[derive(Debug, PartialEq, Eq)]
+pub struct WorktreeRead {
+    pub project_path: String,
+    /// `None` when the server could not list this project; earlier topology
+    /// for it stays.
+    pub worktrees: Option<Vec<WorktreeInfo>>,
+}
+
+/// The pages of the global session list, newest first, without duplicates.
+///
+/// Paging stops when the server names no further cursor, repeats one, or
+/// returns a page with nothing new, so a misbehaving cursor cannot spin.
+#[derive(Debug)]
+pub struct SessionPages {
+    client: ServerClient,
+    cursor: Option<String>,
+    seen: HashSet<SessionId>,
+    done: bool,
+}
+
+impl SessionPages {
+    /// The next page's new sessions, or `None` after the last page.
+    pub async fn next(&mut self) -> Result<Option<Vec<SessionRecord>>, TransportError> {
+        if self.done {
+            return Ok(None);
+        }
+        let page = self.client.session_page(self.cursor.as_deref()).await?;
+        let mut accepted = Vec::with_capacity(page.sessions.len());
+        for session in page.sessions {
+            if self.seen.insert(session.id.clone()) {
+                accepted.push(session);
+            }
+        }
+        match page.next {
+            Some(next) if !accepted.is_empty() && self.cursor.as_deref() != Some(next.as_str()) => {
+                self.cursor = Some(next);
+            }
+            _ => self.done = true,
+        }
+        Ok(Some(accepted))
+    }
 }
 
 /// One page of a session's messages, oldest first.
@@ -174,24 +224,21 @@ impl ServerClient {
     /// A failed page fails the whole read: a partial list has no authority
     /// to remove sessions it did not reach.
     pub async fn all_sessions(&self) -> Result<Vec<SessionRecord>, TransportError> {
-        let mut sessions: Vec<SessionRecord> = Vec::new();
-        let mut seen = std::collections::HashSet::new();
-        let mut cursor: Option<String> = None;
-        loop {
-            let page = self.session_page(cursor.as_deref()).await?;
-            let mut accepted = 0;
-            for session in page.sessions {
-                if seen.insert(session.id.clone()) {
-                    sessions.push(session);
-                    accepted += 1;
-                }
-            }
-            match page.next {
-                Some(next) if accepted > 0 && cursor.as_deref() != Some(next.as_str()) => {
-                    cursor = Some(next);
-                }
-                _ => return Ok(sessions),
-            }
+        let mut pages = self.session_pages();
+        let mut sessions = Vec::new();
+        while let Some(page) = pages.next().await? {
+            sessions.extend(page);
+        }
+        Ok(sessions)
+    }
+
+    /// Pages of every session, for a caller that shows the first page early.
+    pub fn session_pages(&self) -> SessionPages {
+        SessionPages {
+            client: self.clone(),
+            cursor: None,
+            seen: HashSet::new(),
+            done: false,
         }
     }
 
@@ -250,6 +297,104 @@ impl ServerClient {
         projection::message(single.data)?.ok_or_else(|| {
             TransportError::Malformed("the message has a type this client does not know".to_owned())
         })
+    }
+
+    /// The URL of the settings document as this client's surface reads it.
+    pub fn settings_url(&self) -> Url {
+        let mut url = self.endpoint.url("api/config/settings");
+        // A surface header forces a CORS preflight older servers refuse; the
+        // server reads the surface from the query.
+        url.query_pairs_mut().append_pair("surface", SURFACE);
+        url
+    }
+
+    /// The projects registered in OpenChamber.
+    pub async fn projects(&self) -> Result<Vec<ConfiguredProject>, TransportError> {
+        let settings: wire::Settings = self.get_json(self.settings_url(), None).await?;
+        let paths = settings
+            .projects
+            .iter()
+            .filter_map(|entry| entry.get("path").and_then(Value::as_str));
+        Ok(ownership::configured_projects(
+            paths,
+            settings.home_directory.as_deref(),
+        ))
+    }
+
+    /// The URL of one worktree batch; `first` routes it as the UI does.
+    pub fn worktree_batch_url(&self, first: &str) -> Url {
+        let mut url = self.endpoint.url("api/git/project-worktrees");
+        url.query_pairs_mut().append_pair("directory", first);
+        url
+    }
+
+    /// The linked worktrees of each project, in batches.
+    ///
+    /// A failed batch fails the read; a directory the server could not list
+    /// is reported on its own, so it never erases another project's
+    /// worktrees.
+    pub async fn project_worktrees(
+        &self,
+        project_paths: &[String],
+    ) -> Result<Vec<WorktreeRead>, TransportError> {
+        let mut reads = Vec::with_capacity(project_paths.len());
+        for chunk in project_paths.chunks(WORKTREE_BATCH_SIZE) {
+            let response = self
+                .authorized(Method::POST, self.worktree_batch_url(&chunk[0]))
+                .json(&json!({ "directories": chunk }))
+                .send()
+                .await
+                .map_err(TransportError::from_request)?;
+            let batch: wire::WorktreeBatch = read_json(response).await?;
+            let mut by_directory: HashMap<String, Option<Vec<wire::WorktreeEntry>>> = batch
+                .projects
+                .into_iter()
+                .map(|entry| (entry.directory, entry.worktrees))
+                .collect();
+            for project_path in chunk {
+                let listing = by_directory.remove(project_path).flatten();
+                reads.push(WorktreeRead {
+                    project_path: project_path.clone(),
+                    worktrees: listing.map(|entries| {
+                        let listing = entries
+                            .into_iter()
+                            .filter_map(|entry| {
+                                Some(WorktreeInfo {
+                                    path: entry.path.filter(|path| !path.trim().is_empty())?,
+                                    label: None,
+                                    name: entry.name,
+                                    branch: entry.branch,
+                                })
+                            })
+                            .collect();
+                        ownership::linked_worktrees(project_path, listing)
+                    }),
+                });
+            }
+        }
+        Ok(reads)
+    }
+
+    /// The running state of every session the host tracks, from its own
+    /// event stream. The read starts no OpenCode location. Sessions it does
+    /// not list are idle; unknown states are left out.
+    pub async fn session_statuses(&self) -> Result<HashMap<SessionId, LiveStatus>, TransportError> {
+        let snapshot: wire::StatusSnapshot = self
+            .get_json(self.endpoint.url("api/sessions/status"), None)
+            .await?;
+        Ok(snapshot
+            .sessions
+            .into_iter()
+            .filter_map(|(id, entry)| {
+                let status = match entry.status.as_str() {
+                    "busy" => LiveStatus::Busy,
+                    "retry" => LiveStatus::Retry,
+                    "idle" => LiveStatus::Idle,
+                    _ => return None,
+                };
+                Some((SessionId::new(id), status))
+            })
+            .collect())
     }
 
     /// The server's home directory and managed Chats roots.

@@ -14,7 +14,7 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `endpoint.rs` | The user-selected base URL, its path prefix and the `ws`/`wss` form of a route. |
 | `identity.rs` | `/health` parsing, API compatibility and capabilities. |
 | `credential.rs` | The credential a client sends; its `Debug` output is redacted. |
-| `client.rs` | `ServerClient`: identity probe, password login, session pages, message pages, whole messages and Chats roots. |
+| `client.rs` | `ServerClient`: identity probe, password login, session pages, message pages, whole messages, running status, Chats roots, projects and worktrees. |
 | `wire.rs` | Serde shapes of the fields the client reads. Private. |
 | `projection.rs` | Wire records to core records, mirroring `packages/ui/src/lib/opencode/projection.ts`. Private. |
 | `event.rs` | Bridge frames to `ServerEvent`s, mirroring `lib/opencode/events.ts` and `sync/event-pipeline.ts`. |
@@ -44,8 +44,17 @@ counts and identifiers only.
   `encodeURIComponent` does.
 - Message pages ask for part shells only when `/health` lists
   `api.message-part-shells.v1`. `session_message` returns the whole message.
+- Topology reads use OpenChamber's routes: projects from
+  `GET /api/config/settings?surface=desktop`, worktrees from batched
+  `POST /api/git/project-worktrees`, running state from
+  `GET /api/sessions/status`. None of them starts an OpenCode location. A
+  directory the server could not list is reported alone and never erases
+  another project's worktrees.
 - The event stream delivers through a bounded channel and waits for the
-  consumer instead of dropping events. Dropping `EventStream` stops the
+  consumer instead of dropping events. A socket that does not send `ready`
+  within 2 s or falls silent for 30 s is replaced, as the web client does.
+  `Connected { resumed }` says whether the server replayed everything since
+  the last delivered event; a reset retires the cursor. Dropping `EventStream` stops the
   subscription only; it never stops the server or a running turn.
 - Unmodelled event types become `ServerEvent::Unsupported` with their name
   only, never a guessed state change.

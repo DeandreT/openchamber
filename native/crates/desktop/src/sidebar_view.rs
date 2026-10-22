@@ -8,8 +8,11 @@ use gpui_kit::{
 use openchamber_native_core::grouping::GroupLabel;
 use openchamber_native_core::sidebar_rows::{ActivityKey, EmptyKind, GroupLoadState, ShowControl};
 
+use openchamber_native_core::session_index::IndexStatus;
+
 use crate::activation::on_activate;
 use crate::assets;
+use crate::connection::{ConnectionFailure, ConnectionState};
 use crate::locale::{self, Strings};
 use crate::sidebar_item::SidebarItem;
 use crate::theme::Palette;
@@ -42,7 +45,9 @@ impl Workspace {
                 this.render_sidebar_row(index, window, cx)
             }),
         )
-        .size_full();
+        .flex_1()
+        .min_h_0();
+        let status = self.connection_status(&locale::strings(cx).clone());
         div()
             .id("sidebar")
             .role(Role::Tree)
@@ -55,7 +60,46 @@ impl Workspace {
             .when(right_to_left, |this| this.border_l_1())
             .when(!right_to_left, |this| this.border_r_1())
             .py_1()
+            .flex()
+            .flex_col()
+            .when_some(status, |this, status| {
+                this.child(
+                    div()
+                        .id("connection-status")
+                        .role(Role::Status)
+                        .accessibility_id("connection-status")
+                        .aria_label(status.clone())
+                        .flex_shrink_0()
+                        .px(px(TREE_BASE_PADDING + CHEVRON_GAP))
+                        .py_1()
+                        .text_size(rems(META_SIZE))
+                        .text_color(palette.muted_foreground)
+                        .child(status),
+                )
+            })
             .child(rows)
+    }
+
+    /// What the sidebar says about the server, while there is something to say.
+    fn connection_status(&self, strings: &Strings) -> Option<SharedString> {
+        let connection = self.connection.as_ref()?;
+        let host = connection.config.endpoint.authority();
+        let text = match connection.state {
+            ConnectionState::Connecting => strings.format(
+                "desktopHostSwitcher.startup.connectingTo",
+                &[("host", &host)],
+            ),
+            ConnectionState::Reconnecting => strings.get("opencodeCompatibility.reconnecting"),
+            ConnectionState::Failed(failure) => failure_text(strings, failure, &host),
+            ConnectionState::Connected => match self.sessions.status() {
+                IndexStatus::Loading if self.sessions.active().is_empty() => {
+                    strings.get("sessions.sidebar.group.empty.loadingSessions")
+                }
+                IndexStatus::Failed => strings.get("sessions.sidebar.group.empty.loadFailed"),
+                _ => return None,
+            },
+        };
+        Some(text)
     }
 
     fn render_sidebar_row(
@@ -411,4 +455,31 @@ pub fn icon_element(name: &str, _palette: &Palette, color: gpui_kit::Hsla) -> im
         .size(px(16.0))
         .flex_shrink_0()
         .text_color(color)
+}
+
+/// The sentence that explains a connection failure.
+pub(crate) fn failure_text(
+    strings: &Strings,
+    failure: ConnectionFailure,
+    host: &str,
+) -> SharedString {
+    match failure {
+        ConnectionFailure::Unreachable => strings.format(
+            "onboarding.desktopRecovery.remoteUnreachable.description",
+            &[("host", host)],
+        ),
+        ConnectionFailure::NotOpenChamber => strings.format(
+            "onboarding.desktopRecovery.incompatibleServer.description",
+            &[("host", host)],
+        ),
+        ConnectionFailure::Incompatible => {
+            strings.get("onboarding.remoteConnection.probe.incompatibleMessage")
+        }
+        ConnectionFailure::AuthenticationRequired => {
+            strings.get("onboarding.remoteConnection.probe.authMessage")
+        }
+        ConnectionFailure::AuthenticationRejected => {
+            strings.get("sessionAuth.error.incorrectPassword")
+        }
+    }
 }

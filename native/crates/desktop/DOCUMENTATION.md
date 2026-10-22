@@ -2,16 +2,27 @@
 
 `openchamber-native-desktop` is the GPUI Kit client. `main` initializes
 diagnostics, assets, locale and theme, opens the window and hands application
-lifetime to the `Workspace` entity. The first window runs on deterministic
-synthetic data from the core and makes no network or provider calls.
+lifetime to the `Workspace` entity. Without a configured server the window
+runs on deterministic synthetic data from the core and makes no network or
+provider calls. With `OPENCHAMBER_NATIVE_SERVER` it reads one OpenChamber
+server through `openchamber-native-transport`; the connected client is
+read-only until prompt submission has its error and reconciliation paths.
 
 ## Ownership
 
-- `workspace.rs` owns the application state of the offline client: the
-  synthetic records, lifecycle ordering, sidebar presentation state, the
-  selected session, one retained transcript and `ListState` per visited
-  session, drafts, scroll memory and playback tasks. Views read it; actions
-  mutate it through its methods.
+- `workspace.rs` owns the application state: the global `SessionIndex`, the
+  topology (projects, worktrees, Chats roots), lifecycle ordering, live
+  status, sidebar presentation state, the selected session, one retained
+  transcript and `ListState` per visited session with its history state,
+  drafts, scroll memory, synthetic playback tasks and the server connection.
+  Views read it; actions mutate it through its methods.
+- `server_sync.rs` is the workspace's connected behavior: the connection
+  sequence, global session, status and topology reads, history reads and live
+  event delivery.
+- `connection.rs` holds the configured server, the connection state the views
+  explain and the tasks of the current connection attempt.
+- `network.rs` owns the Tokio runtime. GPUI tasks await `NetworkTask`s, and
+  dropping one aborts its network work.
 - `sidebar_item.rs` copies the core row model into owned rows. The core model
   borrows session records and entities cannot hold borrows.
 - `sidebar_view.rs`, `transcript_view.rs`, `composer_view.rs` and
@@ -38,6 +49,25 @@ synthetic data from the core and makes no network or provider calls.
   the tail only while the reader is at the end.
 - Dropping the `Workspace` drops every playback `Task`, which cancels its
   stream; closing the window during playback leaves no owned task running.
+  Dropping it also drops the connection: requests and the subscription end,
+  and the network runtime shuts down without blocking the UI thread. The
+  server and any running turn are unaffected.
+- Every connection attempt has a generation. A result checks the generation
+  that requested it and is dropped when a newer attempt replaced it. A
+  different server identity at the same endpoint is a different runtime:
+  sessions, topology and transcripts are replaced, while drafts and scroll
+  positions keep their original runtime keys.
+- The global reads start once the event stream is live, so events during a
+  read reconcile against its baseline instead of falling between the two.
+  When the stream reconnects without replaying from the last delivered event,
+  the client rereads sessions, running state, topology and every visited
+  transcript. A failed read keeps what the client showed.
+- Visited transcripts merge history reads with `Transcript::materialize`. A
+  live event that refers to a message or part the transcript lacks schedules
+  a read of that session unless one is in flight.
+- Each part of topology discovery (Chats roots, projects, each project's
+  worktrees) fails alone and keeps what it held, so a failed discovery leaves
+  sessions reachable through their fallback rows.
 - Every visible string comes from `resources/locales.json`, every color from
   `resources/themes.json` and every icon from `resources/icons.json`.
 - Interactive elements carry a stable `accessibility_id` equal to their row key
@@ -81,6 +111,20 @@ activate nothing. `on_activate` registers the workspace action for both paths.
 idle window draws none, so a marker scheduled there could wait indefinitely
 and inflate a measurement. Painting the frame is the moment the requested
 transcript exists; presentation timing belongs to the platform.
+
+### Why a Tokio runtime beside GPUI's executor
+
+Reqwest and tokio-tungstenite need Tokio. Network work runs on two Tokio
+workers; GPUI tasks await the results without blocking either executor. Tokio
+channels and join handles complete from any executor, so the bridge is a join
+handle that aborts on drop and nothing more.
+
+### Why the transcript skips most notice roles
+
+`packages/ui/src/components/chat/lib/timelineRoles.ts` hides synthetic,
+system, skill, idle and switch records and shows compaction and shell records
+as notices. The native transcript keeps every record for identity and order
+and renders the same subset.
 
 ### Why `.test_support()` on rows and controls
 
