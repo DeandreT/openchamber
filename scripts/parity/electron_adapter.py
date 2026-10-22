@@ -71,6 +71,15 @@ class ElectronClient:
     def rows(self) -> list[dict]:
         return self._call("rows")["rows"]
 
+    def wait_for(self, condition: dict, timeout_s: float) -> bool:
+        """Whether the page expression ``{"expression": ...}`` held within the
+        timeout, followed by a painted frame."""
+        try:
+            self._call("wait", expression=condition["expression"], timeoutMs=int(timeout_s * 1000))
+        except RuntimeError:
+            return False
+        return True
+
     def rects(self, targets: dict[str, str]) -> dict[str, list[float] | None]:
         selectors = {name: f'[data-sidebar-row-key="{key}"]' for name, key in targets.items()}
         return self._call("rects", selectors=selectors)["rects"]

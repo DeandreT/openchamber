@@ -71,6 +71,10 @@ class NativeClient:
         self._selector = selectors.DefaultSelector()
         self._buffer = ""
         self._app = None
+        # Markers before this index came before the last input.
+        self._input_mark = 0
+        # Inputs this host could not deliver and what replaced them.
+        self.substitutions: list[dict] = []
 
     def launch(self) -> dict:
         env = dict(self.env)
@@ -124,16 +128,32 @@ class NativeClient:
         # A painted frame after readiness: markers are emitted at paint.
         self._read_marks(0.3)
 
-    def _activate(self) -> None:
-        """Raises and focuses the client's window, so captures of the active
-        window and pointer input reach it. The window it opens can lose focus to
-        whatever the previous client left active."""
+    def _window(self) -> str:
         windows = subprocess.run(
             ["xdotool", "search", "--pid", str(self.process.pid)], capture_output=True, text=True,
         ).stdout.split()
         if not windows:
             raise RuntimeError("the native client has no X11 window")
-        subprocess.run(["xdotool", "windowactivate", "--sync", windows[-1]], check=True, capture_output=True, timeout=10)
+        return windows[-1]
+
+    def _activate(self) -> None:
+        """Raises and focuses the client's window, so captures of the active
+        window and pointer input reach it. The window it opens can lose focus to
+        whatever the previous client left active."""
+        subprocess.run(["xdotool", "windowactivate", "--sync", self._window()], check=True, capture_output=True, timeout=10)
+
+    def _screen_point(self, node) -> tuple[int, int]:
+        """The screen position of a node's centre. AccessKit reports screen
+        extents relative to the window, so the window's origin comes from X11."""
+        atspi = _atspi()
+        geometry = dict(
+            line.split("=", 1)
+            for line in subprocess.run(
+                ["xdotool", "getwindowgeometry", "--shell", self._window()], capture_output=True, text=True, check=True,
+            ).stdout.split()
+        )
+        extents = node.get_extents(atspi.CoordType.WINDOW)
+        return int(geometry["X"]) + extents.x + extents.width // 2, int(geometry["Y"]) + extents.y + extents.height // 2
 
     # --- accessibility ---------------------------------------------------
 
@@ -228,18 +248,53 @@ class NativeClient:
 
     # --- input -----------------------------------------------------------
 
+    def wait_for(self, condition: dict, timeout_s: float) -> bool:
+        """Whether the condition held within the timeout: ``{"elements": ids}``
+        for accessible elements, ``{"marker": name}`` for a diagnostic marker
+        emitted since the last input."""
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if "elements" in condition:
+                try:
+                    for accessible_id in condition["elements"]:
+                        self._find(accessible_id)
+                    self._read_marks(0.3)
+                    return True
+                except LookupError:
+                    pass
+            elif any(mark["marker"] == condition["marker"] for mark in self.marks[self._input_mark:]):
+                self._read_marks(0.3)
+                return True
+            self._read_marks(0.1)
+        return False
+
     def click(self, accessible_id: str) -> None:
-        """A real pointer click at the target's centre."""
+        """A real pointer click at the target's centre. A compositor that drops
+        synthetic pointer input (KWin on Wayland without a remote-control grant)
+        gets the target's accessibility action instead, recorded as a
+        substitution so the pointer path is never reported as verified."""
+        self._input_mark = len(self.marks)
         atspi = _atspi()
-        extents = self._find(accessible_id).get_extents(atspi.CoordType.SCREEN)
-        x = extents.x + extents.width // 2
-        y = extents.y + extents.height // 2
+        self._activate()
+        x, y = self._screen_point(self._find(accessible_id))
         atspi.generate_mouse_event(x, y, "abs")
         time.sleep(0.05)
+        if self._pointer() != (x, y):
+            self.substitutions.append({"kind": "pointer", "key": accessible_id, "reference": "click", "replacedBy": "accessibility action"})
+            self.activate(accessible_id)
+            return
         atspi.generate_mouse_event(x, y, "b1c")
+
+    def _pointer(self) -> tuple[int, int]:
+        location = dict(
+            line.split("=", 1)
+            for line in subprocess.run(["xdotool", "getmouselocation", "--shell"], capture_output=True, text=True, check=True).stdout.split()
+        )
+        return int(location["X"]), int(location["Y"])
 
     def activate(self, accessible_id: str) -> None:
         """The target's accessibility action, as a screen reader invokes it."""
+        self._input_mark = len(self.marks)
         node = self._find(accessible_id)
         action = node.get_action_iface()
         if action is None or action.get_n_actions() == 0:
@@ -247,6 +302,7 @@ class NativeClient:
         action.do_action(0)
 
     def key(self, name: str) -> None:
+        self._input_mark = len(self.marks)
         atspi = _atspi()
         from gi.repository import Gdk
 
@@ -254,6 +310,7 @@ class NativeClient:
         atspi.generate_keyboard_event(keyval, None, atspi.KeySynthType.SYM)
 
     def type_text(self, text: str) -> None:
+        self._input_mark = len(self.marks)
         atspi = _atspi()
         atspi.generate_keyboard_event(0, text, atspi.KeySynthType.STRING)
 
