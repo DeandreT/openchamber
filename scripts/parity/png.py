@@ -111,6 +111,17 @@ def unfilter(kind: int, line: bytearray, previous: bytearray, bpp: int) -> None:
             raise ValueError(f"unknown PNG filter {kind}")
 
 
+def crop(image: Image, x: int, y: int, width: int, height: int) -> Image:
+    """The ``width`` by ``height`` region whose top-left pixel is ``(x, y)``."""
+    if x < 0 or y < 0 or x + width > image.width or y + height > image.height:
+        raise ValueError(f"crop {x},{y} {width}x{height} leaves the {image.width}x{image.height} image")
+    stride = image.width * 4
+    rgba = bytearray()
+    for row in range(y, y + height):
+        rgba += image.rgba[row * stride + x * 4 : row * stride + (x + width) * 4]
+    return Image(width, height, rgba)
+
+
 def write(path: Path, image: Image) -> None:
     stride = image.width * 4
     raw = bytearray()

@@ -75,6 +75,10 @@ class ElectronClient:
         selectors = {name: f'[data-sidebar-row-key="{key}"]' for name, key in targets.items()}
         return self._call("rects", selectors=selectors)["rects"]
 
+    def targets(self, specs: dict[str, dict]) -> dict[str, list[float] | None]:
+        """Rectangles of controls by ``{"selector": ...}`` or ``{"button": text}``."""
+        return self._call("targets", specs=specs)["rects"]
+
     def click(self, row_key: str) -> None:
         self._call("click", selector=f'[data-sidebar-row-key="{row_key}"] [data-session-row], [data-sidebar-row-key="{row_key}"] button')
 

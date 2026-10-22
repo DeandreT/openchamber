@@ -180,7 +180,7 @@ def resolve_row(rows: list[dict], target: dict) -> str:
     return matches[0]
 
 
-def perform(client, steps: list[dict], directory: Path, args: argparse.Namespace) -> dict:
+def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], directory: Path, args: argparse.Namespace) -> dict:
     """Runs the steps and returns the evidence of every checkpoint."""
     checkpoints: dict[str, dict] = {}
     for step in steps:
@@ -196,7 +196,12 @@ def perform(client, steps: list[dict], directory: Path, args: argparse.Namespace
             name = step["capture"]
             image = directory / f"{name}.png"
             client.screenshot(image)
-            checkpoints[name] = {"image": str(image), "rows": client.rows()}
+            checkpoints[name] = {
+                "image": str(image),
+                "rows": client.rows(),
+                "targets": client.targets({target: targets[target][kind] for target in step.get("targets", [])}),
+                "unobservable": sorted(getattr(client, "unobservable", ())),
+            }
         else:
             raise ValueError(f"unknown step {step}")
     return checkpoints
@@ -218,7 +223,7 @@ def run_client(kind: str, scenario: dict, work: Path, args: argparse.Namespace) 
         launched = client.launch()
         try:
             client.wait_ready(args.timeout, connected=True)
-            checkpoints = perform(client, scenario["steps"], directory, args)
+            checkpoints = perform(client, kind, scenario["steps"], args.targets, directory, args)
         finally:
             closed = client.close()
         return {"launch": launched, "checkpoints": checkpoints, "close": closed, "seconds": round(time.monotonic() - started, 1)}
@@ -229,8 +234,10 @@ def run_client(kind: str, scenario: dict, work: Path, args: argparse.Namespace) 
             server.stop()
 
 
-def compare_rows(reference: list[dict], candidate: list[dict]) -> list[dict]:
-    """Differences in row identity, order, label and state."""
+def compare_rows(reference: list[dict], candidate: list[dict], unobservable: frozenset[str] = frozenset(), unobserved: list[dict] | None = None) -> list[dict]:
+    """Differences in row identity, order, label and state. A field the
+    candidate's platform cannot report is listed in ``unobserved`` instead:
+    neither a difference nor a match."""
     differences = []
     reference_keys = [row["key"] for row in reference]
     candidate_keys = [row["key"] for row in candidate]
@@ -247,6 +254,10 @@ def compare_rows(reference: list[dict], candidate: list[dict]) -> list[dict]:
         if other is None:
             continue
         for field in ("label", "selected", "expanded"):
+            if field in unobservable:
+                if row[field] is not None and unobserved is not None:
+                    unobserved.append({"kind": field, "key": row["key"], "reference": row[field]})
+                continue
             if row[field] != other[field]:
                 differences.append({"kind": field, "key": row["key"], "reference": row[field], "candidate": other[field]})
     return differences
@@ -256,9 +267,11 @@ def run(args: argparse.Namespace) -> int:
     if not (args.root / "seed").exists():
         print(f"no seed under {args.root}; run the seed command first", file=sys.stderr)
         return 2
-    scenarios = json.loads(SCENARIOS.read_text())["scenarios"]
+    definitions = json.loads(SCENARIOS.read_text())
+    scenarios = definitions["scenarios"]
+    args.targets = definitions.get("targets", {})
     features = json.loads(INVENTORY.read_text())["features"]
-    problems = check_contracts(scenarios, features)
+    problems = check_contracts(scenarios, features, args.targets)
     if problems:
         for problem in problems:
             print(problem, file=sys.stderr)
@@ -279,16 +292,25 @@ def run(args: argparse.Namespace) -> int:
     (output / "report.json").write_text(json.dumps(report, indent=2))
     coverage = report["inventory"]
     print(f"inventory: {coverage['passed']} of {coverage['features']} features passed; "
-          f"{coverage['failed']} failed, {coverage['notRun']} not run, {coverage['manual']} manual only")
+          f"{coverage['failed']} failed, {coverage['incomplete']} incomplete, {coverage['notRun']} not run, "
+          f"{coverage['manual']} manual only")
     print(f"report: {output / 'report.json'}")
     return 1 if failed else 0
 
 
-def check_contracts(scenarios: list[dict], features: list[dict]) -> list[str]:
-    """Every scenario names a known feature and every listed scenario exists."""
+def check_contracts(scenarios: list[dict], features: list[dict], targets: dict[str, dict]) -> list[str]:
+    """Every scenario names a known feature, every listed scenario exists and
+    every captured target is defined for both clients."""
     feature_ids = {feature["id"] for feature in features}
     scenario_ids = {scenario["id"] for scenario in scenarios}
     problems = [f"scenario {scenario['id']} names unknown feature {scenario['feature']}" for scenario in scenarios if scenario["feature"] not in feature_ids]
+    for scenario in scenarios:
+        for step in scenario["steps"]:
+            problems.extend(
+                f"scenario {scenario['id']} captures undefined target {target}"
+                for target in step.get("targets", [])
+                if set(targets.get(target, {})) != {"electron", "native"}
+            )
     for feature in features:
         problems.extend(f"feature {feature['id']} lists unknown scenario {scenario}" for scenario in feature["scenarios"] if scenario not in scenario_ids)
     return problems
@@ -297,7 +319,7 @@ def check_contracts(scenarios: list[dict], features: list[dict]) -> list[str]:
 def inventory_coverage(features: list[dict], results: dict[str, dict]) -> dict:
     """Coverage against the whole inventory: a feature passes only when every
     scenario it lists ran and passed; skipped or manual features never count."""
-    counts = {"features": len(features), "passed": 0, "failed": 0, "notRun": 0, "manual": 0, "byFeature": {}}
+    counts = {"features": len(features), "passed": 0, "failed": 0, "incomplete": 0, "notRun": 0, "manual": 0, "byFeature": {}}
     for feature in features:
         statuses = [results.get(scenario, {}).get("status", "not run") for scenario in feature["scenarios"]]
         if not feature["scenarios"]:
@@ -306,10 +328,12 @@ def inventory_coverage(features: list[dict], results: dict[str, dict]) -> dict:
             status = "failed"
         elif statuses and all(status == "passed" for status in statuses):
             status = "passed"
+        elif any(status == "incomplete" for status in statuses):
+            status = "incomplete"
         else:
             status = "not run"
         counts["byFeature"][feature["id"]] = status
-        counts[{"passed": "passed", "failed": "failed", "not run": "notRun", "manual": "manual"}[status]] += 1
+        counts[{"passed": "passed", "failed": "failed", "incomplete": "incomplete", "not run": "notRun", "manual": "manual"}[status]] += 1
     return counts
 
 
@@ -333,9 +357,16 @@ def run_scenarios(scenarios: list[dict], wanted: set[str] | None, output: Path, 
                 image = compare.compare_images(Path(reference["image"]), Path(candidate["image"]), work / name, args.tolerance)
                 rects_reference = {row["key"]: row["rect"] for row in reference["rows"]}
                 rects_candidate = {row["key"]: row["rect"] for row in candidate["rows"]}
+                for target, rect in reference.get("targets", {}).items():
+                    rects_reference[f"target:{target}"] = rect
+                for target, rect in candidate.get("targets", {}).items():
+                    rects_candidate[f"target:{target}"] = rect
+                unobserved: list[dict] = []
+                rows = compare_rows(reference["rows"], candidate["rows"], frozenset(candidate.get("unobservable", ())), unobserved)
                 comparisons[name] = {
                     "image": image.as_dict(),
-                    "rows": compare_rows(reference["rows"], candidate["rows"]),
+                    "rows": rows,
+                    "unobserved": unobserved,
                     "geometry": compare.compare_geometry(rects_reference, rects_candidate, args.scale),
                 }
             result["comparisons"] = comparisons
@@ -347,7 +378,10 @@ def run_scenarios(scenarios: list[dict], wanted: set[str] | None, output: Path, 
                 and not comparison["geometry"]
                 for comparison in comparisons.values()
             )
-            result["status"] = "passed" if passed else "failed"
+            # Checks the candidate's platform cannot observe leave a clean
+            # scenario incomplete: unverified is never passed.
+            unverified = any(comparison.get("unobserved") for comparison in comparisons.values())
+            result["status"] = "failed" if not passed else "incomplete" if unverified else "passed"
         failed += result["status"] != "passed"
         report["scenarios"][scenario["id"]] = result
         print(f"{scenario['id']}: {result['status']}", flush=True)
@@ -357,7 +391,8 @@ def run_scenarios(scenarios: list[dict], wanted: set[str] | None, output: Path, 
                 continue
             image = comparison["image"]
             print(f"  {name}: {image['differingPixels']} differing pixels ({image['differingShare']:.1%}), "
-                  f"{len(comparison['rows'])} row differences, {len(comparison['geometry'])} geometry differences")
+                  f"{len(comparison['rows'])} row differences, {len(comparison['geometry'])} geometry differences, "
+                  f"{len(comparison['unobserved'])} checks not observable natively")
         for kind in ("electron", "native"):
             if "error" in result[kind]:
                 print(f"  {kind}: {result[kind]['error']}")
