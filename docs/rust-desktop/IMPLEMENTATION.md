@@ -4,6 +4,30 @@ Implement the [native architecture](ARCHITECTURE.md) in independently runnable
 stages. Each stage adds a complete behavior and its failure paths. Add crates and
 dependencies when their first behavior needs them.
 
+## 0. Reference capture and parity tooling
+
+Apply the [desktop UI parity method](PARITY.md) before migrating user-facing
+features. Inventory current desktop controls and workflows, including the
+compact-sidebar and session-visibility repairs, and pin a reproducible Electron
+reference with synthetic data.
+
+Build shared scenarios with a Python runner, an Electron/CDP adapter and a
+Windows UI Automation adapter for GPUI. Use a small native fixture window to
+qualify capture and input before relying on the adapter. Match client dimensions,
+fonts, theme, locale, DPI and scenario state. Prove repeatability and verify that
+known visual and behavior defects fail the gate.
+
+The first comparisons cover compact sidebar selection, transcript reveal and
+nonzero anchor restoration, a draft surviving session switches, Unicode copy
+across virtualized messages and IME-safe submission. Capture screenshots,
+geometry, observable state and accessibility outcomes. Define manual scenarios
+for real Windows behaviors automation cannot establish.
+
+Keep per-feature requirements in source and run results outside the deliverable
+repository. A migrated feature remains incomplete until its required comparisons
+pass. Intentional differences need the user's approval. Carry completed features
+into regression coverage as later stages add functionality.
+
 ## 1. Offline Windows client
 
 Create `native/Cargo.toml`, a toolchain pin and lockfile, with core and desktop
@@ -55,9 +79,10 @@ Acceptance checks:
 6. Complete fixture playback matches the expected text and ordering. Close
    during playback leaves no owned task or process alive.
 
-A failed native scroll, selection, IME or accessibility check is an implementation
-finding. Resolve it or keep that capability explicitly unqualified before
-expanding the prototype into a daily-use client.
+A failed native scroll, selection, IME or accessibility check keeps its feature
+incomplete. Resolve it before qualifying that feature. Run the stage's parity
+matrix and regression scenarios before expanding the prototype into a daily-use
+client.
 
 ## 2. Read-only server connection
 
@@ -114,7 +139,7 @@ macOS or Linux release support.
 
 ## 5. Native host and release
 
-Complete the feature inventory against the supported Electron workflow, including
+Complete all remaining entries in the stage 0 feature inventory, including
 settings, source control, project knowledge, schedules, goals, shortcuts, menus,
 notifications, remote hosts and runtime switching. Each feature retains its
 server or platform owner until a qualified Rust implementation replaces it.
@@ -130,6 +155,10 @@ required profile migration. A real install/update/rollback and shutdown exercise
 is required before replacing an installed application. Qualify each supported
 platform separately. Use existing organization-managed release infrastructure;
 this migration does not require a new pipeline.
+
+Replacement requires the full parity inventory and supported configuration
+matrix to pass, including manual platform checks and reviewed intentional
+differences. Preserve earlier feature gates through every migration stage.
 
 ## Performance contract
 
