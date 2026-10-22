@@ -9,6 +9,20 @@ This document defines the target architecture. The
 [implementation stages](IMPLEMENTATION.md) identify the boundaries to build and
 qualify before a desktop release.
 
+## UI parity requirement
+
+The repaired Electron desktop is the reference for appearance, interaction,
+accessibility and feature coverage. Follow the [desktop UI parity method](PARITY.md)
+for each migrated feature: capture its baseline, run matched visual and behavior
+scenarios, resolve differences and retain regression coverage. Intentional
+differences require the user's approval. A framework limitation leaves a feature
+incomplete until its required behavior is supported or the user changes the
+requirement.
+
+The native prototype grows feature by feature. Electron remains usable through
+development, and its replacement requires full inventory coverage and the host
+and release checks. Each feature's parity gate applies throughout the migration.
+
 ## Runtime ownership
 
 ```text
