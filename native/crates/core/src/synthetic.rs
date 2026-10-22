@@ -269,6 +269,7 @@ pub fn conversation(session_id: &SessionId, shape: ConversationShape) -> Vec<Mes
                 role: Role::User,
                 created,
                 completed: None,
+                notice: None,
             },
             parts: vec![Part::text(
                 PartId::new(format!("{user_id}-p0")),
@@ -282,6 +283,7 @@ pub fn conversation(session_id: &SessionId, shape: ConversationShape) -> Vec<Mes
                 role: Role::Assistant,
                 created: created + 1_000,
                 completed: Some(created + 30_000),
+                notice: None,
             },
             parts: assistant_parts(&assistant_id, turn, shape),
         });
@@ -342,6 +344,7 @@ fn assistant_parts(message_id: &MessageId, turn: usize, shape: ConversationShape
                         status: ToolStatus::Completed,
                         title: Some(format!("packages/ui/src/sync/turn-{turn}.ts")),
                         output: Some(format!("{} lines", 40 + turn)),
+                        elided: None,
                     },
                 ));
             }

@@ -1,0 +1,67 @@
+{
+ "data": {
+  "id": "msg_164c422cf001JfI01Q6WJWl0lr",
+  "time": {
+   "created": 1792691938029,
+   "streamed": 1792691938268,
+   "completed": 1792691938308
+  },
+  "type": "assistant",
+  "agent": "build",
+  "model": {
+   "id": "agent-20tools-300cps",
+   "providerID": "perf",
+   "variant": "default"
+  },
+  "content": [
+   {
+    "type": "text",
+    "text": "Step 20 of 20: listing files that the answer should mention.\n\n"
+   },
+   {
+    "type": "tool",
+    "id": "call_fixture_20",
+    "name": "glob",
+    "executed": false,
+    "state": {
+     "status": "completed",
+     "input": {
+      "pattern": ".agents/skills/*/SKILL.md"
+     },
+     "content": [
+      {
+       "type": "text",
+       "text": "No files found"
+      }
+     ],
+     "metadata": {
+      "count": 0,
+      "truncated": false
+     }
+    },
+    "time": {
+     "created": 1792691938247,
+     "ran": 1792691938257,
+     "completed": 1792691938292
+    }
+   }
+  ],
+  "snapshot": {
+   "start": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+   "end": "4b825dc642cb6eb9a060e54bf8d69288fbee4904",
+   "files": []
+  },
+  "finish": "tool-calls",
+  "rawFinish": "tool_calls",
+  "cost": 0,
+  "tokens": {
+   "input": 1,
+   "output": 16,
+   "reasoning": 0,
+   "cache": {
+    "read": 0,
+    "write": 0
+   }
+  }
+ }
+}

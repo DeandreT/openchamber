@@ -1,0 +1,206 @@
+{
+ "data": [
+  {
+   "id": "ses_e9b406d39ffeelt67y1XaTjhrs",
+   "projectID": "global",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "title": "native: probe",
+   "agent": "build",
+   "model": {
+    "id": "stream-20000cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "cost": 0,
+   "tokens": {
+    "input": 1,
+    "output": 1436,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   },
+   "outcome": "succeeded",
+   "time": {
+    "created": 1792691639066,
+    "updated": 1792691644578,
+    "idle": 1792691644611
+   },
+   "metadata": {
+    "openchamber": {
+     "work": {
+      "state": "open",
+      "openedAt": 1792691643526,
+      "openedBy": "auto"
+     }
+    }
+   }
+  },
+  {
+   "id": "ses_e9b49c443ffefXcWWPhCOga6nH",
+   "projectID": "global",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "title": "native: recorded",
+   "agent": "build",
+   "model": {
+    "id": "code-20000cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "cost": 0,
+   "tokens": {
+    "input": 2,
+    "output": 4145,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   },
+   "outcome": "succeeded",
+   "time": {
+    "created": 1792691026944,
+    "updated": 1792691035637,
+    "idle": 1792691035674
+   },
+   "metadata": {
+    "openchamber": {
+     "work": {
+      "state": "open",
+      "openedAt": 1792691030946,
+      "openedBy": "auto"
+     }
+    }
+   }
+  },
+  {
+   "id": "ses_e9b4b0242ffeULkFFTS9CiS3wW",
+   "projectID": "6c4509beda3c195749f3403bbfe0067ff8b5561a",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "subpath": "tmp/native-serve/project",
+   "title": "native: long",
+   "agent": "build",
+   "model": {
+    "id": "unicode-20000cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "cost": 0,
+   "tokens": {
+    "input": 12,
+    "output": 25632,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   },
+   "outcome": "succeeded",
+   "time": {
+    "created": 1792690945484,
+    "updated": 1792690965437,
+    "idle": 1792690965449
+   },
+   "metadata": {
+    "openchamber": {
+     "work": {
+      "state": "open",
+      "openedAt": 1792690946251,
+      "openedBy": "auto"
+     }
+    }
+   }
+  },
+  {
+   "id": "ses_e9b4b1b11ffeL35iTqmSFoxS2M",
+   "projectID": "6c4509beda3c195749f3403bbfe0067ff8b5561a",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "subpath": "tmp/native-serve/project",
+   "title": "native: short b",
+   "agent": "build",
+   "model": {
+    "id": "unicode-20000cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "cost": 0,
+   "tokens": {
+    "input": 3,
+    "output": 6408,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   },
+   "outcome": "succeeded",
+   "time": {
+    "created": 1792690939142,
+    "updated": 1792690943649,
+    "idle": 1792690943657
+   },
+   "metadata": {
+    "openchamber": {
+     "work": {
+      "state": "open",
+      "openedAt": 1792690939987,
+      "openedBy": "auto"
+     }
+    }
+   }
+  },
+  {
+   "id": "ses_e9b4b2f45ffeFv56FeVzmiYX4s",
+   "projectID": "6c4509beda3c195749f3403bbfe0067ff8b5561a",
+   "location": {
+    "directory": "/home/synthetic/project"
+   },
+   "subpath": "tmp/native-serve/project",
+   "title": "native: short a",
+   "agent": "build",
+   "model": {
+    "id": "code-20000cps",
+    "providerID": "perf",
+    "variant": "default"
+   },
+   "cost": 0,
+   "tokens": {
+    "input": 2,
+    "output": 4145,
+    "reasoning": 0,
+    "cache": {
+     "read": 0,
+     "write": 0
+    }
+   },
+   "outcome": "succeeded",
+   "time": {
+    "created": 1792690933967,
+    "updated": 1792690937145,
+    "idle": 1792690937150
+   },
+   "metadata": {
+    "openchamber": {
+     "work": {
+      "state": "open",
+      "openedAt": 1792690935168,
+      "openedBy": "auto"
+     }
+    }
+   }
+  }
+ ],
+ "cursor": {
+  "previous": "eyJhbmNob3IiOnsiaWQiOiJzZXNfZTliNDA2ZDM5ZmZlZWx0Njd5MVhhVGpocnMiLCJ0aW1lIjoxNzkyNjkxNjQ0NTc4LCJkaXJlY3Rpb24iOiJwcmV2aW91cyJ9fQ",
+  "next": "eyJhbmNob3IiOnsiaWQiOiJzZXNfZTliNGIyZjQ1ZmZlRnY1NkZlVnptaVlYNHMiLCJ0aW1lIjoxNzkyNjkwOTM3MTQ1LCJkaXJlY3Rpb24iOiJuZXh0In19"
+ }
+}

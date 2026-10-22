@@ -10,10 +10,32 @@ use std::ops::Range;
 
 use crate::ids::{MessageId, PartId};
 
+/// What a transcript record is.
+///
+/// Users and assistants carry parts; every other role is one record the
+/// transcript shows as a notice.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Role {
     User,
     Assistant,
+    /// Text the client or server injected on the user's behalf.
+    Synthetic,
+    System,
+    Skill,
+    Shell,
+    Compaction,
+    AgentSwitched,
+    ModelSwitched,
+    LocationSwitched,
+    /// The end of a turn, with its outcome.
+    Idle,
+}
+
+impl Role {
+    /// Whether records of this role carry parts.
+    pub fn has_parts(self) -> bool {
+        matches!(self, Self::User | Self::Assistant)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -38,10 +60,17 @@ pub enum PartContent {
         status: ToolStatus,
         title: Option<String>,
         output: Option<String>,
+        /// Characters of a finished result the server left out of a history
+        /// page. The whole message must be fetched to show the result.
+        elided: Option<usize>,
     },
     File {
         filename: String,
         mime: String,
+    },
+    /// An `@agent` mention in a user prompt.
+    Agent {
+        name: String,
     },
     /// A part type this client does not render; only its type name is kept.
     Unsupported {
@@ -72,6 +101,8 @@ pub struct MessageInfo {
     pub created: i64,
     /// Present once an assistant message finished.
     pub completed: Option<i64>,
+    /// The one line a notice role shows, such as a switched agent's name.
+    pub notice: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -115,6 +146,18 @@ pub enum TranscriptEvent {
     PartRemoved {
         message_id: MessageId,
         part_id: PartId,
+    },
+    /// A step ended: the message's completion time is set, its parts kept.
+    MessageCompleted {
+        message_id: MessageId,
+        completed: i64,
+    },
+    /// A tool call moved to another state; its name and part identity stay.
+    ToolTransition {
+        message_id: MessageId,
+        part_id: PartId,
+        status: ToolStatus,
+        output: Option<String>,
     },
 }
 
@@ -187,7 +230,16 @@ impl Transcript {
     }
 
     /// Replaces the transcript with authoritative history.
-    pub fn replace(&mut self, messages: Vec<Message>) -> TranscriptChange {
+    ///
+    /// A history page may carry finished tool results as shells; a whole
+    /// result this transcript already holds for the same call and status
+    /// stays.
+    pub fn replace(&mut self, mut messages: Vec<Message>) -> TranscriptChange {
+        for message in &mut messages {
+            if let Some(row) = self.row_of(&message.info.id) {
+                keep_whole_results(&self.messages[row], message);
+            }
+        }
         if messages == self.messages {
             return TranscriptChange::Unchanged;
         }
@@ -214,8 +266,9 @@ impl Transcript {
     }
 
     /// Appends a message, or updates it in place when already held.
-    pub fn push(&mut self, message: Message) -> TranscriptChange {
+    pub fn push(&mut self, mut message: Message) -> TranscriptChange {
         if let Some(row) = self.row_of(&message.info.id) {
+            keep_whole_results(&self.messages[row], &mut message);
             if self.messages[row] == message {
                 return TranscriptChange::Unchanged;
             }
@@ -294,6 +347,59 @@ impl Transcript {
                 self.revision += 1;
                 TranscriptChange::Removed { rows: row..row + 1 }
             }
+            TranscriptEvent::MessageCompleted {
+                message_id,
+                completed,
+            } => {
+                let Some(row) = self.row_of(&message_id) else {
+                    return TranscriptChange::NeedsReconcile;
+                };
+                let info = &mut self.messages[row].info;
+                if info.completed == Some(completed) {
+                    return TranscriptChange::Unchanged;
+                }
+                info.completed = Some(completed);
+                self.revision += 1;
+                TranscriptChange::Updated { row }
+            }
+            TranscriptEvent::ToolTransition {
+                message_id,
+                part_id,
+                status: next_status,
+                output: next_output,
+            } => {
+                let Some(row) = self.row_of(&message_id) else {
+                    return TranscriptChange::NeedsReconcile;
+                };
+                let part = self.messages[row]
+                    .parts
+                    .iter_mut()
+                    .find(|part| part.id == part_id);
+                let Some(Part {
+                    content:
+                        PartContent::Tool {
+                            status,
+                            output,
+                            elided,
+                            ..
+                        },
+                    ..
+                }) = part
+                else {
+                    return TranscriptChange::NeedsReconcile;
+                };
+                // A transition with output carries the whole result.
+                let next_elided = if next_output.is_some() { None } else { *elided };
+                let next_output = next_output.or_else(|| output.clone());
+                if *status == next_status && *output == next_output && *elided == next_elided {
+                    return TranscriptChange::Unchanged;
+                }
+                *status = next_status;
+                *output = next_output;
+                *elided = next_elided;
+                self.revision += 1;
+                TranscriptChange::Updated { row }
+            }
             TranscriptEvent::PartRemoved {
                 message_id,
                 part_id,
@@ -323,6 +429,34 @@ impl Transcript {
     }
 }
 
+/// Puts back whole tool results that `next` carries only as shells.
+///
+/// Mirrors `mergeMaterializedPart` in `packages/ui/src/sync/materialization.ts`:
+/// a shell replaces nothing the client holds whole for the same call status.
+fn keep_whole_results(held: &Message, next: &mut Message) {
+    for part in &mut next.parts {
+        let PartContent::Tool {
+            status,
+            elided: Some(_),
+            ..
+        } = &part.content
+        else {
+            continue;
+        };
+        let whole = held.parts.iter().find(|candidate| {
+            candidate.id == part.id
+                && matches!(
+                    &candidate.content,
+                    PartContent::Tool { status: held_status, elided: None, .. }
+                        if held_status == status
+                )
+        });
+        if let Some(whole) = whole {
+            part.content = whole.content.clone();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,6 +468,7 @@ mod tests {
                 role,
                 created: 0,
                 completed: None,
+                notice: None,
             },
             parts: vec![Part::text(format!("{id}-p0").as_str(), text)],
         }
@@ -401,6 +536,92 @@ mod tests {
             delta: "x".to_owned(),
         });
         assert_eq!(change, TranscriptChange::NeedsReconcile);
+    }
+
+    #[test]
+    fn tool_transitions_keep_the_tool_name() {
+        let mut transcript = Transcript::from_history(vec![Message {
+            info: MessageInfo {
+                id: MessageId::from("m1"),
+                role: Role::Assistant,
+                created: 0,
+                completed: None,
+                notice: None,
+            },
+            parts: vec![Part {
+                id: PartId::from("call_1"),
+                content: PartContent::Tool {
+                    tool: "read".to_owned(),
+                    status: ToolStatus::Pending,
+                    title: None,
+                    output: None,
+                    elided: None,
+                },
+            }],
+        }]);
+        let change = transcript.apply(TranscriptEvent::ToolTransition {
+            message_id: MessageId::from("m1"),
+            part_id: PartId::from("call_1"),
+            status: ToolStatus::Completed,
+            output: Some("ok".to_owned()),
+        });
+        assert_eq!(change, TranscriptChange::Updated { row: 0 });
+        let part = &transcript.message(0).expect("row exists").parts[0];
+        assert!(matches!(
+            &part.content,
+            PartContent::Tool { tool, status: ToolStatus::Completed, output: Some(output), .. }
+                if tool == "read" && output == "ok"
+        ));
+        let completed = transcript.apply(TranscriptEvent::MessageCompleted {
+            message_id: MessageId::from("m1"),
+            completed: 9,
+        });
+        assert_eq!(completed, TranscriptChange::Updated { row: 0 });
+        assert_eq!(
+            transcript
+                .message(0)
+                .and_then(|message| message.info.completed),
+            Some(9)
+        );
+    }
+
+    #[test]
+    fn a_shelled_page_keeps_whole_results() {
+        let tool = |output: &str, elided: Option<usize>| Message {
+            info: MessageInfo {
+                id: MessageId::from("m1"),
+                role: Role::Assistant,
+                created: 0,
+                completed: Some(1),
+                notice: None,
+            },
+            parts: vec![Part {
+                id: PartId::from("call_1"),
+                content: PartContent::Tool {
+                    tool: "glob".to_owned(),
+                    status: ToolStatus::Completed,
+                    title: None,
+                    output: Some(output.to_owned()),
+                    elided,
+                },
+            }],
+        };
+        let mut transcript = Transcript::from_history(vec![tool("a.rs", None)]);
+        assert_eq!(
+            transcript.replace(vec![tool("", Some(4))]),
+            TranscriptChange::Unchanged,
+            "the shell names the result this transcript already holds"
+        );
+        assert_eq!(
+            transcript.push(tool("", Some(4))),
+            TranscriptChange::Unchanged
+        );
+        let mut shelled = Transcript::from_history(vec![tool("", Some(4))]);
+        assert_eq!(
+            shelled.push(tool("a.rs", None)),
+            TranscriptChange::Updated { row: 0 },
+            "a whole message completes a shelled call"
+        );
     }
 
     #[test]

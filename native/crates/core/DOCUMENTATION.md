@@ -14,14 +14,17 @@ rendering asks for a projection and dispatches an action.
   of `sessionSidebarRowModel.ts`; `grouping.rs` ports `buildGroupedSessions`
   and `buildSidebarChatGroup`; `ordering.rs` ports `session-ordering.ts`.
 - `transcript.rs` holds one session's messages in server order and reports the
-  rows each mutation touched.
+  rows each mutation touched. User and assistant messages carry parts; every
+  other OpenCode record (synthetic, system, skill, shell, compaction, switched
+  agent, model or location, idle) is a notice with one line of text.
 - `draft.rs` and `scroll_memory.rs` hold client-owned state keyed by the
   runtime and the session or draft identity captured when it was created.
 - `synthetic.rs` produces the documented offline workloads. It is part of the
   core so the desktop, tests and measurement tools share one definition.
 
-The desktop crate owns timers, focus, text layout and windows. Network
-transport, when added, owns wire parsing and authority checks.
+The desktop crate owns timers, focus, text layout and windows. The transport
+crate owns wire parsing and authority checks, and hands the core records and
+`TranscriptEvent`s.
 
 ## Invariants
 
@@ -35,6 +38,10 @@ transport, when added, owns wire parsing and authority checks.
 - Server order is transcript order. Identifier spelling never reorders rows.
   An unchanged event returns `TranscriptChange::Unchanged`, and an event for an
   unknown message returns `NeedsReconcile`.
+- A tool result a history page left out (`PartContent::Tool::elided`) never
+  replaces the whole result a transcript holds for the same call and status,
+  through `replace` or `push`. A live transition with output, or the whole
+  message, completes it.
 - Lifecycle order changes only on live phase transitions or authoritative
   snapshots. Token arrivals and metadata writes never move a row.
 - A failed load keeps its retained snapshot; only `LoadState::Complete` grants
