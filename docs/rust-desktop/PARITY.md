@@ -226,6 +226,7 @@ scenario contracts, synthetic fixtures, capture/comparison tooling and durable
 documentation. Review changed expected results independently of the code that
 would otherwise fail them.
 
+- [Parity runner, inventory and scenarios](../../scripts/parity/DOCUMENTATION.md)
 - [Existing capture and isolation procedure](../../scripts/perf/DOCUMENTATION.md)
 - [CDP adapter](../../scripts/perf/cdp.mjs)
 - [Browser history/scroll scenarios](../../packages/ui/tests/chat-history-scroll.browser.mjs)
