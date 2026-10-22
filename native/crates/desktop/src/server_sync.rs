@@ -47,9 +47,10 @@ impl Workspace {
             let anonymous = ServerClient::new(config.endpoint.clone(), Credential::None)?;
             let identity = anonymous.probe().await?;
             let client = match &config.password {
-                Some(password) => {
-                    ServerClient::new(config.endpoint, anonymous.login(password).await?)?
-                }
+                Some(password) => ServerClient::new(
+                    config.endpoint,
+                    anonymous.login(password, &config.client).await?,
+                )?,
                 None => anonymous,
             };
             Ok::<_, TransportError>((client.with_identity(&identity), identity))

@@ -10,6 +10,7 @@ mod assets;
 mod composer_view;
 mod connection;
 mod diagnostics;
+mod install_id;
 mod locale;
 mod network;
 mod server_sync;

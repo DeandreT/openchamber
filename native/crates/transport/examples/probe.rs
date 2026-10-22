@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use openchamber_native_transport::client::ServerClient;
+use openchamber_native_transport::client::{ClientDescription, ServerClient};
 use openchamber_native_transport::credential::Credential;
 use openchamber_native_transport::endpoint::Endpoint;
 use openchamber_native_transport::event::ServerEvent;
@@ -37,7 +37,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         identity.capabilities.len()
     );
     let client = match std::env::var("OPENCHAMBER_NATIVE_PASSWORD") {
-        Ok(password) => ServerClient::new(endpoint, anonymous.login(&password).await?)?,
+        Ok(password) => {
+            let client = ClientDescription {
+                label: "OpenChamber transport probe".to_owned(),
+                kind: "desktop".to_owned(),
+                ..ClientDescription::default()
+            };
+            ServerClient::new(endpoint, anonymous.login(&password, &client).await?)?
+        }
         Err(_) => anonymous,
     }
     .with_identity(&identity);

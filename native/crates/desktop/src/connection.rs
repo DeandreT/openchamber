@@ -3,10 +3,11 @@
 use std::fmt;
 
 use gpui_kit::Task;
-use openchamber_native_transport::client::ServerClient;
+use openchamber_native_transport::client::{ClientDescription, ServerClient};
 use openchamber_native_transport::endpoint::Endpoint;
 use openchamber_native_transport::error::TransportError;
 
+use crate::install_id;
 use crate::network::Network;
 
 /// `OPENCHAMBER_NATIVE_SERVER`: the base URL of the server to connect to.
@@ -20,6 +21,8 @@ pub struct ServerConfig {
     pub endpoint: Endpoint,
     /// Exchanged once for a client token; never logged.
     pub password: Option<String>,
+    /// What the server records about this install when it issues a token.
+    pub client: ClientDescription,
 }
 
 impl ServerConfig {
@@ -29,7 +32,11 @@ impl ServerConfig {
         let password = std::env::var(PASSWORD_VARIABLE)
             .ok()
             .filter(|password| !password.is_empty());
-        Some(Endpoint::parse(&url).map(|endpoint| Self { endpoint, password }))
+        Some(Endpoint::parse(&url).map(|endpoint| Self {
+            endpoint,
+            password,
+            client: describe_client(),
+        }))
     }
 }
 
@@ -39,7 +46,26 @@ impl fmt::Debug for ServerConfig {
             .debug_struct("ServerConfig")
             .field("endpoint", &self.endpoint)
             .field("password", &self.password.as_ref().map(|_| "<redacted>"))
+            .field("client", &self.client)
             .finish()
+    }
+}
+
+/// This install as a desktop connected to a remote server, described the way
+/// the Electron desktop describes itself.
+fn describe_client() -> ClientDescription {
+    let platform = match std::env::consts::OS {
+        "macos" => Some("macos"),
+        "windows" => Some("windows"),
+        "linux" => Some("linux"),
+        _ => None,
+    };
+    ClientDescription {
+        label: "OpenChamber Desktop".to_owned(),
+        kind: "desktop".to_owned(),
+        dedupe_key: install_id::load_or_create().map(|id| format!("desktop:{id}")),
+        device_platform: platform.map(str::to_owned),
+        app_version: Some(env!("CARGO_PKG_VERSION").to_owned()),
     }
 }
 
