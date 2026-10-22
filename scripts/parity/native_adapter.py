@@ -5,7 +5,9 @@ keys the web sidebar puts in `data-sidebar-row-key`. Pointer input goes
 through AT-SPI's generated X input at the target's centre, keyboard input
 through generated key events, and accessibility activation through the
 target's AT-SPI action; each path is a separate scenario variant. The
-client area is captured with spectacle (KDE) while the window is active.
+client area is captured with spectacle (KDE) while the window is active and
+cut to the application's content root, the `workspace` element; geometry is
+measured from the same origin, as a web page measures from its viewport.
 """
 
 from __future__ import annotations
@@ -18,7 +20,11 @@ import subprocess
 import time
 from pathlib import Path
 
+import png
+
 MARK_PREFIX = "OPENCHAMBER_NATIVE_MARK "
+# Physical pixels a client-side frame line may add on each side of the content.
+MAX_FRAME_LINE = 4
 
 
 def _atspi():
@@ -48,6 +54,11 @@ def set_accessibility(enabled: bool) -> None:
 
 class NativeClient:
     """One native desktop process under test."""
+
+    # Row state AT-SPI cannot report: AccessKit's AT-SPI bridge exposes no
+    # expand or collapse state, so disclosure is verified where the platform
+    # API carries it (UI Automation on Windows), never assumed here.
+    unobservable = frozenset({"expanded"})
 
     def __init__(self, binary: Path, env: dict[str, str], scale: float, width: int, height: int):
         self.binary = binary
@@ -109,8 +120,20 @@ class NativeClient:
         if connected:
             self.wait_for_marker("sessions-shown", timeout_s)
         self._app = self._find_app(timeout_s)
+        self._activate()
         # A painted frame after readiness: markers are emitted at paint.
         self._read_marks(0.3)
+
+    def _activate(self) -> None:
+        """Raises and focuses the client's window, so captures of the active
+        window and pointer input reach it. The window it opens can lose focus to
+        whatever the previous client left active."""
+        windows = subprocess.run(
+            ["xdotool", "search", "--pid", str(self.process.pid)], capture_output=True, text=True,
+        ).stdout.split()
+        if not windows:
+            raise RuntimeError("the native client has no X11 window")
+        subprocess.run(["xdotool", "windowactivate", "--sync", windows[-1]], check=True, capture_output=True, timeout=10)
 
     # --- accessibility ---------------------------------------------------
 
@@ -143,45 +166,65 @@ class NativeClient:
             raise LookupError(f"{len(matches)} native elements have the ID {accessible_id!r}")
         return matches[0]
 
-    def _rect(self, node) -> list[float]:
+    def _content(self):
+        """Window extents of the application's content root, inside any
+        client-side frame the platform draws around it."""
         atspi = _atspi()
+        return self._find("workspace").get_extents(atspi.CoordType.WINDOW)
+
+    def _rect(self, node, content=None) -> list[float]:
+        """Logical rectangle relative to the content root, as the web page's
+        viewport places elements."""
+        atspi = _atspi()
+        content = content or self._content()
         extents = node.get_extents(atspi.CoordType.WINDOW)
         # AT-SPI reports physical pixels; geometry compares logical ones.
-        return [extents.x / self.scale, extents.y / self.scale, extents.width / self.scale, extents.height / self.scale]
+        return [
+            (extents.x - content.x) / self.scale,
+            (extents.y - content.y) / self.scale,
+            extents.width / self.scale,
+            extents.height / self.scale,
+        ]
 
     def rows(self) -> list[dict]:
         """Sidebar rows in display order, as `electron_bridge.mjs` reports them."""
         atspi = _atspi()
         sidebar = self._find("sidebar")
+        content = self._content()
         rows = []
         stack = [sidebar]
         while stack:
             node = stack.pop()
-            for index in reversed(range(node.get_child_count())):
-                stack.append(node.get_child_at_index(index))
             accessible_id = node.get_accessible_id() or ""
-            if node is sidebar or not accessible_id or accessible_id == "connection-status":
+            # Rows do not nest: a row's own controls are not rows.
+            if node is sidebar or not accessible_id:
+                for index in reversed(range(node.get_child_count())):
+                    stack.append(node.get_child_at_index(index))
                 continue
             states = node.get_state_set()
-            expandable = states.contains(atspi.StateType.EXPANDABLE)
             rows.append({
                 "key": accessible_id,
                 "label": node.get_name() or "",
                 "selected": states.contains(atspi.StateType.SELECTED),
-                "expanded": states.contains(atspi.StateType.EXPANDED) if expandable else None,
-                "rect": self._rect(node),
+                "expanded": None,
+                "rect": self._rect(node, content),
             })
         rows.sort(key=lambda row: row["rect"][1])
         return rows
 
     def rects(self, targets: dict[str, str]) -> dict[str, list[float] | None]:
         result = {}
+        content = self._content()
         for name, accessible_id in targets.items():
             try:
-                result[name] = self._rect(self._find(accessible_id))
+                result[name] = self._rect(self._find(accessible_id), content)
             except LookupError:
                 result[name] = None
         return result
+
+    def targets(self, specs: dict[str, str]) -> dict[str, list[float] | None]:
+        """Rectangles of controls by accessible ID."""
+        return self.rects(specs)
 
     # --- input -----------------------------------------------------------
 
@@ -217,9 +260,25 @@ class NativeClient:
     # --- evidence --------------------------------------------------------
 
     def screenshot(self, path: Path) -> dict:
-        """The active window's client area, without decoration or shadow."""
+        """The application's content: the active window's client area, cut to
+        the content root inside any client-side frame line."""
+        self._activate()
         subprocess.run(["spectacle", "-b", "-n", "-a", "-e", "-S", "-o", str(path)], check=True, capture_output=True)
-        return {"path": str(path)}
+        content = self._content()
+        image = png.read(path)
+        # The capture leaves out the frame's shadow band but keeps its line,
+        # which surrounds the content evenly. AccessKit reports no frame
+        # extents, so the line's width comes from the capture itself.
+        line_x = (image.width - content.width) // 2
+        line_y = (image.height - content.height) // 2
+        if not (0 <= line_x <= MAX_FRAME_LINE and 0 <= line_y <= MAX_FRAME_LINE):
+            raise RuntimeError(
+                f"the active window ({image.width}x{image.height}) is not the native client "
+                f"({content.width}x{content.height} content)"
+            )
+        if (line_x, line_y) != (0, 0):
+            png.write(path, png.crop(image, line_x, line_y, content.width, content.height))
+        return {"path": str(path), "crop": [line_x, line_y, content.width, content.height]}
 
     def close(self) -> dict:
         if self.process is None:

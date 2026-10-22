@@ -9,7 +9,8 @@
  * same hit-testing and focus paths as a user's. Nothing here calls
  * application code directly.
  *
- * Commands: launch, wait, rows, rects, observe, click, key, type, text, screenshot, close.
+ * Commands: launch, wait, rows, rects, targets, observe, fonts, click, key, type, text,
+ * screenshot, close.
  */
 import { spawn } from "node:child_process"
 import { writeFileSync } from "node:fs"
@@ -39,18 +40,28 @@ const pageTarget = async (port, deadline) => {
   throw new Error("the application page never appeared")
 }
 
-/** The sidebar rows in display order, with the state a row shows. */
+/**
+ * The sidebar rows in display order, with the state a row shows. A sticky
+ * header leaves an empty placeholder in the list and paints over it, so such
+ * a row reads the header painted at its position. Disclosure state comes from
+ * the row's own toggle, never from a menu trigger inside it.
+ */
 const ROWS = `(() => [...document.querySelectorAll('[data-sidebar-row-key]')]
   .sort((left, right) => left.getBoundingClientRect().top - right.getBoundingClientRect().top)
   .map((element) => {
     const rect = element.getBoundingClientRect()
+    const painted = element.innerText.trim()
+      ? element
+      : document.elementFromPoint(rect.x + rect.width / 2, rect.y + 14)?.closest('button') ?? element
     const session = element.querySelector('[data-session-row]')
-    const expandable = element.querySelector('[aria-expanded]')
+    const toggles = [painted, ...painted.querySelectorAll('[aria-expanded]')]
+      .filter((node) => node.hasAttribute('aria-expanded') && !node.hasAttribute('aria-haspopup'))
+    const label = painted.innerText.split('\\n').map((line) => line.trim()).find(Boolean) ?? ''
     return {
       key: element.getAttribute('data-sidebar-row-key'),
-      label: element.innerText.trim().split('\\n')[0],
+      label,
       selected: session?.getAttribute('aria-current') === 'page',
-      expanded: expandable ? expandable.getAttribute('aria-expanded') === 'true' : null,
+      expanded: toggles.length ? toggles[0].getAttribute('aria-expanded') === 'true' : null,
       rect: [rect.x, rect.y, rect.width, rect.height],
     }
   }))()`
@@ -106,6 +117,19 @@ const handlers = {
     for (const [name, selector] of Object.entries(selectors)) rects[name] = await evaluate(rectOf(selector))
     return { rects }
   },
+  /** Rectangles of controls named by a CSS selector or by a button's exact text. */
+  async targets({ specs }) {
+    const rects = {}
+    for (const [name, spec] of Object.entries(specs)) {
+      rects[name] = await evaluate(spec.button === undefined ? rectOf(spec.selector) : `(() => {
+        const element = [...document.querySelectorAll('button')].find((button) => button.innerText.trim() === ${JSON.stringify(spec.button)})
+        if (!element) return null
+        const rect = element.getBoundingClientRect()
+        return [rect.x, rect.y, rect.width, rect.height]
+      })()`)
+    }
+    return { rects }
+  },
   async click({ selector }) {
     const rect = await evaluate(rectOf(selector))
     if (!rect) throw new Error(`no element for ${selector}`)
@@ -132,6 +156,16 @@ const handlers = {
   },
   async text({ selector }) {
     return { text: await evaluate(`document.querySelector(${JSON.stringify(selector)})?.innerText ?? null`) }
+  },
+  /** The platform font faces Chromium drew a node's text with, and their glyph counts. */
+  async fonts({ selector }) {
+    await client.send("DOM.enable")
+    await client.send("CSS.enable")
+    const { root } = await client.send("DOM.getDocument", { depth: 0 })
+    const { nodeId } = await client.send("DOM.querySelector", { nodeId: root.nodeId, selector })
+    if (!nodeId) throw new Error(`no element for ${selector}`)
+    const { fonts } = await client.send("CSS.getPlatformFontsForNode", { nodeId })
+    return { fonts }
   },
   async screenshot({ path }) {
     const { data } = await client.send("Page.captureScreenshot", { format: "png" })

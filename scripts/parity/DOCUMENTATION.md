@@ -13,7 +13,8 @@ bun run parity run --scenarios shell.startup --output /tmp/parity-run
 `run` needs the packaged Electron build (`packages/electron/dist/...`), the
 native release build (`bun run native:build`), the staged web UI and the
 bundled OpenCode binary; the defaults point at the repository's build outputs.
-On Linux it also needs KDE's `spectacle`, PyGObject with AT-SPI and `busctl`.
+On Linux it also needs KDE's `spectacle`, `xdotool`, PyGObject with AT-SPI and
+`busctl`.
 
 ## Layout
 
@@ -22,8 +23,8 @@ On Linux it also needs KDE's `spectacle`, PyGObject with AT-SPI and `busctl`.
 | `runner.py` | Commands, seed copies, isolated servers, scenario steps, comparisons and the report. |
 | `inventory.json` | The feature inventory: stable IDs, reference files, states, scenarios and coverage kind. Requirements only. |
 | `scenarios.json` | Scenario steps. Rows are addressed by key prefix and title, never by seeded IDs. |
-| `electron_adapter.py`, `electron_bridge.mjs` | Electron through CDP (`scripts/perf/cdp.mjs`): launch, input dispatch, rows, geometry, screenshots and read-only `observe` of layout and computed styles for porting. |
-| `native_adapter.py` | The native window through AT-SPI: launch, generated pointer and key input, accessibility actions, rows, geometry, and client-area capture. |
+| `electron_adapter.py`, `electron_bridge.mjs` | Electron through CDP (`scripts/perf/cdp.mjs`): launch, input dispatch, rows, geometry, screenshots, and read-only `observe` of layout and computed styles and `fonts` of the faces a node is drawn with, for porting. |
+| `native_adapter.py` | The native window through AT-SPI: launch, activation, generated pointer and key input, accessibility actions, rows, geometry, and content capture. |
 | `compare.py` | Pixel, row and geometry comparison. |
 | `png.py` | PNG reading and writing with the standard library. |
 
@@ -47,21 +48,29 @@ bridge emulates it and the launch record says `emulated: true`.
 
 ## Evidence
 
-Each checkpoint records a client-area screenshot and the sidebar rows (key,
-label, selected, expanded and logical rectangle). Electron rows come from
-`[data-sidebar-row-key]` elements; native rows are the accessible elements of
-the sidebar, whose accessible IDs are the same row keys. Electron is captured
-with `Page.captureScreenshot`; the native window with spectacle's active-window
-capture without decoration or shadow, which requires the window to be active.
-Runs are serial and each client starts fresh, so the window under test is the
-active one.
+Each checkpoint records a screenshot of the application's content and the
+sidebar rows (key, label, selected, expanded and logical rectangle). Electron
+rows come from `[data-sidebar-row-key]` elements; a row whose list slot is the
+placeholder of a sticky header reads the header painted over it, and its
+disclosure state comes from its own toggle, never from a menu trigger inside
+it. Native rows are the accessible elements of the sidebar, whose accessible
+IDs are the same row keys; a row's own controls are not rows.
+
+Electron is captured with `Page.captureScreenshot`, which is its viewport. The
+native window is activated with `xdotool`, captured with spectacle's
+active-window capture without the frame's shadow, and cut to the content root
+(the `workspace` element) inside any client-side frame line; native geometry
+is measured from the same root. Runs are serial and each client starts fresh.
 
 A scenario passes only when every checkpoint matches in size and pixels, rows
 and geometry; geometry allows one physical pixel. `--tolerance` ignores
 per-channel differences up to its value and is for reviewed rasterization
-noise only. The report records `passed`, `failed` (the native client differs
-or failed) or `blocked` (the reference failed), and coverage against the whole
-inventory: a feature passes only when every scenario it lists passed. Reports,
+noise only. A check the candidate's platform API cannot report (AT-SPI carries
+no expand or collapse state) is listed as unobserved, never as a match; a
+scenario that is otherwise clean is then `incomplete`. The report records
+`passed`, `incomplete`, `failed` (the native client differs or failed) or
+`blocked` (the reference failed), and coverage against the whole inventory: a
+feature passes only when every scenario it lists passed. Reports,
 screenshots and difference images go to `--output`, by default
 `artifacts/parity-<time>`; they are run evidence and never part of the source.
 

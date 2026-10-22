@@ -1,12 +1,179 @@
 {
-  "$comment": "Parity scenarios. Rows are addressed by key prefix and title, never by seeded session IDs. See scripts/parity/DOCUMENTATION.md.",
+  "$comment": "Parity scenarios. Rows are addressed by key prefix and title, never by seeded session IDs. Targets name controls: a CSS selector or a button's exact text in Electron, an accessible ID in the native client. See scripts/parity/DOCUMENTATION.md.",
+  "targets": {
+    "app-menu": {
+      "electron": {
+        "selector": "button[aria-label=\"Open OpenChamber menu\"]"
+      },
+      "native": "app-menu"
+    },
+    "sidebar-toggle": {
+      "electron": {
+        "selector": "button[aria-label=\"Open sessions\"]"
+      },
+      "native": "sidebar-toggle"
+    },
+    "new-session": {
+      "electron": {
+        "button": "New session"
+      },
+      "native": "new-session"
+    },
+    "source-board": {
+      "electron": {
+        "selector": "button[aria-label=\"Issues and PRs\"]"
+      },
+      "native": "source-board"
+    },
+    "display-mode": {
+      "electron": {
+        "selector": "button[aria-label=\"Display mode\"]"
+      },
+      "native": "display-mode"
+    },
+    "settings": {
+      "electron": {
+        "selector": "button[aria-label=\"Settings\"]"
+      },
+      "native": "settings"
+    },
+    "instance-switcher": {
+      "electron": {
+        "selector": "button[aria-label^=\"Open instance\"]"
+      },
+      "native": "instance-switcher"
+    },
+    "mini-chat": {
+      "electron": {
+        "selector": "button[aria-label=\"Open a new Mini Chat window\"]"
+      },
+      "native": "mini-chat"
+    },
+    "work-status-toggle": {
+      "electron": {
+        "selector": "button[aria-label=\"Toggle work-status panel\"]"
+      },
+      "native": "work-status-toggle"
+    },
+    "window-minimize": {
+      "electron": {
+        "selector": "button[aria-label=\"Minimize window\"]"
+      },
+      "native": "window-minimize"
+    },
+    "window-maximize": {
+      "electron": {
+        "selector": "button[aria-label=\"Maximize window\"]"
+      },
+      "native": "window-maximize"
+    },
+    "window-close": {
+      "electron": {
+        "selector": "button[aria-label=\"Close window\"]"
+      },
+      "native": "window-close"
+    },
+    "work-status": {
+      "electron": {
+        "selector": "aside[aria-label=\"Work status\"]"
+      },
+      "native": "work-status"
+    },
+    "rail-context": {
+      "electron": {
+        "selector": "nav[aria-label=\"Panel surfaces\"] button"
+      },
+      "native": "rail-context"
+    },
+    "rail-configure": {
+      "electron": {
+        "selector": "button[aria-label=\"Configure panels\"]"
+      },
+      "native": "rail-configure"
+    },
+    "startup-title": {
+      "electron": {
+        "selector": "h1"
+      },
+      "native": "startup-title"
+    },
+    "choose-project": {
+      "electron": {
+        "button": "Choose project"
+      },
+      "native": "choose-project"
+    },
+    "composer": {
+      "electron": {
+        "selector": ".oc-composer-sheen"
+      },
+      "native": "composer"
+    },
+    "composer-attach": {
+      "electron": {
+        "selector": "button[aria-label=\"Add attachment\"]"
+      },
+      "native": "composer-attach"
+    },
+    "composer-submit": {
+      "electron": {
+        "selector": "button[aria-label=\"Send message\"]"
+      },
+      "native": "composer-submit"
+    },
+    "starter-explore": {
+      "electron": {
+        "button": "Explore the codebase"
+      },
+      "native": "starter-explore"
+    },
+    "starter-review": {
+      "electron": {
+        "button": "Review my changes"
+      },
+      "native": "starter-review"
+    },
+    "starter-add": {
+      "electron": {
+        "selector": "button[aria-label=\"Add a starter\"]"
+      },
+      "native": "starter-add"
+    }
+  },
   "scenarios": [
     {
       "id": "shell.startup",
       "feature": "shell.startup-view",
       "description": "The window after startup on the seed: sidebar, startup view, composer and rails.",
       "steps": [
-        { "capture": "startup" }
+        {
+          "capture": "startup",
+          "targets": [
+            "app-menu",
+            "sidebar-toggle",
+            "new-session",
+            "source-board",
+            "display-mode",
+            "settings",
+            "instance-switcher",
+            "mini-chat",
+            "work-status-toggle",
+            "window-minimize",
+            "window-maximize",
+            "window-close",
+            "work-status",
+            "rail-context",
+            "rail-configure",
+            "startup-title",
+            "choose-project",
+            "composer",
+            "composer-attach",
+            "composer-submit",
+            "starter-explore",
+            "starter-review",
+            "starter-add"
+          ]
+        }
       ]
     },
     {
@@ -14,9 +181,18 @@
       "feature": "sessions.select",
       "description": "A pointer click on an In work row selects the session and reveals its transcript.",
       "steps": [
-        { "click": { "zone": "activity:work:session:", "title": "parity: long" } },
-        { "settle": 1.5 },
-        { "capture": "selected" }
+        {
+          "click": {
+            "zone": "activity:work:session:",
+            "title": "parity: long"
+          }
+        },
+        {
+          "settle": 1.5
+        },
+        {
+          "capture": "selected"
+        }
       ]
     }
   ]
