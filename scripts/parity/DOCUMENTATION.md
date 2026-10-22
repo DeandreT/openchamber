@@ -22,7 +22,7 @@ On Linux it also needs KDE's `spectacle`, PyGObject with AT-SPI and `busctl`.
 | `runner.py` | Commands, seed copies, isolated servers, scenario steps, comparisons and the report. |
 | `inventory.json` | The feature inventory: stable IDs, reference files, states, scenarios and coverage kind. Requirements only. |
 | `scenarios.json` | Scenario steps. Rows are addressed by key prefix and title, never by seeded IDs. |
-| `electron_adapter.py`, `electron_bridge.mjs` | Electron through CDP (`scripts/perf/cdp.mjs`): launch, input dispatch, rows, geometry and screenshots. |
+| `electron_adapter.py`, `electron_bridge.mjs` | Electron through CDP (`scripts/perf/cdp.mjs`): launch, input dispatch, rows, geometry, screenshots and read-only `observe` of layout and computed styles for porting. |
 | `native_adapter.py` | The native window through AT-SPI: launch, generated pointer and key input, accessibility actions, rows, geometry, and client-area capture. |
 | `compare.py` | Pixel, row and geometry comparison. |
 | `png.py` | PNG reading and writing with the standard library. |

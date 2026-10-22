@@ -9,7 +9,7 @@
  * same hit-testing and focus paths as a user's. Nothing here calls
  * application code directly.
  *
- * Commands: launch, wait, rows, rects, click, key, type, text, screenshot, close.
+ * Commands: launch, wait, rows, rects, observe, click, key, type, text, screenshot, close.
  */
 import { spawn } from "node:child_process"
 import { writeFileSync } from "node:fs"
@@ -125,6 +125,10 @@ const handlers = {
   async type({ text }) {
     await client.send("Input.insertText", { text })
     return {}
+  },
+  /** Read-only observation, such as layout and computed styles. */
+  async observe({ expression }) {
+    return { value: await evaluate(expression) }
   },
   async text({ selector }) {
     return { text: await evaluate(`document.querySelector(${JSON.stringify(selector)})?.innerText ?? null`) }
