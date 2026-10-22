@@ -68,6 +68,10 @@ pub struct Palette {
     pub warning: Hsla,
     pub success: Hsla,
     pub info: Hsla,
+    /// Solid status fills, for surfaces such as the close button's hover.
+    pub status_error: Hsla,
+    pub status_error_foreground: Hsla,
+    pub status_success: Hsla,
     pub cursor: Hsla,
 }
 
@@ -129,6 +133,9 @@ impl Palette {
             warning: color("readable.status.warning"),
             success: color("readable.status.success"),
             info: color("readable.status.info"),
+            status_error: color("status.error"),
+            status_error_foreground: color("status.errorForeground"),
+            status_success: color("status.success"),
             cursor: color("interactive.cursor"),
         })
     }

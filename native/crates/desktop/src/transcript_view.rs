@@ -1,4 +1,4 @@
-//! The conversation header and transcript rows.
+//! The transcript rows of the selected session.
 //!
 //! Each visited session keeps its own `ListState`, so its anchor message and
 //! pixel offset survive switching away and back. Text deltas remeasure only
@@ -8,54 +8,24 @@
 use gpui_kit::component::text::TextView;
 use gpui_kit::{
     AnyElement, Context, ElementId, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    Role, SharedString, StatefulInteractiveElement, Styled, TestSupportExt, Window, div, list,
+    Role, StatefulInteractiveElement, Styled, TestSupportExt, Window, div, list,
     prelude::FluentBuilder, px, rems,
 };
 use openchamber_native_core::transcript::{Message, PartContent, Role as MessageRole};
 
 use crate::activation::on_activate;
+use crate::chrome::glyph;
 use crate::connection::ConnectionFailure;
 use crate::locale;
-use crate::sidebar_view::icon_element;
 use crate::theme::Palette;
 use crate::workspace::{History, Workspace};
 
-const HEADER_HEIGHT: f32 = 44.0;
 /// The readable column width of the chat.
 const COLUMN_MAX_WIDTH: f32 = 768.0;
 const MARKDOWN_SIZE: f32 = 0.875;
 const META_SIZE: f32 = 0.781_25;
 
 impl Workspace {
-    pub(crate) fn render_header(
-        &self,
-        palette: &Palette,
-        _cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let title: SharedString = self
-            .selected_session()
-            .map(|session| session.title.clone().into())
-            .unwrap_or_default();
-        div()
-            .id("conversation-header")
-            .h(px(HEADER_HEIGHT))
-            .flex_shrink_0()
-            .px_4()
-            .flex()
-            .items_center()
-            .border_b_1()
-            .border_color(palette.divider)
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .text_size(rems(MARKDOWN_SIZE))
-                    .font_weight(FontWeight::MEDIUM)
-                    .child(title),
-            )
-    }
-
     pub(crate) fn render_transcript(
         &self,
         palette: &Palette,
@@ -154,11 +124,7 @@ impl Workspace {
                                     .border_color(palette.border)
                                     .cursor_pointer()
                                     .hover(|style| style.bg(palette.hover))
-                                    .child(icon_element(
-                                        "arrow-down-s",
-                                        palette,
-                                        palette.foreground,
-                                    )),
+                                    .child(glyph("arrow-down-s", 16.0, palette.foreground)),
                                 cx,
                                 |this, _, cx| this.scroll_to_tail(cx),
                             )
@@ -273,7 +239,7 @@ fn assistant_message(message: &Message, palette: &Palette) -> AnyElement {
                     .gap_2()
                     .text_size(rems(META_SIZE))
                     .text_color(palette.muted_foreground)
-                    .child(icon_element("terminal", palette, palette.muted_foreground))
+                    .child(glyph("terminal", 16.0, palette.muted_foreground))
                     .child(div().font_weight(FontWeight::MEDIUM).child(tool.clone()))
                     .when_some(title.clone(), |this, title| {
                         this.child(div().truncate().child(title))

@@ -1,11 +1,12 @@
-//! The ordered, mode-neutral sidebar row projection.
+//! The ordered sidebar row projection.
 //!
-//! Mirrors the normal-mode Tree view of `buildSessionSidebarRowModel` in
-//! `packages/ui/src/components/session/sidebar/sessionSidebarRowModel.ts`:
-//! Chats, Pinned and In work zones above the projects, project and worktree
-//! headers, session trees with explicit expansion, reveal controls, status
-//! notices and the empty state. Every row has a stable key so the renderer
-//! can retain row state across rebuilds.
+//! Mirrors the normal mode of `buildSessionSidebarRowModel` in
+//! `packages/ui/src/components/session/sidebar/sessionSidebarRowModel.ts` in
+//! both views: Chats, Pinned and In work zones above the projects, then either
+//! the timeline (one header per project over its root sessions in lifecycle
+//! order) or the project and worktree tree, with reveal controls, status
+//! notices and the empty state. Every row has a stable key so the renderer can
+//! retain row state across rebuilds.
 
 use std::collections::{HashMap, HashSet};
 
@@ -37,14 +38,33 @@ impl ActivityKey {
     }
 }
 
+/// How the projects are arranged.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum SidebarViewMode {
+    /// One header per project over a flat, lifecycle-ordered list of its root
+    /// sessions; the default for new installs.
+    #[default]
+    Timeline,
+    /// The project and worktree tree.
+    Projects,
+}
+
 /// How a session row is drawn.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum RenderContext {
     /// A one-line tree row under a project.
     Project,
-    /// A one-line Pinned or In work row; sessions of every project mix.
+    /// A row under its project header in the timeline; two lines when zone
+    /// rows are detailed.
+    Timeline,
+    /// The timeline row in Pinned and In work, where sessions of every project
+    /// mix.
+    TimelineMixed,
+    /// A one-line Pinned or In work row of the tree view.
     MixedCompact,
-    /// A one-line Chats row in the Tree view.
+    /// A one-line Chats row in the timeline.
+    TimelineChat,
+    /// A one-line Chats row in the tree view.
     TreeChat,
 }
 
@@ -52,14 +72,25 @@ impl RenderContext {
     fn as_str(self) -> &'static str {
         match self {
             Self::Project => "project",
+            Self::Timeline => "timeline",
+            Self::TimelineMixed => "timeline-mixed",
             Self::MixedCompact => "mixed-compact",
+            Self::TimelineChat => "timeline-chat",
             Self::TreeChat => "tree-chat",
         }
     }
 
-    /// Zone rows never expand.
+    /// Flat zone and timeline rows never expand.
     fn expands(self) -> bool {
-        self != Self::MixedCompact
+        !matches!(
+            self,
+            Self::Timeline | Self::TimelineMixed | Self::MixedCompact
+        )
+    }
+
+    /// Rows that keep the tree's geometry and its slot left of the title.
+    pub fn has_tree_slot(self) -> bool {
+        matches!(self, Self::Project | Self::MixedCompact | Self::TreeChat)
     }
 }
 
@@ -127,12 +158,16 @@ pub enum SidebarRow<'a> {
         current_count: usize,
         increment: usize,
         depth: usize,
+        /// Lines up with gutterless timeline rows instead of the tree level.
+        flat: bool,
     },
     Status {
         key: String,
         group_key: String,
         state: GroupLoadState,
         depth: usize,
+        /// Lines up with gutterless timeline rows instead of the tree level.
+        flat: bool,
     },
     Empty {
         key: String,
@@ -205,9 +240,15 @@ pub struct ZoneItem<'a> {
 /// Everything the row model reads.
 #[derive(Clone, Copy, Debug)]
 pub struct SidebarInputs<'v, 'a> {
+    pub view_mode: SidebarViewMode,
+    /// Timeline and zone rows show their second line.
+    pub detailed_zone_rows: bool,
     pub chat_group: Option<&'v SessionGroup<'a>>,
     pub pinned: &'v [ZoneItem<'a>],
     pub work: &'v [ZoneItem<'a>],
+    /// Every active root project session with its project, in lifecycle
+    /// order, for the timeline.
+    pub timeline: &'v [ZoneItem<'a>],
     pub sections: &'v [ProjectSection<'a>],
     pub state: &'v SidebarState,
     pub group_status: &'v HashMap<String, GroupLoadState>,
@@ -245,7 +286,7 @@ impl<'a> SidebarRowModel<'a> {
     }
 }
 
-/// Builds the sidebar rows for the normal Tree view.
+/// Builds the sidebar rows of the normal mode.
 pub fn build<'a>(
     inputs: &SidebarInputs<'_, 'a>,
     ordering: &mut SessionOrdering,
@@ -264,7 +305,10 @@ pub fn build<'a>(
     builder.append_chats();
     builder.append_zone(ActivityKey::Pinned, inputs.pinned);
     builder.append_zone(ActivityKey::Work, inputs.work);
-    builder.append_projects();
+    match inputs.view_mode {
+        SidebarViewMode::Timeline => builder.append_timeline_projects(),
+        SidebarViewMode::Projects => builder.append_projects(),
+    }
     if builder.model.rows.is_empty() {
         builder.push(SidebarRow::Empty {
             key: "sidebar:empty".to_owned(),
@@ -349,7 +393,10 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
                 initial: CHATS_INITIAL_LIMIT,
                 increment: CHATS_INCREMENT,
                 pinned_always_visible: true,
-                context: RenderContext::TreeChat,
+                context: match self.inputs.view_mode {
+                    SidebarViewMode::Timeline => RenderContext::TimelineChat,
+                    SidebarViewMode::Projects => RenderContext::TreeChat,
+                },
             }),
         );
     }
@@ -362,6 +409,15 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
             return;
         }
         let container_key = format!("activity:{}", activity.as_str());
+        // Two-line rows with the project's icon in the timeline, one-line rows
+        // in the tree unless zone rows are detailed.
+        let context = if self.inputs.view_mode == SidebarViewMode::Timeline
+            || self.inputs.detailed_zone_rows
+        {
+            RenderContext::TimelineMixed
+        } else {
+            RenderContext::MixedCompact
+        };
         for item in items {
             self.append_trees(
                 std::slice::from_ref(&item.node),
@@ -369,10 +425,143 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
                     container_key: &container_key,
                     project_id: item.project_id.as_ref(),
                     archived: false,
-                    context: RenderContext::MixedCompact,
+                    context,
                     base_depth: 0,
                 },
             );
+        }
+    }
+
+    /// One header per project, in the projects' order, over its root sessions
+    /// from every worktree in lifecycle order. A session the Pinned zone lists
+    /// is left out of its project; In work keeps it in both.
+    fn append_timeline_projects(&mut self) {
+        let inputs = self.inputs;
+        let mut items_by_project: HashMap<&ProjectId, Vec<&'v ZoneItem<'a>>> = HashMap::new();
+        for item in inputs.timeline {
+            let Some(project_id) = item.project_id.as_ref() else {
+                continue;
+            };
+            if self.pinned_in_zone.contains(&item.node.session.id) {
+                continue;
+            }
+            items_by_project.entry(project_id).or_default().push(item);
+        }
+        for section in inputs.sections {
+            let project_id = &section.project.id;
+            let collapsed = inputs.state.collapsed_projects.contains(project_id);
+            self.model.sticky_headers.push(self.model.rows.len());
+            self.push(SidebarRow::ProjectHeader {
+                key: format!("project:{project_id}:header"),
+                project_id: project_id.clone(),
+                collapsed,
+            });
+            if collapsed {
+                continue;
+            }
+            // A space without chats has no row of its own here, so its group
+            // header stands in for it, with the space's state, until its first
+            // chat.
+            for group in &section.groups {
+                if group.space.is_none() || !group.sessions.is_empty() {
+                    continue;
+                }
+                let group_key = format!("{project_id}:{}", group.id);
+                let status = inputs.group_status.get(&group_key).copied();
+                if status == Some(GroupLoadState::Loading) {
+                    continue;
+                }
+                self.push(SidebarRow::GroupHeader {
+                    key: format!("{group_key}:header"),
+                    group_key: group_key.clone(),
+                    project_id: Some(project_id.clone()),
+                    label: group.label.clone(),
+                    directory: group.directory.clone(),
+                    collapsed: false,
+                    empty: status.is_none_or(|state| state == GroupLoadState::Ready),
+                });
+                if let Some(state) = status.filter(|state| *state != GroupLoadState::Ready) {
+                    self.push_status(&group_key, state, 0, true);
+                }
+            }
+            let items = items_by_project.remove(project_id).unwrap_or_default();
+            if !items.is_empty() {
+                self.append_revealed(
+                    &items,
+                    &format!("timeline-project:{project_id}"),
+                    RenderContext::Timeline,
+                    SESSIONS_INITIAL_LIMIT,
+                    SESSIONS_INCREMENT,
+                );
+                continue;
+            }
+            let Some(main) = section.groups.iter().find(|group| group.is_main) else {
+                continue;
+            };
+            let group_key = format!("{project_id}:{}", main.id);
+            if let Some(state) = inputs
+                .group_status
+                .get(&group_key)
+                .copied()
+                .filter(|state| *state != GroupLoadState::Ready)
+            {
+                self.push_status(&group_key, state, 0, true);
+            }
+        }
+    }
+
+    /// A list that reveals `initial` entries, then `increment` more per Show
+    /// more.
+    fn append_revealed(
+        &mut self,
+        items: &[&'v ZoneItem<'a>],
+        container_key: &str,
+        context: RenderContext,
+        initial: usize,
+        increment: usize,
+    ) {
+        let requested = self
+            .inputs
+            .state
+            .visible_count_by_container
+            .get(container_key)
+            .copied()
+            .unwrap_or(initial)
+            .max(initial);
+        let visible = &items[..requested.min(items.len())];
+        for item in visible {
+            self.append_trees(
+                std::slice::from_ref(&item.node),
+                &AppendOptions {
+                    container_key,
+                    project_id: item.project_id.as_ref(),
+                    archived: false,
+                    context,
+                    base_depth: 0,
+                },
+            );
+        }
+        let control = if items.len() > visible.len() {
+            Some(ShowControl::More)
+        } else if items.len() > initial {
+            Some(ShowControl::Fewer)
+        } else {
+            None
+        };
+        if let Some(control) = control {
+            let suffix = match control {
+                ShowControl::More => "more",
+                ShowControl::Fewer => "fewer",
+            };
+            self.push(SidebarRow::ShowControl {
+                key: format!("{container_key}:{suffix}"),
+                control,
+                container_key: container_key.to_owned(),
+                current_count: visible.len(),
+                increment,
+                depth: 0,
+                flat: true,
+            });
         }
     }
 
@@ -524,6 +713,7 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
                 current_count: limited_visible,
                 increment,
                 depth: content_depth,
+                flat: false,
             });
         } else if !group.is_archived_bucket && limited_count > initial && remaining == 0 {
             self.push(SidebarRow::ShowControl {
@@ -533,12 +723,13 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
                 current_count: limited_visible,
                 increment,
                 depth: content_depth,
+                flat: false,
             });
         }
 
         match status {
             Some(state) if source.is_empty() && state != GroupLoadState::Ready => {
-                self.push_status(group_key, state, content_depth);
+                self.push_status(group_key, state, content_depth, false);
             }
             None | Some(GroupLoadState::Ready) if source.is_empty() && group.is_archived_bucket => {
                 self.push(SidebarRow::Empty {
@@ -552,18 +743,19 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
                     && state != GroupLoadState::Ready
                     && state != GroupLoadState::Loading =>
             {
-                self.push_status(group_key, state, content_depth);
+                self.push_status(group_key, state, content_depth, false);
             }
             _ => {}
         }
     }
 
-    fn push_status(&mut self, group_key: &str, state: GroupLoadState, depth: usize) {
+    fn push_status(&mut self, group_key: &str, state: GroupLoadState, depth: usize, flat: bool) {
         self.push(SidebarRow::Status {
             key: format!("{group_key}:status"),
             group_key: group_key.to_owned(),
             state,
             depth,
+            flat,
         });
     }
 
@@ -645,6 +837,69 @@ fn group_descriptors<'s, 'a>(
     main.chain(others)
         .map(|group| (group, group.is_main))
         .collect()
+}
+
+/// The gap below a row that opens the next section, as `sectionSpacingAfter`
+/// in `packages/ui/src/components/session/sidebar/sessionSidebarVirtualization.ts`
+/// sets it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SectionSpacing {
+    /// Before a zone or project header (`pb-2`): sections of equal weight.
+    Section,
+    /// Before a worktree header inside its project (`pb-1.5`).
+    Group,
+}
+
+/// The gap below `row` when `next` follows it.
+pub fn section_spacing_after(
+    row: &SidebarRow<'_>,
+    next: Option<&SidebarRow<'_>>,
+) -> Option<SectionSpacing> {
+    match next? {
+        SidebarRow::ActivityHeader { .. } | SidebarRow::ProjectHeader { .. } => {
+            Some(SectionSpacing::Section)
+        }
+        SidebarRow::GroupHeader { .. } if !matches!(row, SidebarRow::ProjectHeader { .. }) => {
+            Some(SectionSpacing::Group)
+        }
+        _ => None,
+    }
+}
+
+/// Every active root project session as a flat timeline item, in lifecycle
+/// order (pinned first), with the project that owns it.
+pub fn timeline_items<'a>(
+    sections: &[ProjectSection<'a>],
+    ordering: &mut SessionOrdering,
+) -> Vec<ZoneItem<'a>> {
+    let mut items: Vec<ZoneItem<'a>> = sections
+        .iter()
+        .flat_map(|section| {
+            section
+                .groups
+                .iter()
+                .filter(|group| !group.is_archived_bucket)
+                .flat_map(move |group| {
+                    group.sessions.iter().map(move |node| ZoneItem {
+                        // Timeline rows never expand.
+                        node: SessionNode {
+                            session: node.session,
+                            children: Vec::new(),
+                        },
+                        project_id: Some(section.project.id.clone()),
+                    })
+                })
+        })
+        .collect();
+    items.sort_by(|left, right| {
+        ordering.compare(
+            left.node.session,
+            right.node.session,
+            is_pinned(left.node.session),
+            is_pinned(right.node.session),
+        )
+    });
+    items
 }
 
 /// Builds Pinned and In work items from sessions in lifecycle order.
@@ -750,12 +1005,173 @@ mod tests {
             .collect()
     }
 
+    fn timeline_inputs<'v, 'a>(
+        sections: &'v [ProjectSection<'a>],
+        timeline: &'v [ZoneItem<'a>],
+        work: &'v [ZoneItem<'a>],
+        state: &'v SidebarState,
+        group_status: &'v HashMap<String, GroupLoadState>,
+    ) -> SidebarInputs<'v, 'a> {
+        SidebarInputs {
+            view_mode: SidebarViewMode::Timeline,
+            detailed_zone_rows: false,
+            chat_group: None,
+            pinned: &[],
+            work,
+            timeline,
+            sections,
+            state,
+            group_status,
+            show_only_main_workspace: false,
+            active_project_id: None,
+        }
+    }
+
+    #[test]
+    fn sections_open_with_a_gap_and_worktrees_with_a_smaller_one() {
+        let project_header = SidebarRow::ProjectHeader {
+            key: "project:p:header".to_owned(),
+            project_id: ProjectId::from("p"),
+            collapsed: false,
+        };
+        let zone_header = SidebarRow::ActivityHeader {
+            key: "activity:work:header".to_owned(),
+            activity: ActivityKey::Work,
+            collapsed: false,
+        };
+        let group_header = SidebarRow::GroupHeader {
+            key: "p:g:header".to_owned(),
+            group_key: "p:g".to_owned(),
+            project_id: Some(ProjectId::from("p")),
+            label: GroupLabel::ProjectRoot { branch: None },
+            directory: None,
+            collapsed: false,
+            empty: false,
+        };
+        let status = SidebarRow::Status {
+            key: "p:g:status".to_owned(),
+            group_key: "p:g".to_owned(),
+            state: GroupLoadState::Loading,
+            depth: 0,
+            flat: false,
+        };
+        assert_eq!(
+            section_spacing_after(&zone_header, Some(&project_header)),
+            Some(SectionSpacing::Section)
+        );
+        assert_eq!(
+            section_spacing_after(&status, Some(&zone_header)),
+            Some(SectionSpacing::Section)
+        );
+        assert_eq!(
+            section_spacing_after(&status, Some(&group_header)),
+            Some(SectionSpacing::Group)
+        );
+        assert_eq!(
+            section_spacing_after(&project_header, Some(&group_header)),
+            None
+        );
+        assert_eq!(section_spacing_after(&group_header, Some(&status)), None);
+        assert_eq!(section_spacing_after(&status, None), None);
+    }
+
+    #[test]
+    fn the_timeline_lists_root_sessions_under_their_project_seven_at_a_time() {
+        let records = sessions(9);
+        let nodes: Vec<SessionNode<'_>> = records.iter().map(node).collect();
+        let project = ConfiguredProject {
+            id: ProjectId::from("app"),
+            path: "/p".to_owned(),
+        };
+        let sections = vec![ProjectSection {
+            project: &project,
+            groups: vec![group("root", true, nodes)],
+        }];
+        let mut ordering = SessionOrdering::new();
+        let timeline = timeline_items(&sections, &mut ordering);
+        let work = vec![timeline[0].clone()];
+        let state = SidebarState::default();
+        let status = HashMap::new();
+        let model = build(
+            &timeline_inputs(&sections, &timeline, &work, &state, &status),
+            &mut ordering,
+        );
+        let keys: Vec<&str> = model.rows.iter().map(SidebarRow::key).collect();
+        assert_eq!(keys[0], "activity:work:header");
+        assert_eq!(keys[1], "activity:work:session:s00");
+        assert_eq!(keys[2], "project:app:header");
+        assert_eq!(
+            keys[3], "timeline-project:app:session:s00",
+            "In work keeps it in its project"
+        );
+        assert_eq!(keys.len(), 3 + 7 + 1, "seven sessions and a Show more row");
+        assert_eq!(keys[10], "timeline-project:app:more");
+        assert!(matches!(
+            model.rows[1],
+            SidebarRow::Session {
+                context: RenderContext::TimelineMixed,
+                has_children: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            model.rows[3],
+            SidebarRow::Session {
+                context: RenderContext::Timeline,
+                ..
+            }
+        ));
+        assert!(matches!(
+            model.rows[10],
+            SidebarRow::ShowControl {
+                flat: true,
+                current_count: 7,
+                ..
+            }
+        ));
+
+        let mut revealed = SidebarState::default();
+        revealed.reveal("timeline-project:app", ShowControl::More, 7, 7);
+        let model = build(
+            &timeline_inputs(&sections, &timeline, &work, &revealed, &status),
+            &mut ordering,
+        );
+        assert_eq!(
+            model.rows.last().map(SidebarRow::key),
+            Some("timeline-project:app:fewer")
+        );
+    }
+
+    #[test]
+    fn an_empty_timeline_project_shows_its_main_group_status() {
+        let project = ConfiguredProject {
+            id: ProjectId::from("app"),
+            path: "/p".to_owned(),
+        };
+        let sections = vec![ProjectSection {
+            project: &project,
+            groups: vec![group("root", true, Vec::new())],
+        }];
+        let state = SidebarState::default();
+        let status = HashMap::from([("app:root".to_owned(), GroupLoadState::LoadFailed)]);
+        let mut ordering = SessionOrdering::new();
+        let model = build(
+            &timeline_inputs(&sections, &[], &[], &state, &status),
+            &mut ordering,
+        );
+        let keys: Vec<&str> = model.rows.iter().map(SidebarRow::key).collect();
+        assert_eq!(keys, ["project:app:header", "app:root:status"]);
+    }
+
     #[test]
     fn an_empty_sidebar_shows_the_empty_row() {
         let state = SidebarState::default();
         let status = HashMap::new();
         let model = build(
             &SidebarInputs {
+                view_mode: SidebarViewMode::Projects,
+                detailed_zone_rows: false,
+                timeline: &[],
                 chat_group: None,
                 pinned: &[],
                 work: &[],
@@ -786,6 +1202,9 @@ mod tests {
         let inputs = |state: &SidebarState| -> Vec<String> {
             let model = build(
                 &SidebarInputs {
+                    view_mode: SidebarViewMode::Projects,
+                    detailed_zone_rows: false,
+                    timeline: &[],
                     chat_group: None,
                     pinned: &[],
                     work: &[],
@@ -828,6 +1247,9 @@ mod tests {
         let build_kinds = |state: &SidebarState| {
             kinds(&build(
                 &SidebarInputs {
+                    view_mode: SidebarViewMode::Projects,
+                    detailed_zone_rows: false,
+                    timeline: &[],
                     chat_group: None,
                     pinned: &[],
                     work: &[],
@@ -863,6 +1285,9 @@ mod tests {
         let status = HashMap::new();
         let model = build(
             &SidebarInputs {
+                view_mode: SidebarViewMode::Projects,
+                detailed_zone_rows: false,
+                timeline: &[],
                 chat_group: None,
                 pinned: &pinned,
                 work: &work,
@@ -895,6 +1320,9 @@ mod tests {
         let status = HashMap::from([("app:root".to_owned(), GroupLoadState::LoadFailed)]);
         let model = build(
             &SidebarInputs {
+                view_mode: SidebarViewMode::Projects,
+                detailed_zone_rows: false,
+                timeline: &[],
                 chat_group: None,
                 pinned: &[],
                 work: &[],
