@@ -7,15 +7,21 @@
 
 mod activation;
 mod assets;
+mod chrome;
 mod composer_view;
 mod connection;
+mod context_panel;
 mod diagnostics;
+mod elevation;
+mod fonts;
 mod install_id;
 mod locale;
+mod logical;
 mod network;
 mod server_sync;
 mod sidebar_item;
 mod sidebar_view;
+mod startup_view;
 mod theme;
 mod transcript_view;
 mod workspace;
@@ -24,7 +30,8 @@ mod workspace_tests;
 mod workspace_view;
 
 use gpui_kit::{
-    AppContext, Bounds, TitlebarOptions, WindowAppearance, WindowBounds, WindowOptions, px, size,
+    AppContext, Bounds, TitlebarOptions, WindowAppearance, WindowBounds, WindowDecorations,
+    WindowOptions, point, px, size,
 };
 use openchamber_native_core::synthetic::WorkloadSize;
 
@@ -37,12 +44,17 @@ use crate::locale::Strings;
 use crate::theme::{Appearance, Palette};
 use crate::workspace::{Source, Workspace};
 
-/// The fixture client size of the parity method.
+/// The default client size, which is also the parity method's fixture size.
 const WINDOW_WIDTH: f32 = 1280.0;
 const WINDOW_HEIGHT: f32 = 800.0;
+/// The smallest client size the Electron window allows.
+const MIN_WINDOW_WIDTH: f32 = 800.0;
+const MIN_WINDOW_HEIGHT: f32 = 520.0;
 
 fn main() {
     diagnostics::start();
+    // Read off the startup path; joined just before the first frame.
+    let generic_fonts = fonts::spawn_generic_lookup();
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_env("OPENCHAMBER_NATIVE_LOG")
@@ -72,15 +84,34 @@ fn main() {
             cx.set_global(strings);
             let palette = requested_palette(cx.window_appearance());
             theme::apply(palette, cx);
+            let generic_fonts = generic_fonts.join().unwrap_or_else(|_| {
+                tracing::warn!("the font lookup failed; the default fonts stay");
+                fonts::GenericFamilies::default()
+            });
+            fonts::apply(&generic_fonts, cx);
             workspace_view::bind_keys(cx);
 
-            let bounds = Bounds::centered(None, size(px(WINDOW_WIDTH), px(WINDOW_HEIGHT)), cx);
+            // The window grows by the frame line, so the content keeps the
+            // sizes above.
+            let framed = |width: f32, height: f32| {
+                size(
+                    px(width + 2.0 * chrome::FRAME_LINE),
+                    px(height + 2.0 * chrome::FRAME_LINE),
+                )
+            };
+            let bounds = Bounds::centered(None, framed(WINDOW_WIDTH, WINDOW_HEIGHT), cx);
+            // Frameless like the Electron window on Windows and Linux: the
+            // header draws the window controls and moves the window.
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
                     title: Some(title.into()),
-                    ..TitlebarOptions::default()
+                    appears_transparent: true,
+                    traffic_light_position: Some(point(px(12.0), px(16.0))),
                 }),
+                app_owns_titlebar_drag: true,
+                window_decorations: Some(WindowDecorations::Client),
+                window_min_size: Some(framed(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)),
                 app_id: Some("ai.openchamber.native.development".to_owned()),
                 ..WindowOptions::default()
             };

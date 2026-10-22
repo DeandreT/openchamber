@@ -129,7 +129,7 @@ impl Workspace {
         self.open_sessions.clear();
         self.live_status.clear();
         self.selected = None;
-        self.composer_key = None;
+        self.composer_key = self.new_session_draft_key();
         self.rebuild_sidebar();
     }
 
@@ -530,12 +530,14 @@ impl Workspace {
             return;
         }
         self.rebuild_sidebar();
-        let selection_listed = self
+        // A selected session that left the list returns the window to the
+        // new-session view rather than opening an unrelated session.
+        let selection_gone = self
             .selected
             .as_ref()
-            .is_some_and(|id| self.session(id).is_some());
-        if !selection_listed && let Some(first) = self.first_session_row() {
-            self.select_session(first, window, cx);
+            .is_some_and(|id| self.session(id).is_none());
+        if selection_gone {
+            self.show_new_session(window, cx);
         }
         cx.notify();
     }

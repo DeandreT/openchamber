@@ -17,7 +17,7 @@ use openchamber_native_core::chat_projection;
 use openchamber_native_core::chat_roots::ChatRoots;
 use openchamber_native_core::draft::{Draft, DraftKey, DraftStore, DraftTarget};
 use openchamber_native_core::grouping::{self, GroupingContext, WorktreeSortOrder};
-use openchamber_native_core::ids::{MessageId, PartId, RuntimeId, SessionId};
+use openchamber_native_core::ids::{DraftId, MessageId, PartId, RuntimeId, SessionId};
 use openchamber_native_core::ordering::{ActivityPhase, OrderingMutation, SessionOrdering};
 use openchamber_native_core::ownership::{
     ConfiguredProject, OwnershipInputs, ProjectWorktrees, SessionOwnershipIndex, Surface,
@@ -25,7 +25,9 @@ use openchamber_native_core::ownership::{
 use openchamber_native_core::scroll_memory::{ScrollKey, ScrollMemory, ScrollPosition};
 use openchamber_native_core::session::{LiveStatus, SessionRecord};
 use openchamber_native_core::session_index::SessionIndex;
-use openchamber_native_core::sidebar_rows::{self, SidebarInputs, SidebarState};
+use openchamber_native_core::sidebar_rows::{
+    self, SectionSpacing, SidebarInputs, SidebarState, SidebarViewMode,
+};
 use openchamber_native_core::synthetic::{
     self, ConversationShape, ResponseScript, SyntheticWorkspace, WorkloadSize,
 };
@@ -43,6 +45,10 @@ const CHUNK_INTERVAL: Duration = Duration::from_millis(24);
 /// Pixels rendered beyond the viewport in either direction.
 const TRANSCRIPT_OVERDRAW: f32 = 800.0;
 const SIDEBAR_OVERDRAW: f32 = 300.0;
+/// The draft of the new session the startup view composes. No project is
+/// chosen yet, so it is keyed on the filesystem root of its runtime.
+const NEW_SESSION_DRAFT: &str = "new-session";
+const NEW_SESSION_DIRECTORY: &str = "/";
 
 /// Where the workspace's data comes from.
 #[derive(Debug)]
@@ -91,7 +97,13 @@ pub struct Workspace {
     pub(crate) ordering: SessionOrdering,
     pub(crate) sidebar_state: SidebarState,
     pub(crate) sidebar_items: Vec<SidebarItem>,
+    /// The gap below each row of `sidebar_items` that opens the next section.
+    pub(crate) sidebar_spacing: Vec<Option<SectionSpacing>>,
     pub(crate) sidebar_list: ListState,
+    pub(crate) sidebar_open: bool,
+    pub(crate) work_status_open: bool,
+    /// A press in a title row that moves the window once the pointer moves.
+    pub(crate) title_drag_armed: bool,
     pub(crate) selected: Option<SessionId>,
     pub(crate) open_sessions: HashMap<SessionId, OpenSession>,
     pub(crate) drafts: DraftStore,
@@ -150,7 +162,11 @@ impl Workspace {
             ordering: SessionOrdering::new(),
             sidebar_state: SidebarState::default(),
             sidebar_items: Vec::new(),
+            sidebar_spacing: Vec::new(),
             sidebar_list: ListState::new(0, ListAlignment::Top, px(SIDEBAR_OVERDRAW)),
+            sidebar_open: true,
+            work_status_open: true,
+            title_drag_armed: false,
             selected: None,
             open_sessions: HashMap::new(),
             drafts: DraftStore::new(),
@@ -169,9 +185,9 @@ impl Workspace {
             _subscriptions: vec![subscription],
         };
         workspace.rebuild_sidebar();
-        if let Some(first) = workspace.first_session_row() {
-            workspace.select_session(first, window, cx);
-        }
+        // The window opens on a new session, as the web client does.
+        workspace.composer_key = workspace.new_session_draft_key();
+        workspace.focus_composer(window, cx);
         if workspace.connection.is_some() {
             workspace.connect(window, cx);
         }
@@ -181,12 +197,6 @@ impl Workspace {
     /// Whether the workspace shows synthetic data.
     pub fn is_synthetic(&self) -> bool {
         self.connection.is_none()
-    }
-
-    /// The selected session's record.
-    pub fn selected_session(&self) -> Option<&SessionRecord> {
-        let id = self.selected.as_ref()?;
-        self.session(id)
     }
 
     pub fn session(&self, id: &SessionId) -> Option<&SessionRecord> {
@@ -211,7 +221,7 @@ impl Workspace {
     /// inserted or removed elsewhere.
     pub fn rebuild_sidebar(&mut self) {
         let started = Instant::now();
-        let items = build_sidebar_items(
+        let (items, spacing) = build_sidebar_items(
             &self.topology,
             self.sessions.active(),
             self.sessions.archived(),
@@ -226,6 +236,7 @@ impl Workspace {
             .map(|item| item.key().to_owned());
         let count = items.len();
         self.sidebar_items = items;
+        self.sidebar_spacing = spacing;
         self.sidebar_list.reset(count);
         let restored =
             anchor.and_then(|key| self.sidebar_items.iter().position(|item| item.key() == key));
@@ -238,11 +249,36 @@ impl Workspace {
         diagnostics::mark(Marker::SidebarRebuilt, Some(elapsed), Some(count));
     }
 
-    pub(crate) fn first_session_row(&self) -> Option<SessionId> {
-        self.sidebar_items.iter().find_map(|item| match item {
-            SidebarItem::Session { session_id, .. } => Some(session_id.clone()),
-            _ => None,
-        })
+    pub(crate) fn new_session_draft_key(&self) -> Option<DraftKey> {
+        DraftKey::new(
+            self.runtime.clone(),
+            NEW_SESSION_DIRECTORY,
+            DraftTarget::NewSession(DraftId::from(NEW_SESSION_DRAFT)),
+        )
+    }
+
+    /// Leaves the selected session for the new-session view, keeping both
+    /// drafts and the session's reading position.
+    pub fn show_new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected.is_some() {
+            self.save_composer_draft(cx);
+            self.save_scroll_position();
+            self.selected = None;
+            self.composer_key = self.new_session_draft_key();
+            self.restore_composer_draft(window, cx);
+        }
+        self.focus_composer(window, cx);
+        cx.notify();
+    }
+
+    pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
+        self.sidebar_open = !self.sidebar_open;
+        cx.notify();
+    }
+
+    pub fn toggle_work_status(&mut self, cx: &mut Context<Self>) {
+        self.work_status_open = !self.work_status_open;
+        cx.notify();
     }
 
     /// Selects a session: saves the outgoing draft and position under their
@@ -676,14 +712,15 @@ fn synthetic_clock(sequence: usize) -> i64 {
     1_790_000_000_000 + sequence as i64 * 60_000
 }
 
-/// Runs the core projection and snapshots its rows for rendering.
+/// Runs the core projection and snapshots its rows for rendering, with the
+/// gap below each row.
 fn build_sidebar_items(
     topology: &Topology,
     active: &[SessionRecord],
     archived: &[SessionRecord],
     state: &SidebarState,
     ordering: &mut SessionOrdering,
-) -> Vec<SidebarItem> {
+) -> (Vec<SidebarItem>, Vec<Option<SectionSpacing>>) {
     let ownership = SessionOwnershipIndex::build(&OwnershipInputs {
         sessions: active,
         archived_sessions: archived,
@@ -732,13 +769,19 @@ fn build_sidebar_items(
         ));
     }
     let chat_group = grouping::build_chat_group(&chats.chat_sessions, topology.chat_roots.as_ref());
-    let (pinned, work) = sidebar_rows::zone_items(&sections, chat_group.as_ref(), ordering);
+    // Pinned is hidden by default (`showPinnedSection: false`), so pinned
+    // sessions stay in their projects.
+    let (_pinned, work) = sidebar_rows::zone_items(&sections, chat_group.as_ref(), ordering);
+    let timeline = sidebar_rows::timeline_items(&sections, ordering);
     let group_status = HashMap::new();
     let model = sidebar_rows::build(
         &SidebarInputs {
+            view_mode: SidebarViewMode::Timeline,
+            detailed_zone_rows: false,
             chat_group: chat_group.as_ref(),
-            pinned: &pinned,
+            pinned: &[],
             work: &work,
+            timeline: &timeline,
             sections: &sections,
             state,
             group_status: &group_status,
@@ -752,11 +795,18 @@ fn build_sidebar_items(
         .iter()
         .map(|project| (&project.id, project.path.as_str()))
         .collect();
-    model
+    let items = model
         .rows
         .iter()
         .map(|row| SidebarItem::from_row(row, &project_paths))
-        .collect()
+        .collect();
+    let spacing = model
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| sidebar_rows::section_spacing_after(row, model.rows.get(index + 1)))
+        .collect();
+    (items, spacing)
 }
 
 #[cfg(test)]
@@ -776,13 +826,14 @@ mod tests {
             worktrees: data.worktrees,
             chat_roots: Some(data.chat_roots),
         };
-        let items = build_sidebar_items(
+        let (items, spacing) = build_sidebar_items(
             &topology,
             &active,
             &archived,
             &SidebarState::default(),
             &mut SessionOrdering::new(),
         );
+        assert_eq!(items.len(), spacing.len(), "one gap entry per row");
         assert!(
             items
                 .iter()

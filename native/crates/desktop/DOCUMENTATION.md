@@ -25,11 +25,19 @@ read-only until prompt submission has its error and reconciliation paths.
   dropping one aborts its network work.
 - `sidebar_item.rs` copies the core row model into owned rows. The core model
   borrows session records and entities cannot hold borrows.
-- `sidebar_view.rs`, `transcript_view.rs`, `composer_view.rs` and
-  `workspace_view.rs` render. They dispatch to `Workspace` methods and never
-  interpret records themselves.
+- `workspace_view.rs` lays out the frameless window: the sidebar column, the
+  header with the window controls, the chat, the work status panel and the
+  rail. `sidebar_view.rs`, `startup_view.rs`, `transcript_view.rs`,
+  `composer_view.rs` and `context_panel.rs` render their parts. They dispatch
+  to `Workspace` methods and never interpret records themselves.
+- `chrome.rs` owns the shared controls (sprite glyphs, quiet icon buttons),
+  the drag region and window controls of the frameless window and the
+  content size inside a client-side frame; `logical.rs` maps start and end
+  sides to the layout direction; `elevation.rs` mirrors the design system's
+  ring and shadow recipes.
 - `theme.rs`, `locale.rs` and `assets.rs` load the generated resources in
-  `resources/`; `bun run native:resources` owns their content.
+  `resources/`; `bun run native:resources` owns their content. `fonts.rs`
+  resolves the web client's default font stacks against the installed fonts.
 - `diagnostics.rs` records timing markers without message or title text:
   window creation, first content, usable composer, completed switch, sidebar
   rebuilds, synthetic playback and, when connected, the first painted session
@@ -75,7 +83,17 @@ read-only until prompt submission has its error and reconciliation paths.
   `resources/themes.json` and every icon from `resources/icons.json`.
 - Interactive elements carry a stable `accessibility_id` equal to their row key
   or control name, so automation finds them by ID on Windows UI Automation and
-  Linux AT-SPI alike.
+  Linux AT-SPI alike. The content root is `workspace`.
+- The window opens on the new-session view with nothing selected. A selected
+  session that leaves the list returns the window there; it never selects an
+  unrelated session. The new-session draft has its own key, so its text
+  survives visiting sessions.
+- Layout uses logical sides: English is laid out as measured from the
+  reference and right-to-left locales mirror it. Window controls keep their
+  physical order and the right edge in every language, as in the web client.
+- The content keeps the reference size inside a client-side frame: the
+  window grows by the frame line, and sizes the web client takes from the
+  viewport (`6vh`) come from `chrome::content_size`.
 
 ## Decisions
 
@@ -128,6 +146,23 @@ handle that aborts on drop and nothing more.
 system, skill, idle and switch records and shows compaction and shell records
 as notices. The native transcript keeps every record for identity and order
 and renders the same subset.
+
+### Why the timeline rows split their accessible node and pointer target
+
+Zone and project headers paint across the full sidebar while their list slot
+keeps the list padding, and a session row's margins belong to its slot but not
+to its click target. The accessible node keeps the slot, so automation and
+screen readers see the same rectangles as the web client's row elements, and
+`activation::on_activate_split` registers the pointer action on the painted
+target and the accessibility action on the node.
+
+### Why fonts resolve at startup
+
+The web client's default stacks name families by exact name and then fall
+back to the platform's generic family; on Linux that is fontconfig's
+`system-ui`. GPUI Kit names IBM Plex Sans, which is usually not installed.
+`fc-match` takes about 15 ms, so it runs on a thread started first in `main`
+and joins just before the theme is applied.
 
 ### Why `.test_support()` on rows and controls
 

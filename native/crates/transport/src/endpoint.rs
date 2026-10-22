@@ -1,5 +1,7 @@
 //! The user-selected server endpoint and its path prefix.
 
+use std::net::IpAddr;
+
 use reqwest::Url;
 
 use crate::error::TransportError;
@@ -82,6 +84,18 @@ impl Endpoint {
     pub fn as_str(&self) -> &str {
         self.base.as_str()
     }
+
+    /// Whether the server runs on this machine.
+    pub fn is_loopback(&self) -> bool {
+        let host = self.base.host_str().unwrap_or_default();
+        if host.eq_ignore_ascii_case("localhost") {
+            return true;
+        }
+        host.trim_start_matches('[')
+            .trim_end_matches(']')
+            .parse::<IpAddr>()
+            .is_ok_and(|address| address.is_loopback())
+    }
 }
 
 #[cfg(test)]
@@ -103,6 +117,26 @@ mod tests {
             endpoint.websocket_url("api/global/event/ws").as_str(),
             "wss://host.example/openchamber/api/global/event/ws"
         );
+    }
+
+    #[test]
+    fn knows_servers_on_this_machine() {
+        for local in [
+            "http://127.0.0.1:4799",
+            "http://localhost/",
+            "http://[::1]:3000",
+        ] {
+            assert!(
+                Endpoint::parse(local).expect("valid").is_loopback(),
+                "{local}"
+            );
+        }
+        for remote in ["https://host.example", "http://10.0.0.2:3000"] {
+            assert!(
+                !Endpoint::parse(remote).expect("valid").is_loopback(),
+                "{remote}"
+            );
+        }
     }
 
     #[test]

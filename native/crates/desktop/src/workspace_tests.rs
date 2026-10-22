@@ -108,6 +108,59 @@ fn clicking_a_row_selects_its_session(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn the_window_opens_on_a_new_session(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    assert_eq!(selected(&workspace, cx), None, "nothing is selected");
+    let zone = cx.read(|cx| {
+        workspace
+            .read(cx)
+            .sidebar_items
+            .iter()
+            .find_map(|item| match item {
+                SidebarItem::Zone { key, .. } => Some(key.clone()),
+                _ => None,
+            })
+            .expect("the synthetic sidebar has a zone")
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find(id(&"new-session".into())).visible());
+        assert_eq!(
+            window.find(id(&zone)).expanded(),
+            Some(true),
+            "zone headers report their disclosure state"
+        );
+    })
+    .expect("window is open");
+    assert!(
+        cx.read(|cx| workspace.read(cx).composer_key.is_some()),
+        "the new session's draft has a key"
+    );
+}
+
+#[gpui_kit::test]
+fn new_session_keeps_both_drafts(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let rows = session_rows(&workspace, cx);
+    let (session_row, _) = rows[1].clone();
+    let new_session = id(&"new-session".into());
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.input("a new idea", cx);
+        window.click(id(&session_row), cx);
+        window.input("a reply", cx);
+        window.click(new_session.clone(), cx);
+    })
+    .expect("window is open");
+    assert_eq!(selected(&workspace, cx), None);
+    assert_eq!(composer_text(&workspace, cx), "a new idea");
+
+    cx.update_window(window, |_, window, cx| window.click(id(&session_row), cx))
+        .expect("window is open");
+    assert_eq!(composer_text(&workspace, cx), "a reply");
+}
+
+#[gpui_kit::test]
 fn a_draft_survives_switching_away_and_back(cx: &mut TestAppContext) {
     let (window, workspace) = open(cx);
     let rows = session_rows(&workspace, cx);

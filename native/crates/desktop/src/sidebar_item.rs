@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use gpui_kit::SharedString;
 use openchamber_native_core::grouping::GroupLabel;
 use openchamber_native_core::ids::{ProjectId, SessionId};
+use openchamber_native_core::ordering;
 use openchamber_native_core::sidebar_rows::{
     ActivityKey, EmptyKind, GroupLoadState, RenderContext, ShowControl, SidebarRow,
 };
@@ -42,6 +43,10 @@ pub enum SidebarItem {
         expansion_key: String,
         pinned: bool,
         context: RenderContext,
+        /// When the session last had a conversation, for its age.
+        activity_ms: i64,
+        /// The owning project's name, where sessions of every project mix.
+        project_label: Option<SharedString>,
     },
     Show {
         key: SharedString,
@@ -50,11 +55,13 @@ pub enum SidebarItem {
         current_count: usize,
         increment: usize,
         depth: usize,
+        flat: bool,
     },
     Status {
         key: SharedString,
         state: GroupLoadState,
         depth: usize,
+        flat: bool,
     },
     Empty {
         key: SharedString,
@@ -92,19 +99,12 @@ impl SidebarItem {
                 key,
                 project_id,
                 collapsed,
-            } => {
-                let path = project_paths.get(project_id).copied().unwrap_or_default();
-                let label = path
-                    .rsplit('/')
-                    .find(|segment| !segment.is_empty())
-                    .unwrap_or(path);
-                Self::Project {
-                    key: key.clone().into(),
-                    project_id: project_id.clone(),
-                    label: label.to_owned().into(),
-                    collapsed: *collapsed,
-                }
-            }
+            } => Self::Project {
+                key: key.clone().into(),
+                project_id: project_id.clone(),
+                label: project_label(project_paths, project_id),
+                collapsed: *collapsed,
+            },
             SidebarRow::GroupHeader {
                 key,
                 group_key,
@@ -127,6 +127,7 @@ impl SidebarItem {
                 expanded,
                 expansion_key,
                 context,
+                project_id,
                 ..
             } => Self::Session {
                 key: key.clone().into(),
@@ -138,6 +139,11 @@ impl SidebarItem {
                 expansion_key: expansion_key.clone(),
                 pinned: session.overlay.pinned_at.is_some(),
                 context: *context,
+                activity_ms: ordering::activity_time(session),
+                project_label: (*context == RenderContext::TimelineMixed)
+                    .then_some(project_id.as_ref())
+                    .flatten()
+                    .map(|project_id| project_label(project_paths, project_id)),
             },
             SidebarRow::ShowControl {
                 key,
@@ -146,6 +152,7 @@ impl SidebarItem {
                 current_count,
                 increment,
                 depth,
+                flat,
             } => Self::Show {
                 key: key.clone().into(),
                 control: *control,
@@ -153,13 +160,19 @@ impl SidebarItem {
                 current_count: *current_count,
                 increment: *increment,
                 depth: *depth,
+                flat: *flat,
             },
             SidebarRow::Status {
-                key, state, depth, ..
+                key,
+                state,
+                depth,
+                flat,
+                ..
             } => Self::Status {
                 key: key.clone().into(),
                 state: *state,
                 depth: *depth,
+                flat: *flat,
             },
             SidebarRow::Empty { key, kind, depth } => Self::Empty {
                 key: key.clone().into(),
@@ -168,4 +181,17 @@ impl SidebarItem {
             },
         }
     }
+}
+
+/// A project's display name: the last segment of its folder.
+fn project_label(
+    project_paths: &HashMap<&ProjectId, &str>,
+    project_id: &ProjectId,
+) -> SharedString {
+    let path = project_paths.get(project_id).copied().unwrap_or_default();
+    path.rsplit('/')
+        .find(|segment| !segment.is_empty())
+        .unwrap_or(path)
+        .to_owned()
+        .into()
 }

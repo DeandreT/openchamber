@@ -10,9 +10,12 @@ rendering asks for a projection and dispatches an action.
 ## Ownership
 
 - `ownership.rs` and `chat_projection.rs` port `sessionOwnership.ts` and
-  `sessionChatProjection.ts`. `sidebar_rows.rs` ports the normal-mode Tree view
-  of `sessionSidebarRowModel.ts`; `grouping.rs` ports `buildGroupedSessions`
-  and `buildSidebarChatGroup`; `ordering.rs` ports `session-ordering.ts`.
+  `sessionChatProjection.ts`. `sidebar_rows.rs` ports the normal mode of
+  `sessionSidebarRowModel.ts` in both views (the timeline new installs start
+  on, and the project tree) with the section gaps of
+  `sessionSidebarVirtualization.ts`; `grouping.rs` ports
+  `buildGroupedSessions` and `buildSidebarChatGroup`; `ordering.rs` ports
+  `session-ordering.ts`; `relative_time.rs` ports the sidebar's compact ages.
 - `transcript.rs` holds one session's messages in server order and reports the
   rows each mutation touched. User and assistant messages carry parts; every
   other OpenCode record (synthetic, system, skill, shell, compaction, switched
