@@ -1,0 +1,29 @@
+# Locale keys the native desktop resolves. `bun run native:resources` exports
+# them for every locale into locales.json and checks placeholder parity.
+chat.chatInput.actions.sendMessageAria
+chat.chatInput.actions.stopGeneratingAria
+chat.chatInput.placeholder.chat
+chat.chatInput.placeholder.selectSession
+chat.scrollToBottom.aria
+sessions.sidebar.activity.chatsTitle
+sessions.sidebar.activity.chatsEmpty
+sessions.sidebar.activity.pinnedTitle
+sessions.sidebar.work.title
+sessions.sidebar.empty.noSessions.title
+sessions.sidebar.empty.noSessions.description
+sessions.sidebar.group.showMore
+sessions.sidebar.group.showFewer
+sessions.sidebar.group.empty.loadingSessions
+sessions.sidebar.group.empty.loadFailed
+sessions.sidebar.group.empty.initializationFailed
+sessions.sidebar.group.empty.permissionDenied
+sessions.sidebar.group.empty.noArchivedSessions
+sessions.sidebar.grouping.projectRoot
+sessions.sidebar.grouping.projectRootWithBranch
+sessions.sidebar.grouping.archived
+sessions.sidebar.grouping.spaceUnnamed
+sessions.sidebar.header.actions.newSession
+sessions.sidebar.session.untitled
+sessions.sidebar.session.subsessions.expand
+sessions.sidebar.session.subsessions.collapse
+sessions.sidebar.session.status.pinned

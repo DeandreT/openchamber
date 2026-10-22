@@ -1,0 +1,26 @@
+[package]
+name = "openchamber-native-desktop"
+description = "Native OpenChamber desktop client built with GPUI Kit."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "openchamber-native"
+path = "src/main.rs"
+
+[dependencies]
+gpui-kit.workspace = true
+openchamber-native-core.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+
+[lints]
+workspace = true

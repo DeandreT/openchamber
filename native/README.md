@@ -7,6 +7,7 @@ from the Bun `packages/*` workspace.
 | Crate | Owns |
 | --- | --- |
 | `crates/core` (`openchamber-native-core`) | Domain records, sidebar membership and rows, transcripts, drafts, scroll memory and synthetic workloads. Standard library only. See its [DOCUMENTATION.md](crates/core/DOCUMENTATION.md). |
+| `crates/desktop` (`openchamber-native-desktop`) | The GPUI Kit window, views, theme, locale and icon resources, diagnostics and application lifetime. See its [DOCUMENTATION.md](crates/desktop/DOCUMENTATION.md). |
 
 ## Toolchain
 
@@ -25,10 +26,33 @@ Run these from the repository root:
 ```sh
 bun run native:test      # all workspace tests, including the sidebar parity fixtures
 bun run native:check     # rustfmt check and Clippy with warnings denied
+bun run native:dev       # debug build of the desktop, opened on synthetic data
+bun run native:build     # release build of the desktop
 bun run native:fixtures  # regenerate the TypeScript reference fixtures
+bun run native:resources # regenerate theme, locale and icon resources
 ```
 
+The desktop reads these environment variables:
+
+| Variable | Effect |
+| --- | --- |
+| `OPENCHAMBER_NATIVE_WORKLOAD` | `representative` (2,301 sessions, default), `stress` (23,010) or `small` |
+| `OPENCHAMBER_NATIVE_THEME` | A built-in theme ID such as `openchamber-dark`; otherwise the system appearance picks the default pair |
+| `OPENCHAMBER_NATIVE_LOCALE` | A supported locale such as `ar` or `pt-BR`; otherwise `LANG` |
+| `OPENCHAMBER_NATIVE_DIAGNOSTICS` | `1` prints `OPENCHAMBER_NATIVE_MARK {json}` timing lines to stdout |
+| `OPENCHAMBER_NATIVE_LOG` | A `tracing` filter for stderr, `warn` by default |
+
 `native:fixtures` runs the TypeScript sidebar projection and rewrites
-`crates/core/tests/fixtures/sidebar-projection.json`. The UI test
-`packages/ui/src/lib/native/sidebarParityFixtures.test.ts` fails when that file
-is stale.
+`crates/core/tests/fixtures/sidebar-projection.json`. `native:resources`
+resolves the built-in themes, exports the keys in
+`crates/desktop/resources/locale-keys.txt` for every locale and the glyphs in
+`crates/desktop/resources/icon-names.txt` from the icon sprite. The UI tests in
+`packages/ui/src/lib/native/` fail when any generated file is stale.
+
+## Accessibility on Linux
+
+AccessKit registers with AT-SPI only while the session's accessibility bus
+reports `org.a11y.Status.IsEnabled`. A screen reader turns it on; automation
+can set it with
+`busctl --user set-property org.a11y.Bus /org/a11y/bus org.a11y.Status IsEnabled b true`
+and should restore the previous value afterwards.

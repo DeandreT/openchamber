@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/core"]
+members = ["crates/core", "crates/desktop"]
 
 [workspace.package]
 version = "0.1.0"
@@ -11,8 +11,11 @@ publish = false
 
 [workspace.dependencies]
 openchamber-native-core = { path = "crates/core" }
+gpui-kit = "=0.7.3"
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
+tracing = "=0.1.44"
+tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["env-filter", "fmt", "std"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
