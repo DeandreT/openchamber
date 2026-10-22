@@ -8,7 +8,7 @@
 //! that requested it and is dropped when a newer attempt replaced it.
 
 use std::collections::HashMap;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use gpui_kit::{Context, ListOffset, Window, px};
 use openchamber_native_core::ids::{RuntimeId, SessionId};
@@ -26,6 +26,7 @@ use openchamber_native_transport::identity::{GLOBAL_EVENTS_CAPABILITY, ServerIde
 use openchamber_native_transport::stream::{EventStream, StreamItem};
 
 use crate::connection::{ConnectionFailure, ConnectionState};
+use crate::diagnostics::Marker;
 use crate::workspace::{History, OpenSession, Topology, Workspace};
 
 /// Messages read when a session opens, as the web client reads.
@@ -277,7 +278,11 @@ impl Workspace {
                     cx.notify();
                     return;
                 }
+                let count = sessions.len();
                 let update = this.sessions.complete_load(ticket, sessions);
+                if !std::mem::replace(&mut this.sessions_shown, true) {
+                    this.mark_on_paint(Marker::SessionsShown, None, Some(count));
+                }
                 this.ordering.raise_baselines(this.sessions.active());
                 if let Some(statuses) = statuses {
                     this.apply_status_snapshot(statuses);
@@ -390,6 +395,7 @@ impl Workspace {
             return;
         };
         let since = open.transcript.revision();
+        let requested = Instant::now();
         let request_id = id.clone();
         let task = connection
             .network
@@ -398,7 +404,9 @@ impl Workspace {
         open.history = History::Loading {
             _read: cx.spawn(async move |this, cx| {
                 let outcome = task.await.unwrap_or(Err(TransportError::Cancelled));
-                let _ = this.update(cx, |this, cx| this.finish_history(&id, since, outcome, cx));
+                let _ = this.update(cx, |this, cx| {
+                    this.finish_history(&id, since, requested, outcome, cx);
+                });
             }),
         };
     }
@@ -407,6 +415,7 @@ impl Workspace {
         &mut self,
         id: &SessionId,
         since: u64,
+        requested: Instant,
         outcome: Result<MessagePage, TransportError>,
         cx: &mut Context<Self>,
     ) {
@@ -427,6 +436,8 @@ impl Workspace {
                 apply_list_change(open, &change);
                 if was_empty {
                     restore_position(open, &position);
+                    let count = open.transcript.len();
+                    self.mark_on_paint(Marker::HistoryShown, Some(requested), Some(count));
                 }
             }
             Err(error) => {

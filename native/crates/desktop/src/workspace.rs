@@ -106,7 +106,11 @@ pub struct Workspace {
     prompt_sequence: usize,
     pub(crate) focus_handle: FocusHandle,
     pending_switch: Option<Instant>,
+    /// Markers for the next painted frame.
+    pending_markers: Vec<(Marker, Option<Instant>, Option<usize>)>,
     startup_recorded: bool,
+    /// Whether a complete session list was painted yet.
+    pub(crate) sessions_shown: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -159,7 +163,9 @@ impl Workspace {
             prompt_sequence: 0,
             focus_handle: cx.focus_handle(),
             pending_switch: None,
+            pending_markers: Vec::new(),
             startup_recorded: false,
+            sessions_shown: false,
             _subscriptions: vec![subscription],
         };
         workspace.rebuild_sidebar();
@@ -641,17 +647,27 @@ impl Workspace {
     /// Paint time ends the measured interval: the transcript the reader asked
     /// for is in the frame. Compositor presentation comes after and is not
     /// included, so an occluded window still reports its own work.
-    pub(crate) fn take_frame_markers(&mut self) -> Vec<(Marker, Option<Instant>)> {
-        let mut markers = Vec::new();
+    pub(crate) fn take_frame_markers(&mut self) -> Vec<(Marker, Option<Instant>, Option<usize>)> {
+        let mut markers = std::mem::take(&mut self.pending_markers);
         if !self.startup_recorded {
             self.startup_recorded = true;
-            markers.push((Marker::ContentPainted, None));
-            markers.push((Marker::ComposerUsable, None));
+            markers.push((Marker::ContentPainted, None, None));
+            markers.push((Marker::ComposerUsable, None, None));
         }
         if let Some(started) = self.pending_switch.take() {
-            markers.push((Marker::SwitchCompleted, Some(started)));
+            markers.push((Marker::SwitchCompleted, Some(started), None));
         }
         markers
+    }
+
+    /// Emits `marker` when the next frame paints.
+    pub(crate) fn mark_on_paint(
+        &mut self,
+        marker: Marker,
+        started: Option<Instant>,
+        count: Option<usize>,
+    ) {
+        self.pending_markers.push((marker, started, count));
     }
 }
 

@@ -114,6 +114,8 @@ def native_env(args: argparse.Namespace) -> dict[str, str]:
         OPENCHAMBER_NATIVE_LOCALE="en",
         OPENCHAMBER_NATIVE_LOG="warn",
     )
+    if args.server:
+        env["OPENCHAMBER_NATIVE_SERVER"] = args.server
     return env
 
 
@@ -254,9 +256,20 @@ def native_startup_once(args: argparse.Namespace) -> dict:
         usable = run.wait_for("composer-usable", args.timeout)
         sample["composerUsableSinceSpawnMs"] = usable["arrivedMs"]
         sample["composerUsableSinceMainMs"] = usable["sinceStartMs"]
+        if args.server:
+            # Connected readiness: the frames that first show the server's
+            # complete session list and the selected session's history.
+            sessions = run.wait_for("sessions-shown", args.timeout)
+            history = run.wait_for("history-shown", args.timeout)
+            sample["sessionsShownSinceSpawnMs"] = sessions["arrivedMs"]
+            sample["sessionCount"] = sessions.get("count")
+            sample["historyShownSinceSpawnMs"] = history["arrivedMs"]
+            sample["historyReadMs"] = history.get("durationMs")
         run.read_marks(args.settle)
         sample["marks"] = run.marks
         sample["memoryAfterStartup"] = tree_memory(run.process.pid)
+        if args.server_pid:
+            sample["serverMemory"] = tree_memory(args.server_pid)
         before = tree_cpu_ticks(run.process.pid)
         time.sleep(args.idle_seconds)
         after = tree_cpu_ticks(run.process.pid)
@@ -468,6 +481,8 @@ def main() -> int:
     parser.add_argument("--electron-app", type=Path, help="packaged Electron executable for the comparison")
     parser.add_argument("--electron-opencode", default="cold", choices=["warm", "cold"], help="cold: Electron starts its own OpenCode, as a user launch does")
     parser.add_argument("--electron-memory-delay", type=float, default=20.0, help="seconds after spawn before sampling Electron memory")
+    parser.add_argument("--server", help="OpenChamber server URL: the native client runs connected (an isolated server only)")
+    parser.add_argument("--server-pid", type=int, help="the server's process, sampled for the full-application memory")
     parser.add_argument("--output", type=Path, help="receipt directory")
     args = parser.parse_args()
 
@@ -481,7 +496,7 @@ def main() -> int:
         "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "revision": git_revision(),
         "host": {"platform": platform.platform(), "machine": platform.machine(), "cpus": os.cpu_count(), "session": os.environ.get("XDG_SESSION_TYPE"), "backend": args.backend},
-        "native": {"binary": str(args.binary), "sha256": file_sha256(args.binary), "workload": args.workload, "theme": args.theme},
+        "native": {"binary": str(args.binary), "sha256": file_sha256(args.binary), "workload": args.workload, "theme": args.theme, "server": args.server},
         "electron": {"app": str(args.electron_app) if args.electron_app else None},
         "configuration": {key: str(value) for key, value in vars(args).items()},
         "samples": {"nativeStartup": [], "electronMemory": [], "nativeSwitch": []},
@@ -545,6 +560,11 @@ def main() -> int:
 
     summary = {
         "nativeComposerUsableSinceSpawnMs": summarize([s["composerUsableSinceSpawnMs"] for s in measured]),
+        "nativeSessionsShownSinceSpawnMs": summarize([s["sessionsShownSinceSpawnMs"] for s in measured if "sessionsShownSinceSpawnMs" in s]),
+        "nativeHistoryShownSinceSpawnMs": summarize([s["historyShownSinceSpawnMs"] for s in measured if "historyShownSinceSpawnMs" in s]),
+        "nativeHistoryReadMs": summarize([s["historyReadMs"] for s in measured if s.get("historyReadMs") is not None]),
+        "serverPssBytes": summarize([s["serverMemory"]["pssBytes"] for s in measured if "serverMemory" in s]),
+        "nativeWithServerPssBytes": summarize([s["memoryAfterStartup"]["pssBytes"] + s["serverMemory"]["pssBytes"] for s in measured if "serverMemory" in s]),
         "nativePssBytes": summarize([s["memoryAfterStartup"]["pssBytes"] for s in measured]),
         "nativePrivateBytes": summarize([s["memoryAfterStartup"]["privateBytes"] for s in measured]),
         "nativeIdleCpuPercent": summarize([s["idleCpuPercent"] for s in measured]),
@@ -565,13 +585,24 @@ def main() -> int:
     def mib_stats(stats: dict | None) -> dict | None:
         return None if stats is None else {key: (round(value / (1 << 20), 1) if key != "n" else value) for key, value in stats.items()}
 
-    native_scope = "native offline: window, synthetic data, no server or OpenCode"
+    native_scope = (
+        "native connected: window and client; the server and OpenCode are outside this tree"
+        if args.server
+        else "native offline: window, synthetic data, no server or OpenCode"
+    )
     electron_scope = "Electron packaged: window, in-process server, OpenCode child"
     print("\n| Metric | Median | p95 | Range | n | Scope |")
     print("| --- | --- | --- | --- | --- | --- |")
     print(stat_line("Native composer usable since spawn", summary["nativeComposerUsableSinceSpawnMs"], "ms", native_scope))
     print(stat_line("Electron composer usable since spawn", summary["electronComposerUsableSinceSpawnMs"], "ms", electron_scope + f", opencode {args.electron_opencode}"))
+    if args.server:
+        print(stat_line("Native sessions shown since spawn", summary["nativeSessionsShownSinceSpawnMs"], "ms", native_scope))
+        print(stat_line("Native history shown since spawn", summary["nativeHistoryShownSinceSpawnMs"], "ms", native_scope))
+        print(stat_line("Native history read to paint", summary["nativeHistoryReadMs"], "ms", "request to painted transcript, newest 100 messages"))
     print(stat_line("Native PSS after startup", mib_stats(summary["nativePssBytes"]), "MiB", native_scope))
+    if summary["serverPssBytes"]:
+        print(stat_line("Server PSS (server and OpenCode)", mib_stats(summary["serverPssBytes"]), "MiB", "the isolated server's process tree"))
+        print(stat_line("Native and server PSS", mib_stats(summary["nativeWithServerPssBytes"]), "MiB", "comparable to the Electron tree's ownership"))
     print(stat_line("Electron PSS after startup", mib_stats(summary["electronPssBytes"]), "MiB", electron_scope))
     print(stat_line("Native private after startup", mib_stats(summary["nativePrivateBytes"]), "MiB", native_scope))
     print(stat_line("Electron private after startup", mib_stats(summary["electronPrivateBytes"]), "MiB", electron_scope))
