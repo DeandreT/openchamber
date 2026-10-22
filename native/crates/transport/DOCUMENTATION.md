@@ -20,6 +20,7 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `event.rs` | Bridge frames to `ServerEvent`s, mirroring `lib/opencode/events.ts` and `sync/event-pipeline.ts`. |
 | `stream.rs` | `EventStream`: the reconnecting WebSocket subscription. |
 | `parity_tests.rs` | Differential tests against the official client's fixture. |
+| `tests/server.rs` | The transport against a scripted loopback HTTP and WebSocket server: login fields, bearer use, failure classes, redirects, paging, cancellation, resume and reset cursors, fragmented frames and the `ready` timeout. |
 
 `examples/probe.rs` exercises the crate against a running server and prints
 counts and identifiers only.

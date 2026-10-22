@@ -32,14 +32,26 @@ const PART_SHELLS_VERSION: &str = "v1";
 const SURFACE: &str = "desktop";
 /// Directories per worktree request; the server caps a batch.
 const WORKTREE_BATCH_SIZE: usize = 200;
-/// Label stored with a client token the server issues to this app.
-const CLIENT_LABEL: &str = "OpenChamber Native";
 
 /// One page of sessions and the cursor of the next.
 #[derive(Debug)]
 pub struct SessionPage {
     pub sessions: Vec<SessionRecord>,
     pub next: Option<String>,
+}
+
+/// What the server records about this client when it issues a token.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ClientDescription {
+    /// Shown in the server's device list.
+    pub label: String,
+    /// `desktop` for a desktop connected to a remote server.
+    pub kind: String,
+    /// Stable per install, such as `desktop:<install id>`.
+    pub dedupe_key: Option<String>,
+    /// `macos`, `windows` or `linux`.
+    pub device_platform: Option<String>,
+    pub app_version: Option<String>,
 }
 
 /// One project's worktree read.
@@ -156,20 +168,42 @@ impl ServerClient {
         ServerIdentity::from_health(health)
     }
 
+    /// The body of a password login that issues a client token.
+    pub fn login_body(password: &str, client: &ClientDescription) -> Value {
+        let mut body = json!({
+            "password": password,
+            "trustDevice": true,
+            "issueClientToken": true,
+            "clientLabel": client.label,
+            "clientKind": client.kind,
+        });
+        for (key, value) in [
+            ("dedupeKey", &client.dedupe_key),
+            ("devicePlatform", &client.device_platform),
+            ("appVersion", &client.app_version),
+        ] {
+            if let Some(value) = value {
+                body[key] = json!(value);
+            }
+        }
+        body
+    }
+
     /// Exchanges the UI password for a trusted-device client token.
     ///
-    /// The password is sent once in the request body and not retained.
-    pub async fn login(&self, password: &str) -> Result<Credential, TransportError> {
+    /// The password is sent once in the request body and not retained. The
+    /// server records `client` with the token; the dedupe key makes a later
+    /// login replace this install's record instead of adding one.
+    pub async fn login(
+        &self,
+        password: &str,
+        client: &ClientDescription,
+    ) -> Result<Credential, TransportError> {
         let response = self
             .http
             .post(self.endpoint.url("auth/session"))
             .header(ACCEPT, "application/json")
-            .json(&json!({
-                "password": password,
-                "trustDevice": true,
-                "issueClientToken": true,
-                "label": CLIENT_LABEL,
-            }))
+            .json(&Self::login_body(password, client))
             .send()
             .await
             .map_err(TransportError::from_request)?;
