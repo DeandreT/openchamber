@@ -20,12 +20,17 @@ synthetic data from the core and makes no network or provider calls.
 - `theme.rs`, `locale.rs` and `assets.rs` load the generated resources in
   `resources/`; `bun run native:resources` owns their content.
 - `diagnostics.rs` records timing markers without message or title text.
+  GPUI's own `log` records reach the same `tracing` subscriber.
 
 ## Invariants
 
 - Pointer, keyboard and accessibility activation reach the same `Workspace`
-  method: rows use `on_click`, which GPUI also registers as the AccessKit Click
-  action.
+  method: every control registers its action through
+  `activation::on_activate`, which installs both the pointer click and the
+  AccessKit Click handler.
+- Timing markers end when the frame that shows the result paints. A zero-size
+  canvas at the end of the workspace tree emits them, so they measure the
+  client's own work and do not wait for compositor presentation.
 - Switching sessions saves the outgoing draft and scroll position under the
   identity captured when the outgoing session was selected, then restores the
   incoming ones before the next paint.
@@ -62,6 +67,20 @@ structural changes, never on text deltas.
 Parity requires the Electron client's glyphs. The resource generator exports
 the web UI's Remix sprite paths as standalone SVG documents, and
 `AppAssets` serves them next to GPUI Kit's own assets.
+
+### Why an explicit accessibility Click handler
+
+Without one, GPUI answers an AccessKit Click by synthesizing a mouse click at
+the node's centre, and `on_click` drops it unless the last real pointer
+position hovered the element. Screen readers and automation would then
+activate nothing. `on_activate` registers the workspace action for both paths.
+
+### Why markers end at paint and not at the next frame
+
+`Window::on_next_frame` runs only when another frame is drawn. A covered or
+idle window draws none, so a marker scheduled there could wait indefinitely
+and inflate a measurement. Painting the frame is the moment the requested
+transcript exists; presentation timing belongs to the platform.
 
 ### Why `.test_support()` on rows and controls
 

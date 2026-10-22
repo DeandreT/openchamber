@@ -6,6 +6,7 @@ use gpui_kit::{
     Styled, TestSupportExt, div, prelude::FluentBuilder, px,
 };
 
+use crate::activation::on_activate;
 use crate::locale;
 use crate::sidebar_view::icon_element;
 use crate::theme::Palette;
@@ -67,39 +68,42 @@ impl Workspace {
                     )
                     .child(
                         div().flex().justify_end().child(
-                            div()
-                                .id("composer-submit")
-                                .role(Role::Button)
-                                .accessibility_id("composer-submit")
-                                .aria_label(label)
-                                .size(px(28.0))
-                                .rounded_full()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .cursor_pointer()
-                                .when(streaming, |this| this.bg(palette.active))
-                                .when(!streaming, |this| {
-                                    this.bg(palette.primary)
-                                        .hover(|style| style.bg(palette.primary_hover))
-                                })
-                                .child(icon_element(
-                                    icon,
-                                    palette,
-                                    if streaming {
-                                        palette.foreground
-                                    } else {
-                                        palette.primary_foreground
-                                    },
-                                ))
-                                .on_click(cx.listener(move |this, _, window, cx| {
+                            on_activate(
+                                div()
+                                    .id("composer-submit")
+                                    .role(Role::Button)
+                                    .accessibility_id("composer-submit")
+                                    .aria_label(label)
+                                    .size(px(28.0))
+                                    .rounded_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .cursor_pointer()
+                                    .when(streaming, |this| this.bg(palette.active))
+                                    .when(!streaming, |this| {
+                                        this.bg(palette.primary)
+                                            .hover(|style| style.bg(palette.primary_hover))
+                                    })
+                                    .child(icon_element(
+                                        icon,
+                                        palette,
+                                        if streaming {
+                                            palette.foreground
+                                        } else {
+                                            palette.primary_foreground
+                                        },
+                                    )),
+                                cx,
+                                move |this, window, cx| {
                                     if streaming {
                                         this.stop(cx);
                                     } else {
                                         this.submit(window, cx);
                                     }
-                                }))
-                                .test_support(),
+                                },
+                            )
+                            .test_support(),
                         ),
                     ),
             )

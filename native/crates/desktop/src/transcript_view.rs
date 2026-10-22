@@ -13,6 +13,7 @@ use gpui_kit::{
 };
 use openchamber_native_core::transcript::{Message, PartContent, Role as MessageRole};
 
+use crate::activation::on_activate;
 use crate::locale;
 use crate::sidebar_view::icon_element;
 use crate::theme::Palette;
@@ -99,34 +100,31 @@ impl Workspace {
                         .flex()
                         .justify_center()
                         .child(
-                            div()
-                                .id("scroll-to-bottom")
-                                .role(Role::Button)
-                                .accessibility_id("scroll-to-bottom")
-                                .aria_label(scroll_label)
-                                .size(px(32.0))
-                                .rounded_full()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .bg(palette.elevated)
-                                .border_1()
-                                .border_color(palette.border)
-                                .cursor_pointer()
-                                .hover(|style| style.bg(palette.hover))
-                                .child(icon_element("arrow-down-s", palette, palette.foreground))
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    if let Some(open) = this
-                                        .selected
-                                        .as_ref()
-                                        .and_then(|id| this.open_sessions.get(id))
-                                    {
-                                        open.list.set_follow_mode(gpui_kit::FollowMode::Tail);
-                                        open.list.scroll_to_end();
-                                    }
-                                    cx.notify();
-                                }))
-                                .test_support(),
+                            on_activate(
+                                div()
+                                    .id("scroll-to-bottom")
+                                    .role(Role::Button)
+                                    .accessibility_id("scroll-to-bottom")
+                                    .aria_label(scroll_label)
+                                    .size(px(32.0))
+                                    .rounded_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .bg(palette.elevated)
+                                    .border_1()
+                                    .border_color(palette.border)
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(palette.hover))
+                                    .child(icon_element(
+                                        "arrow-down-s",
+                                        palette,
+                                        palette.foreground,
+                                    )),
+                                cx,
+                                |this, _, cx| this.scroll_to_tail(cx),
+                            )
+                            .test_support(),
                         ),
                 )
             })

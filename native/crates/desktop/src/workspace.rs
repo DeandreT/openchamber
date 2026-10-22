@@ -471,6 +471,19 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Resumes tail following in the selected transcript.
+    pub fn scroll_to_tail(&mut self, cx: &mut Context<Self>) {
+        if let Some(open) = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.open_sessions.get(id))
+        {
+            open.list.set_follow_mode(FollowMode::Tail);
+            open.list.scroll_to_end();
+        }
+        cx.notify();
+    }
+
     /// Stops the selected session's stream, keeping the text received so far.
     pub fn stop(&mut self, cx: &mut Context<Self>) {
         let Some(id) = self.selected.clone() else {
@@ -541,20 +554,22 @@ impl Workspace {
         }
     }
 
-    /// Records startup and switch markers once their frame has painted.
-    pub(crate) fn record_frame_markers(&mut self, window: &mut Window) {
+    /// Pending timing markers, emitted when the frame being built paints.
+    ///
+    /// Paint time ends the measured interval: the transcript the reader asked
+    /// for is in the frame. Compositor presentation comes after and is not
+    /// included, so an occluded window still reports its own work.
+    pub(crate) fn take_frame_markers(&mut self) -> Vec<(Marker, Option<Instant>)> {
+        let mut markers = Vec::new();
         if !self.startup_recorded {
             self.startup_recorded = true;
-            window.on_next_frame(|_, _| {
-                diagnostics::mark(Marker::ContentPainted, None, None);
-                diagnostics::mark(Marker::ComposerUsable, None, None);
-            });
+            markers.push((Marker::ContentPainted, None));
+            markers.push((Marker::ComposerUsable, None));
         }
         if let Some(started) = self.pending_switch.take() {
-            window.on_next_frame(move |_, _| {
-                diagnostics::mark(Marker::SwitchCompleted, Some(started.elapsed()), None);
-            });
+            markers.push((Marker::SwitchCompleted, Some(started)));
         }
+        markers
     }
 }
 

@@ -519,7 +519,12 @@ the process was spawned: the main process's own `[startup-performance]` marks
 (entry module, Electron ready, window created and shown, main module loaded,
 server start and ready, OpenCode ready, application navigation and load), and
 renderer readiness from `startup-probe.mjs`, a recorder installed into the
-application document before it runs and checked once per animation frame:
+application document before it runs and checked once per animation frame.
+The run attaches to the browser target as soon as the DevTools endpoint
+answers and sets `Target.setAutoAttach` with `waitForDebuggerOnStart`, so each
+new page waits until the recorder is installed. The first page of a Linux
+launch is already the application document, and a script added after the
+target appeared would only reach the next document. The recorder marks:
 
 - `reactMounted`: a child of `#root` carries React's fiber expando. `#root`
   holds the HTML splash `#initial-loading` from the first parsed byte, so a
@@ -581,6 +586,12 @@ start its own OpenCode on every launch, the way a user's login does;
 every launch to it through `OPENCODE_PORT`, which isolates OpenChamber's own
 startup from OpenCode's. `--fresh` wipes the home before every launch to
 measure the first launch after an install.
+
+On Linux the checks need a window that keeps drawing. Under Wayland a covered
+window receives no frame callbacks, so `requestAnimationFrame` stops and
+`usable` is never recorded; run the benchmark under X11 with
+`env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11`. Use `--opencode cold` there: the
+warm attachment does not reach a usable composer on Linux.
 
 `--screen` (macOS, with `--window-at`) samples the window's pixels from the
 screen and reports when they first changed and when they stopped changing.
@@ -1072,6 +1083,43 @@ be a measurement, never a disabled instrument.
   is invisible below its threshold. Compare the reporter's scale against yours
   on the dimension the code keys on before concluding a bug is absent.
 
+## Native desktop comparison
+
+`scripts/perf/native_bench.py` measures the native desktop in `native/` and,
+with `--electron-app`, the packaged Electron reference in the same session,
+alternating clients A/B then B/A. It needs the native release build
+(`bun run native:build`); the switch scenario also needs PyGObject with
+AT-SPI and `busctl`.
+
+```bash
+python3 scripts/perf/native_bench.py --runs 5 --warmup 1 \
+  --electron-app packages/electron/dist/linux-unpacked/openchamber
+```
+
+| Scenario | Native boundary | Electron boundary |
+|---|---|---|
+| startup | process spawn to the native `composer-usable` marker line on stdout | `profile:startup`'s `usable`, from spawn |
+| memory | whole process-tree PSS, private and RSS bytes after the startup settle and after the switch sequence | whole process-tree bytes at `--electron-memory-delay`, split by process role (`openchamber:renderer`, `opencode`, …) |
+| idle | process-tree CPU over `--idle-seconds` | the same |
+| switch | AT-SPI activation of sidebar rows to the paint of the revealed transcript, forward and reverse | not measured; `profile:switch` needs a seeded server |
+
+The native client launched here is the offline stage: synthetic data, no
+server and no OpenCode. Its rows carry that scope in the printed table and in
+the receipt, and they never establish a full-application startup or memory
+gain; that comparison needs the connected client against the same server.
+
+Both clients run under X11 by default (`--backend`), because a covered Wayland
+window stops drawing and handling accessibility actions. The switch scenario
+turns the session accessibility flag on for its runs and restores the previous
+value. AT-SPI applications are matched by process ID, never by name: another
+copy of the app on the bus would otherwise receive the clicks. Every launch is
+a new process group that the script stops and reaps; the receipt lists any
+process that outlived `SIGTERM`. The Electron launch uses `profile:startup`'s
+isolation (own home, data directory and Electron profile).
+
+Receipts go to `artifacts/native-bench-<time>/receipt.json` with the revision,
+binary hash, host, configuration, raw samples and summaries.
+
 ## Module Layout
 
 | File | Responsibility |
@@ -1097,4 +1145,5 @@ be a measurement, never a disabled instrument.
 | `trace-analysis.mjs` | Saved-trace analysis: pipeline per second, task classification, large style recalcs. |
 | `toggle-analysis.mjs` | `profile:toggle`'s pure analysis: refresh interval and frame pacing, per-window style/layout and forced layouts from the trace, renders per window, statistics per toggle type. |
 | `source-map.mjs` | Dependency-free source-map reader for the diagnostic build. |
+| `native_bench.py` | Native desktop measurements and the Electron comparison: startup, process-tree memory and CPU, AT-SPI session switching. |
 | `ablations/`, `controls/` | Injected scripts: ablations switch a suspect off, controls create the effect a metric must catch. |

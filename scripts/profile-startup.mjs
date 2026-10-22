@@ -264,6 +264,38 @@ const readStartupMarks = (mainLog, since) => {
   return { marks, codeStartedAt }
 }
 
+// Pauses every new page until the startup recorder is installed in it. The
+// first page of a launch can already be the application document (Linux shows
+// no splash navigation), so a script added after the target appears would
+// only reach the next document and miss this one.
+const installRecorderOnNewPages = async (port, source, deadline) => {
+  let browserUrl = null
+  while (!browserUrl && Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/version`)
+      if (response.ok) browserUrl = (await response.json()).webSocketDebuggerUrl ?? null
+    } catch {
+    }
+    if (!browserUrl) await wait(10)
+  }
+  if (!browserUrl) return null
+  const browser = new CdpClient(browserUrl)
+  await browser.connect()
+  browser.on("Target.attachedToTarget", ({ sessionId, targetInfo, waitingForDebugger }) => {
+    const install = targetInfo.type === "page"
+      ? browser.sendSession(sessionId, "Page.enable")
+        .then(() => browser.sendSession(sessionId, "Page.addScriptToEvaluateOnNewDocument", { source }))
+      : Promise.resolve()
+    install
+      .catch(() => {})
+      .finally(() => {
+        if (waitingForDebugger) browser.sendSession(sessionId, "Runtime.runIfWaitingForDebugger").catch(() => {})
+      })
+  })
+  await browser.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true })
+  return browser
+}
+
 const listTargets = async (port) => {
   try {
     const response = await fetch(`http://127.0.0.1:${port}/json`)
@@ -470,8 +502,10 @@ const launchOnce = async ({ build, run, layout, env, cdpPort, options, outputDir
   const window = []
   let error = null
   let recorder = null
+  let browser = null
 
   try {
+    browser = await installRecorderOnNewPages(cdpPort, buildStartupProbeSource({ modelLabel: options.modelLabel }), deadline)
     while (Date.now() < deadline) {
       if (exited) break
       if (!client) {
@@ -562,6 +596,7 @@ const launchOnce = async ({ build, run, layout, env, cdpPort, options, outputDir
     }
     client.close()
   }
+  browser?.close()
   const screen = sampler ? await sampler.stop() : null
   // Let the main log flush before reading it.
   await wait(300)
