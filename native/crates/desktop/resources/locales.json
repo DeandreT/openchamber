@@ -30,7 +30,17 @@
         "sessions.sidebar.session.untitled": "Untitled Session",
         "sessions.sidebar.session.subsessions.expand": "Expand subsessions",
         "sessions.sidebar.session.subsessions.collapse": "Collapse subsessions",
-        "sessions.sidebar.session.status.pinned": "Pinned session"
+        "sessions.sidebar.session.status.pinned": "Pinned session",
+        "chat.container.sessionLoadError.authDescription": "Your session expired, so the server refused the request. Log in and the conversation will load.",
+        "chat.container.sessionLoadError.description": "The conversation could not be fetched — the server may be offline or unreachable. Nothing is lost; retry once it is back.",
+        "chat.container.sessionLoadError.title": "Session could not be loaded",
+        "desktopHostSwitcher.startup.connectingTo": "Connecting to {host}...",
+        "onboarding.desktopRecovery.incompatibleServer.description": "The server at \"{host}\" is not running OpenChamber. Verify the address points to an OpenChamber server.",
+        "onboarding.desktopRecovery.remoteUnreachable.description": "Could not connect to \"{host}\". Check your network connection and verify the server address.",
+        "onboarding.remoteConnection.probe.authMessage": "Server requires authentication. You can still connect, but may need to provide credentials.",
+        "onboarding.remoteConnection.probe.incompatibleMessage": "Server is running OpenChamber but is not compatible with this app version. Update OpenChamber on the server, then try again.",
+        "opencodeCompatibility.reconnecting": "Reconnecting…",
+        "sessionAuth.error.incorrectPassword": "Incorrect password. Try again."
       }
     },
     "de": {
@@ -62,7 +72,17 @@
         "sessions.sidebar.session.untitled": "Unbenannte Sitzung",
         "sessions.sidebar.session.subsessions.expand": "Untersitzungen ausklappen",
         "sessions.sidebar.session.subsessions.collapse": "Untersitzungen einklappen",
-        "sessions.sidebar.session.status.pinned": "Angeheftete Sitzung"
+        "sessions.sidebar.session.status.pinned": "Angeheftete Sitzung",
+        "chat.container.sessionLoadError.authDescription": "Deine Sitzung ist abgelaufen, daher hat der Server die Anfrage abgelehnt. Melde dich an, dann wird die Unterhaltung geladen.",
+        "chat.container.sessionLoadError.description": "Die Unterhaltung konnte nicht geladen werden — der Server ist womöglich offline oder nicht erreichbar. Nichts ist verloren; versuche es erneut, sobald er wieder da ist.",
+        "chat.container.sessionLoadError.title": "Sitzung konnte nicht geladen werden",
+        "desktopHostSwitcher.startup.connectingTo": "Verbindung zu {host} herstellen...",
+        "onboarding.desktopRecovery.incompatibleServer.description": "Der Server unter \"{host}\" läuft nicht unter OpenChamber. Überprüfen Sie, ob die Adresse auf einen OpenChamber-Server zeigt.",
+        "onboarding.desktopRecovery.remoteUnreachable.description": "Konnte keine Verbindung zu \"{host}\" herstellen. Überprüfen Sie Ihre Netzwerkverbindung und die Serveradresse.",
+        "onboarding.remoteConnection.probe.authMessage": "Der Server erfordert Authentifizierung. Sie können sich immer noch verbinden, aber müssen möglicherweise Anmeldedaten bereitstellen.",
+        "onboarding.remoteConnection.probe.incompatibleMessage": "Der Server läuft unter OpenChamber, ist aber nicht kompatibel mit dieser App-Version. Aktualisieren Sie OpenChamber auf dem Server und versuchen Sie es dann erneut.",
+        "opencodeCompatibility.reconnecting": "Verbindung wird hergestellt…",
+        "sessionAuth.error.incorrectPassword": "Falsches Passwort. Bitte erneut versuchen."
       }
     },
     "fr": {
@@ -94,7 +114,17 @@
         "sessions.sidebar.session.untitled": "Session sans titre",
         "sessions.sidebar.session.subsessions.expand": "Développer les sous-sessions",
         "sessions.sidebar.session.subsessions.collapse": "Réduire les sous-sessions",
-        "sessions.sidebar.session.status.pinned": "Session épinglée"
+        "sessions.sidebar.session.status.pinned": "Session épinglée",
+        "chat.container.sessionLoadError.authDescription": "Votre session a expiré, le serveur a donc refusé la requête. Connectez-vous et la conversation se chargera.",
+        "chat.container.sessionLoadError.description": "Impossible de récupérer la conversation — le serveur est peut-être hors ligne ou injoignable. Rien n'est perdu ; réessayez quand il sera de retour.",
+        "chat.container.sessionLoadError.title": "Impossible de charger la session",
+        "desktopHostSwitcher.startup.connectingTo": "Connexion à {host}...",
+        "onboarding.desktopRecovery.incompatibleServer.description": "Le serveur « {host} » n'exécute pas OpenChamber. Vérifiez que l'adresse pointe vers un serveur OpenChamber.",
+        "onboarding.desktopRecovery.remoteUnreachable.description": "Impossible de se connecter à \"{host}\". Vérifiez votre connexion réseau et vérifiez l'adresse du serveur.",
+        "onboarding.remoteConnection.probe.authMessage": "Le serveur nécessite une authentification. Vous pouvez toujours vous connecter, mais vous devrez peut-être fournir des informations d'identification.",
+        "onboarding.remoteConnection.probe.incompatibleMessage": "Le serveur exécute OpenChamber mais n’est pas compatible avec cette version de l’application. Mettez OpenChamber à jour sur le serveur, puis réessayez.",
+        "opencodeCompatibility.reconnecting": "Reconnexion…",
+        "sessionAuth.error.incorrectPassword": "Mot de passe incorrect. Essayer à nouveau."
       }
     },
     "nl": {
@@ -126,7 +156,17 @@
         "sessions.sidebar.session.untitled": "Naamloze sessie",
         "sessions.sidebar.session.subsessions.expand": "Subsessies uitklappen",
         "sessions.sidebar.session.subsessions.collapse": "Subsessies inklappen",
-        "sessions.sidebar.session.status.pinned": "Vastgezette sessie"
+        "sessions.sidebar.session.status.pinned": "Vastgezette sessie",
+        "chat.container.sessionLoadError.authDescription": "Uw sessie is verlopen, waardoor de server het verzoek heeft geweigerd. Meld u aan en het gesprek wordt geladen.",
+        "chat.container.sessionLoadError.description": "Het gesprek kon niet worden opgehaald — de server is mogelijk offline of niet bereikbaar. Er gaat niets verloren; probeer het opnieuw zodra de server weer bereikbaar is.",
+        "chat.container.sessionLoadError.title": "Sessie kon niet worden geladen",
+        "desktopHostSwitcher.startup.connectingTo": "Verbinden met {host}...",
+        "onboarding.desktopRecovery.incompatibleServer.description": "De server op \"{host}\" draait geen OpenChamber. Controleer of het adres naar een OpenChamber-server verwijst.",
+        "onboarding.desktopRecovery.remoteUnreachable.description": "Kan geen verbinding maken met \"{host}\". Controleer uw netwerkverbinding en controleer het serveradres.",
+        "onboarding.remoteConnection.probe.authMessage": "Server vereist authenticatie. U kunt alsnog verbinden, maar moet dan mogelijk inloggegevens opgeven.",
+        "onboarding.remoteConnection.probe.incompatibleMessage": "De server draait OpenChamber, maar is niet compatibel met deze appversie. Werk OpenChamber op de server bij en probeer het opnieuw.",
+        "opencodeCompatibility.reconnecting": "Opnieuw verbinden…",
+        "sessionAuth.error.incorrectPassword": "Onjuist wachtwoord. Probeer het opnieuw."
       }
     },
     "zh-CN": {
@@ -158,7 +198,17 @@
         "sessions.sidebar.session.untitled": "未命名会话",
         "sessions.sidebar.session.subsessions.expand": "展开子会话",
         "sessions.sidebar.session.subsessions.collapse": "折叠子会话",
-        "sessions.sidebar.session.status.pinned": "已置顶会话"
+        "sessions.sidebar.session.status.pinned": "已置顶会话",
+        "chat.container.sessionLoadError.authDescription": "会话已过期，服务器拒绝了请求。登录后对话即会加载。",
+        "chat.container.sessionLoadError.description": "无法获取对话——服务器可能已关闭或无法访问。内容没有丢失；等它恢复后重试即可。",
+        "chat.container.sessionLoadError.title": "无法加载会话",
+        "desktopHostSwitcher.startup.connectingTo": "正在连接到 {host}...",
+        "onboarding.desktopRecovery.incompatibleServer.description": "“{host}” 上的服务器未运行 OpenChamber。请确认地址是否指向 OpenChamber 服务器。",
+        "onboarding.desktopRecovery.remoteUnreachable.description": "无法连接到 “{host}”。请检查网络连接并确认服务器地址。",
+        "onboarding.remoteConnection.probe.authMessage": "服务器需要身份验证。你仍可连接，但可能需要提供凭据。",
+        "onboarding.remoteConnection.probe.incompatibleMessage": "服务器正在运行 OpenChamber，但与此应用版本不兼容。请更新服务器上的 OpenChamber 后重试。",
+        "opencodeCompatibility.reconnecting": "正在重新连接…",
+        "sessionAuth.error.incorrectPassword": "密码错误，请重试。"
       }
     },
     "zh-TW": {
@@ -190,7 +240,17 @@
         "sessions.sidebar.session.untitled": "未命名會話",
         "sessions.sidebar.session.subsessions.expand": "展開子會話",
         "sessions.sidebar.session.subsessions.collapse": "摺疊子會話",
-        "sessions.sidebar.session.status.pinned": "已釘選會話"
+        "sessions.sidebar.session.status.pinned": "已釘選會話",
+        "chat.container.sessionLoadError.authDescription": "工作階段已過期，伺服器拒絕了請求。登入後對話即會載入。",
+        "chat.container.sessionLoadError.description": "無法取得對話——伺服器可能已關閉或無法連線。內容沒有遺失；待其恢復後再試即可。",
+        "chat.container.sessionLoadError.title": "無法載入工作階段",
+        "desktopHostSwitcher.startup.connectingTo": "正在連線到 {host}...",
+        "onboarding.desktopRecovery.incompatibleServer.description": "「{host}」上的伺服器未執行 OpenChamber。請確認位址是否指向 OpenChamber 伺服器。",
+        "onboarding.desktopRecovery.remoteUnreachable.description": "無法連線到「{host}」。請檢查網路連線並確認伺服器位址。",
+        "onboarding.remoteConnection.probe.authMessage": "伺服器需要身分驗證。你仍可連線，但可能需要提供憑證。",
+        "onboarding.remoteConnection.probe.incompatibleMessage": "伺服器正在執行 OpenChamber，但與此應用程式版本不相容。請更新伺服器上的 OpenChamber 後重試。",
+        "opencodeCompatibility.reconnecting": "正在重新連線…",
+        "sessionAuth.error.incorrectPassword": "密碼錯誤，請重試。"
       }
     },
     "uk": {
@@ -222,7 +282,17 @@
         "sessions.sidebar.session.untitled": "Сесія без назви",
         "sessions.sidebar.session.subsessions.expand": "Розгорнути підсесії",
         "sessions.sidebar.session.subsessions.collapse": "Згорнути підсесії",
-        "sessions.sidebar.session.status.pinned": "Закріплена сесія"
+        "sessions.sidebar.session.status.pinned": "Закріплена сесія",
+        "chat.container.sessionLoadError.authDescription": "Сесія завершилась, тож сервер відхилив запит. Увійди — і розмова завантажиться.",
+        "chat.container.sessionLoadError.description": "Не вдалося отримати розмову — сервер може бути вимкнений або недосяжний. Нічого не втрачено; спробуй знову, коли він повернеться.",
+        "chat.container.sessionLoadError.title": "Не вдалося завантажити сесію",
+        "desktopHostSwitcher.startup.connectingTo": "Підключення до {host}...",
+        "onboarding.desktopRecovery.incompatibleServer.description": "На сервері \"{host}\" не запущено OpenChamber. Перевірте, чи адреса вказує на сервер OpenChamber.",
+        "onboarding.desktopRecovery.remoteUnreachable.description": "Не вдалося підключитися до \"{host}\". Перевірте підключення до мережі та адресу сервера.",
+        "onboarding.remoteConnection.probe.authMessage": "Сервер вимагає автентифікації. Ви все ще можете підключитися, але, можливо, знадобиться надати облікові дані.",
+        "onboarding.remoteConnection.probe.incompatibleMessage": "Сервер працює з OpenChamber, але несумісний із цією версією застосунку. Оновіть OpenChamber на сервері та повторіть спробу.",
+        "opencodeCompatibility.reconnecting": "Повторне підключення…",
+        "sessionAuth.error.incorrectPassword": "Невірний пароль. Спробуйте знову."
       }
     },
     "es": {
@@ -254,7 +324,17 @@
         "sessions.sidebar.session.untitled": "Sesión sin título",
         "sessions.sidebar.session.subsessions.expand": "Expandir subsesiones",
         "sessions.sidebar.session.subsessions.collapse": "Colapsar subsesiones",
-        "sessions.sidebar.session.status.pinned": "Sesión anclada"
+        "sessions.sidebar.session.status.pinned": "Sesión anclada",
+        "chat.container.sessionLoadError.authDescription": "Tu sesión expiró, por lo que el servidor rechazó la solicitud. Inicia sesión y la conversación se cargará.",
+        "chat.container.sessionLoadError.description": "No se pudo obtener la conversación: puede que el servidor esté apagado o inaccesible. No se perdió nada; reintenta cuando vuelva.",
+        "chat.container.sessionLoadError.title": "No se pudo cargar la sesión",
+        "desktopHostSwitcher.startup.connectingTo": "Conectando a {host}...",
+        "onboarding.desktopRecovery.incompatibleServer.description": "El servidor en \"{host}\" no está ejecutando OpenChamber. Verifica que la dirección apunte a un servidor OpenChamber.",
+        "onboarding.desktopRecovery.remoteUnreachable.description": "No se pudo conectar a \"{host}\". Revisa tu conexión de red y verifica la dirección del servidor.",
+        "onboarding.remoteConnection.probe.authMessage": "El servidor requiere autenticación. Puedes conectarte aún así, pero puede que tengas que proporcionar credenciales.",
+        "onboarding.remoteConnection.probe.incompatibleMessage": "El servidor ejecuta OpenChamber pero no es compatible con esta versión de la app. Actualiza OpenChamber en el servidor y vuelve a intentarlo.",
+        "opencodeCompatibility.reconnecting": "Conectando de nuevo…",
+        "sessionAuth.error.incorrectPassword": "Contraseña incorrecta. Inténtalo de nuevo."
       }
     },
     "pt-BR": {
@@ -286,7 +366,17 @@
         "sessions.sidebar.session.untitled": "Sessão sem título",
         "sessions.sidebar.session.subsessions.expand": "Expandir subsessões",
         "sessions.sidebar.session.subsessions.collapse": "Recolher subsessões",
-        "sessions.sidebar.session.status.pinned": "Sessão fixada"
+        "sessions.sidebar.session.status.pinned": "Sessão fixada",
+        "chat.container.sessionLoadError.authDescription": "Sua sessão expirou, então o servidor recusou a solicitação. Entre e a conversa será carregada.",
+        "chat.container.sessionLoadError.description": "Não foi possível buscar a conversa — o servidor pode estar desligado ou inacessível. Nada foi perdido; tente novamente quando ele voltar.",
+        "chat.container.sessionLoadError.title": "Não foi possível carregar a sessão",
+        "desktopHostSwitcher.startup.connectingTo": "Conectando a {host}...",
+        "onboarding.desktopRecovery.incompatibleServer.description": "O servidor em \"{host}\" não está executando OpenChamber. Verifique se o endereço aponta para um servidor OpenChamber.",
+        "onboarding.desktopRecovery.remoteUnreachable.description": "Não foi possível conectar a \"{host}\". Revise sua conexão de rede e verifique o endereço do servidor.",
+        "onboarding.remoteConnection.probe.authMessage": "O servidor exige autenticação. Você ainda pode se conectar, mas talvez precise fornecer credenciais.",
+        "onboarding.remoteConnection.probe.incompatibleMessage": "O servidor está executando OpenChamber, mas não é compatível com esta versão do app. Atualize o OpenChamber no servidor e tente novamente.",
+        "opencodeCompatibility.reconnecting": "Reconectando…",
+        "sessionAuth.error.incorrectPassword": "Senha incorreta. Tente novamente."
       }
     },
     "ko": {
@@ -318,7 +408,17 @@
         "sessions.sidebar.session.untitled": "제목 없는 세션",
         "sessions.sidebar.session.subsessions.expand": "하위 세션 펼치기",
         "sessions.sidebar.session.subsessions.collapse": "하위 세션 접기",
-        "sessions.sidebar.session.status.pinned": "고정된 세션"
+        "sessions.sidebar.session.status.pinned": "고정된 세션",
+        "chat.container.sessionLoadError.authDescription": "세션이 만료되어 서버가 요청을 거부했습니다. 로그인하면 대화가 로드됩니다.",
+        "chat.container.sessionLoadError.description": "대화를 가져오지 못했습니다. 서버가 꺼져 있거나 연결할 수 없는 상태일 수 있습니다. 데이터는 사라지지 않았으니 복구되면 다시 시도하세요.",
+        "chat.container.sessionLoadError.title": "세션을 불러올 수 없습니다",
+        "desktopHostSwitcher.startup.connectingTo": "{host}에 연결 중…",
+        "onboarding.desktopRecovery.incompatibleServer.description": "\"{host}\"의 서버에서 OpenChamber가 실행 중이 아닙니다. 주소가 OpenChamber 서버를 가리키는지 확인하세요.",
+        "onboarding.desktopRecovery.remoteUnreachable.description": "\"{host}\"에 연결할 수 없습니다. 네트워크 연결과 서버 주소를 확인하세요.",
+        "onboarding.remoteConnection.probe.authMessage": "서버에 인증이 필요합니다. 연결은 가능하지만 자격 증명을 입력해야 할 수 있습니다.",
+        "onboarding.remoteConnection.probe.incompatibleMessage": "서버에서 OpenChamber가 실행 중이지만 이 앱 버전과 호환되지 않습니다. 서버의 OpenChamber를 업데이트한 후 다시 시도하세요.",
+        "opencodeCompatibility.reconnecting": "다시 연결 중…",
+        "sessionAuth.error.incorrectPassword": "비밀번호가 올바르지 않습니다. 다시 시도하세요."
       }
     },
     "pl": {
@@ -350,7 +450,17 @@
         "sessions.sidebar.session.untitled": "Nienazwana Sesja",
         "sessions.sidebar.session.subsessions.expand": "Rozwiń pod-sesje",
         "sessions.sidebar.session.subsessions.collapse": "Zwiń pod-sesje",
-        "sessions.sidebar.session.status.pinned": "Przypięta sesja"
+        "sessions.sidebar.session.status.pinned": "Przypięta sesja",
+        "chat.container.sessionLoadError.authDescription": "Sesja wygasła, więc serwer odrzucił żądanie. Zaloguj się, a rozmowa się wczyta.",
+        "chat.container.sessionLoadError.description": "Nie udało się pobrać rozmowy — serwer może być wyłączony lub nieosiągalny. Nic nie przepadło; spróbuj ponownie, gdy wróci.",
+        "chat.container.sessionLoadError.title": "Nie udało się wczytać sesji",
+        "desktopHostSwitcher.startup.connectingTo": "Łączenie z {host}...",
+        "onboarding.desktopRecovery.incompatibleServer.description": "Serwer pod adresem \"{host}\" nie uruchamia OpenChamber. Zweryfikuj czy adres wskazuje na serwer OpenChamber.",
+        "onboarding.desktopRecovery.remoteUnreachable.description": "Nie można było połączyć się z \"{host}\". Sprawdź połączenie sieciowe i zweryfikuj adres serwera.",
+        "onboarding.remoteConnection.probe.authMessage": "Serwer wymaga uwierzytelnienia. Nadal możesz się połączyć, ale może być konieczne podanie danych uwierzytelniających.",
+        "onboarding.remoteConnection.probe.incompatibleMessage": "Serwer uruchamia OpenChamber, ale nie jest zgodny z tą wersją aplikacji. Zaktualizuj OpenChamber na serwerze i spróbuj ponownie.",
+        "opencodeCompatibility.reconnecting": "Ponowne łączenie…",
+        "sessionAuth.error.incorrectPassword": "Nieprawidłowe hasło. Spróbuj ponownie."
       }
     },
     "ja": {
@@ -382,7 +492,17 @@
         "sessions.sidebar.session.untitled": "無題のセッション",
         "sessions.sidebar.session.subsessions.expand": "サブセッションを展開",
         "sessions.sidebar.session.subsessions.collapse": "サブセッションを折りたたむ",
-        "sessions.sidebar.session.status.pinned": "ピン留めされたセッション"
+        "sessions.sidebar.session.status.pinned": "ピン留めされたセッション",
+        "chat.container.sessionLoadError.authDescription": "セッションの有効期限が切れたため、サーバーがリクエストを拒否しました。ログインすると会話が読み込まれます。",
+        "chat.container.sessionLoadError.description": "会話を取得できませんでした。サーバーが停止中か到達できない可能性があります。データは失われていません。復旧後に再試行してください。",
+        "chat.container.sessionLoadError.title": "セッションを読み込めませんでした",
+        "desktopHostSwitcher.startup.connectingTo": "{host}に接続中...",
+        "onboarding.desktopRecovery.incompatibleServer.description": "「{host}」のサーバーはOpenChamberを実行していません。アドレスがOpenChamberサーバーを指していることを確認してください。",
+        "onboarding.desktopRecovery.remoteUnreachable.description": "「{host}」に接続できませんでした。ネットワーク接続を確認し、サーバーアドレスを確認してください。",
+        "onboarding.remoteConnection.probe.authMessage": "サーバーは認証を必要とします。接続は可能ですが、認証情報の提供が必要な場合があります。",
+        "onboarding.remoteConnection.probe.incompatibleMessage": "サーバーはOpenChamberを実行していますが、このアプリバージョンと互換性がありません。サーバーのOpenChamberを更新してから再試行してください。",
+        "opencodeCompatibility.reconnecting": "再接続中…",
+        "sessionAuth.error.incorrectPassword": "パスワードが間違っています。もう一度お試しください。"
       }
     },
     "tr": {
@@ -414,7 +534,17 @@
         "sessions.sidebar.session.untitled": "Adsız Session",
         "sessions.sidebar.session.subsessions.expand": "Alt session'ları genişlet",
         "sessions.sidebar.session.subsessions.collapse": "Alt session'ları daralt",
-        "sessions.sidebar.session.status.pinned": "Sabitlenmiş session"
+        "sessions.sidebar.session.status.pinned": "Sabitlenmiş session",
+        "chat.container.sessionLoadError.authDescription": "Session'ınızın süresi doldu, bu yüzden sunucu isteği reddetti. Oturum açın, sohbet yüklenecek.",
+        "chat.container.sessionLoadError.description": "Bağlantıyı kontrol et ve bu session'ı yeniden yüklemeyi dene.",
+        "chat.container.sessionLoadError.title": "Session yüklenemedi",
+        "desktopHostSwitcher.startup.connectingTo": "{host} adresine bağlanılıyor...",
+        "onboarding.desktopRecovery.incompatibleServer.description": "\"{host}\" adresindeki sunucu OpenChamber çalıştırmıyor. Adresin bir OpenChamber sunucusuna işaret ettiğini doğrulayın.",
+        "onboarding.desktopRecovery.remoteUnreachable.description": "\"{host}\" adresine bağlanılamadı. Ağ bağlantınızı kontrol edin ve sunucu adresini doğrulayın.",
+        "onboarding.remoteConnection.probe.authMessage": "Sunucu kimlik doğrulaması gerektiriyor. Bağlanabilirsiniz ancak kimlik bilgisi girmeniz gerekebilir.",
+        "onboarding.remoteConnection.probe.incompatibleMessage": "Sunucu OpenChamber çalıştırıyor ancak bu uygulama sürümüyle uyumlu değil. Sunucudaki OpenChamber'ı güncelleyin, ardından yeniden deneyin.",
+        "opencodeCompatibility.reconnecting": "Yeniden bağlanılıyor…",
+        "sessionAuth.error.incorrectPassword": "Şifre hatalı. Tekrar deneyin."
       }
     },
     "ar": {
@@ -446,7 +576,17 @@
         "sessions.sidebar.session.untitled": "جلسة بلا عنوان",
         "sessions.sidebar.session.subsessions.expand": "توسيع الجلسات الفرعية",
         "sessions.sidebar.session.subsessions.collapse": "طي الجلسات الفرعية",
-        "sessions.sidebar.session.status.pinned": "جلسة مثبّتة"
+        "sessions.sidebar.session.status.pinned": "جلسة مثبّتة",
+        "chat.container.sessionLoadError.authDescription": "انتهت صلاحية جلستك، فرفض الخادم الطلب. سجّل الدخول وستُحمَّل المحادثة.",
+        "chat.container.sessionLoadError.description": "تعذّر جلب المحادثة — قد يكون الخادم غير متصل أو لا يمكن الوصول إليه. لم يُفقد شيء؛ أعد المحاولة عند عودته.",
+        "chat.container.sessionLoadError.title": "تعذّر تحميل الجلسة",
+        "desktopHostSwitcher.startup.connectingTo": "جارٍ الاتصال بـ {host}…",
+        "onboarding.desktopRecovery.incompatibleServer.description": "الخادم على \"{host}\" لا يشغّل OpenChamber. تحقق من أن العنوان يشير إلى خادم OpenChamber.",
+        "onboarding.desktopRecovery.remoteUnreachable.description": "تعذّر الاتصال بـ \"{host}\". تحقق من اتصالك بالشبكة ومن عنوان الخادم.",
+        "onboarding.remoteConnection.probe.authMessage": "يتطلب الخادم المصادقة. لا يزال بإمكانك الاتصال، لكن قد تحتاج إلى تقديم بيانات الاعتماد.",
+        "onboarding.remoteConnection.probe.incompatibleMessage": "يعمل OpenChamber على الخادم لكنه غير متوافق مع إصدار هذا التطبيق. حدّث OpenChamber على الخادم ثم أعد المحاولة.",
+        "opencodeCompatibility.reconnecting": "جارٍ إعادة الاتصال…",
+        "sessionAuth.error.incorrectPassword": "كلمة المرور غير صحيحة. حاول مجددًا."
       }
     },
     "he": {
@@ -478,7 +618,17 @@
         "sessions.sidebar.session.untitled": "הפעלה ללא שם",
         "sessions.sidebar.session.subsessions.expand": "הרחב הפעלות משנה",
         "sessions.sidebar.session.subsessions.collapse": "כווץ הפעלות משנה",
-        "sessions.sidebar.session.status.pinned": "הפעלה מוצמדת"
+        "sessions.sidebar.session.status.pinned": "הפעלה מוצמדת",
+        "chat.container.sessionLoadError.authDescription": "תוקף ההתחברות פג, ולכן השרת דחה את הבקשה. אחרי התחברות השיחה תיטען.",
+        "chat.container.sessionLoadError.description": "לא ניתן היה להביא את השיחה — ייתכן שהשרת לא מחובר או לא זמין. שום דבר לא אבד; אפשר לנסות שוב כשהוא יחזור.",
+        "chat.container.sessionLoadError.title": "לא ניתן היה לטעון את ההפעלה",
+        "desktopHostSwitcher.startup.connectingTo": "מתחבר אל {host}…",
+        "onboarding.desktopRecovery.incompatibleServer.description": "בשרת שבכתובת \"{host}\" לא פועל OpenChamber. יש לוודא שהכתובת מפנה לשרת OpenChamber.",
+        "onboarding.desktopRecovery.remoteUnreachable.description": "לא ניתן היה להתחבר אל \"{host}\". יש לבדוק את חיבור הרשת ואת כתובת השרת.",
+        "onboarding.remoteConnection.probe.authMessage": "השרת דורש אימות. עדיין אפשר להתחבר, אבל ייתכן שיהיה צורך לספק פרטי התחברות.",
+        "onboarding.remoteConnection.probe.incompatibleMessage": "בשרת פועל OpenChamber, אבל הוא לא תואם לגרסה הזו של האפליקציה. יש לעדכן את OpenChamber בשרת ולנסות שוב.",
+        "opencodeCompatibility.reconnecting": "מתחבר מחדש…",
+        "sessionAuth.error.incorrectPassword": "סיסמה שגויה. אפשר לנסות שוב."
       }
     }
   }

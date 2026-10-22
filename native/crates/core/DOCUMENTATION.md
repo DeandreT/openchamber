@@ -17,6 +17,12 @@ rendering asks for a projection and dispatches an action.
   rows each mutation touched. User and assistant messages carry parts; every
   other OpenCode record (synthetic, system, skill, shell, compaction, switched
   agent, model or location, idle) is a notice with one line of text.
+- `session_index.rs` ports the global session list of
+  `useGlobalSessionsStore.ts` and `session-event-router.ts`: active and
+  archived records, page merges, complete loads and live session changes.
+- `ownership.rs` also derives configured projects from settings paths and a
+  project's linked worktrees from the server's listing, as the web client
+  does.
 - `draft.rs` and `scroll_memory.rs` hold client-owned state keyed by the
   runtime and the session or draft identity captured when it was created.
 - `synthetic.rs` produces the documented offline workloads. It is part of the
@@ -38,6 +44,24 @@ crate owns wire parsing and authority checks, and hands the core records and
 - Server order is transcript order. Identifier spelling never reorders rows.
   An unchanged event returns `TranscriptChange::Unchanged`, and an event for an
   unknown message returns `NeedsReconcile`.
+- Every change to the session index records a mutation revision, removals
+  included even when the session was already absent. A load never overrides a
+  session changed after the revision it started at, so a delayed page cannot
+  restore a deleted session or move one back. Only the newest load completes,
+  and only a complete load grants full-list authority.
+- A patch needs a listed record, and a change older than the held record is
+  ignored. An update that moves only the session's recency waits until its
+  turn settles, so streaming never rebuilds the sidebar.
+- `Transcript::materialize` merges a history read the way
+  `materializeSessionSnapshots` does: held messages win unless the read
+  reports a completion they lack, streamed text that runs ahead of the read
+  stays, finished tool calls never return to an active state, and messages
+  changed after the read was requested follow it. Held messages the read
+  omits stay when they precede its oldest message (older pages) and go when
+  they follow it (deletions).
+- A delta for a part the transcript never saw start returns
+  `NeedsReconcile` instead of building text without its beginning. The first
+  delta after a full-text snapshot appends only what the snapshot lacks.
 - A tool result a history page left out (`PartContent::Tool::elided`) never
   replaces the whole result a transcript holds for the same call and status,
   through `replace` or `push`. A live transition with output, or the whole

@@ -1,8 +1,9 @@
-//! The offline workspace: synthetic sessions, selection, drafts, transcripts
-//! and the deterministic response stream.
+//! The workspace: sessions, topology, selection, drafts and transcripts from
+//! either deterministic synthetic data or one configured OpenChamber server.
 //!
 //! This entity owns application lifetime after `main` opens the window.
-//! Dropping it drops every playback task, which cancels the streams.
+//! Dropping it drops every playback task and the server connection, which
+//! cancels streams, requests and the event subscription.
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -13,13 +14,17 @@ use gpui_kit::{
     ListState, Subscription, Task, Window, px,
 };
 use openchamber_native_core::chat_projection;
+use openchamber_native_core::chat_roots::ChatRoots;
 use openchamber_native_core::draft::{Draft, DraftKey, DraftStore, DraftTarget};
 use openchamber_native_core::grouping::{self, GroupingContext, WorktreeSortOrder};
 use openchamber_native_core::ids::{MessageId, PartId, RuntimeId, SessionId};
 use openchamber_native_core::ordering::{ActivityPhase, OrderingMutation, SessionOrdering};
-use openchamber_native_core::ownership::{OwnershipInputs, SessionOwnershipIndex, Surface};
+use openchamber_native_core::ownership::{
+    ConfiguredProject, OwnershipInputs, ProjectWorktrees, SessionOwnershipIndex, Surface,
+};
 use openchamber_native_core::scroll_memory::{ScrollKey, ScrollMemory, ScrollPosition};
-use openchamber_native_core::session::SessionRecord;
+use openchamber_native_core::session::{LiveStatus, SessionRecord};
+use openchamber_native_core::session_index::SessionIndex;
 use openchamber_native_core::sidebar_rows::{self, SidebarInputs, SidebarState};
 use openchamber_native_core::synthetic::{
     self, ConversationShape, ResponseScript, SyntheticWorkspace, WorkloadSize,
@@ -28,6 +33,7 @@ use openchamber_native_core::transcript::{
     Message, MessageInfo, Part, Role, Transcript, TranscriptChange, TranscriptEvent,
 };
 
+use crate::connection::{Connection, ConnectionFailure};
 use crate::diagnostics::{self, Marker};
 use crate::locale;
 use crate::sidebar_item::SidebarItem;
@@ -38,6 +44,34 @@ const CHUNK_INTERVAL: Duration = Duration::from_millis(24);
 const TRANSCRIPT_OVERDRAW: f32 = 800.0;
 const SIDEBAR_OVERDRAW: f32 = 300.0;
 
+/// Where the workspace's data comes from.
+#[derive(Debug)]
+pub enum Source {
+    /// Deterministic synthetic data; no network or provider calls.
+    Synthetic(WorkloadSize),
+    /// One explicitly configured OpenChamber server, not yet connected.
+    Server(Box<Connection>),
+}
+
+/// Projects, worktrees and Chats roots: what display ownership needs.
+#[derive(Debug, Default)]
+pub struct Topology {
+    pub projects: Vec<ConfiguredProject>,
+    pub worktrees: Vec<ProjectWorktrees>,
+    /// Absent until the server answered; Chats classification needs it.
+    pub chat_roots: Option<ChatRoots>,
+}
+
+/// Where a visited session's history read stands.
+pub enum History {
+    /// The transcript holds an authoritative read (or synthetic data).
+    Complete,
+    /// A read is in flight; dropping the task cancels it.
+    Loading { _read: Task<()> },
+    /// The last read failed; the transcript keeps what it held.
+    Failed(ConnectionFailure),
+}
+
 /// A visited session's transcript and its retained scroll state.
 ///
 /// The list state stays alive while the client runs, so returning to a
@@ -45,25 +79,30 @@ const SIDEBAR_OVERDRAW: f32 = 300.0;
 pub struct OpenSession {
     pub transcript: Transcript,
     pub list: ListState,
+    pub history: History,
+    /// The cursor of the next older page, when the server has one.
+    pub older: Option<String>,
 }
 
 pub struct Workspace {
-    pub(crate) data: SyntheticWorkspace,
-    pub(crate) active_sessions: Vec<SessionRecord>,
-    pub(crate) archived_sessions: Vec<SessionRecord>,
-    session_index: HashMap<SessionId, usize>,
-    runtime: RuntimeId,
-    ordering: SessionOrdering,
+    pub(crate) topology: Topology,
+    pub(crate) sessions: SessionIndex,
+    pub(crate) runtime: RuntimeId,
+    pub(crate) ordering: SessionOrdering,
     pub(crate) sidebar_state: SidebarState,
     pub(crate) sidebar_items: Vec<SidebarItem>,
     pub(crate) sidebar_list: ListState,
     pub(crate) selected: Option<SessionId>,
     pub(crate) open_sessions: HashMap<SessionId, OpenSession>,
-    drafts: DraftStore,
-    scroll_memory: ScrollMemory,
+    pub(crate) drafts: DraftStore,
+    pub(crate) scroll_memory: ScrollMemory,
     pub(crate) composer: Entity<TextareaState>,
-    composer_key: Option<DraftKey>,
+    pub(crate) composer_key: Option<DraftKey>,
     playback: HashMap<SessionId, Task<()>>,
+    /// Running state per session, from the live channel only.
+    pub(crate) live_status: HashMap<SessionId, LiveStatus>,
+    /// Present when the source is a server.
+    pub(crate) connection: Option<Connection>,
     prompt_sequence: usize,
     pub(crate) focus_handle: FocusHandle,
     pending_switch: Option<Instant>,
@@ -72,18 +111,25 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    pub fn new(size: WorkloadSize, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let data = SyntheticWorkspace::new(size);
-        let (archived_sessions, active_sessions): (Vec<SessionRecord>, Vec<SessionRecord>) = data
-            .sessions
-            .iter()
-            .cloned()
-            .partition(SessionRecord::is_archived);
-        let session_index = active_sessions
-            .iter()
-            .enumerate()
-            .map(|(index, session)| (session.id.clone(), index))
-            .collect();
+    pub fn new(source: Source, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let mut sessions = SessionIndex::new();
+        let (topology, runtime, connection) = match source {
+            Source::Synthetic(size) => {
+                let data = SyntheticWorkspace::new(size);
+                let ticket = sessions.begin_load();
+                let _ = sessions.complete_load(ticket, data.sessions);
+                let topology = Topology {
+                    projects: data.projects,
+                    worktrees: data.worktrees,
+                    chat_roots: Some(data.chat_roots),
+                };
+                (topology, RuntimeId::from("synthetic"), None)
+            }
+            Source::Server(connection) => {
+                let runtime = RuntimeId::new(connection.config.endpoint.as_str().to_owned());
+                (Topology::default(), runtime, Some(*connection))
+            }
+        };
         let placeholder = locale::strings(cx).get("chat.chatInput.placeholder.chat");
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
@@ -94,11 +140,9 @@ impl Workspace {
         let subscription = cx.subscribe_in(&composer, window, Self::on_composer_event);
 
         let mut workspace = Self {
-            data,
-            active_sessions,
-            archived_sessions,
-            session_index,
-            runtime: RuntimeId::from("synthetic"),
+            topology,
+            sessions,
+            runtime,
             ordering: SessionOrdering::new(),
             sidebar_state: SidebarState::default(),
             sidebar_items: Vec::new(),
@@ -110,6 +154,8 @@ impl Workspace {
             composer,
             composer_key: None,
             playback: HashMap::new(),
+            live_status: HashMap::new(),
+            connection,
             prompt_sequence: 0,
             focus_handle: cx.focus_handle(),
             pending_switch: None,
@@ -120,7 +166,15 @@ impl Workspace {
         if let Some(first) = workspace.first_session_row() {
             workspace.select_session(first, window, cx);
         }
+        if workspace.connection.is_some() {
+            workspace.connect(window, cx);
+        }
         workspace
+    }
+
+    /// Whether the workspace shows synthetic data.
+    pub fn is_synthetic(&self) -> bool {
+        self.connection.is_none()
     }
 
     /// The selected session's record.
@@ -130,13 +184,19 @@ impl Workspace {
     }
 
     pub fn session(&self, id: &SessionId) -> Option<&SessionRecord> {
-        self.session_index
+        self.sessions
             .get(id)
-            .and_then(|index| self.active_sessions.get(*index))
+            .filter(|session| !session.is_archived())
     }
 
+    /// Whether the session is producing output: synthetic playback, or a
+    /// running turn the live channel reported.
     pub fn is_streaming(&self, id: &SessionId) -> bool {
         self.playback.contains_key(id)
+            || matches!(
+                self.live_status.get(id),
+                Some(LiveStatus::Busy | LiveStatus::Retry)
+            )
     }
 
     /// Rebuilds the sidebar rows from the core projection.
@@ -146,9 +206,9 @@ impl Workspace {
     pub fn rebuild_sidebar(&mut self) {
         let started = Instant::now();
         let items = build_sidebar_items(
-            &self.data,
-            &self.active_sessions,
-            &self.archived_sessions,
+            &self.topology,
+            self.sessions.active(),
+            self.sessions.archived(),
             &self.sidebar_state,
             &mut self.ordering,
         );
@@ -172,7 +232,7 @@ impl Workspace {
         diagnostics::mark(Marker::SidebarRebuilt, Some(elapsed), Some(count));
     }
 
-    fn first_session_row(&self) -> Option<SessionId> {
+    pub(crate) fn first_session_row(&self) -> Option<SessionId> {
         self.sidebar_items.iter().find_map(|item| match item {
             SidebarItem::Session { session_id, .. } => Some(session_id.clone()),
             _ => None,
@@ -200,7 +260,7 @@ impl Workspace {
         self.save_composer_draft(cx);
         self.save_scroll_position();
         self.selected = Some(id.clone());
-        self.ensure_open(&id);
+        self.ensure_open(&id, cx);
         self.composer_key = next_key;
         self.restore_composer_draft(window, cx);
         self.focus_composer(window, cx);
@@ -285,14 +345,18 @@ impl Workspace {
         cx.notify();
     }
 
-    fn ensure_open(&mut self, id: &SessionId) {
+    fn ensure_open(&mut self, id: &SessionId, cx: &mut Context<Self>) {
         if self.open_sessions.contains_key(id) {
             return;
         }
-        let transcript = Transcript::from_history(synthetic::conversation(
-            id,
-            ConversationShape::for_session(id),
-        ));
+        let transcript = if self.is_synthetic() {
+            Transcript::from_history(synthetic::conversation(
+                id,
+                ConversationShape::for_session(id),
+            ))
+        } else {
+            Transcript::new()
+        };
         let list = ListState::new(
             transcript.len(),
             ListAlignment::Top,
@@ -317,8 +381,18 @@ impl Workspace {
                 }
             }
         }
-        self.open_sessions
-            .insert(id.clone(), OpenSession { transcript, list });
+        self.open_sessions.insert(
+            id.clone(),
+            OpenSession {
+                transcript,
+                list,
+                history: History::Complete,
+                older: None,
+            },
+        );
+        if !self.is_synthetic() {
+            self.load_history(id, cx);
+        }
     }
 
     fn save_scroll_position(&mut self) {
@@ -392,7 +466,13 @@ impl Workspace {
     }
 
     /// Sends the composer text to the selected session's synthetic stream.
+    ///
+    /// A server connection is read-only until prompt submission has its
+    /// error and reconciliation paths; the draft stays in the composer.
     pub fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.is_synthetic() {
+            return;
+        }
         let Some(session_id) = self.selected.clone() else {
             return;
         };
@@ -543,7 +623,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn observe_phase(&mut self, session_id: &SessionId, phase: ActivityPhase, now: i64) {
+    pub(crate) fn observe_phase(&mut self, session_id: &SessionId, phase: ActivityPhase, now: i64) {
         let changed = self.ordering.apply(
             &[OrderingMutation::Observe {
                 session_id: session_id.clone(),
@@ -582,7 +662,7 @@ fn synthetic_clock(sequence: usize) -> i64 {
 
 /// Runs the core projection and snapshots its rows for rendering.
 fn build_sidebar_items(
-    data: &SyntheticWorkspace,
+    topology: &Topology,
     active: &[SessionRecord],
     archived: &[SessionRecord],
     state: &SidebarState,
@@ -591,13 +671,17 @@ fn build_sidebar_items(
     let ownership = SessionOwnershipIndex::build(&OwnershipInputs {
         sessions: active,
         archived_sessions: archived,
-        projects: &data.projects,
-        worktrees: &data.worktrees,
+        projects: &topology.projects,
+        worktrees: &topology.worktrees,
         surface: Surface::Desktop,
         ..OwnershipInputs::default()
     });
-    let chats =
-        chat_projection::project(active, &ownership, Some(&data.chat_roots), Surface::Desktop);
+    let chats = chat_projection::project(
+        active,
+        &ownership,
+        topology.chat_roots.as_ref(),
+        Surface::Desktop,
+    );
     let branches = HashMap::new();
     let context = GroupingContext {
         ownership: &ownership,
@@ -606,8 +690,8 @@ fn build_sidebar_items(
         worktree_sort: WorktreeSortOrder::Manual,
         branches: &branches,
     };
-    let mut sections = Vec::with_capacity(data.projects.len());
-    for project in &data.projects {
+    let mut sections = Vec::with_capacity(topology.projects.len());
+    for project in &topology.projects {
         let mut sessions: Vec<&SessionRecord> = chats
             .project_sessions_by_project
             .get(&project.id)
@@ -621,7 +705,7 @@ fn build_sidebar_items(
                 right.overlay.pinned_at.is_some(),
             )
         });
-        let worktrees = data
+        let worktrees = topology
             .worktrees
             .iter()
             .find(|entry| entry.project_path == project.path)
@@ -631,7 +715,7 @@ fn build_sidebar_items(
             project, &sessions, worktrees, &context, ordering,
         ));
     }
-    let chat_group = grouping::build_chat_group(&chats.chat_sessions, Some(&data.chat_roots));
+    let chat_group = grouping::build_chat_group(&chats.chat_sessions, topology.chat_roots.as_ref());
     let (pinned, work) = sidebar_rows::zone_items(&sections, chat_group.as_ref(), ordering);
     let group_status = HashMap::new();
     let model = sidebar_rows::build(
@@ -647,7 +731,7 @@ fn build_sidebar_items(
         },
         ordering,
     );
-    let project_paths: HashMap<_, _> = data
+    let project_paths: HashMap<_, _> = topology
         .projects
         .iter()
         .map(|project| (&project.id, project.path.as_str()))
@@ -671,8 +755,13 @@ mod tests {
             .iter()
             .cloned()
             .partition(SessionRecord::is_archived);
+        let topology = Topology {
+            projects: data.projects,
+            worktrees: data.worktrees,
+            chat_roots: Some(data.chat_roots),
+        };
         let items = build_sidebar_items(
-            &data,
+            &topology,
             &active,
             &archived,
             &SidebarState::default(),

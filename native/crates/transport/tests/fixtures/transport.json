@@ -1441,5 +1441,447 @@
         "elided": null
       }
     ]
+  },
+  "sessionEvents": {
+    "recorded": [
+      {
+        "type": "created",
+        "session": {
+          "id": "ses_e9b49c443ffefXcWWPhCOga6nH",
+          "parentId": null,
+          "directory": "/home/synthetic/project",
+          "title": "native: recorded",
+          "created": 1792691026944,
+          "updated": 1792691026944,
+          "idle": null,
+          "archived": null,
+          "pinned": false,
+          "inWork": false,
+          "btw": false
+        }
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "updated": 1792691030427
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "updated": 1792691030504
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "status": "busy"
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "status": "busy"
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "overlay": {
+          "pinned": false,
+          "inWork": true,
+          "btw": false
+        }
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "overlay": {
+          "pinned": false,
+          "inWork": true,
+          "btw": false
+        }
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "updated": 1792691031613
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "updated": 1792691031618,
+        "idle": 1792691031618
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "status": "idle"
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "status": "idle"
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "status": "idle"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "updated": 1792691034323
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "updated": 1792691034352
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "status": "busy"
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "status": "busy"
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "status": "busy"
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "updated": 1792691035666
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "updated": 1792691035674,
+        "idle": 1792691035674
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "status": "idle"
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "status": "idle"
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "status": "idle"
+      }
+    ],
+    "tools": [
+      {
+        "type": "created",
+        "session": {
+          "id": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+          "parentId": null,
+          "directory": "/home/synthetic/project",
+          "title": "native: tools",
+          "created": 1792691929630,
+          "updated": 1792691929630,
+          "idle": null,
+          "archived": null,
+          "pinned": false,
+          "inWork": false,
+          "btw": false
+        }
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691930922
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691930955
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "overlay": {
+          "pinned": false,
+          "inWork": true,
+          "btw": false
+        }
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "overlay": {
+          "pinned": false,
+          "inWork": true,
+          "btw": false
+        }
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691931672
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691932085
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691932425
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691932780
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691933131
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691933488
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691933824
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691934152
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691934481
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691934794
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691935132
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691935513
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691935878
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691936241
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691936608
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691937060
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691937372
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691937682
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691937980
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691938313
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "busy"
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691957538
+      },
+      {
+        "type": "patched",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "updated": 1792691957540,
+        "idle": 1792691957540
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "idle"
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "idle"
+      },
+      {
+        "type": "status",
+        "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
+        "status": "idle"
+      }
+    ]
   }
 }

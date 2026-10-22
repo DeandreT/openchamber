@@ -39,7 +39,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = match std::env::var("OPENCHAMBER_NATIVE_PASSWORD") {
         Ok(password) => ServerClient::new(endpoint, anonymous.login(&password).await?)?,
         Err(_) => anonymous,
-    };
+    }
+    .with_identity(&identity);
 
     let sessions = client.all_sessions().await?;
     let archived = sessions
@@ -64,15 +65,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let roots = client.chat_roots().await?;
     println!("chat roots known: {}", roots.is_some());
+    let projects = client.projects().await?;
+    let paths: Vec<String> = projects
+        .iter()
+        .map(|project| project.path.clone())
+        .collect();
+    let worktrees = client.project_worktrees(&paths).await?;
+    let listed = worktrees
+        .iter()
+        .filter(|read| read.worktrees.is_some())
+        .count();
+    let linked: usize = worktrees
+        .iter()
+        .filter_map(|read| read.worktrees.as_ref())
+        .map(Vec::len)
+        .sum();
+    println!(
+        "projects: {}, worktree lists: {listed}, linked worktrees: {linked}",
+        projects.len()
+    );
 
     let mut stream = EventStream::subscribe(client);
     let mut counts: BTreeMap<String, usize> = BTreeMap::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
     while let Ok(Some(item)) = tokio::time::timeout_at(deadline, stream.next()).await {
         let key = match item {
-            StreamItem::Connected { replay_reset } => {
-                format!("connected (replay reset {replay_reset})")
-            }
+            StreamItem::Connected { resumed } => format!("connected (resumed {resumed})"),
             StreamItem::Disconnected(error) => format!("disconnected: {error}"),
             StreamItem::Events(events) => {
                 for event in events {

@@ -7,7 +7,7 @@
 
 use openchamber_native_core::ids::{MessageId, OpenCodeProjectId, PartId, SessionId};
 use openchamber_native_core::session::{
-    SessionKind, SessionOverlay, SessionRecord, SessionTime as CoreSessionTime,
+    MetadataFacts, SessionKind, SessionOverlay, SessionRecord, SessionTime as CoreSessionTime,
 };
 use openchamber_native_core::transcript::{
     Message, MessageInfo, Part, PartContent, Role, ToolStatus,
@@ -41,7 +41,7 @@ pub(crate) mod part_ids {
 
 /// Projects a session record with its OpenChamber overlay.
 pub(crate) fn session(wire: wire::Session) -> SessionRecord {
-    let (overlay, kind) = overlay(wire.metadata.as_ref());
+    let MetadataFacts { overlay, kind } = metadata_facts(wire.metadata.as_ref());
     SessionRecord {
         id: SessionId::new(wire.id),
         parent_id: wire
@@ -64,7 +64,7 @@ pub(crate) fn session(wire: wire::Session) -> SessionRecord {
 }
 
 /// The OpenChamber overlay and session kind from a session's full metadata.
-pub(crate) fn overlay(metadata: Option<&Value>) -> (SessionOverlay, SessionKind) {
+pub(crate) fn metadata_facts(metadata: Option<&Value>) -> MetadataFacts {
     let openchamber = metadata
         .and_then(|metadata| metadata.get("openchamber"))
         .filter(|value| value.is_object());
@@ -87,7 +87,10 @@ pub(crate) fn overlay(metadata: Option<&Value>) -> (SessionOverlay, SessionKind)
     } else {
         SessionKind::Conversation
     };
-    (SessionOverlay { pinned_at, in_work }, kind)
+    MetadataFacts {
+        overlay: SessionOverlay { pinned_at, in_work },
+        kind,
+    }
 }
 
 /// Projects one message record; unknown message types are skipped.
@@ -156,7 +159,7 @@ fn parse<T: serde::de::DeserializeOwned>(value: Value, what: &str) -> Result<T, 
         .map_err(|error| TransportError::Malformed(format!("{what}: {error}")))
 }
 
-fn user_parts(message_id: &str, user: &wire::UserBody) -> Vec<Part> {
+pub(crate) fn user_parts(message_id: &str, user: &wire::UserBody) -> Vec<Part> {
     let mut parts = Vec::new();
     if !user.text.is_empty() {
         parts.push(Part::text(

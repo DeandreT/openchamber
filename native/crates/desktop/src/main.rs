@@ -8,8 +8,11 @@
 mod activation;
 mod assets;
 mod composer_view;
+mod connection;
 mod diagnostics;
 mod locale;
+mod network;
+mod server_sync;
 mod sidebar_item;
 mod sidebar_view;
 mod theme;
@@ -23,13 +26,15 @@ use gpui_kit::{
     AppContext, Bounds, TitlebarOptions, WindowAppearance, WindowBounds, WindowOptions, px, size,
 };
 use openchamber_native_core::synthetic::WorkloadSize;
+
 use tracing_subscriber::EnvFilter;
 
 use crate::assets::AppAssets;
+use crate::connection::{Connection, ServerConfig};
 use crate::diagnostics::Marker;
 use crate::locale::Strings;
 use crate::theme::{Appearance, Palette};
-use crate::workspace::Workspace;
+use crate::workspace::{Source, Workspace};
 
 /// The fixture client size of the parity method.
 const WINDOW_WIDTH: f32 = 1280.0;
@@ -44,7 +49,18 @@ fn main() {
         )
         .with_writer(std::io::stderr)
         .init();
-    let workload = requested_workload();
+    let Some(source) = requested_source() else {
+        std::process::exit(2);
+    };
+    let title = match &source {
+        Source::Synthetic(_) => "OpenChamber Native (synthetic data)".to_owned(),
+        Source::Server(connection) => {
+            format!(
+                "OpenChamber Native ({})",
+                connection.config.endpoint.authority()
+            )
+        }
+    };
 
     gpui_kit::application()
         .with_assets(AppAssets)
@@ -61,14 +77,14 @@ fn main() {
             let options = WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 titlebar: Some(TitlebarOptions {
-                    title: Some("OpenChamber Native (synthetic data)".into()),
+                    title: Some(title.into()),
                     ..TitlebarOptions::default()
                 }),
                 app_id: Some("ai.openchamber.native.development".to_owned()),
                 ..WindowOptions::default()
             };
             let opened = gpui_kit::open_window(options, cx, |window, cx| {
-                cx.new(|cx| Workspace::new(workload, window, cx))
+                cx.new(|cx| Workspace::new(source, window, cx))
             });
             if let Err(error) = opened {
                 tracing::error!(%error, "the main window could not be opened");
@@ -84,6 +100,28 @@ fn main() {
             .detach();
             cx.activate(true);
         });
+}
+
+/// A configured server, else synthetic data. `None` after reporting a
+/// configuration the client cannot use.
+fn requested_source() -> Option<Source> {
+    let Some(config) = ServerConfig::from_env() else {
+        return Some(Source::Synthetic(requested_workload()));
+    };
+    let config = match config {
+        Ok(config) => config,
+        Err(error) => {
+            tracing::error!(%error, "OPENCHAMBER_NATIVE_SERVER is not a usable server URL");
+            return None;
+        }
+    };
+    match Connection::new(config) {
+        Ok(connection) => Some(Source::Server(Box::new(connection))),
+        Err(error) => {
+            tracing::error!(%error, "the network runtime could not start");
+            None
+        }
+    }
 }
 
 /// `OPENCHAMBER_NATIVE_WORKLOAD`: `representative` (default), `stress` or `small`.

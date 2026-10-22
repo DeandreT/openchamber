@@ -185,6 +185,49 @@ pub(crate) struct HomeInfo {
     pub canonical_legacy_chats_root: Option<String>,
 }
 
+/// `GET /api/config/settings`: the fields topology needs.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct Settings {
+    /// Entries are checked one by one: a malformed entry is skipped, never
+    /// the whole list.
+    #[serde(default)]
+    pub projects: Vec<Value>,
+    pub home_directory: Option<String>,
+}
+
+/// `GET /api/sessions/status`: the host's cross-project status map.
+#[derive(Debug, Deserialize)]
+pub(crate) struct StatusSnapshot {
+    pub sessions: std::collections::HashMap<String, StatusEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct StatusEntry {
+    pub status: String,
+}
+
+/// `POST /api/git/project-worktrees`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct WorktreeBatch {
+    #[serde(default)]
+    pub projects: Vec<WorktreeBatchEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct WorktreeBatchEntry {
+    pub directory: String,
+    /// Absent or `null` when the server could not list this directory.
+    pub worktrees: Option<Vec<WorktreeEntry>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct WorktreeEntry {
+    pub path: Option<String>,
+    pub branch: Option<String>,
+    pub name: Option<String>,
+}
+
 /// `/auth/session` with `issueClientToken`.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]

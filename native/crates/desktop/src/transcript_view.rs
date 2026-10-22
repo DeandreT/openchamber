@@ -14,10 +14,11 @@ use gpui_kit::{
 use openchamber_native_core::transcript::{Message, PartContent, Role as MessageRole};
 
 use crate::activation::on_activate;
+use crate::connection::ConnectionFailure;
 use crate::locale;
 use crate::sidebar_view::icon_element;
 use crate::theme::Palette;
-use crate::workspace::Workspace;
+use crate::workspace::{History, Workspace};
 
 const HEADER_HEIGHT: f32 = 44.0;
 /// The readable column width of the chat.
@@ -74,6 +75,43 @@ impl Workspace {
                 .child(locale::strings(cx).get("chat.chatInput.placeholder.selectSession"))
                 .into_any_element();
         };
+        if let History::Failed(failure) = &open.history
+            && open.transcript.is_empty()
+        {
+            let strings = locale::strings(cx);
+            let description = match failure {
+                ConnectionFailure::AuthenticationRequired
+                | ConnectionFailure::AuthenticationRejected => {
+                    strings.get("chat.container.sessionLoadError.authDescription")
+                }
+                _ => strings.get("chat.container.sessionLoadError.description"),
+            };
+            return div()
+                .id("transcript-load-error")
+                .role(Role::Alert)
+                .accessibility_id("transcript-load-error")
+                .flex_1()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .items_center()
+                .justify_center()
+                .px_6()
+                .child(
+                    div()
+                        .font_weight(FontWeight::MEDIUM)
+                        .child(strings.get("chat.container.sessionLoadError.title")),
+                )
+                .child(
+                    div()
+                        .max_w(px(420.0))
+                        .text_center()
+                        .text_size(rems(META_SIZE))
+                        .text_color(palette.muted_foreground)
+                        .child(description),
+                )
+                .into_any_element();
+        }
         let following =
             open.list.is_following_tail() || open.list.is_scrolled_to_end().unwrap_or(true);
         let scroll_label = locale::strings(cx).get("chat.scrollToBottom.aria");
@@ -150,7 +188,15 @@ impl Workspace {
         let body = match message.info.role {
             MessageRole::User => user_message(message, &palette),
             MessageRole::Assistant => assistant_message(message, &palette),
-            _ => notice_message(message, &palette),
+            MessageRole::Compaction | MessageRole::Shell => notice_message(message, &palette),
+            // `timelineRoles.ts`: plumbing, and switches the composer already shows.
+            MessageRole::Synthetic
+            | MessageRole::System
+            | MessageRole::Skill
+            | MessageRole::LocationSwitched
+            | MessageRole::Idle
+            | MessageRole::AgentSwitched
+            | MessageRole::ModelSwitched => return div().into_any_element(),
         };
         div()
             .id(ElementId::Name(message.info.id.as_str().to_owned().into()))

@@ -55,6 +55,93 @@ pub struct ProjectWorktrees {
     pub worktrees: Vec<WorktreeInfo>,
 }
 
+/// Valid, unique projects from the settings document's project paths, as
+/// `sanitizeProjects` in `packages/ui/src/stores/useProjectsStore.ts` keeps
+/// them: a leading `~` expands to `home`, paths are normalized, and the first
+/// entry for a path or identifier wins.
+pub fn configured_projects<'a>(
+    paths: impl IntoIterator<Item = &'a str>,
+    home: Option<&str>,
+) -> Vec<ConfiguredProject> {
+    let mut projects: Vec<ConfiguredProject> = Vec::new();
+    for raw in paths {
+        let expanded = expand_home(raw.trim(), home);
+        let Some(path) = path::normalize(&expanded) else {
+            continue;
+        };
+        let Some(id) = ProjectId::from_path(&path) else {
+            continue;
+        };
+        if projects
+            .iter()
+            .any(|project| project.id == id || project.path == path)
+        {
+            continue;
+        }
+        projects.push(ConfiguredProject { id, path });
+    }
+    projects
+}
+
+fn expand_home(value: &str, home: Option<&str>) -> String {
+    match (value, home.filter(|home| !home.is_empty())) {
+        ("~", Some(home)) => home.to_owned(),
+        (value, Some(home)) if value.starts_with("~/") || value.starts_with("~\\") => {
+            format!("{home}{}", &value[1..])
+        }
+        (value, _) => value.to_owned(),
+    }
+}
+
+/// The linked worktrees of `project_path` from the server's listing, as
+/// `readProjectWorktrees` in `packages/ui/src/lib/worktrees/worktreeManager.ts`
+/// derives them: the main checkout is left out, `refs/heads/` is dropped from
+/// branches, the label is the branch, the name or the folder name, and the
+/// list is sorted by label.
+pub fn linked_worktrees(project_path: &str, listing: Vec<WorktreeInfo>) -> Vec<WorktreeInfo> {
+    let project = path::normalize(project_path);
+    let mut worktrees: Vec<WorktreeInfo> = listing
+        .into_iter()
+        .filter_map(|entry| {
+            let worktree_path = path::normalize(&entry.path)?;
+            let branch = entry
+                .branch
+                .as_deref()
+                .map(|branch| branch.trim_start_matches("refs/heads/").trim().to_owned())
+                .unwrap_or_default();
+            let name = entry
+                .name
+                .as_deref()
+                .map(str::trim)
+                .filter(|name| !name.is_empty())
+                .map(str::to_owned)
+                .unwrap_or_else(|| folder_name(&worktree_path));
+            let label = if branch.is_empty() {
+                name.clone()
+            } else {
+                branch.clone()
+            };
+            Some(WorktreeInfo {
+                path: worktree_path,
+                label: Some(label),
+                name: Some(name),
+                branch: Some(branch),
+            })
+        })
+        .filter(|worktree| Some(&worktree.path) != project.as_ref())
+        .collect();
+    worktrees.sort_by_key(|worktree| worktree.label.clone().unwrap_or_default().to_lowercase());
+    worktrees
+}
+
+fn folder_name(directory: &str) -> String {
+    directory
+        .rsplit('/')
+        .find(|segment| !segment.is_empty())
+        .unwrap_or(directory)
+        .to_owned()
+}
+
 /// An isolated space and the project directory it was made for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SpaceMark {
@@ -447,6 +534,52 @@ impl<'p> CanonicalOwners<'p> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn settings_projects_are_expanded_normalized_and_unique() {
+        let projects = configured_projects(
+            [
+                "~/work/app/",
+                "",
+                "/srv/api",
+                "/home/me/work/app",
+                "  ",
+                "/srv/api/",
+            ],
+            Some("/home/me"),
+        );
+        let paths: Vec<&str> = projects
+            .iter()
+            .map(|project| project.path.as_str())
+            .collect();
+        assert_eq!(paths, ["/home/me/work/app", "/srv/api"]);
+        assert_eq!(
+            projects[0].id,
+            ProjectId::from_path("/home/me/work/app").expect("valid path")
+        );
+    }
+
+    #[test]
+    fn linked_worktrees_leave_out_the_main_checkout() {
+        let listing = vec![
+            WorktreeInfo {
+                branch: Some("main".to_owned()),
+                ..WorktreeInfo::new("/repo")
+            },
+            WorktreeInfo {
+                branch: Some("refs/heads/zeta".to_owned()),
+                ..WorktreeInfo::new("/repo-trees/z/")
+            },
+            WorktreeInfo::new("/repo-trees/Alpha"),
+        ];
+        let worktrees = linked_worktrees("/repo/", listing);
+        let labels: Vec<Option<&str>> = worktrees
+            .iter()
+            .map(|worktree| worktree.label.as_deref())
+            .collect();
+        assert_eq!(labels, [Some("Alpha"), Some("zeta")]);
+        assert_eq!(worktrees[1].path, "/repo-trees/z");
+    }
     use crate::session::SessionProjectMetadata;
 
     fn project(id: &str, path: &str) -> ConfiguredProject {

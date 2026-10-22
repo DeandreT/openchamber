@@ -23,17 +23,25 @@ use crate::event::{self, ServerEvent};
 const CHANNEL_CAPACITY: usize = 1024;
 const BACKOFF_BASE: Duration = Duration::from_millis(250);
 const BACKOFF_CAP: Duration = Duration::from_secs(5);
-/// The server sends a heartbeat well inside this interval.
-const SILENCE_LIMIT: Duration = Duration::from_secs(45);
+/// The server sends a heartbeat well inside this interval
+/// (`DEFAULT_HEARTBEAT_TIMEOUT_MS` in `sync/event-pipeline.ts`).
+const SILENCE_LIMIT: Duration = Duration::from_secs(30);
+/// A socket that does not say `ready` this soon is retried
+/// (`DEFAULT_WS_READY_TIMEOUT_MS`), as a server still starting OpenCode can
+/// accept it and stay silent.
+const READY_LIMIT: Duration = Duration::from_secs(2);
+/// The longest a WebSocket handshake may take.
+const HANDSHAKE_LIMIT: Duration = Duration::from_secs(10);
 const ROUTE: &str = "api/global/event/ws";
 
 /// What the stream reports to its consumer.
 #[derive(Debug)]
 pub enum StreamItem {
-    /// A connection is open. After a gap, `replay_reset` means missed events
-    /// were not replayed and affected scopes need authoritative reads.
+    /// A connection is open. `resumed` means the server replayed every event
+    /// since the last one delivered; otherwise anything missed while
+    /// disconnected needs authoritative reads.
     Connected {
-        replay_reset: bool,
+        resumed: bool,
     },
     Events(Vec<ServerEvent>),
     /// The connection failed; live state is stale until the next `Connected`.
@@ -102,6 +110,7 @@ async fn connect_and_read(
     failures: &mut u32,
 ) -> Result<(), TransportError> {
     let mut url = client.endpoint().websocket_url(ROUTE);
+    let cursor_sent = last_event_id.is_some();
     if let Some(id) = last_event_id.as_deref() {
         url.query_pairs_mut().append_pair("lastEventId", id);
     }
@@ -116,19 +125,30 @@ async fn connect_and_read(
         value.set_sensitive(true);
         request.headers_mut().insert("authorization", value);
     }
-    let (mut socket, _) = tokio_tungstenite::connect_async(request)
-        .await
-        .map_err(|error| match error {
-            tokio_tungstenite::tungstenite::Error::Http(response)
-                if matches!(response.status().as_u16(), 401 | 403) =>
-            {
-                TransportError::AuthenticationRequired
-            }
-            other => TransportError::Stream(other.to_string()),
-        })?;
+    let handshake =
+        tokio::time::timeout(HANDSHAKE_LIMIT, tokio_tungstenite::connect_async(request))
+            .await
+            .map_err(|_| TransportError::TimedOut)?;
+    let (mut socket, _) = handshake.map_err(|error| match error {
+        tokio_tungstenite::tungstenite::Error::Http(response)
+            if matches!(response.status().as_u16(), 401 | 403) =>
+        {
+            TransportError::AuthenticationRequired
+        }
+        other => TransportError::Stream(other.to_string()),
+    })?;
+    let mut ready = false;
     loop {
-        let message = match tokio::time::timeout(SILENCE_LIMIT, socket.next()).await {
-            Err(_) => return Err(TransportError::Stream("the stream fell silent".to_owned())),
+        let limit = if ready { SILENCE_LIMIT } else { READY_LIMIT };
+        let message = match tokio::time::timeout(limit, socket.next()).await {
+            Err(_) if ready => {
+                return Err(TransportError::Stream("the stream fell silent".to_owned()));
+            }
+            Err(_) => {
+                return Err(TransportError::Stream(
+                    "the server did not open the stream".to_owned(),
+                ));
+            }
             Ok(None) => {
                 return Err(TransportError::Stream(
                     "the server closed the stream".to_owned(),
@@ -154,9 +174,16 @@ async fn connect_and_read(
         for item in frame.events {
             match item {
                 ServerEvent::Ready { replay_reset } => {
+                    ready = true;
                     *failures = 0;
+                    if replay_reset {
+                        // The cursor names nothing the server holds, such as an
+                        // event from before a restart: retire it.
+                        *last_event_id = None;
+                    }
+                    let resumed = cursor_sent && !replay_reset;
                     if sender
-                        .send(StreamItem::Connected { replay_reset })
+                        .send(StreamItem::Connected { resumed })
                         .await
                         .is_err()
                     {

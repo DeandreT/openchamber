@@ -19,7 +19,7 @@ use openchamber_native_core::synthetic::{ConversationShape, ResponseScript, Work
 use crate::locale::Strings;
 use crate::sidebar_item::SidebarItem;
 use crate::theme::{self, Appearance, Palette};
-use crate::workspace::Workspace;
+use crate::workspace::{Source, Workspace};
 use crate::workspace_view;
 
 fn open(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<Workspace>) {
@@ -37,7 +37,9 @@ fn open(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<Workspace>) {
                 ..WindowOptions::default()
             },
             cx,
-            |window, cx| cx.new(|cx| Workspace::new(WorkloadSize::Small, window, cx)),
+            |window, cx| {
+                cx.new(|cx| Workspace::new(Source::Synthetic(WorkloadSize::Small), window, cx))
+            },
         )
         .expect("the test window opens");
         (window, workspace)

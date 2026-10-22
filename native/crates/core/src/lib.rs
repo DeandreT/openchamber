@@ -16,6 +16,7 @@ pub mod ownership;
 pub mod path;
 pub mod scroll_memory;
 pub mod session;
+pub mod session_index;
 pub mod sidebar_rows;
 pub mod synthetic;
 pub mod transcript;

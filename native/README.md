@@ -8,7 +8,7 @@ from the Bun `packages/*` workspace.
 | --- | --- |
 | `crates/core` (`openchamber-native-core`) | Domain records, sidebar membership and rows, transcripts, drafts, scroll memory and synthetic workloads. Standard library only. See its [DOCUMENTATION.md](crates/core/DOCUMENTATION.md). |
 | `crates/transport` (`openchamber-native-transport`) | The connection to an OpenChamber server: endpoint, identity, authentication, requests, wire parsing and the global event stream. See its [DOCUMENTATION.md](crates/transport/DOCUMENTATION.md). |
-| `crates/desktop` (`openchamber-native-desktop`) | The GPUI Kit window, views, theme, locale and icon resources, diagnostics and application lifetime. See its [DOCUMENTATION.md](crates/desktop/DOCUMENTATION.md). |
+| `crates/desktop` (`openchamber-native-desktop`) | The GPUI Kit window, views, theme, locale and icon resources, diagnostics, the server connection and application lifetime. See its [DOCUMENTATION.md](crates/desktop/DOCUMENTATION.md). |
 
 ## Toolchain
 
@@ -43,6 +43,12 @@ The desktop reads these environment variables:
 | `OPENCHAMBER_NATIVE_LOCALE` | A supported locale such as `ar` or `pt-BR`; otherwise `LANG` |
 | `OPENCHAMBER_NATIVE_DIAGNOSTICS` | `1` prints `OPENCHAMBER_NATIVE_MARK {json}` timing lines to stdout |
 | `OPENCHAMBER_NATIVE_LOG` | A `tracing` filter for stderr, `warn` by default |
+| `OPENCHAMBER_NATIVE_SERVER` | The base URL of an OpenChamber server to read instead of synthetic data, including any path prefix |
+| `OPENCHAMBER_NATIVE_PASSWORD` | The UI password of that server, exchanged once for a client token |
+
+During development, connect only to an isolated server, such as
+`bun run profile:serve -- --root <dir> --port <port>`; see
+`scripts/perf/DOCUMENTATION.md`.
 
 `native:fixtures` runs the TypeScript sidebar projection and rewrites
 `crates/core/tests/fixtures/sidebar-projection.json`. `native:resources`

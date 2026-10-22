@@ -5,7 +5,7 @@
 //! Every mutation reports which rows changed so the renderer can update one
 //! row for a text delta without rebuilding the list.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 use crate::ids::{MessageId, PartId};
@@ -147,6 +147,16 @@ pub enum TranscriptEvent {
         message_id: MessageId,
         part_id: PartId,
     },
+    /// Replaces every part of a message, such as a queued prompt's.
+    PartsReplaced {
+        message_id: MessageId,
+        parts: Vec<Part>,
+    },
+    /// A queued prompt reached the agent; its time becomes the delivery time.
+    MessageDelivered {
+        message_id: MessageId,
+        created: i64,
+    },
     /// A step ended: the message's completion time is set, its parts kept.
     MessageCompleted {
         message_id: MessageId,
@@ -190,6 +200,10 @@ pub struct Transcript {
     messages: Vec<Message>,
     row_by_id: HashMap<MessageId, usize>,
     revision: u64,
+    /// The revision that last changed each message.
+    changed_at: HashMap<MessageId, u64>,
+    /// Text parts whose next delta may repeat the end of a full snapshot.
+    overlapping_delta: HashSet<PartId>,
 }
 
 impl Transcript {
@@ -246,6 +260,12 @@ impl Transcript {
         self.messages = messages;
         self.reindex(0);
         self.revision += 1;
+        self.changed_at = self
+            .messages
+            .iter()
+            .map(|message| (message.info.id.clone(), self.revision))
+            .collect();
+        self.overlapping_delta.clear();
         TranscriptChange::Reset
     }
 
@@ -261,7 +281,9 @@ impl Transcript {
         let count = fresh.len();
         self.messages.splice(0..0, fresh);
         self.reindex(0);
-        self.revision += 1;
+        for row in 0..count {
+            self.touch(row);
+        }
         TranscriptChange::Inserted { rows: 0..count }
     }
 
@@ -273,13 +295,13 @@ impl Transcript {
                 return TranscriptChange::Unchanged;
             }
             self.messages[row] = message;
-            self.revision += 1;
+            self.touch(row);
             return TranscriptChange::Updated { row };
         }
         let row = self.messages.len();
         self.row_by_id.insert(message.info.id.clone(), row);
         self.messages.push(message);
-        self.revision += 1;
+        self.touch(row);
         TranscriptChange::Inserted { rows: row..row + 1 }
     }
 
@@ -293,7 +315,7 @@ impl Transcript {
                         return TranscriptChange::Unchanged;
                     }
                     message.info = info;
-                    self.revision += 1;
+                    self.touch(row);
                     TranscriptChange::Updated { row }
                 }
                 None => self.push(Message {
@@ -308,10 +330,19 @@ impl Transcript {
                 let parts = &mut self.messages[row].parts;
                 match parts.iter_mut().find(|existing| existing.id == part.id) {
                     Some(existing) if *existing == part => return TranscriptChange::Unchanged,
-                    Some(existing) => *existing = part,
+                    // A finished call never goes back to an active state.
+                    Some(existing) if is_final_tool(existing) && is_active_tool(&part) => {
+                        return TranscriptChange::Unchanged;
+                    }
+                    Some(existing) => {
+                        if may_repeat_text(existing, &part) {
+                            self.overlapping_delta.insert(part.id.clone());
+                        }
+                        *existing = part;
+                    }
                     None => parts.push(part),
                 }
-                self.revision += 1;
+                self.touch(row);
                 TranscriptChange::Updated { row }
             }
             TranscriptEvent::PartDelta {
@@ -326,15 +357,24 @@ impl Transcript {
                     return TranscriptChange::Unchanged;
                 }
                 let parts = &mut self.messages[row].parts;
-                match parts.iter_mut().find(|part| part.id == part_id) {
-                    Some(Part {
-                        content: PartContent::Text { text } | PartContent::Reasoning { text },
-                        ..
-                    }) => text.push_str(&delta),
-                    Some(_) => return TranscriptChange::NeedsReconcile,
-                    None => parts.push(Part::text(part_id, delta)),
+                // A delta for a part this transcript never saw started would
+                // build text without its beginning; the scope needs a read.
+                let Some(Part {
+                    content: PartContent::Text { text } | PartContent::Reasoning { text },
+                    ..
+                }) = parts.iter_mut().find(|part| part.id == part_id)
+                else {
+                    return TranscriptChange::NeedsReconcile;
+                };
+                if self.overlapping_delta.remove(&part_id) {
+                    let appended = append_without_overlap(text, &delta);
+                    if !appended {
+                        return TranscriptChange::Unchanged;
+                    }
+                } else {
+                    text.push_str(&delta);
                 }
-                self.revision += 1;
+                self.touch(row);
                 TranscriptChange::Updated { row }
             }
             TranscriptEvent::MessageRemoved { message_id } => {
@@ -343,9 +383,36 @@ impl Transcript {
                 };
                 self.messages.remove(row);
                 self.row_by_id.remove(&message_id);
+                self.changed_at.remove(&message_id);
                 self.reindex(row);
                 self.revision += 1;
                 TranscriptChange::Removed { rows: row..row + 1 }
+            }
+            TranscriptEvent::PartsReplaced { message_id, parts } => {
+                let Some(row) = self.row_of(&message_id) else {
+                    return TranscriptChange::NeedsReconcile;
+                };
+                if self.messages[row].parts == parts {
+                    return TranscriptChange::Unchanged;
+                }
+                self.messages[row].parts = parts;
+                self.touch(row);
+                TranscriptChange::Updated { row }
+            }
+            TranscriptEvent::MessageDelivered {
+                message_id,
+                created,
+            } => {
+                let Some(row) = self.row_of(&message_id) else {
+                    return TranscriptChange::NeedsReconcile;
+                };
+                let info = &mut self.messages[row].info;
+                if info.created == created {
+                    return TranscriptChange::Unchanged;
+                }
+                info.created = created;
+                self.touch(row);
+                TranscriptChange::Updated { row }
             }
             TranscriptEvent::MessageCompleted {
                 message_id,
@@ -359,7 +426,7 @@ impl Transcript {
                     return TranscriptChange::Unchanged;
                 }
                 info.completed = Some(completed);
-                self.revision += 1;
+                self.touch(row);
                 TranscriptChange::Updated { row }
             }
             TranscriptEvent::ToolTransition {
@@ -397,7 +464,7 @@ impl Transcript {
                 *status = next_status;
                 *output = next_output;
                 *elided = next_elided;
-                self.revision += 1;
+                self.touch(row);
                 TranscriptChange::Updated { row }
             }
             TranscriptEvent::PartRemoved {
@@ -413,10 +480,110 @@ impl Transcript {
                 if parts.len() == before {
                     return TranscriptChange::Unchanged;
                 }
-                self.revision += 1;
+                self.touch(row);
                 TranscriptChange::Updated { row }
             }
         }
+    }
+
+    /// Merges a newest-first history read into the transcript.
+    ///
+    /// Mirrors `materializeSessionSnapshots` in
+    /// `packages/ui/src/sync/materialization.ts`. `since` is the revision when
+    /// the read was requested: messages changed after it are live and newer
+    /// than the read, so they stay and follow the history. Held messages the
+    /// read does not list are older pages when they precede its oldest message
+    /// and deletions when they follow it.
+    pub fn materialize(&mut self, history: Vec<Message>, since: u64) -> TranscriptChange {
+        let history_ids: HashSet<&MessageId> =
+            history.iter().map(|message| &message.info.id).collect();
+        let first_shared = self
+            .messages
+            .iter()
+            .position(|message| history_ids.contains(&message.info.id));
+        let is_live = |message: &Message| {
+            self.changed_at
+                .get(&message.info.id)
+                .is_some_and(|revision| *revision > since)
+        };
+        let mut merged: Vec<Message> = Vec::with_capacity(self.messages.len() + history.len());
+        // Older pages before the read.
+        for (row, held) in self.messages.iter().enumerate() {
+            if history_ids.contains(&held.info.id) || is_live(held) {
+                continue;
+            }
+            if first_shared.is_none_or(|first| row < first) {
+                merged.push(held.clone());
+            }
+        }
+        for incoming in history {
+            let held = self
+                .row_of(&incoming.info.id)
+                .map(|row| &self.messages[row]);
+            merged.push(match held {
+                Some(held) => merge_message(held, incoming),
+                None => incoming,
+            });
+        }
+        let listed: HashSet<MessageId> = merged
+            .iter()
+            .map(|message| message.info.id.clone())
+            .collect();
+        for held in &self.messages {
+            if !listed.contains(&held.info.id) && is_live(held) {
+                merged.push(held.clone());
+            }
+        }
+        self.install(merged)
+    }
+
+    /// Replaces the messages and reports the narrowest change.
+    fn install(&mut self, next: Vec<Message>) -> TranscriptChange {
+        if next == self.messages {
+            return TranscriptChange::Unchanged;
+        }
+        let same_prefix = self.messages.len() <= next.len()
+            && self
+                .messages
+                .iter()
+                .zip(&next)
+                .all(|(held, incoming)| held.info.id == incoming.info.id);
+        let changed: Vec<usize> = self
+            .messages
+            .iter()
+            .zip(&next)
+            .enumerate()
+            .filter(|(_, (held, incoming))| held != incoming)
+            .map(|(row, _)| row)
+            .collect();
+        let old_len = self.messages.len();
+        self.messages = next;
+        self.reindex(0);
+        for row in changed
+            .iter()
+            .copied()
+            .chain(old_len.min(self.messages.len())..self.messages.len())
+        {
+            self.touch(row);
+        }
+        if !same_prefix {
+            return TranscriptChange::Reset;
+        }
+        match (changed.first(), changed.last()) {
+            (None, _) | (_, None) => TranscriptChange::Inserted {
+                rows: old_len..self.messages.len(),
+            },
+            (Some(&first), Some(&last)) if old_len == self.messages.len() && first == last => {
+                TranscriptChange::Updated { row: first }
+            }
+            _ => TranscriptChange::Reset,
+        }
+    }
+
+    fn touch(&mut self, row: usize) {
+        self.revision += 1;
+        self.changed_at
+            .insert(self.messages[row].info.id.clone(), self.revision);
     }
 
     fn reindex(&mut self, from: usize) {
@@ -426,6 +593,157 @@ impl Transcript {
         for (row, message) in self.messages.iter().enumerate().skip(from) {
             self.row_by_id.insert(message.info.id.clone(), row);
         }
+    }
+}
+
+fn is_final_tool(part: &Part) -> bool {
+    matches!(
+        part.content,
+        PartContent::Tool {
+            status: ToolStatus::Completed | ToolStatus::Error,
+            ..
+        }
+    )
+}
+
+fn is_active_tool(part: &Part) -> bool {
+    matches!(
+        part.content,
+        PartContent::Tool {
+            status: ToolStatus::Pending | ToolStatus::Running,
+            ..
+        }
+    )
+}
+
+fn part_text(part: &Part) -> Option<&str> {
+    match &part.content {
+        PartContent::Text { text } | PartContent::Reasoning { text } => Some(text),
+        _ => None,
+    }
+}
+
+/// Whether a full snapshot repeats or extends the streamed text, so the next
+/// delta may overlap its end (`getUpdatedDeltaFields` in `event-reducer.ts`).
+fn may_repeat_text(previous: &Part, next: &Part) -> bool {
+    if std::mem::discriminant(&previous.content) != std::mem::discriminant(&next.content) {
+        return false;
+    }
+    match (part_text(previous), part_text(next)) {
+        (Some(previous), Some(next)) if !previous.is_empty() && !next.is_empty() => {
+            next.starts_with(previous) || previous.starts_with(next)
+        }
+        _ => false,
+    }
+}
+
+/// Appends the part of `delta` that `text` does not already end with, as
+/// `appendNonOverlappingDelta` does. Returns whether anything was appended.
+fn append_without_overlap(text: &mut String, delta: &str) -> bool {
+    if text.is_empty() {
+        text.push_str(delta);
+        return true;
+    }
+    if text.ends_with(delta) {
+        return false;
+    }
+    let mut boundaries: Vec<usize> = delta
+        .char_indices()
+        .map(|(index, _)| index)
+        .skip(1)
+        .chain([delta.len()])
+        .filter(|end| *end <= text.len())
+        .collect();
+    boundaries.reverse();
+    for end in boundaries {
+        if text.ends_with(&delta[..end]) {
+            text.push_str(&delta[end..]);
+            return true;
+        }
+    }
+    text.push_str(delta);
+    true
+}
+
+/// A message from a history read, merged with the copy this client holds.
+///
+/// The held record stands unless the read reports a completion it lacks.
+/// Assistant parts merge one by one; parts only the client holds that are
+/// still streaming stay.
+fn merge_message(held: &Message, incoming: Message) -> Message {
+    let is_assistant = incoming.info.role == Role::Assistant;
+    let info = if held.info.role == Role::Assistant
+        && incoming.info.role == Role::Assistant
+        && incoming.info.completed.is_some()
+        && held.info.completed.is_none()
+    {
+        incoming.info
+    } else {
+        held.info.clone()
+    };
+    if is_assistant {
+        let mut parts: Vec<Part> = incoming
+            .parts
+            .into_iter()
+            .map(
+                |next| match held.parts.iter().find(|part| part.id == next.id) {
+                    Some(existing) => merge_part(existing, next),
+                    None => next,
+                },
+            )
+            .collect();
+        for existing in &held.parts {
+            let streaming = part_text(existing).is_some_and(|text| !text.is_empty());
+            if streaming && !parts.iter().any(|part| part.id == existing.id) {
+                parts.push(existing.clone());
+            }
+        }
+        Message { info, parts }
+    } else {
+        Message {
+            info,
+            parts: incoming.parts,
+        }
+    }
+}
+
+/// One part from a history read, merged with the held copy
+/// (`mergeMaterializedPart` in `materialization.ts`).
+fn merge_part(existing: &Part, next: Part) -> Part {
+    if let (
+        PartContent::Tool {
+            status: held_status,
+            elided: held_elided,
+            ..
+        },
+        PartContent::Tool {
+            status: next_status,
+            elided: next_elided,
+            ..
+        },
+    ) = (&existing.content, &next.content)
+    {
+        let shell_of_whole =
+            held_status == next_status && next_elided.is_some() && held_elided.is_none();
+        let regressed = is_final_tool(existing) && is_active_tool(&next);
+        let earlier = *held_status == ToolStatus::Running && *next_status == ToolStatus::Pending;
+        return if shell_of_whole || regressed || earlier {
+            existing.clone()
+        } else {
+            next
+        };
+    }
+    match (part_text(existing), part_text(&next)) {
+        // The client streamed further than the read saw.
+        (Some(held), Some(read))
+            if std::mem::discriminant(&existing.content)
+                == std::mem::discriminant(&next.content)
+                && held.len() > read.len()
+                && held.starts_with(read) =>
+        {
+            existing.clone()
+        }
+        _ => next,
     }
 }
 
@@ -622,6 +940,142 @@ mod tests {
             TranscriptChange::Updated { row: 0 },
             "a whole message completes a shelled call"
         );
+    }
+
+    fn text_message(id: &str, role: Role, text: &str) -> Message {
+        Message {
+            info: MessageInfo {
+                id: MessageId::from(id),
+                role,
+                created: 0,
+                completed: None,
+                notice: None,
+            },
+            parts: vec![Part::text(format!("{id}:text:0"), text)],
+        }
+    }
+
+    fn ids(transcript: &Transcript) -> Vec<&str> {
+        transcript
+            .messages()
+            .iter()
+            .map(|message| message.info.id.as_str())
+            .collect()
+    }
+
+    #[test]
+    fn materialize_keeps_older_pages_and_live_arrivals_and_drops_deletions() {
+        let mut transcript = Transcript::from_history(vec![
+            text_message("old", Role::User, "older page"),
+            text_message("a", Role::User, "a"),
+            text_message("gone", Role::User, "deleted on the server"),
+            text_message("b", Role::Assistant, "b"),
+        ]);
+        let since = transcript.revision();
+        let _ = transcript.push(text_message("live", Role::User, "sent after the read"));
+        let change = transcript.materialize(
+            vec![
+                text_message("a", Role::User, "a"),
+                text_message("b", Role::Assistant, "b"),
+                text_message("c", Role::Assistant, "c"),
+            ],
+            since,
+        );
+        assert_eq!(change, TranscriptChange::Reset);
+        assert_eq!(ids(&transcript), ["old", "a", "b", "c", "live"]);
+        assert_eq!(transcript.row_of(&MessageId::from("live")), Some(4));
+    }
+
+    #[test]
+    fn materialize_appends_without_resetting() {
+        let mut transcript = Transcript::from_history(vec![text_message("a", Role::User, "a")]);
+        let since = transcript.revision();
+        let change = transcript.materialize(
+            vec![
+                text_message("a", Role::User, "a"),
+                text_message("b", Role::Assistant, "b"),
+            ],
+            since,
+        );
+        assert_eq!(change, TranscriptChange::Inserted { rows: 1..2 });
+        assert_eq!(
+            transcript.materialize(transcript.messages().to_vec(), since),
+            TranscriptChange::Unchanged
+        );
+    }
+
+    #[test]
+    fn materialize_keeps_streamed_text_ahead_of_the_read_and_takes_completion() {
+        let mut transcript =
+            Transcript::from_history(vec![text_message("m", Role::Assistant, "hello wor")]);
+        let since = transcript.revision();
+        let mut read = text_message("m", Role::Assistant, "hello");
+        read.info.completed = Some(5);
+        let change = transcript.materialize(vec![read], since);
+        assert_eq!(change, TranscriptChange::Updated { row: 0 });
+        let message = transcript.message(0).expect("row exists");
+        assert_eq!(message.plain_text(), "hello wor");
+        assert_eq!(message.info.completed, Some(5));
+    }
+
+    #[test]
+    fn deltas_need_a_started_part_and_skip_text_a_snapshot_repeated() {
+        let mut transcript =
+            Transcript::from_history(vec![text_message("m", Role::Assistant, "ab")]);
+        let orphan = transcript.apply(TranscriptEvent::PartDelta {
+            message_id: MessageId::from("m"),
+            part_id: PartId::from("m:text:1"),
+            delta: "x".to_owned(),
+        });
+        assert_eq!(orphan, TranscriptChange::NeedsReconcile);
+        let _ = transcript.apply(TranscriptEvent::PartUpdated {
+            message_id: MessageId::from("m"),
+            part: Part::text("m:text:0", "abcd"),
+        });
+        let _ = transcript.apply(TranscriptEvent::PartDelta {
+            message_id: MessageId::from("m"),
+            part_id: PartId::from("m:text:0"),
+            delta: "cdef".to_owned(),
+        });
+        let _ = transcript.apply(TranscriptEvent::PartDelta {
+            message_id: MessageId::from("m"),
+            part_id: PartId::from("m:text:0"),
+            delta: "fg".to_owned(),
+        });
+        assert_eq!(
+            transcript.message(0).expect("row exists").plain_text(),
+            "abcdeffg",
+            "only the first delta after a snapshot drops its repeated start"
+        );
+    }
+
+    #[test]
+    fn a_finished_call_never_returns_to_an_active_state() {
+        let tool = |status: ToolStatus| Part {
+            id: PartId::from("call_1"),
+            content: PartContent::Tool {
+                tool: "glob".to_owned(),
+                status,
+                title: None,
+                output: None,
+                elided: None,
+            },
+        };
+        let mut transcript = Transcript::from_history(vec![Message {
+            info: MessageInfo {
+                id: MessageId::from("m"),
+                role: Role::Assistant,
+                created: 0,
+                completed: None,
+                notice: None,
+            },
+            parts: vec![tool(ToolStatus::Completed)],
+        }]);
+        let change = transcript.apply(TranscriptEvent::PartUpdated {
+            message_id: MessageId::from("m"),
+            part: tool(ToolStatus::Running),
+        });
+        assert_eq!(change, TranscriptChange::Unchanged);
     }
 
     #[test]

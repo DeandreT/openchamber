@@ -69,6 +69,15 @@ impl Endpoint {
         url
     }
 
+    /// The host and port, for messages that name the server.
+    pub fn authority(&self) -> String {
+        let host = self.base.host_str().unwrap_or_default();
+        match self.base.port() {
+            Some(port) => format!("{host}:{port}"),
+            None => host.to_owned(),
+        }
+    }
+
     /// The origin and prefix, for display and runtime identity.
     pub fn as_str(&self) -> &str {
         self.base.as_str()
@@ -108,6 +117,7 @@ mod tests {
             assert!(Endpoint::parse(value).is_err(), "{value} must be rejected");
         }
         let plain = Endpoint::parse("http://127.0.0.1:4799").expect("valid");
+        assert_eq!(plain.authority(), "127.0.0.1:4799");
         assert_eq!(plain.url("health").as_str(), "http://127.0.0.1:4799/health");
         assert_eq!(
             plain.websocket_url("api/global/event/ws").as_str(),

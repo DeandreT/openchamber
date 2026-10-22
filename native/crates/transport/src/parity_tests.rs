@@ -7,7 +7,8 @@
 use std::collections::BTreeMap;
 
 use openchamber_native_core::ids::{MessageId, SessionId};
-use openchamber_native_core::session::SessionRecord;
+use openchamber_native_core::session::{LiveStatus, SessionKind, SessionRecord};
+use openchamber_native_core::session_index::SessionIndex;
 use openchamber_native_core::transcript::{
     Message, PartContent, Role, ToolStatus, Transcript, TranscriptChange,
 };
@@ -45,6 +46,7 @@ struct Fixture {
     next_cursor: Option<String>,
     messages: BTreeMap<String, MessageFixture>,
     whole_message: Value,
+    session_events: BTreeMap<String, Vec<Value>>,
 }
 
 #[derive(Deserialize)]
@@ -375,4 +377,114 @@ fn replayed_events_converge_on_the_history() {
         );
         assert_eq!(replayed, expected, "the replay of {session} diverged");
     }
+}
+
+/// The session-level effects of one event, normalized as the fixture
+/// normalizes the UI's sync events.
+fn session_effect(event: &ServerEvent) -> Option<Value> {
+    match event {
+        ServerEvent::SessionCreated(record) => {
+            Some(json!({"type": "created", "session": normalize_session(record)}))
+        }
+        ServerEvent::SessionPatched { session_id, patch } => {
+            let mut value = json!({"type": "patched", "sessionId": session_id.as_str()});
+            let fields = [
+                ("title", patch.title.as_ref().map(|title| json!(title))),
+                (
+                    "directory",
+                    patch.directory.as_ref().map(|directory| json!(directory)),
+                ),
+                (
+                    "projectId",
+                    patch.project_id.as_ref().map(|id| json!(id.as_str())),
+                ),
+                ("updated", patch.updated.map(|time| json!(time))),
+                ("idle", patch.idle.map(|time| json!(time))),
+                ("archived", patch.archived.map(|time| json!(time))),
+                (
+                    "overlay",
+                    patch.metadata.as_ref().map(|facts| {
+                        json!({
+                            "pinned": facts.overlay.pinned_at.is_some(),
+                            "inWork": facts.overlay.in_work,
+                            "btw": facts.kind == SessionKind::Btw,
+                        })
+                    }),
+                ),
+            ];
+            for (key, field) in fields {
+                if let Some(field) = field {
+                    value[key] = field;
+                }
+            }
+            Some(value)
+        }
+        ServerEvent::SessionDeleted { session_id } => {
+            Some(json!({"type": "deleted", "sessionId": session_id.as_str()}))
+        }
+        ServerEvent::SessionStatus { session_id, status } => Some(json!({
+            "type": "status",
+            "sessionId": session_id.as_str(),
+            "status": match status {
+                LiveStatus::Busy => "busy",
+                LiveStatus::Idle => "idle",
+                LiveStatus::Retry => "retry",
+            },
+        })),
+        _ => None,
+    }
+}
+
+/// Session records, patches, removals and live status follow the UI's
+/// classification of the same frames, in the same order.
+#[test]
+fn session_events_match_the_ui() {
+    let fixture = fixture();
+    for (name, frames) in [("recorded", FRAMES_RECORDED), ("tools", FRAMES_TOOLS)] {
+        let frames: Vec<Value> = serde_json::from_str(frames).expect("valid");
+        let mut effects = Vec::new();
+        for frame in frames {
+            let decoded = event::decode_frame(&frame.to_string()).expect("recorded frames decode");
+            effects.extend(decoded.events.iter().filter_map(session_effect));
+        }
+        assert_eq!(
+            effects, fixture.session_events[name],
+            "the {name} session events diverged"
+        );
+    }
+}
+
+/// Replaying a recorded stream into the index rebuilds the session the
+/// server lists afterwards.
+#[test]
+fn replayed_session_events_converge_on_the_listing() {
+    let page: wire::Page<wire::Session> = serde_json::from_str(SESSIONS).expect("valid");
+    let listed = page
+        .data
+        .into_iter()
+        .map(projection::session)
+        .find(|session| session.id.as_str() == RECORDED_SESSION)
+        .expect("the listing holds the recorded session");
+    let mut index = SessionIndex::new();
+    let ticket = index.begin_load();
+    let _ = index.complete_load(ticket, Vec::new());
+    let frames: Vec<Value> = serde_json::from_str(FRAMES_RECORDED).expect("valid");
+    for frame in frames {
+        let decoded = event::decode_frame(&frame.to_string()).expect("recorded frames decode");
+        let _ = index.apply(
+            decoded
+                .events
+                .iter()
+                .filter_map(ServerEvent::session_change),
+        );
+    }
+    let replayed = index
+        .get(&SessionId::from(RECORDED_SESSION))
+        .expect("the stream created the session");
+    assert!(
+        replayed.same_structure(&listed),
+        "replayed {replayed:?} and listed {listed:?} differ"
+    );
+    // Recency differs by design: events stamp their own time, as the UI does.
+    assert_eq!(replayed.time.idle, listed.time.idle);
 }
