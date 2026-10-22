@@ -144,8 +144,23 @@
     {
       "id": "shell.startup",
       "feature": "shell.startup-view",
-      "description": "The window after startup on the seed: sidebar, startup view, composer and rails.",
+      "description": "The window after startup on the seed, once the composer's model and agent and the work status card's context sources have loaded: sidebar, startup view, composer and rails.",
       "steps": [
+        {
+          "wait": {
+            "electron": {
+              "expression": "!!document.querySelector('.model-controls__model-label')?.textContent.trim() && !!document.querySelector('.model-controls__agent-label')?.textContent.trim() && [...document.querySelectorAll('aside[aria-label=\"Work status\"] span')].some((span) => span.textContent.trim() === 'Context sources')"
+            },
+            "native": {
+              "elements": [
+                "composer-model",
+                "composer-agent",
+                "work-status-context"
+              ]
+            },
+            "timeout": 30
+          }
+        },
         {
           "capture": "startup",
           "targets": [
@@ -188,7 +203,15 @@
           }
         },
         {
-          "settle": 1.5
+          "wait": {
+            "electron": {
+              "expression": "!!document.querySelector('[data-session-row][aria-current=\"page\"]') && document.querySelectorAll('[data-message-id]').length > 0"
+            },
+            "native": {
+              "marker": "history-shown"
+            },
+            "timeout": 30
+          }
         },
         {
           "capture": "selected"

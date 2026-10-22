@@ -183,8 +183,13 @@ def resolve_row(rows: list[dict], target: dict) -> str:
 def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], directory: Path, args: argparse.Namespace) -> dict:
     """Runs the steps and returns the evidence of every checkpoint."""
     checkpoints: dict[str, dict] = {}
+    waits: list[dict] = []
     for step in steps:
-        if "click" in step:
+        if "wait" in step:
+            condition = step["wait"]
+            met = client.wait_for(condition[kind], float(condition.get("timeout", 30)))
+            waits.append({"condition": condition[kind], "met": met})
+        elif "click" in step:
             client.click(resolve_row(client.rows(), step["click"]))
         elif "key" in step:
             client.key(step["key"])
@@ -200,6 +205,8 @@ def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], dire
                 "image": str(image),
                 "rows": client.rows(),
                 "targets": client.targets({target: targets[target][kind] for target in step.get("targets", [])}),
+                "waits": list(waits),
+                "substitutions": list(getattr(client, "substitutions", [])),
                 "unobservable": sorted(getattr(client, "unobservable", ())),
             }
         else:
@@ -306,6 +313,8 @@ def check_contracts(scenarios: list[dict], features: list[dict], targets: dict[s
     problems = [f"scenario {scenario['id']} names unknown feature {scenario['feature']}" for scenario in scenarios if scenario["feature"] not in feature_ids]
     for scenario in scenarios:
         for step in scenario["steps"]:
+            if "wait" in step and set(step["wait"]) - {"timeout"} != {"electron", "native"}:
+                problems.append(f"scenario {scenario['id']} has a wait without a condition for each client")
             problems.extend(
                 f"scenario {scenario['id']} captures undefined target {target}"
                 for target in step.get("targets", [])
@@ -363,25 +372,37 @@ def run_scenarios(scenarios: list[dict], wanted: set[str] | None, output: Path, 
                     rects_candidate[f"target:{target}"] = rect
                 unobserved: list[dict] = []
                 rows = compare_rows(reference["rows"], candidate["rows"], frozenset(candidate.get("unobservable", ())), unobserved)
+                # An input the host could not deliver was replaced; its path is unverified.
+                unobserved.extend(candidate.get("substitutions", []))
                 comparisons[name] = {
                     "image": image.as_dict(),
                     "rows": rows,
                     "unobserved": unobserved,
                     "geometry": compare.compare_geometry(rects_reference, rects_candidate, args.scale),
                 }
+            for name, comparison in comparisons.items():
+                if not comparison.get("missing"):
+                    comparison["unmetWaits"] = [wait for wait in result["native"]["checkpoints"][name].get("waits", []) if not wait["met"]]
             result["comparisons"] = comparisons
+            reference_unmet = any(
+                not wait["met"] for checkpoint in result["electron"]["checkpoints"].values() for wait in checkpoint.get("waits", [])
+            )
             passed = all(
                 not comparison.get("missing")
                 and comparison["image"]["sizeMatches"]
                 and comparison["image"]["differingPixels"] == 0
                 and not comparison["rows"]
                 and not comparison["geometry"]
+                and not comparison["unmetWaits"]
                 for comparison in comparisons.values()
             )
             # Checks the candidate's platform cannot observe leave a clean
             # scenario incomplete: unverified is never passed.
             unverified = any(comparison.get("unobserved") for comparison in comparisons.values())
-            result["status"] = "failed" if not passed else "incomplete" if unverified else "passed"
+            if reference_unmet:
+                result["status"] = "blocked"
+            else:
+                result["status"] = "failed" if not passed else "incomplete" if unverified else "passed"
         failed += result["status"] != "passed"
         report["scenarios"][scenario["id"]] = result
         print(f"{scenario['id']}: {result['status']}", flush=True)
@@ -392,7 +413,8 @@ def run_scenarios(scenarios: list[dict], wanted: set[str] | None, output: Path, 
             image = comparison["image"]
             print(f"  {name}: {image['differingPixels']} differing pixels ({image['differingShare']:.1%}), "
                   f"{len(comparison['rows'])} row differences, {len(comparison['geometry'])} geometry differences, "
-                  f"{len(comparison['unobserved'])} checks not observable natively")
+                  f"{len(comparison['unobserved'])} checks not observable natively, "
+                  f"{len(comparison['unmetWaits'])} native waits not met")
         for kind in ("electron", "native"):
             if "error" in result[kind]:
                 print(f"  {kind}: {result[kind]['error']}")

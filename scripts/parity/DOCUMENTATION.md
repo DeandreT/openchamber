@@ -66,8 +66,11 @@ A scenario passes only when every checkpoint matches in size and pixels, rows
 and geometry; geometry allows one physical pixel. `--tolerance` ignores
 per-channel differences up to its value and is for reviewed rasterization
 noise only. A check the candidate's platform API cannot report (AT-SPI carries
-no expand or collapse state) is listed as unobserved, never as a match; a
-scenario that is otherwise clean is then `incomplete`. The report records
+no expand or collapse state) is listed as unobserved, never as a match, and so
+is a pointer click the host dropped (KWin on Wayland ignores synthetic X input
+without a remote-control grant), which the native adapter replaces with the
+target's accessibility action; a scenario that is otherwise clean is then
+`incomplete`. The report records
 `passed`, `incomplete`, `failed` (the native client differs or failed) or
 `blocked` (the reference failed), and coverage against the whole inventory: a
 feature passes only when every scenario it lists passed. Reports,
@@ -83,4 +86,12 @@ Give the feature an inventory entry first, with the reference files and the
 states it covers, then add steps to `scenarios.json` that name it. The runner
 refuses a scenario whose feature is not in the inventory and an inventory entry
 that lists a scenario that does not exist. Steps are `click` (a row by zone
-prefix and title), `key`, `type`, `settle` and `capture`.
+prefix and title), `key`, `type`, `wait`, `settle` and `capture`. A capture
+can list `targets` from the scenario file's shared target table.
+
+Prefer `wait` to `settle`: it names the observable state a checkpoint needs,
+with one condition per client (a page expression for Electron; accessible
+elements or a diagnostic marker emitted since the last input for the native
+client) and a timeout. A reference that never reaches its state blocks the
+scenario; a native client that never does fails it, and its evidence is still
+captured.
