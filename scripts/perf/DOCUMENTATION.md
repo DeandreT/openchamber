@@ -1103,10 +1103,19 @@ python3 scripts/perf/native_bench.py --runs 5 --warmup 1 \
 | idle | process-tree CPU over `--idle-seconds` | the same |
 | switch | AT-SPI activation of sidebar rows to the paint of the revealed transcript, forward and reverse | not measured; `profile:switch` needs a seeded server |
 
-The native client launched here is the offline stage: synthetic data, no
-server and no OpenCode. Its rows carry that scope in the printed table and in
-the receipt, and they never establish a full-application startup or memory
-gain; that comparison needs the connected client against the same server.
+By default the native client runs offline: synthetic data, no server and no
+OpenCode. Its rows carry that scope in the printed table and in the receipt,
+and they never establish a full-application startup or memory gain.
+
+With `--server <url>` (an isolated server, such as `bun run profile:serve`)
+the native client runs connected. Each launch also waits for the
+`sessions-shown` and `history-shown` markers: the frames that first paint the
+complete session list and the selected session's history. `--server-pid`
+samples the server's process tree with each launch, so native plus server can
+be set against the Electron tree, which owns its server and OpenCode. The
+native startup rows then measure a client joining a running server, while
+Electron's startup includes starting its server and OpenCode; the printed
+scopes say so.
 
 Both clients run under X11 by default (`--backend`), because a covered Wayland
 window stops drawing and handling accessibility actions. The switch scenario

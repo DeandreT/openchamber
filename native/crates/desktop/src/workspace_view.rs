@@ -74,9 +74,9 @@ impl Render for Workspace {
                     canvas(
                         |_, _, _| {},
                         move |_, _, _, _| {
-                            for (marker, started) in markers {
+                            for (marker, started, count) in markers {
                                 let elapsed = started.map(|started| started.elapsed());
-                                diagnostics::mark(marker, elapsed, None);
+                                diagnostics::mark(marker, elapsed, count);
                             }
                         },
                     )

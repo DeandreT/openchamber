@@ -30,7 +30,10 @@ read-only until prompt submission has its error and reconciliation paths.
   interpret records themselves.
 - `theme.rs`, `locale.rs` and `assets.rs` load the generated resources in
   `resources/`; `bun run native:resources` owns their content.
-- `diagnostics.rs` records timing markers without message or title text.
+- `diagnostics.rs` records timing markers without message or title text:
+  window creation, first content, usable composer, completed switch, sidebar
+  rebuilds, synthetic playback and, when connected, the first painted session
+  list and each visited session's first painted history.
   GPUI's own `log` records reach the same `tracing` subscriber.
 
 ## Invariants

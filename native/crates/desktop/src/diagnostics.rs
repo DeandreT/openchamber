@@ -25,6 +25,10 @@ pub enum Marker {
     SidebarRebuilt,
     /// A synthetic response finished streaming.
     PlaybackCompleted,
+    /// The first complete global session list was painted.
+    SessionsShown,
+    /// A visited session's first history read was painted.
+    HistoryShown,
 }
 
 impl Marker {
@@ -36,6 +40,8 @@ impl Marker {
             Self::SwitchCompleted => "switch-completed",
             Self::SidebarRebuilt => "sidebar-rebuilt",
             Self::PlaybackCompleted => "playback-completed",
+            Self::SessionsShown => "sessions-shown",
+            Self::HistoryShown => "history-shown",
         }
     }
 }
