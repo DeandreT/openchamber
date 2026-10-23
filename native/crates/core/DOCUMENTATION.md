@@ -26,7 +26,9 @@ rendering asks for a projection and dispatches an action.
   its turn (`turn_position`); `turn_footer.rs` formats and fits the facts a
   finished turn shows. A compaction record carries its lifecycle, and
   `context_usage.rs` reads a session's context fill from the newest response
-  that reported tokens, unknown after a finished compaction. User and assistant messages carry parts; every
+  that reported tokens, unknown after a finished compaction. Parts carry
+  their times and steps their cost (`Usd`, billionths of a dollar so sums are
+  exact), and `turn_stats.rs` ports `getLatestCompletedTurnStats` over them. User and assistant messages carry parts; every
   other OpenCode record (synthetic, system, skill, shell, compaction, switched
   agent, model or location, idle) is a notice with one line of text.
 - `session_index.rs` ports the global session list of

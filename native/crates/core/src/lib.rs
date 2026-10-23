@@ -26,3 +26,4 @@ pub mod sidebar_rows;
 pub mod synthetic;
 pub mod transcript;
 pub mod turn_footer;
+pub mod turn_stats;

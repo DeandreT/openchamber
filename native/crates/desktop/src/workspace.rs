@@ -36,6 +36,7 @@ use openchamber_native_core::synthetic::{
 use openchamber_native_core::transcript::{
     Message, MessageInfo, Part, Role, Transcript, TranscriptChange, TranscriptEvent,
 };
+use openchamber_native_core::turn_stats::TurnStats;
 
 use crate::chrome::InitialSize;
 use crate::composer_view::ComposerSlot;
@@ -96,6 +97,8 @@ pub struct OpenSession {
     pub older: Option<String>,
     /// The prompt the rail last showed as current.
     pub rail_current: Option<usize>,
+    /// The statistics the Turn stats section last committed while idle.
+    pub turn_stats: Cell<Option<TurnStats>>,
 }
 
 pub struct Workspace {
@@ -112,6 +115,8 @@ pub struct Workspace {
     pub(crate) work_status_open: bool,
     /// Whether the work status card's Context sources section is expanded.
     pub(crate) work_status_context_open: bool,
+    /// Turn stats start expanded.
+    pub(crate) work_status_telemetry_open: bool,
     /// A press in a title row that moves the window once the pointer moves.
     pub(crate) title_drag_armed: bool,
     pub(crate) selected: Option<SessionId>,
@@ -189,6 +194,7 @@ impl Workspace {
             sidebar_open: true,
             work_status_open: true,
             work_status_context_open: false,
+            work_status_telemetry_open: true,
             title_drag_armed: false,
             selected: None,
             open_sessions: HashMap::new(),
@@ -494,6 +500,7 @@ impl Workspace {
                 history: History::Complete,
                 older: None,
                 rail_current: None,
+                turn_stats: Cell::new(None),
             },
         );
         if !self.is_synthetic() {

@@ -121,7 +121,12 @@ const normalizePart = (part: Part) => {
   switch (part.type) {
     case 'text':
     case 'reasoning':
-      return { id: part.id, type: part.type, text: part.text };
+      return {
+        id: part.id,
+        type: part.type,
+        text: part.text,
+        time: { start: part.time?.start ?? null, end: part.time?.end ?? null },
+      };
     case 'tool':
       return {
         id: part.id,
@@ -130,6 +135,10 @@ const normalizePart = (part: Part) => {
         status: part.state.status,
         output: part.state.status === 'completed' ? part.state.output : part.state.status === 'error' ? part.state.error : null,
         elided: toolContentShellChars(part),
+        time: {
+          start: 'time' in part.state ? part.state.time.start : null,
+          end: 'time' in part.state && 'end' in part.state.time ? part.state.time.end : null,
+        },
       };
     case 'file':
       return { id: part.id, type: 'file', filename: part.filename ?? '', mime: part.mime };
@@ -261,6 +270,8 @@ export const renderTransportFixtures = async (): Promise<string> => {
               : undefined),
             finish: message.finish ?? null,
             error: message.error?.message ?? null,
+            // Billionths of a dollar, as the native client keeps costs.
+            cost: message.cost === undefined ? null : Math.round(message.cost * 1e9),
             tokens: message.tokens
               ? {
                   input: message.tokens.input,

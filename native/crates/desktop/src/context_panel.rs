@@ -7,7 +7,7 @@
 use gpui_kit::{
     AnyElement, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Role,
     SharedString, StatefulInteractiveElement, Styled, TestSupportExt, div, prelude::FluentBuilder,
-    px, rems,
+    px,
 };
 
 use openchamber_native_core::context_usage::{self, ContextUsage, UsageTone};
@@ -111,6 +111,7 @@ impl Workspace {
                             ),
                     )
                     .children(self.render_context_usage(palette, direction, cx))
+                    .children(self.render_turn_stats(palette, direction, cx))
                     .children(self.render_context_sources(palette, direction, cx))
                     .child(
                         div()
@@ -304,90 +305,38 @@ impl Workspace {
                 "chat.workStatus.breakdown.mcpCountPlural",
             ));
         }
-        let expanded = self.work_status_context_open;
-        let title = strings.get("chat.workStatus.section.contextBreakdown");
-        let foreground = palette.foreground;
-        let heading = on_activate(
-            div()
-                .id("work-status-context")
-                .role(Role::Button)
-                .accessibility_id("work-status-context")
-                .aria_label(title.clone())
-                .aria_expanded(expanded)
-                .flex_1()
-                .min_w_0()
-                .h_full()
-                .px(px(4.0))
-                .rounded(px(CONTROL_RADIUS))
-                .flex_row_from(direction)
-                .items_center()
-                .gap(px(6.0))
-                .cursor_pointer()
-                .text_color(palette.muted_foreground)
-                .hover(move |style| style.text_color(foreground))
-                .child(glyph("stack", 16.0, palette.muted_foreground))
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .css_text(XS_SIZE, XS_LINE, cx)
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(palette.foreground)
-                        .child(title),
-                )
-                .child(sidebar_view::chevron(!expanded, direction, palette))
-                .child(div().flex_1())
-                .child(
-                    div()
-                        .min_w_0()
-                        .max_w(gpui_kit::relative(0.6))
-                        .truncate()
-                        .css_text(XS_SIZE, XS_LINE, cx)
-                        .text_color(palette.muted_foreground)
-                        .child(SharedString::from(summary.join(" · "))),
-                ),
-            cx,
-            |this, _, cx| {
-                this.work_status_context_open = !this.work_status_context_open;
-                cx.notify();
+        let rows = vec![
+            work_status_row(
+                strings.get("chat.workStatus.breakdown.skills"),
+                skills.to_string().into(),
+                None,
+                palette,
+                direction,
+                cx,
+            ),
+            work_status_row(
+                strings.get("chat.workStatus.breakdown.mcp"),
+                mcp.to_string().into(),
+                None,
+                palette,
+                direction,
+                cx,
+            ),
+        ];
+        Some(collapsible_section(
+            Section {
+                id: "work-status-context",
+                icon: "stack",
+                title: strings.get("chat.workStatus.section.contextBreakdown"),
+                summary: Some(SharedString::from(summary.join(" · "))),
+                expanded: self.work_status_context_open,
+                toggle: |this| this.work_status_context_open = !this.work_status_context_open,
             },
-        )
-        .test_support();
-        let row = |label: SharedString, value: usize| {
-            div()
-                .h(px(ROW_HEIGHT))
-                .px(px(4.0))
-                .flex_row_from(direction)
-                .items_center()
-                .gap(px(8.0))
-                .text_size(rems(ROW_SIZE))
-                .text_color(palette.muted_foreground)
-                .child(div().flex_1().min_w_0().truncate().child(label))
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .child(SharedString::from(value.to_string())),
-                )
-        };
-        Some(
-            div()
-                .mt(px(SECTION_GAP))
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .h(px(HEADING_HEIGHT))
-                        .mb(px(2.0))
-                        .flex_row_from(direction)
-                        .items_center()
-                        .child(heading),
-                )
-                .when(expanded, |this| {
-                    this.child(row(strings.get("chat.workStatus.breakdown.skills"), skills))
-                        .child(row(strings.get("chat.workStatus.breakdown.mcp"), mcp))
-                })
-                .into_any_element(),
-        )
+            rows,
+            palette,
+            direction,
+            cx,
+        ))
     }
 
     /// The column of panel surfaces at the end edge.
@@ -490,4 +439,123 @@ impl Workspace {
                 .render(palette, cx, |_, _, _| {}),
             )
     }
+}
+
+/// A collapsible section of the card (`WorkStatusSection` with a toggle).
+pub(crate) struct Section {
+    pub id: &'static str,
+    pub icon: &'static str,
+    pub title: SharedString,
+    /// Shown at the heading's end, in muted text.
+    pub summary: Option<SharedString>,
+    pub expanded: bool,
+    pub toggle: fn(&mut Workspace),
+}
+
+/// The section's 24 px heading (its glyph, title, chevron and summary) and,
+/// while expanded, its rows; `mt-5` above.
+pub(crate) fn collapsible_section(
+    section: Section,
+    rows: Vec<AnyElement>,
+    palette: &Palette,
+    direction: Direction,
+    cx: &Context<Workspace>,
+) -> AnyElement {
+    let foreground = palette.foreground;
+    let toggle = section.toggle;
+    let heading = on_activate(
+        div()
+            .id(section.id)
+            .role(Role::Button)
+            .accessibility_id(section.id)
+            .aria_label(section.title.clone())
+            .aria_expanded(section.expanded)
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .px(px(4.0))
+            .rounded(px(CONTROL_RADIUS))
+            .flex_row_from(direction)
+            .items_center()
+            .gap(px(6.0))
+            .cursor_pointer()
+            .text_color(palette.muted_foreground)
+            .hover(move |style| style.text_color(foreground))
+            .child(glyph(section.icon, 16.0, palette.muted_foreground))
+            .child(
+                div()
+                    .min_w_0()
+                    .truncate()
+                    .css_text(XS_SIZE, XS_LINE, cx)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .text_color(palette.foreground)
+                    .child(section.title),
+            )
+            .child(sidebar_view::chevron(!section.expanded, direction, palette))
+            .child(div().flex_1())
+            .children(section.summary.map(|summary| {
+                div()
+                    .min_w_0()
+                    .max_w(gpui_kit::relative(0.6))
+                    .truncate()
+                    .css_text(XS_SIZE, XS_LINE, cx)
+                    .text_color(palette.muted_foreground)
+                    .child(summary)
+            })),
+        cx,
+        move |this, _, cx| {
+            toggle(this);
+            cx.notify();
+        },
+    )
+    .test_support();
+    div()
+        .mt(px(SECTION_GAP))
+        .flex()
+        .flex_col()
+        .child(
+            div()
+                .h(px(HEADING_HEIGHT))
+                .mb(px(2.0))
+                .flex_row_from(direction)
+                .items_center()
+                .child(heading),
+        )
+        .when(section.expanded, |this| this.children(rows))
+        .into_any_element()
+}
+
+/// A 28 px readout (`WorkStatusRow`): a label that truncates before its
+/// value, both muted unless the value has a tone.
+pub(crate) fn work_status_row(
+    label: SharedString,
+    value: SharedString,
+    value_color: Option<gpui_kit::Hsla>,
+    palette: &Palette,
+    direction: Direction,
+    cx: &Context<Workspace>,
+) -> AnyElement {
+    div()
+        .h(px(ROW_HEIGHT))
+        .px(px(4.0))
+        .flex_row_from(direction)
+        .items_center()
+        .gap(px(8.0))
+        .text_color(palette.muted_foreground)
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .css_text(ROW_SIZE, ROW_LINE, cx)
+                .child(label),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .css_text(ROW_SIZE, ROW_LINE, cx)
+                .when_some(value_color, |this, color| this.text_color(color))
+                .child(value),
+        )
+        .into_any_element()
 }

@@ -74,6 +74,11 @@ counts and identifiers only.
   Compaction records carry their status from history reads and from the
   compaction started, ended and failed events. Catalog models keep a positive
   context window.
+- Part times follow `projectAssistantContent` in history reads (text spans
+  its step, a tool its run) and the stream's event times live (a text or
+  reasoning part from its start, a tool from its call to its result), so the
+  replay comparison leaves them out as it leaves out message times. Steps
+  carry their cost from history and from the step ended and failed events.
 - `PublicAssetClient` shares nothing with `ServerClient`: it sends no
   credential, cookie or OpenChamber header, requests only HTTPS URLs, follows
   only HTTPS redirects and refuses bodies over 256 KiB.
