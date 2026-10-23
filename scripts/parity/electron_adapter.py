@@ -12,7 +12,7 @@ BRIDGE = Path(__file__).with_name("electron_bridge.mjs")
 
 FINGERPRINT = """(() => JSON.stringify([
   document.body.innerText.length,
-  ...[...document.querySelectorAll('aside, section, [data-sidebar-row-key], [data-message-id]')].slice(0, 400).map((element) => {
+  ...[...document.querySelectorAll('aside, section, nav [role=option] > span, [data-sidebar-row-key], [data-message-id]')].slice(0, 400).map((element) => {
     const rect = element.getBoundingClientRect()
     return [Math.round(rect.x), Math.round(rect.y), Math.round(rect.width), Math.round(rect.height)]
   }),
@@ -82,7 +82,7 @@ class ElectronClient:
 
     def fingerprint(self) -> str:
         """What a settled page holds still: its text and the boxes of its
-        panels, sections, rows and messages."""
+        panels, sections, prompt ticks, rows and messages."""
         return self._call("observe", expression=FINGERPRINT)["value"]
 
     def wait_for(self, condition: dict, timeout_s: float) -> bool:
