@@ -224,6 +224,15 @@ spacing of the characters before it, as Chromium adds spacing after every
 character. Text that does not fit on one line, or that has right-to-left
 characters, falls back to ordinary wrapped text without spacing.
 
+### Why the interface font falls back to Arial's family
+
+The web's interface stack ends in `sans-serif`, which Chromium maps to Arial
+and fontconfig to Arial or a metric twin such as Liberation Sans. A glyph the
+interface face lacks (such as `↑`) comes from that family before any
+per-character fallback, so `fonts.rs` resolves it the same way, accepting only
+Arial and its metric twins as Skia does, and the workspace root sets it as the
+interface font's first fallback.
+
 ### Why logos are inverted in the SVG
 
 The web draws provider logos with `dark:invert`. GPUI's image pipeline has no
