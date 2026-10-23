@@ -61,7 +61,9 @@ secret service on it, which outlive the run and ask the user to unlock their
 keyring. The session starts the accessibility bus and registry itself, and
 `xsettingsd` publishes fontconfig's `system-ui` family as the GTK font, which
 Chromium's `system-ui` follows on a desktop. When the run ends, every process
-attached to the private bus is stopped.
+attached to the private bus is stopped. The bus daemon now and then dies
+before the session starts; the display is then started again, at most three
+times, which is safe because nothing has run yet.
 
 Ad hoc probes that open windows use the same display:
 
@@ -123,7 +125,7 @@ scenario; a native client that never does fails it, and its evidence is still
 captured.
 
 Every capture first waits up to 15 s for the client to hold still for
-750 ms: Electron's text and the boxes of its panels, sections, rows and
-messages, the native client's accessible rows. Panels that fill in after the
+750 ms: Electron's text and the boxes of its panels, sections, prompt ticks,
+rows and messages, the native client's accessible rows. Panels that fill in after the
 transcript would otherwise be captured midway. A reference that never holds
 still blocks the scenario; a native client that never does fails it.

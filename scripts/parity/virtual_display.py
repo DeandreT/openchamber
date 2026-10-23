@@ -52,6 +52,9 @@ BUS_CONFIG = """<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Config
   </policy>
 </busconfig>
 """
+# Starts of the display when its bus daemon dies before the session starts,
+# which happens now and then under dbus-run-session.
+DISPLAY_STARTS = 3
 # How long the compositor may take to wind down after the run finished.
 SHUTDOWN_GRACE_S = 10.0
 # The accessibility bus and its registry. Their D-Bus activation goes through
@@ -123,37 +126,42 @@ def run_inside(command: list[str], width: int, height: int) -> int:
         env = {key: value for key, value in os.environ.items() if key not in SESSION_VARIABLES}
         env[INSIDE] = "1"
         log = open(compositor_log, "wb")
-        compositor = subprocess.Popen(
-            [
-                "dbus-run-session", f"--config-file={bus_config}", "--",
-                "kwin_wayland", "--virtual", "--xwayland",
-                "--width", str(width + MARGIN), "--height", str(height + MARGIN),
-                "--socket", f"openchamber-parity-{os.getpid()}",
-                "--exit-with-session", str(session),
-            ],
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stderr=log,
-            start_new_session=True,
-        )
-        try:
-            while compositor.poll() is None and not status.exists():
-                time.sleep(0.2)
-            deadline = time.monotonic() + SHUTDOWN_GRACE_S
-            while compositor.poll() is None and time.monotonic() < deadline:
-                time.sleep(0.2)
-        except KeyboardInterrupt:
-            pass
-        finally:
-            if compositor.poll() is None:
-                os.killpg(compositor.pid, signal.SIGTERM)
-                try:
-                    compositor.wait(timeout=SHUTDOWN_GRACE_S)
-                except subprocess.TimeoutExpired:
-                    os.killpg(compositor.pid, signal.SIGKILL)
-                    compositor.wait()
-            if bus_record.exists():
-                stop_attached(bus_record.read_text())
+        for _ in range(DISPLAY_STARTS):
+            compositor = subprocess.Popen(
+                [
+                    "dbus-run-session", f"--config-file={bus_config}", "--",
+                    "kwin_wayland", "--virtual", "--xwayland",
+                    "--width", str(width + MARGIN), "--height", str(height + MARGIN),
+                    "--socket", f"openchamber-parity-{os.getpid()}",
+                    "--exit-with-session", str(session),
+                ],
+                env=env,
+                stdin=subprocess.DEVNULL,
+                stderr=log,
+                start_new_session=True,
+            )
+            try:
+                while compositor.poll() is None and not status.exists():
+                    time.sleep(0.2)
+                deadline = time.monotonic() + SHUTDOWN_GRACE_S
+                while compositor.poll() is None and time.monotonic() < deadline:
+                    time.sleep(0.2)
+            except KeyboardInterrupt:
+                pass
+            finally:
+                if compositor.poll() is None:
+                    os.killpg(compositor.pid, signal.SIGTERM)
+                    try:
+                        compositor.wait(timeout=SHUTDOWN_GRACE_S)
+                    except subprocess.TimeoutExpired:
+                        os.killpg(compositor.pid, signal.SIGKILL)
+                        compositor.wait()
+                if bus_record.exists():
+                    stop_attached(bus_record.read_text())
+            # A session that recorded its bus ran the command; only one that
+            # never started (its bus daemon died first) is started again.
+            if bus_record.exists() or status.exists():
+                break
         if run_errors.exists():
             sys.stderr.write(run_errors.read_text(errors="replace"))
         log.close()
