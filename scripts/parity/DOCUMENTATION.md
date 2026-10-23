@@ -121,3 +121,9 @@ elements or a diagnostic marker emitted since the last input for the native
 client) and a timeout. A reference that never reaches its state blocks the
 scenario; a native client that never does fails it, and its evidence is still
 captured.
+
+Every capture first waits up to 15 s for the client to hold still for
+750 ms: Electron's text and the boxes of its panels, sections, rows and
+messages, the native client's accessible rows. Panels that fill in after the
+transcript would otherwise be captured midway. A reference that never holds
+still blocks the scenario; a native client that never does fails it.
