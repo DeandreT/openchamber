@@ -84,17 +84,24 @@ impl ComposerSlot {
 }
 
 impl Workspace {
+    /// The chat area's width: the content between the sidebar and the work
+    /// status panel and rail.
+    pub(crate) fn chat_area_width(&self, window: &Window) -> f32 {
+        let mut area = f32::from(chrome::content_size(window).width) - context_panel::RAIL_WIDTH;
+        if self.sidebar_open {
+            area -= sidebar_view::SIDEBAR_WIDTH;
+        }
+        if self.work_status_open {
+            area -= context_panel::PANEL_WIDTH;
+        }
+        area
+    }
+
     /// The composer box's width: the chat column, less the transcript's
     /// navigation gutter when a session is open, capped and padded as
     /// `.chat-input-column`.
     pub(crate) fn composer_width(&self, window: &Window) -> f32 {
-        let mut column = f32::from(chrome::content_size(window).width) - context_panel::RAIL_WIDTH;
-        if self.sidebar_open {
-            column -= sidebar_view::SIDEBAR_WIDTH;
-        }
-        if self.work_status_open {
-            column -= context_panel::PANEL_WIDTH;
-        }
+        let mut column = self.chat_area_width(window);
         if self.selected.is_some() {
             column -= chrome::NAVIGATION_GUTTER;
         }
