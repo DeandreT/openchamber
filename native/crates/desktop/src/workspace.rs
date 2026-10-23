@@ -94,6 +94,8 @@ pub struct OpenSession {
     pub history: History,
     /// The cursor of the next older page, when the server has one.
     pub older: Option<String>,
+    /// The prompt the rail last showed as current.
+    pub rail_current: Option<usize>,
 }
 
 pub struct Workspace {
@@ -450,6 +452,16 @@ impl Workspace {
             px(TRANSCRIPT_OVERDRAW),
         );
         list.set_follow_mode(FollowMode::Tail);
+        // A scroll that moves the current prompt redraws the rail.
+        let workspace = cx.entity().downgrade();
+        let session = id.clone();
+        list.set_scroll_handler(move |_, _, cx| {
+            let _ = workspace.update(cx, |this, cx| {
+                if this.refresh_prompt_rail(&session) {
+                    cx.notify();
+                }
+            });
+        });
         let key = ScrollKey {
             runtime: self.runtime.clone(),
             session: id.clone(),
@@ -475,6 +487,7 @@ impl Workspace {
                 list,
                 history: History::Complete,
                 older: None,
+                rail_current: None,
             },
         );
         if !self.is_synthetic() {

@@ -29,6 +29,7 @@ impl Workspace {
         &self,
         palette: &Palette,
         direction: Direction,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let Some(open) = self
@@ -87,6 +88,12 @@ impl Workspace {
         let following =
             open.list.is_following_tail() || open.list.is_scrolled_to_end().unwrap_or(true);
         let scroll_label = locale::strings(cx).get("chat.scrollToBottom.aria");
+        let rail = self.render_prompt_rail(
+            palette,
+            direction,
+            locale::strings(cx).get("chat.promptNavigator.aria"),
+            window,
+        );
         let rows = list(
             open.list.clone(),
             cx.processor(|this, index: usize, window, cx| this.render_message(index, window, cx)),
@@ -100,6 +107,7 @@ impl Workspace {
             .inset_0()
             .padding_end(direction, px(chrome::NAVIGATION_GUTTER))
             .child(rows)
+            .children(rail)
             .when(!following, |this| {
                 this.child(
                     div()

@@ -64,7 +64,7 @@ impl Render for Workspace {
                 .min_w_0()
                 .h_full()
                 .bg(palette.chat_background)
-                .child(self.render_transcript(&palette, direction, cx))
+                .child(self.render_transcript(&palette, direction, window, cx))
                 .child(self.render_composer(&palette, direction, window, cx))
                 .into_any_element()
         } else {

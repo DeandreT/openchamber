@@ -34,6 +34,11 @@ read-only until prompt submission has its error and reconciliation paths.
 - `context_panel.rs` also reads the selected session's context fill against
   the limit `useContextWindowLimits` picks (the record's model, the newest
   answer's, the composer's) and draws its row and meter.
+- `prompt_rail.rs` draws the prompt navigator at the transcript's end edge:
+  one tick per prompt, the current one longer, following the reading line
+  as `scrollSpy.ts` does, in the narrow clipping gutter when the message
+  column reaches under the full one. A scroll that moves the current prompt
+  redraws it.
 - `turn_footer.rs` draws the facts under a finished turn (model, effort,
   agent, duration) and fits them to the row as `useFactsFit` does, keeping
   the place of the message actions the web lays out for hover. The time fact

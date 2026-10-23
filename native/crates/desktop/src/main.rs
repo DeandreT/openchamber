@@ -20,6 +20,7 @@ mod locale;
 mod logical;
 mod model_controls;
 mod network;
+mod prompt_rail;
 mod provider_logos;
 mod send_catalog;
 mod server_sync;

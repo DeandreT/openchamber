@@ -29,6 +29,7 @@ chat.modelControls.autoModel
 chat.modelControls.default
 chat.modelControls.selectAgent
 chat.modelControls.selectModel
+chat.promptNavigator.aria
 chat.scrollToBottom.aria
 chat.workStatus.action.openContext
 chat.workStatus.ariaLabel
