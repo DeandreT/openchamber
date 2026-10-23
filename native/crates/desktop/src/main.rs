@@ -29,6 +29,7 @@ mod startup_view;
 mod theme;
 mod tracked_text;
 mod transcript_view;
+mod turn_footer;
 mod workspace;
 #[cfg(test)]
 mod workspace_tests;

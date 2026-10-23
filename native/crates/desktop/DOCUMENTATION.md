@@ -30,7 +30,11 @@ read-only until prompt submission has its error and reconciliation paths.
   hides their labels by the controls' width as the web's container query
   does.
 - `provider_logos.rs` resolves, loads and caches provider logos for the
-  composer and the sidebar rows.
+  composer, the sidebar rows and the turn footers.
+- `turn_footer.rs` draws the facts under a finished turn (model, effort,
+  agent, duration) and fits them to the row as `useFactsFit` does, keeping
+  the place of the message actions the web lays out for hover. The time fact
+  waits for a time-zone source.
 - `sidebar_item.rs` copies the core row model into owned rows. The core model
   borrows session records and entities cannot hold borrows.
 - `workspace_view.rs` lays out the frameless window: the sidebar column, the

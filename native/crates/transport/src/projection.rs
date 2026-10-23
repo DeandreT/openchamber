@@ -13,7 +13,8 @@ use openchamber_native_core::session::{
     MetadataFacts, SessionKind, SessionOverlay, SessionRecord, SessionTime as CoreSessionTime,
 };
 use openchamber_native_core::transcript::{
-    Message, MessageInfo, Part, PartContent, Role, ToolStatus,
+    AssistantFacts, Message, MessageInfo, Part, PartContent, Role, StepOutcome, TokenUsage,
+    ToolStatus,
 };
 use serde_json::Value;
 
@@ -108,6 +109,7 @@ pub(crate) fn message(envelope: wire::MessageEnvelope) -> Result<Option<Message>
     } = envelope;
     let body = Value::Object(body);
     let notice = |field: &str| body.get(field).and_then(Value::as_str).map(str::to_owned);
+    let mut facts = None;
     let (role, parts, notice) = match kind.as_str() {
         "user" => {
             let user: wire::UserBody = parse(body.clone(), "user message")?;
@@ -115,11 +117,22 @@ pub(crate) fn message(envelope: wire::MessageEnvelope) -> Result<Option<Message>
         }
         "assistant" => {
             let assistant: wire::AssistantBody = parse(body.clone(), "assistant message")?;
-            (
-                Role::Assistant,
-                assistant_parts(&id, &assistant.content),
-                None,
-            )
+            let parts = assistant_parts(&id, &assistant.content);
+            facts = Some(AssistantFacts {
+                agent: assistant.agent.filter(|agent| !agent.is_empty()),
+                model: assistant.model.map(model_choice),
+                outcome: StepOutcome {
+                    finish: assistant.finish,
+                    error: assistant
+                        .error
+                        .as_ref()
+                        .and_then(|error| error.get("message"))
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                    tokens: assistant.tokens.map(token_usage),
+                },
+            });
+            (Role::Assistant, parts, None)
         }
         "synthetic" => (Role::Synthetic, Vec::new(), notice("text")),
         "system" => (Role::System, Vec::new(), notice("text")),
@@ -154,9 +167,20 @@ pub(crate) fn message(envelope: wire::MessageEnvelope) -> Result<Option<Message>
             created: time.created,
             completed: time.completed,
             notice,
+            assistant: facts,
         },
         parts,
     }))
+}
+
+pub(crate) fn token_usage(wire: wire::TokenUsage) -> TokenUsage {
+    TokenUsage {
+        input: wire.input,
+        output: wire.output,
+        reasoning: wire.reasoning,
+        cache_read: wire.cache.read,
+        cache_write: wire.cache.write,
+    }
 }
 
 fn parse<T: serde::de::DeserializeOwned>(value: Value, what: &str) -> Result<T, TransportError> {

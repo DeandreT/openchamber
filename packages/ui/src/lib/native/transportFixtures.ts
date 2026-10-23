@@ -253,6 +253,25 @@ export const renderTransportFixtures = async (): Promise<string> => {
       role: message.role,
       created: message.time.created,
       completed: 'completed' in message.time ? message.time.completed ?? null : null,
+      assistant: message.role === 'assistant'
+        ? {
+            agent: message.agent || null,
+            model: normalizeModelRef(message.providerID && message.modelID
+              ? { providerID: message.providerID, id: message.modelID, variant: message.variant }
+              : undefined),
+            finish: message.finish ?? null,
+            error: message.error?.message ?? null,
+            tokens: message.tokens
+              ? {
+                  input: message.tokens.input,
+                  output: message.tokens.output,
+                  reasoning: message.tokens.reasoning,
+                  cacheRead: message.tokens.cache.read,
+                  cacheWrite: message.tokens.cache.write,
+                }
+              : null,
+          }
+        : null,
       parts: parts.map(normalizePart),
     }));
   // `getSessionMessages`: a page shorter than its limit is the oldest one.

@@ -24,3 +24,4 @@ pub mod session_index;
 pub mod sidebar_rows;
 pub mod synthetic;
 pub mod transcript;
+pub mod turn_footer;

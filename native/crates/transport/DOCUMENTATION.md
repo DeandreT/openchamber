@@ -66,8 +66,11 @@ counts and identifiers only.
   `listMcpServers` do; the skill count reads `GET /api/config/skills` for the
   owning project. Catalog changes (`config`, `agent`, `provider` and `model`
   updates) arrive as one `CatalogUpdated` event naming what changed.
-- A session's model comes with its record and with `session.model.selected`,
-  so the sidebar shows the provider of each session's current model.
+- A session's model and agent come with its record and with
+  `session.model.selected` and `session.agent.selected`.
+- An assistant message's agent and model come with `session.step.started`,
+  and its finish, error and tokens with `session.step.ended` or
+  `session.step.failed`, so a replayed stream converges on the history read.
 - `PublicAssetClient` shares nothing with `ServerClient`: it sends no
   credential, cookie or OpenChamber header, requests only HTTPS URLs, follows
   only HTTPS redirects and refuses bodies over 256 KiB.
