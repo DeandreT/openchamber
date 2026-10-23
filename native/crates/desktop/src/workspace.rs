@@ -110,6 +110,9 @@ pub struct Workspace {
     pub(crate) scroll_memory: ScrollMemory,
     pub(crate) composer: Entity<TextareaState>,
     pub(crate) composer_key: Option<DraftKey>,
+    /// Whether the composer shows the short placeholder; unknown until the
+    /// first frame measures it.
+    pub(crate) composer_placeholder_compact: Option<bool>,
     playback: HashMap<SessionId, Task<()>>,
     /// Running state per session, from the live channel only.
     pub(crate) live_status: HashMap<SessionId, LiveStatus>,
@@ -173,6 +176,7 @@ impl Workspace {
             scroll_memory: ScrollMemory::new(),
             composer,
             composer_key: None,
+            composer_placeholder_compact: None,
             playback: HashMap::new(),
             live_status: HashMap::new(),
             connection,
@@ -197,6 +201,12 @@ impl Workspace {
     /// Whether the workspace shows synthetic data.
     pub fn is_synthetic(&self) -> bool {
         self.connection.is_none()
+    }
+
+    /// The selected session's record.
+    pub fn selected_session(&self) -> Option<&SessionRecord> {
+        let id = self.selected.as_ref()?;
+        self.session(id)
     }
 
     pub fn session(&self, id: &SessionId) -> Option<&SessionRecord> {

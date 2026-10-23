@@ -7,6 +7,7 @@ chat.chatInput.chooseProject
 chat.chatInput.focusMode.toggleAria
 chat.chatInput.permissionMode.ask
 chat.chatInput.placeholder.chat
+chat.chatInput.placeholder.chatCompact
 chat.chatInput.placeholder.selectSession
 chat.container.sessionLoadError.authDescription
 chat.container.sessionLoadError.description
@@ -52,6 +53,7 @@ header.actions.newMiniChatAria
 header.actions.openAppMenuAria
 header.actions.openSessionsAria
 header.services.openWithCurrent
+header.sessionActions.openAria
 header.windowControls.close
 header.windowControls.groupAria
 header.windowControls.maximize

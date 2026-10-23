@@ -9,19 +9,19 @@ use gpui_kit::component::input::Textarea;
 use gpui_kit::component::{Sizable, Size};
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, Role, StatefulInteractiveElement,
-    Styled, TestSupportExt, div, linear_color_stop, linear_gradient, prelude::FluentBuilder, px,
-    rems,
+    Styled, TestSupportExt, Window, div, linear_color_stop, linear_gradient,
+    prelude::FluentBuilder, px, rems,
 };
 
 use crate::activation::on_activate;
-use crate::chrome::{ButtonTone, IconButton, glyph};
+use crate::chrome::{self, ButtonTone, IconButton, glyph};
 use crate::elevation;
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
 use crate::theme::Palette;
 use crate::workspace::Workspace;
+use crate::{context_panel, sidebar_view};
 
-const COLUMN_MAX_WIDTH: f32 = 768.0;
 const BOX_RADIUS: f32 = 12.0;
 const EDITOR_MIN_HEIGHT: f32 = 52.0;
 const TOOLBAR_HEIGHT: f32 = 44.0;
@@ -36,26 +36,74 @@ const EDITOR_INSET_Y: f32 = 2.0;
 const TEXT_SIZE: f32 = 0.875;
 const TEXT_LINE: f32 = 1.3125;
 
+/// Below this editor width the composer shows the short placeholder
+/// (`COMPACT_CHAT_PLACEHOLDER_MAX_WIDTH` in `ChatInput.tsx`).
+const COMPACT_PLACEHOLDER_BELOW: f32 = 560.0;
+
 impl Workspace {
-    /// The composer below a selected session's transcript.
+    /// The composer box's width: the chat column, less the transcript's
+    /// navigation gutter when a session is open, capped and padded as
+    /// `.chat-input-column`.
+    fn composer_width(&self, window: &Window) -> f32 {
+        let mut column = f32::from(chrome::content_size(window).width) - context_panel::RAIL_WIDTH;
+        if self.sidebar_open {
+            column -= sidebar_view::SIDEBAR_WIDTH;
+        }
+        if self.work_status_open {
+            column -= context_panel::PANEL_WIDTH;
+        }
+        if self.selected.is_some() {
+            column -= chrome::NAVIGATION_GUTTER;
+        }
+        column.min(chrome::CHAT_COLUMN_MAX_WIDTH)
+            - 2.0 * f32::from(chrome::chat_column_padding(window))
+    }
+
+    /// Shows the full placeholder, or the short one in a narrow composer.
+    pub(crate) fn sync_composer_placeholder(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let compact = self.composer_width(window) < COMPACT_PLACEHOLDER_BELOW;
+        if self.composer_placeholder_compact == Some(compact) {
+            return;
+        }
+        self.composer_placeholder_compact = Some(compact);
+        let placeholder = locale::strings(cx).get(if compact {
+            "chat.chatInput.placeholder.chatCompact"
+        } else {
+            "chat.chatInput.placeholder.chat"
+        });
+        self.composer.update(cx, |composer, cx| {
+            composer.set_placeholder(placeholder, window, cx);
+        });
+    }
+
+    /// The composer docked over the bottom of a selected session's
+    /// transcript, in the chat column beside the prompt navigation gutter.
     pub(crate) fn render_composer(
         &self,
         palette: &Palette,
         direction: Direction,
+        window: &Window,
         cx: &Context<Self>,
     ) -> impl IntoElement {
         div()
             .id("composer-region")
-            .flex_shrink_0()
-            .px_4()
-            .pb_3()
-            .pt_2()
+            .absolute()
+            .bottom_0()
+            .left_0()
+            .right_0()
+            .padding_end(direction, px(chrome::NAVIGATION_GUTTER))
+            .pb(px(16.0))
             .flex()
             .justify_center()
             .child(
                 div()
                     .w_full()
-                    .max_w(px(COLUMN_MAX_WIDTH))
+                    .max_w(px(chrome::CHAT_COLUMN_MAX_WIDTH))
+                    .px(chrome::chat_column_padding(window))
                     .child(self.render_composer_box(palette, direction, cx)),
             )
     }

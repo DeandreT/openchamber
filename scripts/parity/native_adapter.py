@@ -124,7 +124,6 @@ class NativeClient:
         if connected:
             self.wait_for_marker("sessions-shown", timeout_s)
         self._app = self._find_app(timeout_s)
-        self._activate()
         # A painted frame after readiness: markers are emitted at paint.
         self._read_marks(0.3)
 
@@ -139,7 +138,9 @@ class NativeClient:
     def _activate(self) -> None:
         """Raises and focuses the client's window, so captures of the active
         window and pointer input reach it. The window it opens can lose focus to
-        whatever the previous client left active."""
+        whatever the previous client left active. Only captures and clicks
+        activate it, right before they act, so a person using the desktop
+        during a run has as little time as possible to type into it."""
         subprocess.run(["xdotool", "windowactivate", "--sync", self._window()], check=True, capture_output=True, timeout=10)
 
     def _screen_point(self, node) -> tuple[int, int]:

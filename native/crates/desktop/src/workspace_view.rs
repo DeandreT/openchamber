@@ -3,11 +3,13 @@
 //! status panel and the panel rail.
 
 use gpui_kit::{
-    Context, InteractiveElement, IntoElement, KeyBinding, ParentElement, Render,
-    StatefulInteractiveElement, Styled, Window, actions, canvas, div, prelude::FluentBuilder, px,
+    Context, InteractiveElement, IntoElement, KeyBinding, MouseButton, ParentElement, Render, Role,
+    SharedString, StatefulInteractiveElement, Styled, TestSupportExt, Window, actions, canvas, div,
+    prelude::FluentBuilder, px, rems,
 };
 
-use crate::chrome::{self, ButtonTone, IconButton, TITLE_ROW_HEIGHT};
+use crate::activation::on_activate;
+use crate::chrome::{self, ButtonTone, CONTROL_RADIUS, IconButton, TITLE_ROW_HEIGHT, glyph};
 use crate::diagnostics;
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
@@ -27,6 +29,9 @@ actions!(
 );
 
 const KEY_CONTEXT: &str = "OpenChamberWorkspace";
+/// The header's session title: 14/17.5 px.
+const TITLE_SIZE: f32 = 0.875;
+const TITLE_LINE: f32 = 1.093_75;
 
 /// Registers the workspace's keyboard shortcuts.
 pub fn bind_keys(cx: &mut gpui_kit::App) {
@@ -40,19 +45,19 @@ pub fn bind_keys(cx: &mut gpui_kit::App) {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let markers = self.take_frame_markers();
+        self.sync_composer_placeholder(window, cx);
         let palette = cx.global::<Palette>().clone();
         let direction = locale::strings(cx).direction();
         let chat = if self.selected.is_some() {
             div()
                 .id("conversation")
+                .relative()
                 .flex_1()
                 .min_w_0()
                 .h_full()
-                .flex()
-                .flex_col()
                 .bg(palette.chat_background)
-                .child(self.render_transcript(&palette, cx))
-                .child(self.render_composer(&palette, direction, cx))
+                .child(self.render_transcript(&palette, direction, cx))
+                .child(self.render_composer(&palette, direction, window, cx))
                 .into_any_element()
         } else {
             self.render_startup(&palette, direction, window, cx)
@@ -60,7 +65,7 @@ impl Render for Workspace {
         };
         div()
             .id("workspace")
-            .role(gpui_kit::Role::Group)
+            .role(Role::Group)
             .accessibility_id("workspace")
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
@@ -119,6 +124,71 @@ impl Render for Workspace {
 }
 
 impl Workspace {
+    /// The selected session's title and its actions, at the header's start.
+    fn render_session_title(
+        &self,
+        palette: &Palette,
+        direction: Direction,
+        cx: &Context<Self>,
+    ) -> Option<impl IntoElement> {
+        let session = self.selected_session()?;
+        let strings = locale::strings(cx);
+        let title: SharedString = if session.title.is_empty() {
+            strings.get("sessions.sidebar.session.untitled")
+        } else {
+            session.title.clone().into()
+        };
+        let foreground = palette.foreground;
+        let actions = on_activate(
+            div()
+                .id("session-actions")
+                .group("session-actions")
+                .role(Role::Button)
+                .accessibility_id("session-actions")
+                .aria_label(strings.get("header.sessionActions.openAria"))
+                .w(px(24.0))
+                .h(px(18.0))
+                .flex_shrink_0()
+                .rounded(px(CONTROL_RADIUS))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(
+                    glyph("more", 16.0, palette.muted_foreground)
+                        .group_hover("session-actions", move |style| style.text_color(foreground)),
+                ),
+            cx,
+            |_, _, _| {},
+        )
+        .test_support();
+        Some(
+            div()
+                .min_w_0()
+                .margin_end(direction, px(12.0))
+                .py(px(2.0))
+                .flex_row_from(direction)
+                .items_center()
+                .gap(px(2.0))
+                .child(
+                    div()
+                        .id("session-title")
+                        .accessibility_id("session-title")
+                        .role(Role::Heading)
+                        .aria_label(title.clone())
+                        .min_w_0()
+                        .px(px(4.0))
+                        .truncate()
+                        .text_size(rems(TITLE_SIZE))
+                        .line_height(rems(TITLE_LINE))
+                        .text_color(palette.foreground)
+                        .child(title),
+                )
+                .child(actions),
+        )
+    }
+
     /// The main column's title row. Window controls keep their physical
     /// order and the right edge in every language, as in the web client.
     fn render_header(
@@ -146,6 +216,11 @@ impl Workspace {
                         this.padding_start(direction, px(12.0))
                             .child(self.render_title_controls(palette, direction, cx))
                     })
+                    .child(div().w(px(12.0)).flex_shrink_0())
+                    .when_some(
+                        self.render_session_title(palette, direction, cx),
+                        |this, title| this.child(title),
+                    )
                     .child(div().flex_1())
                     .child(
                         div()

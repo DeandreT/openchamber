@@ -138,6 +138,18 @@
         "selector": "button[aria-label=\"Add a starter\"]"
       },
       "native": "starter-add"
+    },
+    "session-title": {
+      "electron": {
+        "selector": "header div:has(> .oc-ui-start-align)"
+      },
+      "native": "session-title"
+    },
+    "session-actions": {
+      "electron": {
+        "selector": "button[aria-label=\"Open session actions\"]"
+      },
+      "native": "session-actions"
     }
   },
   "scenarios": [
@@ -214,7 +226,16 @@
           }
         },
         {
-          "capture": "selected"
+          "capture": "selected",
+          "targets": [
+            "session-title",
+            "session-actions",
+            "composer",
+            "composer-submit",
+            "work-status",
+            "rail-context",
+            "new-session"
+          ]
         }
       ]
     }

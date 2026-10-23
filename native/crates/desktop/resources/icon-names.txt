@@ -39,6 +39,7 @@ list-indefinite
 loader-4
 menu-2
 mic
+more
 more-2
 node-tree
 picture-in-picture-2
