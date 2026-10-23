@@ -34,6 +34,17 @@ read-only until prompt submission has its error and reconciliation paths.
 - `context_panel.rs` also reads the selected session's context fill against
   the limit `useContextWindowLimits` picks (the record's model, the newest
   answer's, the composer's) and draws its row and meter.
+- `project_section.rs` draws the card's Project section: the project's
+  label, the attention callout, the branch and changed-files rows from the
+  session directory's Git status, and the project action row. It reads the
+  status when the directory comes into view (again once five seconds old) and
+  after a burst of finished file-changing tool calls in an open session.
+  Nested repositories, pull request rows and running or choosing actions are
+  not ported yet.
+- `open_in_app.rs` finds the file manager's icon as Electron's Linux app
+  discovery does, PNG files only, and opens the project folder with the
+  platform's default handler; the control shows only for a server on this
+  machine.
 - `turn_stats_section.rs` draws the card's Turn stats from the core's
   `turn_stats`, recomputed while the session is idle and kept while it
   works; `context_panel.rs` holds the card's shared collapsible section and

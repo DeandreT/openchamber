@@ -125,6 +125,16 @@ pub struct ServerSettings {
     pub routing_feature_available: Option<bool>,
     /// The model defaults of registered projects that set any.
     pub project_defaults: Vec<ProjectDefaults>,
+    /// The display labels of registered projects that set one.
+    pub project_labels: Vec<ProjectLabel>,
+}
+
+/// A registered project's display label, trimmed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProjectLabel {
+    /// The project's normalized path, as in `ServerSettings::projects`.
+    pub path: String,
+    pub label: String,
 }
 
 /// A registered project's own model defaults, trimmed.
@@ -146,6 +156,7 @@ impl ServerSettings {
             .filter_map(|entry| entry.get("path").and_then(Value::as_str));
         let projects = ownership::configured_projects(paths, home_directory.as_deref());
         let mut project_defaults: Vec<ProjectDefaults> = Vec::new();
+        let mut project_labels: Vec<ProjectLabel> = Vec::new();
         for entry in &settings.projects {
             let Some(raw) = entry.get("path").and_then(Value::as_str) else {
                 continue;
@@ -170,6 +181,12 @@ impl ServerSettings {
                     .filter(|text| !text.is_empty())
                     .map(str::to_owned)
             };
+            if let Some(label) = field("label") {
+                project_labels.push(ProjectLabel {
+                    path: project.path.clone(),
+                    label,
+                });
+            }
             project_defaults.push(ProjectDefaults {
                 path: project.path,
                 agent: field("defaultAgent"),
@@ -183,6 +200,7 @@ impl ServerSettings {
         Self {
             projects,
             project_defaults,
+            project_labels,
             home_directory,
             last_directory: non_empty_string(settings.last_directory),
             active_project_id: non_empty_string(settings.active_project_id),
@@ -749,8 +767,8 @@ mod tests {
     fn the_active_project_resolves_through_the_registered_projects() {
         let wire: wire::Settings = serde_json::from_value(json!({
             "projects": [
-                {"path": "/work/app", "defaultModel": " perf/stream ", "defaultAgent": " "},
-                {"path": "/work/lib"},
+                {"path": "/work/app", "defaultModel": " perf/stream ", "defaultAgent": " ", "label": " App "},
+                {"path": "/work/lib", "label": " "},
                 {"path": "/work/app/", "defaultAgent": "plan"}
             ],
             "activeProjectId": ProjectId::from_path("/work/lib").expect("a project ID").as_str(),
@@ -767,6 +785,14 @@ mod tests {
                 variant: None,
             }],
             "defaults are trimmed and a later entry of the same path is ignored"
+        );
+        assert_eq!(
+            settings.project_labels,
+            [ProjectLabel {
+                path: "/work/app".to_owned(),
+                label: "App".to_owned(),
+            }],
+            "labels are trimmed and a blank one is none"
         );
         let unknown = ServerSettings {
             active_project_id: Some("path_missing".to_owned()),

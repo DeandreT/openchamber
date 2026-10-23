@@ -20,6 +20,8 @@ mod locale;
 mod logical;
 mod model_controls;
 mod network;
+mod open_in_app;
+mod project_section;
 mod prompt_rail;
 mod provider_logos;
 mod send_catalog;

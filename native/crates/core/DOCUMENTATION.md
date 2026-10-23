@@ -10,6 +10,10 @@ rendering asks for a projection and dispatches an action.
 ## Ownership
 
 - `send_config.rs` ports default agent/model selection, an existing session's selection from its record, catalog grouping, composer labels and agent color allocation from the web client.
+- `repository.rs` holds what the card reports about a repository,
+  `project_actions.rs` which project action its row shows and with which
+  glyph, and `tool_names.rs` OpenCode's tool name comparison, including
+  which finished calls may change what Git reports.
 - `provider_logo.rs` ports the provider logo lookup of `useProviderLogo.ts`
   (bundled candidates, then models.dev) and inverts an SVG's paint colors for
   dark themes, as the web's `dark:invert` does.

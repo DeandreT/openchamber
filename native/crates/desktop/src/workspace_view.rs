@@ -55,6 +55,7 @@ impl Render for Workspace {
         self.sync_composer_placeholder(window, cx);
         self.ensure_send_catalog(cx);
         self.ensure_provider_logos(cx);
+        self.ensure_project_readouts(cx);
         let palette = cx.global::<Palette>().clone();
         let direction = locale::strings(cx).direction();
         let chat = if self.selected.is_some() {

@@ -14,6 +14,7 @@ pub mod event;
 pub mod identity;
 #[cfg(test)]
 mod parity_tests;
+pub mod project;
 mod projection;
 pub mod public_asset;
 pub mod stream;

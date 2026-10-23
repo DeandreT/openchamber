@@ -17,7 +17,10 @@ use openchamber_native_core::ownership::ProjectWorktrees;
 use openchamber_native_core::scroll_memory::{ScrollKey, ScrollPosition};
 use openchamber_native_core::session::{LiveStatus, SessionRecord};
 use openchamber_native_core::session_index::{IndexUpdate, SessionIndex};
-use openchamber_native_core::transcript::{TranscriptChange, TranscriptEvent};
+use openchamber_native_core::tool_names;
+use openchamber_native_core::transcript::{
+    PartContent, ToolStatus, TranscriptChange, TranscriptEvent,
+};
 use openchamber_native_transport::client::{MessagePage, ServerClient};
 use openchamber_native_transport::credential::Credential;
 use openchamber_native_transport::error::TransportError;
@@ -127,6 +130,7 @@ impl Workspace {
         self.sessions = SessionIndex::new();
         self.topology = Topology::default();
         self.reset_send_catalog();
+        self.reset_project_readouts();
         self.open_sessions.clear();
         self.live_status.clear();
         self.selected = None;
@@ -461,6 +465,7 @@ impl Workspace {
         let mut changes = Vec::new();
         let mut ordering = Vec::new();
         let mut reread: Vec<SessionId> = Vec::new();
+        let mut git_changed: Vec<SessionId> = Vec::new();
         for event in events {
             if let Some(change) = event.session_change() {
                 changes.push(change);
@@ -486,6 +491,11 @@ impl Workspace {
                     self.refresh_send_catalog(kind, directory.as_deref(), cx);
                 }
                 ServerEvent::Transcript { session_id, event } => {
+                    if self.finishes_git_changing_call(&session_id, &event)
+                        && !git_changed.contains(&session_id)
+                    {
+                        git_changed.push(session_id.clone());
+                    }
                     if self.apply_transcript_event(&session_id, event)
                         && !reread.contains(&session_id)
                     {
@@ -504,6 +514,45 @@ impl Workspace {
         for id in reread {
             self.load_history(&id, cx);
         }
+        for id in git_changed {
+            if let Some(directory) = self
+                .sessions
+                .get(&id)
+                .and_then(|session| session.resolved_directory())
+            {
+                self.refresh_git_status_soon(&directory, cx);
+            }
+        }
+    }
+
+    /// Whether `event` finishes a call of a tool that may change what Git
+    /// reports (`requestGitRefreshForToolTransition`): its first move to a
+    /// final state.
+    fn finishes_git_changing_call(&self, id: &SessionId, event: &TranscriptEvent) -> bool {
+        let TranscriptEvent::ToolTransition {
+            message_id,
+            part_id,
+            status: ToolStatus::Completed | ToolStatus::Error,
+            ..
+        } = event
+        else {
+            return false;
+        };
+        let Some(open) = self.open_sessions.get(id) else {
+            return false;
+        };
+        open.transcript
+            .row_of(message_id)
+            .and_then(|row| open.transcript.message(row))
+            .and_then(|message| message.parts.iter().find(|part| &part.id == part_id))
+            .is_some_and(|part| {
+                matches!(
+                    &part.content,
+                    PartContent::Tool { tool, status, .. }
+                        if !matches!(status, ToolStatus::Completed | ToolStatus::Error)
+                            && tool_names::may_change_git(tool)
+                )
+            })
     }
 
     /// Applies a live transcript event to a visited session. Returns whether
