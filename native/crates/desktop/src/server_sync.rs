@@ -126,6 +126,7 @@ impl Workspace {
         self.runtime = runtime;
         self.sessions = SessionIndex::new();
         self.topology = Topology::default();
+        self.reset_send_catalog();
         self.open_sessions.clear();
         self.live_status.clear();
         self.selected = None;
@@ -316,10 +317,11 @@ impl Workspace {
         };
         let task = connection.network.run(async move {
             let roots = client.chat_roots().await;
-            let projects = client.projects().await;
-            let worktrees = match &projects {
-                Ok(projects) => {
-                    let paths: Vec<String> = projects
+            let settings = client.settings().await;
+            let worktrees = match &settings {
+                Ok(settings) => {
+                    let paths: Vec<String> = settings
+                        .projects
                         .iter()
                         .map(|project| project.path.clone())
                         .collect();
@@ -327,10 +329,10 @@ impl Workspace {
                 }
                 Err(_) => None,
             };
-            (roots, projects, worktrees)
+            (roots, settings, worktrees)
         });
         connection.topology_task = Some(cx.spawn(async move |this, cx| {
-            let Some((roots, projects, worktrees)) = task.await else {
+            let Some((roots, settings, worktrees)) = task.await else {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
@@ -340,16 +342,18 @@ impl Workspace {
                     Ok(roots) => this.topology.chat_roots = roots,
                     Err(error) => tracing::warn!(%error, "the Chats roots could not be read"),
                 }
-                match projects {
-                    Ok(projects) => {
+                match settings {
+                    Ok(settings) => {
                         this.topology.worktrees.retain(|entry| {
-                            projects
+                            settings
+                                .projects
                                 .iter()
                                 .any(|project| project.path == entry.project_path)
                         });
-                        this.topology.projects = projects;
+                        this.topology.projects = settings.projects.clone();
+                        this.send_catalog.settings = Some(settings);
                     }
-                    Err(error) => tracing::warn!(%error, "the projects could not be read"),
+                    Err(error) => tracing::warn!(%error, "the settings could not be read"),
                 }
                 match worktrees {
                     Some(Ok(reads)) => {
@@ -477,6 +481,9 @@ impl Workspace {
                 ServerEvent::SessionDeleted { session_id } => {
                     self.live_status.remove(&session_id);
                     ordering.push(OrderingMutation::Remove { session_id });
+                }
+                ServerEvent::CatalogUpdated { kind, directory } => {
+                    self.refresh_send_catalog(kind, directory.as_deref(), cx);
                 }
                 ServerEvent::Transcript { session_id, event } => {
                     if self.apply_transcript_event(&session_id, event)

@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 
 use openchamber_native_core::ids::{MessageId, SessionId};
+use openchamber_native_core::send_config::{AgentMode, ModelChoice};
 use openchamber_native_core::session::{LiveStatus, SessionKind, SessionRecord};
 use openchamber_native_core::session_index::SessionIndex;
 use openchamber_native_core::transcript::{
@@ -20,7 +21,7 @@ use crate::credential::Credential;
 use crate::endpoint::Endpoint;
 use crate::event::{self, ServerEvent};
 use crate::identity::{PART_SHELLS_CAPABILITY, ServerIdentity};
-use crate::{projection, wire};
+use crate::{catalog, projection, wire};
 
 const FIXTURE: &str = include_str!("../tests/fixtures/transport.json");
 const SESSIONS: &str = include_str!("../tests/fixtures/wire/sessions.json");
@@ -32,6 +33,12 @@ const MESSAGES_TOOLS_SHELLED: &str =
 const MESSAGE_TOOLS_SINGLE: &str = include_str!("../tests/fixtures/wire/message-tools-single.json");
 const FRAMES_RECORDED: &str = include_str!("../tests/fixtures/wire/frames-recorded.json");
 const FRAMES_TOOLS: &str = include_str!("../tests/fixtures/wire/frames-tools.json");
+const AGENTS: &str = include_str!("../tests/fixtures/wire/agents.json");
+const MODELS: &str = include_str!("../tests/fixtures/wire/models.json");
+const MODEL_DEFAULT: &str = include_str!("../tests/fixtures/wire/model-default.json");
+const PROVIDERS: &str = include_str!("../tests/fixtures/wire/providers.json");
+const CONFIG: &str = include_str!("../tests/fixtures/wire/config.json");
+const MCP: &str = include_str!("../tests/fixtures/wire/mcp.json");
 const RECORDED_SESSION: &str = "ses_e9b49c443ffefXcWWPhCOga6nH";
 const TOOLS_SESSION: &str = "ses_e9b3bfe12ffeMuiZLLg25eNcms";
 const TOOLS_MESSAGE: &str = "msg_164c422cf001JfI01Q6WJWl0lr";
@@ -47,6 +54,18 @@ struct Fixture {
     messages: BTreeMap<String, MessageFixture>,
     whole_message: Value,
     session_events: BTreeMap<String, Vec<Value>>,
+    catalog: CatalogFixture,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CatalogFixture {
+    agents: Vec<Value>,
+    models: Vec<Value>,
+    providers: Vec<Value>,
+    default_model: Value,
+    opencode_defaults: Value,
+    mcp_connected: usize,
 }
 
 #[derive(Deserialize)]
@@ -102,6 +121,15 @@ fn normalize_session(session: &SessionRecord) -> Value {
         "pinned": session.overlay.pinned_at.is_some(),
         "inWork": session.overlay.in_work,
         "btw": session.is_btw(),
+        "model": session.model.as_ref().map(normalize_model),
+    })
+}
+
+fn normalize_model(model: &ModelChoice) -> Value {
+    json!({
+        "providerId": model.provider_id,
+        "modelId": model.model_id,
+        "variant": model.variant,
     })
 }
 
@@ -411,6 +439,7 @@ fn session_effect(event: &ServerEvent) -> Option<Value> {
                         })
                     }),
                 ),
+                ("model", patch.model.as_ref().map(normalize_model)),
             ];
             for (key, field) in fields {
                 if let Some(field) = field {
@@ -487,4 +516,112 @@ fn replayed_session_events_converge_on_the_listing() {
     );
     // Recency differs by design: events stamp their own time, as the UI does.
     assert_eq!(replayed.time.idle, listed.time.idle);
+}
+
+fn located<T: serde::de::DeserializeOwned>(raw: &str) -> T {
+    let located: wire::Located<T> = serde_json::from_str(raw).expect("the recording is valid");
+    located.data
+}
+
+#[test]
+fn catalog_requests_match_the_official_client() {
+    let fixture = fixture();
+    let client = ServerClient::new(
+        Endpoint::parse(&fixture.base_url).expect("the fixture base URL is valid"),
+        Credential::None,
+    )
+    .expect("a client builds");
+    for (name, route) in [
+        ("agents", "agent"),
+        ("models", "model"),
+        ("default model", "model/default"),
+        ("providers", "provider"),
+        ("config", "config"),
+        ("mcp servers", "mcp"),
+    ] {
+        let recorded = request(&fixture, name);
+        let built = client
+            .get_request(client.opencode_url(route), Some(&fixture.scoped_directory))
+            .build()
+            .expect("the request builds");
+        assert_eq!(recorded.method, "GET");
+        assert_eq!(built.url().path(), recorded.path, "{name}");
+        assert_eq!(sorted_query(built.url()), recorded.query, "{name}");
+        assert_eq!(
+            built
+                .headers()
+                .get("x-opencode-directory")
+                .and_then(|value| value.to_str().ok()),
+            recorded.directory_header.as_deref(),
+            "{name} is read in the active directory"
+        );
+    }
+}
+
+#[test]
+fn catalogs_project_as_the_ui_does() {
+    let fixture = fixture();
+    let agents: Vec<Value> = located::<Vec<wire::AgentInfo>>(AGENTS)
+        .into_iter()
+        .map(projection::agent)
+        .map(|agent| {
+            json!({
+                "name": agent.name,
+                "displayName": agent.display_name,
+                "mode": agent.mode.map(|mode| match mode {
+                    AgentMode::Primary => "primary",
+                    AgentMode::Subagent => "subagent",
+                    AgentMode::All => "all",
+                }),
+                "hidden": agent.hidden,
+                "model": agent.model.as_ref().map(normalize_model),
+                "color": agent.color,
+            })
+        })
+        .collect();
+    assert_eq!(agents, fixture.catalog.agents);
+
+    let models: Vec<Value> = located::<Vec<wire::ModelInfo>>(MODELS)
+        .into_iter()
+        .map(projection::model)
+        .map(|model| {
+            json!({
+                "modelId": model.provider_model_id.as_deref().unwrap_or(&model.id),
+                "id": model.id,
+                "providerId": model.provider_id,
+                "name": model.name,
+                "enabled": model.enabled,
+                "variants": model.variants,
+            })
+        })
+        .collect();
+    assert_eq!(models, fixture.catalog.models);
+
+    let providers: Vec<Value> = located::<Vec<wire::ProviderInfo>>(PROVIDERS)
+        .into_iter()
+        .map(projection::provider)
+        .map(|provider| json!({"id": provider.id, "name": provider.name, "enabled": provider.enabled}))
+        .collect();
+    assert_eq!(providers, fixture.catalog.providers);
+
+    let default_model: Option<wire::DefaultModel> = located(MODEL_DEFAULT);
+    assert_eq!(
+        default_model
+            .map(|model| json!({"providerId": model.provider_id, "modelId": model.model_id})),
+        Some(fixture.catalog.default_model)
+    );
+
+    let entries: Vec<wire::ConfigEntry> =
+        serde_json::from_str(CONFIG).expect("the recording is valid");
+    let defaults = catalog::opencode_defaults(&catalog::fold_config(entries));
+    assert_eq!(
+        json!({"defaultAgent": defaults.default_agent, "model": defaults.model}),
+        fixture.catalog.opencode_defaults
+    );
+
+    let servers: Vec<wire::McpServer> = located(MCP);
+    assert_eq!(
+        catalog::connected_count(&servers),
+        fixture.catalog.mcp_connected
+    );
 }

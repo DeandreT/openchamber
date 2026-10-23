@@ -42,6 +42,12 @@ pub enum ServerEvent {
         session_id: SessionId,
         event: TranscriptEvent,
     },
+    /// OpenCode rebuilt a catalog in `directory`, or in every directory when
+    /// the event names none.
+    CatalogUpdated {
+        kind: CatalogKind,
+        directory: Option<String>,
+    },
     Heartbeat,
     /// The server is shedding load; reconcile after it recovers.
     Backpressure,
@@ -49,6 +55,35 @@ pub enum ServerEvent {
     Unsupported {
         kind: String,
     },
+}
+
+/// Which catalog an update rebuilt, as `catalog.updated` kinds in
+/// `packages/ui/src/lib/opencode/events.ts` name them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CatalogKind {
+    Config,
+    Agent,
+    Skill,
+    Provider,
+    Model,
+    Credential,
+    /// An MCP server's connection state changed.
+    McpStatus,
+}
+
+impl CatalogKind {
+    fn from_event_type(kind: &str) -> Option<Self> {
+        Some(match kind {
+            "config.updated" => Self::Config,
+            "agent.updated" => Self::Agent,
+            "skill.updated" => Self::Skill,
+            "provider.updated" => Self::Provider,
+            "model.updated" => Self::Model,
+            "credential.updated" | "credential.switched" => Self::Credential,
+            "mcp.status.changed" => Self::McpStatus,
+            _ => return None,
+        })
+    }
 }
 
 impl ServerEvent {
@@ -137,6 +172,16 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
     if let Some(events) = translate_openchamber(kind, payload) {
         return events;
     }
+    if let Some(kind) = CatalogKind::from_event_type(kind) {
+        return vec![ServerEvent::CatalogUpdated {
+            kind,
+            directory: payload
+                .pointer("/location/directory")
+                .and_then(Value::as_str)
+                .filter(|directory| !directory.is_empty() && *directory != "global")
+                .map(str::to_owned),
+        }];
+    }
     let data = payload.get("data").unwrap_or(&Value::Null);
     let created = payload
         .get("created")
@@ -166,6 +211,11 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
         }))
     };
     let assistant = || text("assistantMessageID").map(MessageId::from);
+    let model = || {
+        data.get("model")
+            .and_then(|model| wire::AgentModel::deserialize(model).ok())
+            .map(projection::model_choice)
+    };
     let ordinal = || {
         data.get("ordinal")
             .and_then(Value::as_u64)
@@ -208,6 +258,7 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                 project: None,
                 kind: facts.kind,
                 overlay: facts.overlay,
+                model: model(),
             })]
         }
         "session.deleted" => vec![ServerEvent::SessionDeleted { session_id }],
@@ -272,6 +323,7 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                 session_id: session_id.clone(),
                 patch: SessionPatch {
                     updated: Some(created),
+                    model: model(),
                     ..SessionPatch::default()
                 },
             },
@@ -570,6 +622,32 @@ mod tests {
         );
         assert!(decode_frame("not json").is_err());
         assert!(decode_frame(r#"{"type":"error","message":"boom"}"#).is_err());
+    }
+
+    #[test]
+    fn catalog_rebuilds_name_their_directory() {
+        let scoped = decode_frame(
+            r#"{"type":"event","payload":{"id":"evt_1","type":"agent.updated","location":{"directory":"/work/app"},"data":{}}}"#,
+        )
+        .expect("valid");
+        assert_eq!(
+            scoped.events,
+            [ServerEvent::CatalogUpdated {
+                kind: CatalogKind::Agent,
+                directory: Some("/work/app".to_owned()),
+            }]
+        );
+        let global = decode_frame(
+            r#"{"type":"event","payload":{"id":"evt_2","type":"credential.switched","location":{"directory":"global"},"data":{}}}"#,
+        )
+        .expect("valid");
+        assert_eq!(
+            global.events,
+            [ServerEvent::CatalogUpdated {
+                kind: CatalogKind::Credential,
+                directory: None,
+            }]
+        );
     }
 
     #[test]

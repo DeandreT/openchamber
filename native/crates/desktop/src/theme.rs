@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use gpui_kit::component::Theme;
 use gpui_kit::component::theme::ThemeMode;
 use gpui_kit::{App, Global, Hsla, Rgba};
+use openchamber_native_core::send_config::{AgentColor, SyntaxPaletteEntry};
 use serde::Deserialize;
 
 const THEMES_JSON: &str = include_str!("../resources/themes.json");
@@ -23,11 +24,24 @@ struct ThemeFile {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ThemeEntry {
     id: String,
     variant: String,
     colors: HashMap<String, String>,
+    agent_palette: Vec<PaletteRole>,
 }
+
+#[derive(Deserialize)]
+struct PaletteRole {
+    index: usize,
+    colorful: bool,
+}
+
+/// The syntax roles agent colors draw from, in `agentColorPalette`'s order.
+const AGENT_SYNTAX_ROLES: [&str; 7] = [
+    "keyword", "type", "function", "number", "string", "operator", "variable",
+];
 
 /// Light or dark appearance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -72,7 +86,12 @@ pub struct Palette {
     pub status_error: Hsla,
     pub status_error_foreground: Hsla,
     pub status_success: Hsla,
+    pub status_info: Hsla,
     pub cursor: Hsla,
+    /// `syntax.base.*` in `AGENT_SYNTAX_ROLES` order.
+    pub agent_syntax: [Hsla; AGENT_SYNTAX_ROLES.len()],
+    /// The theme's ordered, contrast-filtered agent palette.
+    pub agent_palette: Vec<SyntaxPaletteEntry>,
 }
 
 impl Global for Palette {}
@@ -136,8 +155,33 @@ impl Palette {
             status_error: color("status.error"),
             status_error_foreground: color("status.errorForeground"),
             status_success: color("status.success"),
+            status_info: color("status.info"),
             cursor: color("interactive.cursor"),
+            agent_syntax: AGENT_SYNTAX_ROLES.map(|role| color(&format!("syntax.base.{role}"))),
+            agent_palette: entry
+                .agent_palette
+                .iter()
+                .map(|role| SyntaxPaletteEntry {
+                    index: role.index,
+                    colorful: role.colorful,
+                })
+                .collect(),
         })
+    }
+}
+
+impl Palette {
+    /// The color of an agent's label and icon, as `useAgentColors` resolves it.
+    pub fn agent_color(&self, color: &AgentColor) -> Hsla {
+        match color {
+            AgentColor::Configured(hex) => parse_hex(hex).unwrap_or(self.status_success),
+            AgentColor::Success => self.status_success,
+            AgentColor::Syntax { index, .. } => self
+                .agent_syntax
+                .get(*index)
+                .copied()
+                .unwrap_or(self.status_success),
+        }
     }
 }
 

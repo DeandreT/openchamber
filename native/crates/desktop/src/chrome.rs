@@ -5,11 +5,13 @@
 //! (`packages/ui/src/components/layout/Header.tsx`,
 //! `components/desktop/WindowsWindowControls.tsx`).
 
+use std::time::{Duration, Instant};
+
 use gpui_kit::component::{InteractiveElementExt, window_paddings};
 use gpui_kit::{
-    AnyElement, Context, ElementId, Hsla, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, Pixels, Role, SharedString, Size, StatefulInteractiveElement, Styled, Svg,
-    TestSupportExt, Window, WindowControlArea, div, prelude::FluentBuilder, px, svg,
+    AnyElement, Context, Decorations, ElementId, Hsla, InteractiveElement, IntoElement,
+    MouseButton, ParentElement, Pixels, Role, SharedString, Size, StatefulInteractiveElement,
+    Styled, Svg, TestSupportExt, Window, WindowControlArea, div, prelude::FluentBuilder, px, svg,
 };
 
 use crate::activation::on_activate;
@@ -40,6 +42,59 @@ pub fn content_size(window: &Window) -> Size<Pixels> {
     Size {
         width: viewport.width - frame(paddings.left) - frame(paddings.right),
         height: viewport.height - frame(paddings.top) - frame(paddings.bottom),
+    }
+}
+
+/// How long after opening the window's content is held at its requested size.
+const INITIAL_SIZE_HOLD: Duration = Duration::from_secs(2);
+
+/// Holds a new window's content at the size it asked for while the
+/// compositor settles the client-side frame.
+///
+/// GPUI publishes the shadow band (`_GTK_FRAME_EXTENTS` on X11) with the
+/// first frame. Depending on whether the compositor already manages the
+/// window then, KWin either grows the window by the band or keeps the window
+/// and shrinks the content by it, so the content can open 40 pixels short;
+/// a correction can also cross the compositor's own adjustment. Until the
+/// hold expires, every frame whose content is off resizes a floating window
+/// by the error, so the size converges whatever the order. Tiled and
+/// maximized windows are sized by the window manager and left alone.
+#[derive(Debug)]
+pub struct InitialSize {
+    content: Size<Pixels>,
+    until: Instant,
+}
+
+impl InitialSize {
+    pub fn new(content: Size<Pixels>) -> Self {
+        Self {
+            content,
+            until: Instant::now() + INITIAL_SIZE_HOLD,
+        }
+    }
+
+    /// Corrects the window toward the requested content size. Returns
+    /// whether the hold continues.
+    pub fn hold(&self, window: &mut Window) -> bool {
+        if Instant::now() >= self.until {
+            return false;
+        }
+        let floating = match window.window_decorations() {
+            Decorations::Client { tiling } => !tiling.is_tiled(),
+            Decorations::Server => true,
+        };
+        if !floating || window.is_maximized() || window.is_fullscreen() {
+            return false;
+        }
+        let content = content_size(window);
+        if content != self.content {
+            let viewport = window.viewport_size();
+            window.resize(Size {
+                width: viewport.width + self.content.width - content.width,
+                height: viewport.height + self.content.height - content.height,
+            });
+        }
+        true
     }
 }
 

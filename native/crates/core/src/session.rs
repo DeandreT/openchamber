@@ -2,6 +2,7 @@
 
 use crate::ids::{OpenCodeProjectId, SessionId};
 use crate::path;
+use crate::send_config::ModelChoice;
 
 /// What kind of conversation a session is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -60,6 +61,8 @@ pub struct SessionRecord {
     pub project: Option<SessionProjectMetadata>,
     pub kind: SessionKind,
     pub overlay: SessionOverlay,
+    /// The model the session's next turn uses, as the server last reported it.
+    pub model: Option<ModelChoice>,
 }
 
 /// What a session's full metadata establishes for the client.
@@ -83,6 +86,8 @@ pub struct SessionPatch {
     pub archived: Option<Option<i64>>,
     /// Replaces what the previous full metadata established.
     pub metadata: Option<MetadataFacts>,
+    /// The newly selected model.
+    pub model: Option<ModelChoice>,
 }
 
 impl SessionPatch {
@@ -159,6 +164,9 @@ impl SessionRecord {
             next.overlay = facts.overlay;
             next.kind = facts.kind;
         }
+        if let Some(model) = &patch.model {
+            next.model = Some(model.clone());
+        }
         next
     }
 
@@ -181,7 +189,16 @@ impl SessionRecord {
             && self.time.archived == other.time.archived
             && self.overlay == other.overlay
             && self.kind == other.kind
+            && self.provider_id() == other.provider_id()
             && self.resolved_directory() == other.resolved_directory()
+    }
+
+    /// The provider of the session's model, whose logo its sidebar row shows.
+    pub fn provider_id(&self) -> Option<&str> {
+        self.model
+            .as_ref()
+            .map(|model| model.provider_id.as_str())
+            .filter(|id| !id.is_empty())
     }
 
     /// `projectID`, falling back to `project.id`.

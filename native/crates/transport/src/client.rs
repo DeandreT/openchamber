@@ -22,6 +22,7 @@ use crate::wire;
 
 /// Page size of global session reads, as the web client uses.
 pub const SESSION_PAGE_SIZE: usize = 500;
+const MODEL_REF_LIMIT: usize = 1024;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// Asks for message pages with finished tool results left out
@@ -104,6 +105,146 @@ pub struct MessagePage {
     pub messages: Vec<Message>,
     /// The cursor of the next older page.
     pub older: Option<String>,
+}
+
+/// The OpenChamber settings this client reads. Each value is checked on its
+/// own, as the web client's settings parsers do: a malformed value is left
+/// out, never the whole document.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ServerSettings {
+    pub projects: Vec<ConfiguredProject>,
+    pub home_directory: Option<String>,
+    pub last_directory: Option<String>,
+    pub active_project_id: Option<String>,
+    pub default_model: Option<String>,
+    pub default_variant: Option<String>,
+    pub default_agent: Option<String>,
+    pub last_selected_model: Option<String>,
+    /// `(providerID, modelID)` pairs hidden from the picker.
+    pub hidden_models: Vec<(String, String)>,
+    pub routing_feature_available: Option<bool>,
+    /// The model defaults of registered projects that set any.
+    pub project_defaults: Vec<ProjectDefaults>,
+}
+
+/// A registered project's own model defaults, trimmed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProjectDefaults {
+    /// The project's normalized path, as in `ServerSettings::projects`.
+    pub path: String,
+    pub agent: Option<String>,
+    pub model: Option<String>,
+    pub variant: Option<String>,
+}
+
+impl ServerSettings {
+    fn from_wire(settings: wire::Settings) -> Self {
+        let home_directory = non_empty_string(settings.home_directory);
+        let paths = settings
+            .projects
+            .iter()
+            .filter_map(|entry| entry.get("path").and_then(Value::as_str));
+        let projects = ownership::configured_projects(paths, home_directory.as_deref());
+        let mut project_defaults: Vec<ProjectDefaults> = Vec::new();
+        for entry in &settings.projects {
+            let Some(raw) = entry.get("path").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(project) =
+                ownership::configured_projects([raw], home_directory.as_deref()).pop()
+            else {
+                continue;
+            };
+            // The first entry of a path is the registered one.
+            if project_defaults
+                .iter()
+                .any(|known| known.path == project.path)
+            {
+                continue;
+            }
+            let field = |key: &str| {
+                entry
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .map(str::to_owned)
+            };
+            project_defaults.push(ProjectDefaults {
+                path: project.path,
+                agent: field("defaultAgent"),
+                model: field("defaultModel"),
+                variant: field("defaultVariant"),
+            });
+        }
+        project_defaults.retain(|defaults| {
+            defaults.agent.is_some() || defaults.model.is_some() || defaults.variant.is_some()
+        });
+        Self {
+            projects,
+            project_defaults,
+            home_directory,
+            last_directory: non_empty_string(settings.last_directory),
+            active_project_id: non_empty_string(settings.active_project_id),
+            default_model: non_empty_string(settings.default_model),
+            default_variant: non_empty_string(settings.default_variant),
+            default_agent: non_empty_string(settings.default_agent),
+            last_selected_model: non_empty_string(settings.last_selected_model),
+            hidden_models: settings
+                .hidden_models
+                .as_ref()
+                .and_then(Value::as_array)
+                .map(|entries| model_refs(entries))
+                .unwrap_or_default(),
+            routing_feature_available: settings
+                .routing_feature_available
+                .as_ref()
+                .and_then(Value::as_bool),
+        }
+    }
+
+    /// The path of the active project, when it is registered.
+    pub fn active_project_path(&self) -> Option<&str> {
+        let id = self.active_project_id.as_deref()?;
+        self.projects
+            .iter()
+            .find(|project| project.id.as_str() == id)
+            .map(|project| project.path.as_str())
+    }
+}
+
+/// `parseNonEmptyString`: any string with at least one character.
+fn non_empty_string(value: Option<Value>) -> Option<String> {
+    match value {
+        Some(Value::String(text)) if !text.is_empty() => Some(text),
+        _ => None,
+    }
+}
+
+/// `parseModelRefs(1024)`: trimmed, non-empty, first occurrence of each pair.
+fn model_refs(entries: &[Value]) -> Vec<(String, String)> {
+    let mut refs: Vec<(String, String)> = Vec::new();
+    let mut seen = HashSet::new();
+    for entry in entries {
+        let field = |key: &str| {
+            entry
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+        };
+        let (Some(provider_id), Some(model_id)) = (field("providerID"), field("modelID")) else {
+            continue;
+        };
+        if !seen.insert(format!("{provider_id}/{model_id}")) {
+            continue;
+        }
+        refs.push((provider_id.to_owned(), model_id.to_owned()));
+        if refs.len() >= MODEL_REF_LIMIT {
+            break;
+        }
+    }
+    refs
 }
 
 /// A server connection with its credential.
@@ -342,17 +483,10 @@ impl ServerClient {
         url
     }
 
-    /// The projects registered in OpenChamber.
-    pub async fn projects(&self) -> Result<Vec<ConfiguredProject>, TransportError> {
+    /// The registered projects and the composer's defaults.
+    pub async fn settings(&self) -> Result<ServerSettings, TransportError> {
         let settings: wire::Settings = self.get_json(self.settings_url(), None).await?;
-        let paths = settings
-            .projects
-            .iter()
-            .filter_map(|entry| entry.get("path").and_then(Value::as_str));
-        Ok(ownership::configured_projects(
-            paths,
-            settings.home_directory.as_deref(),
-        ))
+        Ok(ServerSettings::from_wire(settings))
     }
 
     /// The URL of one worktree batch; `first` routes it as the UI does.
@@ -457,17 +591,25 @@ impl ServerClient {
     }
 
     /// A GET with the credential, scoped to `directory` when one is named.
-    async fn get_json<T: DeserializeOwned>(
+    pub(crate) async fn get_json<T: DeserializeOwned>(
         &self,
         url: Url,
         directory: Option<&str>,
     ) -> Result<T, TransportError> {
-        let mut request = self.authorized(Method::GET, url);
-        if let Some(directory) = directory {
-            request = request.header("x-opencode-directory", encode_directory(directory));
-        }
-        let response = request.send().await.map_err(TransportError::from_request)?;
+        let response = self
+            .get_request(url, directory)
+            .send()
+            .await
+            .map_err(TransportError::from_request)?;
         read_json(response).await
+    }
+
+    pub(crate) fn get_request(&self, url: Url, directory: Option<&str>) -> RequestBuilder {
+        let request = self.authorized(Method::GET, url);
+        match directory {
+            Some(directory) => request.header("x-opencode-directory", encode_directory(directory)),
+            None => request,
+        }
     }
 }
 
@@ -545,6 +687,8 @@ async fn read_json<T: DeserializeOwned>(response: Response) -> Result<T, Transpo
 
 #[cfg(test)]
 mod tests {
+    use openchamber_native_core::ids::ProjectId;
+
     use super::*;
 
     #[test]
@@ -556,5 +700,78 @@ mod tests {
         assert_eq!(encode_directory("C:\\work\\app"), "C%3A%5Cwork%5Capp");
         assert_eq!(encode_directory("/tmp/ünï"), "%2Ftmp%2F%C3%BCn%C3%AF");
         assert_eq!(encode_directory("a-b_c.d!e~f*g'h(i)"), "a-b_c.d!e~f*g'h(i)");
+    }
+
+    #[test]
+    fn settings_ignore_malformed_values_one_by_one() {
+        let wire: wire::Settings = serde_json::from_value(json!({
+            "projects": [{"id": "x", "path": "/work/app"}, {"path": 7}, "/ignored"],
+            "homeDirectory": "/home/me",
+            "lastDirectory": 3,
+            "activeProjectId": "",
+            "defaultModel": "perf/stream",
+            "defaultAgent": ["plan"],
+            "defaultVariant": " high ",
+            "hiddenModels": [
+                {"providerID": " perf ", "modelID": "a"},
+                {"providerID": "perf", "modelID": "a "},
+                {"providerID": "perf"},
+                {"providerID": "", "modelID": "b"},
+                "perf/c",
+                {"providerID": "perf", "modelID": "d"}
+            ],
+            "routingFeatureAvailable": "yes"
+        }))
+        .expect("settings with malformed values still parse");
+        let settings = ServerSettings::from_wire(wire);
+        assert_eq!(settings.projects.len(), 1);
+        assert_eq!(settings.home_directory.as_deref(), Some("/home/me"));
+        assert_eq!(settings.last_directory, None);
+        assert_eq!(settings.active_project_id, None);
+        assert_eq!(settings.default_model.as_deref(), Some("perf/stream"));
+        assert_eq!(settings.default_agent, None);
+        assert_eq!(
+            settings.default_variant.as_deref(),
+            Some(" high "),
+            "non-empty strings are kept verbatim"
+        );
+        assert_eq!(
+            settings.hidden_models,
+            [
+                ("perf".to_owned(), "a".to_owned()),
+                ("perf".to_owned(), "d".to_owned())
+            ]
+        );
+        assert_eq!(settings.routing_feature_available, None);
+    }
+
+    #[test]
+    fn the_active_project_resolves_through_the_registered_projects() {
+        let wire: wire::Settings = serde_json::from_value(json!({
+            "projects": [
+                {"path": "/work/app", "defaultModel": " perf/stream ", "defaultAgent": " "},
+                {"path": "/work/lib"},
+                {"path": "/work/app/", "defaultAgent": "plan"}
+            ],
+            "activeProjectId": ProjectId::from_path("/work/lib").expect("a project ID").as_str(),
+        }))
+        .expect("settings parse");
+        let settings = ServerSettings::from_wire(wire);
+        assert_eq!(settings.active_project_path(), Some("/work/lib"));
+        assert_eq!(
+            settings.project_defaults,
+            [ProjectDefaults {
+                path: "/work/app".to_owned(),
+                agent: None,
+                model: Some("perf/stream".to_owned()),
+                variant: None,
+            }],
+            "defaults are trimmed and a later entry of the same path is ignored"
+        );
+        let unknown = ServerSettings {
+            active_project_id: Some("path_missing".to_owned()),
+            ..settings
+        };
+        assert_eq!(unknown.active_project_path(), None);
     }
 }

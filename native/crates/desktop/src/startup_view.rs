@@ -7,20 +7,24 @@
 
 use gpui_kit::{
     Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Role,
-    StatefulInteractiveElement, Styled, TestSupportExt, Window, div, px, rems,
+    StatefulInteractiveElement, Styled, TestSupportExt, TextAlign, Window, div, px,
 };
 
 use crate::activation::on_activate;
+use crate::baseline::CssTextExt;
 use crate::chrome::{self, CONTROL_RADIUS, glyph};
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
 use crate::theme::Palette;
+use crate::tracked_text::tracked_text;
 use crate::workspace::Workspace;
 
 const CHIP_HEIGHT: f32 = 24.0;
 /// `text-3xl`, `typography-ui-label` and `typography-meta`, in rems.
 const TITLE_SIZE: f32 = 1.875;
 const TITLE_LINE: f32 = 2.25;
+/// `tracking-tight`, in ems.
+const TITLE_TRACKING: f32 = -0.025;
 const LABEL_SIZE: f32 = 0.843_75;
 const LABEL_LINE: f32 = 1.25;
 const META_SIZE: f32 = 0.781_25;
@@ -47,6 +51,7 @@ impl Workspace {
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let strings = locale::strings(cx).clone();
+        let title = strings.get("chat.emptyState.draftTitle");
         // `pb-[6vh]`: six percent of the content's height.
         let lift = chrome::content_size(window).height * 0.06;
         let column_padding = chrome::chat_column_padding(window);
@@ -63,11 +68,13 @@ impl Workspace {
                 .items_center()
                 .gap(px(6.0))
                 .cursor_pointer()
-                .text_size(rems(LABEL_SIZE))
-                .line_height(rems(LABEL_LINE))
                 .font_weight(FontWeight::MEDIUM)
                 .text_color(palette.foreground)
-                .child(strings.get("chat.chatInput.chooseProject"))
+                .child(
+                    div()
+                        .css_text(LABEL_SIZE, LABEL_LINE, cx)
+                        .child(strings.get("chat.chatInput.chooseProject")),
+                )
                 .child(glyph("arrow-down-s", 16.0, palette.foreground).opacity(0.5)),
             cx,
             |_, _, _| {},
@@ -95,8 +102,6 @@ impl Workspace {
                     .items_center()
                     .gap(px(6.0))
                     .cursor_pointer()
-                    .text_size(rems(META_SIZE))
-                    .line_height(rems(META_LINE))
                     .text_color(palette.muted_foreground)
                     .hover(move |style| style.bg(hover_fill).text_color(foreground))
                     .child(
@@ -106,7 +111,7 @@ impl Workspace {
                                 style.opacity(1.0).text_color(foreground)
                             }),
                     )
-                    .child(label),
+                    .child(div().css_text(META_SIZE, META_LINE, cx).child(label)),
                 cx,
                 |_, _, _| {},
             )
@@ -161,11 +166,12 @@ impl Workspace {
                                 .accessibility_id("startup-title")
                                 .aria_level(1)
                                 .w_full()
-                                .text_center()
-                                .text_size(rems(TITLE_SIZE))
-                                .line_height(rems(TITLE_LINE))
+                                .aria_label(title.clone())
+                                .flex()
+                                .justify_center()
+                                .css_text(TITLE_SIZE, TITLE_LINE, cx)
                                 .text_color(palette.foreground)
-                                .child(strings.get("chat.emptyState.draftTitle")),
+                                .child(tracked_text(title, TITLE_TRACKING, TextAlign::Center)),
                         ),
                     )
                     .child(

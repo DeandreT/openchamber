@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { listModelVariantIds, modelVariantNames } from "@/lib/modelVariants";
+import { modelVariantNames } from "@/lib/modelVariants";
 import { AUTO_MODEL_ID, AUTO_PROVIDER_ID, isAutoModel } from '@/lib/routing/autoModel';
 import { selectAutoReady, useRoutingStore } from '@/stores/useRoutingStore';
 import type { StoreApi, UseBoundStore } from "zustand";
@@ -12,8 +12,7 @@ import { isSameProjectConfigError, readProjectConfigError, type ProjectConfigErr
 import { scopeMatches, subscribeToConfigChanges } from "@/lib/configSync";
 import type { ModelMetadata } from "@/types";
 import { createDeferredSafeJSONStorage } from "./utils/safeStorage";
-import { filterVisibleAgents, isAgentHidden } from "./useAgentsStore";
-import { isPrimaryMode } from "@/components/chat/mobileControlsUtils";
+import { filterVisibleAgents } from "./useAgentsStore";
 import { useSessionUIStore } from "@/sync/session-ui-store";
 import { useSelectionStore } from "@/sync/selection-store";
 import { useUIStore } from "@/stores/useUIStore";
@@ -22,8 +21,12 @@ import { useDirectoryStore } from "@/stores/useDirectoryStore";
 import { useProjectsStore } from "@/stores/useProjectsStore";
 import { resolveProjectForSessionDirectory } from "@/lib/projectResolution";
 import { streamDebugEnabled } from "@/stores/utils/streamDebug";
-import { parseModelIdentifier, parseModelSelection } from "@/lib/modelIdentifier";
-import type { ModelRef } from "@/lib/settings/parsers";
+import { parseModelIdentifier } from "@/lib/modelIdentifier";
+import {
+    catalogHasProviderModel, findProviderModel, groupProviderCatalog, modelHasVariant,
+    resolveDefaultAgentModelSelection as selectDefaultAgentModel,
+    resolveFallbackModel, resolveRememberedModel, type FallbackModelPrefs,
+} from './configModelSelection';
 import { configModelIdentifier } from "@/lib/opencode/projection";
 import { runtimeFetch } from "@/lib/runtime-fetch";
 import { EMPTY_VOICE_API_KEYS, fetchVoiceApiKeys, migrateLegacyVoiceApiKeys, updateVoiceApiKeys, type VoiceApiKeyKind, type VoiceApiKeyState } from "@/lib/voiceKeysApi";
@@ -36,8 +39,6 @@ import { readCachedCatalog, shouldHoldFirstLoadAgainstCache, writeCachedCatalogW
 const MODELS_DEV_API_URL = "https://models.dev/api.json";
 const MODELS_DEV_PROXY_URL = "/api/openchamber/models-metadata";
 
-const FALLBACK_PROVIDER_ID = "opencode";
-const FALLBACK_MODEL_ID = "big-pickle";
 // Sentinel selectedProviderId used by the providers UI while the "Add provider"
 // form is open. It is intentionally not a real provider id and must not be
 // persisted as a stable provider selection.
@@ -208,35 +209,11 @@ const normalizeOptionalString = (value: unknown): string | undefined => {
     return trimmed.length > 0 ? trimmed : undefined;
 };
 
-const findProviderModel = (
-    providers: ProviderWithModelList[],
-    providerId: string,
-    modelId: string,
-): Model | undefined => (
-    findCatalogModel(providers.find((provider) => provider.id === providerId)?.models, modelId)
-);
-
-/** v2 lists model variants as records with an `id`, not as a keyed map. */
-const modelHasVariant = (model: Model | undefined, variant: string | null | undefined): boolean => (
-    typeof variant === "string" && listModelVariantIds(model?.variants).includes(variant)
-);
-
 const hasProviderModel = (
     providers: ProviderWithModelList[],
     providerId: string,
     modelId: string
-): boolean => {
-    // Auto is not a provider OpenCode reports; it is a valid selection exactly
-    // while the server says routing can honour it.
-    if (isAutoModel(providerId, modelId)) {
-        return selectAutoReady(useRoutingStore.getState());
-    }
-    const provider = providers.find((item) => item.id === providerId);
-    if (!provider) {
-        return false;
-    }
-    return findCatalogModel(provider.models, modelId) !== undefined;
-};
+): boolean => catalogHasProviderModel(providers, providerId, modelId, selectAutoReady(useRoutingStore.getState()));
 
 /**
  * An `openchamber/auto` selection that this server cannot honour. Auto is a
@@ -309,197 +286,22 @@ const resolveProviderModelSelection = ({
     return resolveLastSelectedModel(fallbackPrefs) ?? resolveFallbackModel(providers, fallbackPrefs.hiddenModels);
 };
 
-/** What the automatic pick reads from the user's model preferences. */
-type FallbackModelPrefs = {
-    hiddenModels: readonly ModelRef[];
-    lastSelectedModel: string | undefined;
-};
-
 const readFallbackModelPrefs = (): FallbackModelPrefs => {
     const { hiddenModels, lastSelectedModel } = useUIStore.getState();
     return { hiddenModels, lastSelectedModel };
 };
 
-const isModelHidden = (hiddenModels: readonly ModelRef[], providerId: string, modelId: string): boolean => hiddenModels.some(
-    (hidden) => hidden.providerID === providerId && hidden.modelID === modelId,
+const resolveLastSelectedModel = (prefs: FallbackModelPrefs) => resolveRememberedModel(
+    prefs, isStaleAutoSelection(AUTO_PROVIDER_ID, AUTO_MODEL_ID),
 );
 
-// The model last picked in a chat composer, once nothing configured names one.
-// Like a configured default it survives catalog gaps: a provider that has not
-// registered yet must not move a new session onto Big Pickle. A model hidden
-// since, or an Auto pick this server cannot honour, is skipped.
-const resolveLastSelectedModel = (
-    { hiddenModels, lastSelectedModel }: FallbackModelPrefs,
-): { providerId: string; modelId: string } | null => {
-    const parsed = lastSelectedModel ? parseModelString(lastSelectedModel) : null;
-    if (!parsed) return null;
-    if (isModelHidden(hiddenModels, parsed.providerId, parsed.modelId)) return null;
-    if (isStaleAutoSelection(parsed.providerId, parsed.modelId)) return null;
-    return parsed;
-};
-
-// The pick when nothing is configured or remembered: Big Pickle, else the first
-// model. A model the user hid in the picker is skipped; configured defaults never
-// come through here, so they stay honoured even when hidden. With every model
-// hidden the conversation still needs one to send with, so the unfiltered pick stands.
-const resolveFallbackModel = (
-    providers: ProviderWithModelList[],
-    hiddenModels: readonly ModelRef[],
-): { providerId: string; modelId: string } | null => {
-    const isVisible = (providerId: string, modelId: string) => !isModelHidden(hiddenModels, providerId, modelId);
-
-    const hasBigPickle = hasProviderModel(providers, FALLBACK_PROVIDER_ID, FALLBACK_MODEL_ID);
-    if (hasBigPickle && isVisible(FALLBACK_PROVIDER_ID, FALLBACK_MODEL_ID)) {
-        return { providerId: FALLBACK_PROVIDER_ID, modelId: FALLBACK_MODEL_ID };
-    }
-    for (const provider of providers) {
-        const visibleModel = provider.models.find((model) => isVisible(provider.id, model.modelID));
-        if (visibleModel) {
-            return { providerId: provider.id, modelId: visibleModel.modelID };
-        }
-    }
-
-    if (hasBigPickle) {
-        return { providerId: FALLBACK_PROVIDER_ID, modelId: FALLBACK_MODEL_ID };
-    }
-    const firstProvider = providers[0];
-    const firstModel = firstProvider?.models[0];
-    if (firstProvider && firstModel) {
-        return { providerId: firstProvider.id, modelId: firstModel.modelID };
-    }
-    return null;
-};
-
-type DefaultAgentModelSelection = {
-    agentName: string | undefined;
-    providerId?: string;
-    modelId?: string;
-    variant?: string;
-};
-
-// Shared default-selection cascade used both at startup (loadAgents) and when opening a
-// fresh draft (applyDefaultModelAgentSelection), so the two paths stay identical.
-//
-//   Agent: project.defaultAgent → settings.defaultAgent → opencode default_agent → build → first primary → first
-//   Model: project.defaultModel → settings.defaultModel → resolved agent's pinned model+variant → opencode config.model
-//          → last model picked in a chat → opencode/big-pickle → first (these three skip models hidden in the picker)
-//
-// The opencode default_agent / default model (config fields on the OpenCode server) are honored
-// only when our own settings have no default. A configured identifier remains
-// selected through discovery gaps; catalog absence must not select a different model.
-// OpenCode itself resolves a model the same way:
-// an agent's pinned model wins, otherwise the global `model` config applies — so we check the
-// agent's model before opencodeDefaultModel. When the agent supplies the model, its `variant` is
-// carried through too (if the model actually exposes that variant).
-const resolveDefaultAgentModelSelection = ({
-    agents,
-    providers,
-    projectDefaultAgent,
-    projectDefaultModel,
-    projectDefaultVariant,
-    settingsDefaultAgent,
-    settingsDefaultModel,
-    settingsDefaultVariant,
-    opencodeDefaultAgent,
-    opencodeDefaultModel,
-    allowFallback = true,
-    fallbackPrefs,
-}: {
-    agents: Agent[];
-    providers: ProviderWithModelList[];
-    projectDefaultAgent?: string;
-    projectDefaultModel?: string;
-    projectDefaultVariant?: string;
-    settingsDefaultAgent?: string;
-    settingsDefaultModel?: string;
-    settingsDefaultVariant?: string;
-    opencodeDefaultAgent?: string;
-    opencodeDefaultModel?: string;
-    allowFallback?: boolean;
-    fallbackPrefs: FallbackModelPrefs;
-}): DefaultAgentModelSelection => {
-    const resolveVariant = (providerId: string, modelId: string, variant?: string): string | undefined => {
-        if (!variant) {
-            return undefined;
-        }
-        return modelHasVariant(findProviderModel(providers, providerId, modelId), variant) ? variant : undefined;
-    };
-
-    // --- Agent cascade ---
-    const primaryAgents = agents.filter((agent) => isPrimaryMode(agent.mode) && !isAgentHidden(agent));
-
-    let resolvedAgent: Agent | undefined;
-    if (projectDefaultAgent) {
-        resolvedAgent = agents.find((agent) => agent.name === projectDefaultAgent);
-    }
-    if (!resolvedAgent && settingsDefaultAgent) {
-        resolvedAgent = agents.find((agent) => agent.name === settingsDefaultAgent);
-    }
-    if (!resolvedAgent && opencodeDefaultAgent) {
-        const candidate = agents.find((agent) => agent.name === opencodeDefaultAgent);
-        // OpenCode requires the default agent to be a visible primary agent.
-        if (candidate && isPrimaryMode(candidate.mode) && !isAgentHidden(candidate)) {
-            resolvedAgent = candidate;
-        }
-    }
-    if (!resolvedAgent) {
-        resolvedAgent = primaryAgents.find((agent) => agent.name === "build") || primaryAgents[0] || agents[0];
-    }
-    // --- Model cascade ---
-    let providerId: string | undefined;
-    let modelId: string | undefined;
-    let variant: string | undefined;
-
-    const effectiveDefaultModel = projectDefaultModel || settingsDefaultModel;
-
-    if (effectiveDefaultModel) {
-        const parsed = parseModelString(effectiveDefaultModel);
-        if (parsed && !isStaleAutoSelection(parsed.providerId, parsed.modelId)) {
-            providerId = parsed.providerId;
-            modelId = parsed.modelId;
-            // A project default carries its own variant; the settings variant
-            // belongs to the settings model and must not leak onto it.
-            const configuredVariant = projectDefaultModel ? projectDefaultVariant : settingsDefaultVariant;
-            variant = hasProviderModel(providers, providerId, modelId)
-                ? resolveVariant(providerId, modelId, configuredVariant)
-                : configuredVariant;
-        }
-    }
-
-    if (providerId || !allowFallback) {
-        return { agentName: resolvedAgent?.name ?? projectDefaultAgent ?? settingsDefaultAgent, providerId, modelId, variant };
-    }
-
-    if (!providerId
-        && resolvedAgent?.model?.providerID
-        && resolvedAgent.model?.id) {
-        providerId = resolvedAgent.model.providerID;
-        modelId = resolvedAgent.model.id;
-        variant = hasProviderModel(providers, providerId, modelId)
-            ? resolveVariant(providerId, modelId, resolvedAgent.model.variant)
-            : resolvedAgent.model.variant;
-    }
-
-    // OpenCode's global default model — used when neither our settings nor the agent pin a model.
-    if (!providerId && opencodeDefaultModel) {
-        const parsed = parseModelSelection(opencodeDefaultModel);
-        if (parsed) {
-            providerId = parsed.providerID;
-            modelId = parsed.modelID;
-            variant = hasProviderModel(providers, providerId, modelId)
-                ? resolveVariant(providerId, modelId, parsed.variant)
-                : parsed.variant;
-        }
-    }
-
-    if (!providerId) {
-        const fallback = resolveLastSelectedModel(fallbackPrefs) ?? resolveFallbackModel(providers, fallbackPrefs.hiddenModels);
-        providerId = fallback?.providerId;
-        modelId = fallback?.modelId;
-    }
-
-    return { agentName: resolvedAgent?.name, providerId, modelId, variant };
-};
+const resolveDefaultAgentModelSelection = (
+    options: Omit<Parameters<typeof selectDefaultAgentModel>[0], 'autoReady' | 'staleAuto'>,
+) => selectDefaultAgentModel({
+    ...options,
+    autoReady: selectAutoReady(useRoutingStore.getState()),
+    staleAuto: isStaleAutoSelection(AUTO_PROVIDER_ID, AUTO_MODEL_ID),
+});
 
 const resolveGitGenerationModelSelection = ({
     providers,
@@ -2252,22 +2054,10 @@ export const useConfigStore = create<ConfigStore>()(
                                 ? { [apiResult.default.providerID]: apiResult.default.id }
                                 : {};
 
-                            const modelsByProvider = new Map<string, ProviderModel[]>();
-                            for (const model of catalogModels) {
-                                if (!model.enabled) continue;
-                                const bucket = modelsByProvider.get(model.providerID);
-                                if (bucket) bucket.push(model);
-                                else modelsByProvider.set(model.providerID, [model]);
-                            }
                             // A provider the user switched off, or one with no usable
                             // model, is not offerable — v2 replaced the `connected` list
                             // with these two facts.
-                            const processedProviders: ProviderWithModelList[] = providers
-                                .filter((provider) => provider.activation !== "disabled" && modelsByProvider.has(provider.id))
-                                .map((provider) => ({
-                                    ...provider,
-                                    models: modelsByProvider.get(provider.id) ?? [],
-                                }));
+                            const processedProviders = groupProviderCatalog(providers, catalogModels);
 
                             if (!isConfigRuntimeContextCurrent(runtimeContext)) return;
                             if (holdFirstLoadAgainstCache(_providersShownFromCache, inFlightKey, countCatalogModels(processedProviders))) {

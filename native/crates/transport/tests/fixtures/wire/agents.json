@@ -1,0 +1,92 @@
+{
+  "location": {
+    "directory": "/home/synthetic/my project/ünï"
+  },
+  "data": [
+    {
+      "id": "build",
+      "name": "Build",
+      "description": "The default agent. Executes tools based on configured permissions.",
+      "mode": "primary",
+      "hidden": false
+    },
+    {
+      "id": "general",
+      "name": "General",
+      "description": "General-purpose agent for researching complex questions and executing multi-step tasks. Use this agent to execute multiple units of work in parallel.",
+      "mode": "subagent",
+      "hidden": false
+    },
+    {
+      "id": "explore",
+      "name": "Explore",
+      "description": "Fast agent specialized for exploring codebases. Use this when you need to quickly find files by patterns (eg. \"src/components/**/*.tsx\"), search code for keywords (eg. \"API endpoints\"), or answer questions about the codebase (eg. \"how do API endpoints work?\"). When calling this agent, specify the desired thoroughness level: \"quick\" for basic searches, \"medium\" for moderate exploration, or \"very thorough\" for comprehensive analysis across multiple locations and naming conventions.",
+      "mode": "subagent",
+      "hidden": false
+    },
+    {
+      "id": "compaction",
+      "name": "Compaction",
+      "mode": "primary",
+      "hidden": true
+    },
+    {
+      "id": "title",
+      "name": "Title",
+      "mode": "primary",
+      "hidden": true,
+      "model": {
+        "id": "stream-1200cps",
+        "providerID": "perf"
+      }
+    },
+    {
+      "id": "summary",
+      "name": "Summary",
+      "mode": "primary",
+      "hidden": true
+    },
+    {
+      "id": "plan",
+      "name": "Plan",
+      "description": "Read-only agent for exploring the codebase and planning work before implementation.",
+      "mode": "primary",
+      "hidden": false
+    },
+    {
+      "id": "drafter",
+      "name": "drafter",
+      "mode": "primary",
+      "hidden": true,
+      "model": {
+        "id": "code-300cps",
+        "providerID": "perf",
+        "variant": "high"
+      },
+      "color": "#c4920a"
+    },
+    {
+      "id": "reviewer",
+      "name": "Reviewer",
+      "mode": "subagent",
+      "hidden": false,
+      "color": "#d08770"
+    },
+    {
+      "id": "helper",
+      "name": "helper",
+      "mode": "all",
+      "hidden": false
+    },
+    {
+      "id": "writer",
+      "name": "  Writer  ",
+      "mode": "all",
+      "hidden": false,
+      "model": {
+        "id": "missing-model",
+        "providerID": "elsewhere"
+      }
+    }
+  ]
+}

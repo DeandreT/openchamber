@@ -6,9 +6,11 @@ import { fileURLToPath } from 'node:url';
 import {
   NATIVE_ICONS_PATH,
   NATIVE_LOCALES_PATH,
+  NATIVE_PROVIDER_LOGOS_PATH,
   NATIVE_THEMES_PATH,
   renderNativeIcons,
   renderNativeLocales,
+  renderNativeProviderLogos,
   renderNativeThemes,
 } from './nativeResources';
 
@@ -27,5 +29,9 @@ describe('native desktop resources', () => {
 
   test('the checked-in icons match the icon sprite', () => {
     expect(checkedIn(NATIVE_ICONS_PATH)).toBe(renderNativeIcons());
+  });
+
+  test('the checked-in provider logos match the bundled logos and aliases', () => {
+    expect(checkedIn(NATIVE_PROVIDER_LOGOS_PATH)).toBe(renderNativeProviderLogos());
   });
 });

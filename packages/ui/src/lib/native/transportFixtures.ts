@@ -5,8 +5,9 @@
  * through a `fetch` that also records every request it sends. Its decoded
  * results go through the UI's own projection. The output pins three things
  * the Rust transport must reproduce: the requests (method, path, query,
- * directory header), the projected sessions and the projected messages. See
- * `docs/rust-desktop/OPENCODE_ADAPTER.md`.
+ * directory header), the projected sessions and messages, and the catalogs
+ * the composer selects from (agents, models, providers, the folded OpenCode
+ * config and MCP status). See `docs/rust-desktop/OPENCODE_ADAPTER.md`.
  *
  *   bun run native:transport-fixtures
  */
@@ -18,8 +19,10 @@ import { OpenCode } from '@opencode/client';
 import { z } from 'zod';
 
 import type { SessionPatch, SyncEvent } from '@/lib/opencode/events';
-import { projectMessages, projectSession } from '@/lib/opencode/projection';
-import { compact, type Metadata, type Part, type Session } from '@/lib/opencode/model';
+import { configModelIdentifier, mergeConfigDocuments, projectAgent, projectMessages, projectSession } from '@/lib/opencode/projection';
+import { compact, type Agent, type Metadata, type Part, type Session } from '@/lib/opencode/model';
+import { listModelVariantIds } from '@/lib/modelVariants';
+import { isAgentHidden } from '@/stores/useAgentsStore';
 import { PART_SHELLS_HEADER, PART_SHELLS_VERSION, toolContentShellChars } from '@/lib/opencode/toolContentShells';
 import { isBtwSession } from '@/lib/sessionBtwMetadata';
 import { isSessionPinnedInMetadata } from '@/lib/sessionPins';
@@ -53,6 +56,12 @@ type RecordedRequest = {
 
 const responseFor = (path: string, shelled: boolean): string => {
   if (path === '/api/session') return readWire('sessions');
+  if (path === '/api/agent') return readWire('agents');
+  if (path === '/api/model') return readWire('models');
+  if (path === '/api/model/default') return readWire('model-default');
+  if (path === '/api/provider') return readWire('providers');
+  if (path === '/api/config') return readWire('config');
+  if (path === '/api/mcp') return readWire('mcp');
   if (path === `/api/session/${RECORDED_SESSION}/message`) return readWire('messages-recorded');
   if (path === `/api/session/${LONG_SESSION}/message`) return readWire('messages-long');
   if (path === `/api/session/${TOOLS_SESSION}/message`) return readWire(shelled ? 'messages-tools-shelled' : 'messages-tools');
@@ -89,6 +98,9 @@ const createRecordingClient = (requests: RecordedRequest[], headers?: Record<str
   };
 };
 
+const normalizeModelRef = (model: Session['model'] | undefined) =>
+  model ? { providerId: model.providerID, modelId: model.id, variant: model.variant ?? null } : null;
+
 const normalizeSession = (session: Session) => ({
   id: session.id,
   parentId: session.parentID ?? null,
@@ -101,6 +113,7 @@ const normalizeSession = (session: Session) => ({
   pinned: isSessionPinnedInMetadata(session),
   inWork: isSessionInWork(session),
   btw: isBtwSession(session),
+  model: normalizeModelRef(session.model),
 });
 
 const normalizePart = (part: Part) => {
@@ -124,6 +137,15 @@ const normalizePart = (part: Part) => {
   }
 };
 
+const normalizeAgent = (agent: Agent) => ({
+  name: agent.name,
+  displayName: agent.displayName ?? null,
+  mode: agent.mode ?? null,
+  hidden: isAgentHidden(agent),
+  model: normalizeModelRef(agent.model),
+  color: agent.color ?? null,
+});
+
 /** The installed client's version; its package exports do not include the manifest. */
 const installedClientVersion = (): string =>
   z.object({ version: z.string() }).parse(JSON.parse(readFileSync(resolve(repoRoot, 'node_modules/@opencode/client/package.json'), 'utf8'))).version;
@@ -143,6 +165,7 @@ type SessionEffect =
       idle?: number;
       archived?: number | null;
       overlay?: Overlay;
+      model?: ReturnType<typeof normalizeModelRef>;
     }
   | { type: 'deleted'; sessionId: string }
   | { type: 'status'; sessionId: string; status: string };
@@ -168,6 +191,7 @@ const sessionEffects = (frames: string, base: Session) => {
       idle: patch.time?.idle,
       archived: patch.time?.archived,
       overlay: patch.metadata === undefined ? undefined : overlay(patch.metadata),
+      model: patch.model === undefined ? undefined : normalizeModelRef(patch.model),
     });
     return Object.keys(fields).length > 0 ? [{ type: 'patched', sessionId: sessionID, ...fields }] : [];
   };
@@ -211,6 +235,14 @@ export const renderTransportFixtures = async (): Promise<string> => {
     global.client.message.list({ sessionID: TOOLS_SESSION, limit: 50 }, { headers: { [PART_SHELLS_HEADER]: PART_SHELLS_VERSION } }),
   );
   const single = await global.named('whole message', () => global.client.session.message.get({ sessionID: TOOLS_SESSION, messageID: TOOLS_MESSAGE }));
+  // The composer's catalogs, read in the active project as `getProvidersForConfig`,
+  // `listAgents`, `getConfig` and `listMcpServers` do.
+  const agents = await scoped.named('agents', () => scoped.client.agent.list());
+  const models = await scoped.named('models', () => scoped.client.model.list());
+  const defaultModel = await scoped.named('default model', () => scoped.client.model.default());
+  const providers = await scoped.named('providers', () => scoped.client.provider.list());
+  const config = mergeConfigDocuments(await scoped.named('config', () => scoped.client.config.get()));
+  const mcp = await scoped.named('mcp servers', () => scoped.client.mcp.list());
 
   const normalizeMessages = (data: Parameters<typeof projectMessages>[0], sessionID: string) =>
     projectMessages(data, sessionID).map(({ message, parts }) => ({
@@ -240,6 +272,24 @@ export const renderTransportFixtures = async (): Promise<string> => {
       shelled: page(shelled, TOOLS_SESSION, 50),
     },
     wholeMessage: normalizeMessages([single], TOOLS_SESSION)[0],
+    catalog: {
+      agents: agents.data.map(projectAgent).map(normalizeAgent),
+      models: models.data.map((model) => ({
+        id: model.id,
+        modelId: model.modelID,
+        providerId: model.providerID,
+        name: model.name ?? null,
+        enabled: model.enabled,
+        variants: listModelVariantIds(model.variants),
+      })),
+      providers: providers.data.map((provider) => ({ id: provider.id, name: provider.name ?? null, enabled: provider.activation !== 'disabled' })),
+      defaultModel: defaultModel.data ? { providerId: defaultModel.data.providerID, modelId: defaultModel.data.modelID } : null,
+      opencodeDefaults: {
+        defaultAgent: typeof config.default_agent === 'string' && config.default_agent.trim() ? config.default_agent.trim() : null,
+        model: configModelIdentifier(config.model) ?? null,
+      },
+      mcpConnected: mcp.data.filter((server) => server.status.status === 'connected').length,
+    },
     sessionEvents: {
       recorded: sessionEffects(readWire('frames-recorded'), projectSession(sessions.data[0])),
       tools: sessionEffects(readWire('frames-tools'), projectSession(sessions.data[0])),

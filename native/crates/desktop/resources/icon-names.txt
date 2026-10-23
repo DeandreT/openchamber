@@ -10,6 +10,7 @@ arrow-right-s
 bar-chart
 book-marked
 box-3
+brain-ai-3
 bug
 calendar-schedule
 chat-4
@@ -22,6 +23,7 @@ close
 command
 compass-3
 equalizer-2
+error-warning
 eye
 file-edit
 folder
@@ -42,6 +44,8 @@ mic
 more
 more-2
 node-tree
+openchamber
+pencil-ai
 picture-in-picture-2
 pushpin
 robot

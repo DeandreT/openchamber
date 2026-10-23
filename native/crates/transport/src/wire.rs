@@ -45,6 +45,7 @@ pub(crate) struct Session {
     pub title: Option<String>,
     pub time: SessionTime,
     pub metadata: Option<Value>,
+    pub model: Option<AgentModel>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -185,15 +186,113 @@ pub(crate) struct HomeInfo {
     pub canonical_legacy_chats_root: Option<String>,
 }
 
-/// `GET /api/config/settings`: the fields topology needs.
+/// `GET /api/config/settings`: the fields topology and the composer's
+/// defaults need. Values are checked one by one, as the web client's settings
+/// parsers do: a malformed value is ignored, never the whole document.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Settings {
-    /// Entries are checked one by one: a malformed entry is skipped, never
-    /// the whole list.
     #[serde(default)]
     pub projects: Vec<Value>,
-    pub home_directory: Option<String>,
+    pub home_directory: Option<Value>,
+    pub last_directory: Option<Value>,
+    pub active_project_id: Option<Value>,
+    pub default_model: Option<Value>,
+    pub default_variant: Option<Value>,
+    pub default_agent: Option<Value>,
+    pub last_selected_model: Option<Value>,
+    pub hidden_models: Option<Value>,
+    pub routing_feature_available: Option<Value>,
+}
+
+/// OpenCode v2 list routes: `{ location, data }`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct Located<T> {
+    pub data: T,
+}
+
+/// `GET /api/agent`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct AgentInfo {
+    pub id: String,
+    pub name: Option<String>,
+    pub mode: Option<String>,
+    pub hidden: Option<bool>,
+    pub options: Option<Value>,
+    pub model: Option<AgentModel>,
+    pub color: Option<String>,
+}
+
+/// A model reference: an agent's pinned model, or a session's current one.
+#[derive(Debug, Deserialize)]
+pub(crate) struct AgentModel {
+    #[serde(rename = "providerID")]
+    pub provider_id: String,
+    pub id: String,
+    pub variant: Option<String>,
+}
+
+/// `GET /api/model`: one model of the flat catalog.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ModelInfo {
+    pub id: String,
+    #[serde(rename = "modelID")]
+    pub model_id: String,
+    #[serde(rename = "providerID")]
+    pub provider_id: String,
+    pub name: Option<String>,
+    #[serde(default)]
+    pub enabled: bool,
+    pub variants: Option<Vec<ModelVariant>>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ModelVariant {
+    pub id: String,
+}
+
+/// `GET /api/model/default`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct DefaultModel {
+    #[serde(rename = "modelID")]
+    pub model_id: String,
+    #[serde(rename = "providerID")]
+    pub provider_id: String,
+}
+
+/// `GET /api/provider`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ProviderInfo {
+    pub id: String,
+    pub name: Option<String>,
+    pub activation: Option<String>,
+}
+
+/// `GET /api/config`: every discovered config document and folder, lowest
+/// priority first.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ConfigEntry {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub info: Option<serde_json::Map<String, Value>>,
+}
+
+/// `GET /api/mcp`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct McpServer {
+    pub status: McpStatus,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct McpStatus {
+    pub status: String,
+}
+
+/// `GET /api/config/skills`.
+#[derive(Debug, Deserialize)]
+pub(crate) struct Skills {
+    #[serde(default)]
+    pub skills: Vec<Value>,
 }
 
 /// `GET /api/sessions/status`: the host's cross-project status map.

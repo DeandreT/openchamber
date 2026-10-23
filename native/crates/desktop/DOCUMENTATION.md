@@ -23,18 +23,27 @@ read-only until prompt submission has its error and reconciliation paths.
   explain and the tasks of the current connection attempt.
 - `network.rs` owns the Tokio runtime. GPUI tasks await `NetworkTask`s, and
   dropping one aborts its network work.
+- `send_catalog.rs` holds the composer's catalogs per configuration directory
+  and resolves what a send would use through the core's `send_config`;
+  `model_controls.rs` draws the effort, model and agent controls from it.
+- `provider_logos.rs` resolves, loads and caches provider logos for the
+  composer and the sidebar rows.
 - `sidebar_item.rs` copies the core row model into owned rows. The core model
   borrows session records and entities cannot hold borrows.
 - `workspace_view.rs` lays out the frameless window: the sidebar column, the
   header with the window controls, the chat, the work status panel and the
   rail. `sidebar_view.rs`, `startup_view.rs`, `transcript_view.rs`,
-  `composer_view.rs` and `context_panel.rs` render their parts. They dispatch
+  `composer_view.rs`, `model_controls.rs` and `context_panel.rs` render their
+  parts. They dispatch
   to `Workspace` methods and never interpret records themselves.
 - `chrome.rs` owns the shared controls (sprite glyphs, quiet icon buttons),
   the drag region and window controls of the frameless window and the
-  content size inside a client-side frame; `logical.rs` maps start and end
-  sides to the layout direction; `elevation.rs` mirrors the design system's
-  ring and shadow recipes.
+  content size inside a client-side frame, and holds a new window at its
+  requested content size; `logical.rs` maps start and end sides to the layout
+  direction; `elevation.rs` mirrors the design system's ring and shadow
+  recipes.
+- `baseline.rs` places text on Chromium's baseline (`css_text`), and
+  `tracked_text.rs` draws text with CSS letter spacing.
 - `theme.rs`, `locale.rs` and `assets.rs` load the generated resources in
   `resources/`; `bun run native:resources` owns their content. `fonts.rs`
   resolves the web client's default font stacks against the installed fonts.
@@ -93,7 +102,17 @@ read-only until prompt submission has its error and reconciliation paths.
   physical order and the right edge in every language, as in the web client.
 - The content keeps the reference size inside a client-side frame: the
   window grows by the frame line, and sizes the web client takes from the
-  viewport (`6vh`) come from `chrome::content_size`.
+  viewport (`6vh`) come from `chrome::content_size`. For two seconds after
+  opening, a floating window whose content is off that size is resized by
+  the error on each frame; tiled, maximized and full-screen windows are left
+  to the window manager.
+- Text sized with `css_text` sits where Chromium puts it; text in an element
+  with other children or a background gets its own `css_text` element, since
+  the correction moves the whole element.
+- A provider logo is bundled, loading, drawn or absent. Bundled logos draw at
+  once; any other is fetched once for the app's lifetime, keeps its box while
+  loading and is left out when the fetch or the SVG fails, as the web drops a
+  broken image. A fetch cut short by a closing connection is tried again.
 
 ## Decisions
 
@@ -163,6 +182,40 @@ back to the platform's generic family; on Linux that is fontconfig's
 `system-ui`. GPUI Kit names IBM Plex Sans, which is usually not installed.
 `fc-match` takes about 15 ms, so it runs on a thread started first in `main`
 and joins just before the theme is applied.
+
+### Why text moves onto Chromium's baseline
+
+Chromium rounds a font's ascent and descent to whole pixels before centering
+them in the line box and floors the half-leading; GPUI centers the exact
+metrics and rounds the glyph origin. For the same text in the same box the two
+can sit a pixel apart, which the parity runner measures at every size whose
+rounding differs (for Noto Sans: 12/12, 12/16, 12.5/18 and 30/36). `css_text`
+computes the difference from the resolved font's metrics and moves the text
+element by it, so it holds for any font.
+
+### Why letter spacing is a custom element
+
+GPUI's text elements have no letter spacing. `tracked_text` shapes the line
+normally, keeping the font's kerning, and paints each glyph moved by the
+spacing of the characters before it, as Chromium adds spacing after every
+character. Text that does not fit on one line, or that has right-to-left
+characters, falls back to ordinary wrapped text without spacing.
+
+### Why logos are inverted in the SVG
+
+The web draws provider logos with `dark:invert`. GPUI's image pipeline has no
+color filter, and inverting rasterized pixels would need an image crate the
+workspace does not use. Inverting the SVG's paint colors gives the same
+drawing for the logos in use, which paint in hex colors, black, white or
+`currentColor`; `openchamber_native_core::provider_logo` documents the limits.
+
+### Why the window's first size is held
+
+GPUI publishes the client-side shadow band with the first frame. If KWin
+already manages the window then, it grows the window by the band; otherwise it
+takes the requested size as the window with the band and shrinks the content
+by 40 pixels. No single request is right in both orders, so the window
+corrects itself from the measured content size until the compositor settles.
 
 ### Why `.test_support()` on rows and controls
 

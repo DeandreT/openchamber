@@ -1,0 +1,39 @@
+[
+  {
+    "type": "directory",
+    "path": "/home/synthetic/.config/opencode"
+  },
+  {
+    "type": "document",
+    "path": "/home/synthetic/.config/opencode/opencode.json",
+    "info": {
+      "model": "perf/stream-100cps",
+      "default_agent": "plan",
+      "agent": {
+        "plan": {
+          "color": "#aa5500"
+        }
+      }
+    }
+  },
+  {
+    "type": "directory",
+    "path": "/home/synthetic/my project/ünï"
+  },
+  {
+    "type": "document",
+    "path": "/home/synthetic/my project/ünï/opencode.json",
+    "info": {
+      "model": {
+        "providerID": "perf",
+        "model": "stream-300cps",
+        "variant": "high"
+      },
+      "agent": {
+        "build": {
+          "temperature": 0.2
+        }
+      }
+    }
+  }
+]

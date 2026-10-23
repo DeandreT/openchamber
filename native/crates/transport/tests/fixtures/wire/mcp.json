@@ -1,0 +1,39 @@
+{
+  "location": {
+    "directory": "/home/synthetic/my project/ünï"
+  },
+  "data": [
+    {
+      "name": "docs",
+      "status": {
+        "status": "connected"
+      }
+    },
+    {
+      "name": "tracker",
+      "status": {
+        "status": "needs_auth",
+        "error": "sign in"
+      }
+    },
+    {
+      "name": "search",
+      "status": {
+        "status": "connected"
+      }
+    },
+    {
+      "name": "browser",
+      "status": {
+        "status": "failed",
+        "error": "exited"
+      }
+    },
+    {
+      "name": "files",
+      "status": {
+        "status": "disabled"
+      }
+    }
+  ]
+}

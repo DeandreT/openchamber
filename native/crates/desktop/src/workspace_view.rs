@@ -5,10 +5,11 @@
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, KeyBinding, MouseButton, ParentElement, Render, Role,
     SharedString, StatefulInteractiveElement, Styled, TestSupportExt, Window, actions, canvas, div,
-    prelude::FluentBuilder, px, rems,
+    prelude::FluentBuilder, px,
 };
 
 use crate::activation::on_activate;
+use crate::baseline::CssTextExt;
 use crate::chrome::{self, ButtonTone, CONTROL_RADIUS, IconButton, TITLE_ROW_HEIGHT, glyph};
 use crate::diagnostics;
 use crate::locale::{self, Direction};
@@ -45,7 +46,14 @@ pub fn bind_keys(cx: &mut gpui_kit::App) {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let markers = self.take_frame_markers();
+        if let Some(initial_size) = &self.initial_size
+            && !initial_size.hold(window)
+        {
+            self.initial_size = None;
+        }
         self.sync_composer_placeholder(window, cx);
+        self.ensure_send_catalog(cx);
+        self.ensure_provider_logos(cx);
         let palette = cx.global::<Palette>().clone();
         let direction = locale::strings(cx).direction();
         let chat = if self.selected.is_some() {
@@ -180,8 +188,7 @@ impl Workspace {
                         .min_w_0()
                         .px(px(4.0))
                         .truncate()
-                        .text_size(rems(TITLE_SIZE))
-                        .line_height(rems(TITLE_LINE))
+                        .css_text(TITLE_SIZE, TITLE_LINE, cx)
                         .text_color(palette.foreground)
                         .child(title),
                 )

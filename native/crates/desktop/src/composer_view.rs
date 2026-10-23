@@ -252,6 +252,10 @@ impl Workspace {
                             .items_center()
                             .justify_end()
                             .gap(px(12.0))
+                            // Synthetic data has no catalogs to select from.
+                            .when(!self.is_synthetic(), |this| {
+                                this.child(self.render_model_controls(palette, direction, cx))
+                            })
                             .child(action("composer-dictation", "mic", "chat.dictation.start"))
                             .child(send),
                     ),
