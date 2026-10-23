@@ -30,6 +30,7 @@ chat.modelControls.default
 chat.modelControls.selectAgent
 chat.modelControls.selectModel
 chat.scrollToBottom.aria
+chat.workStatus.action.openContext
 chat.workStatus.ariaLabel
 chat.workStatus.breakdown.mcp
 chat.workStatus.breakdown.mcpCountPlural
@@ -37,6 +38,7 @@ chat.workStatus.breakdown.mcpCountSingle
 chat.workStatus.breakdown.skillCountPlural
 chat.workStatus.breakdown.skillCountSingle
 chat.workStatus.breakdown.skills
+chat.workStatus.context.label
 chat.workStatus.section.contextBreakdown
 chat.workStatus.section.session
 chat.workStatus.sections.open
@@ -58,6 +60,7 @@ contextPanel.mode.walkthrough
 contextRail.aria.rail
 contextRail.configure.open
 contextRail.surface.notes
+contextUsage.compacted.description
 desktopHostSwitcher.instance.local
 desktopHostSwitcher.startup.connectingTo
 header.actions.newMiniChatAria

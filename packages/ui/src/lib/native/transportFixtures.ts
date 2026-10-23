@@ -272,6 +272,7 @@ export const renderTransportFixtures = async (): Promise<string> => {
               : null,
           }
         : null,
+      compaction: message.role === 'compaction' ? message.status ?? null : null,
       parts: parts.map(normalizePart),
     }));
   // `getSessionMessages`: a page shorter than its limit is the oldest one.
@@ -303,6 +304,8 @@ export const renderTransportFixtures = async (): Promise<string> => {
         name: model.name ?? null,
         enabled: model.enabled,
         variants: listModelVariantIds(model.variants),
+        // `limitsForAnsweringModel` reads only a positive window.
+        contextLimit: (model.limit?.context ?? 0) > 0 ? model.limit.context : null,
       })),
       providers: providers.data.map((provider) => ({ id: provider.id, name: provider.name ?? null, enabled: provider.activation !== 'disabled' })),
       defaultModel: defaultModel.data ? { providerId: defaultModel.data.providerID, modelId: defaultModel.data.modelID } : null,

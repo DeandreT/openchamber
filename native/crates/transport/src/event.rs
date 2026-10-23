@@ -10,7 +10,8 @@ use openchamber_native_core::ids::{MessageId, OpenCodeProjectId, PartId, Session
 use openchamber_native_core::session::{LiveStatus, SessionPatch, SessionRecord, SessionTime};
 use openchamber_native_core::session_index::SessionChange;
 use openchamber_native_core::transcript::{
-    AssistantFacts, MessageInfo, Part, PartContent, Role, StepOutcome, ToolStatus, TranscriptEvent,
+    AssistantFacts, CompactionStatus, MessageInfo, Part, PartContent, Role, StepOutcome,
+    ToolStatus, TranscriptEvent,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -209,6 +210,7 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
             completed: None,
             notice: notice.map(str::to_owned),
             assistant: None,
+            compaction: None,
         }))
     };
     let assistant = || text("assistantMessageID").map(MessageId::from);
@@ -372,6 +374,7 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                 completed: None,
                 notice,
                 assistant: None,
+                compaction: None,
             };
             let payload = data
                 .pointer("/item/payload")
@@ -412,6 +415,26 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
             })],
             None => Vec::new(),
         },
+        // `events.ts`: a compaction's start and failure take the input's ID
+        // when there is one; its end is a record of its own.
+        "session.compaction.started" | "session.compaction.ended" | "session.compaction.failed" => {
+            let (status, id, summary) = match kind {
+                "session.compaction.started" => {
+                    (CompactionStatus::Running, text("inputID"), Some(""))
+                }
+                "session.compaction.ended" => (CompactionStatus::Completed, None, text("text")),
+                _ => (CompactionStatus::Failed, text("inputID"), Some("")),
+            };
+            vec![transcript(TranscriptEvent::MessageUpdated(MessageInfo {
+                id: id.map_or_else(|| message_id_from_event(event_id), MessageId::from),
+                role: Role::Compaction,
+                created,
+                completed: None,
+                notice: summary.map(str::to_owned),
+                assistant: None,
+                compaction: Some(status),
+            }))]
+        }
         "session.inbox.cancelled" => match text("inboxID") {
             Some(inbox_id) => vec![transcript(TranscriptEvent::MessageRemoved {
                 message_id: MessageId::from(inbox_id),
@@ -432,6 +455,7 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                     model: model(),
                     outcome: StepOutcome::default(),
                 }),
+                compaction: None,
             }))],
             None => Vec::new(),
         },
@@ -656,6 +680,53 @@ mod tests {
         );
         assert!(decode_frame("not json").is_err());
         assert!(decode_frame(r#"{"type":"error","message":"boom"}"#).is_err());
+    }
+
+    #[test]
+    fn compactions_report_their_lifecycle() {
+        let status = |frame: &str| match &decode_frame(frame).expect("valid").events[..] {
+            [
+                ServerEvent::Transcript {
+                    event: TranscriptEvent::MessageUpdated(info),
+                    ..
+                },
+            ] => (
+                info.id.as_str().to_owned(),
+                info.compaction,
+                info.notice.clone(),
+            ),
+            other => panic!("one message update, not {other:?}"),
+        };
+        assert_eq!(
+            status(
+                r#"{"type":"event","payload":{"id":"evt_c1","created":5,"type":"session.compaction.started","data":{"sessionID":"s1","inputID":"msg_in","reason":"auto"}}}"#
+            ),
+            (
+                "msg_in".to_owned(),
+                Some(CompactionStatus::Running),
+                Some(String::new())
+            )
+        );
+        assert_eq!(
+            status(
+                r#"{"type":"event","payload":{"id":"evt_c2","created":6,"type":"session.compaction.ended","data":{"sessionID":"s1","reason":"auto","text":"summary"}}}"#
+            ),
+            (
+                "msg_c2".to_owned(),
+                Some(CompactionStatus::Completed),
+                Some("summary".to_owned())
+            )
+        );
+        assert_eq!(
+            status(
+                r#"{"type":"event","payload":{"id":"evt_c3","created":7,"type":"session.compaction.failed","data":{"sessionID":"s1","reason":"auto","error":{"type":"x","message":"y"}}}}"#
+            ),
+            (
+                "msg_c3".to_owned(),
+                Some(CompactionStatus::Failed),
+                Some(String::new())
+            )
+        );
     }
 
     #[test]

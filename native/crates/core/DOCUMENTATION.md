@@ -24,7 +24,9 @@ rendering asks for a projection and dispatches an action.
   rows each mutation touched. An assistant message carries its step's
   agent, model, finish, error and token usage, and each assistant row knows
   its turn (`turn_position`); `turn_footer.rs` formats and fits the facts a
-  finished turn shows. User and assistant messages carry parts; every
+  finished turn shows. A compaction record carries its lifecycle, and
+  `context_usage.rs` reads a session's context fill from the newest response
+  that reported tokens, unknown after a finished compaction. User and assistant messages carry parts; every
   other OpenCode record (synthetic, system, skill, shell, compaction, switched
   agent, model or location, idle) is a notice with one line of text.
 - `session_index.rs` ports the global session list of

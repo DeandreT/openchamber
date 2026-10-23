@@ -267,6 +267,7 @@
           "created": 1792691035674,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         },
         {
@@ -291,6 +292,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164b659d000171ZQZWj1JEOsAc:text:0",
@@ -305,6 +307,7 @@
           "created": 1792691034494,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164b65932001DxhyM76Dl4xnCt:text:0",
@@ -319,6 +322,7 @@
           "created": 1792691034352,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         },
         {
@@ -327,6 +331,7 @@
           "created": 1792691034323,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         },
         {
@@ -335,6 +340,7 @@
           "created": 1792691031618,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         },
         {
@@ -359,6 +365,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164b64aee001nTYDQhVv2HEVZ9:text:0",
@@ -373,6 +380,7 @@
           "created": 1792691030707,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164b64a50001SM08pX22Ti9w61:text:0",
@@ -387,6 +395,7 @@
           "created": 1792691030504,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         },
         {
@@ -395,6 +404,7 @@
           "created": 1792691030427,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         }
       ],
@@ -409,6 +419,7 @@
           "created": 1792690965449,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         },
         {
@@ -433,6 +444,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164b54927001wfaLclzRoAsaly:text:0",
@@ -447,6 +459,7 @@
           "created": 1792690964738,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164b548870015yqub5Drq31CCa:text:0",
@@ -461,6 +474,7 @@
           "created": 1792690964470,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         },
         {
@@ -469,6 +483,7 @@
           "created": 1792690964441,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         },
         {
@@ -477,6 +492,7 @@
           "created": 1792690962561,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         },
         {
@@ -501,6 +517,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164b53cb5001xchppUZ2R5l5KO:text:0",
@@ -515,6 +532,7 @@
           "created": 1792690961574,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164b53c89001L7zyVYmavkElkg:text:0",
@@ -529,6 +547,7 @@
           "created": 1792690961470,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         },
         {
@@ -537,6 +556,7 @@
           "created": 1792690961463,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         },
         {
@@ -545,6 +565,7 @@
           "created": 1792690960215,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         },
         {
@@ -569,6 +590,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164b53573001HtYUZK3QM71xub:text:0",
@@ -583,6 +605,7 @@
           "created": 1792690959699,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164b53531001qEt8WdBp5cErRz:text:0",
@@ -597,6 +620,7 @@
           "created": 1792690959607,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         },
         {
@@ -605,6 +629,7 @@
           "created": 1792690959598,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         },
         {
@@ -613,6 +638,7 @@
           "created": 1792690958543,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         },
         {
@@ -637,6 +663,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164b52ed000103oiIvdJRw4gaB:text:0",
@@ -651,6 +678,7 @@
           "created": 1792690958020,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164b52eab001rZIFsQTU2DKsNw:text:0",
@@ -665,6 +693,7 @@
           "created": 1792690957951,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         },
         {
@@ -673,6 +702,7 @@
           "created": 1792690957942,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         }
       ],
@@ -687,6 +717,7 @@
           "created": 1792691957540,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         },
         {
@@ -711,6 +742,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c4241e001WHGO3wFCOKk5zN:text:0",
@@ -741,6 +773,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c422cf001JfI01Q6WJWl0lr:text:0",
@@ -779,6 +812,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c421a2001FMXD6eIjNwOzxm:text:0",
@@ -817,6 +851,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c42071001SP29PH3gnZx5DP:text:0",
@@ -855,6 +890,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c41f390013373eX2Slw146g:text:0",
@@ -893,6 +929,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c41d7c001M9FOaabD7cjk9S:text:0",
@@ -931,6 +968,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c41c0a001lXkHS3nl91Lirt:text:0",
@@ -969,6 +1007,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c41a9c001Ok4bpCPtpJIZWw:text:0",
@@ -1007,6 +1046,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c41934001a3MDxne3e0TSvH:text:0",
@@ -1045,6 +1085,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c417b1001rC3QndTUfcE2ph:text:0",
@@ -1083,6 +1124,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c4165f001k8wkTUiN1s2Fkm:text:0",
@@ -1121,6 +1163,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c41523001MT9vtA4VuEX88I:text:0",
@@ -1159,6 +1202,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c413e0001ZJTo4KWUTQRj6D:text:0",
@@ -1197,6 +1241,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c41291001VCyJHkr65te5P2:text:0",
@@ -1235,6 +1280,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c4114e001Vd0EvZXqb2uD1s:text:0",
@@ -1273,6 +1319,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c40fe0001tK1lPCPt2ozvCf:text:0",
@@ -1311,6 +1358,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c40e80001zKQEzf7yFUXsC4:text:0",
@@ -1349,6 +1397,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c40d1e001hGUxxB8KxctChC:text:0",
@@ -1387,6 +1436,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c40bd1001J9FvuA4riVss3j:text:0",
@@ -1425,6 +1475,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c40a36001MhWCLP7G2cqVs3:text:0",
@@ -1463,6 +1514,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c4084f001t6X4jvnZdftt0c:text:0",
@@ -1485,6 +1537,7 @@
           "created": 1792691931183,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c407e4001V8frLikrLPKACZ:text:0",
@@ -1499,6 +1552,7 @@
           "created": 1792691930955,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         },
         {
@@ -1507,6 +1561,7 @@
           "created": 1792691930922,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         }
       ],
@@ -1521,6 +1576,7 @@
           "created": 1792691957540,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         },
         {
@@ -1545,6 +1601,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c4241e001WHGO3wFCOKk5zN:text:0",
@@ -1575,6 +1632,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c422cf001JfI01Q6WJWl0lr:text:0",
@@ -1613,6 +1671,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c421a2001FMXD6eIjNwOzxm:text:0",
@@ -1651,6 +1710,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c42071001SP29PH3gnZx5DP:text:0",
@@ -1689,6 +1749,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c41f390013373eX2Slw146g:text:0",
@@ -1727,6 +1788,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c41d7c001M9FOaabD7cjk9S:text:0",
@@ -1765,6 +1827,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c41c0a001lXkHS3nl91Lirt:text:0",
@@ -1803,6 +1866,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c41a9c001Ok4bpCPtpJIZWw:text:0",
@@ -1841,6 +1905,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c41934001a3MDxne3e0TSvH:text:0",
@@ -1879,6 +1944,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c417b1001rC3QndTUfcE2ph:text:0",
@@ -1917,6 +1983,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c4165f001k8wkTUiN1s2Fkm:text:0",
@@ -1955,6 +2022,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c41523001MT9vtA4VuEX88I:text:0",
@@ -1993,6 +2061,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c413e0001ZJTo4KWUTQRj6D:text:0",
@@ -2031,6 +2100,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c41291001VCyJHkr65te5P2:text:0",
@@ -2069,6 +2139,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c4114e001Vd0EvZXqb2uD1s:text:0",
@@ -2107,6 +2178,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c40fe0001tK1lPCPt2ozvCf:text:0",
@@ -2145,6 +2217,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c40e80001zKQEzf7yFUXsC4:text:0",
@@ -2183,6 +2256,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c40d1e001hGUxxB8KxctChC:text:0",
@@ -2221,6 +2295,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c40bd1001J9FvuA4riVss3j:text:0",
@@ -2259,6 +2334,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c40a36001MhWCLP7G2cqVs3:text:0",
@@ -2297,6 +2373,7 @@
               "cacheWrite": 0
             }
           },
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c4084f001t6X4jvnZdftt0c:text:0",
@@ -2319,6 +2396,7 @@
           "created": 1792691931183,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": [
             {
               "id": "msg_164c407e4001V8frLikrLPKACZ:text:0",
@@ -2333,6 +2411,7 @@
           "created": 1792691930955,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         },
         {
@@ -2341,6 +2420,7 @@
           "created": 1792691930922,
           "completed": null,
           "assistant": null,
+          "compaction": null,
           "parts": []
         }
       ],
@@ -2369,6 +2449,7 @@
         "cacheWrite": 0
       }
     },
+    "compaction": null,
     "parts": [
       {
         "id": "msg_164c422cf001JfI01Q6WJWl0lr:text:0",
@@ -2501,7 +2582,8 @@
           "high",
           "xhigh",
           "max"
-        ]
+        ],
+        "contextLimit": null
       },
       {
         "id": "nemotron-3.5-super-vl-free",
@@ -2516,7 +2598,8 @@
           "medium",
           "high",
           "xhigh"
-        ]
+        ],
+        "contextLimit": null
       },
       {
         "id": "beam-free",
@@ -2530,7 +2613,8 @@
           "high",
           "xhigh",
           "max"
-        ]
+        ],
+        "contextLimit": null
       },
       {
         "id": "mimo-v2.6-flash-free",
@@ -2538,7 +2622,8 @@
         "providerId": "opencode",
         "name": "MiMo-V2.6-Flash Free",
         "enabled": true,
-        "variants": []
+        "variants": [],
+        "contextLimit": null
       },
       {
         "id": "deepseek-v4.1-flash-free",
@@ -2550,7 +2635,8 @@
           "low",
           "high",
           "max"
-        ]
+        ],
+        "contextLimit": null
       },
       {
         "id": "glm-5.3-flash-free",
@@ -2562,7 +2648,8 @@
           "low",
           "high",
           "max"
-        ]
+        ],
+        "contextLimit": null
       },
       {
         "id": "nemotron-3.5-lightning-free",
@@ -2570,7 +2657,8 @@
         "providerId": "opencode",
         "name": "Nemotron 3.5 Lightning Free",
         "enabled": true,
-        "variants": []
+        "variants": [],
+        "contextLimit": null
       },
       {
         "id": "nemotron-3-ultra-free",
@@ -2578,7 +2666,8 @@
         "providerId": "opencode",
         "name": "Nemotron 3 Ultra Free",
         "enabled": true,
-        "variants": []
+        "variants": [],
+        "contextLimit": null
       },
       {
         "id": "big-pickle",
@@ -2586,7 +2675,8 @@
         "providerId": "opencode",
         "name": "Big Pickle",
         "enabled": true,
-        "variants": []
+        "variants": [],
+        "contextLimit": null
       },
       {
         "id": "stream-100cps",
@@ -2598,7 +2688,8 @@
           "low",
           "medium",
           "high"
-        ]
+        ],
+        "contextLimit": null
       },
       {
         "id": "stream-300cps",
@@ -2610,7 +2701,8 @@
           "low",
           "medium",
           "high"
-        ]
+        ],
+        "contextLimit": null
       },
       {
         "id": "stream-600cps",
@@ -2622,7 +2714,8 @@
           "low",
           "medium",
           "high"
-        ]
+        ],
+        "contextLimit": null
       },
       {
         "id": "stream-1200cps",
@@ -2634,7 +2727,8 @@
           "low",
           "medium",
           "high"
-        ]
+        ],
+        "contextLimit": null
       },
       {
         "id": "code-300cps",
@@ -2646,7 +2740,8 @@
           "low",
           "medium",
           "high"
-        ]
+        ],
+        "contextLimit": null
       },
       {
         "id": "code-1200cps",
@@ -2658,7 +2753,8 @@
           "low",
           "medium",
           "high"
-        ]
+        ],
+        "contextLimit": null
       },
       {
         "id": "unicode-300cps",
@@ -2670,7 +2766,8 @@
           "low",
           "medium",
           "high"
-        ]
+        ],
+        "contextLimit": null
       },
       {
         "id": "unicode-1200cps",
@@ -2682,7 +2779,8 @@
           "low",
           "medium",
           "high"
-        ]
+        ],
+        "contextLimit": null
       },
       {
         "id": "stream-20000cps",
@@ -2694,7 +2792,8 @@
           "low",
           "medium",
           "high"
-        ]
+        ],
+        "contextLimit": null
       },
       {
         "id": "code-20000cps",
@@ -2706,7 +2805,8 @@
           "low",
           "medium",
           "high"
-        ]
+        ],
+        "contextLimit": null
       },
       {
         "id": "unicode-20000cps",
@@ -2718,7 +2818,8 @@
           "low",
           "medium",
           "high"
-        ]
+        ],
+        "contextLimit": null
       },
       {
         "id": "think-30s",
@@ -2730,7 +2831,8 @@
           "low",
           "medium",
           "high"
-        ]
+        ],
+        "contextLimit": null
       },
       {
         "id": "agent-20tools-300cps",
@@ -2742,7 +2844,8 @@
           "low",
           "medium",
           "high"
-        ]
+        ],
+        "contextLimit": null
       },
       {
         "id": "agent-40tools-300cps",
@@ -2754,7 +2857,8 @@
           "low",
           "medium",
           "high"
-        ]
+        ],
+        "contextLimit": null
       },
       {
         "id": "switched-off",
@@ -2762,7 +2866,8 @@
         "providerId": "perf",
         "name": "Switched off",
         "enabled": false,
-        "variants": []
+        "variants": [],
+        "contextLimit": null
       },
       {
         "id": "orphan-1",
@@ -2770,7 +2875,8 @@
         "providerId": "disabled-provider",
         "name": "Orphan",
         "enabled": true,
-        "variants": []
+        "variants": [],
+        "contextLimit": null
       }
     ],
     "providers": [

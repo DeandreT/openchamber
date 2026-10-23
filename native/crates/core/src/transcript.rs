@@ -142,6 +142,16 @@ pub struct MessageInfo {
     pub notice: Option<String>,
     /// An assistant message's step facts; `None` for every other role.
     pub assistant: Option<AssistantFacts>,
+    /// A compaction record's lifecycle; `None` for every other role.
+    pub compaction: Option<CompactionStatus>,
+}
+
+/// Where a compaction stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CompactionStatus {
+    Running,
+    Completed,
+    Failed,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -864,6 +874,7 @@ mod tests {
                 completed: None,
                 notice: None,
                 assistant: None,
+                compaction: None,
             },
             parts: vec![Part::text(format!("{id}-p0").as_str(), text)],
         }
@@ -985,6 +996,7 @@ mod tests {
                 completed: None,
                 notice: None,
                 assistant: None,
+                compaction: None,
             },
             parts: vec![Part {
                 id: PartId::from("call_1"),
@@ -1034,6 +1046,7 @@ mod tests {
                 completed: Some(1),
                 notice: None,
                 assistant: None,
+                compaction: None,
             },
             parts: vec![Part {
                 id: PartId::from("call_1"),
@@ -1073,6 +1086,7 @@ mod tests {
                 completed: None,
                 notice: None,
                 assistant: None,
+                compaction: None,
             },
             parts: vec![Part::text(format!("{id}:text:0"), text)],
         }
@@ -1192,6 +1206,7 @@ mod tests {
                 completed: None,
                 notice: None,
                 assistant: None,
+                compaction: None,
             },
             parts: vec![tool(ToolStatus::Completed)],
         }]);

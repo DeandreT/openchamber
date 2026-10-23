@@ -159,6 +159,7 @@ pub(crate) enum ModelControl {
     Auto,
     Model {
         provider_id: String,
+        model_id: String,
         label: String,
         variant: VariantControl,
     },
@@ -475,6 +476,7 @@ impl Workspace {
         ModelControl::Model {
             label: send_config::model_label(providers, &choice),
             provider_id: choice.provider_id,
+            model_id: choice.model_id,
             variant,
         }
     }
