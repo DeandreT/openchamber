@@ -14,7 +14,9 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `endpoint.rs` | The user-selected base URL, its path prefix and the `ws`/`wss` form of a route. |
 | `identity.rs` | `/health` parsing, API compatibility and capabilities. |
 | `credential.rs` | The credential a client sends; its `Debug` output is redacted. |
-| `client.rs` | `ServerClient`: identity probe, password login, session pages, message pages, whole messages, running status, Chats roots, projects and worktrees. |
+| `client.rs` | `ServerClient`: identity probe, password login, session pages, message pages, whole messages, running status, settings, Chats roots, projects and worktrees. |
+| `catalog.rs` | The composer's catalogs in one directory: agents, the flat model catalog with OpenCode's default model, folded config defaults, the skill count and the connected MCP count. |
+| `public_asset.rs` | `PublicAssetClient`: public assets the web client loads from third-party hosts, such as models.dev's provider logos. |
 | `wire.rs` | Serde shapes of the fields the client reads. Private. |
 | `projection.rs` | Wire records to core records, mirroring `packages/ui/src/lib/opencode/projection.ts`. Private. |
 | `event.rs` | Bridge frames to `ServerEvent`s, mirroring `lib/opencode/events.ts` and `sync/event-pipeline.ts`. |
@@ -59,6 +61,16 @@ counts and identifiers only.
   subscription only; it never stops the server or a running turn.
 - Unmodelled event types become `ServerEvent::Unsupported` with their name
   only, never a guessed state change.
+- Catalog reads send the directory in `x-opencode-directory`, as the web
+  client's `listAgents`, `getProvidersForConfig`, `getConfig` and
+  `listMcpServers` do; the skill count reads `GET /api/config/skills` for the
+  owning project. Catalog changes (`config`, `agent`, `provider` and `model`
+  updates) arrive as one `CatalogUpdated` event naming what changed.
+- A session's model comes with its record and with `session.model.selected`,
+  so the sidebar shows the provider of each session's current model.
+- `PublicAssetClient` shares nothing with `ServerClient`: it sends no
+  credential, cookie or OpenChamber header, requests only HTTPS URLs, follows
+  only HTTPS redirects and refuses bodies over 256 KiB.
 
 ## Decisions
 
@@ -78,6 +90,14 @@ row expands. A shelled page keeps everything a collapsed row reads and marks
 the left-out length in `PartContent::Tool::elided`; the row fetches the whole
 message when it needs the result. The core keeps any whole result it already
 holds (see its documentation).
+
+### Why provider logos come from models.dev
+
+The web client draws a provider without a bundled logo with
+`https://models.dev/logos/<provider>.svg`, straight from the browser. The
+native client fetches the same URL, so both show the same logo. The request
+names only the provider ID, and it goes through its own client so the server's
+credential cannot reach another host.
 
 ### Why differential fixtures
 

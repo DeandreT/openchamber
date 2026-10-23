@@ -9,6 +9,10 @@ rendering asks for a projection and dispatches an action.
 
 ## Ownership
 
+- `send_config.rs` ports default agent/model selection, catalog grouping, composer labels and agent color allocation from the web client.
+- `provider_logo.rs` ports the provider logo lookup of `useProviderLogo.ts`
+  (bundled candidates, then models.dev) and inverts an SVG's paint colors for
+  dark themes, as the web's `dark:invert` does.
 - `ownership.rs` and `chat_projection.rs` port `sessionOwnership.ts` and
   `sessionChatProjection.ts`. `sidebar_rows.rs` ports the normal mode of
   `sessionSidebarRowModel.ts` in both views (the timeline new installs start
@@ -23,6 +27,8 @@ rendering asks for a projection and dispatches an action.
 - `session_index.rs` ports the global session list of
   `useGlobalSessionsStore.ts` and `session-event-router.ts`: active and
   archived records, page merges, complete loads and live session changes.
+  A record carries the session's current model as the server last reported
+  it.
 - `ownership.rs` also derives configured projects from settings paths and a
   project's linked worktrees from the server's listing, as the web client
   does.
@@ -74,6 +80,11 @@ crate owns wire parsing and authority checks, and hands the core records and
 - A failed load keeps its retained snapshot; only `LoadState::Complete` grants
   full-scope authority.
 - A non-empty draft leaves the store only by an explicit send or clear.
+- Default selections preserve configured identifiers through catalog gaps. Only
+  remembered and automatic fallback choices skip models hidden in the picker.
+- Agent color allocation consumes a theme-prepared ordered palette. Its indices
+  refer to keyword, type, function, number, string, operator and variable;
+  configured colors accept six-digit hex except the migration placeholder.
 - Synthetic workloads are deterministic: the same size yields the same records
   and text.
 

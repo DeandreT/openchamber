@@ -36,6 +36,7 @@
     "type-check:ui": "bun run --cwd packages/ui type-check",
     "settings-registry:generate": "bun run --cwd packages/ui src/lib/settings/registry-snapshot.ts",
     "native:fixtures": "bun run --cwd packages/ui src/lib/native/sidebarParityFixtures.ts",
+    "native:send-config-fixtures": "bun run --cwd packages/ui src/lib/native/sendConfigFixtures.ts",
     "native:resources": "bun run --cwd packages/ui src/lib/native/nativeResources.ts",
     "native:transport-fixtures": "bun run --cwd packages/ui src/lib/native/transportFixtures.ts",
     "parity": "python3 scripts/parity/runner.py",

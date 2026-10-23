@@ -19,6 +19,7 @@ use openchamber_native_core::sidebar_rows::{
 };
 
 use crate::activation::{on_activate, on_activate_split};
+use crate::baseline::CssTextExt;
 use crate::chrome::{self, ButtonTone, CONTROL_RADIUS, IconButton, TITLE_ROW_HEIGHT, glyph};
 use crate::connection::{ConnectionFailure, ConnectionState};
 use crate::locale::{self, Direction, Strings};
@@ -44,6 +45,9 @@ const SESSION_HEIGHT: f32 = 28.0;
 const SESSION_MARGIN: f32 = 1.0;
 /// Timeline rows have no gutter: their content sits 10 px in.
 const TIMELINE_INSET: f32 = 10.0;
+/// The provider logo before a compact row's age: `h-3 w-3 opacity-45`.
+const ROW_LOGO: f32 = 12.0;
+const ROW_LOGO_OPACITY: f32 = 0.45;
 /// Tree geometry: 12 px per level from an 8 px edge, then the slot and a gap.
 const TREE_BASE_PADDING: f32 = 8.0;
 const TREE_INDENT: f32 = 12.0;
@@ -159,8 +163,6 @@ impl Workspace {
             .items_center()
             .gap(px(8.0))
             .cursor_pointer()
-            .text_size(rems(LABEL_SIZE))
-            .line_height(rems(LABEL_LINE))
             .text_color(palette.muted_foreground)
             .hover(move |style| style.text_color(foreground))
             .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
@@ -170,7 +172,11 @@ impl Workspace {
                 glyph("chat-new", 16.0, palette.muted_foreground)
                     .group_hover("new-session", move |style| style.text_color(foreground)),
             )
-            .child(new_session_label);
+            .child(
+                div()
+                    .css_text(LABEL_SIZE, LABEL_LINE, cx)
+                    .child(new_session_label),
+            );
         div()
             .flex_row_from(direction)
             .items_center()
@@ -330,8 +336,6 @@ impl Workspace {
                         .items_center()
                         .gap(px(6.0))
                         .cursor_pointer()
-                        .text_size(rems(LABEL_SIZE))
-                        .line_height(rems(LABEL_LINE))
                         .text_color(palette.muted_foreground)
                         .hover(move |style| style.bg(hover_fill).text_color(foreground))
                         .child(
@@ -340,7 +344,11 @@ impl Workspace {
                                     style.text_color(foreground)
                                 }),
                         )
-                        .child(instance.clone()),
+                        .child(
+                            div()
+                                .css_text(LABEL_SIZE, LABEL_LINE, cx)
+                                .child(instance.clone()),
+                        ),
                     cx,
                     |_, _, _| {},
                 )
@@ -465,7 +473,7 @@ impl Workspace {
                     .aria_expanded(!*collapsed)
                     .h(px(SESSION_HEIGHT))
                     .child(glyph(icon, 16.0, palette.muted_foreground))
-                    .child(row_text(text, palette.muted_foreground));
+                    .child(row_text(text, palette.muted_foreground, cx));
                 let toggled = item.clone();
                 on_activate(row, cx, move |this, _, cx| {
                     this.toggle_collapsed(&toggled, cx)
@@ -527,7 +535,7 @@ impl Workspace {
                     .aria_level(depth + 1)
                     .when(*has_children, |this| this.aria_expanded(*expanded))
                     .h(px(SESSION_HEIGHT))
-                    .child(row_text(title, text_color))
+                    .child(row_text(title, text_color, cx))
                     .when(streaming, |this| {
                         this.child(glyph("circle", 16.0, palette.info))
                     })
@@ -567,8 +575,7 @@ impl Workspace {
                     .padding_start(direction, px(inset))
                     .flex_row_from(direction)
                     .cursor_pointer()
-                    .text_size(rems(XS_SIZE))
-                    .line_height(rems(XS_LINE))
+                    .css_text(XS_SIZE, XS_LINE, cx)
                     .text_color(palette.muted_foreground.opacity(0.7))
                     .hover(move |style| style.text_color(foreground).underline())
                     .child(label);
@@ -614,6 +621,7 @@ impl Workspace {
                     .child(row_text(
                         strings.get("sessions.sidebar.empty.noSessions.title"),
                         palette.foreground,
+                        cx,
                     ))
                     .child(
                         div()
@@ -688,8 +696,7 @@ impl Workspace {
                 div()
                     .min_w_0()
                     .truncate()
-                    .text_size(rems(HEADER_SIZE))
-                    .line_height(rems(LABEL_LINE))
+                    .css_text(HEADER_SIZE, LABEL_LINE, cx)
                     .font_weight(FontWeight::SEMIBOLD)
                     .text_color(palette.foreground)
                     .child(header.label),
@@ -716,11 +723,15 @@ impl Workspace {
             title,
             activity_ms,
             project_label,
+            provider_id,
             ..
         } = item
         else {
             return div().into_any_element();
         };
+        let logo = provider_id.as_ref().and_then(|provider_id| {
+            self.render_provider_logo(provider_id, ROW_LOGO, ROW_LOGO_OPACITY, palette)
+        });
         let strings = locale::strings(cx);
         let selected = self.selected.as_ref() == Some(session_id);
         let streaming = self.is_streaming(session_id);
@@ -767,16 +778,15 @@ impl Workspace {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .text_size(rems(LABEL_SIZE))
-                    .line_height(rems(LABEL_LINE))
+                    .css_text(LABEL_SIZE, LABEL_LINE, cx)
                     .text_color(title_color)
                     .child(title),
             )
+            .children(logo)
             .child(
                 div()
                     .flex_shrink_0()
-                    .text_size(rems(MICRO_SIZE))
-                    .line_height(rems(MICRO_SIZE))
+                    .css_text(MICRO_SIZE, MICRO_SIZE, cx)
                     .text_color(palette.muted_foreground.opacity(0.5))
                     .child(age),
             );
@@ -882,7 +892,11 @@ fn status_label(strings: &Strings, state: GroupLoadState) -> SharedString {
 }
 
 /// A disclosure chevron; collapsed rows point toward the end side.
-fn chevron(collapsed: bool, direction: Direction, palette: &Palette) -> impl IntoElement {
+pub(crate) fn chevron(
+    collapsed: bool,
+    direction: Direction,
+    palette: &Palette,
+) -> impl IntoElement {
     let name = match (collapsed, direction) {
         (false, _) => "arrow-down-s",
         (true, Direction::LeftToRight) => "arrow-right-s",
@@ -949,13 +963,12 @@ fn notice_row(
         .child(label)
 }
 
-fn row_text(text: SharedString, color: Hsla) -> impl IntoElement {
+fn row_text(text: SharedString, color: Hsla, cx: &gpui_kit::App) -> impl IntoElement {
     div()
         .flex_1()
         .min_w_0()
         .truncate()
-        .text_size(rems(LABEL_SIZE))
-        .line_height(rems(LABEL_LINE))
+        .css_text(LABEL_SIZE, LABEL_LINE, cx)
         .text_color(color)
         .child(text)
 }

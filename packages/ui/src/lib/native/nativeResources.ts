@@ -7,7 +7,7 @@
  *
  *   bun run native:resources
  */
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
@@ -15,6 +15,8 @@ import { z } from 'zod';
 import { iconSpriteData } from '@/components/icon/sprite';
 import { themes } from '@/lib/theme/themes';
 import { getReadableThemeColors } from '@/lib/theme/readableColors';
+import { agentColorPalette } from '@/lib/agentColorPalette';
+import { PROVIDER_LOGO_ALIASES } from '@/lib/providerLogoCandidates';
 import { getLocaleDirection, LOCALES, type Locale } from '@/lib/i18n/runtime';
 import type { I18nDictionary } from '@/lib/i18n/store';
 import { dict as en } from '@/lib/i18n/messages/en';
@@ -44,6 +46,9 @@ export const NATIVE_THEMES_PATH = `${resourcesDirectory}/themes.json`;
 /** The sprite icons the native views draw, one name per line. */
 export const NATIVE_ICON_NAMES_PATH = `${resourcesDirectory}/icon-names.txt`;
 export const NATIVE_ICONS_PATH = `${resourcesDirectory}/icons.json`;
+export const NATIVE_PROVIDER_LOGOS_PATH = `${resourcesDirectory}/provider-logos.json`;
+/** The provider logos the web bundles, one SVG per provider ID. */
+const PROVIDER_LOGOS_DIRECTORY = 'packages/ui/src/assets/provider-logos';
 
 const dictionaries = {
   en, de, fr, nl, 'zh-CN': zhCN, 'zh-TW': zhTW, uk, es, 'pt-BR': ptBR, ko, pl, ja, tr, ar, he,
@@ -105,7 +110,11 @@ const flattenColors = (group: ColorGroup, prefix: string, target: Record<string,
   }
 };
 
-/** Exports every built-in theme's resolved colors and computed readable text colors. */
+/**
+ * Exports every built-in theme's resolved colors, computed readable text
+ * colors and agent color palette (syntax role indices in `agentColorPalette`'s
+ * keyword, type, function, number, string, operator, variable order).
+ */
 export const renderNativeThemes = (): string => {
   const exported = themes.map((theme) => {
     const colors: Record<string, string> = {};
@@ -116,6 +125,7 @@ export const renderNativeThemes = (): string => {
       name: theme.metadata.name,
       variant: theme.metadata.variant,
       colors: Object.fromEntries(Object.entries(colors).sort(([left], [right]) => (left < right ? -1 : 1))),
+      agentPalette: agentColorPalette(theme).map(({ index, colorful }) => ({ index, colorful })),
     };
   });
   return `${JSON.stringify({ defaultLight: 'openchamber-light', defaultDark: 'openchamber-dark', themes: exported }, null, 2)}\n`;
@@ -134,11 +144,25 @@ export const renderNativeIcons = (): string => {
   return `${JSON.stringify(icons, null, 2)}\n`;
 };
 
+/**
+ * Exports the bundled provider logos by provider ID, with the aliases that
+ * map other provider IDs onto them.
+ */
+export const renderNativeProviderLogos = (): string => {
+  const directory = resolve(repoRoot, PROVIDER_LOGOS_DIRECTORY);
+  const logos: Record<string, string> = {};
+  for (const file of readdirSync(directory).filter((name) => name.endsWith('.svg')).sort()) {
+    logos[file.slice(0, -'.svg'.length).toLowerCase()] = readFileSync(resolve(directory, file), 'utf8');
+  }
+  return `${JSON.stringify({ aliases: Object.fromEntries(PROVIDER_LOGO_ALIASES), logos }, null, 2)}\n`;
+};
+
 const writeNativeResources = (): string[] => {
   const outputs: Array<[string, string]> = [
     [NATIVE_LOCALES_PATH, renderNativeLocales()],
     [NATIVE_THEMES_PATH, renderNativeThemes()],
     [NATIVE_ICONS_PATH, renderNativeIcons()],
+    [NATIVE_PROVIDER_LOGOS_PATH, renderNativeProviderLogos()],
   ];
   return outputs.map(([relativePath, content]) => {
     const target = resolve(repoRoot, relativePath);

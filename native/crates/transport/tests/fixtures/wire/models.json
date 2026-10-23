@@ -1,0 +1,452 @@
+{
+  "location": {
+    "directory": "/home/synthetic/my project/ünï"
+  },
+  "data": [
+    {
+      "id": "flint-40b-free",
+      "modelID": "flint-40b-free",
+      "providerID": "opencode",
+      "name": "Flint 40B Free",
+      "family": "flint",
+      "enabled": true,
+      "status": "active",
+      "variants": [
+        {
+          "id": "low"
+        },
+        {
+          "id": "medium"
+        },
+        {
+          "id": "high"
+        },
+        {
+          "id": "xhigh"
+        },
+        {
+          "id": "max"
+        }
+      ]
+    },
+    {
+      "id": "nemotron-3.5-super-vl-free",
+      "modelID": "nemotron-3.5-super-vl-free",
+      "providerID": "opencode",
+      "name": "Nemotron 3.5 Super VL Free",
+      "family": "nemotron",
+      "enabled": true,
+      "status": "active",
+      "variants": [
+        {
+          "id": "none"
+        },
+        {
+          "id": "minimal"
+        },
+        {
+          "id": "low"
+        },
+        {
+          "id": "medium"
+        },
+        {
+          "id": "high"
+        },
+        {
+          "id": "xhigh"
+        }
+      ]
+    },
+    {
+      "id": "beam-free",
+      "modelID": "beam-free",
+      "providerID": "opencode",
+      "name": "Beam Free",
+      "family": "beam",
+      "enabled": true,
+      "status": "active",
+      "variants": [
+        {
+          "id": "low"
+        },
+        {
+          "id": "medium"
+        },
+        {
+          "id": "high"
+        },
+        {
+          "id": "xhigh"
+        },
+        {
+          "id": "max"
+        }
+      ]
+    },
+    {
+      "id": "mimo-v2.6-flash-free",
+      "modelID": "mimo-v2.6-flash-free",
+      "providerID": "opencode",
+      "name": "MiMo-V2.6-Flash Free",
+      "family": "mimo",
+      "enabled": true,
+      "status": "active",
+      "variants": []
+    },
+    {
+      "id": "deepseek-v4.1-flash-free",
+      "modelID": "deepseek-v4.1-flash-free",
+      "providerID": "opencode",
+      "name": "DeepSeek V4.1 Flash Free",
+      "family": "deepseek-flash",
+      "enabled": true,
+      "status": "active",
+      "variants": [
+        {
+          "id": "low"
+        },
+        {
+          "id": "high"
+        },
+        {
+          "id": "max"
+        }
+      ]
+    },
+    {
+      "id": "glm-5.3-flash-free",
+      "modelID": "glm-5.3-flash-free",
+      "providerID": "opencode",
+      "name": "GLM-5.3-Flash Free",
+      "family": "glm-flash",
+      "enabled": true,
+      "status": "active",
+      "variants": [
+        {
+          "id": "low"
+        },
+        {
+          "id": "high"
+        },
+        {
+          "id": "max"
+        }
+      ]
+    },
+    {
+      "id": "nemotron-3.5-lightning-free",
+      "modelID": "nemotron-3.5-lightning-free",
+      "providerID": "opencode",
+      "name": "Nemotron 3.5 Lightning Free",
+      "family": "nemotron",
+      "enabled": true,
+      "status": "active",
+      "variants": []
+    },
+    {
+      "id": "nemotron-3-ultra-free",
+      "modelID": "nemotron-3-ultra-free",
+      "providerID": "opencode",
+      "name": "Nemotron 3 Ultra Free",
+      "family": "nemotron",
+      "enabled": true,
+      "status": "active",
+      "variants": []
+    },
+    {
+      "id": "big-pickle",
+      "modelID": "big-pickle",
+      "providerID": "opencode",
+      "name": "Big Pickle",
+      "family": "big-pickle",
+      "enabled": true,
+      "status": "active",
+      "variants": []
+    },
+    {
+      "id": "stream-100cps",
+      "modelID": "stream-100cps",
+      "providerID": "perf",
+      "name": "Fixture stream, 100 characters/s",
+      "enabled": true,
+      "status": "active",
+      "variants": [
+        {
+          "id": "low"
+        },
+        {
+          "id": "medium"
+        },
+        {
+          "id": "high"
+        }
+      ]
+    },
+    {
+      "id": "stream-300cps",
+      "modelID": "stream-300cps",
+      "providerID": "perf",
+      "name": "Fixture stream, 300 characters/s",
+      "enabled": true,
+      "status": "active",
+      "variants": [
+        {
+          "id": "low"
+        },
+        {
+          "id": "medium"
+        },
+        {
+          "id": "high"
+        }
+      ]
+    },
+    {
+      "id": "stream-600cps",
+      "modelID": "stream-600cps",
+      "providerID": "perf",
+      "name": "Fixture stream, 600 characters/s",
+      "enabled": true,
+      "status": "active",
+      "variants": [
+        {
+          "id": "low"
+        },
+        {
+          "id": "medium"
+        },
+        {
+          "id": "high"
+        }
+      ]
+    },
+    {
+      "id": "stream-1200cps",
+      "modelID": "stream-1200cps",
+      "providerID": "perf",
+      "name": "Fixture stream, 1200 characters/s",
+      "enabled": true,
+      "status": "active",
+      "variants": [
+        {
+          "id": "low"
+        },
+        {
+          "id": "medium"
+        },
+        {
+          "id": "high"
+        }
+      ]
+    },
+    {
+      "id": "code-300cps",
+      "modelID": "code-300cps",
+      "providerID": "perf",
+      "name": "Fixture code block, 300 characters/s",
+      "enabled": true,
+      "status": "active",
+      "variants": [
+        {
+          "id": "low"
+        },
+        {
+          "id": "medium"
+        },
+        {
+          "id": "high"
+        }
+      ]
+    },
+    {
+      "id": "code-1200cps",
+      "modelID": "code-1200cps",
+      "providerID": "perf",
+      "name": "Fixture code block, 1200 characters/s",
+      "enabled": true,
+      "status": "active",
+      "variants": [
+        {
+          "id": "low"
+        },
+        {
+          "id": "medium"
+        },
+        {
+          "id": "high"
+        }
+      ]
+    },
+    {
+      "id": "unicode-300cps",
+      "modelID": "unicode-300cps",
+      "providerID": "perf",
+      "name": "Fixture non-Latin prose and code, 300 characters/s",
+      "enabled": true,
+      "status": "active",
+      "variants": [
+        {
+          "id": "low"
+        },
+        {
+          "id": "medium"
+        },
+        {
+          "id": "high"
+        }
+      ]
+    },
+    {
+      "id": "unicode-1200cps",
+      "modelID": "unicode-1200cps",
+      "providerID": "perf",
+      "name": "Fixture non-Latin prose and code, 1200 characters/s",
+      "enabled": true,
+      "status": "active",
+      "variants": [
+        {
+          "id": "low"
+        },
+        {
+          "id": "medium"
+        },
+        {
+          "id": "high"
+        }
+      ]
+    },
+    {
+      "id": "stream-20000cps",
+      "modelID": "stream-20000cps",
+      "providerID": "perf",
+      "name": "Fixture stream, seeding speed",
+      "enabled": true,
+      "status": "active",
+      "variants": [
+        {
+          "id": "low"
+        },
+        {
+          "id": "medium"
+        },
+        {
+          "id": "high"
+        }
+      ]
+    },
+    {
+      "id": "code-20000cps",
+      "modelID": "code-20000cps",
+      "providerID": "perf",
+      "name": "Fixture code, seeding speed",
+      "enabled": true,
+      "status": "active",
+      "variants": [
+        {
+          "id": "low"
+        },
+        {
+          "id": "medium"
+        },
+        {
+          "id": "high"
+        }
+      ]
+    },
+    {
+      "id": "unicode-20000cps",
+      "modelID": "unicode-20000cps",
+      "providerID": "perf",
+      "name": "Fixture unicode, seeding speed",
+      "enabled": true,
+      "status": "active",
+      "variants": [
+        {
+          "id": "low"
+        },
+        {
+          "id": "medium"
+        },
+        {
+          "id": "high"
+        }
+      ]
+    },
+    {
+      "id": "think-30s",
+      "modelID": "think-30s",
+      "providerID": "perf",
+      "name": "Fixture silence, 30s",
+      "enabled": true,
+      "status": "active",
+      "variants": [
+        {
+          "id": "low"
+        },
+        {
+          "id": "medium"
+        },
+        {
+          "id": "high"
+        }
+      ]
+    },
+    {
+      "id": "agent-20tools-300cps",
+      "modelID": "agent-20tools-300cps",
+      "providerID": "perf",
+      "name": "Fixture agent, 20 tool calls then 300 characters/s",
+      "enabled": true,
+      "status": "active",
+      "variants": [
+        {
+          "id": "low"
+        },
+        {
+          "id": "medium"
+        },
+        {
+          "id": "high"
+        }
+      ]
+    },
+    {
+      "id": "agent-40tools-300cps",
+      "modelID": "agent-40tools-300cps",
+      "providerID": "perf",
+      "name": "Fixture agent, 40 tool calls then 300 characters/s",
+      "enabled": true,
+      "status": "active",
+      "variants": [
+        {
+          "id": "low"
+        },
+        {
+          "id": "medium"
+        },
+        {
+          "id": "high"
+        }
+      ]
+    },
+    {
+      "id": "switched-off",
+      "modelID": "switched-off",
+      "providerID": "perf",
+      "name": "Switched off",
+      "enabled": false,
+      "status": "active",
+      "variants": []
+    },
+    {
+      "id": "orphan-1",
+      "modelID": "orphan-1",
+      "providerID": "disabled-provider",
+      "name": "Orphan",
+      "enabled": true,
+      "status": "active",
+      "variants": []
+    }
+  ]
+}

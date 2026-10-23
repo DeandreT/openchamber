@@ -1,0 +1,31 @@
+{
+  "skills": [
+    {
+      "name": "OpenCode",
+      "scope": "user",
+      "source": "opencode"
+    },
+    {
+      "name": "Report",
+      "scope": "user",
+      "source": "opencode"
+    },
+    {
+      "name": "release-notes",
+      "scope": "project",
+      "source": "opencode"
+    },
+    {
+      "name": "style-guide",
+      "scope": "user",
+      "source": "claude"
+    }
+  ],
+  "externalSkills": [
+    {
+      "name": "shared-skill",
+      "scope": "user",
+      "source": "external"
+    }
+  ]
+}

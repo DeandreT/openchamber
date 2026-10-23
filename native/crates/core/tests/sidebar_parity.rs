@@ -159,6 +159,7 @@ fn session(fixture: &FixtureSession) -> SessionRecord {
             SessionKind::Conversation
         },
         overlay: SessionOverlay::default(),
+        model: None,
     }
 }
 

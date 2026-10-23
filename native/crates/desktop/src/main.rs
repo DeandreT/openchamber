@@ -7,6 +7,7 @@
 
 mod activation;
 mod assets;
+mod baseline;
 mod chrome;
 mod composer_view;
 mod connection;
@@ -17,12 +18,16 @@ mod fonts;
 mod install_id;
 mod locale;
 mod logical;
+mod model_controls;
 mod network;
+mod provider_logos;
+mod send_catalog;
 mod server_sync;
 mod sidebar_item;
 mod sidebar_view;
 mod startup_view;
 mod theme;
+mod tracked_text;
 mod transcript_view;
 mod workspace;
 #[cfg(test)]
@@ -116,7 +121,14 @@ fn main() {
                 ..WindowOptions::default()
             };
             let opened = gpui_kit::open_window(options, cx, |window, cx| {
-                cx.new(|cx| Workspace::new(source, window, cx))
+                cx.new(|cx| {
+                    let mut workspace = Workspace::new(source, window, cx);
+                    workspace.initial_size = Some(chrome::InitialSize::new(size(
+                        px(WINDOW_WIDTH),
+                        px(WINDOW_HEIGHT),
+                    )));
+                    workspace
+                })
             });
             if let Err(error) = opened {
                 tracing::error!(%error, "the main window could not be opened");

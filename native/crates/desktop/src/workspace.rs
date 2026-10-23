@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::component::input::{InputEvent, TextareaState};
 use gpui_kit::{
     App, AppContext, Context, Entity, FocusHandle, FollowMode, ListAlignment, ListOffset,
-    ListState, Subscription, Task, Window, px,
+    ListState, SharedString, Subscription, Task, Window, px,
 };
 use openchamber_native_core::chat_projection;
 use openchamber_native_core::chat_roots::ChatRoots;
@@ -35,9 +35,12 @@ use openchamber_native_core::transcript::{
     Message, MessageInfo, Part, Role, Transcript, TranscriptChange, TranscriptEvent,
 };
 
+use crate::chrome::InitialSize;
 use crate::connection::{Connection, ConnectionFailure};
 use crate::diagnostics::{self, Marker};
 use crate::locale;
+use crate::provider_logos::ProviderLogos;
+use crate::send_catalog::SendCatalog;
 use crate::sidebar_item::SidebarItem;
 
 /// Delay between synthetic response chunks.
@@ -102,6 +105,8 @@ pub struct Workspace {
     pub(crate) sidebar_list: ListState,
     pub(crate) sidebar_open: bool,
     pub(crate) work_status_open: bool,
+    /// Whether the work status card's Context sources section is expanded.
+    pub(crate) work_status_context_open: bool,
     /// A press in a title row that moves the window once the pointer moves.
     pub(crate) title_drag_armed: bool,
     pub(crate) selected: Option<SessionId>,
@@ -118,6 +123,13 @@ pub struct Workspace {
     pub(crate) live_status: HashMap<SessionId, LiveStatus>,
     /// Present when the source is a server.
     pub(crate) connection: Option<Connection>,
+    /// The composer's catalogs and defaults; empty for synthetic data.
+    pub(crate) send_catalog: SendCatalog,
+    pub(crate) provider_logos: ProviderLogos,
+    /// Set while the new window's content is held at its requested size.
+    pub(crate) initial_size: Option<InitialSize>,
+    /// The providers whose logos the sidebar rows show, without repeats.
+    pub(crate) sidebar_providers: Vec<SharedString>,
     prompt_sequence: usize,
     pub(crate) focus_handle: FocusHandle,
     pending_switch: Option<Instant>,
@@ -169,6 +181,7 @@ impl Workspace {
             sidebar_list: ListState::new(0, ListAlignment::Top, px(SIDEBAR_OVERDRAW)),
             sidebar_open: true,
             work_status_open: true,
+            work_status_context_open: false,
             title_drag_armed: false,
             selected: None,
             open_sessions: HashMap::new(),
@@ -180,6 +193,10 @@ impl Workspace {
             playback: HashMap::new(),
             live_status: HashMap::new(),
             connection,
+            send_catalog: SendCatalog::default(),
+            provider_logos: ProviderLogos::default(),
+            initial_size: None,
+            sidebar_providers: Vec::new(),
             prompt_sequence: 0,
             focus_handle: cx.focus_handle(),
             pending_switch: None,
@@ -245,6 +262,18 @@ impl Workspace {
             .get(top.item_ix)
             .map(|item| item.key().to_owned());
         let count = items.len();
+        let mut providers: Vec<SharedString> = Vec::new();
+        for item in &items {
+            if let SidebarItem::Session {
+                provider_id: Some(provider_id),
+                ..
+            } = item
+                && !providers.contains(provider_id)
+            {
+                providers.push(provider_id.clone());
+            }
+        }
+        self.sidebar_providers = providers;
         self.sidebar_items = items;
         self.sidebar_spacing = spacing;
         self.sidebar_list.reset(count);

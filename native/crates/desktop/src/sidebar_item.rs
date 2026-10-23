@@ -47,6 +47,8 @@ pub enum SidebarItem {
         activity_ms: i64,
         /// The owning project's name, where sessions of every project mix.
         project_label: Option<SharedString>,
+        /// The provider of the session's model, for its logo.
+        provider_id: Option<SharedString>,
     },
     Show {
         key: SharedString,
@@ -144,6 +146,7 @@ impl SidebarItem {
                     .then_some(project_id.as_ref())
                     .flatten()
                     .map(|project_id| project_label(project_paths, project_id)),
+                provider_id: session.provider_id().map(SharedString::new),
             },
             SidebarRow::ShowControl {
                 key,

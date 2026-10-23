@@ -5,15 +5,18 @@
 //! status card (`.oc-panel-edge`).
 
 use gpui_kit::{
-    Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Role,
-    StatefulInteractiveElement, Styled, TestSupportExt, div, px, rems,
+    AnyElement, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Role,
+    SharedString, StatefulInteractiveElement, Styled, TestSupportExt, div, prelude::FluentBuilder,
+    px, rems,
 };
 
 use crate::activation::on_activate;
-use crate::chrome::{ButtonTone, CONTROL_RADIUS, IconButton};
+use crate::baseline::CssTextExt;
+use crate::chrome::{ButtonTone, CONTROL_RADIUS, IconButton, glyph};
 use crate::elevation;
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
+use crate::sidebar_view;
 use crate::theme::Palette;
 use crate::workspace::Workspace;
 
@@ -27,6 +30,12 @@ const RAIL_GLYPH: f32 = 18.0;
 /// `text-xs` of the design system, in rems of the 16 px root.
 const XS_SIZE: f32 = 0.75;
 const XS_LINE: f32 = 1.0;
+/// A row's 13 px text, in rems of the 16 px root.
+const ROW_SIZE: f32 = 0.8125;
+/// Space above every section after the first (`mt-5`).
+const SECTION_GAP: f32 = 20.0;
+const HEADING_HEIGHT: f32 = 24.0;
+const ROW_HEIGHT: f32 = 28.0;
 
 /// The rail's surfaces in their default order: ID, glyph and label key.
 const RAIL_SURFACES: &[(&str, &str, &str)] = &[
@@ -68,6 +77,10 @@ impl Workspace {
                     .bg(elevation::panel_fill(palette))
                     .shadow(elevation::panel_edge(palette))
                     .p(px(8.0))
+                    // A flex column, as the web's sections are flex
+                    // containers: no margin collapses between them.
+                    .flex()
+                    .flex_col()
                     .child(
                         div()
                             .flex_row_from(direction)
@@ -80,13 +93,13 @@ impl Workspace {
                                     .flex_1()
                                     .min_w_0()
                                     .truncate()
-                                    .text_size(rems(XS_SIZE))
-                                    .line_height(rems(XS_LINE))
+                                    .css_text(XS_SIZE, XS_LINE, cx)
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(palette.foreground)
                                     .child(strings.get("chat.workStatus.section.session")),
                             ),
                     )
+                    .children(self.render_context_sources(palette, direction, cx))
                     .child(
                         div()
                             .absolute()
@@ -111,6 +124,125 @@ impl Workspace {
                             .shadow(elevation::panel_edge_ring(palette)),
                     ),
             )
+    }
+
+    /// The Context sources section: the workspace's skill and connected MCP
+    /// counts (`WorkStatusContextSection.tsx`), hidden while both are zero.
+    /// Linked threads and pinned knowledge are not read yet.
+    fn render_context_sources(
+        &self,
+        palette: &Palette,
+        direction: Direction,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        let (skills, mcp) = self.context_counts()?;
+        if skills == 0 && mcp == 0 {
+            return None;
+        }
+        let strings = locale::strings(cx);
+        let count = |count: usize, single: &str, plural: &str| {
+            let key = if count == 1 { single } else { plural };
+            strings.format(key, &[("count", &count.to_string())])
+        };
+        let mut summary: Vec<SharedString> = Vec::new();
+        if skills > 0 {
+            summary.push(count(
+                skills,
+                "chat.workStatus.breakdown.skillCountSingle",
+                "chat.workStatus.breakdown.skillCountPlural",
+            ));
+        }
+        if mcp > 0 {
+            summary.push(count(
+                mcp,
+                "chat.workStatus.breakdown.mcpCountSingle",
+                "chat.workStatus.breakdown.mcpCountPlural",
+            ));
+        }
+        let expanded = self.work_status_context_open;
+        let title = strings.get("chat.workStatus.section.contextBreakdown");
+        let foreground = palette.foreground;
+        let heading = on_activate(
+            div()
+                .id("work-status-context")
+                .role(Role::Button)
+                .accessibility_id("work-status-context")
+                .aria_label(title.clone())
+                .aria_expanded(expanded)
+                .flex_1()
+                .min_w_0()
+                .h_full()
+                .px(px(4.0))
+                .rounded(px(CONTROL_RADIUS))
+                .flex_row_from(direction)
+                .items_center()
+                .gap(px(6.0))
+                .cursor_pointer()
+                .text_color(palette.muted_foreground)
+                .hover(move |style| style.text_color(foreground))
+                .child(glyph("stack", 16.0, palette.muted_foreground))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .css_text(XS_SIZE, XS_LINE, cx)
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(palette.foreground)
+                        .child(title),
+                )
+                .child(sidebar_view::chevron(!expanded, direction, palette))
+                .child(div().flex_1())
+                .child(
+                    div()
+                        .min_w_0()
+                        .max_w(gpui_kit::relative(0.6))
+                        .truncate()
+                        .css_text(XS_SIZE, XS_LINE, cx)
+                        .text_color(palette.muted_foreground)
+                        .child(SharedString::from(summary.join(" · "))),
+                ),
+            cx,
+            |this, _, cx| {
+                this.work_status_context_open = !this.work_status_context_open;
+                cx.notify();
+            },
+        )
+        .test_support();
+        let row = |label: SharedString, value: usize| {
+            div()
+                .h(px(ROW_HEIGHT))
+                .px(px(4.0))
+                .flex_row_from(direction)
+                .items_center()
+                .gap(px(8.0))
+                .text_size(rems(ROW_SIZE))
+                .text_color(palette.muted_foreground)
+                .child(div().flex_1().min_w_0().truncate().child(label))
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .child(SharedString::from(value.to_string())),
+                )
+        };
+        Some(
+            div()
+                .mt(px(SECTION_GAP))
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .h(px(HEADING_HEIGHT))
+                        .mb(px(2.0))
+                        .flex_row_from(direction)
+                        .items_center()
+                        .child(heading),
+                )
+                .when(expanded, |this| {
+                    this.child(row(strings.get("chat.workStatus.breakdown.skills"), skills))
+                        .child(row(strings.get("chat.workStatus.breakdown.mcp"), mcp))
+                })
+                .into_any_element(),
+        )
     }
 
     /// The column of panel surfaces at the end edge.

@@ -21,6 +21,10 @@ There are multiple store categories in this directory.
 
 ### Catalog refresh
 
+`configModelSelection.ts` owns provider grouping and the default agent/model cascade.
+The config store supplies routing readiness after applying the settings-loaded guard;
+the selector preserves configured choices through catalog gaps.
+
 `catalogRefresh.ts` re-reads the lists Settings and the composer show — agents,
 commands, skills, MCP servers, plugins, providers — when OpenCode reports that
 it rebuilt a catalog. The sync layer calls it from `reloadCatalog`; see

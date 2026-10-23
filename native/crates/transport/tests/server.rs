@@ -492,7 +492,7 @@ async fn redirects_are_never_followed_and_failures_never_read_as_empty() {
         Err(TransportError::Malformed(_))
     ));
     assert!(matches!(
-        client.projects().await,
+        client.settings().await,
         Err(TransportError::AuthenticationRequired)
     ));
 }

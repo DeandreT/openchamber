@@ -72,7 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let roots = client.chat_roots().await?;
     println!("chat roots known: {}", roots.is_some());
-    let projects = client.projects().await?;
+    let projects = client.settings().await?.projects;
     let paths: Vec<String> = projects
         .iter()
         .map(|project| project.path.clone())

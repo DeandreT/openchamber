@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
+import { buildProviderLogoCandidates } from '@/lib/providerLogoCandidates';
 
 type LogoSource = 'local' | 'remote' | 'none';
 
@@ -27,46 +28,8 @@ const localLogoModules = loadLocalLogoModules();
 const LOCAL_PROVIDER_LOGO_MAP = new Map<string, string>();
 const PRELOADED_LOGO_SRCS = new Set<string>();
 
-const LOGO_ALIAS = new Map<string, string>([
-    ['codex', 'openai'],
-    ['chatgpt', 'openai'],
-    ['claude', 'anthropic'],
-    ['cline-pass', 'cline'],
-    ['gemini', 'google'],
-    ['evroc-ai', 'evroc'],
-    ['evrocai', 'evroc'],
-    ['ollama-cloud', 'ollama'],
-    ['wafer-ai', 'wafer.ai'],
-    ['wafer', 'wafer.ai'],
-    ['copilot', 'github-copilot'],
-]);
-
-const normalizeProviderId = (providerId: string | null | undefined) => {
-    return (providerId ?? '')
-        .toLowerCase()
-        .trim()
-        .replace(/^models\./, '')
-        .replace(/^provider\./, '')
-        .replace(/\s+/g, '-');
-};
-
-const buildLogoCandidates = (providerId: string | null | undefined) => {
-    const normalized = normalizeProviderId(providerId);
-    if (!normalized) {
-        return [] as string[];
-    }
-
-    const compact = normalized.replace(/[^a-z0-9_\-./:]/g, '');
-    const primary = compact.split(/[/:]/)[0] || compact;
-    const prefixAlias = compact.startsWith('exe-') ? 'exe-dev' : undefined;
-    const candidates = [prefixAlias, LOGO_ALIAS.get(compact), LOGO_ALIAS.get(primary), compact, primary]
-        .filter((value): value is string => Boolean(value && value.length > 0));
-
-    return [...new Set(candidates)];
-};
-
 const resolveProviderLogoSrc = (providerId: string | null | undefined): string | null => {
-    const candidates = buildLogoCandidates(providerId);
+    const candidates = buildProviderLogoCandidates(providerId);
     const localResolvedId = candidates.find((candidate) => LOCAL_PROVIDER_LOGO_MAP.has(candidate)) ?? null;
     const localLogoSrc = localResolvedId ? LOCAL_PROVIDER_LOGO_MAP.get(localResolvedId) ?? null : null;
     if (localLogoSrc) {
@@ -106,7 +69,7 @@ for (const [path, url] of Object.entries(localLogoModules)) {
 }
 
 export function useProviderLogo(providerId: string | null | undefined): UseProviderLogoReturn {
-    const candidates = buildLogoCandidates(providerId);
+    const candidates = buildProviderLogoCandidates(providerId);
     const localResolvedId = candidates.find((candidate) => LOCAL_PROVIDER_LOGO_MAP.has(candidate)) ?? null;
     const remoteResolvedId = candidates[0] ?? null;
     const hasLocalLogo = Boolean(localResolvedId);

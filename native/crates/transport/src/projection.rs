@@ -6,6 +6,9 @@
 //! address the same parts.
 
 use openchamber_native_core::ids::{MessageId, OpenCodeProjectId, PartId, SessionId};
+use openchamber_native_core::send_config::{
+    AgentEntry, AgentMode, FlatModel, FlatProvider, ModelChoice,
+};
 use openchamber_native_core::session::{
     MetadataFacts, SessionKind, SessionOverlay, SessionRecord, SessionTime as CoreSessionTime,
 };
@@ -60,6 +63,7 @@ pub(crate) fn session(wire: wire::Session) -> SessionRecord {
         project: None,
         kind,
         overlay,
+        model: wire.model.map(model_choice),
     }
 }
 
@@ -271,6 +275,64 @@ fn elided_chars(metadata: Option<&Value>) -> Option<usize> {
     let chars = metadata?.get(CONTENT_SHELL_KEY)?.get("chars")?.as_f64()?;
     // Lengths are whole numbers; anything else is a malformed marker.
     (chars >= 0.0 && chars.fract() == 0.0).then_some(chars as usize)
+}
+
+/// Projects an agent as `projectAgent` does: the ID becomes the name, the
+/// name the display name. Hidden is either flag, as `isAgentHidden` reads.
+pub(crate) fn agent(wire: wire::AgentInfo) -> AgentEntry {
+    let hidden_option = wire
+        .options
+        .as_ref()
+        .and_then(|options| options.get("hidden"))
+        .and_then(Value::as_bool);
+    AgentEntry {
+        name: wire.id,
+        display_name: wire.name,
+        mode: match wire.mode.as_deref() {
+            Some("primary") => Some(AgentMode::Primary),
+            Some("subagent") => Some(AgentMode::Subagent),
+            Some("all") => Some(AgentMode::All),
+            _ => None,
+        },
+        hidden: wire.hidden == Some(true) || hidden_option == Some(true),
+        model: wire.model.map(model_choice),
+        color: wire.color,
+    }
+}
+
+pub(crate) fn model_choice(wire: wire::AgentModel) -> ModelChoice {
+    ModelChoice {
+        provider_id: wire.provider_id,
+        model_id: wire.id,
+        variant: wire.variant,
+    }
+}
+
+/// Projects one model of the flat catalog.
+pub(crate) fn model(wire: wire::ModelInfo) -> FlatModel {
+    FlatModel {
+        provider_model_id: (wire.model_id != wire.id).then_some(wire.model_id),
+        id: wire.id,
+        provider_id: wire.provider_id,
+        name: wire.name,
+        variants: wire
+            .variants
+            .into_iter()
+            .flatten()
+            .map(|variant| variant.id)
+            .filter(|id| !id.is_empty())
+            .collect(),
+        enabled: wire.enabled,
+    }
+}
+
+/// Projects a provider; only an explicit `disabled` activation turns it off.
+pub(crate) fn provider(wire: wire::ProviderInfo) -> FlatProvider {
+    FlatProvider {
+        enabled: wire.activation.as_deref() != Some("disabled"),
+        id: wire.id,
+        name: wire.name,
+    }
 }
 
 #[cfg(test)]

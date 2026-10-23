@@ -67,6 +67,10 @@ everything else, keeping the two groups separate inside the transport crate.
   wire events, OpenChamber's own session events and replay identifiers. The
   native client subscribes there, with the bearer token in the upgrade
   request, and reconciles affected scopes after a gap.
+- **Third-party assets.** The one request outside the server is a provider
+  logo from `https://models.dev/logos/<provider>.svg`, which the web client
+  loads from the same URL. It goes through a separate client that carries no
+  credential and accepts only HTTPS.
 - **Outcomes.** Unreachable, not OpenChamber, authentication required,
   authentication rejected, incompatible, malformed and failed are distinct
   results. None of them is reported as an empty success.

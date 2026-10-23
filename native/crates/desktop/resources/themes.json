@@ -148,7 +148,21 @@
         "tools.edit.removedBackground": "#ab595925",
         "tools.icon": "#696960",
         "tools.title": "#44443d"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 5,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "openchamber-dark",
@@ -296,7 +310,21 @@
         "tools.edit.removedBackground": "#cb767625",
         "tools.icon": "#949187",
         "tools.title": "#dbd7cc"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 5,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "flexoki-light",
@@ -444,7 +472,33 @@
         "tools.edit.removedBackground": "#AF302925",
         "tools.icon": "#6a6962",
         "tools.title": "#494741"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": false
+        },
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 4,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "flexoki-dark",
@@ -592,7 +646,37 @@
         "tools.edit.removedBackground": "#AF302925",
         "tools.icon": "#96958e",
         "tools.title": "#dedcd3"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": true
+        },
+        {
+          "index": 4,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": false
+        },
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 2,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "fields-of-the-shire-dark",
@@ -740,7 +824,21 @@
         "tools.edit.removedBackground": "#b85a4a25",
         "tools.icon": "#9f9686",
         "tools.title": "#e9decf"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 0,
+          "colorful": false
+        },
+        {
+          "index": 5,
+          "colorful": false
+        }
+      ]
     },
     {
       "id": "fields-of-the-shire-light",
@@ -888,7 +986,17 @@
         "tools.edit.removedBackground": "#a24d3f25",
         "tools.icon": "#6c6459",
         "tools.title": "#514a40"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 0,
+          "colorful": false
+        }
+      ]
     },
     {
       "id": "aura-dark",
@@ -1038,7 +1146,25 @@
         "tools.edit.removedBackground": "#240103",
         "tools.icon": "#929195",
         "tools.title": "#dbdbdc"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": false
+        },
+        {
+          "index": 2,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "aura-light",
@@ -1188,7 +1314,25 @@
         "tools.edit.removedBackground": "#feeeee",
         "tools.icon": "#605a71",
         "tools.title": "#474056"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": true
+        },
+        {
+          "index": 2,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "ayu-dark",
@@ -1338,7 +1482,25 @@
         "tools.edit.removedBackground": "#240100",
         "tools.icon": "#8c9095",
         "tools.title": "#d9d9db"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": false
+        }
+      ]
     },
     {
       "id": "ayu-light",
@@ -1488,7 +1650,29 @@
         "tools.edit.removedBackground": "#feeeee",
         "tools.icon": "#5c6570",
         "tools.title": "#3f4851"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": false
+        },
+        {
+          "index": 4,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "carbonfox-dark",
@@ -1638,7 +1822,29 @@
         "tools.edit.removedBackground": "#230105",
         "tools.icon": "#a5a6a9",
         "tools.title": "#f7f7f7"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": false
+        }
+      ]
     },
     {
       "id": "carbonfox-light",
@@ -1788,7 +1994,29 @@
         "tools.edit.removedBackground": "#ffeeec",
         "tools.icon": "#5a5a5a",
         "tools.title": "#404040"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": false
+        }
+      ]
     },
     {
       "id": "catppuccin-dark",
@@ -1937,7 +2165,33 @@
         "tools.edit.removedBackground": "#f38ba826",
         "tools.icon": "#9399b2",
         "tools.title": "#cdd6f4"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "catppuccin-light",
@@ -2086,7 +2340,33 @@
         "tools.edit.removedBackground": "#d20f3926",
         "tools.icon": "#616274",
         "tools.title": "#4c4f69"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": true
+        },
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "cursor-dark",
@@ -2235,7 +2515,29 @@
         "tools.edit.removedBackground": "#BF616A24",
         "tools.icon": "#989898",
         "tools.title": "#e1e1e2"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 4,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": false
+        },
+        {
+          "index": 0,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "cursor-light",
@@ -2384,7 +2686,29 @@
         "tools.edit.removedBackground": "#A3424B1C",
         "tools.icon": "#66696f",
         "tools.title": "#454a50"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 4,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": false
+        },
+        {
+          "index": 0,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "dracula-dark",
@@ -2534,7 +2858,29 @@
         "tools.edit.removedBackground": "#230207",
         "tools.icon": "#959594",
         "tools.title": "#e0e0e2"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": false
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 4,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "dracula-light",
@@ -2684,7 +3030,29 @@
         "tools.edit.removedBackground": "#feedf1",
         "tools.icon": "#5f5f6a",
         "tools.title": "#45454f"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": false
+        },
+        {
+          "index": 4,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "everforest-dark",
@@ -2834,7 +3202,25 @@
         "tools.edit.removedBackground": "#230106",
         "tools.icon": "#8f978e",
         "tools.title": "#f0efed"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 6,
+          "colorful": true
+        },
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "everforest-light",
@@ -2984,7 +3370,29 @@
         "tools.edit.removedBackground": "#feeeef",
         "tools.icon": "#656b62",
         "tools.title": "#3b474e"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "github-dark",
@@ -3134,7 +3542,29 @@
         "tools.edit.removedBackground": "#240202",
         "tools.icon": "#88909a",
         "tools.title": "#d7d8da"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 4,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "github-light",
@@ -3284,7 +3714,29 @@
         "tools.edit.removedBackground": "#ffeeec",
         "tools.icon": "#5c646e",
         "tools.title": "#464a4e"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 4,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "gruvbox-dark",
@@ -3434,7 +3886,25 @@
         "tools.edit.removedBackground": "#240100",
         "tools.icon": "#a79a7c",
         "tools.title": "#e9e8e4"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": false
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "gruvbox-light",
@@ -3584,7 +4054,29 @@
         "tools.edit.removedBackground": "#feeeec",
         "tools.icon": "#615d58",
         "tools.title": "#47433c"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": false
+        },
+        {
+          "index": 1,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "jetbrains-dark",
@@ -3732,7 +4224,25 @@
         "tools.edit.removedBackground": "#45302B40",
         "tools.icon": "#999ca4",
         "tools.title": "#e5e7eb"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": false
+        },
+        {
+          "index": 3,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "jetbrains-light",
@@ -3880,7 +4390,25 @@
         "tools.edit.removedBackground": "#FFD5CC50",
         "tools.icon": "#696a6f",
         "tools.title": "#45474b"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": false
+        }
+      ]
     },
     {
       "id": "kanagawa-dark",
@@ -4030,7 +4558,29 @@
         "tools.edit.removedBackground": "#230202",
         "tools.icon": "#8a8a83",
         "tools.title": "#e0dfde"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 5,
+          "colorful": true
+        },
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": true
+        },
+        {
+          "index": 0,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "kanagawa-light",
@@ -4180,7 +4730,29 @@
         "tools.edit.removedBackground": "#ffeeec",
         "tools.icon": "#64635e",
         "tools.title": "#4c3d33"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 5,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": false
+        },
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 2,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "material-dark",
@@ -4330,7 +4902,29 @@
         "tools.edit.removedBackground": "#240004",
         "tools.icon": "#85989f",
         "tools.title": "#edeff0"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": false
+        }
+      ]
     },
     {
       "id": "material-light",
@@ -4480,7 +5074,33 @@
         "tools.edit.removedBackground": "#feeeec",
         "tools.icon": "#5f6c72",
         "tools.title": "#3e484c"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": false
+        }
+      ]
     },
     {
       "id": "monokai-dark",
@@ -4630,7 +5250,25 @@
         "tools.edit.removedBackground": "#23010a",
         "tools.icon": "#9a9b95",
         "tools.title": "#e7e7e7"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": false
+        },
+        {
+          "index": 4,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "monokai-light",
@@ -4780,7 +5418,25 @@
         "tools.edit.removedBackground": "#feeeef",
         "tools.icon": "#656056",
         "tools.title": "#4b463c"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": false
+        }
+      ]
     },
     {
       "id": "nightowl-dark",
@@ -4930,7 +5586,29 @@
         "tools.edit.removedBackground": "#240102",
         "tools.icon": "#89909d",
         "tools.title": "#d7d9dc"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": false
+        },
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 4,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "nightowl-light",
@@ -5080,7 +5758,29 @@
         "tools.edit.removedBackground": "#feeeed",
         "tools.icon": "#5a5a6b",
         "tools.title": "#41404f"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": false
+        },
+        {
+          "index": 4,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "nord-dark",
@@ -5230,7 +5930,29 @@
         "tools.edit.removedBackground": "#230106",
         "tools.icon": "#9ea1a9",
         "tools.title": "#f0f1f2"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 4,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": false
+        }
+      ]
     },
     {
       "id": "nord-light",
@@ -5380,7 +6102,21 @@
         "tools.edit.removedBackground": "#feeeef",
         "tools.icon": "#565c67",
         "tools.title": "#3c424c"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "osaka-jade-refined",
@@ -5530,7 +6266,21 @@
         "tools.edit.removedBackground": "#240103",
         "tools.icon": "#86978c",
         "tools.title": "#d9dbd6"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": true
+        },
+        {
+          "index": 0,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "osaka-jade-refined-light",
@@ -5680,7 +6430,21 @@
         "tools.edit.removedBackground": "#ffeeeb",
         "tools.icon": "#53685B",
         "tools.title": "#40463e"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": false
+        }
+      ]
     },
     {
       "id": "onedarkpro-dark",
@@ -5828,7 +6592,25 @@
         "tools.edit.removedBackground": "#E06C7525",
         "tools.icon": "#96a0ac",
         "tools.title": "#e4ebf8"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": false
+        },
+        {
+          "index": 1,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "onedarkpro-light",
@@ -5976,7 +6758,25 @@
         "tools.edit.removedBackground": "#E06C7525",
         "tools.icon": "#616770",
         "tools.title": "#454c58"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": false
+        }
+      ]
     },
     {
       "id": "opencode-dark",
@@ -6126,7 +6926,25 @@
         "tools.edit.removedBackground": "#240200",
         "tools.icon": "#949494",
         "tools.title": "#dfdfdf"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": false
+        }
+      ]
     },
     {
       "id": "opencode-light",
@@ -6276,7 +7094,25 @@
         "tools.edit.removedBackground": "#feeeeb",
         "tools.icon": "#646464",
         "tools.title": "#4a4a4a"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": false
+        },
+        {
+          "index": 3,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "rosepine-dark",
@@ -6426,7 +7262,29 @@
         "tools.edit.removedBackground": "#23000b",
         "tools.icon": "#87849b",
         "tools.title": "#dbdade"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 4,
+          "colorful": true
+        },
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": false
+        }
+      ]
     },
     {
       "id": "rosepine-light",
@@ -6576,7 +7434,25 @@
         "tools.edit.removedBackground": "#feeef1",
         "tools.icon": "#6a6673",
         "tools.title": "#464061"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": true
+        },
+        {
+          "index": 4,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "solarized-dark",
@@ -6726,7 +7602,29 @@
         "tools.edit.removedBackground": "#240103",
         "tools.icon": "#889595",
         "tools.title": "#e0e4e5"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": false
+        },
+        {
+          "index": 4,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "solarized-light",
@@ -6876,7 +7774,29 @@
         "tools.edit.removedBackground": "#feeeee",
         "tools.icon": "#596c73",
         "tools.title": "#33494f"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 4,
+          "colorful": true
+        },
+        {
+          "index": 5,
+          "colorful": false
+        },
+        {
+          "index": 1,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "tokyonight-dark",
@@ -7026,7 +7946,33 @@
         "tools.edit.removedBackground": "#240103",
         "tools.icon": "#8b92b5",
         "tools.title": "#dcdde3"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": false
+        },
+        {
+          "index": 4,
+          "colorful": true
+        },
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "tokyonight-light",
@@ -7176,7 +8122,29 @@
         "tools.edit.removedBackground": "#ffeef0",
         "tools.icon": "#4b5472",
         "tools.title": "#343a56"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "vesper-dark",
@@ -7326,7 +8294,17 @@
         "tools.edit.removedBackground": "#240103",
         "tools.icon": "#8f8f8f",
         "tools.title": "#d9d9d9"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 0,
+          "colorful": false
+        }
+      ]
     },
     {
       "id": "vesper-light",
@@ -7476,7 +8454,17 @@
         "tools.edit.removedBackground": "#ffeeed",
         "tools.icon": "#5c5c5c",
         "tools.title": "#424242"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 1,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": false
+        }
+      ]
     },
     {
       "id": "vercel-dark",
@@ -7626,7 +8614,29 @@
         "tools.edit.removedBackground": "#240103",
         "tools.icon": "#878787",
         "tools.title": "#cfcfcf"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "vercel-light",
@@ -7776,7 +8786,29 @@
         "tools.edit.removedBackground": "#ffeeed",
         "tools.icon": "#666666",
         "tools.title": "#4a4a4a"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 0,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "mono-plus-dark",
@@ -7924,7 +8956,17 @@
         "tools.edit.removedBackground": "#9e6a6a20",
         "tools.icon": "#898989",
         "tools.title": "#cecece"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "mono-plus-light",
@@ -8072,7 +9114,21 @@
         "tools.edit.removedBackground": "#8a5a5a18",
         "tools.icon": "#6a6a6a",
         "tools.title": "#454545"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 2,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 4,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "mono-dark",
@@ -8220,7 +9276,13 @@
         "tools.edit.removedBackground": "#ffffff10",
         "tools.icon": "#898989",
         "tools.title": "#d0d0d0"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 0,
+          "colorful": false
+        }
+      ]
     },
     {
       "id": "mono-light",
@@ -8368,7 +9430,13 @@
         "tools.edit.removedBackground": "#0000000a",
         "tools.icon": "#656565",
         "tools.title": "#454545"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 0,
+          "colorful": false
+        }
+      ]
     },
     {
       "id": "vitesse-dark-dark",
@@ -8516,7 +9584,21 @@
         "tools.edit.removedBackground": "#cb767620",
         "tools.icon": "#93928c",
         "tools.title": "#ddd9cd"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 5,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": true
+        },
+        {
+          "index": 1,
+          "colorful": true
+        }
+      ]
     },
     {
       "id": "vitesse-light-light",
@@ -8664,7 +9746,21 @@
         "tools.edit.removedBackground": "#ab595920",
         "tools.icon": "#6b6b64",
         "tools.title": "#484843"
-      }
+      },
+      "agentPalette": [
+        {
+          "index": 5,
+          "colorful": true
+        },
+        {
+          "index": 3,
+          "colorful": true
+        },
+        {
+          "index": 6,
+          "colorful": true
+        }
+      ]
     }
   ]
 }

@@ -109,6 +109,54 @@
       "query": [],
       "directoryHeader": null,
       "partShellsHeader": null
+    },
+    {
+      "name": "agents",
+      "method": "GET",
+      "path": "/api/agent",
+      "query": [],
+      "directoryHeader": "%2Fhome%2Fsynthetic%2Fmy%20project%2F%C3%BCn%C3%AF",
+      "partShellsHeader": null
+    },
+    {
+      "name": "models",
+      "method": "GET",
+      "path": "/api/model",
+      "query": [],
+      "directoryHeader": "%2Fhome%2Fsynthetic%2Fmy%20project%2F%C3%BCn%C3%AF",
+      "partShellsHeader": null
+    },
+    {
+      "name": "default model",
+      "method": "GET",
+      "path": "/api/model/default",
+      "query": [],
+      "directoryHeader": "%2Fhome%2Fsynthetic%2Fmy%20project%2F%C3%BCn%C3%AF",
+      "partShellsHeader": null
+    },
+    {
+      "name": "providers",
+      "method": "GET",
+      "path": "/api/provider",
+      "query": [],
+      "directoryHeader": "%2Fhome%2Fsynthetic%2Fmy%20project%2F%C3%BCn%C3%AF",
+      "partShellsHeader": null
+    },
+    {
+      "name": "config",
+      "method": "GET",
+      "path": "/api/config",
+      "query": [],
+      "directoryHeader": "%2Fhome%2Fsynthetic%2Fmy%20project%2F%C3%BCn%C3%AF",
+      "partShellsHeader": null
+    },
+    {
+      "name": "mcp servers",
+      "method": "GET",
+      "path": "/api/mcp",
+      "query": [],
+      "directoryHeader": "%2Fhome%2Fsynthetic%2Fmy%20project%2F%C3%BCn%C3%AF",
+      "partShellsHeader": null
     }
   ],
   "sessions": [
@@ -123,7 +171,12 @@
       "archived": null,
       "pinned": false,
       "inWork": true,
-      "btw": false
+      "btw": false,
+      "model": {
+        "providerId": "perf",
+        "modelId": "stream-20000cps",
+        "variant": "default"
+      }
     },
     {
       "id": "ses_e9b49c443ffefXcWWPhCOga6nH",
@@ -136,7 +189,12 @@
       "archived": null,
       "pinned": false,
       "inWork": true,
-      "btw": false
+      "btw": false,
+      "model": {
+        "providerId": "perf",
+        "modelId": "code-20000cps",
+        "variant": "default"
+      }
     },
     {
       "id": "ses_e9b4b0242ffeULkFFTS9CiS3wW",
@@ -149,7 +207,12 @@
       "archived": null,
       "pinned": false,
       "inWork": true,
-      "btw": false
+      "btw": false,
+      "model": {
+        "providerId": "perf",
+        "modelId": "unicode-20000cps",
+        "variant": "default"
+      }
     },
     {
       "id": "ses_e9b4b1b11ffeL35iTqmSFoxS2M",
@@ -162,7 +225,12 @@
       "archived": null,
       "pinned": false,
       "inWork": true,
-      "btw": false
+      "btw": false,
+      "model": {
+        "providerId": "perf",
+        "modelId": "unicode-20000cps",
+        "variant": "default"
+      }
     },
     {
       "id": "ses_e9b4b2f45ffeFv56FeVzmiYX4s",
@@ -175,7 +243,12 @@
       "archived": null,
       "pinned": false,
       "inWork": true,
-      "btw": false
+      "btw": false,
+      "model": {
+        "providerId": "perf",
+        "modelId": "code-20000cps",
+        "variant": "default"
+      }
     }
   ],
   "nextCursor": "eyJhbmNob3IiOnsiaWQiOiJzZXNfZTliNGIyZjQ1ZmZlRnY1NkZlVnptaVlYNHMiLCJ0aW1lIjoxNzkyNjkwOTM3MTQ1LCJkaXJlY3Rpb24iOiJuZXh0In19",
@@ -1442,6 +1515,421 @@
       }
     ]
   },
+  "catalog": {
+    "agents": [
+      {
+        "name": "build",
+        "displayName": "Build",
+        "mode": "primary",
+        "hidden": false,
+        "model": null,
+        "color": null
+      },
+      {
+        "name": "general",
+        "displayName": "General",
+        "mode": "subagent",
+        "hidden": false,
+        "model": null,
+        "color": null
+      },
+      {
+        "name": "explore",
+        "displayName": "Explore",
+        "mode": "subagent",
+        "hidden": false,
+        "model": null,
+        "color": null
+      },
+      {
+        "name": "compaction",
+        "displayName": "Compaction",
+        "mode": "primary",
+        "hidden": true,
+        "model": null,
+        "color": null
+      },
+      {
+        "name": "title",
+        "displayName": "Title",
+        "mode": "primary",
+        "hidden": true,
+        "model": {
+          "providerId": "perf",
+          "modelId": "stream-1200cps",
+          "variant": null
+        },
+        "color": null
+      },
+      {
+        "name": "summary",
+        "displayName": "Summary",
+        "mode": "primary",
+        "hidden": true,
+        "model": null,
+        "color": null
+      },
+      {
+        "name": "plan",
+        "displayName": "Plan",
+        "mode": "primary",
+        "hidden": false,
+        "model": null,
+        "color": null
+      },
+      {
+        "name": "drafter",
+        "displayName": "drafter",
+        "mode": "primary",
+        "hidden": true,
+        "model": {
+          "providerId": "perf",
+          "modelId": "code-300cps",
+          "variant": "high"
+        },
+        "color": "#c4920a"
+      },
+      {
+        "name": "reviewer",
+        "displayName": "Reviewer",
+        "mode": "subagent",
+        "hidden": false,
+        "model": null,
+        "color": "#d08770"
+      },
+      {
+        "name": "helper",
+        "displayName": "helper",
+        "mode": "all",
+        "hidden": false,
+        "model": null,
+        "color": null
+      },
+      {
+        "name": "writer",
+        "displayName": "  Writer  ",
+        "mode": "all",
+        "hidden": false,
+        "model": {
+          "providerId": "elsewhere",
+          "modelId": "missing-model",
+          "variant": null
+        },
+        "color": null
+      }
+    ],
+    "models": [
+      {
+        "id": "flint-40b-free",
+        "modelId": "flint-40b-free",
+        "providerId": "opencode",
+        "name": "Flint 40B Free",
+        "enabled": true,
+        "variants": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "nemotron-3.5-super-vl-free",
+        "modelId": "nemotron-3.5-super-vl-free",
+        "providerId": "opencode",
+        "name": "Nemotron 3.5 Super VL Free",
+        "enabled": true,
+        "variants": [
+          "none",
+          "minimal",
+          "low",
+          "medium",
+          "high",
+          "xhigh"
+        ]
+      },
+      {
+        "id": "beam-free",
+        "modelId": "beam-free",
+        "providerId": "opencode",
+        "name": "Beam Free",
+        "enabled": true,
+        "variants": [
+          "low",
+          "medium",
+          "high",
+          "xhigh",
+          "max"
+        ]
+      },
+      {
+        "id": "mimo-v2.6-flash-free",
+        "modelId": "mimo-v2.6-flash-free",
+        "providerId": "opencode",
+        "name": "MiMo-V2.6-Flash Free",
+        "enabled": true,
+        "variants": []
+      },
+      {
+        "id": "deepseek-v4.1-flash-free",
+        "modelId": "deepseek-v4.1-flash-free",
+        "providerId": "opencode",
+        "name": "DeepSeek V4.1 Flash Free",
+        "enabled": true,
+        "variants": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "glm-5.3-flash-free",
+        "modelId": "glm-5.3-flash-free",
+        "providerId": "opencode",
+        "name": "GLM-5.3-Flash Free",
+        "enabled": true,
+        "variants": [
+          "low",
+          "high",
+          "max"
+        ]
+      },
+      {
+        "id": "nemotron-3.5-lightning-free",
+        "modelId": "nemotron-3.5-lightning-free",
+        "providerId": "opencode",
+        "name": "Nemotron 3.5 Lightning Free",
+        "enabled": true,
+        "variants": []
+      },
+      {
+        "id": "nemotron-3-ultra-free",
+        "modelId": "nemotron-3-ultra-free",
+        "providerId": "opencode",
+        "name": "Nemotron 3 Ultra Free",
+        "enabled": true,
+        "variants": []
+      },
+      {
+        "id": "big-pickle",
+        "modelId": "big-pickle",
+        "providerId": "opencode",
+        "name": "Big Pickle",
+        "enabled": true,
+        "variants": []
+      },
+      {
+        "id": "stream-100cps",
+        "modelId": "stream-100cps",
+        "providerId": "perf",
+        "name": "Fixture stream, 100 characters/s",
+        "enabled": true,
+        "variants": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      {
+        "id": "stream-300cps",
+        "modelId": "stream-300cps",
+        "providerId": "perf",
+        "name": "Fixture stream, 300 characters/s",
+        "enabled": true,
+        "variants": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      {
+        "id": "stream-600cps",
+        "modelId": "stream-600cps",
+        "providerId": "perf",
+        "name": "Fixture stream, 600 characters/s",
+        "enabled": true,
+        "variants": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      {
+        "id": "stream-1200cps",
+        "modelId": "stream-1200cps",
+        "providerId": "perf",
+        "name": "Fixture stream, 1200 characters/s",
+        "enabled": true,
+        "variants": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      {
+        "id": "code-300cps",
+        "modelId": "code-300cps",
+        "providerId": "perf",
+        "name": "Fixture code block, 300 characters/s",
+        "enabled": true,
+        "variants": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      {
+        "id": "code-1200cps",
+        "modelId": "code-1200cps",
+        "providerId": "perf",
+        "name": "Fixture code block, 1200 characters/s",
+        "enabled": true,
+        "variants": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      {
+        "id": "unicode-300cps",
+        "modelId": "unicode-300cps",
+        "providerId": "perf",
+        "name": "Fixture non-Latin prose and code, 300 characters/s",
+        "enabled": true,
+        "variants": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      {
+        "id": "unicode-1200cps",
+        "modelId": "unicode-1200cps",
+        "providerId": "perf",
+        "name": "Fixture non-Latin prose and code, 1200 characters/s",
+        "enabled": true,
+        "variants": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      {
+        "id": "stream-20000cps",
+        "modelId": "stream-20000cps",
+        "providerId": "perf",
+        "name": "Fixture stream, seeding speed",
+        "enabled": true,
+        "variants": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      {
+        "id": "code-20000cps",
+        "modelId": "code-20000cps",
+        "providerId": "perf",
+        "name": "Fixture code, seeding speed",
+        "enabled": true,
+        "variants": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      {
+        "id": "unicode-20000cps",
+        "modelId": "unicode-20000cps",
+        "providerId": "perf",
+        "name": "Fixture unicode, seeding speed",
+        "enabled": true,
+        "variants": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      {
+        "id": "think-30s",
+        "modelId": "think-30s",
+        "providerId": "perf",
+        "name": "Fixture silence, 30s",
+        "enabled": true,
+        "variants": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      {
+        "id": "agent-20tools-300cps",
+        "modelId": "agent-20tools-300cps",
+        "providerId": "perf",
+        "name": "Fixture agent, 20 tool calls then 300 characters/s",
+        "enabled": true,
+        "variants": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      {
+        "id": "agent-40tools-300cps",
+        "modelId": "agent-40tools-300cps",
+        "providerId": "perf",
+        "name": "Fixture agent, 40 tool calls then 300 characters/s",
+        "enabled": true,
+        "variants": [
+          "low",
+          "medium",
+          "high"
+        ]
+      },
+      {
+        "id": "switched-off",
+        "modelId": "switched-off",
+        "providerId": "perf",
+        "name": "Switched off",
+        "enabled": false,
+        "variants": []
+      },
+      {
+        "id": "orphan-1",
+        "modelId": "orphan-1",
+        "providerId": "disabled-provider",
+        "name": "Orphan",
+        "enabled": true,
+        "variants": []
+      }
+    ],
+    "providers": [
+      {
+        "id": "opencode",
+        "name": "OpenCode",
+        "enabled": true
+      },
+      {
+        "id": "perf",
+        "name": "Performance fixture",
+        "enabled": true
+      },
+      {
+        "id": "disabled-provider",
+        "name": "Switched off provider",
+        "enabled": false
+      }
+    ],
+    "defaultModel": {
+      "providerId": "perf",
+      "modelId": "stream-300cps"
+    },
+    "opencodeDefaults": {
+      "defaultAgent": "plan",
+      "model": "perf/stream-300cps#high"
+    },
+    "mcpConnected": 2
+  },
   "sessionEvents": {
     "recorded": [
       {
@@ -1457,13 +1945,19 @@
           "archived": null,
           "pinned": false,
           "inWork": false,
-          "btw": false
+          "btw": false,
+          "model": null
         }
       },
       {
         "type": "patched",
         "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
-        "updated": 1792691030427
+        "updated": 1792691030427,
+        "model": {
+          "providerId": "perf",
+          "modelId": "stream-20000cps",
+          "variant": null
+        }
       },
       {
         "type": "patched",
@@ -1537,7 +2031,12 @@
       {
         "type": "patched",
         "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
-        "updated": 1792691034323
+        "updated": 1792691034323,
+        "model": {
+          "providerId": "perf",
+          "modelId": "code-20000cps",
+          "variant": null
+        }
       },
       {
         "type": "patched",
@@ -1605,13 +2104,19 @@
           "archived": null,
           "pinned": false,
           "inWork": false,
-          "btw": false
+          "btw": false,
+          "model": null
         }
       },
       {
         "type": "patched",
         "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
-        "updated": 1792691930922
+        "updated": 1792691930922,
+        "model": {
+          "providerId": "perf",
+          "modelId": "agent-20tools-300cps",
+          "variant": null
+        }
       },
       {
         "type": "patched",

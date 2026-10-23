@@ -1,0 +1,11 @@
+{
+  "location": {
+    "directory": "/home/synthetic/my project/ünï"
+  },
+  "data": {
+    "id": "stream-300cps",
+    "modelID": "stream-300cps",
+    "providerID": "perf",
+    "name": "Fixture stream, 300 characters/s"
+  }
+}
