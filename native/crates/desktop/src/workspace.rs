@@ -452,14 +452,20 @@ impl Workspace {
             px(TRANSCRIPT_OVERDRAW),
         );
         list.set_follow_mode(FollowMode::Tail);
-        // A scroll that moves the current prompt redraws the rail.
+        // A scroll that moves the current prompt redraws the rail. The list
+        // is still borrowed while it reports the scroll, so the rail reads it
+        // once the scroll is applied.
         let workspace = cx.entity().downgrade();
         let session = id.clone();
         list.set_scroll_handler(move |_, _, cx| {
-            let _ = workspace.update(cx, |this, cx| {
-                if this.refresh_prompt_rail(&session) {
-                    cx.notify();
-                }
+            let workspace = workspace.clone();
+            let session = session.clone();
+            cx.defer(move |cx| {
+                let _ = workspace.update(cx, |this, cx| {
+                    if this.refresh_prompt_rail(&session) {
+                        cx.notify();
+                    }
+                });
             });
         });
         let key = ScrollKey {
