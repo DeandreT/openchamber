@@ -64,6 +64,7 @@ pub(crate) fn session(wire: wire::Session) -> SessionRecord {
         kind,
         overlay,
         model: wire.model.map(model_choice),
+        agent: wire.agent.filter(|agent| !agent.is_empty()),
     }
 }
 

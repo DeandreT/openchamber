@@ -187,7 +187,7 @@ impl Workspace {
                                     .items_center()
                                     .child(project_chooser),
                             )
-                            .child(self.render_composer_box(palette, direction, cx)),
+                            .child(self.render_composer_box(palette, direction, window, cx)),
                     )
                     .child(
                         div()

@@ -46,6 +46,7 @@ pub(crate) struct Session {
     pub time: SessionTime,
     pub metadata: Option<Value>,
     pub model: Option<AgentModel>,
+    pub agent: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

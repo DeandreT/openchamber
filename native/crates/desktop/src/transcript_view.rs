@@ -21,8 +21,6 @@ use crate::logical::LogicalStyledExt;
 use crate::theme::Palette;
 use crate::workspace::{History, Workspace};
 
-/// Space below the last message for the docked composer and its margin.
-const COMPOSER_CLEARANCE: f32 = 132.0;
 const MARKDOWN_SIZE: f32 = 0.875;
 const META_SIZE: f32 = 0.781_25;
 
@@ -159,9 +157,9 @@ impl Workspace {
             return div().into_any_element();
         };
         let body = match message.info.role {
-            MessageRole::User => user_message(message, &palette),
-            MessageRole::Assistant => assistant_message(message, &palette),
-            MessageRole::Compaction | MessageRole::Shell => notice_message(message, &palette),
+            MessageRole::User => Some(user_message(message, &palette)),
+            MessageRole::Assistant => Some(assistant_message(message, &palette)),
+            MessageRole::Compaction | MessageRole::Shell => Some(notice_message(message, &palette)),
             // `timelineRoles.ts`: plumbing, and switches the composer already shows.
             MessageRole::Synthetic
             | MessageRole::System
@@ -169,15 +167,21 @@ impl Workspace {
             | MessageRole::LocationSwitched
             | MessageRole::Idle
             | MessageRole::AgentSwitched
-            | MessageRole::ModelSwitched => return div().into_any_element(),
+            | MessageRole::ModelSwitched => None,
         };
-        // The last message clears the composer docked over the transcript.
-        let last = index + 1 == open_len;
+        // The last row, shown or not, carries the tail spacer that keeps the
+        // transcript's end clear of the docked composer.
+        let tail = (index + 1 == open_len).then(|| self.composer_slot.get().tail_inset());
+        let Some(body) = body else {
+            return div()
+                .when_some(tail, |this, tail| this.h(px(tail)))
+                .into_any_element();
+        };
         div()
             .id(ElementId::Name(message.info.id.as_str().to_owned().into()))
             .w_full()
             .pt(px(16.0))
-            .when(last, |this| this.pb(px(COMPOSER_CLEARANCE)))
+            .when_some(tail, |this, tail| this.pb(px(tail)))
             .flex()
             .justify_center()
             .child(

@@ -5,7 +5,9 @@
 //! Dropping it drops every playback task and the server connection, which
 //! cancels streams, requests and the event subscription.
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui_kit::component::input::{InputEvent, TextareaState};
@@ -36,6 +38,7 @@ use openchamber_native_core::transcript::{
 };
 
 use crate::chrome::InitialSize;
+use crate::composer_view::ComposerSlot;
 use crate::connection::{Connection, ConnectionFailure};
 use crate::diagnostics::{self, Marker};
 use crate::locale;
@@ -128,6 +131,8 @@ pub struct Workspace {
     pub(crate) provider_logos: ProviderLogos,
     /// Set while the new window's content is held at its requested size.
     pub(crate) initial_size: Option<InitialSize>,
+    /// The docked composer's slot, measured while painting.
+    pub(crate) composer_slot: Rc<Cell<ComposerSlot>>,
     /// The providers whose logos the sidebar rows show, without repeats.
     pub(crate) sidebar_providers: Vec<SharedString>,
     prompt_sequence: usize,
@@ -196,6 +201,7 @@ impl Workspace {
             send_catalog: SendCatalog::default(),
             provider_logos: ProviderLogos::default(),
             initial_size: None,
+            composer_slot: Rc::default(),
             sidebar_providers: Vec::new(),
             prompt_sequence: 0,
             focus_handle: cx.focus_handle(),

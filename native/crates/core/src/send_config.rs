@@ -379,6 +379,98 @@ pub fn resolve_default_selection(
     }
 }
 
+/// What an existing session's record names: the model and agent its next
+/// turn uses, as the server last reported them.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SessionRecordChoice<'a> {
+    pub model: Option<&'a ModelChoice>,
+    pub agent: Option<&'a str>,
+}
+
+/// The selection the composer shows for an existing session when nothing
+/// was picked in it, as `ModelControls.tsx` restores it from the record.
+///
+/// The record's model replaces the default one when the catalog lists it; a
+/// model the catalog lacks leaves the default selection. Its effort is the
+/// record's when the model offers it, else the effort an existing session
+/// inherits (`resolveInheritedVariantForModel`): the agent's pinned effort for
+/// that model, the configured default for that model, then the default
+/// selection's effort when it names the same model. The record's agent
+/// replaces the default one when the agents include it.
+#[must_use]
+pub fn resolve_session_selection(
+    default: &Selection,
+    record: SessionRecordChoice<'_>,
+    agents: &[AgentEntry],
+    providers: &[CatalogProvider],
+    defaults: &SelectionDefaults,
+) -> Selection {
+    let agent_name = record
+        .agent
+        .filter(|name| agents.iter().any(|agent| agent.name == *name))
+        .map(str::to_owned)
+        .or_else(|| default.agent_name.clone());
+    let Some(recorded) = record
+        .model
+        .filter(|choice| find_model(providers, choice).is_some())
+    else {
+        return Selection {
+            agent_name,
+            model: default.model.clone(),
+        };
+    };
+    let offered: &[String] = find_model(providers, recorded)
+        .map(|model| model.variants.as_slice())
+        .unwrap_or_default();
+    let same_model = |choice: &ModelChoice| {
+        choice.provider_id == recorded.provider_id && choice.model_id == recorded.model_id
+    };
+    let agent_variant = agent_name
+        .as_deref()
+        .and_then(|name| agents.iter().find(|agent| agent.name == name))
+        .and_then(|agent| agent.model.as_ref())
+        .filter(|pinned| same_model(pinned))
+        .and_then(|pinned| pinned.variant.clone());
+    let configured_variant = [
+        (
+            &defaults.project_default_model,
+            &defaults.project_default_variant,
+        ),
+        (
+            &defaults.settings_default_model,
+            &defaults.settings_default_variant,
+        ),
+    ]
+    .into_iter()
+    .find(|(model, _)| {
+        nonempty(model)
+            .and_then(parse_identifier)
+            .is_some_and(|choice| same_model(&choice))
+    })
+    .and_then(|(_, variant)| variant.clone());
+    let inherited_variant = default
+        .model
+        .as_ref()
+        .filter(|choice| same_model(choice))
+        .and_then(|choice| choice.variant.clone());
+    let variant = [
+        recorded.variant.clone(),
+        agent_variant,
+        configured_variant,
+        inherited_variant,
+    ]
+    .into_iter()
+    .flatten()
+    .find(|variant| offered.contains(variant));
+    Selection {
+        agent_name,
+        model: Some(ModelChoice {
+            variant,
+            ..recorded.clone()
+        }),
+    }
+}
+
 fn js_trim(value: &str) -> &str {
     value.trim_matches(is_js_whitespace)
 }
@@ -800,5 +892,163 @@ pub fn agent_color_with_palette(
     AgentColor::Syntax {
         index: palette[hash_name(name) % palette.len()].index,
         of: syntax_roles,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn choice(provider: &str, model: &str, variant: Option<&str>) -> ModelChoice {
+        ModelChoice {
+            provider_id: provider.to_owned(),
+            model_id: model.to_owned(),
+            variant: variant.map(str::to_owned),
+        }
+    }
+
+    fn catalog() -> Vec<CatalogProvider> {
+        let model = |id: &str, variants: &[&str]| CatalogModel {
+            id: id.to_owned(),
+            provider_model_id: None,
+            name: None,
+            variants: variants.iter().map(|&variant| variant.to_owned()).collect(),
+        };
+        vec![CatalogProvider {
+            id: "perf".to_owned(),
+            name: None,
+            models: vec![
+                model("stream", &["low", "high"]),
+                model("unicode", &["low", "high"]),
+                model("plain", &[]),
+            ],
+        }]
+    }
+
+    fn agent(name: &str, model: Option<ModelChoice>) -> AgentEntry {
+        AgentEntry {
+            name: name.to_owned(),
+            display_name: None,
+            mode: Some(AgentMode::Primary),
+            hidden: false,
+            model,
+            color: None,
+        }
+    }
+
+    fn default_selection() -> Selection {
+        Selection {
+            agent_name: Some("build".to_owned()),
+            model: Some(choice("perf", "stream", Some("high"))),
+        }
+    }
+
+    #[test]
+    fn the_record_model_and_agent_replace_the_default() {
+        let agents = [agent("build", None), agent("plan", None)];
+        let recorded = choice("perf", "unicode", Some("low"));
+        let selection = resolve_session_selection(
+            &default_selection(),
+            SessionRecordChoice {
+                model: Some(&recorded),
+                agent: Some("plan"),
+            },
+            &agents,
+            &catalog(),
+            &SelectionDefaults::default(),
+        );
+        assert_eq!(selection.agent_name.as_deref(), Some("plan"));
+        assert_eq!(selection.model, Some(recorded));
+    }
+
+    #[test]
+    fn a_model_or_agent_the_catalog_lacks_keeps_the_default() {
+        let agents = [agent("build", None)];
+        let missing = choice("perf", "retired", None);
+        let selection = resolve_session_selection(
+            &default_selection(),
+            SessionRecordChoice {
+                model: Some(&missing),
+                agent: Some("removed"),
+            },
+            &agents,
+            &catalog(),
+            &SelectionDefaults::default(),
+        );
+        assert_eq!(selection, default_selection());
+    }
+
+    #[test]
+    fn an_unoffered_effort_falls_back_in_inheritance_order() {
+        let recorded = choice("perf", "unicode", Some("default"));
+        let record = SessionRecordChoice {
+            model: Some(&recorded),
+            agent: Some("build"),
+        };
+        let pinned = [agent(
+            "build",
+            Some(choice("perf", "unicode", Some("high"))),
+        )];
+        let unpinned = [agent("build", None)];
+        let configured = SelectionDefaults {
+            settings_default_model: Some("perf/unicode".to_owned()),
+            settings_default_variant: Some("low".to_owned()),
+            ..SelectionDefaults::default()
+        };
+        let variant = |agents: &[AgentEntry], defaults: &SelectionDefaults| {
+            resolve_session_selection(&default_selection(), record, agents, &catalog(), defaults)
+                .model
+                .and_then(|model| model.variant)
+        };
+        assert_eq!(
+            variant(&pinned, &configured).as_deref(),
+            Some("high"),
+            "the agent's pin"
+        );
+        assert_eq!(
+            variant(&unpinned, &configured).as_deref(),
+            Some("low"),
+            "the configured default"
+        );
+        assert_eq!(
+            variant(&unpinned, &SelectionDefaults::default()),
+            None,
+            "the model's default"
+        );
+    }
+
+    #[test]
+    fn the_default_effort_carries_over_only_for_the_same_model() {
+        let recorded = choice("perf", "stream", None);
+        let selection = resolve_session_selection(
+            &default_selection(),
+            SessionRecordChoice {
+                model: Some(&recorded),
+                agent: None,
+            },
+            &[agent("build", None)],
+            &catalog(),
+            &SelectionDefaults::default(),
+        );
+        assert_eq!(
+            selection.model,
+            Some(choice("perf", "stream", Some("high")))
+        );
+        let plain = choice("perf", "plain", Some("high"));
+        let selection = resolve_session_selection(
+            &default_selection(),
+            SessionRecordChoice {
+                model: Some(&plain),
+                agent: None,
+            },
+            &[agent("build", None)],
+            &catalog(),
+            &SelectionDefaults::default(),
+        );
+        assert_eq!(
+            selection.model,
+            Some(choice("perf", "plain", None)),
+            "no efforts offered"
+        );
     }
 }

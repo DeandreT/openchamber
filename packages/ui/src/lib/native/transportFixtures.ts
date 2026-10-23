@@ -114,6 +114,7 @@ const normalizeSession = (session: Session) => ({
   inWork: isSessionInWork(session),
   btw: isBtwSession(session),
   model: normalizeModelRef(session.model),
+  agent: session.agent || null,
 });
 
 const normalizePart = (part: Part) => {
@@ -166,6 +167,7 @@ type SessionEffect =
       archived?: number | null;
       overlay?: Overlay;
       model?: ReturnType<typeof normalizeModelRef>;
+      agent?: string;
     }
   | { type: 'deleted'; sessionId: string }
   | { type: 'status'; sessionId: string; status: string };
@@ -192,6 +194,7 @@ const sessionEffects = (frames: string, base: Session) => {
       archived: patch.time?.archived,
       overlay: patch.metadata === undefined ? undefined : overlay(patch.metadata),
       model: patch.model === undefined ? undefined : normalizeModelRef(patch.model),
+      agent: patch.agent || undefined,
     });
     return Object.keys(fields).length > 0 ? [{ type: 'patched', sessionId: sessionID, ...fields }] : [];
   };

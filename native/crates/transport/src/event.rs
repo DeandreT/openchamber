@@ -259,6 +259,9 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                 kind: facts.kind,
                 overlay: facts.overlay,
                 model: model(),
+                agent: text("agent")
+                    .filter(|agent| !agent.is_empty())
+                    .map(str::to_owned),
             })]
         }
         "session.deleted" => vec![ServerEvent::SessionDeleted { session_id }],
@@ -313,6 +316,9 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                 session_id: session_id.clone(),
                 patch: SessionPatch {
                     updated: Some(created),
+                    agent: text("agent")
+                        .filter(|agent| !agent.is_empty())
+                        .map(str::to_owned),
                     ..SessionPatch::default()
                 },
             },
