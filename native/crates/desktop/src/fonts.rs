@@ -8,23 +8,36 @@
 //! then the platform's generic family, so both clients draw text with the same
 //! face. On Linux the generic families come from fontconfig, which is slow
 //! enough to read on a thread while the application starts.
+//!
+//! The interface stack ends in `sans-serif`, which Chromium maps to its
+//! default sans-serif family, Arial, and fontconfig to Arial or a metric twin
+//! such as Liberation Sans. Text the interface face lacks a glyph for (such as
+//! `↑`) comes from that face before any per-character fallback, so it is the
+//! interface font's first fallback here too.
 
 #[cfg(target_os = "linux")]
 use std::process::Command;
 use std::thread::{self, JoinHandle};
 
 use gpui_kit::component::Theme;
-use gpui_kit::{App, SharedString};
+use gpui_kit::{App, FontFallbacks, Global, SharedString};
 
 /// Named families of the interface stack after the macOS-only keywords.
 const UI_FAMILIES: &[&str] = &["Segoe UI"];
 /// Named families of the code stack after `ui-monospace`.
 const MONO_FAMILIES: &[&str] = &["SFMono-Regular", "Menlo", "Cascadia Mono", "Segoe UI Mono"];
+/// Chromium's default `sans-serif` family, and the families Skia accepts in
+/// its place when fontconfig substitutes one.
+#[cfg(target_os = "linux")]
+const SANS_SERIF_FAMILY: &str = "Arial";
+#[cfg(target_os = "linux")]
+const SANS_SERIF_EQUIVALENTS: &[&str] = &["Arial", "Liberation Sans", "Arimo", "Albany AMT"];
 
-/// The platform's `system-ui` and `monospace` families.
+/// The platform's `system-ui`, `sans-serif` and `monospace` families.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GenericFamilies {
     system_ui: Option<String>,
+    sans_serif: Option<String>,
     monospace: Option<String>,
 }
 
@@ -37,6 +50,8 @@ pub fn spawn_generic_lookup() -> JoinHandle<GenericFamilies> {
 fn generic_families() -> GenericFamilies {
     GenericFamilies {
         system_ui: fontconfig_family("system-ui").or_else(|| fontconfig_family("sans-serif")),
+        sans_serif: fontconfig_family(SANS_SERIF_FAMILY)
+            .filter(|family| SANS_SERIF_EQUIVALENTS.contains(&family.as_str())),
         monospace: fontconfig_family("monospace"),
     }
 }
@@ -45,6 +60,7 @@ fn generic_families() -> GenericFamilies {
 fn generic_families() -> GenericFamilies {
     GenericFamilies {
         system_ui: Some("Segoe UI".to_owned()),
+        sans_serif: Some("Arial".to_owned()),
         monospace: Some("Consolas".to_owned()),
     }
 }
@@ -53,6 +69,7 @@ fn generic_families() -> GenericFamilies {
 fn generic_families() -> GenericFamilies {
     GenericFamilies {
         system_ui: Some(".SystemUIFont".to_owned()),
+        sans_serif: Some("Helvetica".to_owned()),
         monospace: Some("Menlo".to_owned()),
     }
 }
@@ -76,6 +93,23 @@ fn fontconfig_family(pattern: &str) -> Option<String> {
 pub struct FontFamilies {
     pub ui: SharedString,
     pub mono: SharedString,
+}
+
+/// The interface font's fallbacks: the stack's `sans-serif` family when it
+/// differs from the interface family.
+#[derive(Clone, Debug, Default)]
+pub struct UiFontFallbacks(pub Option<FontFallbacks>);
+
+impl Global for UiFontFallbacks {}
+
+/// The `sans-serif` family as the interface font's fallback, unless it is
+/// the interface family itself.
+pub fn ui_fallbacks(generic: &GenericFamilies, ui: &SharedString) -> Option<FontFallbacks> {
+    generic
+        .sans_serif
+        .as_ref()
+        .filter(|family| family.as_str() != ui.as_ref())
+        .map(|family| FontFallbacks::from_fonts(vec![family.clone()]))
 }
 
 /// Resolves both stacks against the installed fonts. A stack with nothing
@@ -117,7 +151,9 @@ pub fn apply(generic: &GenericFamilies, cx: &mut App) {
         },
         &fallback,
     );
-    tracing::info!(ui = %families.ui, mono = %families.mono, "fonts selected");
+    let fallbacks = ui_fallbacks(generic, &families.ui);
+    tracing::info!(ui = %families.ui, mono = %families.mono, ?fallbacks, "fonts selected");
+    cx.set_global(UiFontFallbacks(fallbacks));
     Theme::update(cx, |theme| {
         theme.font_family = families.ui.clone();
         theme.mono_font_family = families.mono.clone();
@@ -132,6 +168,7 @@ mod tests {
     fn named_families_win_over_generic_ones_only_when_installed() {
         let generic = GenericFamilies {
             system_ui: Some("Noto Sans".to_owned()),
+            sans_serif: Some("Liberation Sans".to_owned()),
             monospace: Some("Noto Sans Mono".to_owned()),
         };
         let fallback = FontFamilies {
@@ -154,5 +191,21 @@ mod tests {
         );
         let bare = resolve(&GenericFamilies::default(), |_| false, &fallback);
         assert_eq!(bare, fallback);
+    }
+
+    #[test]
+    fn the_sans_serif_family_falls_back_only_when_it_differs() {
+        let generic = GenericFamilies {
+            system_ui: Some("Noto Sans".to_owned()),
+            sans_serif: Some("Liberation Sans".to_owned()),
+            monospace: None,
+        };
+        assert_eq!(
+            ui_fallbacks(&generic, &"Noto Sans".into())
+                .map(|fallbacks| fallbacks.fallback_list().to_vec()),
+            Some(vec!["Liberation Sans".to_owned()])
+        );
+        assert!(ui_fallbacks(&generic, &"Liberation Sans".into()).is_none());
+        assert!(ui_fallbacks(&GenericFamilies::default(), &"Noto Sans".into()).is_none());
     }
 }

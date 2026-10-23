@@ -12,6 +12,7 @@ use crate::activation::on_activate;
 use crate::baseline::CssTextExt;
 use crate::chrome::{self, ButtonTone, CONTROL_RADIUS, IconButton, TITLE_ROW_HEIGHT, glyph};
 use crate::diagnostics;
+use crate::fonts;
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
 use crate::theme::Palette;
@@ -75,6 +76,14 @@ impl Render for Workspace {
             .id("workspace")
             .role(Role::Group)
             .accessibility_id("workspace")
+            // Glyphs the interface face lacks come from the stack's
+            // `sans-serif` family first, as in Chromium.
+            .map(|mut this| {
+                this.text_style().font_fallbacks = cx
+                    .try_global::<fonts::UiFontFallbacks>()
+                    .and_then(|fallbacks| fallbacks.0.clone());
+                this
+            })
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
             .on_action(cx.listener(|this, _: &SelectNextSession, window, cx| {
