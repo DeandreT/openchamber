@@ -132,11 +132,26 @@ const handlers = {
     }
     return { rects }
   },
-  async click({ selector }) {
-    const rect = await evaluate(rectOf(selector))
-    if (!rect) throw new Error(`no element for ${selector}`)
-    const x = rect[0] + rect[2] / 2
-    const y = rect[1] + rect[3] / 2
+  /**
+   * Clicks the centre of `selector`. With `within`, the element under that
+   * point must be inside `within` before the press: a list that is still
+   * settling can move another row under a centre read a moment earlier.
+   */
+  async click({ selector, within, timeoutMs = 5_000 }) {
+    const deadline = Date.now() + timeoutMs
+    let x
+    let y
+    for (;;) {
+      const rect = await evaluate(rectOf(selector))
+      if (!rect) throw new Error(`no element for ${selector}`)
+      x = rect[0] + rect[2] / 2
+      y = rect[1] + rect[3] / 2
+      if (!within) break
+      const hit = await evaluate(`!!document.elementFromPoint(${x}, ${y})?.closest(${JSON.stringify(within)})`)
+      if (hit) break
+      if (Date.now() > deadline) throw new Error(`the centre of ${selector} stays outside ${within}`)
+      await wait(100)
+    }
     await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y })
     await client.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 })
     await client.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 })

@@ -89,7 +89,8 @@ class ElectronClient:
         return self._call("targets", specs=specs)["rects"]
 
     def click(self, row_key: str) -> None:
-        self._call("click", selector=f'[data-sidebar-row-key="{row_key}"] [data-session-row], [data-sidebar-row-key="{row_key}"] button')
+        row = f'[data-sidebar-row-key="{row_key}"]'
+        self._call("click", selector=f"{row} [data-session-row], {row} button", within=row)
 
     def key(self, name: str) -> None:
         codes = {"Return": ("Enter", "Enter", 13), "Escape": ("Escape", "Escape", 27), "Down": ("ArrowDown", "ArrowDown", 40), "Up": ("ArrowUp", "ArrowUp", 38)}
