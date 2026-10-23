@@ -16,6 +16,7 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `credential.rs` | The credential a client sends; its `Debug` output is redacted. |
 | `client.rs` | `ServerClient`: identity probe, password login, session pages, message pages, whole messages, running status, settings, Chats roots, projects and worktrees. |
 | `catalog.rs` | The composer's catalogs in one directory: agents, the flat model catalog with OpenCode's default model, folded config defaults, the skill count and the connected MCP count. |
+| `project.rs` | A directory's Git status (`GET /api/git/status`) and a project's configured actions (`GET /api/projects/:projectId/config`, the path-derived ID). |
 | `public_asset.rs` | `PublicAssetClient`: public assets the web client loads from third-party hosts, such as models.dev's provider logos. |
 | `wire.rs` | Serde shapes of the fields the client reads. Private. |
 | `projection.rs` | Wire records to core records, mirroring `packages/ui/src/lib/opencode/projection.ts`. Private. |

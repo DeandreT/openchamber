@@ -21,6 +21,7 @@ checkbox-blank
 checkbox-circle
 circle
 close
+code
 command
 compass-3
 donut-chart
@@ -28,6 +29,8 @@ equalizer-2
 error-warning
 eye
 file-edit
+file-text
+flask
 folder
 folder-add
 fullscreen
@@ -35,6 +38,7 @@ fullscreen-exit
 git-branch
 git-pull-request
 global
+hammer
 history
 information
 layout-column
@@ -49,10 +53,14 @@ node-tree
 openchamber
 pencil-ai
 picture-in-picture-2
+play
 pushpin
 robot
+robot-2
+rocket
 route
 scales-3
+scan-2
 search
 search-eye
 send-plane-2
@@ -67,3 +75,4 @@ survey
 target
 terminal
 terminal-box
+tools

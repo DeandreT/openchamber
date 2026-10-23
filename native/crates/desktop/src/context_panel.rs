@@ -32,21 +32,21 @@ const CARD_RADIUS: f32 = 12.0;
 const RAIL_BUTTON: f32 = 28.0;
 const RAIL_GLYPH: f32 = 18.0;
 /// `text-xs` of the design system, in rems of the 16 px root.
-const XS_SIZE: f32 = 0.75;
-const XS_LINE: f32 = 1.0;
+pub(crate) const XS_SIZE: f32 = 0.75;
+pub(crate) const XS_LINE: f32 = 1.0;
 /// A row's 13 px text, in rems of the 16 px root, on the base `leading-normal`
 /// line of 1.5 times its size.
-const ROW_SIZE: f32 = 0.8125;
-const ROW_LINE: f32 = 1.218_75;
+pub(crate) const ROW_SIZE: f32 = 0.8125;
+pub(crate) const ROW_LINE: f32 = 1.218_75;
 /// The compacted caption's `text-[11px] leading-4`.
 const CAPTION_SIZE: f32 = 0.6875;
 const CAPTION_LINE: f32 = 1.0;
 /// The fill shown after a compaction, until a response reports tokens.
 const UNKNOWN_PERCENT: &str = "\u{2014}";
 /// Space above every section after the first (`mt-5`).
-const SECTION_GAP: f32 = 20.0;
+pub(crate) const SECTION_GAP: f32 = 20.0;
 const HEADING_HEIGHT: f32 = 24.0;
-const ROW_HEIGHT: f32 = 28.0;
+pub(crate) const ROW_HEIGHT: f32 = 28.0;
 
 /// The rail's surfaces in their default order: ID, glyph and label key.
 const RAIL_SURFACES: &[(&str, &str, &str)] = &[
@@ -111,6 +111,7 @@ impl Workspace {
                             ),
                     )
                     .children(self.render_context_usage(palette, direction, cx))
+                    .children(self.render_project_section(palette, direction, cx))
                     .children(self.render_turn_stats(palette, direction, cx))
                     .children(self.render_context_sources(palette, direction, cx))
                     .child(
@@ -557,5 +558,59 @@ pub(crate) fn work_status_row(
                 .when_some(value_color, |this, color| this.text_color(color))
                 .child(value),
         )
+        .into_any_element()
+}
+
+/// One value at a row's end, in its own tone or the row's muted text.
+pub(crate) struct RowValue {
+    pub text: SharedString,
+    pub color: Option<gpui_kit::Hsla>,
+}
+
+/// A readout with a leading glyph (`WorkStatusRow` with `icon`).
+pub(crate) struct IconRow {
+    pub icon: &'static str,
+    pub label: SharedString,
+    pub values: Vec<RowValue>,
+}
+
+/// A 28 px row: its 16 px glyph, a label that truncates before the values,
+/// and the values `gap-1.5` apart, all muted unless toned.
+pub(crate) fn icon_row(
+    row: IconRow,
+    palette: &Palette,
+    direction: Direction,
+    cx: &Context<Workspace>,
+) -> AnyElement {
+    let values = (!row.values.is_empty()).then(|| {
+        div()
+            .flex_shrink_0()
+            .flex_row_from(direction)
+            .items_center()
+            .gap(px(6.0))
+            .children(row.values.into_iter().map(|value| {
+                div()
+                    .css_text(ROW_SIZE, ROW_LINE, cx)
+                    .when_some(value.color, |this, color| this.text_color(color))
+                    .child(value.text)
+            }))
+    });
+    div()
+        .h(px(ROW_HEIGHT))
+        .px(px(4.0))
+        .flex_row_from(direction)
+        .items_center()
+        .gap(px(8.0))
+        .text_color(palette.muted_foreground)
+        .child(glyph(row.icon, 16.0, palette.muted_foreground))
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .css_text(ROW_SIZE, ROW_LINE, cx)
+                .child(row.label),
+        )
+        .children(values)
         .into_any_element()
 }

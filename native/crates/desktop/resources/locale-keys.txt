@@ -33,6 +33,11 @@ chat.promptNavigator.aria
 chat.scrollToBottom.aria
 chat.workStatus.action.openContext
 chat.workStatus.ariaLabel
+chat.workStatus.attention.bisect
+chat.workStatus.attention.cherryPick
+chat.workStatus.attention.merge
+chat.workStatus.attention.rebase
+chat.workStatus.attention.revert
 chat.workStatus.breakdown.mcp
 chat.workStatus.breakdown.mcpCountPlural
 chat.workStatus.breakdown.mcpCountSingle
@@ -40,7 +45,10 @@ chat.workStatus.breakdown.skillCountPlural
 chat.workStatus.breakdown.skillCountSingle
 chat.workStatus.breakdown.skills
 chat.workStatus.context.label
+chat.workStatus.git.changedFilePlural
+chat.workStatus.git.changedFileSingle
 chat.workStatus.section.contextBreakdown
+chat.workStatus.section.project
 chat.workStatus.section.session
 chat.workStatus.section.telemetry
 chat.workStatus.sections.open
@@ -94,7 +102,9 @@ onboarding.desktopRecovery.incompatibleServer.description
 onboarding.desktopRecovery.remoteUnreachable.description
 onboarding.remoteConnection.probe.authMessage
 onboarding.remoteConnection.probe.incompatibleMessage
+openInApp.actions.openInAria
 opencodeCompatibility.reconnecting
+projectActions.actions.autoDiscover
 sessionAuth.error.incorrectPassword
 sessions.sidebar.activity.chatsEmpty
 sessions.sidebar.activity.chatsTitle

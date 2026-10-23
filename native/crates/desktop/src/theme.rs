@@ -89,6 +89,7 @@ pub struct Palette {
     pub status_error_foreground: Hsla,
     pub status_success: Hsla,
     pub status_warning: Hsla,
+    pub status_warning_background: Hsla,
     pub status_info: Hsla,
     pub cursor: Hsla,
     /// `syntax.base.*` in `AGENT_SYNTAX_ROLES` order.
@@ -160,6 +161,7 @@ impl Palette {
             status_error_foreground: color("status.errorForeground"),
             status_success: color("status.success"),
             status_warning: color("status.warning"),
+            status_warning_background: color("status.warningBackground"),
             status_info: color("status.info"),
             cursor: color("interactive.cursor"),
             agent_syntax: AGENT_SYNTAX_ROLES.map(|role| color(&format!("syntax.base.{role}"))),

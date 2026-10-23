@@ -43,6 +43,7 @@ use crate::composer_view::ComposerSlot;
 use crate::connection::{Connection, ConnectionFailure};
 use crate::diagnostics::{self, Marker};
 use crate::locale;
+use crate::project_section::ProjectReadouts;
 use crate::provider_logos::ProviderLogos;
 use crate::send_catalog::SendCatalog;
 use crate::sidebar_item::SidebarItem;
@@ -136,6 +137,7 @@ pub struct Workspace {
     /// The composer's catalogs and defaults; empty for synthetic data.
     pub(crate) send_catalog: SendCatalog,
     pub(crate) provider_logos: ProviderLogos,
+    pub(crate) project_readouts: ProjectReadouts,
     /// Set while the new window's content is held at its requested size.
     pub(crate) initial_size: Option<InitialSize>,
     /// The docked composer's slot, measured while painting.
@@ -208,6 +210,7 @@ impl Workspace {
             connection,
             send_catalog: SendCatalog::default(),
             provider_logos: ProviderLogos::default(),
+            project_readouts: ProjectReadouts::default(),
             initial_size: None,
             composer_slot: Rc::default(),
             sidebar_providers: Vec::new(),
