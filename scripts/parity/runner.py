@@ -33,11 +33,14 @@ import compare  # noqa: E402
 from electron_adapter import ElectronClient  # noqa: E402
 import native_adapter  # noqa: E402
 from native_adapter import NativeClient  # noqa: E402
+import virtual_display  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCENARIOS = Path(__file__).with_name("scenarios.json")
 INVENTORY = Path(__file__).with_name("inventory.json")
 ISOLATED_SERVER = REPO_ROOT / "scripts" / "perf" / "isolated-server.mjs"
+FIXTURE_PROVIDER = REPO_ROOT / "scripts" / "perf" / "fixture-provider.mjs"
+THEMES = REPO_ROOT / "native" / "crates" / "desktop" / "resources" / "themes.json"
 SEED_SESSION = REPO_ROOT / "scripts" / "perf" / "seed-long-session.mjs"
 DEFAULT_ELECTRON = REPO_ROOT / "packages" / "electron" / "dist" / "linux-unpacked" / "openchamber"
 DEFAULT_NATIVE = REPO_ROOT / "native" / "target" / "release" / "openchamber-native"
@@ -103,6 +106,49 @@ class IsolatedServer:
         self.log.close()
 
 
+class FixtureProvider:
+    """The fixture model provider for a client that runs its own server, with
+    the OpenCode configuration the isolated server gives its OpenCode."""
+
+    def __init__(self, root: Path):
+        self.port = free_port()
+        self.log = open(root / "fixture.log", "w")
+        env = {key: os.environ[key] for key in ("PATH", "LANG") if key in os.environ}
+        self.process = subprocess.Popen(
+            ["node", str(FIXTURE_PROVIDER), str(self.port)],
+            cwd=REPO_ROOT, env=env, stdout=self.log, stderr=subprocess.STDOUT, start_new_session=True,
+        )
+        script = (
+            f"import {{ isolatedOpencodeConfig }} from {json.dumps(ISOLATED_SERVER.as_uri())};"
+            f"console.log(JSON.stringify(isolatedOpencodeConfig({self.port})))"
+        )
+        self.opencode_config = subprocess.run(
+            ["node", "--input-type=module", "-e", script], cwd=REPO_ROOT, env=env,
+            check=True, capture_output=True, text=True,
+        ).stdout.strip()
+
+    def wait_ready(self, timeout_s: float) -> None:
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if self.process.poll() is not None:
+                raise RuntimeError(f"the fixture provider exited; see {self.log.name}")
+            try:
+                with socket.create_connection(("127.0.0.1", self.port), timeout=1):
+                    return
+            except OSError:
+                time.sleep(0.2)
+        raise TimeoutError("the fixture provider did not start")
+
+    def stop(self) -> None:
+        try:
+            os.killpg(self.process.pid, 15)
+            self.process.wait(timeout=10)
+        except (ProcessLookupError, subprocess.TimeoutExpired):
+            os.killpg(self.process.pid, 9)
+            self.process.wait(timeout=10)
+        self.log.close()
+
+
 def seed(args: argparse.Namespace) -> int:
     root = args.root.resolve()
     if (root / "seed").exists() and not args.force:
@@ -128,13 +174,17 @@ def seed(args: argparse.Namespace) -> int:
 
 
 def copy_seed(root: Path, target: Path, theme: str) -> Path:
-    """An independent copy of the seed with the theme pinned."""
+    """An independent copy of the seed with the theme pinned. The web reads
+    `useSystemTheme: false` together with the derived `themeVariant`, so the
+    variant and that variant's theme are pinned too."""
     state = target / "state"
     shutil.copytree(root / "seed", state, symlinks=True)
     preferences = state / "oc-data" / "preferences.json"
     document = json.loads(preferences.read_text()) if preferences.exists() else {"version": 1, "fields": {}}
     now = int(time.time() * 1000)
-    for key, value in (("useSystemTheme", False), ("themeId", theme)):
+    variant = theme_variant(theme)
+    pinned = (("useSystemTheme", False), ("themeId", theme), ("themeVariant", variant), (f"{variant}ThemeId", theme))
+    for key, value in pinned:
         document["fields"][key] = {"value": value, "updatedAt": now}
     preferences.write_text(json.dumps(document, indent=2))
     # The login-shell probe runs zsh -il; an empty rc keeps it non-interactive.
@@ -143,7 +193,15 @@ def copy_seed(root: Path, target: Path, theme: str) -> Path:
     return state
 
 
-def electron_env(state: Path) -> dict[str, str]:
+def theme_variant(theme: str) -> str:
+    """`light` or `dark`, from the exported theme catalog."""
+    for entry in json.loads(THEMES.read_text())["themes"]:
+        if entry["id"] == theme:
+            return entry["variant"]
+    raise LookupError(f"no theme {theme} in {THEMES}")
+
+
+def electron_env(state: Path, opencode_config: str) -> dict[str, str]:
     keep = ("PATH", "DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "LANG", "USER")
     env = {key: os.environ[key] for key in keep if key in os.environ}
     env.update(
@@ -156,6 +214,7 @@ def electron_env(state: Path) -> dict[str, str]:
         XDG_STATE_HOME=str(state / "xdg-state"),
         OPENCHAMBER_DATA_DIR=str(state / "oc-data"),
         OPENCHAMBER_DESKTOP_USER_DATA_DIR=str(state / "electron-user-data"),
+        OPENCODE_CONFIG_CONTENT=opencode_config,
     )
     return env
 
@@ -219,6 +278,7 @@ def run_client(kind: str, scenario: dict, work: Path, args: argparse.Namespace) 
     directory.mkdir(parents=True)
     state = copy_seed(args.root.resolve(), directory, args.theme)
     server = None
+    fixture = None
     started = time.monotonic()
     try:
         if kind == "native":
@@ -226,7 +286,9 @@ def run_client(kind: str, scenario: dict, work: Path, args: argparse.Namespace) 
             server.wait_ready(args.timeout)
             client = NativeClient(args.native_binary, native_env(server.url, args.theme), args.scale, args.width, args.height)
         else:
-            client = ElectronClient(args.electron_app, electron_env(state), args.scale, args.width, args.height)
+            fixture = FixtureProvider(directory)
+            fixture.wait_ready(args.timeout)
+            client = ElectronClient(args.electron_app, electron_env(state, fixture.opencode_config), args.scale, args.width, args.height)
         launched = client.launch()
         try:
             client.wait_ready(args.timeout, connected=True)
@@ -239,6 +301,8 @@ def run_client(kind: str, scenario: dict, work: Path, args: argparse.Namespace) 
     finally:
         if server is not None:
             server.stop()
+        if fixture is not None:
+            fixture.stop()
 
 
 def compare_rows(reference: list[dict], candidate: list[dict], unobservable: frozenset[str] = frozenset(), unobserved: list[dict] | None = None) -> list[dict]:
@@ -441,8 +505,21 @@ def main() -> int:
     runner.add_argument("--scale", type=float, default=1.0)
     runner.add_argument("--tolerance", type=int, default=0, help="largest per-channel difference ignored; reviewed noise only")
     runner.add_argument("--output", type=Path, help="report directory, outside the repository's sources")
+    runner.add_argument(
+        "--display", choices=("private", "session"), default="private",
+        help="private: a headless compositor nothing else reaches (default); session: the desktop's own display",
+    )
     args = parser.parse_args()
-    return seed(args) if args.command == "seed" else run(args)
+    if args.command == "seed":
+        return seed(args)
+    if args.display == "private" and not virtual_display.inside():
+        problem = virtual_display.available()
+        if problem:
+            print(f"no private display: {problem}; pass --display session to use the desktop's", file=sys.stderr)
+            return 1
+        command = [sys.executable, "-u", str(Path(__file__).resolve()), *sys.argv[1:]]
+        return virtual_display.run_inside(command, args.width, args.height)
+    return run(args)
 
 
 if __name__ == "__main__":

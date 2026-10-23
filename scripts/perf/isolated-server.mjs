@@ -133,6 +133,16 @@ const writeSettings = (state, project) => {
   }, null, 2))
 }
 
+/** The OpenCode configuration an isolated server runs with: the fixture
+ * provider on `fixturePort` as the default model, nothing that reaches out. */
+export const isolatedOpencodeConfig = (fixturePort) => ({
+  ...fixtureProviderConfig(fixturePort),
+  model: "perf/stream-300cps",
+  small_model: "perf/stream-1200cps",
+  autoupdate: false,
+  share: "disabled",
+})
+
 /** Isolate both Node's Windows home lookup and OpenCode's XDG paths. */
 export const isolatedServerEnv = ({ state, dist, config, opencodeBinary, inherited = process.env }) => {
   const home = join(state, "home")
@@ -186,8 +196,7 @@ export const startIsolatedServer = async ({ repo, dist, state, project, port, fi
   mkdirSync(join(state, "oc-data"), { recursive: true })
   ensureProject(project)
   writeSettings(state, project)
-  const config = { ...fixtureProviderConfig(fixturePort), model: "perf/stream-300cps", small_model: "perf/stream-1200cps", autoupdate: false, share: "disabled" }
-  const env = isolatedServerEnv({ state, dist, config, opencodeBinary })
+  const env = isolatedServerEnv({ state, dist, config: isolatedOpencodeConfig(fixturePort), opencodeBinary })
   const child = spawn(process.execPath, [join(repo, "packages/web/bin/cli.js"), "serve", "--port", String(port), "--foreground"], {
     cwd: project,
     env,
