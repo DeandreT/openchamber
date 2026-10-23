@@ -91,6 +91,34 @@ pub(crate) struct AgentMention {
 pub(crate) struct AssistantBody {
     #[serde(default)]
     pub content: Vec<AssistantItem>,
+    pub agent: Option<String>,
+    pub model: Option<AgentModel>,
+    pub finish: Option<String>,
+    /// `SessionStructuredError`; only its message is read, so a malformed
+    /// error never fails the message.
+    pub error: Option<Value>,
+    pub tokens: Option<TokenUsage>,
+}
+
+/// `TokenUsageInfo`.
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct TokenUsage {
+    #[serde(default)]
+    pub input: u64,
+    #[serde(default)]
+    pub output: u64,
+    #[serde(default)]
+    pub reasoning: u64,
+    #[serde(default)]
+    pub cache: TokenCache,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct TokenCache {
+    #[serde(default)]
+    pub read: u64,
+    #[serde(default)]
+    pub write: u64,
 }
 
 /// One item of an assistant message's ordered content.

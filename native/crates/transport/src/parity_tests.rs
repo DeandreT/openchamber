@@ -194,6 +194,19 @@ fn normalize_message(message: &Message) -> Value {
         "role": role_name(message.info.role),
         "created": message.info.created,
         "completed": message.info.completed,
+        "assistant": message.info.assistant.as_ref().map(|facts| json!({
+            "agent": facts.agent,
+            "model": facts.model.as_ref().map(normalize_model),
+            "finish": facts.outcome.finish,
+            "error": facts.outcome.error,
+            "tokens": facts.outcome.tokens.map(|tokens| json!({
+                "input": tokens.input,
+                "output": tokens.output,
+                "reasoning": tokens.reasoning,
+                "cacheRead": tokens.cache_read,
+                "cacheWrite": tokens.cache_write,
+            })),
+        })),
         "parts": parts,
     })
 }

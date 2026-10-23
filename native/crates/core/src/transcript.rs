@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 use crate::ids::{MessageId, PartId};
+use crate::send_config::ModelChoice;
 
 /// What a transcript record is.
 ///
@@ -93,6 +94,42 @@ impl Part {
     }
 }
 
+/// Tokens one assistant step used.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TokenUsage {
+    pub input: u64,
+    pub output: u64,
+    pub reasoning: u64,
+    pub cache_read: u64,
+    pub cache_write: u64,
+}
+
+impl TokenUsage {
+    /// Every counted token, as `extractTokensFromMessage` sums them when a
+    /// reading has no total.
+    pub fn total(&self) -> u64 {
+        self.input + self.output + self.reasoning + self.cache_read + self.cache_write
+    }
+}
+
+/// How an assistant step ended.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StepOutcome {
+    /// Why the step ended, such as `stop`.
+    pub finish: Option<String>,
+    /// The failure's message when the step failed.
+    pub error: Option<String>,
+    pub tokens: Option<TokenUsage>,
+}
+
+/// What an assistant message records about the step that wrote it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AssistantFacts {
+    pub agent: Option<String>,
+    pub model: Option<ModelChoice>,
+    pub outcome: StepOutcome,
+}
+
 /// Message metadata without its parts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MessageInfo {
@@ -103,6 +140,8 @@ pub struct MessageInfo {
     pub completed: Option<i64>,
     /// The one line a notice role shows, such as a switched agent's name.
     pub notice: Option<String>,
+    /// An assistant message's step facts; `None` for every other role.
+    pub assistant: Option<AssistantFacts>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -124,6 +163,15 @@ impl Message {
             .collect();
         texts.join("\n\n")
     }
+}
+
+/// An assistant row's place in its turn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TurnPosition {
+    /// Whether no assistant message follows before the next user message.
+    pub last_assistant: bool,
+    /// When the user message that opened the turn was created.
+    pub prompt_created: Option<i64>,
 }
 
 /// A live change to one transcript.
@@ -161,6 +209,7 @@ pub enum TranscriptEvent {
     MessageCompleted {
         message_id: MessageId,
         completed: i64,
+        outcome: StepOutcome,
     },
     /// A tool call moved to another state; its name and part identity stay.
     ToolTransition {
@@ -236,6 +285,30 @@ impl Transcript {
 
     pub fn row_of(&self, id: &MessageId) -> Option<usize> {
         self.row_by_id.get(id).copied()
+    }
+
+    /// Where an assistant row sits in its turn: the user message that opened
+    /// the turn and every assistant message up to the next user message, as
+    /// `MessageList.tsx` groups turns. Other roles neither open nor close a
+    /// turn. `None` for a row that is not an assistant message.
+    pub fn turn_position(&self, row: usize) -> Option<TurnPosition> {
+        if self.messages.get(row)?.info.role != Role::Assistant {
+            return None;
+        }
+        let last_assistant = self.messages[row + 1..]
+            .iter()
+            .map(|message| message.info.role)
+            .find(|role| matches!(role, Role::User | Role::Assistant))
+            != Some(Role::Assistant);
+        let prompt_created = self.messages[..row]
+            .iter()
+            .rev()
+            .find(|message| message.info.role == Role::User)
+            .map(|message| message.info.created);
+        Some(TurnPosition {
+            last_assistant,
+            prompt_created,
+        })
     }
 
     /// Increments on every observable mutation.
@@ -417,15 +490,18 @@ impl Transcript {
             TranscriptEvent::MessageCompleted {
                 message_id,
                 completed,
+                outcome,
             } => {
                 let Some(row) = self.row_of(&message_id) else {
                     return TranscriptChange::NeedsReconcile;
                 };
                 let info = &mut self.messages[row].info;
-                if info.completed == Some(completed) {
+                let facts = info.assistant.get_or_insert_default();
+                if info.completed == Some(completed) && facts.outcome == outcome {
                     return TranscriptChange::Unchanged;
                 }
                 info.completed = Some(completed);
+                facts.outcome = outcome;
                 self.touch(row);
                 TranscriptChange::Updated { row }
             }
@@ -787,9 +863,52 @@ mod tests {
                 created: 0,
                 completed: None,
                 notice: None,
+                assistant: None,
             },
             parts: vec![Part::text(format!("{id}-p0").as_str(), text)],
         }
+    }
+
+    #[test]
+    fn turns_run_from_a_prompt_to_the_next_and_skip_notices() {
+        let created = |mut message: Message, at: i64| {
+            message.info.created = at;
+            message
+        };
+        let transcript = Transcript::from_history(vec![
+            created(message("u1", Role::User, "go"), 100),
+            message("a1", Role::Assistant, "step"),
+            message("a2", Role::Assistant, "answer"),
+            message("i1", Role::Idle, ""),
+            created(message("u2", Role::User, "again"), 200),
+            message("a3", Role::Assistant, "answer"),
+            message("s1", Role::ModelSwitched, ""),
+        ]);
+        let position = |row| transcript.turn_position(row);
+        assert_eq!(
+            position(1),
+            Some(TurnPosition {
+                last_assistant: false,
+                prompt_created: Some(100)
+            })
+        );
+        assert_eq!(
+            position(2),
+            Some(TurnPosition {
+                last_assistant: true,
+                prompt_created: Some(100)
+            }),
+            "an idle record does not continue the turn"
+        );
+        assert_eq!(
+            position(5),
+            Some(TurnPosition {
+                last_assistant: true,
+                prompt_created: Some(200)
+            })
+        );
+        assert_eq!(position(0), None, "user rows have no turn position");
+        assert_eq!(position(3), None);
     }
 
     #[test]
@@ -865,6 +984,7 @@ mod tests {
                 created: 0,
                 completed: None,
                 notice: None,
+                assistant: None,
             },
             parts: vec![Part {
                 id: PartId::from("call_1"),
@@ -893,6 +1013,7 @@ mod tests {
         let completed = transcript.apply(TranscriptEvent::MessageCompleted {
             message_id: MessageId::from("m1"),
             completed: 9,
+            outcome: StepOutcome::default(),
         });
         assert_eq!(completed, TranscriptChange::Updated { row: 0 });
         assert_eq!(
@@ -912,6 +1033,7 @@ mod tests {
                 created: 0,
                 completed: Some(1),
                 notice: None,
+                assistant: None,
             },
             parts: vec![Part {
                 id: PartId::from("call_1"),
@@ -950,6 +1072,7 @@ mod tests {
                 created: 0,
                 completed: None,
                 notice: None,
+                assistant: None,
             },
             parts: vec![Part::text(format!("{id}:text:0"), text)],
         }
@@ -1068,6 +1191,7 @@ mod tests {
                 created: 0,
                 completed: None,
                 notice: None,
+                assistant: None,
             },
             parts: vec![tool(ToolStatus::Completed)],
         }]);

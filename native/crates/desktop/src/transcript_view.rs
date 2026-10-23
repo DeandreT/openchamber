@@ -156,9 +156,19 @@ impl Workspace {
         let Some(message) = open.transcript.message(index) else {
             return div().into_any_element();
         };
+        let direction = locale::strings(cx).direction();
         let body = match message.info.role {
             MessageRole::User => Some(user_message(message, &palette)),
-            MessageRole::Assistant => Some(assistant_message(message, &palette)),
+            MessageRole::Assistant => Some(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(assistant_message(message, &palette))
+                    .children(
+                        self.render_turn_footer(index, message, &palette, direction, window, cx),
+                    )
+                    .into_any_element(),
+            ),
             MessageRole::Compaction | MessageRole::Shell => Some(notice_message(message, &palette)),
             // `timelineRoles.ts`: plumbing, and switches the composer already shows.
             MessageRole::Synthetic

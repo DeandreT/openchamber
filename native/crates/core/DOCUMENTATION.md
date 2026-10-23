@@ -21,7 +21,10 @@ rendering asks for a projection and dispatches an action.
   `buildGroupedSessions` and `buildSidebarChatGroup`; `ordering.rs` ports
   `session-ordering.ts`; `relative_time.rs` ports the sidebar's compact ages.
 - `transcript.rs` holds one session's messages in server order and reports the
-  rows each mutation touched. User and assistant messages carry parts; every
+  rows each mutation touched. An assistant message carries its step's
+  agent, model, finish, error and token usage, and each assistant row knows
+  its turn (`turn_position`); `turn_footer.rs` formats and fits the facts a
+  finished turn shows. User and assistant messages carry parts; every
   other OpenCode record (synthetic, system, skill, shell, compaction, switched
   agent, model or location, idle) is a notice with one line of text.
 - `session_index.rs` ports the global session list of

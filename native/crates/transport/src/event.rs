@@ -10,7 +10,7 @@ use openchamber_native_core::ids::{MessageId, OpenCodeProjectId, PartId, Session
 use openchamber_native_core::session::{LiveStatus, SessionPatch, SessionRecord, SessionTime};
 use openchamber_native_core::session_index::SessionChange;
 use openchamber_native_core::transcript::{
-    MessageInfo, Part, PartContent, Role, ToolStatus, TranscriptEvent,
+    AssistantFacts, MessageInfo, Part, PartContent, Role, StepOutcome, ToolStatus, TranscriptEvent,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -208,6 +208,7 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
             created,
             completed: None,
             notice: notice.map(str::to_owned),
+            assistant: None,
         }))
     };
     let assistant = || text("assistantMessageID").map(MessageId::from);
@@ -370,6 +371,7 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                 created,
                 completed: None,
                 notice,
+                assistant: None,
             };
             let payload = data
                 .pointer("/item/payload")
@@ -423,14 +425,40 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                 created,
                 completed: None,
                 notice: None,
+                assistant: Some(AssistantFacts {
+                    agent: text("agent")
+                        .filter(|agent| !agent.is_empty())
+                        .map(str::to_owned),
+                    model: model(),
+                    outcome: StepOutcome::default(),
+                }),
             }))],
             None => Vec::new(),
         },
         "session.step.ended" | "session.step.failed" => match assistant() {
-            Some(message_id) => vec![transcript(TranscriptEvent::MessageCompleted {
-                message_id,
-                completed: created,
-            })],
+            Some(message_id) => {
+                let failed = kind == "session.step.failed";
+                let finish = text("finish")
+                    .map(str::to_owned)
+                    .or_else(|| failed.then(|| "error".to_owned()));
+                let error = data
+                    .pointer("/error/message")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                let tokens = data
+                    .get("tokens")
+                    .and_then(|tokens| wire::TokenUsage::deserialize(tokens).ok())
+                    .map(projection::token_usage);
+                vec![transcript(TranscriptEvent::MessageCompleted {
+                    message_id,
+                    completed: created,
+                    outcome: StepOutcome {
+                        finish,
+                        error,
+                        tokens,
+                    },
+                })]
+            }
             None => Vec::new(),
         },
         "session.text.started"

@@ -125,6 +125,28 @@ impl Workspace {
         if let ModelControl::Model { provider_id, .. } = self.model_control() {
             self.ensure_provider_logo(&provider_id, cx);
         }
+        // The turn footers of the selected session.
+        let mut footers: Vec<String> = Vec::new();
+        if let Some(open) = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.open_sessions.get(id))
+        {
+            for message in open.transcript.messages() {
+                if let Some(model) = message
+                    .info
+                    .assistant
+                    .as_ref()
+                    .and_then(|facts| facts.model.as_ref())
+                    && !footers.contains(&model.provider_id)
+                {
+                    footers.push(model.provider_id.clone());
+                }
+            }
+        }
+        for provider_id in &footers {
+            self.ensure_provider_logo(provider_id, cx);
+        }
     }
 
     /// Starts loading the logo of `provider_id` unless it is known.
