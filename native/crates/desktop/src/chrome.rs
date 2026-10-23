@@ -43,6 +43,25 @@ pub fn content_size(window: &Window) -> Size<Pixels> {
     }
 }
 
+/// The transcript's end gutter (`pe-8`) that holds the prompt navigation.
+pub const NAVIGATION_GUTTER: f32 = 32.0;
+
+/// `.chat-column`, `.chat-input-column` and `.chat-message-column` of
+/// `packages/ui/src/styles/typography.css`: at most 48rem wide, centered.
+pub const CHAT_COLUMN_MAX_WIDTH: f32 = 768.0;
+
+/// The chat columns' inline padding: `clamp(1rem, 2.5vw, 1.5rem)` from a
+/// 1,024 px wide viewport, `clamp(0.75rem, 2.5vw, 1rem)` below.
+pub fn chat_column_padding(window: &Window) -> Pixels {
+    let width = f32::from(content_size(window).width);
+    let preferred = width * 0.025;
+    px(if width >= 1024.0 {
+        preferred.clamp(16.0, 24.0)
+    } else {
+        preferred.clamp(12.0, 16.0)
+    })
+}
+
 /// Height of the title rows of the sidebar and the main column.
 pub const TITLE_ROW_HEIGHT: f32 = 48.0;
 /// `rounded-md` of the design system.

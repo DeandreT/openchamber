@@ -14,14 +14,15 @@ use gpui_kit::{
 use openchamber_native_core::transcript::{Message, PartContent, Role as MessageRole};
 
 use crate::activation::on_activate;
-use crate::chrome::glyph;
+use crate::chrome::{self, glyph};
 use crate::connection::ConnectionFailure;
-use crate::locale;
+use crate::locale::{self, Direction};
+use crate::logical::LogicalStyledExt;
 use crate::theme::Palette;
 use crate::workspace::{History, Workspace};
 
-/// The readable column width of the chat.
-const COLUMN_MAX_WIDTH: f32 = 768.0;
+/// Space below the last message for the docked composer and its margin.
+const COMPOSER_CLEARANCE: f32 = 132.0;
 const MARKDOWN_SIZE: f32 = 0.875;
 const META_SIZE: f32 = 0.781_25;
 
@@ -29,6 +30,7 @@ impl Workspace {
     pub(crate) fn render_transcript(
         &self,
         palette: &Palette,
+        direction: Direction,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let Some(open) = self
@@ -37,7 +39,8 @@ impl Workspace {
             .and_then(|id| self.open_sessions.get(id))
         else {
             return div()
-                .flex_1()
+                .absolute()
+                .inset_0()
                 .flex()
                 .items_center()
                 .justify_center()
@@ -60,7 +63,8 @@ impl Workspace {
                 .id("transcript-load-error")
                 .role(Role::Alert)
                 .accessibility_id("transcript-load-error")
-                .flex_1()
+                .absolute()
+                .inset_0()
                 .flex()
                 .flex_col()
                 .gap_1()
@@ -94,9 +98,9 @@ impl Workspace {
             .id("transcript")
             .role(Role::Log)
             .accessibility_id("transcript")
-            .relative()
-            .flex_1()
-            .min_h_0()
+            .absolute()
+            .inset_0()
+            .padding_end(direction, px(chrome::NAVIGATION_GUTTER))
             .child(rows)
             .when(!following, |this| {
                 this.child(
@@ -139,16 +143,19 @@ impl Workspace {
     fn render_message(
         &mut self,
         index: usize,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let palette = cx.global::<Palette>().clone();
-        let Some(message) = self
+        let Some(open) = self
             .selected
             .as_ref()
             .and_then(|id| self.open_sessions.get(id))
-            .and_then(|open| open.transcript.message(index))
         else {
+            return div().into_any_element();
+        };
+        let open_len = open.transcript.len();
+        let Some(message) = open.transcript.message(index) else {
             return div().into_any_element();
         };
         let body = match message.info.role {
@@ -164,14 +171,22 @@ impl Workspace {
             | MessageRole::AgentSwitched
             | MessageRole::ModelSwitched => return div().into_any_element(),
         };
+        // The last message clears the composer docked over the transcript.
+        let last = index + 1 == open_len;
         div()
             .id(ElementId::Name(message.info.id.as_str().to_owned().into()))
             .w_full()
-            .px_4()
-            .pt_4()
+            .pt(px(16.0))
+            .when(last, |this| this.pb(px(COMPOSER_CLEARANCE)))
             .flex()
             .justify_center()
-            .child(div().w_full().max_w(px(COLUMN_MAX_WIDTH)).child(body))
+            .child(
+                div()
+                    .w_full()
+                    .max_w(px(chrome::CHAT_COLUMN_MAX_WIDTH))
+                    .px(chrome::chat_column_padding(window))
+                    .child(body),
+            )
             .into_any_element()
     }
 }

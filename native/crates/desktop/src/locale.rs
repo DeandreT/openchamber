@@ -148,7 +148,79 @@ fn normalize(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+    use std::fs;
+    use std::path::Path;
+
     use super::*;
+
+    /// String literals in `source`, without escape handling beyond `\"`.
+    fn string_literals(source: &str) -> Vec<String> {
+        let mut literals = Vec::new();
+        let mut chars = source.chars();
+        while let Some(character) = chars.next() {
+            if character != '"' {
+                continue;
+            }
+            let mut literal = String::new();
+            while let Some(next) = chars.next() {
+                match next {
+                    '\\' => {
+                        if let Some(escaped) = chars.next() {
+                            literal.push(escaped);
+                        }
+                    }
+                    '"' => break,
+                    other => literal.push(other),
+                }
+            }
+            literals.push(literal);
+        }
+        literals
+    }
+
+    /// Whether a literal has the shape of a dictionary key in one of the
+    /// dictionaries' namespaces, such as `sessions.sidebar.work.title`. Theme
+    /// tokens share the shape but not the namespaces.
+    fn looks_like_key(literal: &str, namespaces: &HashSet<&str>) -> bool {
+        let segments: Vec<&str> = literal.split('.').collect();
+        segments.len() >= 3
+            && namespaces.contains(segments[0])
+            && segments.iter().all(|segment| {
+                !segment.is_empty() && segment.chars().all(|c| c.is_ascii_alphanumeric())
+            })
+    }
+
+    #[test]
+    fn every_key_the_views_name_is_exported() {
+        let exported: HashSet<&str> = include_str!("../resources/locale-keys.txt")
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty() && !line.starts_with('#'))
+            .collect();
+        let namespaces: HashSet<&str> = exported
+            .iter()
+            .filter_map(|key| key.split('.').next())
+            .collect();
+        let sources = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut missing = Vec::new();
+        for entry in fs::read_dir(&sources).expect("the crate has sources") {
+            let path = entry.expect("source entries are readable").path();
+            if path.extension().is_none_or(|extension| extension != "rs") {
+                continue;
+            }
+            let source = fs::read_to_string(&path).expect("sources are UTF-8");
+            for literal in string_literals(&source) {
+                if looks_like_key(&literal, &namespaces) && !exported.contains(literal.as_str()) {
+                    missing.push(format!("{}: {literal}", path.display()));
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "add these keys to resources/locale-keys.txt and run `bun run native:resources`: {missing:#?}"
+        );
+    }
 
     #[test]
     fn normalizes_environment_locales() {

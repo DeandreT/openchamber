@@ -17,8 +17,6 @@ use crate::logical::LogicalStyledExt;
 use crate::theme::Palette;
 use crate::workspace::Workspace;
 
-/// `chat-input-column`'s inline padding.
-const COLUMN_PADDING: f32 = 24.0;
 const CHIP_HEIGHT: f32 = 24.0;
 /// `text-3xl`, `typography-ui-label` and `typography-meta`, in rems.
 const TITLE_SIZE: f32 = 1.875;
@@ -51,6 +49,7 @@ impl Workspace {
         let strings = locale::strings(cx).clone();
         // `pb-[6vh]`: six percent of the content's height.
         let lift = chrome::content_size(window).height * 0.06;
+        let column_padding = chrome::chat_column_padding(window);
         let project_chooser = on_activate(
             div()
                 .id("choose-project")
@@ -155,7 +154,7 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .child(
-                        div().px(px(COLUMN_PADDING)).mb(px(28.0)).child(
+                        div().px(column_padding).mb(px(28.0)).child(
                             div()
                                 .id("startup-title")
                                 .role(Role::Heading)
@@ -171,7 +170,7 @@ impl Workspace {
                     )
                     .child(
                         div()
-                            .px(px(COLUMN_PADDING))
+                            .px(column_padding)
                             .flex()
                             .flex_col()
                             .child(
@@ -187,7 +186,7 @@ impl Workspace {
                     .child(
                         div()
                             .mt(px(16.0))
-                            .px(px(COLUMN_PADDING))
+                            .px(column_padding)
                             .flex_row_from(direction)
                             .flex_wrap()
                             .items_center()
