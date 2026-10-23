@@ -201,17 +201,26 @@ def theme_variant(theme: str) -> str:
     raise LookupError(f"no theme {theme} in {THEMES}")
 
 
+def state_dirs(state: Path) -> dict[str, str]:
+    """The home and XDG directories of a client's state copy. Both clients
+    get them, so lookups under them (icon themes, default applications) see
+    the same files."""
+    return {
+        "HOME": str(state / "home"),
+        "XDG_CONFIG_HOME": str(state / "config"),
+        "XDG_DATA_HOME": str(state / "data"),
+        "XDG_CACHE_HOME": str(state / "cache"),
+        "XDG_STATE_HOME": str(state / "xdg-state"),
+    }
+
+
 def electron_env(state: Path, opencode_config: str) -> dict[str, str]:
     keep = ("PATH", "DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "LANG", "USER")
     env = {key: os.environ[key] for key in keep if key in os.environ}
+    env.update(state_dirs(state))
     env.update(
-        HOME=str(state / "home"),
         SHELL="/bin/zsh",
         LANG="en_US.UTF-8",
-        XDG_CONFIG_HOME=str(state / "config"),
-        XDG_DATA_HOME=str(state / "data"),
-        XDG_CACHE_HOME=str(state / "cache"),
-        XDG_STATE_HOME=str(state / "xdg-state"),
         OPENCHAMBER_DATA_DIR=str(state / "oc-data"),
         OPENCHAMBER_DESKTOP_USER_DATA_DIR=str(state / "electron-user-data"),
         OPENCODE_CONFIG_CONTENT=opencode_config,
@@ -219,8 +228,9 @@ def electron_env(state: Path, opencode_config: str) -> dict[str, str]:
     return env
 
 
-def native_env(server_url: str, theme: str) -> dict[str, str]:
+def native_env(state: Path, server_url: str, theme: str) -> dict[str, str]:
     env = {key: value for key, value in os.environ.items() if not key.startswith(("OPENCHAMBER_", "OPENCODE_"))}
+    env.update(state_dirs(state))
     env.update(
         OPENCHAMBER_NATIVE_SERVER=server_url,
         OPENCHAMBER_NATIVE_THEME=theme,
@@ -309,7 +319,7 @@ def run_client(kind: str, scenario: dict, work: Path, args: argparse.Namespace) 
         if kind == "native":
             server = IsolatedServer(directory, args)
             server.wait_ready(args.timeout)
-            client = NativeClient(args.native_binary, native_env(server.url, args.theme), args.scale, args.width, args.height)
+            client = NativeClient(args.native_binary, native_env(state, server.url, args.theme), args.scale, args.width, args.height)
         else:
             fixture = FixtureProvider(directory)
             fixture.wait_ready(args.timeout)
