@@ -239,6 +239,29 @@ def resolve_row(rows: list[dict], target: dict) -> str:
     return matches[0]
 
 
+# A capture waits until the client's content held still this long.
+SETTLE_QUIET_S = 0.75
+SETTLE_TIMEOUT_S = 15.0
+
+
+def settle(client) -> bool:
+    """Whether the client's fingerprint held still for the quiet period
+    before the timeout. Content still loading (a panel filling in after the
+    transcript) would otherwise be captured midway."""
+    deadline = time.monotonic() + SETTLE_TIMEOUT_S
+    previous = None
+    since = time.monotonic()
+    while time.monotonic() < deadline:
+        current = client.fingerprint()
+        if current != previous:
+            previous = current
+            since = time.monotonic()
+        elif time.monotonic() - since >= SETTLE_QUIET_S:
+            return True
+        time.sleep(0.1)
+    return False
+
+
 def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], directory: Path, args: argparse.Namespace) -> dict:
     """Runs the steps and returns the evidence of every checkpoint."""
     checkpoints: dict[str, dict] = {}
@@ -259,9 +282,11 @@ def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], dire
         elif "capture" in step:
             name = step["capture"]
             image = directory / f"{name}.png"
+            settled = settle(client)
             client.screenshot(image)
             checkpoints[name] = {
                 "image": str(image),
+                "settled": settled,
                 "rows": client.rows(),
                 "targets": client.targets({target: targets[target][kind] for target in step.get("targets", [])}),
                 "waits": list(waits),
@@ -446,11 +471,15 @@ def run_scenarios(scenarios: list[dict], wanted: set[str] | None, output: Path, 
                 }
             for name, comparison in comparisons.items():
                 if not comparison.get("missing"):
-                    comparison["unmetWaits"] = [wait for wait in result["native"]["checkpoints"][name].get("waits", []) if not wait["met"]]
+                    candidate = result["native"]["checkpoints"][name]
+                    comparison["unmetWaits"] = [wait for wait in candidate.get("waits", []) if not wait["met"]]
+                    comparison["nativeUnsettled"] = not candidate.get("settled", True)
             result["comparisons"] = comparisons
+            # A reference that never reached its state, or never held still,
+            # is no reference.
             reference_unmet = any(
                 not wait["met"] for checkpoint in result["electron"]["checkpoints"].values() for wait in checkpoint.get("waits", [])
-            )
+            ) or any(not checkpoint.get("settled", True) for checkpoint in result["electron"]["checkpoints"].values())
             passed = all(
                 not comparison.get("missing")
                 and comparison["image"]["sizeMatches"]
@@ -458,6 +487,7 @@ def run_scenarios(scenarios: list[dict], wanted: set[str] | None, output: Path, 
                 and not comparison["rows"]
                 and not comparison["geometry"]
                 and not comparison["unmetWaits"]
+                and not comparison["nativeUnsettled"]
                 for comparison in comparisons.values()
             )
             # Checks the candidate's platform cannot observe leave a clean
@@ -478,7 +508,8 @@ def run_scenarios(scenarios: list[dict], wanted: set[str] | None, output: Path, 
             print(f"  {name}: {image['differingPixels']} differing pixels ({image['differingShare']:.1%}), "
                   f"{len(comparison['rows'])} row differences, {len(comparison['geometry'])} geometry differences, "
                   f"{len(comparison['unobserved'])} checks not observable natively, "
-                  f"{len(comparison['unmetWaits'])} native waits not met")
+                  f"{len(comparison['unmetWaits'])} native waits not met"
+                  + (", native never settled" if comparison["nativeUnsettled"] else ""))
         for kind in ("electron", "native"):
             if "error" in result[kind]:
                 print(f"  {kind}: {result[kind]['error']}")

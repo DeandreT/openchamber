@@ -10,6 +10,15 @@ from pathlib import Path
 BRIDGE = Path(__file__).with_name("electron_bridge.mjs")
 
 
+FINGERPRINT = """(() => JSON.stringify([
+  document.body.innerText.length,
+  ...[...document.querySelectorAll('aside, section, [data-sidebar-row-key], [data-message-id]')].slice(0, 400).map((element) => {
+    const rect = element.getBoundingClientRect()
+    return [Math.round(rect.x), Math.round(rect.y), Math.round(rect.width), Math.round(rect.height)]
+  }),
+]))()"""
+
+
 class ElectronClient:
     """One packaged Electron process under test, driven over CDP."""
 
@@ -70,6 +79,11 @@ class ElectronClient:
 
     def rows(self) -> list[dict]:
         return self._call("rows")["rows"]
+
+    def fingerprint(self) -> str:
+        """What a settled page holds still: its text and the boxes of its
+        panels, sections, rows and messages."""
+        return self._call("observe", expression=FINGERPRINT)["value"]
 
     def wait_for(self, condition: dict, timeout_s: float) -> bool:
         """Whether the page expression ``{"expression": ...}`` held within the
