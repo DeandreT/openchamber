@@ -76,7 +76,9 @@ const rectOf = (selector) => `(() => {
 const handlers = {
   async launch({ app, env, scale, width, height, timeoutMs = 120_000 }) {
     const port = await reservePort()
-    const args = [`--remote-debugging-port=${port}`, `--force-device-scale-factor=${scale}`]
+    // The basic password store keeps Chromium off the desktop's secret
+    // service, which would ask the user to unlock their keyring.
+    const args = [`--remote-debugging-port=${port}`, `--force-device-scale-factor=${scale}`, "--password-store=basic"]
     child = spawn(app, args, { env, stdio: "ignore", detached: true })
     child.unref()
     const page = await pageTarget(port, Date.now() + timeoutMs)

@@ -13,14 +13,15 @@ bun run parity run --scenarios shell.startup --output /tmp/parity-run
 `run` needs the packaged Electron build (`packages/electron/dist/...`), the
 native release build (`bun run native:build`), the staged web UI and the
 bundled OpenCode binary; the defaults point at the repository's build outputs.
-On Linux it also needs KDE's `spectacle`, `xdotool`, PyGObject with AT-SPI and
-`busctl`.
+On Linux it also needs KDE's `spectacle`, `xdotool`, PyGObject with AT-SPI,
+`busctl`, `kwin_wayland`, `dbus-run-session`, `xsettingsd` and fontconfig.
 
 ## Layout
 
 | File | Owns |
 | --- | --- |
 | `runner.py` | Commands, seed copies, isolated servers, scenario steps, comparisons and the report. |
+| `virtual_display.py` | The private display runs happen in, and `-- <command>` for probes that need one. |
 | `inventory.json` | The feature inventory: stable IDs, reference files, states, scenarios and coverage kind. Requirements only. |
 | `scenarios.json` | Scenario steps. Rows are addressed by key prefix and title, never by seeded IDs. |
 | `electron_adapter.py`, `electron_bridge.mjs` | Electron through CDP (`scripts/perf/cdp.mjs`): launch, input dispatch, rows, geometry, screenshots, and read-only `observe` of layout and computed styles and `fonts` of the faces a node is drawn with, for porting. |
@@ -36,15 +37,40 @@ fixture provider and creates fixed sessions through
 `<root>/seed`. Each client of each scenario gets its own copy of the seed, so a
 mutation in one run never changes another's starting state. The native client
 connects to an isolated server running on its copy; Electron starts its own
-in-process server and OpenCode on its copy. Both copies pin the theme
-(`useSystemTheme: false` and `themeId`); the native client reads the same theme
-from `OPENCHAMBER_NATIVE_THEME`.
+in-process server and OpenCode on its copy, with a fixture provider of its own
+and the same OpenCode configuration the isolated server uses
+(`isolatedOpencodeConfig` in `scripts/perf/isolated-server.mjs`). Both copies
+pin the theme (`useSystemTheme: false`, `themeId`, the derived `themeVariant`
+and that variant's theme ID, all of which the web reads); the native client
+reads the same theme from `OPENCHAMBER_NATIVE_THEME`.
 
 Both clients run at the standard client size of 1,280 by 800 logical pixels,
 under X11 and at a fixed device scale: `--force-device-scale-factor` for
 Electron and `GPUI_X11_SCALE_FACTOR` for GPUI. Electron's DevTools endpoint
 cannot size its window; when its viewport differs from the requested size the
 bridge emulates it and the launch record says `emulated: true`.
+
+## The private display
+
+`run` re-executes itself inside a headless KWin (`kwin_wayland --virtual`)
+with its own XWayland and its own D-Bus session, so the clients share no
+screen, input, focus or accessibility bus with the desktop. `--display
+session` runs on the desktop's own display instead. The private bus activates
+no services: KWin's startup would otherwise start a desktop portal and a
+secret service on it, which outlive the run and ask the user to unlock their
+keyring. The session starts the accessibility bus and registry itself, and
+`xsettingsd` publishes fontconfig's `system-ui` family as the GTK font, which
+Chromium's `system-ui` follows on a desktop. When the run ends, every process
+attached to the private bus is stopped.
+
+Ad hoc probes that open windows use the same display:
+
+```sh
+python3 scripts/parity/virtual_display.py -- <command> [arguments]
+```
+
+Never start a compositor on a plain `dbus-run-session` for this: services it
+activates escape to the user's desktop.
 
 ## Evidence
 
