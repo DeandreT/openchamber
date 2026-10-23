@@ -273,6 +273,7 @@ pub fn conversation(session_id: &SessionId, shape: ConversationShape) -> Vec<Mes
                 completed: None,
                 notice: None,
                 assistant: None,
+                compaction: None,
             },
             parts: vec![Part::text(
                 PartId::new(format!("{user_id}-p0")),
@@ -288,6 +289,7 @@ pub fn conversation(session_id: &SessionId, shape: ConversationShape) -> Vec<Mes
                 completed: Some(created + 30_000),
                 notice: None,
                 assistant: None,
+                compaction: None,
             },
             parts: assistant_parts(&assistant_id, turn, shape),
         });

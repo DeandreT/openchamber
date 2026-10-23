@@ -13,6 +13,8 @@ pub struct CatalogModel {
     pub name: Option<String>,
     /// Supported variant identifiers.
     pub variants: Vec<String>,
+    /// The context window, when OpenCode reports a positive one.
+    pub context_limit: Option<u64>,
 }
 
 /// A provider with its models, disabled providers and models already removed.
@@ -133,6 +135,8 @@ pub struct FlatModel {
     pub name: Option<String>,
     /// Supported variant identifiers.
     pub variants: Vec<String>,
+    /// The context window, when OpenCode reports a positive one.
+    pub context_limit: Option<u64>,
     /// OpenCode's model-enabled flag.
     pub enabled: bool,
 }
@@ -166,6 +170,7 @@ pub fn group_catalog(providers: &[FlatProvider], models: &[FlatModel]) -> Vec<Ca
                     .filter(|id| !id.is_empty())
                     .cloned()
                     .collect(),
+                context_limit: model.context_limit,
             });
     }
     providers
@@ -913,6 +918,7 @@ mod tests {
             provider_model_id: None,
             name: None,
             variants: variants.iter().map(|&variant| variant.to_owned()).collect(),
+            context_limit: None,
         };
         vec![CatalogProvider {
             id: "perf".to_owned(),

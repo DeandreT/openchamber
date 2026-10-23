@@ -72,6 +72,8 @@ pub struct Palette {
     pub primary_foreground: Hsla,
     pub primary_hover: Hsla,
     pub chat_background: Hsla,
+    /// `--chat-divider`: the context meter's track.
+    pub chat_divider: Hsla,
     pub user_message_background: Hsla,
     pub divider: Hsla,
     pub link: Hsla,
@@ -86,6 +88,7 @@ pub struct Palette {
     pub status_error: Hsla,
     pub status_error_foreground: Hsla,
     pub status_success: Hsla,
+    pub status_warning: Hsla,
     pub status_info: Hsla,
     pub cursor: Hsla,
     /// `syntax.base.*` in `AGENT_SYNTAX_ROLES` order.
@@ -142,6 +145,7 @@ impl Palette {
             primary_foreground: color("primary.foreground"),
             primary_hover: color("primary.hover"),
             chat_background: color("chat.background"),
+            chat_divider: color("chat.divider"),
             user_message_background: color("chat.userMessageBackground"),
             divider: color("chat.divider"),
             link: color("markdown.link"),
@@ -155,6 +159,7 @@ impl Palette {
             status_error: color("status.error"),
             status_error_foreground: color("status.errorForeground"),
             status_success: color("status.success"),
+            status_warning: color("status.warning"),
             status_info: color("status.info"),
             cursor: color("interactive.cursor"),
             agent_syntax: AGENT_SYNTAX_ROLES.map(|role| color(&format!("syntax.base.{role}"))),

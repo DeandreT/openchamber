@@ -35,6 +35,7 @@ impl From<&FixtureModel> for CatalogModel {
             provider_model_id: model.provider_model_id.clone(),
             name: model.name.clone(),
             variants: model.variants.clone(),
+            context_limit: None,
         }
     }
 }
@@ -324,6 +325,7 @@ fn grouping_matches_reference() {
                 provider_model_id: entry.model.provider_model_id.clone(),
                 name: entry.model.name.clone(),
                 variants: entry.model.variants.clone(),
+                context_limit: None,
                 enabled: entry.enabled,
             })
             .collect();

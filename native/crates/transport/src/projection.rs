@@ -13,8 +13,8 @@ use openchamber_native_core::session::{
     MetadataFacts, SessionKind, SessionOverlay, SessionRecord, SessionTime as CoreSessionTime,
 };
 use openchamber_native_core::transcript::{
-    AssistantFacts, Message, MessageInfo, Part, PartContent, Role, StepOutcome, TokenUsage,
-    ToolStatus,
+    AssistantFacts, CompactionStatus, Message, MessageInfo, Part, PartContent, Role, StepOutcome,
+    TokenUsage, ToolStatus,
 };
 use serde_json::Value;
 
@@ -110,6 +110,14 @@ pub(crate) fn message(envelope: wire::MessageEnvelope) -> Result<Option<Message>
     let body = Value::Object(body);
     let notice = |field: &str| body.get(field).and_then(Value::as_str).map(str::to_owned);
     let mut facts = None;
+    let compaction = (kind == "compaction")
+        .then(|| match body.get("status").and_then(Value::as_str) {
+            Some("running") => Some(CompactionStatus::Running),
+            Some("completed") => Some(CompactionStatus::Completed),
+            Some("failed") => Some(CompactionStatus::Failed),
+            _ => None,
+        })
+        .flatten();
     let (role, parts, notice) = match kind.as_str() {
         "user" => {
             let user: wire::UserBody = parse(body.clone(), "user message")?;
@@ -168,6 +176,7 @@ pub(crate) fn message(envelope: wire::MessageEnvelope) -> Result<Option<Message>
             completed: time.completed,
             notice,
             assistant: facts,
+            compaction,
         },
         parts,
     }))
@@ -347,6 +356,11 @@ pub(crate) fn model(wire: wire::ModelInfo) -> FlatModel {
             .map(|variant| variant.id)
             .filter(|id| !id.is_empty())
             .collect(),
+        context_limit: wire
+            .limit
+            .and_then(|limit| limit.context)
+            .filter(|context| context.is_finite() && *context >= 1.0)
+            .map(|context| context as u64),
         enabled: wire.enabled,
     }
 }
@@ -366,6 +380,26 @@ mod tests {
 
     fn envelope(json: &str) -> wire::MessageEnvelope {
         serde_json::from_str(json).expect("test JSON is valid")
+    }
+
+    #[test]
+    fn a_model_keeps_only_a_positive_context_window() {
+        let limit = |json: &str| {
+            let wire: wire::ModelInfo = serde_json::from_str(json).expect("test JSON is valid");
+            model(wire).context_limit
+        };
+        let base = r#""id":"m","modelID":"m","providerID":"p","enabled":true"#;
+        assert_eq!(
+            limit(&format!(
+                r#"{{{base},"limit":{{"context":400000,"output":8000}}}}"#
+            )),
+            Some(400_000)
+        );
+        assert_eq!(
+            limit(&format!(r#"{{{base},"limit":{{"context":0,"output":0}}}}"#)),
+            None
+        );
+        assert_eq!(limit(&format!("{{{base}}}")), None);
     }
 
     #[test]

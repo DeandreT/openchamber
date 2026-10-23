@@ -31,6 +31,9 @@ read-only until prompt submission has its error and reconciliation paths.
   does.
 - `provider_logos.rs` resolves, loads and caches provider logos for the
   composer, the sidebar rows and the turn footers.
+- `context_panel.rs` also reads the selected session's context fill against
+  the limit `useContextWindowLimits` picks (the record's model, the newest
+  answer's, the composer's) and draws its row and meter.
 - `turn_footer.rs` draws the facts under a finished turn (model, effort,
   agent, duration) and fits them to the row as `useFactsFit` does, keeping
   the place of the message actions the web lays out for hover. The time fact

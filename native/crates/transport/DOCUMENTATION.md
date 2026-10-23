@@ -71,6 +71,9 @@ counts and identifiers only.
 - An assistant message's agent and model come with `session.step.started`,
   and its finish, error and tokens with `session.step.ended` or
   `session.step.failed`, so a replayed stream converges on the history read.
+  Compaction records carry their status from history reads and from the
+  compaction started, ended and failed events. Catalog models keep a positive
+  context window.
 - `PublicAssetClient` shares nothing with `ServerClient`: it sends no
   credential, cookie or OpenChamber header, requests only HTTPS URLs, follows
   only HTTPS redirects and refuses bodies over 256 KiB.

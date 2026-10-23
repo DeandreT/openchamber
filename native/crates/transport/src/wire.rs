@@ -273,6 +273,12 @@ pub(crate) struct ModelInfo {
     #[serde(default)]
     pub enabled: bool,
     pub variants: Option<Vec<ModelVariant>>,
+    pub limit: Option<ModelLimit>,
+}
+
+#[derive(Debug, Deserialize)]
+pub(crate) struct ModelLimit {
+    pub context: Option<f64>,
 }
 
 #[derive(Debug, Deserialize)]

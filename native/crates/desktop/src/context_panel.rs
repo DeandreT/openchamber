@@ -10,12 +10,16 @@ use gpui_kit::{
     px, rems,
 };
 
+use openchamber_native_core::context_usage::{self, ContextUsage, UsageTone};
+use openchamber_native_core::send_config::ModelChoice;
+
 use crate::activation::on_activate;
 use crate::baseline::CssTextExt;
 use crate::chrome::{ButtonTone, CONTROL_RADIUS, IconButton, glyph};
 use crate::elevation;
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
+use crate::send_catalog::ModelControl;
 use crate::sidebar_view;
 use crate::theme::Palette;
 use crate::workspace::Workspace;
@@ -30,8 +34,15 @@ const RAIL_GLYPH: f32 = 18.0;
 /// `text-xs` of the design system, in rems of the 16 px root.
 const XS_SIZE: f32 = 0.75;
 const XS_LINE: f32 = 1.0;
-/// A row's 13 px text, in rems of the 16 px root.
+/// A row's 13 px text, in rems of the 16 px root, on the base `leading-normal`
+/// line of 1.5 times its size.
 const ROW_SIZE: f32 = 0.8125;
+const ROW_LINE: f32 = 1.218_75;
+/// The compacted caption's `text-[11px] leading-4`.
+const CAPTION_SIZE: f32 = 0.6875;
+const CAPTION_LINE: f32 = 1.0;
+/// The fill shown after a compaction, until a response reports tokens.
+const UNKNOWN_PERCENT: &str = "\u{2014}";
 /// Space above every section after the first (`mt-5`).
 const SECTION_GAP: f32 = 20.0;
 const HEADING_HEIGHT: f32 = 24.0;
@@ -99,6 +110,7 @@ impl Workspace {
                                     .child(strings.get("chat.workStatus.section.session")),
                             ),
                     )
+                    .children(self.render_context_usage(palette, direction, cx))
                     .children(self.render_context_sources(palette, direction, cx))
                     .child(
                         div()
@@ -124,6 +136,139 @@ impl Workspace {
                             .shadow(elevation::panel_edge_ring(palette)),
                     ),
             )
+    }
+
+    /// The selected session's context window: a row with its fill and a meter
+    /// under it (`WorkStatusPrimaryGroup.tsx`), absent before any response
+    /// reported tokens.
+    fn render_context_usage(
+        &self,
+        palette: &Palette,
+        direction: Direction,
+        cx: &Context<Self>,
+    ) -> Option<AnyElement> {
+        let usage = self.session_context_usage()?;
+        let strings = locale::strings(cx);
+        let (value, percent, compacted) = match usage {
+            ContextUsage::Measured { percent, .. } => {
+                (context_usage::format_percent(percent), percent, false)
+            }
+            ContextUsage::Compacted { .. } => (UNKNOWN_PERCENT.to_owned(), 0.0, true),
+        };
+        let fill = match UsageTone::of(percent) {
+            UsageTone::Safe => palette.status_success,
+            UsageTone::Warn => palette.status_warning,
+            UsageTone::Critical => palette.status_error,
+        };
+        let row = div()
+            .id("work-status-context-usage")
+            .role(Role::Group)
+            .accessibility_id("work-status-context-usage")
+            .aria_label(strings.get("chat.workStatus.action.openContext"))
+            .h(px(ROW_HEIGHT))
+            .px(px(4.0))
+            .flex_row_from(direction)
+            .items_center()
+            .gap(px(8.0))
+            .text_color(palette.muted_foreground)
+            .child(glyph("donut-chart", 16.0, palette.muted_foreground))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .css_text(ROW_SIZE, ROW_LINE, cx)
+                    .child(strings.get("chat.workStatus.context.label")),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .css_text(ROW_SIZE, ROW_LINE, cx)
+                    .child(SharedString::from(value)),
+            );
+        let meter = div()
+            .mx(px(4.0))
+            .mb(px(4.0))
+            .h(px(4.0))
+            .rounded_full()
+            .overflow_hidden()
+            .bg(palette.chat_divider)
+            .flex_row_from(direction)
+            .child(
+                div()
+                    .h_full()
+                    .rounded_full()
+                    .w(gpui_kit::relative((percent / 100.0).clamp(0.0, 1.0) as f32))
+                    .bg(fill),
+            );
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .child(row)
+                .child(meter)
+                .when(compacted, |this| {
+                    this.child(
+                        div()
+                            .mx(px(4.0))
+                            .mb(px(4.0))
+                            .css_text(CAPTION_SIZE, CAPTION_LINE, cx)
+                            .text_color(palette.muted_foreground)
+                            .child(strings.get("contextUsage.compacted.description")),
+                    )
+                })
+                .into_any_element(),
+        )
+    }
+
+    /// The fill of the selected session's window, measured against the
+    /// context limit `useContextWindowLimits` picks: the record's model, then
+    /// the newest answer's, then the composer's.
+    fn session_context_usage(&self) -> Option<ContextUsage> {
+        let session = self.selected_session()?;
+        let open = self.open_sessions.get(&session.id)?;
+        let directory = self.config_directory()?;
+        let providers = self
+            .send_catalog
+            .directory(&directory)
+            .and_then(|entry| entry.providers.ready())
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let limit_of = |choice: &ModelChoice| {
+            providers
+                .iter()
+                .find(|provider| provider.id == choice.provider_id)?
+                .models
+                .iter()
+                .find(|model| model.id == choice.model_id)?
+                .context_limit
+        };
+        let answering = open.transcript.messages().iter().rev().find_map(|message| {
+            message
+                .info
+                .assistant
+                .as_ref()
+                .and_then(|facts| facts.model.as_ref())
+        });
+        let composer = match self.model_control() {
+            ModelControl::Model {
+                provider_id,
+                model_id,
+                ..
+            } => Some(ModelChoice {
+                provider_id,
+                model_id,
+                variant: None,
+            }),
+            _ => None,
+        };
+        let limit = session
+            .model
+            .as_ref()
+            .and_then(limit_of)
+            .or_else(|| answering.and_then(limit_of))
+            .or_else(|| composer.as_ref().and_then(limit_of));
+        context_usage::context_usage(open.transcript.messages(), limit)
     }
 
     /// The Context sources section: the workspace's skill and connected MCP

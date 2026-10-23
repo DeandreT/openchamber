@@ -22,6 +22,7 @@ circle
 close
 command
 compass-3
+donut-chart
 equalizer-2
 error-warning
 eye

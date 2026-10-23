@@ -11,7 +11,7 @@ use openchamber_native_core::send_config::{AgentMode, ModelChoice};
 use openchamber_native_core::session::{LiveStatus, SessionKind, SessionRecord};
 use openchamber_native_core::session_index::SessionIndex;
 use openchamber_native_core::transcript::{
-    Message, PartContent, Role, ToolStatus, Transcript, TranscriptChange,
+    CompactionStatus, Message, PartContent, Role, ToolStatus, Transcript, TranscriptChange,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -207,6 +207,11 @@ fn normalize_message(message: &Message) -> Value {
                 "cacheWrite": tokens.cache_write,
             })),
         })),
+        "compaction": message.info.compaction.map(|status| match status {
+            CompactionStatus::Running => "running",
+            CompactionStatus::Completed => "completed",
+            CompactionStatus::Failed => "failed",
+        }),
         "parts": parts,
     })
 }
@@ -607,6 +612,7 @@ fn catalogs_project_as_the_ui_does() {
                 "name": model.name,
                 "enabled": model.enabled,
                 "variants": model.variants,
+                "contextLimit": model.context_limit,
             })
         })
         .collect();
