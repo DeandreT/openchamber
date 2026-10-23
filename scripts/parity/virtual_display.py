@@ -89,8 +89,10 @@ def run_inside(command: list[str], width: int, height: int) -> int:
         status = Path(work) / "status"
         session = Path(work) / "session.sh"
         bus_record = Path(work) / "bus"
-        # The compositor's own output is noise; the run's errors are not.
+        # The compositor's own output is noise unless it ends the run early;
+        # the run's errors are not.
         run_errors = Path(work) / "stderr"
+        compositor_log = Path(work) / "compositor.log"
         services = Path(work) / "services"
         services.mkdir()
         bus_config = Path(work) / "bus.conf"
@@ -120,6 +122,7 @@ def run_inside(command: list[str], width: int, height: int) -> int:
         session.chmod(0o700)
         env = {key: value for key, value in os.environ.items() if key not in SESSION_VARIABLES}
         env[INSIDE] = "1"
+        log = open(compositor_log, "wb")
         compositor = subprocess.Popen(
             [
                 "dbus-run-session", f"--config-file={bus_config}", "--",
@@ -130,7 +133,7 @@ def run_inside(command: list[str], width: int, height: int) -> int:
             ],
             env=env,
             stdin=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stderr=log,
             start_new_session=True,
         )
         try:
@@ -153,8 +156,12 @@ def run_inside(command: list[str], width: int, height: int) -> int:
                 stop_attached(bus_record.read_text())
         if run_errors.exists():
             sys.stderr.write(run_errors.read_text(errors="replace"))
+        log.close()
         if not status.exists():
-            print("the private display ended before the run finished", file=sys.stderr)
+            tail = compositor_log.read_text(errors="replace").splitlines()[-20:]
+            print("the private display ended before the run finished; the compositor's last output:", file=sys.stderr)
+            for line in tail:
+                print(f"  {line}", file=sys.stderr)
             return 1
         return int(status.read_text() or 1)
 
