@@ -160,6 +160,7 @@ fn session(fixture: &FixtureSession) -> SessionRecord {
         },
         overlay: SessionOverlay::default(),
         model: None,
+        agent: None,
     }
 }
 

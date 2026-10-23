@@ -24,8 +24,11 @@ read-only until prompt submission has its error and reconciliation paths.
 - `network.rs` owns the Tokio runtime. GPUI tasks await `NetworkTask`s, and
   dropping one aborts its network work.
 - `send_catalog.rs` holds the composer's catalogs per configuration directory
-  and resolves what a send would use through the core's `send_config`;
-  `model_controls.rs` draws the effort, model and agent controls from it.
+  and resolves what a send would use through the core's `send_config`: the
+  directory's default selection, refined by a selected session's record;
+  `model_controls.rs` draws the effort, model and agent controls from it and
+  hides their labels by the controls' width as the web's container query
+  does.
 - `provider_logos.rs` resolves, loads and caches provider logos for the
   composer and the sidebar rows.
 - `sidebar_item.rs` copies the core row model into owned rows. The core model
@@ -109,6 +112,10 @@ read-only until prompt submission has its error and reconciliation paths.
 - Text sized with `css_text` sits where Chromium puts it; text in an element
   with other children or a background gets its own `css_text` element, since
   the correction moves the whole element.
+- The transcript's last row, shown or not, carries the tail spacer: the
+  docked composer's resting slot plus a gap, growing only once the composer
+  grows past an allowance (`composerTailInset.ts`). The slot is measured
+  while painting, and a new inset remeasures that row.
 - A provider logo is bundled, loading, drawn or absent. Bundled logos draw at
   once; any other is fetched once for the app's lifetime, keeps its box while
   loading and is left out when the fetch or the SVG fails, as the web drops a

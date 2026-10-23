@@ -122,6 +122,7 @@ fn normalize_session(session: &SessionRecord) -> Value {
         "inWork": session.overlay.in_work,
         "btw": session.is_btw(),
         "model": session.model.as_ref().map(normalize_model),
+        "agent": session.agent,
     })
 }
 
@@ -440,6 +441,7 @@ fn session_effect(event: &ServerEvent) -> Option<Value> {
                     }),
                 ),
                 ("model", patch.model.as_ref().map(normalize_model)),
+                ("agent", patch.agent.as_ref().map(|agent| json!(agent))),
             ];
             for (key, field) in fields {
                 if let Some(field) = field {

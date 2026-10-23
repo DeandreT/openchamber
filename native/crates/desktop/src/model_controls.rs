@@ -36,15 +36,41 @@ const VARIANT_LABEL_MAX: f32 = 180.0;
 const AGENT_LABEL_MAX: f32 = 220.0;
 /// `hover:opacity-70`.
 const HOVER_OPACITY: f32 = 0.7;
+/// The container widths at or below which `index.css` hides a label
+/// (`22rem`, `14rem` and `10rem` of `@container/model-controls`).
+const AGENT_LABEL_HIDDEN_AT: f32 = 352.0;
+const VARIANT_LABEL_HIDDEN_AT: f32 = 224.0;
+const MODEL_LABEL_HIDDEN_AT: f32 = 160.0;
+
+/// Which control labels fit the controls' width; a hidden label leaves the
+/// glyph.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Labels {
+    variant: bool,
+    model: bool,
+    agent: bool,
+}
+
+impl Labels {
+    fn for_width(width: f32) -> Self {
+        Self {
+            variant: width > VARIANT_LABEL_HIDDEN_AT,
+            model: width > MODEL_LABEL_HIDDEN_AT,
+            agent: width > AGENT_LABEL_HIDDEN_AT,
+        }
+    }
+}
 
 impl Workspace {
-    /// The effort, model and agent controls, end-aligned.
+    /// The effort, model and agent controls, end-aligned in `width`.
     pub(crate) fn render_model_controls(
         &self,
         palette: &Palette,
         direction: Direction,
+        width: f32,
         cx: &Context<Self>,
     ) -> impl IntoElement {
+        let labels = Labels::for_width(width);
         let model = self.model_control();
         let variant = match &model {
             ModelControl::Model { variant, .. } => variant.clone(),
@@ -57,14 +83,21 @@ impl Workspace {
             .items_center()
             .justify_end()
             .gap(px(12.0))
-            .children(render_variant_control(&variant, palette, direction, cx))
-            .child(self.render_model_control(model, palette, direction, cx))
-            .child(self.render_agent_control(palette, direction, cx))
+            .children(render_variant_control(
+                &variant,
+                labels.variant,
+                palette,
+                direction,
+                cx,
+            ))
+            .child(self.render_model_control(model, labels.model, palette, direction, cx))
+            .child(self.render_agent_control(labels.agent, palette, direction, cx))
     }
 
     fn render_model_control(
         &self,
         model: ModelControl,
+        show_label: bool,
         palette: &Palette,
         direction: Direction,
         cx: &Context<Self>,
@@ -102,12 +135,13 @@ impl Workspace {
             direction,
             cx,
             leading,
-            meta_label(label, color, MODEL_LABEL_MAX, cx),
+            show_label.then(|| meta_label(label, color, MODEL_LABEL_MAX, cx)),
         )
     }
 
     fn render_agent_control(
         &self,
+        show_label: bool,
         palette: &Palette,
         direction: Direction,
         cx: &Context<Self>,
@@ -144,7 +178,7 @@ impl Workspace {
             direction,
             cx,
             leading,
-            meta_label(label, color, AGENT_LABEL_MAX, cx),
+            show_label.then(|| meta_label(label, color, AGENT_LABEL_MAX, cx)),
         )
     }
 }
@@ -174,6 +208,7 @@ impl Workspace {
 /// info status color.
 fn render_variant_control(
     variant: &VariantControl,
+    show_label: bool,
     palette: &Palette,
     direction: Direction,
     cx: &Context<Workspace>,
@@ -192,7 +227,7 @@ fn render_variant_control(
         direction,
         cx,
         Some(glyph("brain-ai-3", CONTROL_GLYPH, color).into_any_element()),
-        meta_label(label, color, VARIANT_LABEL_MAX, cx),
+        show_label.then(|| meta_label(label, color, VARIANT_LABEL_MAX, cx)),
     ))
 }
 
@@ -203,7 +238,7 @@ fn control(
     direction: Direction,
     cx: &Context<Workspace>,
     leading: Option<AnyElement>,
-    text: AnyElement,
+    text: Option<AnyElement>,
 ) -> AnyElement {
     on_activate(
         div()
@@ -219,7 +254,7 @@ fn control(
             .cursor_pointer()
             .hover(|style| style.opacity(HOVER_OPACITY))
             .children(leading)
-            .child(text),
+            .children(text),
         cx,
         |_, _, _| {},
     )
@@ -264,4 +299,25 @@ fn readiness_label(unavailable: bool, cx: &Context<Workspace>) -> SharedString {
     } else {
         "common.loading"
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The widths the reference's composers give the controls: the
+    /// new-session view's 372 px and a session's 340 px.
+    #[test]
+    fn labels_hide_in_the_web_order() {
+        let shown = |variant, model, agent| Labels {
+            variant,
+            model,
+            agent,
+        };
+        assert_eq!(Labels::for_width(372.0), shown(true, true, true));
+        assert_eq!(Labels::for_width(340.0), shown(true, true, false));
+        assert_eq!(Labels::for_width(352.0), shown(true, true, false));
+        assert_eq!(Labels::for_width(200.0), shown(false, true, false));
+        assert_eq!(Labels::for_width(160.0), shown(false, false, false));
+    }
 }

@@ -199,6 +199,7 @@ impl SyntheticWorkspace {
                 kind: Default::default(),
                 overlay,
                 model: None,
+                agent: None,
             });
         }
 

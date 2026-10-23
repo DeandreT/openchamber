@@ -176,7 +176,8 @@
         "providerId": "perf",
         "modelId": "stream-20000cps",
         "variant": "default"
-      }
+      },
+      "agent": "build"
     },
     {
       "id": "ses_e9b49c443ffefXcWWPhCOga6nH",
@@ -194,7 +195,8 @@
         "providerId": "perf",
         "modelId": "code-20000cps",
         "variant": "default"
-      }
+      },
+      "agent": "build"
     },
     {
       "id": "ses_e9b4b0242ffeULkFFTS9CiS3wW",
@@ -212,7 +214,8 @@
         "providerId": "perf",
         "modelId": "unicode-20000cps",
         "variant": "default"
-      }
+      },
+      "agent": "build"
     },
     {
       "id": "ses_e9b4b1b11ffeL35iTqmSFoxS2M",
@@ -230,7 +233,8 @@
         "providerId": "perf",
         "modelId": "unicode-20000cps",
         "variant": "default"
-      }
+      },
+      "agent": "build"
     },
     {
       "id": "ses_e9b4b2f45ffeFv56FeVzmiYX4s",
@@ -248,7 +252,8 @@
         "providerId": "perf",
         "modelId": "code-20000cps",
         "variant": "default"
-      }
+      },
+      "agent": "build"
     }
   ],
   "nextCursor": "eyJhbmNob3IiOnsiaWQiOiJzZXNfZTliNGIyZjQ1ZmZlRnY1NkZlVnptaVlYNHMiLCJ0aW1lIjoxNzkyNjkwOTM3MTQ1LCJkaXJlY3Rpb24iOiJuZXh0In19",
@@ -1946,7 +1951,8 @@
           "pinned": false,
           "inWork": false,
           "btw": false,
-          "model": null
+          "model": null,
+          "agent": null
         }
       },
       {
@@ -1962,7 +1968,8 @@
       {
         "type": "patched",
         "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
-        "updated": 1792691030504
+        "updated": 1792691030504,
+        "agent": "build"
       },
       {
         "type": "status",
@@ -2041,7 +2048,8 @@
       {
         "type": "patched",
         "sessionId": "ses_e9b49c443ffefXcWWPhCOga6nH",
-        "updated": 1792691034352
+        "updated": 1792691034352,
+        "agent": "build"
       },
       {
         "type": "status",
@@ -2105,7 +2113,8 @@
           "pinned": false,
           "inWork": false,
           "btw": false,
-          "model": null
+          "model": null,
+          "agent": null
         }
       },
       {
@@ -2121,7 +2130,8 @@
       {
         "type": "patched",
         "sessionId": "ses_e9b3bfe12ffeMuiZLLg25eNcms",
-        "updated": 1792691930955
+        "updated": 1792691930955,
+        "agent": "build"
       },
       {
         "type": "status",

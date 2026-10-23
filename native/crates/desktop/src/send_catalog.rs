@@ -18,7 +18,7 @@ use gpui_kit::{Context, Task};
 use openchamber_native_core::path;
 use openchamber_native_core::send_config::{
     self, AgentColor, AgentEntry, AutoRouting, CatalogProvider, ModelChoice, Selection,
-    SelectionDefaults,
+    SelectionDefaults, SessionRecordChoice,
 };
 use openchamber_native_transport::catalog::{ModelCatalog, OpenCodeDefaults};
 use openchamber_native_transport::client::ServerSettings;
@@ -404,8 +404,9 @@ impl Workspace {
         }
     }
 
-    /// The default selection of the config directory, once its agents,
-    /// models and config are known.
+    /// What a send would use, once the config directory's agents, models
+    /// and config are known: the directory's default selection, refined by a
+    /// selected session's record.
     fn send_selection(&self) -> Option<(String, Selection)> {
         let directory = self.config_directory()?;
         let entry = self.send_catalog.directory(&directory)?;
@@ -418,10 +419,21 @@ impl Workspace {
             Load::Loading => return None,
         };
         let defaults = self.selection_defaults(&directory, opencode);
-        Some((
-            directory,
-            send_config::resolve_default_selection(agents, providers, &defaults),
-        ))
+        let selection = send_config::resolve_default_selection(agents, providers, &defaults);
+        let selection = match self.selected_session() {
+            Some(session) => send_config::resolve_session_selection(
+                &selection,
+                SessionRecordChoice {
+                    model: session.model.as_ref(),
+                    agent: session.agent.as_deref(),
+                },
+                agents,
+                providers,
+                &defaults,
+            ),
+            None => selection,
+        };
+        Some((directory, selection))
     }
 
     /// Whether the catalogs could not be read and are not coming.

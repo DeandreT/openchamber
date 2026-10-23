@@ -9,7 +9,7 @@ use gpui_kit::component::input::Textarea;
 use gpui_kit::component::{Sizable, Size};
 use gpui_kit::{
     Context, InteractiveElement, IntoElement, ParentElement, Role, StatefulInteractiveElement,
-    Styled, TestSupportExt, Window, div, linear_color_stop, linear_gradient,
+    Styled, TestSupportExt, Window, canvas, div, linear_color_stop, linear_gradient,
     prelude::FluentBuilder, px, rems,
 };
 
@@ -27,6 +27,13 @@ const EDITOR_MIN_HEIGHT: f32 = 52.0;
 const TOOLBAR_HEIGHT: f32 = 44.0;
 const ACTION_SIZE: f32 = 24.0;
 const ACTION_GLYPH: f32 = 18.0;
+/// The toolbar's `px-2.5`, the start actions' and the groups' `gap-x-1.5`,
+/// and the end controls' `md:gap-x-3`.
+const TOOLBAR_PADDING_X: f32 = 10.0;
+const START_GAP: f32 = 6.0;
+const END_GAP: f32 = 12.0;
+/// Attach, focus mode, permissions and goal.
+const START_ACTIONS: f32 = 4.0;
 /// A custom Kit size whose text is 14 px; its editor insets text by 8 px
 /// across and 2 px down.
 const EDITOR_SIZE: f32 = 16.0;
@@ -40,11 +47,47 @@ const TEXT_LINE: f32 = 1.3125;
 /// (`COMPACT_CHAT_PLACEHOLDER_MAX_WIDTH` in `ChatInput.tsx`).
 const COMPACT_PLACEHOLDER_BELOW: f32 = 560.0;
 
+/// `composerTailInset.ts`: the gap between the transcript's last row and the
+/// resting composer, how far the composer grows before it pushes the
+/// transcript, and the slot height assumed before one is measured.
+const TAIL_GAP: f32 = 80.0;
+const GROWTH_ALLOWANCE: f32 = 88.0;
+const DEFAULT_SLOT_HEIGHT: f32 = 128.0;
+
+/// The docked composer's slot as last measured.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct ComposerSlot {
+    /// The smallest height measured: the composer at rest.
+    resting: Option<f32>,
+    height: Option<f32>,
+}
+
+impl ComposerSlot {
+    /// Records a measured height; a zero height is a slot not laid out yet.
+    fn measured(self, height: f32) -> Self {
+        if height <= 0.0 {
+            return self;
+        }
+        Self {
+            resting: Some(self.resting.map_or(height, |resting| resting.min(height))),
+            height: Some(height),
+        }
+    }
+
+    /// How much of the transcript's end the composer reserves
+    /// (`resolveComposerTailInset`).
+    pub(crate) fn tail_inset(self) -> f32 {
+        let resting = self.resting.unwrap_or(DEFAULT_SLOT_HEIGHT);
+        let height = self.height.unwrap_or(resting);
+        (resting + TAIL_GAP).max(height + TAIL_GAP - GROWTH_ALLOWANCE)
+    }
+}
+
 impl Workspace {
     /// The composer box's width: the chat column, less the transcript's
     /// navigation gutter when a session is open, capped and padded as
     /// `.chat-input-column`.
-    fn composer_width(&self, window: &Window) -> f32 {
+    pub(crate) fn composer_width(&self, window: &Window) -> f32 {
         let mut column = f32::from(chrome::content_size(window).width) - context_panel::RAIL_WIDTH;
         if self.sidebar_open {
             column -= sidebar_view::SIDEBAR_WIDTH;
@@ -82,6 +125,8 @@ impl Workspace {
 
     /// The composer docked over the bottom of a selected session's
     /// transcript, in the chat column beside the prompt navigation gutter.
+    /// Its slot is measured every frame; a new tail inset remeasures the
+    /// transcript's last row, which carries the spacer.
     pub(crate) fn render_composer(
         &self,
         palette: &Palette,
@@ -89,6 +134,31 @@ impl Workspace {
         window: &Window,
         cx: &Context<Self>,
     ) -> impl IntoElement {
+        let slot = self.composer_slot.clone();
+        let list = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.open_sessions.get(id))
+            .map(|open| open.list.clone());
+        let measure = canvas(
+            move |bounds, window, _| {
+                let previous = slot.get();
+                let next = previous.measured(f32::from(bounds.size.height));
+                slot.set(next);
+                if next.tail_inset() != previous.tail_inset()
+                    && let Some(list) = &list
+                {
+                    let count = list.item_count();
+                    if count > 0 {
+                        list.remeasure_items(count - 1..count);
+                    }
+                    window.refresh();
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0();
         div()
             .id("composer-region")
             .absolute()
@@ -99,12 +169,13 @@ impl Workspace {
             .pb(px(16.0))
             .flex()
             .justify_center()
+            .child(measure)
             .child(
                 div()
                     .w_full()
                     .max_w(px(chrome::CHAT_COLUMN_MAX_WIDTH))
                     .px(chrome::chat_column_padding(window))
-                    .child(self.render_composer_box(palette, direction, cx)),
+                    .child(self.render_composer_box(palette, direction, window, cx)),
             )
     }
 
@@ -113,8 +184,17 @@ impl Workspace {
         &self,
         palette: &Palette,
         direction: Direction,
+        window: &Window,
         cx: &Context<Self>,
     ) -> impl IntoElement {
+        // The width the effort, model and agent controls get: the web's
+        // `@container/model-controls` hides their labels by it.
+        let controls_width = self.composer_width(window)
+            - 2.0 * TOOLBAR_PADDING_X
+            - START_ACTIONS * ACTION_SIZE
+            - (START_ACTIONS - 1.0) * START_GAP
+            - START_GAP
+            - 2.0 * (END_GAP + ACTION_SIZE);
         let streaming = self
             .selected
             .as_ref()
@@ -215,15 +295,17 @@ impl Workspace {
                 div()
                     .h(px(TOOLBAR_HEIGHT))
                     .flex_shrink_0()
-                    .px(px(10.0))
+                    .px(px(TOOLBAR_PADDING_X))
                     .py(px(6.0))
                     .flex_row_from(direction)
                     .items_center()
+                    .gap(px(START_GAP))
                     .child(
                         div()
+                            .flex_shrink_0()
                             .flex_row_from(direction)
                             .items_center()
-                            .gap(px(6.0))
+                            .gap(px(START_GAP))
                             .child(action(
                                 "composer-attach",
                                 "add-circle",
@@ -248,17 +330,44 @@ impl Workspace {
                     .child(
                         div()
                             .flex_1()
+                            .min_w_0()
                             .flex_row_from(direction)
                             .items_center()
                             .justify_end()
-                            .gap(px(12.0))
+                            .gap(px(END_GAP))
                             // Synthetic data has no catalogs to select from.
                             .when(!self.is_synthetic(), |this| {
-                                this.child(self.render_model_controls(palette, direction, cx))
+                                this.child(self.render_model_controls(
+                                    palette,
+                                    direction,
+                                    controls_width,
+                                    cx,
+                                ))
                             })
                             .child(action("composer-dictation", "mic", "chat.dictation.start"))
                             .child(send),
                     ),
             )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_tail_keeps_the_resting_composer_and_a_gap() {
+        let unmeasured = ComposerSlot::default();
+        assert_eq!(
+            unmeasured.tail_inset(),
+            208.0,
+            "the web's default before a measurement"
+        );
+        let resting = unmeasured.measured(0.0).measured(115.0);
+        assert_eq!(resting.tail_inset(), 195.0);
+        // Growth takes the gap first, then pushes the transcript.
+        assert_eq!(resting.measured(180.0).tail_inset(), 195.0);
+        assert_eq!(resting.measured(250.0).tail_inset(), 242.0);
+        assert_eq!(resting.measured(250.0).measured(115.0).tail_inset(), 195.0);
     }
 }

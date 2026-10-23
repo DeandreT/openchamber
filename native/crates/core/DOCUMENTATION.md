@@ -9,7 +9,7 @@ rendering asks for a projection and dispatches an action.
 
 ## Ownership
 
-- `send_config.rs` ports default agent/model selection, catalog grouping, composer labels and agent color allocation from the web client.
+- `send_config.rs` ports default agent/model selection, an existing session's selection from its record, catalog grouping, composer labels and agent color allocation from the web client.
 - `provider_logo.rs` ports the provider logo lookup of `useProviderLogo.ts`
   (bundled candidates, then models.dev) and inverts an SVG's paint colors for
   dark themes, as the web's `dark:invert` does.
@@ -27,8 +27,8 @@ rendering asks for a projection and dispatches an action.
 - `session_index.rs` ports the global session list of
   `useGlobalSessionsStore.ts` and `session-event-router.ts`: active and
   archived records, page merges, complete loads and live session changes.
-  A record carries the session's current model as the server last reported
-  it.
+  A record carries the session's current model and agent as the server last
+  reported them.
 - `ownership.rs` also derives configured projects from settings paths and a
   project's linked worktrees from the server's listing, as the web client
   does.

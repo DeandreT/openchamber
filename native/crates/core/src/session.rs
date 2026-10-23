@@ -63,6 +63,8 @@ pub struct SessionRecord {
     pub overlay: SessionOverlay,
     /// The model the session's next turn uses, as the server last reported it.
     pub model: Option<ModelChoice>,
+    /// The agent the session's next turn uses, as the server last reported it.
+    pub agent: Option<String>,
 }
 
 /// What a session's full metadata establishes for the client.
@@ -88,6 +90,8 @@ pub struct SessionPatch {
     pub metadata: Option<MetadataFacts>,
     /// The newly selected model.
     pub model: Option<ModelChoice>,
+    /// The newly selected agent.
+    pub agent: Option<String>,
 }
 
 impl SessionPatch {
@@ -166,6 +170,9 @@ impl SessionRecord {
         }
         if let Some(model) = &patch.model {
             next.model = Some(model.clone());
+        }
+        if let Some(agent) = &patch.agent {
+            next.agent = Some(agent.clone());
         }
         next
     }
