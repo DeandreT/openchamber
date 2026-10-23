@@ -98,6 +98,7 @@ pub(crate) struct AssistantBody {
     /// error never fails the message.
     pub error: Option<Value>,
     pub tokens: Option<TokenUsage>,
+    pub cost: Option<f64>,
 }
 
 /// `TokenUsageInfo`.
@@ -130,10 +131,18 @@ pub(crate) enum AssistantItem {
     },
     Reasoning {
         text: String,
+        time: Option<ItemTime>,
     },
     Tool(ToolItem),
     #[serde(other)]
     Unsupported,
+}
+
+/// A reasoning item's own times.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ItemTime {
+    pub created: Option<i64>,
+    pub completed: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -141,6 +150,15 @@ pub(crate) struct ToolItem {
     pub id: String,
     pub name: String,
     pub state: ToolState,
+    pub time: Option<ToolTime>,
+}
+
+/// When a tool call was streamed, started running and finished.
+#[derive(Debug, Deserialize)]
+pub(crate) struct ToolTime {
+    pub created: Option<i64>,
+    pub ran: Option<i64>,
+    pub completed: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]

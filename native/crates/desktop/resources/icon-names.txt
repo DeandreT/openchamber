@@ -8,6 +8,7 @@ archive
 arrow-down-s
 arrow-right-s
 bar-chart
+bar-chart-2
 book-marked
 box-3
 brain-ai-3

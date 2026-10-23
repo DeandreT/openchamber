@@ -13,8 +13,8 @@ use openchamber_native_core::session::{
     MetadataFacts, SessionKind, SessionOverlay, SessionRecord, SessionTime as CoreSessionTime,
 };
 use openchamber_native_core::transcript::{
-    AssistantFacts, CompactionStatus, Message, MessageInfo, Part, PartContent, Role, StepOutcome,
-    TokenUsage, ToolStatus,
+    AssistantFacts, CompactionStatus, Message, MessageInfo, Part, PartContent, PartTime, Role,
+    StepOutcome, TokenUsage, ToolStatus, Usd,
 };
 use serde_json::Value;
 
@@ -121,11 +121,11 @@ pub(crate) fn message(envelope: wire::MessageEnvelope) -> Result<Option<Message>
     let (role, parts, notice) = match kind.as_str() {
         "user" => {
             let user: wire::UserBody = parse(body.clone(), "user message")?;
-            (Role::User, user_parts(&id, &user), None)
+            (Role::User, user_parts(&id, &user, time.created), None)
         }
         "assistant" => {
             let assistant: wire::AssistantBody = parse(body.clone(), "assistant message")?;
-            let parts = assistant_parts(&id, &assistant.content);
+            let parts = assistant_parts(&id, &assistant.content, time.created, time.completed);
             facts = Some(AssistantFacts {
                 agent: assistant.agent.filter(|agent| !agent.is_empty()),
                 model: assistant.model.map(model_choice),
@@ -138,6 +138,7 @@ pub(crate) fn message(envelope: wire::MessageEnvelope) -> Result<Option<Message>
                         .and_then(Value::as_str)
                         .map(str::to_owned),
                     tokens: assistant.tokens.map(token_usage),
+                    cost: assistant.cost.and_then(Usd::from_dollars),
                 },
             });
             (Role::Assistant, parts, None)
@@ -197,13 +198,20 @@ fn parse<T: serde::de::DeserializeOwned>(value: Value, what: &str) -> Result<T, 
         .map_err(|error| TransportError::Malformed(format!("{what}: {error}")))
 }
 
-pub(crate) fn user_parts(message_id: &str, user: &wire::UserBody) -> Vec<Part> {
+/// A prompt's text was written at once: its time is the message's creation.
+pub(crate) fn user_parts(message_id: &str, user: &wire::UserBody, created: i64) -> Vec<Part> {
     let mut parts = Vec::new();
     if !user.text.is_empty() {
-        parts.push(Part::text(
-            PartId::new(part_ids::text(message_id, 0)),
-            user.text.clone(),
-        ));
+        parts.push(Part {
+            id: PartId::new(part_ids::text(message_id, 0)),
+            content: PartContent::Text {
+                text: user.text.clone(),
+            },
+            time: PartTime {
+                start: Some(created),
+                end: Some(created),
+            },
+        });
     }
     for (index, file) in user.files.iter().enumerate() {
         parts.push(Part {
@@ -212,6 +220,7 @@ pub(crate) fn user_parts(message_id: &str, user: &wire::UserBody) -> Vec<Part> {
                 filename: file.name.clone().unwrap_or_default(),
                 mime: file.mime.clone(),
             },
+            time: PartTime::default(),
         });
     }
     for (index, agent) in user.agents.iter().enumerate() {
@@ -220,6 +229,7 @@ pub(crate) fn user_parts(message_id: &str, user: &wire::UserBody) -> Vec<Part> {
             content: PartContent::Agent {
                 name: agent.name.clone(),
             },
+            time: PartTime::default(),
         });
     }
     parts
@@ -227,23 +237,44 @@ pub(crate) fn user_parts(message_id: &str, user: &wire::UserBody) -> Vec<Part> {
 
 /// Text and reasoning ordinals count per kind in content order, matching the
 /// `ordinal` live `session.text.*` and `session.reasoning.*` events carry.
-pub(crate) fn assistant_parts(message_id: &str, content: &[wire::AssistantItem]) -> Vec<Part> {
+///
+/// Times follow `projectAssistantContent`: text spans its message's window,
+/// and text another item follows ended when the message was created if the
+/// message is still open; reasoning keeps its own times.
+pub(crate) fn assistant_parts(
+    message_id: &str,
+    content: &[wire::AssistantItem],
+    created: i64,
+    completed: Option<i64>,
+) -> Vec<Part> {
     let mut parts = Vec::new();
     let mut text_ordinal = 0;
     let mut reasoning_ordinal = 0;
-    for item in content {
+    for (index, item) in content.iter().enumerate() {
         match item {
             wire::AssistantItem::Text { text } => {
-                parts.push(Part::text(
-                    PartId::new(part_ids::text(message_id, text_ordinal)),
-                    text.clone(),
-                ));
+                let followed = index + 1 < content.len();
+                parts.push(Part {
+                    id: PartId::new(part_ids::text(message_id, text_ordinal)),
+                    content: PartContent::Text { text: text.clone() },
+                    time: PartTime {
+                        start: Some(created),
+                        end: completed.or(followed.then_some(created)),
+                    },
+                });
                 text_ordinal += 1;
             }
-            wire::AssistantItem::Reasoning { text } => {
+            wire::AssistantItem::Reasoning { text, time } => {
                 parts.push(Part {
                     id: PartId::new(part_ids::reasoning(message_id, reasoning_ordinal)),
                     content: PartContent::Reasoning { text: text.clone() },
+                    time: PartTime {
+                        start: time
+                            .as_ref()
+                            .and_then(|time| time.created)
+                            .or(Some(created)),
+                        end: time.as_ref().and_then(|time| time.completed),
+                    },
                 });
                 reasoning_ordinal += 1;
             }
@@ -291,6 +322,20 @@ pub(crate) fn tool_part(tool: &wire::ToolItem) -> Part {
             )
         }
     };
+    // `projectToolPart`: a call runs from `ran` (else its creation) to its
+    // completion (else its start); a streaming call has no time yet.
+    let start = tool
+        .time
+        .as_ref()
+        .and_then(|time| time.ran.or(time.created));
+    let time = match status {
+        ToolStatus::Pending => PartTime::default(),
+        ToolStatus::Running => PartTime { start, end: None },
+        ToolStatus::Completed | ToolStatus::Error => PartTime {
+            start,
+            end: tool.time.as_ref().and_then(|time| time.completed).or(start),
+        },
+    };
     Part {
         id: PartId::new(tool.id.clone()),
         content: PartContent::Tool {
@@ -300,6 +345,7 @@ pub(crate) fn tool_part(tool: &wire::ToolItem) -> Part {
             output,
             elided,
         },
+        time,
     }
 }
 

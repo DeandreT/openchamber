@@ -10,8 +10,8 @@ use openchamber_native_core::ids::{MessageId, OpenCodeProjectId, PartId, Session
 use openchamber_native_core::session::{LiveStatus, SessionPatch, SessionRecord, SessionTime};
 use openchamber_native_core::session_index::SessionChange;
 use openchamber_native_core::transcript::{
-    AssistantFacts, CompactionStatus, MessageInfo, Part, PartContent, Role, StepOutcome,
-    ToolStatus, TranscriptEvent,
+    AssistantFacts, CompactionStatus, MessageInfo, Part, PartContent, PartTime, Role, StepOutcome,
+    ToolStatus, TranscriptEvent, Usd,
 };
 use serde::Deserialize;
 use serde_json::Value;
@@ -391,7 +391,7 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                         transcript(TranscriptEvent::MessageUpdated(info(Role::User, None))),
                         transcript(TranscriptEvent::PartsReplaced {
                             message_id: message_id.clone(),
-                            parts: projection::user_parts(inbox_id, &user),
+                            parts: projection::user_parts(inbox_id, &user, created),
                         }),
                     ]
                 }
@@ -473,6 +473,10 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                     .get("tokens")
                     .and_then(|tokens| wire::TokenUsage::deserialize(tokens).ok())
                     .map(projection::token_usage);
+                let cost = data
+                    .get("cost")
+                    .and_then(Value::as_f64)
+                    .and_then(Usd::from_dollars);
                 vec![transcript(TranscriptEvent::MessageCompleted {
                     message_id,
                     completed: created,
@@ -480,6 +484,7 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                         finish,
                         error,
                         tokens,
+                        cost,
                     },
                 })]
             }
@@ -503,11 +508,19 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
             } else {
                 part_ids::reasoning(message_id.as_str(), ordinal())
             };
+            // A part starts when its stream starts; an `ended` snapshot stands
+            // in for both ends when the stream was joined late, and the
+            // transcript keeps an earlier streamed start.
+            let ended = kind.ends_with(".ended");
             vec![transcript(TranscriptEvent::PartUpdated {
                 message_id,
                 part: Part {
                     id: PartId::new(id),
                     content,
+                    time: PartTime {
+                        start: Some(created),
+                        end: ended.then_some(created),
+                    },
                 },
             })]
         }
@@ -538,6 +551,7 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                         output: None,
                         elided: None,
                     },
+                    time: PartTime::default(),
                 },
             })],
             _ => Vec::new(),
@@ -573,6 +587,7 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                 part_id: PartId::from(call_id),
                 status,
                 output,
+                at: created,
             })]
         }
         _ => vec![ServerEvent::Unsupported {

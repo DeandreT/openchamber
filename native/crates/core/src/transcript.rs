@@ -83,6 +83,16 @@ pub enum PartContent {
 pub struct Part {
     pub id: PartId,
     pub content: PartContent,
+    pub time: PartTime,
+}
+
+/// When a part was produced, as far as its record says: a history read
+/// gives text its step's window and a tool its run, the live stream the
+/// times its events arrived.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PartTime {
+    pub start: Option<i64>,
+    pub end: Option<i64>,
 }
 
 impl Part {
@@ -90,7 +100,31 @@ impl Part {
         Self {
             id: id.into(),
             content: PartContent::Text { text: text.into() },
+            time: PartTime::default(),
         }
+    }
+}
+
+/// A step's cost in billionths of a US dollar, so costs add exactly.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Usd(u64);
+
+impl Usd {
+    /// `None` for a negative or non-finite amount.
+    pub fn from_dollars(dollars: f64) -> Option<Self> {
+        (dollars.is_finite() && dollars >= 0.0).then(|| Self((dollars * 1e9).round() as u64))
+    }
+
+    pub fn dollars(self) -> f64 {
+        self.0 as f64 / 1e9
+    }
+}
+
+impl std::ops::Add for Usd {
+    type Output = Self;
+
+    fn add(self, other: Self) -> Self {
+        Self(self.0.saturating_add(other.0))
     }
 }
 
@@ -120,6 +154,7 @@ pub struct StepOutcome {
     /// The failure's message when the step failed.
     pub error: Option<String>,
     pub tokens: Option<TokenUsage>,
+    pub cost: Option<Usd>,
 }
 
 /// What an assistant message records about the step that wrote it.
@@ -227,6 +262,8 @@ pub enum TranscriptEvent {
         part_id: PartId,
         status: ToolStatus,
         output: Option<String>,
+        /// When the transition happened: a call's start, a result's end.
+        at: i64,
     },
 }
 
@@ -421,7 +458,7 @@ impl Transcript {
                         if may_repeat_text(existing, &part) {
                             self.overlapping_delta.insert(part.id.clone());
                         }
-                        *existing = part;
+                        *existing = with_streamed_start(existing, part);
                     }
                     None => parts.push(part),
                 }
@@ -520,6 +557,7 @@ impl Transcript {
                 part_id,
                 status: next_status,
                 output: next_output,
+                at,
             } => {
                 let Some(row) = self.row_of(&message_id) else {
                     return TranscriptChange::NeedsReconcile;
@@ -536,6 +574,7 @@ impl Transcript {
                             elided,
                             ..
                         },
+                    time,
                     ..
                 }) = part
                 else {
@@ -544,12 +583,33 @@ impl Transcript {
                 // A transition with output carries the whole result.
                 let next_elided = if next_output.is_some() { None } else { *elided };
                 let next_output = next_output.or_else(|| output.clone());
-                if *status == next_status && *output == next_output && *elided == next_elided {
+                // `applyToolTransition`: a call starts the run; a result ends
+                // it and keeps the start a running call recorded.
+                let next_time = match next_status {
+                    ToolStatus::Running => PartTime {
+                        start: Some(at),
+                        end: None,
+                    },
+                    ToolStatus::Completed | ToolStatus::Error => PartTime {
+                        start: time
+                            .start
+                            .filter(|_| *status == ToolStatus::Running)
+                            .or(Some(at)),
+                        end: Some(at),
+                    },
+                    ToolStatus::Pending => *time,
+                };
+                if *status == next_status
+                    && *output == next_output
+                    && *elided == next_elided
+                    && *time == next_time
+                {
                     return TranscriptChange::Unchanged;
                 }
                 *status = next_status;
                 *output = next_output;
                 *elided = next_elided;
+                *time = next_time;
                 self.touch(row);
                 TranscriptChange::Updated { row }
             }
@@ -793,6 +853,27 @@ fn merge_message(held: &Message, incoming: Message) -> Message {
     }
 }
 
+/// A text or reasoning snapshot that ends a part carries its own time as the
+/// start; the start streamed earlier is the real one and stays
+/// (`withStreamedStart` in `event-reducer.ts`).
+fn with_streamed_start(previous: &Part, mut next: Part) -> Part {
+    let same_kind = matches!(
+        (&previous.content, &next.content),
+        (PartContent::Text { .. }, PartContent::Text { .. })
+            | (PartContent::Reasoning { .. }, PartContent::Reasoning { .. })
+    );
+    if let (true, Some(_), Some(earlier), Some(start)) = (
+        same_kind,
+        next.time.end,
+        previous.time.start,
+        next.time.start,
+    ) && earlier < start
+    {
+        next.time.start = Some(earlier);
+    }
+    next
+}
+
 /// One part from a history read, merged with the held copy
 /// (`mergeMaterializedPart` in `materialization.ts`).
 fn merge_part(existing: &Part, next: Part) -> Part {
@@ -1007,6 +1088,7 @@ mod tests {
                     output: None,
                     elided: None,
                 },
+                time: PartTime::default(),
             }],
         }]);
         let change = transcript.apply(TranscriptEvent::ToolTransition {
@@ -1014,6 +1096,7 @@ mod tests {
             part_id: PartId::from("call_1"),
             status: ToolStatus::Completed,
             output: Some("ok".to_owned()),
+            at: 8,
         });
         assert_eq!(change, TranscriptChange::Updated { row: 0 });
         let part = &transcript.message(0).expect("row exists").parts[0];
@@ -1057,6 +1140,7 @@ mod tests {
                     output: Some(output.to_owned()),
                     elided,
                 },
+                time: PartTime::default(),
             }],
         };
         let mut transcript = Transcript::from_history(vec![tool("a.rs", None)]);
@@ -1197,6 +1281,7 @@ mod tests {
                 output: None,
                 elided: None,
             },
+            time: PartTime::default(),
         };
         let mut transcript = Transcript::from_history(vec![Message {
             info: MessageInfo {

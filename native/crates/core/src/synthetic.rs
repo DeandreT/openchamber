@@ -8,7 +8,7 @@ use crate::chat_roots::ChatRoots;
 use crate::ids::{MessageId, PartId, ProjectId, SessionId};
 use crate::ownership::{ConfiguredProject, ProjectWorktrees, WorktreeInfo};
 use crate::session::{SessionOverlay, SessionRecord, SessionTime};
-use crate::transcript::{Message, MessageInfo, Part, PartContent, Role, ToolStatus};
+use crate::transcript::{Message, MessageInfo, Part, PartContent, PartTime, Role, ToolStatus};
 
 /// The home directory every synthetic runtime reports.
 pub const HOME: &str = "/home/synthetic";
@@ -312,6 +312,7 @@ fn assistant_parts(message_id: &MessageId, turn: usize, shape: ConversationShape
     let part = |index: usize, content: PartContent| Part {
         id: PartId::new(format!("{message_id}-p{index}")),
         content,
+        time: PartTime::default(),
     };
     match shape {
         ConversationShape::Short => vec![part(

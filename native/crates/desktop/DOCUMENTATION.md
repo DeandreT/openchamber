@@ -34,6 +34,10 @@ read-only until prompt submission has its error and reconciliation paths.
 - `context_panel.rs` also reads the selected session's context fill against
   the limit `useContextWindowLimits` picks (the record's model, the newest
   answer's, the composer's) and draws its row and meter.
+- `turn_stats_section.rs` draws the card's Turn stats from the core's
+  `turn_stats`, recomputed while the session is idle and kept while it
+  works; `context_panel.rs` holds the card's shared collapsible section and
+  readout row.
 - `prompt_rail.rs` draws the prompt navigator at the transcript's end edge:
   one tick per prompt, the current one longer, following the reading line
   as `scrollSpy.ts` does, in the narrow clipping gutter when the message

@@ -11,7 +11,7 @@ use openchamber_native_core::send_config::{AgentMode, ModelChoice};
 use openchamber_native_core::session::{LiveStatus, SessionKind, SessionRecord};
 use openchamber_native_core::session_index::SessionIndex;
 use openchamber_native_core::transcript::{
-    CompactionStatus, Message, PartContent, Role, ToolStatus, Transcript, TranscriptChange,
+    CompactionStatus, Message, Part, PartContent, Role, ToolStatus, Transcript, TranscriptChange,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -156,10 +156,10 @@ fn normalize_message(message: &Message) -> Value {
         .iter()
         .map(|part| match &part.content {
             PartContent::Text { text } => {
-                json!({"id": part.id.as_str(), "type": "text", "text": text})
+                json!({"id": part.id.as_str(), "type": "text", "text": text, "time": part_time(part)})
             }
             PartContent::Reasoning { text } => {
-                json!({"id": part.id.as_str(), "type": "reasoning", "text": text})
+                json!({"id": part.id.as_str(), "type": "reasoning", "text": text, "time": part_time(part)})
             }
             PartContent::Tool {
                 tool,
@@ -179,6 +179,7 @@ fn normalize_message(message: &Message) -> Value {
                 },
                 "output": output,
                 "elided": elided,
+                "time": part_time(part),
             }),
             PartContent::File { filename, mime } => {
                 json!({"id": part.id.as_str(), "type": "file", "filename": filename, "mime": mime})
@@ -199,6 +200,7 @@ fn normalize_message(message: &Message) -> Value {
             "model": facts.model.as_ref().map(normalize_model),
             "finish": facts.outcome.finish,
             "error": facts.outcome.error,
+            "cost": facts.outcome.cost.map(|cost| (cost.dollars() * 1e9).round() as u64),
             "tokens": facts.outcome.tokens.map(|tokens| json!({
                 "input": tokens.input,
                 "output": tokens.output,
@@ -224,10 +226,21 @@ fn project_page(raw: &str, limit: usize) -> MessagePage {
 }
 
 /// Ids and parts only: live events stamp event times, history its own.
+fn part_time(part: &Part) -> Value {
+    json!({"start": part.time.start, "end": part.time.end})
+}
+
 fn without_times(message: &Message) -> Value {
     let mut value = normalize_message(message);
     value["created"] = Value::Null;
     value["completed"] = Value::Null;
+    if let Some(parts) = value["parts"].as_array_mut() {
+        for part in parts {
+            if let Some(part) = part.as_object_mut() {
+                part.remove("time");
+            }
+        }
+    }
     value
 }
 
