@@ -61,9 +61,9 @@ secret service on it, which outlive the run and ask the user to unlock their
 keyring. The session starts the accessibility bus and registry itself, and
 `xsettingsd` publishes fontconfig's `system-ui` family as the GTK font, which
 Chromium's `system-ui` follows on a desktop. When the run ends, every process
-attached to the private bus is stopped. The bus daemon now and then dies
-before the session starts; the display is then started again, at most three
-times, which is safe because nothing has run yet.
+attached to the private bus is stopped. The session's work directory lives in
+`XDG_RUNTIME_DIR` (else `/tmp`): the bus socket inside it must stay within
+the 108-byte socket path limit whatever `TMPDIR` is.
 
 Ad hoc probes that open windows use the same display:
 
