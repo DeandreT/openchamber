@@ -42,7 +42,9 @@ and the same OpenCode configuration the isolated server uses
 (`isolatedOpencodeConfig` in `scripts/perf/isolated-server.mjs`). Both copies
 pin the theme (`useSystemTheme: false`, `themeId`, the derived `themeVariant`
 and that variant's theme ID, all of which the web reads); the native client
-reads the same theme from `OPENCHAMBER_NATIVE_THEME`.
+reads the same theme from `OPENCHAMBER_NATIVE_THEME`. Each client runs with
+its copy's own home and XDG directories, so lookups under them, such as the
+file manager's icon, see the same files.
 
 Both clients run at the standard client size of 1,280 by 800 logical pixels,
 under X11 and at a fixed device scale: `--force-device-scale-factor` for
