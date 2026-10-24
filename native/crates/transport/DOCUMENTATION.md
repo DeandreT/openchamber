@@ -14,7 +14,7 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `endpoint.rs` | The user-selected base URL, its path prefix and the `ws`/`wss` form of a route. |
 | `identity.rs` | `/health` parsing, API compatibility and capabilities. |
 | `credential.rs` | The credential a client sends; its `Debug` output is redacted. |
-| `client.rs` | `ServerClient`: identity probe, password login, session pages, message pages, whole messages, running status, settings, Chats roots, projects and worktrees. |
+| `client.rs` | `ServerClient`: identity probe, password login, session pages, message pages, whole messages, running status, settings reads and writes, Chats roots, projects and worktrees. |
 | `catalog.rs` | The composer's catalogs in one directory: agents, the flat model catalog with OpenCode's default model, folded config defaults, the skill count and the connected MCP count. |
 | `project.rs` | A directory's Git status (`GET /api/git/status`) and a project's configured actions (`GET /api/projects/:projectId/config`, the path-derived ID). |
 | `public_asset.rs` | `PublicAssetClient`: public assets the web client loads from third-party hosts, such as models.dev's provider logos. |
@@ -54,6 +54,9 @@ counts and identifiers only.
   `GET /api/sessions/status`. None of them starts an OpenCode location. A
   directory the server could not list is reported alone and never erases
   another project's worktrees.
+- Settings writes send only the changed keys with
+  `PUT /api/config/settings?surface=desktop`, as the web client does, and
+  return the merged document the server answers with.
 - The event stream delivers through a bounded channel and waits for the
   consumer instead of dropping events. A socket that does not send `ready`
   within 2 s or falls silent for 30 s is replaced, as the web client does.

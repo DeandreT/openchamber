@@ -5,7 +5,6 @@
 //! the affected row; tail following continues only while the reader is at
 //! the end.
 
-use gpui_kit::component::text::TextView;
 use gpui_kit::{
     AnyElement, Context, ElementId, FontWeight, InteractiveElement, IntoElement, ParentElement,
     Role, StatefulInteractiveElement, Styled, TestSupportExt, Window, div, list,
@@ -18,10 +17,10 @@ use crate::chrome::{self, glyph};
 use crate::connection::ConnectionFailure;
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
+use crate::markdown_view::{self, Author};
 use crate::theme::Palette;
 use crate::workspace::{History, Workspace};
 
-const MARKDOWN_SIZE: f32 = 0.875;
 const META_SIZE: f32 = 0.781_25;
 
 impl Workspace {
@@ -195,11 +194,17 @@ impl Workspace {
                 .when_some(tail, |this, tail| this.h(px(tail)))
                 .into_any_element();
         };
+        // A message's own spacing (`MessageList`): 16 px above a user's
+        // message, 8 px below an assistant's.
+        let (above, below) = match message.info.role {
+            MessageRole::Assistant => (0.0, 8.0),
+            _ => (16.0, 0.0),
+        };
         div()
             .id(ElementId::Name(message.info.id.as_str().to_owned().into()))
             .w_full()
-            .pt(px(16.0))
-            .when_some(tail, |this, tail| this.pb(px(tail)))
+            .pt(px(above))
+            .pb(px(below + tail.unwrap_or_default()))
             .flex()
             .justify_center()
             .child(
@@ -211,12 +216,6 @@ impl Workspace {
             )
             .into_any_element()
     }
-}
-
-fn markdown(id: &str, text: &str) -> TextView {
-    TextView::markdown(ElementId::Name(id.to_owned().into()), text.to_owned())
-        .selectable(true)
-        .text_size(rems(MARKDOWN_SIZE))
 }
 
 fn user_message(message: &Message, palette: &Palette) -> AnyElement {
@@ -236,7 +235,12 @@ fn user_message(message: &Message, palette: &Palette) -> AnyElement {
                 .py_2()
                 .rounded(px(12.0))
                 .bg(palette.user_message_background)
-                .child(markdown(&part_id, &text)),
+                .child(markdown_view::markdown(
+                    &part_id,
+                    &text,
+                    palette,
+                    Author::User,
+                )),
         )
         .into_any_element()
 }
@@ -253,10 +257,16 @@ fn notice_message(message: &Message, palette: &Palette) -> AnyElement {
 }
 
 fn assistant_message(message: &Message, palette: &Palette) -> AnyElement {
-    let mut column = div().flex().flex_col().gap_2();
+    // The text parts' `my-1`.
+    let mut column = div().py(px(4.0)).flex().flex_col().gap_2();
     for part in &message.parts {
         column = match &part.content {
-            PartContent::Text { text } => column.child(markdown(part.id.as_str(), text)),
+            PartContent::Text { text } => column.child(markdown_view::markdown(
+                part.id.as_str(),
+                text,
+                palette,
+                Author::Assistant,
+            )),
             PartContent::Reasoning { text } => column.child(
                 div()
                     .text_size(rems(META_SIZE))

@@ -21,13 +21,14 @@ use openchamber_native_core::tool_names;
 use openchamber_native_core::transcript::{
     PartContent, ToolStatus, TranscriptChange, TranscriptEvent,
 };
-use openchamber_native_transport::client::{MessagePage, ServerClient};
+use openchamber_native_transport::client::{MessagePage, ServerClient, SettingsChanges};
 use openchamber_native_transport::credential::Credential;
 use openchamber_native_transport::error::TransportError;
 use openchamber_native_transport::event::ServerEvent;
 use openchamber_native_transport::identity::{GLOBAL_EVENTS_CAPABILITY, ServerIdentity};
 use openchamber_native_transport::stream::{EventStream, StreamItem};
 
+use crate::code_card::CodeWrap;
 use crate::connection::{ConnectionFailure, ConnectionState};
 use crate::diagnostics::Marker;
 use crate::workspace::{History, OpenSession, Topology, Workspace};
@@ -312,6 +313,42 @@ impl Workspace {
             .reconcile_snapshot(active, known.iter(), now_ms());
     }
 
+    /// Turns code line wrapping on or off and saves the choice as the web
+    /// does. A failed save keeps the choice on screen.
+    pub(crate) fn toggle_code_wrap(&mut self, cx: &mut Context<Self>) {
+        let wrap = !cx.try_global::<CodeWrap>().copied().unwrap_or_default().0;
+        self.show_code_wrap(wrap, cx);
+        self.code_wrap_saves += 1;
+        let save = self.code_wrap_saves;
+        let Some(connection) = self.connection.as_mut() else {
+            return;
+        };
+        let Some(client) = connection.client.clone() else {
+            return;
+        };
+        let changes = SettingsChanges {
+            code_block_line_wrap: Some(wrap),
+        };
+        let task = connection
+            .network
+            .run(async move { client.save_settings(&changes).await });
+        cx.spawn(async move |this, cx| {
+            let Some(result) = task.await else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(settings) if save == this.code_wrap_saves => {
+                    if let Some(wrap) = settings.code_block_line_wrap {
+                        this.show_code_wrap(wrap, cx);
+                    }
+                }
+                Ok(_) => {}
+                Err(error) => tracing::warn!(%error, "the code wrap setting could not be saved"),
+            });
+        })
+        .detach();
+    }
+
     fn load_topology(&mut self, cx: &mut Context<Self>) {
         let Some(connection) = self.connection.as_mut() else {
             return;
@@ -355,6 +392,9 @@ impl Workspace {
                                 .any(|project| project.path == entry.project_path)
                         });
                         this.topology.projects = settings.projects.clone();
+                        if let Some(wrap) = settings.code_block_line_wrap {
+                            this.show_code_wrap(wrap, cx);
+                        }
                         this.send_catalog.settings = Some(settings);
                     }
                     Err(error) => tracing::warn!(%error, "the settings could not be read"),

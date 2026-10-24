@@ -67,6 +67,15 @@ read-only until prompt submission has its error and reconciliation paths.
   `composer_view.rs`, `model_controls.rs` and `context_panel.rs` render their
   parts. They dispatch
   to `Workspace` methods and never interpret records themselves.
+- `markdown_view.rs` renders message Markdown through Kit's text view with
+  the web's body color and block spacing. Headings (`markdown_view.rs`),
+  lists (`markdown_list.rs`) and fenced code (`code_card.rs`) are custom
+  blocks drawn to the web's `.markdown-content` rules; their inline content
+  goes through nested text views with the same blocks. A selection crossing
+  a custom block takes it whole. Code is highlighted with tree-sitter in the
+  theme's syntax colors (`theme.rs` builds Kit's highlight theme), and the
+  code wrap choice is the `codeBlockLineWrap` setting, saved through
+  `server_sync.rs`.
 - `chrome.rs` owns the shared controls (sprite glyphs, quiet icon buttons),
   the drag region and window controls of the frameless window and the
   content size inside a client-side frame, and holds a new window at its
@@ -89,7 +98,9 @@ read-only until prompt submission has its error and reconciliation paths.
 - Pointer, keyboard and accessibility activation reach the same `Workspace`
   method: every control registers its action through
   `activation::on_activate`, which installs both the pointer click and the
-  AccessKit Click handler.
+  AccessKit Click handler. Controls inside a Markdown custom block render
+  without the workspace's context; they install both handlers themselves and
+  reach the workspace through an action.
 - Timing markers end when the frame that shows the result paints. A zero-size
   canvas at the end of the workspace tree emits them, so they measure the
   client's own work and do not wait for compositor presentation.

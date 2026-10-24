@@ -39,6 +39,7 @@ use openchamber_native_core::transcript::{
 use openchamber_native_core::turn_stats::TurnStats;
 
 use crate::chrome::InitialSize;
+use crate::code_card::CodeWrap;
 use crate::composer_view::ComposerSlot;
 use crate::connection::{Connection, ConnectionFailure};
 use crate::diagnostics::{self, Marker};
@@ -136,6 +137,9 @@ pub struct Workspace {
     pub(crate) connection: Option<Connection>,
     /// The composer's catalogs and defaults; empty for synthetic data.
     pub(crate) send_catalog: SendCatalog,
+    /// Code wrap saves started; a save's answer applies only while it is
+    /// the latest.
+    pub(crate) code_wrap_saves: u64,
     pub(crate) provider_logos: ProviderLogos,
     pub(crate) project_readouts: ProjectReadouts,
     /// Set while the new window's content is held at its requested size.
@@ -209,6 +213,7 @@ impl Workspace {
             live_status: HashMap::new(),
             connection,
             send_catalog: SendCatalog::default(),
+            code_wrap_saves: 0,
             provider_logos: ProviderLogos::default(),
             project_readouts: ProjectReadouts::default(),
             initial_size: None,
@@ -682,6 +687,19 @@ impl Workspace {
         {
             open.list.set_follow_mode(FollowMode::Tail);
             open.list.scroll_to_end();
+        }
+        cx.notify();
+    }
+
+    /// Shows code wrapped or not; every transcript row is measured again,
+    /// since code blocks change height.
+    pub(crate) fn show_code_wrap(&mut self, wrap: bool, cx: &mut Context<Self>) {
+        if cx.try_global::<CodeWrap>().copied().unwrap_or_default() == CodeWrap(wrap) {
+            return;
+        }
+        cx.set_global(CodeWrap(wrap));
+        for open in self.open_sessions.values() {
+            open.list.remeasure();
         }
         cx.notify();
     }

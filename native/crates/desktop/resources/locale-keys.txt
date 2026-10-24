@@ -99,6 +99,10 @@ header.workStatusPanel.toggleAria
 integrationsCatalog.sidebar.open
 layout.mainTab.terminal
 layout.rightSidebar.git
+markdownRenderer.code.actions.copiedTitle
+markdownRenderer.code.actions.copyTitle
+markdownRenderer.code.actions.disableWrapTitle
+markdownRenderer.code.actions.enableWrapTitle
 onboarding.desktopRecovery.incompatibleServer.description
 onboarding.desktopRecovery.remoteUnreachable.description
 onboarding.remoteConnection.probe.authMessage

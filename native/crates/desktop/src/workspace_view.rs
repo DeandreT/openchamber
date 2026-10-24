@@ -27,6 +27,8 @@ actions!(
         SelectPreviousSession,
         /// Stops the selected session's response.
         StopGenerating,
+        /// Turns line wrapping in code blocks on or off.
+        ToggleCodeWrap,
     ]
 );
 
@@ -94,6 +96,9 @@ impl Render for Workspace {
                 this.select_adjacent(-1, window, cx);
             }))
             .on_action(cx.listener(|this, _: &StopGenerating, _, cx| this.stop(cx)))
+            .on_action(cx.listener(|this, _: &ToggleCodeWrap, _, cx| {
+                this.toggle_code_wrap(cx);
+            }))
             .size_full()
             .flex_row_from(direction)
             .bg(palette.background)
