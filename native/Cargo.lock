@@ -4975,6 +4975,7 @@ dependencies = [
 name = "openchamber-native-desktop"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "gpui-kit",
  "openchamber-native-core",
  "openchamber-native-transport",

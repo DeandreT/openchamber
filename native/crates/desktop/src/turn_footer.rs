@@ -3,18 +3,23 @@
 //!
 //! The row reserves the width of the message actions, which the web shows on
 //! hover and lays out at all times, so the facts fit as they do there. The
-//! time fact is left out: formatting local time needs a time-zone source the
-//! native workspace does not have yet.
+//! time fact is the step's completion (else its creation) in the local time
+//! zone, written with the locale's exported `Intl` data.
 
+use std::sync::Arc;
+
+use chrono::{Datelike, Local, NaiveDate, TimeZone, Timelike};
 use gpui_kit::{
-    AnyElement, Context, Hsla, IntoElement, ParentElement, SharedString, Styled, Window, div, px,
+    AnyElement, Context, FontFeatures, Hsla, IntoElement, ParentElement, SharedString, Styled,
+    Window, div, prelude::FluentBuilder, px,
 };
+use openchamber_native_core::message_time::{ClockPreference, LocalDate, LocalDateTime};
 use openchamber_native_core::send_config::{self, ModelChoice};
 use openchamber_native_core::transcript::{Message, PartContent};
 use openchamber_native_core::turn_footer::{self, FactWidths, ShownFacts};
 
 use crate::baseline::CssTextExt;
-use crate::locale::Direction;
+use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
 use crate::theme::Palette;
 use crate::workspace::Workspace;
@@ -46,6 +51,7 @@ struct Facts {
     effort: Option<SharedString>,
     agent: Option<SharedString>,
     duration: Option<SharedString>,
+    time: Option<SharedString>,
 }
 
 impl Workspace {
@@ -60,20 +66,33 @@ impl Workspace {
         window: &Window,
         cx: &Context<Self>,
     ) -> Option<AnyElement> {
-        let facts = self.turn_facts(row, message)?;
-        let measure = |text: &str| text_width(text, window);
+        let facts = self.turn_facts(row, message, cx)?;
+        let measure = |text: &str| text_width(text, window, false);
+        let measure_digits = |text: &str| text_width(text, window, true);
         let fact_width = |text: &str| FACT_GAP + measure(SEPARATOR) + FACT_GAP + measure(text);
         let widths = FactWidths {
             model: ICON + FACT_GAP + measure(&facts.model_name),
             effort: facts.effort.as_deref().map(fact_width),
             agent: facts.agent.as_deref().map(fact_width),
-            duration: facts.duration.as_deref().map(fact_width),
-            timestamp: None,
+            duration: facts
+                .duration
+                .as_deref()
+                .map(|text| FACT_GAP + measure(SEPARATOR) + FACT_GAP + measure_digits(text)),
+            timestamp: facts
+                .time
+                .as_deref()
+                .map(|text| FACT_GAP + measure(SEPARATOR) + FACT_GAP + measure_digits(text)),
         };
         let available = self.composer_width(window) - ROW_GAP - ACTIONS_WIDTH;
-        let ShownFacts { effort, agent, .. } = turn_footer::fit_facts(available, widths);
+        let ShownFacts {
+            effort,
+            agent,
+            timestamp,
+        } = turn_footer::fit_facts(available, widths);
         let color = palette.muted_foreground.opacity(TEXT_ALPHA);
-        let fact = |text: SharedString| render_fact(text, color, direction, cx);
+        let fact =
+            |text: SharedString| render_fact(text, color, Digits::Proportional, direction, cx);
+        let digits = |text: SharedString| render_fact(text, color, Digits::Tabular, direction, cx);
         let icon = self
             .render_provider_logo(&facts.model.provider_id, ICON, 1.0, palette)
             .unwrap_or_else(|| div().size(px(ICON)).flex_shrink_0().into_any_element());
@@ -109,7 +128,8 @@ impl Workspace {
                     .child(model)
                     .children(facts.effort.filter(|_| effort).map(&fact))
                     .children(facts.agent.filter(|_| agent).map(&fact))
-                    .children(facts.duration.map(&fact)),
+                    .children(facts.duration.map(&digits))
+                    .children(facts.time.filter(|_| timestamp).map(&digits)),
             )
             // The message actions appear on hover; their place is kept.
             .child(div().w(px(ACTIONS_WIDTH)).flex_shrink_0());
@@ -122,7 +142,7 @@ impl Workspace {
         )
     }
 
-    fn turn_facts(&self, row: usize, message: &Message) -> Option<Facts> {
+    fn turn_facts(&self, row: usize, message: &Message, cx: &Context<Self>) -> Option<Facts> {
         let open = self.open_sessions.get(self.selected.as_ref()?)?;
         let position = open.transcript.turn_position(row)?;
         let assistant = message.info.assistant.as_ref()?;
@@ -151,6 +171,15 @@ impl Workspace {
             .and_then(|entry| entry.providers.ready())
             .map(Vec::as_slice)
             .unwrap_or_default();
+        let time = message_time(
+            message.info.completed.unwrap_or(message.info.created),
+            self.send_catalog
+                .settings
+                .as_ref()
+                .map(|settings| settings.clock)
+                .unwrap_or_default(),
+            cx,
+        );
         let duration = position
             .prompt_created
             .zip(message.info.completed)
@@ -169,15 +198,61 @@ impl Workspace {
                 .or_else(|| session.and_then(|session| session.agent.clone()))
                 .map(SharedString::from),
             duration,
+            time,
             model,
         })
     }
+}
+
+/// How a fact's digits are set: `tabular-nums` for the duration and time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Digits {
+    Proportional,
+    Tabular,
+}
+
+fn tabular() -> FontFeatures {
+    FontFeatures(Arc::new(vec![("tnum".to_owned(), 1)]))
+}
+
+/// The message time as `formatTimestampForDisplay` writes it, in the local
+/// time zone; `None` for a time the zone cannot place.
+fn message_time(
+    timestamp_ms: i64,
+    clock: ClockPreference,
+    cx: &Context<Workspace>,
+) -> Option<SharedString> {
+    let moment = Local.timestamp_millis_opt(timestamp_ms).single()?;
+    let today = Local::now().date_naive();
+    let local_date = |date: NaiveDate| LocalDate {
+        year: date.year(),
+        month: date.month(),
+        day: date.day(),
+    };
+    let strings = locale::strings(cx);
+    let text = strings.dates().message_time(
+        &LocalDateTime {
+            date: local_date(moment.date_naive()),
+            hour: moment.hour(),
+            minute: moment.minute(),
+        },
+        local_date(today),
+        local_date(today.pred_opt()?),
+        clock,
+        |time| {
+            strings
+                .format("common.date.yesterdayWithTime", &[("time", time)])
+                .to_string()
+        },
+    );
+    Some(text.into())
 }
 
 /// One fact after the model: its separator and text.
 fn render_fact(
     text: SharedString,
     color: Hsla,
+    digits: Digits,
     direction: Direction,
     cx: &Context<Workspace>,
 ) -> AnyElement {
@@ -193,13 +268,25 @@ fn render_fact(
                 .text_color(color.opacity(SEPARATOR_OPACITY))
                 .child(SEPARATOR),
         )
-        .child(div().css_text(TEXT_SIZE, TEXT_LINE, cx).child(text))
+        .child(
+            div()
+                .css_text(TEXT_SIZE, TEXT_LINE, cx)
+                .when(digits == Digits::Tabular, |this| {
+                    this.font_features(tabular())
+                })
+                .child(text),
+        )
         .into_any_element()
 }
 
-/// The width of `text` in the UI font at the footer's size.
-fn text_width(text: &str, window: &Window) -> f32 {
-    let run = window.text_style().to_run(text.len());
+/// The width of `text` in the UI font at the footer's size, with tabular
+/// digits when `tabular` is set.
+fn text_width(text: &str, window: &Window, tabular_digits: bool) -> f32 {
+    let mut style = window.text_style();
+    if tabular_digits {
+        style.font_features = tabular();
+    }
+    let run = style.to_run(text.len());
     f32::from(
         window
             .text_system()

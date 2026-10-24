@@ -107,6 +107,7 @@ Rust 1.97.1 with the Windows MSVC target for the initial implementation.
 | `eventsource-stream` / `futures-util` | `0.2.3` / `0.3.34` | Incremental SSE decoding and stream consumption |
 | `tracing` / `tracing-subscriber` | `0.1.44` / `0.3.23` | Local structured diagnostics and timing |
 | `thiserror` | `2.0.21` | Typed errors at adapter boundaries |
+| `chrono` | `0.4.45` | The local time zone for message times; locale text comes from exported `Intl` data |
 
 Add dependencies with their first use. GPUI Kit re-exports its matching GPUI
 snapshot. Its 0.7.3 manifest pins the GPUI snapshot family to 0.3.9. Use those

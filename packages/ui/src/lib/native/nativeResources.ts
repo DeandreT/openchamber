@@ -18,6 +18,7 @@ import { getReadableThemeColors } from '@/lib/theme/readableColors';
 import { agentColorPalette } from '@/lib/agentColorPalette';
 import { PROVIDER_LOGO_ALIASES } from '@/lib/providerLogoCandidates';
 import { getLocaleDirection, LOCALES, type Locale } from '@/lib/i18n/runtime';
+import { getIntlLocale } from '@/lib/i18n/intl';
 import type { I18nDictionary } from '@/lib/i18n/store';
 import { dict as en } from '@/lib/i18n/messages/en';
 import { dict as de } from '@/lib/i18n/messages/de';
@@ -47,6 +48,7 @@ export const NATIVE_THEMES_PATH = `${resourcesDirectory}/themes.json`;
 export const NATIVE_ICON_NAMES_PATH = `${resourcesDirectory}/icon-names.txt`;
 export const NATIVE_ICONS_PATH = `${resourcesDirectory}/icons.json`;
 export const NATIVE_PROVIDER_LOGOS_PATH = `${resourcesDirectory}/provider-logos.json`;
+export const NATIVE_DATE_FORMATS_PATH = `${resourcesDirectory}/date-formats.json`;
 /** The provider logos the web bundles, one SVG per provider ID. */
 const PROVIDER_LOGOS_DIRECTORY = 'packages/ui/src/assets/provider-logos';
 
@@ -157,12 +159,55 @@ export const renderNativeProviderLogos = (): string => {
   return `${JSON.stringify({ aliases: Object.fromEntries(PROVIDER_LOGO_ALIASES), logos }, null, 2)}\n`;
 };
 
+/**
+ * How each locale writes a message's time, as `formatTimestampForDisplay`
+ * asks `Intl` for it: the short month names and, for the 12- and 24-hour
+ * clocks, the order of hour, minute and day period with the hour and day
+ * period each hour of the day shows. The native client has no locale data
+ * of its own, so it fills these in rather than formatting.
+ */
+export const renderNativeDateFormats = (): string => {
+  const document: Record<string, unknown> = {};
+  for (const locale of LOCALES) {
+    const intl = getIntlLocale(locale);
+    const clock = (hour12: boolean) => {
+      const format = new Intl.DateTimeFormat(intl, { hour: 'numeric', minute: '2-digit', hour12 });
+      let layout: string[] | null = null;
+      const hours: string[] = [];
+      const dayPeriods: string[] = [];
+      for (let hour = 0; hour < 24; hour += 1) {
+        const parts = format.formatToParts(new Date(2026, 0, 1, hour, 5));
+        const shape = parts.map((part) => (
+          part.type === 'literal' ? part.value : `{${part.type}}`
+        ));
+        if (layout && shape.join('\u0000') !== layout.join('\u0000')) {
+          throw new Error(`${intl} writes ${hour}:05 in another layout`);
+        }
+        layout = shape;
+        const minute = parts.find((part) => part.type === 'minute')?.value;
+        if (minute !== '05') throw new Error(`${intl} writes minute 5 as ${minute}`);
+        hours.push(parts.find((part) => part.type === 'hour')?.value ?? '');
+        dayPeriods.push(parts.find((part) => part.type === 'dayPeriod')?.value ?? '');
+      }
+      return { layout, hours, dayPeriods };
+    };
+    document[locale] = {
+      hour12ByDefault: new Intl.DateTimeFormat(intl, { hour: 'numeric' }).resolvedOptions().hour12 === true,
+      months: Array.from({ length: 12 }, (_, month) => new Date(2026, month, 1).toLocaleString(intl, { month: 'short' })),
+      twelveHour: clock(true),
+      twentyFourHour: clock(false),
+    };
+  }
+  return `${JSON.stringify(document, null, 2)}\n`;
+};
+
 const writeNativeResources = (): string[] => {
   const outputs: Array<[string, string]> = [
     [NATIVE_LOCALES_PATH, renderNativeLocales()],
     [NATIVE_THEMES_PATH, renderNativeThemes()],
     [NATIVE_ICONS_PATH, renderNativeIcons()],
     [NATIVE_PROVIDER_LOGOS_PATH, renderNativeProviderLogos()],
+    [NATIVE_DATE_FORMATS_PATH, renderNativeDateFormats()],
   ];
   return outputs.map(([relativePath, content]) => {
     const target = resolve(repoRoot, relativePath);

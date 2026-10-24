@@ -20,6 +20,7 @@ const INTL_LOCALE_BY_LOCALE: Record<Locale, string> = {
   he: 'he-IL',
 };
 
-const getIntlLocale = (locale: Locale): string => INTL_LOCALE_BY_LOCALE[locale] ?? 'en-US';
+/** @public Also read by the native resource export (`lib/native/nativeResources.ts`). */
+export const getIntlLocale = (locale: Locale): string => INTL_LOCALE_BY_LOCALE[locale] ?? 'en-US';
 
 export const getCurrentIntlLocale = (): string => getIntlLocale(useI18nStore.getState().locale);

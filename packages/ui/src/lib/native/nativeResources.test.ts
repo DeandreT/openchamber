@@ -4,10 +4,12 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import {
+  NATIVE_DATE_FORMATS_PATH,
   NATIVE_ICONS_PATH,
   NATIVE_LOCALES_PATH,
   NATIVE_PROVIDER_LOGOS_PATH,
   NATIVE_THEMES_PATH,
+  renderNativeDateFormats,
   renderNativeIcons,
   renderNativeLocales,
   renderNativeProviderLogos,
@@ -29,6 +31,10 @@ describe('native desktop resources', () => {
 
   test('the checked-in icons match the icon sprite', () => {
     expect(checkedIn(NATIVE_ICONS_PATH)).toBe(renderNativeIcons());
+  });
+
+  test('the checked-in date formats match the runtime\'s Intl data', () => {
+    expect(checkedIn(NATIVE_DATE_FORMATS_PATH)).toBe(renderNativeDateFormats());
   });
 
   test('the checked-in provider logos match the bundled logos and aliases', () => {
