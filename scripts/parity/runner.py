@@ -274,6 +274,17 @@ def settle(client) -> bool:
     return False
 
 
+def wait_selected(client, key: str, timeout_s: float = 15.0) -> bool:
+    """Waits for the requested row, so an unrelated selected session cannot
+    satisfy a click's postcondition."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if any(row["key"] == key and row.get("selected") for row in client.rows()):
+            return True
+        time.sleep(0.1)
+    return False
+
+
 def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], directory: Path, args: argparse.Namespace) -> dict:
     """Runs the steps and returns the evidence of every checkpoint."""
     checkpoints: dict[str, dict] = {}
@@ -284,7 +295,13 @@ def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], dire
             met = client.wait_for(condition[kind], float(condition.get("timeout", 30)))
             waits.append({"condition": condition[kind], "met": met})
         elif "click" in step:
-            client.click(resolve_row(client.rows(), step["click"]))
+            # Hydration can move rows between resolving a target and pressing
+            # it. A quiet startup is a prerequisite for reproducible input.
+            if not settle(client):
+                raise TimeoutError("the client never settled before row selection")
+            key = resolve_row(client.rows(), step["click"])
+            client.click(key)
+            waits.append({"condition": {"selectedRow": key}, "met": wait_selected(client, key)})
         elif "key" in step:
             client.key(step["key"])
         elif "type" in step:
