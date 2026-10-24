@@ -107,6 +107,11 @@ class ElectronClient:
         """Rectangles of controls by ``{"selector": ...}`` or ``{"button": text}``."""
         return self._call("targets", specs=specs)["rects"]
 
+    def text_boxes(self) -> list[list[float]]:
+        """The boxes of the visible text, ``[x, y, width, height]`` in CSS
+        pixels."""
+        return self._call("textBoxes")["boxes"]
+
     def click(self, row_key: str) -> None:
         row = f'[data-sidebar-row-key="{row_key}"]'
         self._call("click", selector=f"{row} [data-session-row], {row} button", within=row)

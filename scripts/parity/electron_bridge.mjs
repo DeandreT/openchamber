@@ -9,8 +9,8 @@
  * same hit-testing and focus paths as a user's. Nothing here calls
  * application code directly.
  *
- * Commands: launch, wait, rows, inflight, rects, targets, observe, fonts, click, key,
- * type, text, screenshot, close.
+ * Commands: launch, wait, rows, inflight, rects, targets, textBoxes, observe, fonts,
+ * click, key, type, text, screenshot, close.
  */
 import { spawn } from "node:child_process"
 import { writeFileSync } from "node:fs"
@@ -145,6 +145,35 @@ const handlers = {
       })()`)
     }
     return { rects }
+  },
+  /**
+   * The boxes of the visible text on screen: every line box of every
+   * rendered text node, and every text field (placeholders are not text
+   * nodes). The glyph-edge exception applies only inside them.
+   */
+  async textBoxes() {
+    return { boxes: await evaluate(`(() => {
+      const boxes = []
+      const inView = (rect) => rect.width > 0 && rect.height > 0 && rect.right > 0 && rect.bottom > 0
+        && rect.left < innerWidth && rect.top < innerHeight
+      const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT)
+      const range = document.createRange()
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        if (!node.data.trim()) continue
+        const parent = node.parentElement
+        if (!parent?.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue
+        range.selectNodeContents(node)
+        for (const rect of range.getClientRects()) {
+          if (inView(rect)) boxes.push([rect.x, rect.y, rect.width, rect.height])
+        }
+      }
+      for (const field of document.querySelectorAll('input, textarea')) {
+        if (!field.checkVisibility({ opacityProperty: true, visibilityProperty: true })) continue
+        const rect = field.getBoundingClientRect()
+        if (inView(rect)) boxes.push([rect.x, rect.y, rect.width, rect.height])
+      }
+      return boxes
+    })()`) }
   },
   /**
    * Clicks the centre of `selector`. With `within`, the element under that

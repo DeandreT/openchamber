@@ -95,7 +95,17 @@ is measured from the same root. Runs are serial and each client starts fresh.
 A scenario passes only when every checkpoint matches in size and pixels, rows
 and geometry; geometry allows one physical pixel. `--tolerance` ignores
 per-channel differences up to its value and is for reviewed rasterization
-noise only. A check the candidate's platform API cannot report (AT-SPI carries
+noise only. Glyph-edge noise is forgiven only at the checkpoints
+`exceptions.json` lists, each with its region, reason and the user's
+decision: there the reference's visible text boxes (text nodes' line boxes
+and text fields, read after the screenshot) bound where a differing pixel may
+count as noise, and only when each image's colour lies within the range the
+other holds in the pixel's 3x3 neighbourhood (give or take `GLYPH_SLACK`
+levels): the same ink within a pixel, as the geometry rule allows. Such pixels are reported as `glyphEdgePixels` and drawn
+yellow in the difference image; moved, missing or recoloured glyphs leave
+solid differences and still count. `compare_test.py` checks that split
+(`python3 -m unittest compare_test`, from this directory); rerun it whenever
+the comparison changes. A check the candidate's platform API cannot report (AT-SPI carries
 no expand or collapse state) is listed as unobserved, never as a match, and so
 is a pointer click the host dropped (KWin on Wayland ignores synthetic X input
 without a remote-control grant), which the native adapter replaces with the
