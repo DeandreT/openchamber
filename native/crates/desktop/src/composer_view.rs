@@ -43,9 +43,9 @@ const EDITOR_INSET_Y: f32 = 2.0;
 const TEXT_SIZE: f32 = 0.875;
 const TEXT_LINE: f32 = 1.3125;
 
-/// Below this editor width the composer shows the short placeholder
-/// (`COMPACT_CHAT_PLACEHOLDER_MAX_WIDTH` in `ChatInput.tsx`).
-const COMPACT_PLACEHOLDER_BELOW: f32 = 560.0;
+/// The composer box's width around the editor's text: the web editor's
+/// 12 px on each side plus its content's 1 px start padding.
+const EDITOR_TEXT_INSET: f32 = 25.0;
 
 /// `composerTailInset.ts`: the gap between the transcript's last row and the
 /// resting composer, how far the composer grows before it pushes the
@@ -109,13 +109,16 @@ impl Workspace {
             - 2.0 * f32::from(chrome::chat_column_padding(window))
     }
 
-    /// Shows the full placeholder, or the short one in a narrow composer.
+    /// Shows the full placeholder, or the short one when the full one would
+    /// wrap (`usePlaceholderFitsOneLine` in the web composer).
     pub(crate) fn sync_composer_placeholder(
         &mut self,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let compact = self.composer_width(window) < COMPACT_PLACEHOLDER_BELOW;
+        let full = locale::strings(cx).get("chat.chatInput.placeholder.chat");
+        let available = self.composer_width(window) - EDITOR_TEXT_INSET;
+        let compact = editor_text_width(&full, window) > available;
         if self.composer_placeholder_compact == Some(compact) {
             return;
         }
@@ -356,6 +359,18 @@ impl Workspace {
                     ),
             )
     }
+}
+
+/// The width of `text` in the editor's font.
+fn editor_text_width(text: &str, window: &Window) -> f32 {
+    let run = window.text_style().to_run(text.len());
+    let size = rems(TEXT_SIZE).to_pixels(window.rem_size());
+    f32::from(
+        window
+            .text_system()
+            .layout_line(text, size, &[run], None)
+            .width,
+    )
 }
 
 #[cfg(test)]
