@@ -212,6 +212,22 @@ fn code_actions(
         |_, _| false,
     );
     let is_copied = *copied.read(cx);
+    let wrap_focus = window
+        .use_keyed_state(
+            ElementId::Name(format!("code-wrap-focus-{key}").into()),
+            cx,
+            |_, cx| cx.focus_handle().tab_index(0).tab_stop(true),
+        )
+        .read(cx)
+        .clone();
+    let copy_focus = window
+        .use_keyed_state(
+            ElementId::Name(format!("code-copy-focus-{key}").into()),
+            cx,
+            |_, cx| cx.focus_handle().tab_index(0).tab_stop(true),
+        )
+        .read(cx)
+        .clone();
     let strings = locale::strings(cx);
     let wrap_title = strings.get(if wrap {
         "markdownRenderer.code.actions.disableWrapTitle"
@@ -223,11 +239,11 @@ fn code_actions(
     } else {
         "markdownRenderer.code.actions.copyTitle"
     });
-    let toggle_wrap = |_: &_, window: &mut Window, cx: &mut App| {
+    let toggle_wrap = |window: &mut Window, cx: &mut App| {
         window.dispatch_action(Box::new(ToggleCodeWrap), cx);
     };
     let code = fence.code.clone();
-    let copy = move |_: &_, window: &mut Window, cx: &mut App| {
+    let copy = move |window: &mut Window, cx: &mut App| {
         cx.write_to_clipboard(ClipboardItem::new_string(code.to_string()));
         copied.update(cx, |copied, _| *copied = true);
         window.refresh();
@@ -246,27 +262,20 @@ fn code_actions(
         "text-wrap",
         wrap_title,
         palette,
+        toggle_wrap,
     )
     .aria_toggled(if wrap { Toggled::True } else { Toggled::False })
-    .on_click(move |event, window, cx| toggle_wrap(event, window, cx))
-    .on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
-        window.dispatch_action(Box::new(ToggleCodeWrap), cx);
-    })
-    .test_support();
+    .test_support()
+    .track_focus(&wrap_focus);
     let copy_button = action_button(
         format!("code-copy-{key}").into(),
         if is_copied { "check" } else { "file-copy" },
         copy_title,
         palette,
-    );
-    let copy_click = Rc::new(copy);
-    let pointer_copy = copy_click.clone();
-    let copy_button = copy_button
-        .on_click(move |_, window, cx| pointer_copy(&(), window, cx))
-        .on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
-            copy_click(&(), window, cx);
-        })
-        .test_support();
+        copy,
+    )
+    .test_support()
+    .track_focus(&copy_focus);
     div()
         .absolute()
         .top_0()
@@ -276,6 +285,7 @@ fn code_actions(
         .items_center()
         .child(
             div()
+                .tab_group()
                 .flex()
                 .items_center()
                 .gap(px(2.0))
@@ -292,8 +302,12 @@ fn action_button(
     icon: &str,
     title: SharedString,
     palette: &Palette,
+    activate: impl Fn(&mut Window, &mut App) + 'static,
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
     let hover = palette.hover;
+    let activate = Rc::new(activate);
+    let pointer = Rc::clone(&activate);
+    let accessible = Rc::clone(&activate);
     div()
         .id(ElementId::Name(id.clone()))
         .accessibility_id(id)
@@ -306,6 +320,11 @@ fn action_button(
         .rounded(px(ACTION_RADIUS))
         .cursor_pointer()
         .hover(move |style| style.bg(hover))
+        .focus(move |style| style.bg(hover))
+        .on_click(move |_, window, cx| pointer(window, cx))
+        .on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
+            accessible(window, cx)
+        })
         .child(glyph(icon, ACTION_GLYPH, palette.elevated_foreground))
 }
 
@@ -423,7 +442,9 @@ fn paint_gutter(
 #[cfg(test)]
 mod tests {
     use gpui_kit::test::TestWindowExt;
-    use gpui_kit::{AppContext, Context, FocusHandle, Render, TestAppContext, WindowOptions};
+    use gpui_kit::{
+        AnyWindowHandle, AppContext, Context, FocusHandle, Render, TestAppContext, WindowOptions,
+    };
 
     use crate::locale::Strings;
     use crate::theme;
@@ -457,9 +478,8 @@ mod tests {
         }
     }
 
-    #[gpui_kit::test]
-    fn code_buttons_toggle_wrap_and_copy_exact_unicode(cx: &mut TestAppContext) {
-        let window = cx.update(|cx| {
+    fn open_card(cx: &mut TestAppContext) -> AnyWindowHandle {
+        cx.update(|cx| {
             gpui_kit::init(cx);
             cx.set_global(Strings::load("en"));
             cx.set_global(CodeWrap::default());
@@ -473,7 +493,12 @@ mod tests {
             })
             .expect("test window opens");
             window
-        });
+        })
+    }
+
+    #[gpui_kit::test]
+    fn code_buttons_toggle_wrap_and_copy_exact_unicode(cx: &mut TestAppContext) {
+        let window = open_card(cx);
         cx.update_window(window, |_, window, cx| {
             window.render_frame(cx);
             let copy = ElementId::Name("code-copy-0".into());
@@ -491,6 +516,61 @@ mod tests {
         assert!(
             cx.read(|cx| !cx.global::<CodeWrap>().0),
             "the deferred wrap action reaches its owner"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn code_buttons_are_reachable_by_tab_enter_and_space(cx: &mut TestAppContext) {
+        let window = open_card(cx);
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.press("tab", cx);
+        })
+        .expect("test window is open");
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert_eq!(
+                window.find(ElementId::Name("code-wrap-0".into())).focused(),
+                Some(true),
+                "Tab focuses wrap"
+            );
+            window.press("enter", cx);
+        })
+        .expect("test window is open");
+        assert!(
+            !cx.read(|cx| cx.global::<CodeWrap>().0),
+            "Enter turns wrapping off once"
+        );
+        cx.update_window(window, |_, window, cx| {
+            window.press("space", cx);
+        })
+        .expect("test window is open");
+        assert!(
+            cx.read(|cx| cx.global::<CodeWrap>().0),
+            "Space turns wrapping back on once"
+        );
+        cx.update_window(window, |_, window, cx| {
+            window.press("tab", cx);
+        })
+        .expect("test window is open");
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.press("enter", cx);
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()),
+                Some("let message = \"Привіт 👋\";\nprintln!(\"{message}\");".to_owned())
+            );
+            window.press("shift-tab", cx);
+        })
+        .expect("test window is open");
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.press("enter", cx);
+        })
+        .expect("test window is open");
+        assert!(
+            !cx.read(|cx| cx.global::<CodeWrap>().0),
+            "Shift-Tab returns to the wrap button"
         );
     }
 }
