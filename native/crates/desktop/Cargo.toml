@@ -12,6 +12,7 @@ name = "openchamber-native"
 path = "src/main.rs"
 
 [dependencies]
+chrono.workspace = true
 gpui-kit.workspace = true
 openchamber-native-core.workspace = true
 openchamber-native-transport.workspace = true

@@ -12,6 +12,7 @@ publish = false
 [workspace.dependencies]
 openchamber-native-core = { path = "crates/core" }
 openchamber-native-transport = { path = "crates/transport" }
+chrono = { version = "=0.4.45", default-features = false, features = ["clock"] }
 futures-util = { version = "=0.3.34", default-features = false, features = ["std", "sink"] }
 gpui-kit = "=0.7.3"
 serde = { version = "=1.0.229", features = ["derive"] }

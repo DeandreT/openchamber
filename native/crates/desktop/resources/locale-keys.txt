@@ -63,6 +63,7 @@ chat.workStatus.telemetry.tokens
 chat.workStatus.telemetry.tokens.inOut
 chat.workStatus.telemetry.toolDuration
 chat.workStatus.telemetry.ttft
+common.date.yesterdayWithTime
 common.loading
 common.relative.daysAgoCompact
 common.relative.hoursAgoCompact

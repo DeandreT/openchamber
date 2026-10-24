@@ -5,6 +5,7 @@ use std::time::Duration;
 
 use openchamber_native_core::chat_roots::ChatRoots;
 use openchamber_native_core::ids::{MessageId, SessionId};
+use openchamber_native_core::message_time::ClockPreference;
 use openchamber_native_core::ownership::{self, ConfiguredProject, WorktreeInfo};
 use openchamber_native_core::session::{LiveStatus, SessionRecord};
 use openchamber_native_core::transcript::Message;
@@ -123,6 +124,8 @@ pub struct ServerSettings {
     /// `(providerID, modelID)` pairs hidden from the picker.
     pub hidden_models: Vec<(String, String)>,
     pub routing_feature_available: Option<bool>,
+    /// `timeFormatPreference`: the clock message times use.
+    pub clock: ClockPreference,
     /// The model defaults of registered projects that set any.
     pub project_defaults: Vec<ProjectDefaults>,
     /// The display labels of registered projects that set one.
@@ -218,6 +221,12 @@ impl ServerSettings {
                 .routing_feature_available
                 .as_ref()
                 .and_then(Value::as_bool),
+            clock: settings
+                .time_format_preference
+                .as_ref()
+                .and_then(Value::as_str)
+                .map(ClockPreference::from_setting)
+                .unwrap_or_default(),
         }
     }
 
@@ -738,7 +747,8 @@ mod tests {
                 "perf/c",
                 {"providerID": "perf", "modelID": "d"}
             ],
-            "routingFeatureAvailable": "yes"
+            "routingFeatureAvailable": "yes",
+            "timeFormatPreference": "24h"
         }))
         .expect("settings with malformed values still parse");
         let settings = ServerSettings::from_wire(wire);
@@ -761,6 +771,7 @@ mod tests {
             ]
         );
         assert_eq!(settings.routing_feature_available, None);
+        assert_eq!(settings.clock, ClockPreference::TwentyFourHour);
     }
 
     #[test]

@@ -250,6 +250,7 @@ pub(crate) struct Settings {
     pub last_selected_model: Option<Value>,
     pub hidden_models: Option<Value>,
     pub routing_feature_available: Option<Value>,
+    pub time_format_preference: Option<Value>,
 }
 
 /// OpenCode v2 list routes: `{ location, data }`.

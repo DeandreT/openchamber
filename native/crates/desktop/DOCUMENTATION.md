@@ -55,9 +55,10 @@ read-only until prompt submission has its error and reconciliation paths.
   column reaches under the full one. A scroll that moves the current prompt
   redraws it.
 - `turn_footer.rs` draws the facts under a finished turn (model, effort,
-  agent, duration) and fits them to the row as `useFactsFit` does, keeping
-  the place of the message actions the web lays out for hover. The time fact
-  waits for a time-zone source.
+  agent, duration, time) and fits them to the row as `useFactsFit` does,
+  keeping the place of the message actions the web lays out for hover. The
+  time is the step's completion in the local time zone (`chrono`), written
+  with the locale's exported data; settings choose the clock.
 - `sidebar_item.rs` copies the core row model into owned rows. The core model
   borrows session records and entities cannot hold borrows.
 - `workspace_view.rs` lays out the frameless window: the sidebar column, the
