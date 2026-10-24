@@ -29,6 +29,7 @@ use openchamber_native_transport::identity::{GLOBAL_EVENTS_CAPABILITY, ServerIde
 use openchamber_native_transport::stream::{EventStream, StreamItem};
 
 use crate::code_card::CodeWrap;
+use crate::code_wrap_state::CodeWrapState;
 use crate::connection::{ConnectionFailure, ConnectionState};
 use crate::diagnostics::Marker;
 use crate::workspace::{History, OpenSession, Topology, Workspace};
@@ -105,9 +106,10 @@ impl Workspace {
                 connection.client = Some(client);
                 connection.state = ConnectionState::Connected;
                 if runtime != self.runtime {
-                    self.switch_runtime(runtime);
+                    self.switch_runtime(runtime, cx);
                 }
                 self.subscribe(generation, window, cx);
+                self.save_code_wrap(cx);
             }
             Err(error) => {
                 let failure = ConnectionFailure::from_error(&error);
@@ -126,7 +128,10 @@ impl Workspace {
 
     /// Replaces every runtime-scoped record. Drafts and scroll positions keep
     /// their runtime keys, so they never restore into another server.
-    fn switch_runtime(&mut self, runtime: RuntimeId) {
+    fn switch_runtime(&mut self, runtime: RuntimeId, cx: &mut Context<Self>) {
+        self.code_wrap_save_task = None;
+        self.code_wrap_state = CodeWrapState::default();
+        cx.set_global(CodeWrap::default());
         self.runtime = runtime;
         self.sessions = SessionIndex::new();
         self.topology = Topology::default();
@@ -318,35 +323,71 @@ impl Workspace {
     pub(crate) fn toggle_code_wrap(&mut self, cx: &mut Context<Self>) {
         let wrap = !cx.try_global::<CodeWrap>().copied().unwrap_or_default().0;
         self.show_code_wrap(wrap, cx);
-        self.code_wrap_saves += 1;
-        let save = self.code_wrap_saves;
+        self.code_wrap_state.change(wrap);
+        self.save_code_wrap(cx);
+    }
+
+    /// Drains one runtime's latest choices in order. The captured client
+    /// continues across a reconnect to that runtime; changing runtimes or
+    /// closing the workspace cancels this task and its network request.
+    fn save_code_wrap(&mut self, cx: &mut Context<Self>) {
         let Some(connection) = self.connection.as_mut() else {
             return;
         };
         let Some(client) = connection.client.clone() else {
             return;
         };
-        let changes = SettingsChanges {
-            code_block_line_wrap: Some(wrap),
+        let Some(save) = self.code_wrap_state.begin_save() else {
+            return;
         };
+        let runtime = self.runtime.clone();
+        let generation = connection.generation;
+        let changes = SettingsChanges {
+            code_block_line_wrap: Some(save.value),
+        };
+        let first_client = client.clone();
         let task = connection
             .network
-            .run(async move { client.save_settings(&changes).await });
-        cx.spawn(async move |this, cx| {
-            let Some(result) = task.await else {
-                return;
-            };
-            let _ = this.update(cx, |this, cx| match result {
-                Ok(settings) if save == this.code_wrap_saves => {
-                    if let Some(wrap) = settings.code_block_line_wrap {
-                        this.show_code_wrap(wrap, cx);
+            .run(async move { first_client.save_settings(&changes).await });
+        self.code_wrap_save_task =
+            Some(cx.spawn(async move |this, cx| {
+                let mut current = Some((save, task));
+                while let Some((save, task)) = current {
+                    let result = task.await.unwrap_or(Err(TransportError::Cancelled));
+                    current = this.update(cx, |this, cx| {
+                    if this.runtime != runtime {
+                        return None;
                     }
+                    let latest = this.code_wrap_state.finish_save(save);
+                    let same_generation = this.connection.as_ref().is_some_and(|connection| {
+                        connection.generation == generation
+                    });
+                    match result {
+                        Ok(settings) if latest && same_generation => {
+                            if let Some(wrap) = settings.code_block_line_wrap {
+                                this.show_code_wrap(wrap, cx);
+                                if let Some(held) = this.send_catalog.settings.as_mut() {
+                                    held.code_block_line_wrap = Some(wrap);
+                                }
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(error) => {
+                            tracing::warn!(%error, "the code wrap setting could not be saved");
+                        }
+                    }
+                    let save = this.code_wrap_state.begin_save()?;
+                    let client = client.clone();
+                    let changes = SettingsChanges {
+                        code_block_line_wrap: Some(save.value),
+                    };
+                    let task = this.connection.as_ref()?.network.run(async move {
+                        client.save_settings(&changes).await
+                    });
+                    Some((save, task))
+                }).ok().flatten();
                 }
-                Ok(_) => {}
-                Err(error) => tracing::warn!(%error, "the code wrap setting could not be saved"),
-            });
-        })
-        .detach();
+            }));
     }
 
     fn load_topology(&mut self, cx: &mut Context<Self>) {
@@ -356,6 +397,8 @@ impl Workspace {
         let Some(client) = connection.client.clone() else {
             return;
         };
+        let generation = connection.generation;
+        let wrap_revision = self.code_wrap_state.revision();
         let task = connection.network.run(async move {
             let roots = client.chat_roots().await;
             let settings = client.settings().await;
@@ -377,6 +420,13 @@ impl Workspace {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
+                if !this
+                    .connection
+                    .as_ref()
+                    .is_some_and(|connection| connection.generation == generation)
+                {
+                    return;
+                }
                 // Each part fails alone and keeps what it held, so a failed
                 // discovery leaves sessions reachable through their fallback.
                 match roots {
@@ -384,7 +434,7 @@ impl Workspace {
                     Err(error) => tracing::warn!(%error, "the Chats roots could not be read"),
                 }
                 match settings {
-                    Ok(settings) => {
+                    Ok(mut settings) => {
                         this.topology.worktrees.retain(|entry| {
                             settings
                                 .projects
@@ -392,8 +442,13 @@ impl Workspace {
                                 .any(|project| project.path == entry.project_path)
                         });
                         this.topology.projects = settings.projects.clone();
-                        if let Some(wrap) = settings.code_block_line_wrap {
-                            this.show_code_wrap(wrap, cx);
+                        if this.code_wrap_state.can_adopt(wrap_revision) {
+                            if let Some(wrap) = settings.code_block_line_wrap {
+                                this.show_code_wrap(wrap, cx);
+                            }
+                        } else {
+                            settings.code_block_line_wrap =
+                                Some(cx.try_global::<CodeWrap>().copied().unwrap_or_default().0);
                         }
                         this.send_catalog.settings = Some(settings);
                     }

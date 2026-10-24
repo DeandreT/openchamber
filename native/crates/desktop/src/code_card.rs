@@ -15,8 +15,8 @@ use gpui_kit::component::Theme;
 use gpui_kit::{
     AccessibleAction, AnyElement, App, Bounds, ClipboardItem, ElementId, FontFeatures, Global,
     InteractiveElement, IntoElement, ParentElement, Pixels, Role, SharedString,
-    StatefulInteractiveElement, StyleRefinement, Styled, TextAlign, TextRun, Toggled, Window,
-    canvas, div, font, point, px, rems, transparent_black,
+    StatefulInteractiveElement, StyleRefinement, Styled, TestSupportExt, TextAlign, TextRun,
+    Toggled, Window, canvas, div, font, point, px, rems, transparent_black,
 };
 
 use crate::chrome::glyph;
@@ -242,7 +242,7 @@ fn code_actions(
         .detach();
     };
     let wrap_button = action_button(
-        ElementId::Name(format!("code-wrap-{key}").into()),
+        format!("code-wrap-{key}").into(),
         "text-wrap",
         wrap_title,
         palette,
@@ -251,9 +251,10 @@ fn code_actions(
     .on_click(move |event, window, cx| toggle_wrap(event, window, cx))
     .on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
         window.dispatch_action(Box::new(ToggleCodeWrap), cx);
-    });
+    })
+    .test_support();
     let copy_button = action_button(
-        ElementId::Name(format!("code-copy-{key}").into()),
+        format!("code-copy-{key}").into(),
         if is_copied { "check" } else { "file-copy" },
         copy_title,
         palette,
@@ -264,7 +265,8 @@ fn code_actions(
         .on_click(move |_, window, cx| pointer_copy(&(), window, cx))
         .on_a11y_action(AccessibleAction::Click, move |_, window, cx| {
             copy_click(&(), window, cx);
-        });
+        })
+        .test_support();
     div()
         .absolute()
         .top_0()
@@ -286,14 +288,15 @@ fn code_actions(
 }
 
 fn action_button(
-    id: ElementId,
+    id: SharedString,
     icon: &str,
     title: SharedString,
     palette: &Palette,
 ) -> gpui_kit::Stateful<gpui_kit::Div> {
     let hover = palette.hover;
     div()
-        .id(id)
+        .id(ElementId::Name(id.clone()))
+        .accessibility_id(id)
         .role(Role::Button)
         .aria_label(title)
         .size(px(ACTION_SIZE))
@@ -419,11 +422,75 @@ fn paint_gutter(
 
 #[cfg(test)]
 mod tests {
+    use gpui_kit::test::TestWindowExt;
+    use gpui_kit::{AppContext, Context, FocusHandle, Render, TestAppContext, WindowOptions};
+
+    use crate::locale::Strings;
+    use crate::theme;
+
     use super::*;
 
     #[test]
     fn a_fence_outruns_the_backticks_inside_it() {
         assert_eq!(fenced(Some("ts"), "let a = 1;"), "```ts\nlet a = 1;\n```");
         assert_eq!(fenced(None, "a ```` b"), "`````\na ```` b\n`````");
+    }
+
+    struct TestCard {
+        focus: FocusHandle,
+    }
+
+    impl Render for TestCard {
+        fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+            let fence = Fence {
+                language: Some("rust".into()),
+                code: "let message = \"Привіт 👋\";\nprintln!(\"{message}\");".into(),
+            };
+            div()
+                .track_focus(&self.focus)
+                .on_action(cx.listener(|_, _: &ToggleCodeWrap, _, cx| {
+                    let wrap = cx.global::<CodeWrap>().0;
+                    cx.set_global(CodeWrap(!wrap));
+                    cx.notify();
+                }))
+                .child(code_card(&fence, 0, Author::Assistant, window, cx))
+        }
+    }
+
+    #[gpui_kit::test]
+    fn code_buttons_toggle_wrap_and_copy_exact_unicode(cx: &mut TestAppContext) {
+        let window = cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(Strings::load("en"));
+            cx.set_global(CodeWrap::default());
+            theme::apply(Palette::default_for(Appearance::Dark), cx);
+            let (window, _) = gpui_kit::open_window(WindowOptions::default(), cx, |window, cx| {
+                cx.new(|cx| {
+                    let focus = cx.focus_handle();
+                    window.focus(&focus, cx);
+                    TestCard { focus }
+                })
+            })
+            .expect("test window opens");
+            window
+        });
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            let copy = ElementId::Name("code-copy-0".into());
+            let wrap = ElementId::Name("code-wrap-0".into());
+            assert!(window.find(copy.clone()).visible(), "copy is reachable");
+            window.click(copy, cx);
+            assert_eq!(
+                cx.read_from_clipboard().and_then(|item| item.text()),
+                Some("let message = \"Привіт 👋\";\nprintln!(\"{message}\");".to_owned()),
+                "copy preserves source without line numbers or fences"
+            );
+            window.click(wrap, cx);
+        })
+        .expect("test window is open");
+        assert!(
+            cx.read(|cx| !cx.global::<CodeWrap>().0),
+            "the deferred wrap action reaches its owner"
+        );
     }
 }

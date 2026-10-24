@@ -40,6 +40,7 @@ use openchamber_native_core::turn_stats::TurnStats;
 
 use crate::chrome::InitialSize;
 use crate::code_card::CodeWrap;
+use crate::code_wrap_state::CodeWrapState;
 use crate::composer_view::ComposerSlot;
 use crate::connection::{Connection, ConnectionFailure};
 use crate::diagnostics::{self, Marker};
@@ -137,9 +138,8 @@ pub struct Workspace {
     pub(crate) connection: Option<Connection>,
     /// The composer's catalogs and defaults; empty for synthetic data.
     pub(crate) send_catalog: SendCatalog,
-    /// Code wrap saves started; a save's answer applies only while it is
-    /// the latest.
-    pub(crate) code_wrap_saves: u64,
+    pub(crate) code_wrap_state: CodeWrapState,
+    pub(crate) code_wrap_save_task: Option<Task<()>>,
     pub(crate) provider_logos: ProviderLogos,
     pub(crate) project_readouts: ProjectReadouts,
     /// Set while the new window's content is held at its requested size.
@@ -213,7 +213,8 @@ impl Workspace {
             live_status: HashMap::new(),
             connection,
             send_catalog: SendCatalog::default(),
-            code_wrap_saves: 0,
+            code_wrap_state: CodeWrapState::default(),
+            code_wrap_save_task: None,
             provider_logos: ProviderLogos::default(),
             project_readouts: ProjectReadouts::default(),
             initial_size: None,
