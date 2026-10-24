@@ -100,7 +100,7 @@ Rust 1.97.1 with the Windows MSVC target for the initial implementation.
 
 | Dependency | Initial pin | Responsibility |
 | --- | --- | --- |
-| `gpui-kit` | `0.7.3` | Native window, components, text, lists, assets and AccessKit integration |
+| `gpui-kit` | `0.7.3` | Native window, components, text, lists, assets and AccessKit integration; its `tree-sitter` features highlight fenced code |
 | `serde` / `serde_json` | `1.0.229` / `1.0.154` | Typed JSON adapters and fixture decoding |
 | `tokio` | `1.53.3` | Background network tasks, bounded delivery and cancellation |
 | `reqwest` | `0.13.5` | HTTP transport |

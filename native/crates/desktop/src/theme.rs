@@ -6,8 +6,10 @@
 //! Kit theme, which [`apply`] fills from the same palette.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use gpui_kit::component::Theme;
+use gpui_kit::component::highlighter::HighlightTheme;
 use gpui_kit::component::theme::ThemeMode;
 use gpui_kit::{App, Global, Hsla, Rgba};
 use openchamber_native_core::send_config::{AgentColor, SyntaxPaletteEntry};
@@ -41,6 +43,52 @@ struct PaletteRole {
 /// The syntax roles agent colors draw from, in `agentColorPalette`'s order.
 const AGENT_SYNTAX_ROLES: [&str; 7] = [
     "keyword", "type", "function", "number", "string", "operator", "variable",
+];
+
+/// Tree-sitter captures and the syntax colors they take, as
+/// `buildSyntaxTokenRules` (`lib/shiki/textMateThemeFromAppTheme.ts`) colors
+/// the TextMate scopes that name the same things: each capture tries its
+/// `syntax.tokens.*` names in order and falls back to a `syntax.base.*` role.
+/// The flag marks the web's bold function names.
+const CAPTURE_COLORS: &[(&str, &[&str], &str, bool)] = &[
+    ("attribute", &["tagAttribute"], "type", false),
+    ("boolean", &["boolean"], "type", false),
+    ("comment", &[], "comment", false),
+    ("comment.doc", &["commentDoc"], "comment", false),
+    ("constant", &["constant"], "foreground", false),
+    ("constructor", &["className", "class"], "function", false),
+    ("embedded", &[], "foreground", false),
+    ("emphasis", &[], "string", false),
+    ("emphasis.strong", &["namespace"], "type", false),
+    ("enum", &["enum"], "function", false),
+    ("function", &[], "function", true),
+    ("keyword", &[], "keyword", false),
+    ("label", &["label", "variableGlobal"], "number", false),
+    ("link_text", &[], "string", false),
+    ("link_uri", &["url"], "string", false),
+    ("number", &[], "number", false),
+    ("operator", &[], "operator", false),
+    ("preproc", &["preprocessor", "label"], "number", false),
+    ("property", &["variableProperty"], "variable", false),
+    ("punctuation", &["punctuation"], "comment", false),
+    ("punctuation.bracket", &["punctuation"], "comment", false),
+    ("punctuation.delimiter", &["punctuation"], "comment", false),
+    ("punctuation.list_marker", &[], "type", false),
+    ("punctuation.special", &["punctuation"], "comment", false),
+    ("string", &[], "string", false),
+    ("string.escape", &["stringEscape"], "foreground", false),
+    ("string.regex", &["stringRegex"], "string", false),
+    ("string.special", &[], "string", false),
+    ("string.special.symbol", &[], "string", false),
+    ("tag", &["tag"], "keyword", false),
+    ("tag.doctype", &["tag"], "keyword", false),
+    ("text.code.span", &[], "string", false),
+    ("text.literal", &[], "string", false),
+    ("title", &[], "type", false),
+    ("type", &["interface"], "type", false),
+    ("variable", &[], "variable", false),
+    ("variable.special", &["variableGlobal"], "number", false),
+    ("variant", &["constant"], "foreground", false),
 ];
 
 /// Light or dark appearance.
@@ -80,6 +128,8 @@ pub struct Palette {
     pub inline_code: Hsla,
     pub syntax_background: Hsla,
     pub syntax_foreground: Hsla,
+    /// Code highlighting from the theme's syntax tokens.
+    pub highlight: Arc<HighlightTheme>,
     pub error: Hsla,
     pub warning: Hsla,
     pub success: Hsla,
@@ -153,6 +203,7 @@ impl Palette {
             inline_code: color("markdown.inlineCode"),
             syntax_background: color("syntax.base.background"),
             syntax_foreground: color("syntax.base.foreground"),
+            highlight: Arc::new(highlight_theme(entry)),
             error: color("readable.status.error"),
             warning: color("readable.status.warning"),
             success: color("readable.status.success"),
@@ -236,8 +287,41 @@ pub fn apply(palette: Palette, cx: &mut App) {
         theme.scrollbar_thumb = palette.active;
         theme.scrollbar_thumb_hover = palette.border;
         theme.window_border = palette.border;
+        theme.highlight_theme = palette.highlight.clone();
     });
     cx.set_global(palette);
+}
+
+/// The theme's code highlighting, in the Zed format Kit reads.
+fn highlight_theme(entry: &ThemeEntry) -> HighlightTheme {
+    let token = |name: &str| entry.colors.get(name).cloned();
+    let mut syntax = serde_json::Map::new();
+    for (capture, tokens, role, bold) in CAPTURE_COLORS {
+        let color = tokens
+            .iter()
+            .find_map(|name| token(&format!("syntax.tokens.{name}")))
+            .or_else(|| token(&format!("syntax.base.{role}")));
+        let Some(color) = color else {
+            continue;
+        };
+        let mut style = serde_json::json!({ "color": color });
+        if *bold {
+            style["font_weight"] = serde_json::json!(700);
+        }
+        syntax.insert((*capture).to_owned(), style);
+    }
+    serde_json::from_value(serde_json::json!({
+        "name": entry.id,
+        "appearance": entry.variant,
+        "style": {
+            "editor.background": token("syntax.base.background"),
+            "editor.foreground": token("syntax.base.foreground"),
+            "editor.line_number": token("syntax.highlights.lineNumber"),
+            "editor.active_line_number": token("syntax.highlights.lineNumberActive"),
+            "syntax": syntax,
+        },
+    }))
+    .unwrap_or_else(|error| panic!("theme {} builds a highlight theme: {error}", entry.id))
 }
 
 fn theme_file() -> ThemeFile {
@@ -291,6 +375,11 @@ mod tests {
         for entry in &file.themes {
             let palette = Palette::by_id(&entry.id).expect("theme exists");
             assert_eq!(palette.id, entry.id);
+            assert!(
+                palette.highlight.keyword.is_some(),
+                "{} colors keywords",
+                entry.id
+            );
         }
         assert_eq!(
             Palette::default_for(Appearance::Dark).appearance,
