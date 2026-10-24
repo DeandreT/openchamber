@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
-use openchamber_native_transport::client::{ClientDescription, ServerClient};
+use openchamber_native_transport::client::{ClientDescription, ServerClient, SettingsChanges};
 use openchamber_native_transport::credential::Credential;
 use openchamber_native_transport::endpoint::Endpoint;
 use openchamber_native_transport::error::TransportError;
@@ -337,6 +337,71 @@ fn description() -> ClientDescription {
         device_platform: Some("linux".to_owned()),
         app_version: Some("0.1.0".to_owned()),
     }
+}
+
+#[tokio::test]
+async fn settings_writes_preserve_the_prefix_surface_and_unrelated_fields() {
+    let server = Server::start(
+        |request| {
+            assert_eq!(
+                request.target,
+                "/prefix/api/config/settings?surface=desktop"
+            );
+            assert_eq!(request.method, "PUT");
+            assert_eq!(request.json(), json!({"codeBlockLineWrap": false}));
+            Reply::json(json!({"codeBlockLineWrap": false, "defaultAgent": "build"}))
+        },
+        vec![],
+    )
+    .await;
+    let client = ServerClient::new(
+        server.endpoint(),
+        Credential::ClientToken("fixture-settings-token".to_owned()),
+    )
+    .expect("a client");
+    let settings = client
+        .save_settings(&SettingsChanges {
+            code_block_line_wrap: Some(false),
+        })
+        .await
+        .expect("settings are saved");
+    assert_eq!(settings.code_block_line_wrap, Some(false));
+    assert_eq!(settings.default_agent.as_deref(), Some("build"));
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].header("authorization"),
+        Some("Bearer fixture-settings-token")
+    );
+}
+
+#[tokio::test]
+async fn settings_write_failures_and_missing_values_remain_distinct() {
+    let server = Server::start(
+        |request| match request.json()["codeBlockLineWrap"].as_bool() {
+            Some(false) => Reply::with_status(503, "application/json", "{}"),
+            _ => Reply::json(json!({})),
+        },
+        vec![],
+    )
+    .await;
+    let client = ServerClient::new(server.endpoint(), Credential::None).expect("a client");
+    assert!(
+        client
+            .save_settings(&SettingsChanges {
+                code_block_line_wrap: Some(false),
+            })
+            .await
+            .is_err(),
+        "a failed save cannot become empty success"
+    );
+    let settings = client
+        .save_settings(&SettingsChanges {
+            code_block_line_wrap: Some(true),
+        })
+        .await
+        .expect("an older server may omit the field");
+    assert_eq!(settings.code_block_line_wrap, None);
 }
 
 #[tokio::test]

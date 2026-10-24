@@ -10,6 +10,7 @@ mod assets;
 mod baseline;
 mod chrome;
 mod code_card;
+mod code_wrap_state;
 mod composer_view;
 mod connection;
 mod context_panel;

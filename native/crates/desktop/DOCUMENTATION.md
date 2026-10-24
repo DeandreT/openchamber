@@ -76,6 +76,12 @@ read-only until prompt submission has its error and reconciliation paths.
   theme's syntax colors (`theme.rs` builds Kit's highlight theme), and the
   code wrap choice is the `codeBlockLineWrap` setting, saved through
   `server_sync.rs`.
+- `code_wrap_state.rs` orders code-wrap changes for one runtime. It permits
+  one request at a time and coalesces pending toggles to their newest value.
+  A settings read captures its revision and cannot overwrite later choices.
+  Reconnecting to the same runtime preserves queued writes; switching
+  runtimes or closing the window cancels their owned task. A failed save
+  preserves the displayed choice and releases the queue without retrying.
 - `chrome.rs` owns the shared controls (sprite glyphs, quiet icon buttons),
   the drag region and window controls of the frameless window and the
   content size inside a client-side frame, and holds a new window at its
