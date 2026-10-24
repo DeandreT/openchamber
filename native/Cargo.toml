@@ -14,7 +14,23 @@ openchamber-native-core = { path = "crates/core" }
 openchamber-native-transport = { path = "crates/transport" }
 chrono = { version = "=0.4.45", default-features = false, features = ["clock"] }
 futures-util = { version = "=0.3.34", default-features = false, features = ["std", "sink"] }
-gpui-kit = "=0.7.3"
+# Fenced code is highlighted with tree-sitter; the grammars cover the
+# languages agents most often write.
+gpui-kit = { version = "=0.7.3", features = [
+    "tree-sitter",
+    "tree-sitter-bash",
+    "tree-sitter-css",
+    "tree-sitter-diff",
+    "tree-sitter-go",
+    "tree-sitter-html",
+    "tree-sitter-javascript",
+    "tree-sitter-python",
+    "tree-sitter-rust",
+    "tree-sitter-toml",
+    "tree-sitter-tsx",
+    "tree-sitter-typescript",
+    "tree-sitter-yaml",
+] }
 serde = { version = "=1.0.229", features = ["derive"] }
 serde_json = "=1.0.154"
 reqwest = { version = "=0.13.5", default-features = false, features = ["rustls", "json", "charset"] }
