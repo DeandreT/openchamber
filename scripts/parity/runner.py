@@ -255,15 +255,16 @@ SETTLE_TIMEOUT_S = 15.0
 
 
 def settle(client) -> bool:
-    """Whether the client's fingerprint held still for the quiet period
-    before the timeout. Content still loading (a panel filling in after the
-    transcript) would otherwise be captured midway."""
+    """Whether the client's fingerprint held still for the quiet period,
+    with no request in flight, before the timeout. Content still loading (a
+    panel filling in after the transcript) would otherwise be captured
+    midway."""
     deadline = time.monotonic() + SETTLE_TIMEOUT_S
     previous = None
     since = time.monotonic()
     while time.monotonic() < deadline:
         current = client.fingerprint()
-        if current != previous:
+        if current != previous or client.busy():
             previous = current
             since = time.monotonic()
         elif time.monotonic() - since >= SETTLE_QUIET_S:

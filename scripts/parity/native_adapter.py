@@ -247,6 +247,11 @@ class NativeClient:
         """What a settled window holds still: its rows and their boxes."""
         return json.dumps(self.rows())
 
+    def busy(self) -> bool:
+        """The native client's reads land in rows and markers; no request
+        count is exposed, so its fingerprint alone decides."""
+        return False
+
     def targets(self, specs: dict[str, str]) -> dict[str, list[float] | None]:
         """Rectangles of controls by accessible ID."""
         return self.rects(specs)
