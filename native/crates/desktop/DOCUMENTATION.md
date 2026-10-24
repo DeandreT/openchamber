@@ -75,7 +75,9 @@ read-only until prompt submission has its error and reconciliation paths.
   a custom block takes it whole. Code is highlighted with tree-sitter in the
   theme's syntax colors (`theme.rs` builds Kit's highlight theme), and the
   code wrap choice is the `codeBlockLineWrap` setting, saved through
-  `server_sync.rs`.
+  `server_sync.rs`. Code-card actions retain focus handles, participate in
+  Tab navigation, and use GPUI's keyboard-generated clicks for Enter and
+  Space. Pointer, keyboard and accessibility clicks use the same callback.
 - `code_wrap_state.rs` orders code-wrap changes for one runtime. It permits
   one request at a time and coalesces pending toggles to their newest value.
   A settings read captures its revision and cannot overwrite later choices.
