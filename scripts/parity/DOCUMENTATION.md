@@ -136,6 +136,11 @@ client) and a timeout. A reference that never reaches its state blocks the
 scenario; a native client that never does fails it, and its evidence is still
 captured.
 
+Session-row clicks first require a settled client, then verify that the exact
+requested row is selected. An unrelated selected row cannot satisfy this
+postcondition. `runner_test.py` covers these input checks; run it from this
+directory with `python3 -m unittest runner_test`.
+
 Every capture first waits up to 15 s for the client to hold still for
 750 ms: Electron's text and the boxes of its panels, sections, prompt ticks,
 rows and messages, the native client's accessible rows. Electron must also
