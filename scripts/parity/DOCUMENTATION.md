@@ -128,6 +128,8 @@ captured.
 
 Every capture first waits up to 15 s for the client to hold still for
 750 ms: Electron's text and the boxes of its panels, sections, prompt ticks,
-rows and messages, the native client's accessible rows. Panels that fill in after the
+rows and messages, the native client's accessible rows. Electron must also
+have no fetch or XHR request in flight; a panel whose data has not arrived can
+hold still for longer than the quiet period. Panels that fill in after the
 transcript would otherwise be captured midway. A reference that never holds
 still blocks the scenario; a native client that never does fails it.

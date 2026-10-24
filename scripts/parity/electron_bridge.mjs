@@ -9,8 +9,8 @@
  * same hit-testing and focus paths as a user's. Nothing here calls
  * application code directly.
  *
- * Commands: launch, wait, rows, rects, targets, observe, fonts, click, key, type, text,
- * screenshot, close.
+ * Commands: launch, wait, rows, inflight, rects, targets, observe, fonts, click, key,
+ * type, text, screenshot, close.
  */
 import { spawn } from "node:child_process"
 import { writeFileSync } from "node:fs"
@@ -20,6 +20,10 @@ import { CdpClient, reservePort, wait } from "../perf/cdp.mjs"
 
 let child = null
 let client = null
+// Fetch and XHR requests the page started and that have not ended. Streams
+// that stay open by design (EventSource) are not counted.
+const inflight = new Set()
+const TRACKED_REQUESTS = new Set(["Fetch", "XHR"])
 
 const evaluate = async (expression) => {
   const result = await client.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true })
@@ -85,6 +89,12 @@ const handlers = {
     client = new CdpClient(page.webSocketDebuggerUrl)
     await client.connect()
     await client.send("Runtime.enable")
+    client.on("Network.requestWillBeSent", ({ requestId, type }) => {
+      if (TRACKED_REQUESTS.has(type)) inflight.add(requestId)
+    })
+    client.on("Network.loadingFinished", ({ requestId }) => inflight.delete(requestId))
+    client.on("Network.loadingFailed", ({ requestId }) => inflight.delete(requestId))
+    await client.send("Network.enable")
     // Electron's DevTools endpoint cannot size the window. The default main
     // window has the standard client size; when it differs (a stored size, a
     // window manager constraint), emulate the viewport and say so.
@@ -113,6 +123,10 @@ const handlers = {
   },
   async rows() {
     return { rows: await evaluate(ROWS) }
+  },
+  /** How many fetch and XHR requests are still in flight. */
+  async inflight() {
+    return { count: inflight.size }
   },
   async rects({ selectors }) {
     const rects = {}

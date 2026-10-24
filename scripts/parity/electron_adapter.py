@@ -85,6 +85,11 @@ class ElectronClient:
         panels, sections, prompt ticks, rows and messages."""
         return self._call("observe", expression=FINGERPRINT)["value"]
 
+    def busy(self) -> bool:
+        """Whether the page still has fetch or XHR requests in flight: a
+        panel whose data has not arrived can hold still for a while."""
+        return self._call("inflight")["count"] > 0
+
     def wait_for(self, condition: dict, timeout_s: float) -> bool:
         """Whether the page expression ``{"expression": ...}`` held within the
         timeout, followed by a painted frame."""
