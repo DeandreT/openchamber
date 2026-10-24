@@ -9,7 +9,7 @@ import { useUIStore } from '@/stores/useUIStore';
 import { useSessionDisplayStore } from '@/stores/useSessionDisplayStore';
 import type { MultiRunSummary } from '@/lib/multirun/runs';
 import type { SessionNode } from '../types';
-import { isTwoLineTimelineContext, type SessionSidebarRenderContext } from '../sessionSidebarRowModel';
+import { isMultiLineTimelineContext, isTwoLineTimelineContext, type SessionSidebarRenderContext } from '../sessionSidebarRowModel';
 import { formatSessionCompactDateLabel } from '../utils';
 import { CollapsedSessionActivityIndicator } from './collapsedActivityIndicator';
 import { SessionTimelineRowBody } from './SessionTimelineRowBody';
@@ -32,7 +32,6 @@ type Props = {
   expansionKey: string;
   expanded: boolean;
   forceExpanded: boolean;
-  notifyOnSubtasks: boolean;
   toggleParent: (key: string) => void;
 };
 
@@ -59,26 +58,30 @@ function RunSidebarRowComponent({
   expansionKey,
   expanded,
   forceExpanded,
-  notifyOnSubtasks,
   toggleParent,
 }: Props): React.ReactNode {
   const { t } = useI18n();
   const isActive = useUIStore((state) => state.runOverviewKey === run.key);
   // The Tree view's Pinned and In work rows are flat too, on one line.
   const isOneLineRow = renderContext === 'mixed-compact';
-  const isTimelineRow = isTwoLineTimelineContext(renderContext) || isOneLineRow;
+  const isTimelineRow = isMultiLineTimelineContext(renderContext) || isOneLineRow;
   const detailedRows = useSessionDisplayStore((state) => state.detailedZoneRows);
-  const compactRow = isOneLineRow || !detailedRows;
-  // Only Pinned and In work mix projects; under a project header the row needs no icon.
+  // Two-line rows sit on one line unless detailed rows are on; the list by
+  // time keeps its three lines.
+  const compactRow = isOneLineRow || (isTwoLineTimelineContext(renderContext) && !detailedRows);
+  // The list by time names the project on a first line of its own.
+  const hasProjectLine = renderContext === 'timeline-by-time';
+  // Only Pinned, In work and the list by time mix projects; under a project
+  // header the row needs no icon.
   const timelineProject = useProjectsStore(React.useCallback((state) => (
-    (renderContext === 'timeline-mixed' || renderContext === 'mixed-compact') && projectId ? state.projects.find((entry) => entry.id === projectId) ?? null : null
-  ), [renderContext, projectId]));
+    (renderContext === 'timeline-mixed' || renderContext === 'mixed-compact' || hasProjectLine) && projectId ? state.projects.find((entry) => entry.id === projectId) ?? null : null
+  ), [hasProjectLine, renderContext, projectId]));
   const laneCount = run.lanes.length;
   const laneCountLabel = laneCount === 1
     ? t('sessions.sidebar.run.laneCountSingle', { count: laneCount })
     : t('sessions.sidebar.run.laneCountPlural', { count: laneCount });
   const activityNodes = React.useMemo(() => [...laneNodes], [laneNodes]);
-  const activity = <CollapsedSessionActivityIndicator nodes={activityNodes} blockingSessionIds={blockingSessionIds} includeUnreadSubtasks={notifyOnSubtasks} />;
+  const activity = <CollapsedSessionActivityIndicator nodes={activityNodes} blockingSessionIds={blockingSessionIds} />;
   // Muted like an idle session title; the run's state shows in its mark.
   const titleClassName = isActive ? 'text-interactive-selection-foreground' : 'text-muted-foreground';
   const openOverview = () => useUIStore.getState().setRunOverviewKey(run.key);
@@ -108,6 +111,7 @@ function RunSidebarRowComponent({
           compact={compactRow}
           project={timelineProject}
           projectLabel={projectLabel}
+          projectLine={hasProjectLine}
           title={run.title}
           titleClassName={titleClassName}
           branchLabel={null}

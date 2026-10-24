@@ -1210,7 +1210,24 @@ describe("session restore (unarchive)", () => {
     expect(openchamberRouteRequests.map((request) => request.body.ids)).toEqual([["parent"], ["child"], ["grandchild"]])
   })
 
-  test("never restores a subsession on its own", async () => {
+  test("restores a subsession on its own when its parent is active", async () => {
+    globalActiveSessions = [sessionFixture("parent")]
+    globalArchivedSessions.push({ ...archivedFixture("child"), parentID: "parent" }, { ...archivedFixture("grandchild"), parentID: "child" })
+    beforeArchiveRouteResolve = (path) => {
+      if (!path.endsWith("/unarchive")) return
+      const ids = openchamberRouteRequests.at(-1)?.body.ids
+      unarchiveBatchResponse = { status: 200, body: { restored: [{ id: Array.isArray(ids) ? String(ids[0]) : "", archivedAt: null }], failedIds: [] } }
+    }
+    const source = createStore({}, { session: [] })
+    const { unarchiveSession, setActionRefs } = await import("./session-actions")
+    setActionRefs(createChildStores([["/test/project", source]]), () => "/test/project")
+
+    // Its own archived subsessions come back with it.
+    expect(await unarchiveSession("child")).toBe(true)
+    expect(openchamberRouteRequests.map((request) => request.body.ids)).toEqual([["child"], ["grandchild"]])
+  })
+
+  test("never restores a subsession of an archived or unknown parent on its own", async () => {
     globalArchivedSessions.push(
       { ...sessionFixture("child"), directory: "/test/project", parentID: "parent", time: { created: 1, updated: 1, archived: 5 } } as unknown as Session,
     )
@@ -1221,6 +1238,11 @@ describe("session restore (unarchive)", () => {
 
     expect(await unarchiveSession("child")).toBe(false)
     expect(await unarchiveSessions(["child"])).toEqual({ restoredIds: [], failedIds: ["child"] })
+    expect(openchamberRouteRequests).toEqual([])
+
+    // The same once the parent is known and archived.
+    globalArchivedSessions.push(archivedFixture("parent"))
+    expect(await unarchiveSession("child")).toBe(false)
     expect(openchamberRouteRequests).toEqual([])
 
     // Undo puts back exactly what an archive just moved, subsessions included.
@@ -2897,6 +2919,10 @@ describe("cancelForm passes directory", () => {
   })
 })
 
+function archivedFixture(id: string): Session {
+  return { ...sessionFixture(id), time: { created: 1, updated: 1, archived: 5 } }
+}
+
 function sessionFixture(id: string): Session {
   return {
     id,
@@ -3490,6 +3516,26 @@ describe("setSessionWorkState", () => {
     expect(updated?.metadata).toEqual({ openchamber: { work: { state: "open" } } })
     const request = openchamberRouteRequests.find((entry) => entry.path.endsWith("/ses-work/metadata"))
     expect(request?.body).toMatchObject({ patch: { openchamber: { work: { state: "open", openedBy: "user" } } } })
+  })
+
+  test("reports a deleted session folder as its own error", async () => {
+    const { SessionDirectoryMissingError, setSessionWorkState } = await import("./session-actions")
+    archiveBatchResponse = { status: 409, body: { error: "Location not found: /gone", code: "SESSION_DIRECTORY_MISSING" } }
+
+    const failure = await setSessionWorkState("ses-work", "/gone", "done").catch((error: Error) => error)
+
+    expect(failure instanceof SessionDirectoryMissingError).toBe(true)
+    expect(globalUpsertedSessions).toHaveLength(0)
+  })
+
+  test("keeps any other failed write a plain error", async () => {
+    const { SessionDirectoryMissingError, setSessionWorkState } = await import("./session-actions")
+    archiveBatchResponse = { status: 500, body: { error: "OpenCode is down" } }
+
+    const failure = await setSessionWorkState("ses-work", "/test/project", "done").catch((error: Error) => error)
+
+    expect(failure instanceof Error).toBe(true)
+    expect(failure instanceof SessionDirectoryMissingError).toBe(false)
   })
 
   test("writes nothing to the new server when the runtime switches during the read", async () => {

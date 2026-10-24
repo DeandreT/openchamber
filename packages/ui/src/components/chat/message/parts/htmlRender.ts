@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import type { FrameScrollDirection } from '@/components/chat/lib/scroll/timelineScrollIntent';
+import { PREVIEW_BRIDGE_CHANNEL } from '@/lib/browser/previewFrameHost';
 import type { ChatQuoteAnchor } from '@/lib/chatQuoteAnchor';
 import type { JsonValue } from '@/lib/opencode/model';
 import { getReadableThemeColors } from '@/lib/theme/readableColors';
@@ -43,11 +45,16 @@ const SELECTION_MESSAGE = `${MESSAGE_PREFIX}selection`;
 // closes the selection menu, as Escape does for a selection in the chat.
 const SELECTION_ESCAPE_MESSAGE = `${MESSAGE_PREFIX}selection-escape`;
 const MARK_CLICK_MESSAGE = `${MESSAGE_PREFIX}mark-click`;
+// A wheel or swipe in the page that scrolls the chat around it (see the
+// bootstrap): the host tells the chat's follow a reader is scrolling.
+const SCROLL_MESSAGE = `${MESSAGE_PREFIX}scroll`;
 // From the host: drop the page's own selection, paint these quote marks, and
 // scroll to and flash one quote.
 const CLEAR_SELECTION_MESSAGE = `${MESSAGE_PREFIX}clear-selection`;
 const MARKS_MESSAGE = `${MESSAGE_PREFIX}marks`;
 const REVEAL_MESSAGE = `${MESSAGE_PREFIX}reveal`;
+// From the host: the pointer entered or left the frame (see SCROLLBAR_CSS).
+const POINTER_MESSAGE = `${MESSAGE_PREFIX}pointer`;
 // The longest selection a page reports; the bootstrap cuts at this length.
 const HTML_RENDER_SELECTION_MAX_LENGTH = 20_000;
 // How long a revealed quote flashes; the same as the chat's own flash.
@@ -61,6 +68,8 @@ export interface HtmlRenderTheme {
 interface HtmlRenderMetrics {
     /** The app's rem in px: the interface size setting scales it, and the controls with it. */
     rem: number;
+    /** The chat's body text size in px: the page's root font size, so the page's rem follows the interface size. */
+    text: number;
     sans: string;
     mono: string;
 }
@@ -78,6 +87,8 @@ const CHART_SERIES = {
     light: ['#2563eb', '#0d9488', '#7c3aed', '#db2777', '#65a30d'],
 } as const;
 
+const darkLift = (foreground: string) => `inset 0 1px 0 0 color-mix(in srgb,${foreground} 1.5%,transparent), 0 1px 1px 0 rgb(0 0 0 / 0.28), 0 2px 3px -2px rgb(0 0 0 / 0.2)`;
+
 /**
  * The variables a page styles against. The names follow the shadcn
  * convention models already write. The agent-facing description in
@@ -86,10 +97,11 @@ const CHART_SERIES = {
 export function htmlRenderTheme(theme: Theme, metrics: HtmlRenderMetrics): HtmlRenderTheme {
     const { surface, interactive, primary, status, syntax } = theme.colors;
     const dark = theme.metadata.variant === 'dark';
-    // The app's main button (components/ui/button.tsx, TINT_PRIMARY): a pale
+    // The app's main button (components/ui/button-variants.ts, TINT_PRIMARY): a pale
     // accent fill and border with readable accent text. A dark theme mixes the
     // accent into transparent so the tone sits on the surface behind it.
     const tint = (amount: number, base: string) => `color-mix(in srgb,${primary.base} ${amount}%,${base})`;
+    const errorTint = (amount: number, base: string) => `color-mix(in srgb,${status.error} ${amount}%,${base})`;
     const readable = getReadableThemeColors(theme);
     return {
         appearance: theme.metadata.variant,
@@ -125,11 +137,40 @@ export function htmlRenderTheme(theme: Theme, metrics: HtmlRenderMetrics): HtmlR
                 ? `inset 0 1px 0 0 color-mix(in srgb,${surface.foreground} 6%,transparent), 0 1px 1px 0 rgb(0 0 0 / 0.31), 0 2px 5px -2px rgb(0 0 0 / 0.4)`
                 : 'inset 0 1px 0 0 rgb(255 255 255 / 0.45), 0 1px 2px 0 rgb(0 0 0 / 0.08)',
             '--oc-button-sheen': dark ? `linear-gradient(180deg,color-mix(in srgb,${surface.foreground} 1%,transparent),transparent 50%)` : 'none',
+            // The destructive button (TINT_DESTRUCTIVE): the same light with
+            // a fainter error tint, mixed into transparent in dark themes like
+            // the main one.
+            '--oc-destructive-text': readable.tinted.error,
+            '--oc-destructive-bg': dark ? errorTint(11, 'transparent') : errorTint(7, surface.background),
+            '--oc-destructive-hover': dark ? errorTint(16, 'transparent') : errorTint(11, surface.background),
+            '--oc-destructive-active': dark ? errorTint(22, 'transparent') : errorTint(16, surface.background),
+            '--oc-destructive-border': errorTint(dark ? 15 : 9, 'transparent'),
             // What the app marks chosen with (a pressed chip): the selection
             // fill and its readable text.
             '--oc-selection': interactive.selection,
             '--oc-selection-foreground': readable.selectionForeground,
+            // The light of the app's text fields and raised pills
+            // (`.oc-raised`, `.oc-field`, `.oc-recessed` in
+            // styles/design-system.css): in light themes a field is pressed
+            // into the page and a pill lifts on a short shadow; in dark themes
+            // both take a lit top line, and a field's fill is washed halfway
+            // toward the canvas so it sits a tone below the pills.
+            '--oc-edge': `color-mix(in srgb,${surface.foreground} ${dark ? 6 : 10}%,transparent)`,
+            '--oc-field-bg': dark ? `color-mix(in srgb,${surface.background} 50%,${surface.elevated})` : surface.elevated,
+            '--oc-field-lift': dark ? darkLift(surface.foreground) : 'inset 0 1px 2px 0 rgb(0 0 0 / 0.04)',
+            '--oc-raised-bg': dark ? surface.elevated : surface.background,
+            '--oc-raised-lift': dark ? darkLift(surface.foreground) : '0 1px 2px 0 rgb(0 0 0 / 0.06)',
+            '--oc-recessed': `inset 0 1px 2px 0 rgb(0 0 0 / ${dark ? 0.4 : 0.05})`,
+            '--oc-hover': interactive.hover,
+            '--oc-active': interactive.active,
+            // Status text that stays readable on its own pale tint (a badge).
+            '--oc-success-text': readable.tinted.success,
+            '--oc-warning-text': readable.tinted.warning,
+            '--oc-error-text': readable.tinted.error,
+            '--oc-info-text': readable.tinted.info,
             '--oc-rem': `${metrics.rem}px`,
+            // Not listed for agents: the page's root font size (see BASE_CSS).
+            '--oc-text': `${metrics.text}px`,
             // The app's --radius (0.5625rem), at the app's scale.
             '--radius': `${metrics.rem * 0.5625}px`,
             '--font-sans': metrics.sans,
@@ -160,20 +201,114 @@ const OPTION_CSS = '.oc-options{display:grid;gap:12px;grid-template-columns:repe
     + '.oc-button{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;height:calc(var(--oc-rem) * 2);padding:0 calc(var(--oc-rem) * .75);border:1px solid var(--oc-button-border);border-radius:calc(var(--oc-rem) * .4375);background-color:var(--oc-button-bg);background-image:var(--oc-button-sheen);box-shadow:var(--oc-button-shadow);color:var(--oc-button-text);font:inherit;font-size:calc(var(--oc-rem) * .84375);line-height:1.45;font-weight:500;white-space:nowrap;cursor:pointer;transition:background-color .15s}'
     + '.oc-button:hover,.oc-button:focus-visible{background-color:var(--oc-button-hover)}.oc-button:active{background-color:var(--oc-button-active);background-image:none;box-shadow:none}'
     + '.oc-button:disabled{opacity:.5;cursor:default;pointer-events:none}'
+    // Two more of the app's Button variants: outline for a secondary action
+    // (raised and neutral, canvas-coloured in light themes) and destructive.
+    + '.oc-button[data-variant=outline]{--oc-button-bg:var(--oc-raised-bg);--oc-button-hover:var(--oc-raised-bg);--oc-button-active:var(--oc-raised-bg);--oc-button-border:transparent;--oc-button-text:var(--card-foreground);--oc-button-shadow:inset 0 0 0 1px var(--oc-edge),var(--oc-raised-lift)}'
+    + '.oc-button[data-variant=outline]:hover,.oc-button[data-variant=outline]:focus-visible{background-image:linear-gradient(var(--oc-hover),var(--oc-hover))}'
+    + '.oc-button[data-variant=outline]:active{background-image:linear-gradient(var(--oc-active),var(--oc-active));box-shadow:inset 0 0 0 1px var(--oc-edge)}'
+    + '.oc-button[data-variant=destructive]{--oc-button-bg:var(--oc-destructive-bg);--oc-button-hover:var(--oc-destructive-hover);--oc-button-active:var(--oc-destructive-active);--oc-button-border:var(--oc-destructive-border);--oc-button-text:var(--oc-destructive-text)}'
     // Focus draws no ring in the app: a focused control takes its hover fill.
     + '.oc-option:focus-visible,.oc-button:focus-visible{outline:none}';
 
-// The page sits on the chat's own background, and a scrollbar inside the
-// reply would read as a box within the thread, so it stays hidden. Media
-// shrinks to the column. What is still wider (a wide table) scrolls sideways,
-// without the elastic bounce at its edges; the page never scrolls vertically
-// while it fits its frame (see the bootstrap), so a vertical swipe still
-// scrolls the chat. Only the horizontal bounce is turned off: turning off the
-// vertical one would also stop a vertical swipe from reaching the chat.
-const BASE_CSS = 'html{background:transparent;color:var(--foreground);font-family:var(--font-sans);font-size:14px;line-height:1.5;-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%;scrollbar-width:none;overflow-x:auto;overscroll-behavior-x:none}'
-    + 'html::-webkit-scrollbar{display:none}body{margin:0}a{color:var(--primary)}code,kbd,pre,samp{font-family:var(--font-mono)}img,svg,video,canvas{max-width:100%}'
+// Ready classes for what pages draw again and again: boxes, secondary text,
+// tables, badges, legend dots and bars, and form fields, in the app's look.
+// A third of a page's characters went into its own CSS for these, written
+// anew on every page and looking different on every model. Agents still
+// write plain HTML; the classes only spare them the styling. The
+// agent-facing description in packages/web/server/lib/agent-tool/runtime.js
+// names them; change both together.
+const badgeTone = (tone: 'success' | 'warning' | 'error' | 'info', color: string) => `.oc-badge[data-tone=${tone}]{--oc-tone:${color};--oc-tone-text:var(--oc-${tone}-text)}`;
+const CHEVRON = 'linear-gradient(45deg,transparent 50%,var(--muted-foreground) 50%),linear-gradient(135deg,var(--muted-foreground) 50%,transparent 50%)';
+const KIT_CSS = '.oc-box{box-sizing:border-box;padding:16px;border-radius:var(--radius);background-color:color-mix(in srgb,var(--foreground) 4%,transparent)}'
+    + '.oc-box .oc-box{background-color:color-mix(in srgb,var(--foreground) 6%,transparent)}'
+    + '.oc-muted{color:var(--muted-foreground)}'
+    + '.oc-num{font-variant-numeric:tabular-nums;text-align:end}'
+    // The chat's own Markdown table (chat/markdown/MarkdownTable.tsx): a framed
+    // block that scrolls sideways when wider than the column, rows apart by
+    // a hairline.
+    + '.oc-table{overflow-x:auto;overscroll-behavior-x:none;border:1px solid color-mix(in srgb,var(--border) 80%,transparent);border-radius:calc(var(--oc-rem) * .5);background-color:var(--card)}'
+    + '.oc-table table{width:100%;border-collapse:collapse}'
+    + '.oc-table th,.oc-table td{padding:.625em 1em;text-align:start;vertical-align:middle;border-bottom:1px solid color-mix(in srgb,var(--border) 60%,transparent)}'
+    + '.oc-table th{font-weight:600}.oc-table td{color:color-mix(in srgb,var(--foreground) 90%,transparent)}'
+    + '.oc-table tr:last-child>td{border-bottom:0}.oc-table .oc-num{text-align:end}'
+    + '.oc-badge{display:inline-flex;align-items:center;padding:.0625em .5em;border-radius:999px;background-color:color-mix(in srgb,var(--foreground) 6%,transparent);color:var(--muted-foreground);font-size:.8125em;font-weight:500;line-height:1.45;white-space:nowrap}'
+    + '.oc-badge[data-tone]{background-color:color-mix(in srgb,var(--oc-tone) 15%,transparent);color:var(--oc-tone-text)}'
+    + badgeTone('success', 'var(--success)') + badgeTone('warning', 'var(--warning)') + badgeTone('error', 'var(--destructive)') + badgeTone('info', 'var(--info)')
+    + '.oc-dot{display:inline-block;width:.5em;height:.5em;border-radius:50%;background-color:var(--color,var(--chart-1));vertical-align:.1em}'
+    + '.oc-bar{display:block;height:8px;border-radius:999px;overflow:hidden;background-color:color-mix(in srgb,var(--foreground) 8%,transparent)}'
+    + '.oc-bar::before{content:"";display:block;width:var(--value,0%);max-width:100%;height:100%;border-radius:inherit;background-color:var(--color,var(--chart-1))}'
+    // A field is the app's Input (components/ui/input.tsx): sized in the
+    // app's rem like .oc-button, its edge brightening on focus.
+    + '.oc-field{display:flex;flex-direction:column;gap:6px;min-width:0;font-size:calc(var(--oc-rem) * .8125);font-weight:500}'
+    + '.oc-field .oc-muted{font-weight:400}'
+    + '.oc-input{box-sizing:border-box;width:100%;min-width:0;height:calc(var(--oc-rem) * 2);margin:0;padding:0 calc(var(--oc-rem) * .625);border:0;border-radius:calc(var(--oc-rem) * .4375);background-color:var(--oc-field-bg);box-shadow:inset 0 0 0 1px var(--oc-edge),var(--oc-field-lift);color:var(--card-foreground);font:inherit;font-size:calc(var(--oc-rem) * .84375);font-weight:400;line-height:1.45;outline:none;transition:background-color .15s}'
+    + '.oc-input::placeholder{color:var(--muted-foreground)}'
+    + '.oc-input:hover:not(:focus){background-image:linear-gradient(var(--oc-hover),var(--oc-hover))}'
+    + '.oc-input:focus{--oc-edge:color-mix(in srgb,var(--foreground) 26%,transparent)}'
+    + '.oc-input[aria-invalid=true]{--oc-edge:var(--destructive)}'
+    + '.oc-input:disabled{opacity:.5;cursor:default}'
+    + 'textarea.oc-input{height:auto;min-height:calc(var(--oc-rem) * 4);padding:calc(var(--oc-rem) * .5) calc(var(--oc-rem) * .625);resize:vertical}'
+    // A native select draws its own box in some engines, so it gets the
+    // field's and a chevron drawn in the theme's muted text.
+    + `select.oc-input{appearance:none;-webkit-appearance:none;padding-inline-end:calc(var(--oc-rem) * 1.75);background-image:${CHEVRON};background-position:calc(100% - calc(var(--oc-rem) * 1.0625)) 50%,calc(100% - calc(var(--oc-rem) * .75)) 50%;background-size:5px 5px;background-repeat:no-repeat;cursor:pointer}`
+    + `select.oc-input:hover:not(:focus){background-image:${CHEVRON},linear-gradient(var(--oc-hover),var(--oc-hover));background-size:5px 5px,5px 5px,auto;background-position:calc(100% - calc(var(--oc-rem) * 1.0625)) 50%,calc(100% - calc(var(--oc-rem) * .75)) 50%,0 0}`
+    + 'select.oc-input:dir(rtl){background-position:calc(var(--oc-rem) * .75) 50%,calc(var(--oc-rem) * 1.0625) 50%}'
+    + 'select.oc-input:dir(rtl):hover:not(:focus){background-position:calc(var(--oc-rem) * .75) 50%,calc(var(--oc-rem) * 1.0625) 50%,0 0}'
+    // The app's Switch (components/ui/switch.tsx) on a plain checkbox.
+    + '.oc-switch{appearance:none;-webkit-appearance:none;position:relative;flex:none;box-sizing:border-box;width:36px;height:20px;margin:0;border:2px solid transparent;border-radius:999px;background-color:var(--border);vertical-align:middle;cursor:pointer;transition:background-color .15s}'
+    + '.oc-switch::before{content:"";position:absolute;top:0;inset-inline-start:0;width:16px;height:16px;border-radius:50%;background-color:var(--muted-foreground);transition:transform .15s}'
+    + '.oc-switch:checked{background-color:var(--primary)}'
+    + '.oc-switch:checked::before{background-color:var(--primary-foreground);transform:translateX(16px)}'
+    + '.oc-switch:checked:dir(rtl)::before{transform:translateX(-16px)}'
+    + '.oc-switch:disabled{opacity:.5;cursor:default}.oc-switch:focus-visible{outline:none}'
+    // One choice among a few, or tabs: the app's active-pill strip, a
+    // recessed track with the chosen option raised.
+    // As wide as its options, also in a flex column that would stretch it.
+    + '.oc-segmented{display:inline-flex;width:fit-content;max-width:100%;gap:2px;padding:2px;box-sizing:border-box;overflow-x:auto;border-radius:calc(var(--oc-rem) * .625);background-color:color-mix(in srgb,var(--foreground) 4%,transparent);box-shadow:var(--oc-recessed)}'
+    + '.oc-segmented>button{display:inline-flex;align-items:center;justify-content:center;gap:6px;height:calc(var(--oc-rem) * 1.75);padding:0 calc(var(--oc-rem) * .625);border:0;border-radius:calc(var(--oc-rem) * .5);background:transparent;color:var(--muted-foreground);font:inherit;font-size:calc(var(--oc-rem) * .8125);font-weight:500;white-space:nowrap;cursor:pointer;transition:color .15s}'
+    + '.oc-segmented>button:hover,.oc-segmented>button:focus-visible{color:var(--foreground);outline:none}'
+    + '.oc-segmented>button[aria-pressed=true]{background-color:var(--oc-raised-bg);box-shadow:inset 0 0 0 1px var(--oc-edge),var(--oc-raised-lift);color:var(--card-foreground)}';
+
+// The page sits on the chat's own background. Media shrinks to the column.
+// What is still wider (a wide table) scrolls sideways, without the elastic
+// bounce at its edges; text is the chat's own size (--oc-text), and a page
+// that sizes its text in rem or em scales with the interface size setting as
+// the chat does; the page never scrolls vertically while it fits its frame
+// (see the bootstrap), so a vertical swipe still scrolls the chat. Only the
+// horizontal bounce is turned off: turning off the vertical one would also
+// stop a vertical swipe from reaching the chat.
+//
+// A page wider than the frame has a horizontal scrollbar, drawn like the
+// app's own (10px, the thumb inset 2px, a darker tone under the pointer), but
+// its thumb shows only while the pointer is over the page: a scrollbar always
+// on screen would read as a box within the thread. The host marks the root
+// with `data-oc-pointer` while the pointer is over the frame element, the
+// same signal that shows the page's corner buttons. The page's own `:hover`
+// is not used: in our checks with synthetic pointer input it stayed set after
+// the pointer left the sandboxed frame. An attribute and not a class, so the
+// tooltip check below does not rebuild its set on every enter and leave, and
+// a page that rewrites its root's classes does not drop it. On a touch screen, where
+// nothing hovers, it always shows, as the page's corner buttons do. Its track
+// stays in place while hidden, so hovering moves nothing; the bootstrap adds
+// its height to the page's. The vertical bar has no width: the page never
+// scrolls vertically in the chat. Firefox has no per-axis scrollbar styles,
+// so there both bars are thin and follow the same hover rule; a vertical one
+// shows only on a page taller than its frame. Safari on iOS draws no styled
+// scrollbar and reserves no room for one.
+const SCROLLBAR_THUMB = 'color-mix(in srgb,var(--foreground) 18%,transparent)';
+const SCROLLBAR_THUMB_HOVER = 'color-mix(in srgb,var(--foreground) 36%,transparent)';
+const SCROLLBAR_CSS = 'html::-webkit-scrollbar{width:0;height:10px;background:transparent}html::-webkit-scrollbar-corner,html::-webkit-scrollbar-track{background:transparent}'
+    + 'html::-webkit-scrollbar-thumb{background-color:transparent;border:2px solid transparent;border-radius:6px;background-clip:padding-box}'
+    + `html[data-oc-pointer]::-webkit-scrollbar-thumb{background-color:${SCROLLBAR_THUMB}}html[data-oc-pointer]::-webkit-scrollbar-thumb:hover{background-color:${SCROLLBAR_THUMB_HOVER}}`
+    + `@media (pointer:coarse){html::-webkit-scrollbar-thumb{background-color:${SCROLLBAR_THUMB}}}`
+    + `@supports not selector(::-webkit-scrollbar){html{scrollbar-width:thin;scrollbar-color:transparent transparent}html[data-oc-pointer]{scrollbar-color:${SCROLLBAR_THUMB} transparent}`
+    + `@media (pointer:coarse){html{scrollbar-color:${SCROLLBAR_THUMB} transparent}}}`;
+const BASE_CSS = 'html{background:transparent;color:var(--foreground);font-family:var(--font-sans);font-size:var(--oc-text,14px);line-height:1.5;-webkit-font-smoothing:antialiased;-webkit-text-size-adjust:100%;overflow-x:auto;overscroll-behavior-x:none}'
+    + SCROLLBAR_CSS
+    + 'body{margin:0}a{color:var(--primary)}code,kbd,pre,samp{font-family:var(--font-mono)}img,svg,video,canvas{max-width:100%}'
     + '::highlight(oc-chat-quote),::highlight(oc-chat-quote-focus),::highlight(oc-chat-quote-flash){background-color:var(--oc-quote-mark,rgba(127,127,127,.35))}'
-    + OPTION_CSS;
+    + OPTION_CSS
+    + KIT_CSS;
 
 const CSS_VARIABLE_NAME = /^--[a-z0-9-]+$/;
 const sanitizeCssValue = (value: string): string => value.replace(/[;{}<>]/g, '');
@@ -185,6 +320,18 @@ function themeCss(theme: HtmlRenderTheme): string {
         .join('');
     return `:root{color-scheme:${theme.appearance};${declarations}}${BASE_CSS}`;
 }
+
+// Lets the host annotate the page the way the Files view annotates an HTML
+// preview: the host posts the annotation overlay's code, the page evaluates it
+// and posts the settled value back (lib/browser/previewFrameHost.ts is the
+// host's half; packages/web/server/lib/fs/preview-bridge.js is the same
+// listener for previews, change both together). Only the parent's messages
+// are read, and the code runs with what the page's own scripts already have.
+const ANNOTATION_BRIDGE = `(function(C){window.addEventListener("message",function(e){var d=e.data,t,r,m=function(x){return String(x&&x.message||x);};`
+    + 'if(e.source!==window.parent||!d||d.channel!==C||d.type!=="eval"||typeof d.id!=="string"||typeof d.code!=="string")return;'
+    + 'r=function(k,v){try{window.parent.postMessage({channel:C,type:"result",id:d.id,ok:k,value:v},"*");}catch(x){window.parent.postMessage({channel:C,type:"result",id:d.id,ok:false,value:m(x)},"*");}};'
+    + 'try{t=(0,eval)(d.code);}catch(x){r(false,m(x));return;}'
+    + `Promise.resolve(t).then(function(v){r(true,v===undefined?null:v);},function(x){r(false,m(x));});});})(${JSON.stringify(PREVIEW_BRIDGE_CHANNEL)});`;
 
 // Runs in the page's head, before its own styles and scripts. It rewrites its
 // own <style> element rather than setting inline properties, so the page's
@@ -201,7 +348,25 @@ function themeCss(theme: HtmlRenderTheme): string {
 // shrink back to the root's box, on every frame for as long as the page was
 // shown. The body's own scroll height does not depend on the frame's. It is
 // measured before the page's own `zoom`, so it is scaled by the body's drawn
-// height over its layout height to match the box it is added to.
+// height over its layout height to match the box it is added to. A page wider
+// than its frame adds the height of its horizontal scrollbar (the window's
+// height less the root's client height), so the bar sits under the content
+// instead of over its last line. Not when the content ends exactly at the
+// frame's bottom and the bar was already there: that is content sized to the
+// frame (`min-height:100vh`, where vh counts the bar's room too), which grew
+// with every bar's height added under it, up to the height cap. The bar then
+// sits over the bottom of that content. The bar comes and goes with the
+// page's width without resizing the root, so the tooltip check below also
+// sizes the page again when the bar's height changed.
+//
+// A page built as an app screen scrolls itself: the body, or a box spanning
+// the whole frame from its top to its bottom (`height:100vh` or `100%` with
+// `overflow:auto`), holds the content and the document never outgrows the
+// frame, so the frame stayed at its minimum height with the page scrolling
+// inside a 48 px strip. Such a box adds what it hides below its own edge.
+// Each box is grown that way once per height: a box of a fixed height that
+// only happened to span the frame does not follow, and growing it again would
+// swing the frame between two heights.
 //
 // A page that fits its frame cannot scroll at all. A document that can scroll
 // keeps a touch that starts on it: on a phone, a swipe over a page that fit
@@ -240,6 +405,14 @@ function themeCss(theme: HtmlRenderTheme): string {
 // tall as the page; the browser carries that scroll on to the chat around the
 // frame, so the quote comes into view there too.
 //
+// A wheel or a swipe over the page scrolls the chat around the frame, but its
+// events stay in the frame, and the chat releases its follow of a running
+// reply only on the gesture events it hears: while a reply streamed, the
+// chat pulled the reader back to the end on every new line. So the page
+// reports the direction of every wheel up and vertical swipe the page's own
+// script and scrolling boxes left alone, and the host passes it to the chat
+// as that gesture.
+//
 // A tooltip or popup the page positions itself can stick out past the frame,
 // where the frame cuts it off (on a phone the column is about 360px). Every
 // absolutely or fixed positioned element that is partly inside and partly out
@@ -251,10 +424,15 @@ function themeCss(theme: HtmlRenderTheme): string {
 // and resize; a CSS :hover tooltip changes nothing in the DOM, so hover counts.
 const BOOTSTRAP_SCRIPT = `(function(){var s=document.getElementById("oc-html-render-theme");if(!s||window.parent===window)return;var B=${JSON.stringify(BASE_CSS)};`
     + `window.addEventListener("message",function(e){var d=e.data;if(e.source!==window.parent||!d||d.type!==${JSON.stringify(THEME_MESSAGE)}||!d.variables||typeof d.variables!=="object")return;var c=":root{color-scheme:"+(d.appearance==="light"?"light":"dark")+";";for(var k in d.variables){if(/^--[a-z0-9-]+$/.test(k))c+=k+":"+String(d.variables[k]).replace(/[;{}<>]/g,"")+";";}s.textContent=c+"}"+B;});`
+    + `window.addEventListener("message",function(e){var d=e.data;if(e.source!==window.parent||!d||d.type!==${JSON.stringify(POINTER_MESSAGE)})return;if(d.over===true)document.documentElement.setAttribute("data-oc-pointer","");else document.documentElement.removeAttribute("data-oc-pointer");});`
     + `document.addEventListener("click",function(e){var t=e.target,a=t&&t.closest?t.closest("a[href]"):null,u;if(!a)return;try{u=new URL(a.getAttribute("href"),document.baseURI);}catch(x){return;}if(!/^https?:$/.test(u.protocol))return;e.preventDefault();window.parent.postMessage({type:${JSON.stringify(OPEN_LINK_MESSAGE)},url:u.href},"*");},true);`
-    + `var h,z=function(){var r=document.documentElement,d=document.body,v=r.scrollHeight>r.clientHeight?r.scrollHeight:r.getBoundingClientRect().height,i,b;`
+    + ANNOTATION_BRIDGE
+    + `var h,G=0,HF=new WeakMap(),z=function(){var r=document.documentElement,d=document.body,v=r.scrollHeight>r.clientHeight?r.scrollHeight:r.getBoundingClientRect().height,i,b,k;`
     + `if(d&&!/^(?:hidden|clip|scroll|auto)$/.test(getComputedStyle(d).overflowY)){b=d.getBoundingClientRect();b=b.top+window.scrollY+(d.clientTop+d.scrollHeight)*(d.offsetHeight?b.height/d.offsetHeight:1);if(b>v)v=b;}if(N){N=0;W();}`
-    + `for(i=0;i<P.length;i++){b=P[i].getBoundingClientRect();if(getComputedStyle(P[i]).position==="absolute"&&(b.width||b.height)&&b.bottom+window.scrollY>v)v=b.bottom+window.scrollY;}v=Math.ceil(v);r.style.overflowY=v>window.innerHeight+1?"auto":"hidden";if(v===h)return;h=v;window.parent.postMessage({type:${JSON.stringify(SIZE_MESSAGE)},height:v},"*");};window.addEventListener("resize",z);`
+    + `for(i=0;i<P.length;i++){b=P[i].getBoundingClientRect();if(getComputedStyle(P[i]).position==="absolute"&&(b.width||b.height)&&b.bottom+window.scrollY>v)v=b.bottom+window.scrollY;}`
+    + `for(i=-1;i<SC.length;i++){b=i<0?d:SC[i];if(!b||b.scrollHeight<=b.clientHeight+1||i<0&&!/^(?:scroll|auto)$/.test(getComputedStyle(b).overflowY))continue;k=b.getBoundingClientRect();`
+    + `if(k.top>1||Math.abs(k.bottom-window.innerHeight)>1||Math.abs((HF.get(b)||-9)-k.height)<.5)continue;HF.set(b,k.height);k=window.innerHeight+b.scrollHeight-b.clientHeight;if(k>v)v=k;}`
+    + `i=window.innerHeight-r.clientHeight;v=Math.ceil(v);if(i&&!(i===G&&v===window.innerHeight))v+=i;G=i;r.style.overflowY=v>window.innerHeight+1?"auto":"hidden";if(v===h)return;h=v;window.parent.postMessage({type:${JSON.stringify(SIZE_MESSAGE)},height:v},"*");};window.addEventListener("resize",z);`
     + `if(window.ResizeObserver){var o=new ResizeObserver(z);o.observe(document.documentElement);document.addEventListener("DOMContentLoaded",function(){if(document.body)o.observe(document.body);});}`
     + `document.addEventListener("DOMContentLoaded",z);window.addEventListener("load",z);`
     + `window.addEventListener("keydown",function(e){var t=e.composedPath()[0],f;if(!e.isTrusted||e.isComposing||!(e.metaKey||e.ctrlKey)||/^[acvxyz]$/i.test(e.key)&&!e.altKey||t&&(t.isContentEditable||/^(?:INPUT|TEXTAREA|SELECT)$/.test(t.tagName)))return;`
@@ -287,9 +465,15 @@ const BOOTSTRAP_SCRIPT = `(function(){var s=document.getElementById("oc-html-ren
     + `document.addEventListener("click",function(e){var g=window.getSelection(),x=e.clientX,y=e.clientY,i,j,c,b=null,k="";if(!AR.length||g&&!g.isCollapsed)return;`
     + `for(i=0;i<AR.length&&!b;i++){c=AR[i].range.getClientRects();for(j=0;j<c.length;j++){if(x>=c[j].left&&x<=c[j].right&&y>=c[j].top&&y<=c[j].bottom){k=AR[i].id;b=AR[i].range.getBoundingClientRect();break;}}}`
     + `window.parent.postMessage({type:${JSON.stringify(MARK_CLICK_MESSAGE)},id:k,rect:b?{top:b.top,left:b.left,width:b.width,height:b.height}:{top:y,left:x,width:0,height:0}},"*");});`
-    + `var P=[],Q=0,N=1,C=function(e){for(var a=e.parentElement;a&&a!==document.body;a=a.parentElement){var o=getComputedStyle(a);if(o.overflowX!=="visible"||o.overflowY!=="visible")return 1;}return 0;},`
-    + `W=function(){P=[];var a=document.body?document.body.getElementsByTagName("*"):[];for(var i=0;i<a.length&&i<5000;i++){var p=getComputedStyle(a[i]).position;if((p==="absolute"||p==="fixed")&&!C(a[i]))P.push(a[i]);}},`
-    + `F=function(){Q=0;if(N){N=0;W();}var w=document.documentElement.clientWidth;for(var i=0;i<P.length;i++){var e=P[i],x=e.__ocx||0,y=e.__ocy||0,r=e.getBoundingClientRect(),l=r.left-x,g=r.right-x,t=r.top-y,b=r.bottom-y,nx=0,ny=0;if(!r.width&&!r.height)continue;`
+    + `var GX=null,GY=null,GU=function(t){for(var e=t&&t.nodeType===1?t:t&&t.parentElement;e&&e!==document.documentElement&&e!==document.body;e=e.parentElement){if(e.scrollTop>0&&/^(?:auto|scroll)$/.test(getComputedStyle(e).overflowY))return 1;}e=document.scrollingElement;return e&&e.scrollTop>0?1:0;},`
+    + `GS=function(d){window.parent.postMessage({type:${JSON.stringify(SCROLL_MESSAGE)},direction:d},"*");};`
+    + `window.addEventListener("wheel",function(e){if(e.isTrusted&&!e.defaultPrevented&&!e.ctrlKey&&e.deltaY<0&&!GU(e.target))GS("up");},{passive:true});`
+    + `window.addEventListener("touchstart",function(e){var t=e.touches[0];GX=t?t.clientX:null;GY=t?t.clientY:null;},{passive:true});`
+    + `window.addEventListener("touchmove",function(e){var t=e.touches[0],x,y,dx,dy;if(!t||GX===null||GY===null)return;x=t.clientX;y=t.clientY;dx=x-GX;dy=y-GY;GX=x;GY=y;`
+    + `if(!e.isTrusted||e.defaultPrevented||Math.abs(dy)<=Math.abs(dx))return;if(dy<0)GS("down");else if(!GU(e.target))GS("up");},{passive:true});`
+    + `var P=[],SC=[],Q=0,N=1,C=function(e){for(var a=e.parentElement;a&&a!==document.body;a=a.parentElement){var o=getComputedStyle(a);if(o.overflowX!=="visible"||o.overflowY!=="visible")return 1;}return 0;},`
+    + `W=function(){P=[];SC=[];var a=document.body?document.body.getElementsByTagName("*"):[];for(var i=0;i<a.length&&i<5000;i++){var o=getComputedStyle(a[i]),p=o.position;if((p==="absolute"||p==="fixed")&&!C(a[i]))P.push(a[i]);if(/^(?:scroll|auto)$/.test(o.overflowY))SC.push(a[i]);}},`
+    + `F=function(){Q=0;if(window.innerHeight-document.documentElement.clientHeight!==G)z();if(N){N=0;W();}var w=document.documentElement.clientWidth;for(var i=0;i<P.length;i++){var e=P[i],x=e.__ocx||0,y=e.__ocy||0,r=e.getBoundingClientRect(),l=r.left-x,g=r.right-x,t=r.top-y,b=r.bottom-y,nx=0,ny=0;if(!r.width&&!r.height)continue;`
     + `if(g>0&&l<w&&r.width<=w){if(g>w)nx=w-g;if(l+nx<0)nx=-l;}if(t<0&&b>0)ny=-t;if(nx!==x||ny!==y){e.__ocx=nx;e.__ocy=ny;e.style.translate=nx||ny?nx+"px "+ny+"px":"";}}},`
     + `U=function(r){if(r)N=1;if(!Q)Q=requestAnimationFrame(F);};`
     + `new MutationObserver(function(m){for(var i=0;i<m.length;i++)if(m[i].type==="childList"||m[i].attributeName==="class")N=1;U(0);}).observe(document.documentElement,{subtree:true,childList:true,attributes:true,attributeFilter:["style","class"]});`
@@ -378,6 +562,8 @@ export function buildHtmlRenderDocument(
 
 export const htmlRenderThemeMessage = (theme: HtmlRenderTheme) => ({ type: THEME_MESSAGE, ...theme });
 
+export const htmlRenderPointerMessage = (over: boolean) => ({ type: POINTER_MESSAGE, over });
+
 export const htmlRenderAnswerStateMessage = (state: HtmlRenderAnswerState) => ({ type: ANSWER_STATE_MESSAGE, ...state });
 
 type JsonRpcId = number | string;
@@ -444,7 +630,8 @@ type HtmlRenderFrameMessage =
     | { kind: 'selection'; text: string; rect: z.infer<typeof selectionRectSchema>; anchor?: Omit<ChatQuoteAnchor, 'page'> }
     // An empty id is a click on no mark; the rect is then the click's point.
     | { kind: 'selection-escape' }
-    | { kind: 'mark-click'; id: string; rect: z.infer<typeof selectionRectSchema> };
+    | { kind: 'mark-click'; id: string; rect: z.infer<typeof selectionRectSchema> }
+    | { kind: 'scroll'; direction: FrameScrollDirection };
 
 /** A quote mark the host asks a page to paint. */
 export interface HtmlRenderMark {
@@ -467,6 +654,7 @@ const frameMessageSchema = z.discriminatedUnion('type', [
     }),
     z.object({ type: z.literal(SELECTION_ESCAPE_MESSAGE) }),
     z.object({ type: z.literal(MARK_CLICK_MESSAGE), id: z.string().max(200), rect: selectionRectSchema }),
+    z.object({ type: z.literal(SCROLL_MESSAGE), direction: z.enum(['up', 'down']) }),
 ]);
 
 // MCP Apps `ui/message`. Only text content is read; the summary is its text.
@@ -509,6 +697,7 @@ export function readHtmlRenderFrameMessage(event: Pick<MessageEvent, 'data'>): H
     }
     if (message.type === SELECTION_ESCAPE_MESSAGE) return { kind: 'selection-escape' };
     if (message.type === MARK_CLICK_MESSAGE) return { kind: 'mark-click', id: message.id, rect: message.rect };
+    if (message.type === SCROLL_MESSAGE) return { kind: 'scroll', direction: message.direction };
     // Only a chord with Cmd or Ctrl: the page never passes plain typing on,
     // and a page that tried to must not reach the app's single-key handling.
     if (!message.metaKey && !message.ctrlKey) return null;

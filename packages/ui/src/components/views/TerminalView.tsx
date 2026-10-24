@@ -812,6 +812,13 @@ export const TerminalView: React.FC<TerminalViewProps> = ({ visible, directory, 
         });
     }, [t]);
 
+    // Touch terminals have no right-click menu and no paste shortcut, so the
+    // toolbar offers Paste next to Copy. The clipboard read starts inside the
+    // click, which iOS and Android require.
+    const handlePasteClipboard = React.useCallback(() => {
+        void terminalControllerRef.current?.pasteClipboard();
+    }, []);
+
     const handleSelectTab = React.useCallback(
         (tabId: string) => {
             if (!terminalDirectory) return;
@@ -1320,6 +1327,19 @@ export const TerminalView: React.FC<TerminalViewProps> = ({ visible, directory, 
                             >
                                 <Icon name="file-copy" className="h-4 w-4" />
                             </Button>
+                            {useTouchTerminalInput ? (
+                                <Button
+                                    type="button"
+                                    size="xs"
+                                    variant="ghost"
+                                    className="h-7 w-7 p-0"
+                                    onClick={handlePasteClipboard}
+                                    title={t('terminalView.actions.paste')}
+                                    aria-label={t('terminalView.actions.paste')}
+                                >
+                                    <Icon name="clipboard" className="h-4 w-4" />
+                                </Button>
+                            ) : null}
                             {previewUrl ? (
                                 <Button
                                     type="button"

@@ -514,6 +514,45 @@ describe('relay host-client control reconnect', () => {
   it('holds off when another host with the same identity took the slot', async () => {
     expect(await redialsAfterClose(4001)).toBe(0);
   });
+
+  // The relay retires a replaced control socket with a frame; the host closes
+  // it with 1000, and the frame's code decides the reconnect.
+  const redialsAfterRetire = async (code) => {
+    const sockets = [];
+    const host = startRelayHost({
+      relayUrl: 'wss://relay.example.test/ws',
+      identity: fakeIdentity,
+      getLocalPort: () => 1,
+      logger: { warn: () => {} },
+      createSocket: (url) => {
+        const socket = new BunLikeFailingSocket(url);
+        socket.close = (closeCode) => {
+          socket.readyState = WebSocket.CLOSED;
+          socket.emit('close', closeCode, Buffer.from(''));
+        };
+        sockets.push(socket);
+        return socket;
+      },
+    });
+    try {
+      const control = sockets[0];
+      control.readyState = WebSocket.OPEN;
+      control.emit('open');
+      control.emit('message', Buffer.from(JSON.stringify({ type: 'relay-retire', code, reason: 'retired' })), false);
+      await sleep(1500);
+      return sockets.length - 1;
+    } finally {
+      host.stop();
+    }
+  };
+
+  it('holds off when the relay retires the control socket as replaced', async () => {
+    expect(await redialsAfterRetire(4001)).toBe(0);
+  });
+
+  it('reconnects when the relay retires an unresponsive control socket', async () => {
+    expect(await redialsAfterRetire(4003)).toBe(1);
+  });
 });
 
 describe('relay host-client relay retire', () => {

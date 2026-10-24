@@ -87,6 +87,11 @@ export const resolveFindDiff = (
 ): FileDiffMetadata | null => (fileDiff && hideWhitespace ? hideWhitespaceChanges(fileDiff) : fileDiff);
 
 /** Whether two matches (or a match and an anchor) point at the same occurrence. */
+// A closed bar or an empty query has one shared empty list, so new sources
+// while nothing is searched never look like new matches: the index sync below
+// updates state during render, and a fresh array there would re-render forever.
+const NO_MATCHES: DiffFindMatch[] = [];
+
 const isSameMatch = (a: DiffFindAnchor, b: DiffFindAnchor): boolean =>
   a.filePath === b.filePath && a.side === b.side && a.lineNumber === b.lineNumber && a.spanStart === b.spanStart;
 
@@ -211,9 +216,9 @@ export const useDiffFind = (
   const searched = React.useMemo(() => expandSources(sources, loaded), [loaded, sources]);
 
   const matches = React.useMemo<DiffFindMatch[]>(() => {
-    if (!isOpen) return [];
+    if (!isOpen) return NO_MATCHES;
     const needle = appliedQuery.trim();
-    if (needle.length === 0) return [];
+    if (needle.length === 0) return NO_MATCHES;
     const found: DiffFindMatch[] = [];
     for (const source of searched) {
       const diff = loaded.get(source.filePath)?.diff;

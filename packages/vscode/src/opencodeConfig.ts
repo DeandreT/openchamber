@@ -17,6 +17,8 @@ import {
 } from 'jsonc-parser';
 import { resolveNpmRegistryRequest } from '../../web/server/lib/opencode/npm-registry-config.js';
 import { writeFileAtomic } from '../../web/server/lib/opencode/atomic-write.js';
+import { toLoadablePluginSpec } from '../../web/server/lib/opencode/loadable-plugin-spec.js';
+import { isGitSpec } from '../../web/server/lib/opencode/plugin-spec.js';
 import {
   toAgentEntity,
   fromAgentEntity,
@@ -47,6 +49,7 @@ import {
   formatModelSelection,
   writeWebSearchSelection,
   writeWarmingEnabled,
+  writeSkillDisabled,
   findWebSearchProjectOverride,
   type AgentEntity,
   type CommandEntity,
@@ -104,7 +107,7 @@ export type Snippet = {
 };
 
 export type PluginScope = 'user' | 'project';
-type PluginParsedKind = 'npm' | 'path';
+type PluginParsedKind = 'npm' | 'path' | 'git';
 
 export type PluginEntry = {
   id: string;
@@ -130,7 +133,8 @@ export type PluginRegistryResult =
   | { kind: 'npm-network'; spec: string; error: string }
   | { kind: 'path-ok'; spec: string; absolutePath: string }
   | { kind: 'path-missing'; spec: string; absolutePath: string }
-  | { kind: 'path-unreadable'; spec: string; absolutePath: string };
+  | { kind: 'path-unreadable'; spec: string; absolutePath: string }
+  | { kind: 'git-ok'; spec: string };
 
 export type ConfigSources = {
   /** `legacy` marks a file OpenCode still decodes through its v1 path. */
@@ -1107,6 +1111,14 @@ const validatePluginSpec = (spec: unknown): string => {
   return spec.trim();
 };
 
+const requireLoadablePluginSpec = (spec: string): string => {
+  const loadable = toLoadablePluginSpec(spec);
+  if (loadable === null) {
+    throw codedError(`OpenCode cannot load plugin "${spec}"`, 'UNLOADABLE_SPEC');
+  }
+  return loadable;
+};
+
 const PLUGIN_FILE_NAME_PATTERN = /^[a-z0-9][a-z0-9-_.]*\.(js|ts|mjs|cjs)$/;
 
 const validatePluginFileName = (fileName: unknown): string => {
@@ -1178,6 +1190,13 @@ const serializePluginEntry = (entry: { spec?: unknown; options?: unknown }): str
 
 const isPluginPathSpec = (spec: string): boolean =>
   spec.startsWith('/') || spec.startsWith('./') || spec.startsWith('../') || spec.startsWith('~') || path.win32.isAbsolute(spec);
+
+/** How a spec loads, by the server's rule (`plugin-spec.js`): a path, a Git package, or npm. */
+const pluginParsedKind = (spec: string): PluginParsedKind => {
+  if (isPluginPathSpec(spec)) return 'path';
+  if (isGitSpec(spec)) return 'git';
+  return 'npm';
+};
 
 const parsePluginPathSpec = (spec: string, workingDirectory?: string | null): { absolutePath: string } => {
   if (spec === '~') return { absolutePath: path.resolve(os.homedir()) };
@@ -1334,7 +1353,7 @@ export const listPluginEntries = (workingDirectory?: string): PluginEntry[] => {
         spec: item.entry.package,
         scope: source.scope,
         kind: 'config',
-        parsedKind: isPluginPathSpec(item.entry.package) ? 'path' : 'npm',
+        parsedKind: pluginParsedKind(item.entry.package),
       };
       if (item.entry.options) entry.options = item.entry.options;
       entries.push(entry);
@@ -1347,7 +1366,7 @@ export const getPluginEntry = (id: string, workingDirectory?: string): PluginEnt
   listPluginEntries(workingDirectory).find((entry) => entry.id === id) || null;
 
 export const createPluginEntry = (entry: { spec?: unknown; options?: unknown; scope?: unknown }, workingDirectory?: string): void => {
-  const spec = validatePluginSpec(entry.spec);
+  const spec = requireLoadablePluginSpec(validatePluginSpec(entry.spec));
   const scope = validatePluginScope(entry.scope || 'user');
   const sources = getPluginConfigSources(workingDirectory);
   if (sources.some((source) => source.scope === scope && hasPluginSpec(readPluginArray(source.config), spec))) {
@@ -1366,7 +1385,10 @@ export const updatePluginEntry = (id: string, updates: { spec?: unknown; options
   const target = getPluginTarget(id, workingDirectory);
   if (!target) throw codedError('Plugin entry not found', 'NOT_FOUND');
   const existing = parsePluginRaw(target.plugin[target.index]);
-  const nextSpec = updates.spec === undefined ? existing.spec : validatePluginSpec(updates.spec);
+  let nextSpec = updates.spec === undefined ? existing.spec : validatePluginSpec(updates.spec);
+  // An entry already in the config keeps its spec as written; only a changed
+  // spec has to be one OpenCode loads.
+  if (nextSpec !== existing.spec) nextSpec = requireLoadablePluginSpec(nextSpec);
   const nextOptions = updates.options === undefined ? existing.options : updates.options;
   target.plugin[target.index] = serializePluginEntry({ spec: nextSpec, options: nextOptions });
   writeConfig(writePluginArray(target.config, target.plugin), target.path);
@@ -1522,7 +1544,7 @@ export const queryPluginRegistry = async (
   const npmJobs = new Map<string, string[]>();
   const malformedSpecs = new Set<string>();
   for (const spec of uniqueSpecs) {
-    if (isPluginPathSpec(spec)) continue;
+    if (pluginParsedKind(spec) !== 'npm') continue;
     const parsed = parsePluginNpmSpec(spec);
     if ('malformed' in parsed) {
       malformedSpecs.add(spec);
@@ -1540,6 +1562,12 @@ export const queryPluginRegistry = async (
   for (const spec of uniqueSpecs) {
     if (malformedSpecs.has(spec)) {
       results.push({ kind: 'npm-malformed', spec, error: 'Spec syntax is malformed' });
+      continue;
+    }
+
+    // A Git package never reaches the npm registry; OpenCode resolves it itself.
+    if (pluginParsedKind(spec) === 'git') {
+      results.push({ kind: 'git-ok', spec });
       continue;
     }
 
@@ -1880,6 +1908,49 @@ export const setWarmingEnabled = (enabled: boolean): { changed: boolean } => {
   const target = getJsonWriteTarget(layers, AGENT_SCOPE.USER);
   const changed = writeWarmingEnabled(target.config, enabled);
   if (changed) writeConfig(target.config, target.path);
+  return { changed };
+};
+
+/** A config file to clear a skill's deny from, or null when it cannot be parsed: it is skipped, never rewritten. */
+const readConfigFileForSkillSwitch = (filePath: string) => {
+  try {
+    return readConfigFile(filePath);
+  } catch (error) {
+    console.warn(`[skills] could not read ${filePath} to switch a skill on:`, error instanceof Error ? error.message : String(error));
+    return null;
+  }
+};
+
+/**
+ * Mirror of the web server's `setSkillEnabled`
+ * (`packages/web/server/lib/opencode/skill-switch.js`): off writes an exact
+ * deny where the skill lives, on removes the exact deny from every config file
+ * OpenCode reads for the directory. Returns the files it changed.
+ */
+export const setSkillEnabled = (input: {
+  id: string;
+  enabled: boolean;
+  scope: 'user' | 'project';
+  directory?: string;
+}) => {
+  const layers = readConfigLayers(input.directory);
+
+  if (!input.enabled) {
+    const target = getJsonWriteTarget(layers, input.scope === 'project' ? AGENT_SCOPE.PROJECT : AGENT_SCOPE.USER);
+    const changed = writeSkillDisabled(target.config, input.id, true);
+    if (changed) writeConfig(target.config, target.path);
+    return { changed: changed ? [target.path] : [] };
+  }
+
+  const { userPath, userOverridePath, customPath } = layers.paths;
+  const files = [...new Set([customPath, userPath, userOverridePath, ...getFolderConfigPaths(input.directory)])]
+    .filter((filePath): filePath is string => Boolean(filePath));
+  const changed = files.filter((filePath) => {
+    const config = readConfigFileForSkillSwitch(filePath);
+    if (!config || !writeSkillDisabled(config, input.id, false)) return false;
+    writeConfig(config, filePath);
+    return true;
+  });
   return { changed };
 };
 
@@ -2865,6 +2936,8 @@ export type SkillConfigSources = {
 };
 
 export type DiscoveredSkill = {
+  /** OpenCode's id, sent for built-in skills, whose path does not carry it. */
+  id?: string;
   name: string;
   path: string;
   scope: SkillScope;

@@ -1,5 +1,6 @@
 import type { Message, Part } from "@/lib/opencode/model"
 import type { MessagePage, PendingInboxMessage } from "@/lib/opencode/client"
+import { olderMessagesCursor } from "@/lib/opencode/messageCursor"
 import type { ChildStoreManager, DirectoryStore } from "./child-store"
 import { retry } from "./retry"
 import { mergeOptimisticPage, type OptimisticItem } from "./optimistic"
@@ -163,6 +164,32 @@ const countUserMessages = (messages: Message[]): number => {
 const hasInitialTurns = (messages: Message[]): boolean => countUserMessages(messages) >= INITIAL_USER_TURNS
 
 /**
+ * Where a transcript that outgrew the cold-navigation window is cut back to
+ * it: the index of the prompt the kept records start with, or -1 when
+ * nothing goes. The kept window follows the cold-navigation rule (ten
+ * prompts, or the record ceiling once at least the newest prompt is in), so a
+ * cut always falls on a turn boundary, and only the window is walked. The
+ * prompt's context carriers (the `synthetic` records sent right before it)
+ * stay with it: its chips, and a revert or fork that cuts at the first
+ * carrier, need them.
+ */
+const findHistoryTrimIndex = (messages: Message[]): number => {
+  const maxRecords = getInitialWindowMaxRecords()
+  let prompts = 0
+  let cut = -1
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    if (!isUserMessage(messages[index])) continue
+    prompts += 1
+    if (prompts >= INITIAL_USER_TURNS || messages.length - index >= maxRecords) {
+      cut = index
+      break
+    }
+  }
+  while (cut > 0 && messages[cut - 1].role === "synthetic") cut -= 1
+  return cut > 0 ? cut : -1
+}
+
+/**
  * Drops the cached records a replacing window no longer covers, so older
  * cached history cannot sit behind a hole. Kept: records the window carries,
  * optimistic records, and records newer than the window, which arrived live
@@ -246,6 +273,8 @@ export class SessionMessageLoader {
   private releaseDerivedCache: (target: SessionMessageTarget) => void = () => undefined
   private readonly historyReaders = new Map<string, number>()
   private readonly renderedSessions = new Map<string, number>()
+  /** Timelines scrolled away from the end; they keep `trimHistory` off. */
+  private readonly historyBrowsers = new Map<string, number>()
 
   constructor(
     private readonly childStores: ChildStoreManager,
@@ -332,12 +361,18 @@ export class SessionMessageLoader {
     if (normalized) this.retention?.schedule(normalized)
   }
 
-  /** Hold history for an imperative reader or a transcript still on screen. */
-  retainSessionHistory(target: SessionMessageTarget, reason: "read" | "rendered" = "read"): () => void {
+  /**
+   * Hold history for an imperative reader, a transcript still on screen, or a
+   * timeline whose reader is away from its end (`browsing`, which only keeps
+   * `trimHistory` from cutting what that reader may be looking at).
+   */
+  retainSessionHistory(target: SessionMessageTarget, reason: "read" | "rendered" | "browsing" = "read"): () => void {
     const normalized = this.normalizeTarget(target)
     if (!normalized) return () => undefined
     const key = this.keyFor(normalized)
-    const holders = reason === "rendered" ? this.renderedSessions : this.historyReaders
+    const holders = reason === "rendered"
+      ? this.renderedSessions
+      : reason === "browsing" ? this.historyBrowsers : this.historyReaders
     holders.set(key, (holders.get(key) ?? 0) + 1)
     let released = false
     return () => {
@@ -348,6 +383,48 @@ export class SessionMessageLoader {
       else holders.delete(key)
       this.scheduleCacheRetention(normalized.directory)
     }
+  }
+
+  /**
+   * Cuts a transcript that outgrew the cold-navigation window back to that
+   * window, the way it would open cold. The dropped turns stay reachable:
+   * coverage moves to a cursor below the oldest kept prompt, so loading older
+   * history reads them again. The caller decides when the reader cannot see
+   * the cut (`ChatContainer` asks after a turn starts or ends, with the reader
+   * at the end). Nothing is cut while a load runs, while a history reader
+   * holds the transcript or another timeline browses it, while a revert is
+   * pending, after a stream gap the transcript was not confirmed since (it
+   * may hold a hole the cursor would hide), or at a record the server has not
+   * confirmed. Returns whether anything was cut.
+   */
+  trimHistory(target: SessionMessageTarget): boolean {
+    const normalized = this.normalizeTarget(target)
+    if (!normalized || this.disposed) return false
+    const key = this.keyFor(normalized)
+    const entry = this.entries.get(key)
+    if (!entry || entry.snapshot.status !== "ready" || !entry.snapshot.resolved || entry.inflight || entry.evicted) return false
+    if (this.historyReaders.get(key) || this.historyBrowsers.get(key) || entry.verifiedEpoch < this.historyEpoch) return false
+    const store = this.childStores.getChild(normalized.directory)
+    if (!store) return false
+    const current = store.getState()
+    const messages = current.message[normalized.sessionID]
+    if (!messages) return false
+    // A pending revert hides the transcript's tail behind its marker; a cut
+    // counted over the hidden turns could drop the marker and show them again.
+    if (current.session.find((session) => session.id === normalized.sessionID)?.revert) return false
+    const cut = findHistoryTrimIndex(messages)
+    if (cut < 0 || entry.optimistic.has(messages[cut].id)) return false
+    const part = { ...current.part }
+    for (let index = 0; index < cut; index += 1) delete part[messages[index].id]
+    store.setState({ message: { ...current.message, [normalized.sessionID]: messages.slice(cut) }, part })
+    this.patchEntry(entry, {
+      limit: messages.length - cut,
+      cursor: olderMessagesCursor(messages[cut].id),
+      complete: false,
+      updatedAt: Date.now(),
+    })
+    this.persistCoverage(normalized, entry.snapshot)
+    return true
   }
 
   private evictSessionHistory(target: SessionMessageTarget): void {

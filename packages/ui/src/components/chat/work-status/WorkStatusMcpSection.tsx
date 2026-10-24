@@ -93,7 +93,7 @@ export const WorkStatusMcpSection: React.FC<Props> = ({ sessionId, directory: se
     <WorkStatusCollapsibleSection
       id="mcp"
       title={t('chat.workStatus.section.mcp')}
-      iconNode={<McpIcon className="size-4 shrink-0 text-muted-foreground" />}
+      iconNode={<McpIcon className="size-3.5 shrink-0 text-muted-foreground" />}
       summary={`${mcpConnected}/${mcpServers.length}`}
     >
       {mcpServers.map(([name, entry]) => {

@@ -30,6 +30,7 @@ import { useOptionalThemeSystem } from '@/contexts/useThemeSystem';
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 import { useWorkerPool } from '@/contexts/DiffWorkerProvider';
 import { ensurePierreThemeRegistered, getResolvedShikiTheme } from '@/lib/shiki/appThemeRegistry';
+import { DIFFS_HIGHLIGHTER } from '@/lib/shiki/diffsHighlighter';
 import { getDefaultTheme } from '@/lib/theme/themes';
 
 import { useDeviceInfo } from '@/lib/device';
@@ -41,6 +42,7 @@ import { getDiffLinesText } from '@/lib/diff/selectedDiffLines';
 import { findWordAtOffset } from '@/lib/diff/findWord';
 import type { DiffFindSide } from '@/lib/diff/diffFind';
 import { PIERRE_DIFF_TINT_CSS } from '@/lib/shiki/pierreDiffTint';
+import { DiffStickyScrollbar } from './DiffStickyScrollbar';
 
 /**
  * A click on a collapsed-context expander of a partial (patch-only) diff.
@@ -67,6 +69,13 @@ const EMPTY_HUNK_ANCHORS: readonly PatchHunkAnchor[] = [];
 const HUNK_ACTION_OVERLAY_CSS = `
   [data-gutter-buffer="annotation"] { min-height: 0; }
   [data-code] { min-height: 2.5rem; align-content: start; }
+`;
+
+// The inline layout draws the columns' horizontal scrollbar outside the
+// shadow root, sticky to the panel (DiffStickyScrollbar).
+const HIDE_COLUMN_SCROLLBAR_CSS = `
+  [data-code] { scrollbar-width: none; }
+  [data-code]::-webkit-scrollbar { display: none; }
 `;
 
 
@@ -1668,6 +1677,7 @@ const PierreDiffViewerBody: React.FC<
       light: lightTheme.metadata.id,
     },
     themeType: isDark ? 'dark' : 'light',
+    preferredHighlighter: DIFFS_HIGHLIGHTER,
     diffStyle: renderSideBySide ? 'split' : 'unified',
     diffIndicators: 'none',
     hunkSeparators: 'line-info-basic',
@@ -1686,10 +1696,14 @@ const PierreDiffViewerBody: React.FC<
     onGutterUtilityClick: enableComments ? handleGutterUtilityClick : undefined,
     onLineClick: enableComments || onFindWordRequest ? handleLineClick : undefined,
     onLineSelected: enableComments ? handleSelectionChange : undefined,
-    unsafeCSS: hunkAnchors.length > 0 ? `${WEBKIT_SCROLL_FIX_CSS}\n${HUNK_ACTION_OVERLAY_CSS}` : WEBKIT_SCROLL_FIX_CSS,
+    unsafeCSS: [
+      WEBKIT_SCROLL_FIX_CSS,
+      hunkAnchors.length > 0 ? HUNK_ACTION_OVERLAY_CSS : '',
+      layout === 'inline' ? HIDE_COLUMN_SCROLLBAR_CSS : '',
+    ].join('\n'),
     renderAnnotation: enableComments || hunkAnchors.length > 0 || expandOnDemand ? renderAnnotation : undefined,
     onPostRender: handlePostRender,
-  }), [handlePostRender, hunkAnchors.length, darkTheme.metadata.id, enableComments, expandOnDemand, isDark, isLargeContent, lightTheme.metadata.id, renderSideBySide, wrapLines, handleSelectionChange, handleGutterUtilityClick, handleLineClick, onFindWordRequest, renderAnnotation]);
+  }), [handlePostRender, hunkAnchors.length, darkTheme.metadata.id, enableComments, expandOnDemand, isDark, isLargeContent, layout, lightTheme.metadata.id, renderSideBySide, wrapLines, handleSelectionChange, handleGutterUtilityClick, handleLineClick, onFindWordRequest, renderAnnotation]);
 
 
   const lineAnnotations = useMemo<DiffLineAnnotation<DiffAnnotation>[]>(() => {
@@ -2124,6 +2138,7 @@ const PierreDiffViewerBody: React.FC<
       <div ref={diffRootRef} className="pierre-diff-wrapper w-full overflow-x-auto overflow-y-visible relative">
       <div ref={diffContainerRef} className="w-full" />
     </div>
+    <DiffStickyScrollbar containerRef={diffContainerRef} />
     {commentOverlays}
     {hunkActionPortals}
   </div>

@@ -37,14 +37,23 @@ other.
   and makes small edits, such as ticking a step, with its own file tools, and
   `save` creates or replaces one whole. `expected` guards a replacement only:
   a save that carries it without an `id` is a 400, never a silently ignored
-  conflict check. The actions answer `403` while
+  conflict check. Notes and todos carry `planId`, todos `dependsOn`, under
+  the storage rules of `../project-context/DOCUMENTATION.md`; an update may
+  send only those fields. `list` narrows notes, todos and plans to one `planId`; `ready: true`
+  keeps only unfinished todos whose dependencies all exist and are completed,
+  judged on the whole stored list before the plan filter. Readiness is never
+  stored. A plan save with `sessionId` sets or replaces (`null` clears) the
+  existing plan's session link; it carries no markdown, and a call with
+  both, or without an `id`, is refused before anything is written. That
+  input names the plan's session and never a note's origin. A field the
+  tool declares for another kind is a 400. The actions answer `403` while
   `agentKnowledgeToolEnabled` is `false`. `show` checks the plan exists and
   sends `openchamber:plan-open-request` to every connected window, like
   `file.open`; every layout opens the plan the way a click in the Project
   knowledge Plans list does: in place in the panel on desktop and web, in the
   drawer's plan viewer on mobile. No
   window reached is `503`.
-- `render-page.js` runs `render.page` for the `openchamber_render` agent tool.
+- `render-page.js` runs `render.page` for the `openchamber_render` agent tool. Only `html` is required: a page sent without a title is named after its own `<title>`, else its first h1 to h3, else "Page", with the same rule the chat uses (`renderedPage` in `packages/ui/src/lib/opencode/tools.ts`). Weaker models sent title and html in separate calls, each refused call costing the whole page again; a missing html now also asks for both in one call.
   The chat draws the page from the call's own input, so the action stores
   nothing: it checks `html` (at most 200,000 characters) and `title` (at most
   120) and answers `403` while `agentRenderToolEnabled` is `false`. With
@@ -60,9 +69,17 @@ other.
   `openchamber:page-waiting` / `openchamber:page-settled` to the clients, and
   sends the same "Input needed" notification a form gets.
   `renderPageImageSources` lists the local images a page names by absolute
-  path (in quotes or a CSS `url()`, PNG, JPEG, GIF or WebP, at most 12). The
-  image grant route (`../markdown-image-grants/`) allows exactly those, and the
-  chat reads them with the same rule.
+  path (in quotes or a CSS `url()`, PNG, JPEG, GIF or WebP), every one of them.
+  The image grant route (`../markdown-image-grants/`) allows exactly those, and
+  the chat reads them with the same rule. `fitRenderPageImages` checks the
+  files and takes them in page order while they add up to at most
+  `RENDER_PAGE_IMAGE_BUDGET_BYTES` (25 MB); the grant route serves a page by it.
+  The action checks the page the same way before answering, so the agent hears
+  what the user will see: when an image will not show, the result carries
+  `images` (`shown`, `notShown` with each path and its reason, and `weightMB`
+  against `budgetMB` when the budget cut it) and a note telling the agent to
+  split the page or use smaller images. A page whose images all show answers
+  as before.
 - `routes.js` is the authenticated CLI HTTP adapter. It forwards one action,
   preserves service status and partial-result details, and propagates request
   cancellation. It also carries the chat's answer to a waiting page.
@@ -182,12 +199,18 @@ other.
   (`../session-knowledge/DOCUMENTATION.md`): what the work is about, never one
   mentioned in passing. It sends one service-neutral record (`url`, `title`, `kind`
   `change` or `issue`, optional `identifier`) and nothing is looked up, so any
-  tracker works. The URL decides what is stored: a GitHub pull or issue
+  tracker works. The URL decides what is stored: a github.com pull or issue
   address becomes the GitHub entry (kind from the path, live state as for any
-  link), a Linear issue address the Linear entry, anything else an `external`
-  entry shown by identifier. A GitLab merge request or issue address (the
-  `/-/merge_requests/N` shape on any host) is keyed by the thread, so linking
-  it again from a tab like `/diffs` or with a query refreshes the one entry. It only adds or refreshes links, never removes
+  link), an item link a registered tracker's `matchUrl` claims a tracker
+  entry (`{ id: '<provider>:<IDENTIFIER>', kind, provider, identifier }`;
+  Linear's id stays `linear:ENG-12` and its kind stays `linear` while the
+  `/api/linear` alias exists, so older bundled UIs keep showing and keeping
+  it; other trackers are `kind: 'tracker'`, see
+  `../trackers/DOCUMENTATION.md`), anything else an `external` entry shown by identifier.
+  A change request or issue address that a source-control provider's
+  `urls.thread` names (GitLab's `/-/merge_requests/N` shape on any host) is
+  keyed by the thread, so linking it again from a tab like `/diffs` or with a
+  query refreshes the one entry. It only adds or refreshes links, never removes
   one: the user owns removal. A missing field or a non-http(s) URL is a 400 and
   nothing is written.
 - `file.open` shows a file in the user's viewer. `file-open.js` resolves a

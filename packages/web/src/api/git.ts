@@ -16,6 +16,7 @@ export const createWebGitAPI = (): GitAPI => ({
   getGitStatus: gitApiHttp.getGitStatus,
   prefetchProjectStatuses: gitApiHttp.prefetchProjectStatuses,
   getGitDiff: gitApiHttp.getGitDiff,
+  getGitDiffs: gitApiHttp.getGitDiffs,
   getGitFileDiff: gitApiHttp.getGitFileDiff,
   getGitRangeDiff: gitApiHttp.getGitRangeDiff,
   getGitRangeFiles: gitApiHttp.getGitRangeFiles,
@@ -67,6 +68,7 @@ export const createWebGitAPI = (): GitAPI => ({
   getGitLog(directory: string, options?: GitLogOptions) {
     return gitApiHttp.getGitLog(directory, options);
   },
+  addChangeIdToHead: gitApiHttp.addChangeIdToHead,
   getCommitFiles: gitApiHttp.getCommitFiles,
   getGitCommitDiff: gitApiHttp.getGitCommitDiff,
   getCurrentGitIdentity: gitApiHttp.getCurrentGitIdentity,

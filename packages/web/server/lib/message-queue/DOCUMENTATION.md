@@ -174,8 +174,8 @@ persisted "sending" flag would strand a message forever.
      context behind for the retry to duplicate;
    - otherwise `POST /session/:id/prompt` with the user's text, files and
      agent mention.
-   Success removes the item, persists, broadcasts, and marks the user
-   message sent for notifications. Failure keeps the item, backs off
+   Success removes the item, persists, broadcasts, and calls `onPromptSent`.
+   Failure keeps the item, backs off
    2 s → 60 s (doubling per consecutive failure of that item), and re-arms.
 6. The next item goes out after the next busy → idle cycle.
 

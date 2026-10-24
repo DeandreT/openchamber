@@ -87,6 +87,48 @@ describe('bridge git special runtime', () => {
     expect(sdkClient.generate.text.mock.calls[0][0].prompt).toContain('+new line');
   });
 
+  it('reads the prompts of the directory it commits in and uses an empty instructions override as written', async () => {
+    gitService.getGitStatus.mockImplementation(async () => ({ files: [{ path: 'src/a.ts', index: ' ', working_dir: 'M' }] }));
+    gitService.getGitLog.mockImplementation(async () => ({ all: [] }));
+    gitService.getGitDiff.mockImplementation(async () => ({ kind: 'diff', diff: 'diff --git a/src/a.ts b/src/a.ts\n+new line', submodule: null }));
+    sdkClient.generate.text.mockImplementation(async () => ({ text: '{"subject":"feat: add a line","highlights":[]}' }));
+    const readPromptOverrides = mock(async () => ({
+      'git.commit.generate.visible': 'Project visible',
+      'git.commit.generate.instructions': '',
+    }));
+
+    const response = await handleSpecialGitBridgeMessage({
+      id: 'p1',
+      type: 'api:git/commit-message',
+      payload: { directory: '/repo-b' },
+    }, { manager: { getApiUrl: () => 'http://opencode.test', getOpenCodeAuthHeaders: () => ({}) } }, {
+      readSettings: () => ({}),
+      execGit: mock(),
+      readPromptOverrides,
+    });
+
+    expect(response.success).toBe(true);
+    expect(readPromptOverrides).toHaveBeenCalledWith('/repo-b');
+    const prompt = sdkClient.generate.text.mock.calls[0][0].prompt;
+    expect(prompt.startsWith('Project visible\n\n\n\nDiffs of the selected files:')).toBe(true);
+    expect(prompt).not.toContain('Return exactly one JSON object');
+  });
+
+  it('fails the generation when the prompts cannot be read instead of using the built-in text', async () => {
+    const response = await handleSpecialGitBridgeMessage({
+      id: 'p2',
+      type: 'api:git/commit-message',
+      payload: { directory: '/repo' },
+    }, { manager: { getApiUrl: () => 'http://opencode.test', getOpenCodeAuthHeaders: () => ({}) } }, {
+      readSettings: () => ({}),
+      execGit: mock(),
+      readPromptOverrides: async () => { throw new Error('Project magic prompts cannot be read: invalid JSON'); },
+    });
+
+    expect(response).toEqual({ id: 'p2', type: 'api:git/commit-message', success: false, error: 'Project magic prompts cannot be read: invalid JSON' });
+    expect(sdkClient.generate.text).not.toHaveBeenCalled();
+  });
+
   it('generates PR descriptions through the OpenCode generate route', async () => {
     const response = await handleSpecialGitBridgeMessage({
       id: '1',
@@ -126,12 +168,16 @@ describe('bridge git special runtime', () => {
     );
   });
 
-  it('uses the title agent model when no request or override model is set', async () => {
+  it('uses the title agent model and its thinking variant when no request or override model is set', async () => {
     gitService.getGitStatus.mockImplementation(async () => ({ files: [{ path: 'src/a.ts', index: ' ', working_dir: 'M' }] }));
     gitService.getGitLog.mockImplementation(async () => ({ all: [{ message: 'fix: earlier change' }] }));
     gitService.getGitDiff.mockImplementation(async () => ({ kind: 'diff', diff: 'diff --git a/src/a.ts b/src/a.ts\n+new line', submodule: null }));
-    sdkClient.agent.get.mockImplementation(async () => ({ data: { model: { providerID: 'sidecar', id: 'tiny-model' } } }));
-    sdkClient.model.list.mockImplementation(async () => ({ data: [{ providerID: 'sidecar', id: 'tiny-model' }] }));
+    sdkClient.agent.get.mockImplementation(async () => ({
+      data: { model: { providerID: 'sidecar', id: 'tiny-model', variant: 'low' } },
+    }));
+    sdkClient.model.list.mockImplementation(async () => ({
+      data: [{ providerID: 'sidecar', id: 'tiny-model', variants: [{ id: 'low' }] }],
+    }));
     sdkClient.generate.text.mockImplementation(async () => ({ text: '{"subject":"feat: add a line","highlights":["adds a line"]}' }));
 
     const response = await handleSpecialGitBridgeMessage({
@@ -145,7 +191,11 @@ describe('bridge git special runtime', () => {
     });
 
     expect(response.success).toBe(true);
-    expect(sdkClient.generate.text.mock.calls[0][0].model).toEqual({ id: 'tiny-model', providerID: 'sidecar' });
+    expect(sdkClient.generate.text.mock.calls[0][0].model).toEqual({
+      id: 'tiny-model',
+      providerID: 'sidecar',
+      variant: 'low',
+    });
   });
 
   it('skips a title agent model OpenCode lists as disabled, like the server resolver', async () => {
@@ -193,6 +243,37 @@ describe('bridge git special runtime', () => {
 
     expect(response.success).toBe(true);
     expect(sdkClient.generate.text.mock.calls[0][0].model).toEqual({ id: 'claude-sonnet-4-5', providerID: 'anthropic' });
+  });
+
+  it('carries the small-model thinking variant into generation', async () => {
+    gitService.getGitStatus.mockImplementation(async () => ({ files: [{ path: 'src/a.ts', index: ' ', working_dir: 'M' }] }));
+    gitService.getGitLog.mockImplementation(async () => ({ all: [{ message: 'fix: earlier change' }] }));
+    gitService.getGitDiff.mockImplementation(async () => ({ kind: 'diff', diff: 'diff --git a/src/a.ts b/src/a.ts\n+new line', submodule: null }));
+    sdkClient.model.list.mockImplementation(async () => ({
+      data: [{ providerID: 'anthropic', id: 'claude-sonnet-4-5', variants: [{ id: 'high' }] }],
+    }));
+    sdkClient.generate.text.mockImplementation(async () => ({ text: '{"subject":"feat: add a line","highlights":["adds a line"]}' }));
+
+    const response = await handleSpecialGitBridgeMessage({
+      id: 'variant1',
+      type: 'api:git/commit-message',
+      payload: { directory: '/repo' },
+    }, { manager: { getApiUrl: () => 'http://opencode.test', getOpenCodeAuthHeaders: () => ({}) } }, {
+      readSettings: () => ({
+        smallModelUseDefault: false,
+        smallModelOverride: 'anthropic/claude-sonnet-4-5',
+        smallModelVariant: 'high',
+      }),
+      execGit: mock(),
+      readPromptOverrides: () => ({}),
+    });
+
+    expect(response.success).toBe(true);
+    expect(sdkClient.generate.text.mock.calls[0][0].model).toEqual({
+      id: 'claude-sonnet-4-5',
+      providerID: 'anthropic',
+      variant: 'high',
+    });
   });
 
   it('keeps the configured small model when the catalog comes back empty', async () => {

@@ -367,6 +367,173 @@ describe('generateSmallModelText', () => {
     expect(lastGenerate().body.model).toEqual({ id: 'gpt-5-mini', providerID: 'openai' });
   });
 
+  it('sends the thinking variant a caller names with its own model', async () => {
+    state.models = [MODEL({ variants: [{ id: 'low' }, { id: 'high' }] })];
+
+    const result = await generateSmallModelText({
+      prompt: 'hi', directory: '/proj', model: 'anthropic/claude-haiku-4-5', variant: 'high',
+    });
+    expect(result).toMatchObject({ providerID: 'anthropic', modelID: 'claude-haiku-4-5', source: 'request' });
+    expect(lastGenerate().body.model).toEqual({ id: 'claude-haiku-4-5', providerID: 'anthropic', variant: 'high' });
+  });
+
+  it('sends the thinking variant saved beside the small model override', async () => {
+    state.models = [MODEL({ variants: [{ id: 'low' }, { id: 'high' }] })];
+    fs.writeFileSync(
+      path.join(TEMP_DATA_DIR, 'settings.json'),
+      JSON.stringify({
+        smallModelUseDefault: false,
+        smallModelOverride: 'anthropic/claude-haiku-4-5',
+        smallModelVariant: 'high',
+      }),
+    );
+
+    try {
+      const result = await generateSmallModelText({ prompt: 'hi', directory: '/proj' });
+      expect(result).toMatchObject({ providerID: 'anthropic', modelID: 'claude-haiku-4-5', source: 'settings' });
+      expect(lastGenerate().body.model).toEqual({
+        id: 'claude-haiku-4-5',
+        providerID: 'anthropic',
+        variant: 'high',
+      });
+    } finally {
+      fs.rmSync(path.join(TEMP_DATA_DIR, 'settings.json'), { force: true });
+    }
+  });
+
+  it('reads the saved variant from the profile preferences file', async () => {
+    state.models = [MODEL({ variants: [{ id: 'high' }] })];
+    const preferencesPath = path.join(TEMP_DATA_DIR, 'preferences.json');
+    fs.writeFileSync(
+      preferencesPath,
+      JSON.stringify({
+        version: 1,
+        fields: {
+          smallModelUseDefault: { value: false, updatedAt: 1 },
+          smallModelOverride: { value: 'anthropic/claude-haiku-4-5', updatedAt: 1 },
+          smallModelVariant: { value: 'high', updatedAt: 1 },
+        },
+      }),
+    );
+
+    try {
+      await generateSmallModelText({ prompt: 'hi', directory: '/proj' });
+      expect(lastGenerate().body.model).toEqual({
+        id: 'claude-haiku-4-5',
+        providerID: 'anthropic',
+        variant: 'high',
+      });
+    } finally {
+      fs.rmSync(preferencesPath, { force: true });
+    }
+  });
+
+  it('drops a saved variant the catalog does not list for the model', async () => {
+    state.models = [MODEL({ variants: [{ id: 'low' }] })];
+    fs.writeFileSync(
+      path.join(TEMP_DATA_DIR, 'settings.json'),
+      JSON.stringify({
+        smallModelUseDefault: false,
+        smallModelOverride: 'anthropic/claude-haiku-4-5',
+        smallModelVariant: 'high',
+      }),
+    );
+
+    try {
+      await generateSmallModelText({ prompt: 'hi', directory: '/proj' });
+      expect(lastGenerate().body.model).toEqual({ id: 'claude-haiku-4-5', providerID: 'anthropic' });
+    } finally {
+      fs.rmSync(path.join(TEMP_DATA_DIR, 'settings.json'), { force: true });
+    }
+  });
+
+  it('drops a saved variant when the known model lists no variants', async () => {
+    state.models = [MODEL()];
+    fs.writeFileSync(
+      path.join(TEMP_DATA_DIR, 'settings.json'),
+      JSON.stringify({
+        smallModelUseDefault: false,
+        smallModelOverride: 'anthropic/claude-haiku-4-5',
+        smallModelVariant: 'high',
+      }),
+    );
+
+    try {
+      await generateSmallModelText({ prompt: 'hi', directory: '/proj' });
+      expect(lastGenerate().body.model).toEqual({ id: 'claude-haiku-4-5', providerID: 'anthropic' });
+    } finally {
+      fs.rmSync(path.join(TEMP_DATA_DIR, 'settings.json'), { force: true });
+    }
+  });
+
+  it('keeps a saved variant when the catalog does not know the model', async () => {
+    state.models = [];
+    fs.writeFileSync(
+      path.join(TEMP_DATA_DIR, 'settings.json'),
+      JSON.stringify({
+        smallModelUseDefault: false,
+        smallModelOverride: 'anthropic/claude-haiku-4-5',
+        smallModelVariant: 'high',
+      }),
+    );
+
+    try {
+      await generateSmallModelText({ prompt: 'hi', directory: '/proj' });
+      expect(lastGenerate().body.model).toEqual({
+        id: 'claude-haiku-4-5',
+        providerID: 'anthropic',
+        variant: 'high',
+      });
+    } finally {
+      fs.rmSync(path.join(TEMP_DATA_DIR, 'settings.json'), { force: true });
+    }
+  });
+
+  it('ignores the saved variant while the default small model is used', async () => {
+    state.models = [MODEL({ variants: [{ id: 'high' }] })];
+    state.defaultModel = state.models[0];
+    fs.writeFileSync(
+      path.join(TEMP_DATA_DIR, 'settings.json'),
+      JSON.stringify({
+        smallModelUseDefault: true,
+        smallModelOverride: 'openai/gpt-5.6-luna',
+        smallModelVariant: 'high',
+      }),
+    );
+
+    try {
+      const result = await generateSmallModelText({ prompt: 'hi', directory: '/proj' });
+      expect(result).toMatchObject({ providerID: 'anthropic', modelID: 'claude-haiku-4-5', source: 'default' });
+      expect(lastGenerate().body.model).toEqual({ id: 'claude-haiku-4-5', providerID: 'anthropic' });
+    } finally {
+      fs.rmSync(path.join(TEMP_DATA_DIR, 'settings.json'), { force: true });
+    }
+  });
+
+  it('sends the thinking variant on OpenCode\'s title agent model', async () => {
+    state.titleModel = { id: 'gpt-5-mini', providerID: 'openai', variant: 'low' };
+    state.models = [MODEL({
+      id: 'gpt-5-mini',
+      modelID: 'gpt-5-mini',
+      providerID: 'openai',
+      variants: [{ id: 'low' }],
+    })];
+
+    const result = await generateSmallModelText({
+      prompt: 'hi',
+      directory: '/proj',
+      preferredProviderID: 'anthropic',
+      preferredModelID: 'claude-haiku-4-5',
+    });
+
+    expect(result).toMatchObject({ providerID: 'openai', modelID: 'gpt-5-mini', source: 'config' });
+    expect(lastGenerate().body.model).toEqual({
+      id: 'gpt-5-mini',
+      providerID: 'openai',
+      variant: 'low',
+    });
+  });
+
   // A commit message or a spoken summary names the composer's provider and
   // model; OpenCode's default (its first available model when none is set)
   // can be another provider's.
@@ -559,6 +726,30 @@ describe('describeSmallModel', () => {
     try {
       const described = await describeSmallModel({ directory: '/proj' });
       expect(described).toMatchObject({ providerID: 'openai', modelID: 'gpt-5.6-luna', source: 'settings' });
+    } finally {
+      fs.rmSync(path.join(TEMP_DATA_DIR, 'settings.json'), { force: true });
+    }
+  });
+
+  it('reports the override thinking variant', async () => {
+    state.models = [MODEL({ variants: [{ id: 'low' }, { id: 'high' }] })];
+    fs.writeFileSync(
+      path.join(TEMP_DATA_DIR, 'settings.json'),
+      JSON.stringify({
+        smallModelUseDefault: false,
+        smallModelOverride: 'anthropic/claude-haiku-4-5',
+        smallModelVariant: 'high',
+      }),
+    );
+
+    try {
+      const described = await describeSmallModel({ directory: '/proj' });
+      expect(described).toMatchObject({
+        providerID: 'anthropic',
+        modelID: 'claude-haiku-4-5',
+        variant: 'high',
+        source: 'settings',
+      });
     } finally {
       fs.rmSync(path.join(TEMP_DATA_DIR, 'settings.json'), { force: true });
     }

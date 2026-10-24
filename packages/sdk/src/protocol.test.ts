@@ -765,6 +765,17 @@ describe('parseGuestMessage', () => {
     expect(parseGuestMessage({ ...base, type: 'generate', payload: {} })).toBeNull();
   });
 
+  test('accepts the late generate listen notice and a late answer, and drops a malformed one', () => {
+    const envelope = { channel: OPENCHAMBER_SDK_CHANNEL, v: 1 as const };
+    expect(parseGuestMessage({ ...envelope, type: 'generate-late-listen' })?.type).toBe('generate-late-listen');
+    const answered = { ...envelope, type: 'generate-late' as const, payload: { request: { prompt: 'Summarize' }, ok: true as const, result: { text: 'Short.' } } };
+    expect(parseHostMessage(answered)).toEqual(answered);
+    const failed = { ...envelope, type: 'generate-late' as const, payload: { request: { prompt: 'Summarize', system: 'Be brief' }, ok: false as const, code: 'MODEL_FAILED' as const, error: 'Failed.' } };
+    expect(parseHostMessage(failed)).toEqual(failed);
+    expect(parseHostMessage({ ...answered, payload: { request: { prompt: '' }, ok: true, result: { text: 'x' } } })).toBeNull();
+    expect(parseHostMessage({ ...failed, payload: { ...failed.payload, code: 'NOPE' } })).toBeNull();
+  });
+
   test('accepts file messages and drops an empty or backslash path', () => {
     const base = { channel: OPENCHAMBER_SDK_CHANNEL, v: 1 as const, id: 'oc-20' };
     expect(parseGuestMessage({ ...base, type: 'file-read', payload: { path: 'README.md' } })?.type).toBe('file-read');

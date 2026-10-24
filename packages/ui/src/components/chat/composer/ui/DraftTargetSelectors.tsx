@@ -46,6 +46,7 @@ import { useKeybind } from '@/hooks/useKeybind';
 import type { Theme } from '@/types/theme';
 import { normalizePath } from '../attachments/filePaths';
 import { getProjectDisplayLabel, type DraftTargetProject } from '../state/useDraftTarget';
+import { useProjectsInSidebarOrder } from '@/components/session/sidebar/list/useProjectsInSidebarOrder';
 
 interface BranchOption {
     value: string;
@@ -221,11 +222,12 @@ function DraftTargetSelectorsView(props: DraftTargetProps) {
         setOpenPicker('worktree');
     });
 
+    const orderedProjects = useProjectsInSidebarOrder(projects, openPicker === 'project');
     const filteredProjects = React.useMemo(
         () => openPicker === 'project'
-            ? rankByQuery(projects, projectQuery, (project) => [getProjectDisplayLabel(project), project.path])
-            : projects,
-        [openPicker, projects, projectQuery],
+            ? rankByQuery(orderedProjects, projectQuery, (project) => [getProjectDisplayLabel(project), project.path])
+            : orderedProjects,
+        [openPicker, orderedProjects, projectQuery],
     );
 
     // Transient search must never survive to the next opening, including
@@ -642,6 +644,7 @@ export function MobileDraftTargetSheets(
     } = props;
 
     const [branchQuery, setBranchQuery] = React.useState('');
+    const orderedProjects = useProjectsInSidebarOrder(projects, openPicker === 'project');
 
     // Reset the branch search whenever the branch sheet opens or closes.
     React.useEffect(() => {
@@ -653,7 +656,7 @@ export function MobileDraftTargetSheets(
             <ProjectPickerSheet
                 open={openPicker === 'project'}
                 onClose={() => onOpenPickerChange(null)}
-                projects={projects}
+                projects={orderedProjects}
                 selectedProjectId={selectedProject.id}
                 onSelectProject={onProjectChange}
                 theme={theme}

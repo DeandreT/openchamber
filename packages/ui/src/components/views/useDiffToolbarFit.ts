@@ -21,16 +21,42 @@ interface ToolbarFit {
   steps: readonly string[];
   /** Texts whose truncation counts as not fitting; none when omitted. */
   clippedText?: string;
+  /** Steps taken only while the row overflows, whatever `clippedText` says. */
+  overflowSteps?: readonly string[];
 }
+
+/**
+ * The controls that move into the diff toolbar's "More actions" menu, one
+ * step each: the view options from the end of the row, then, when the row
+ * still does not fit (a repository picker at the narrowest widths), the
+ * walkthrough, which the rail opens as well.
+ */
+export const DIFF_TOOLBAR_MENU_STEPS = {
+  layout: 'data-diff-toolbar-more-layout',
+  whitespace: 'data-diff-toolbar-more-whitespace',
+  wrap: 'data-diff-toolbar-more-wrap',
+  tree: 'data-diff-toolbar-more-tree',
+  walkthrough: 'data-diff-toolbar-more-walkthrough',
+} as const;
+
+const DIFF_TOOLBAR_MENU_STEP_ORDER = [
+  DIFF_TOOLBAR_MENU_STEPS.layout,
+  DIFF_TOOLBAR_MENU_STEPS.whitespace,
+  DIFF_TOOLBAR_MENU_STEPS.wrap,
+  DIFF_TOOLBAR_MENU_STEPS.tree,
+  DIFF_TOOLBAR_MENU_STEPS.walkthrough,
+];
 
 /**
  * The diff toolbar: first the walkthrough label, then the review and expand
  * labels and the scope count. Its `.truncate` texts include the base and
- * commit pickers.
+ * commit pickers. Then, only while the row still overflows (a picker cut down
+ * to its icon is no reason), the view options move into "More actions".
  */
 const DIFF_TOOLBAR_FIT: ToolbarFit = {
-  steps: ['data-diff-toolbar-compact-walkthrough', 'data-diff-toolbar-compact'],
+  steps: ['data-diff-toolbar-compact-walkthrough', 'data-diff-toolbar-compact', ...DIFF_TOOLBAR_MENU_STEP_ORDER],
   clippedText: '.truncate',
+  overflowSteps: DIFF_TOOLBAR_MENU_STEP_ORDER,
 };
 
 export const useToolbarFit = (ref: React.RefObject<HTMLElement | null>, fit: ToolbarFit): void => {
@@ -71,10 +97,10 @@ const fits = (container: HTMLElement, clippedText: string | undefined): boolean 
   return true;
 };
 
-export const fitToolbar = (container: HTMLElement, { steps, clippedText }: ToolbarFit = DIFF_TOOLBAR_FIT): void => {
+export const fitToolbar = (container: HTMLElement, { steps, clippedText, overflowSteps }: ToolbarFit = DIFF_TOOLBAR_FIT): void => {
   for (const step of steps) container.removeAttribute(step);
   for (const step of steps) {
-    if (fits(container, clippedText)) return;
+    if (fits(container, overflowSteps?.includes(step) ? undefined : clippedText)) return;
     container.setAttribute(step, '');
   }
 };

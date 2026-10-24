@@ -5,6 +5,7 @@ import { partIds, type ConfigDocument } from "./model"
 import {
   configModelIdentifier,
   deniesAnyProvider,
+  findIntegrationPolicy,
   isIntegrationDenied,
   mergeConfigDocuments,
   projectAgent,
@@ -225,7 +226,7 @@ describe("projectMessage (other roles)", () => {
       { id: "2", type: "system", time: { created: 2 }, text: "sys", description: "d" },
       { id: "3", type: "skill", time: { created: 3 }, skill: "sk", name: "Skill", text: "t" },
       { id: "4", type: "shell", time: { created: 4 }, shellID: "sh", command: "ls", status: "exited", exit: 0 },
-      { id: "5", type: "compaction", time: { created: 5 }, status: "running", reason: "auto", summary: "", recent: "" },
+      { id: "5", type: "compaction", time: { created: 5 }, status: "running", reason: "auto", summary: "" },
       {
         id: "6",
         type: "compaction",
@@ -356,6 +357,7 @@ describe("integration policies", () => {
     ])
     expect(isIntegrationDenied(policies, "mcp:github-enterprise")).toBe(true)
     expect(isIntegrationDenied(policies, "skill:deploy")).toBe(true)
+    expect(findIntegrationPolicy(policies, "skill:deploy")).toEqual({ resource: "skill:deploy", effect: "deny", path: "/repo/opencode.json" })
     expect(isIntegrationDenied(policies, "skill:deploy-docs")).toBe(false)
     expect(isIntegrationDenied(policies, "mcp:linear")).toBe(false)
   })

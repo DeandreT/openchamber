@@ -104,14 +104,16 @@ test('navigation is enabled once there are matches', async () => {
   expect(next.disabled).toBe(false);
 });
 
-test('a still-reading changeset is shown as a spinner beside the count', async () => {
+test('a still-reading changeset marks the total as growing', async () => {
   await render({ query: 'needle', total: 2, currentIndex: 0, isSearching: true });
-  expect(host.querySelector('[role="status"]')).not.toBeNull();
+  const count = host.querySelector('[aria-live="polite"]');
+  expect(count?.textContent).toBe('1/2+');
+  expect(count?.getAttribute('aria-label')).toBe('1 of 2, Still reading files…');
 });
 
-test('a finished search shows no spinner', async () => {
+test('a finished search shows the final total', async () => {
   await render({ query: 'needle', total: 2, currentIndex: 0, isSearching: false });
-  expect(host.querySelector('[role="status"]')).toBeNull();
+  expect(host.querySelector('[aria-live="polite"]')?.textContent).toBe('1/2');
 });
 
 test('a bumped focusNonce re-focuses and re-selects the query', async () => {

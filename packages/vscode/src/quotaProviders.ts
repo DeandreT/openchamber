@@ -3,13 +3,14 @@ import { OPENCODE_CONFIG_DIR } from './opencodeConfigPaths';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
-import { fetchOpenCodeGoUsage, type OpenCodeGoApiKeyCredential, type OpenCodeGoConsoleCredential } from './opencodeGoQuota';
+import { fetchOpenCodeGoUsage, OPENCODE_GO_KEY_EXPIRED, type OpenCodeGoApiKeyCredential, type OpenCodeGoConsoleCredential } from './opencodeGoQuota';
 import { deleteLegacyOllamaCloudCredential, deleteLegacyOpenCodeGoCredential, readCredential } from './quotaCredentials';
 import { readOpenCodeCredentials } from './opencodeAuth';
 import { readConfig } from './opencodeConfig';
 import { isRecord, toProviderEntity } from './opencode-config-v2';
 import { fetchExeDevUsage } from './exeDevQuota';
 import { refreshGoogleAccessToken } from '../../web/server/lib/quota/providers/google/oauth.js';
+import { antigravityHeaders, warnIfGeminiGroupMissing } from '../../web/server/lib/quota/providers/antigravity/client.js';
 
 type AuthEntry = Record<string, unknown> | string;
 type AuthFile = Record<string, AuthEntry>;
@@ -931,15 +932,15 @@ export const listConfiguredQuotaProviders = async () => {
   return Array.from(configured);
 };
 
-// A 401 is not always an expired token: for a still-valid sign-in that may not
-// read usage (OpenCode's `chatgpt-token-sharing`) the endpoint answers with an
-// access-enforcement body. Same wording as the web server's Codex provider.
+// A 401 is not always an expired token: the usage endpoint refuses OpenCode's
+// `chatgpt-token-sharing` token with an access-enforcement body, and OpenAI has
+// no usage endpoint for that sign-in. Same wording as the web server's Codex provider.
 const codexErrorBodySchema = z.object({ error: z.object({ type: z.string() }) });
 
 const codexUnauthorizedMessage = async (response: Response): Promise<string> => {
   const body = codexErrorBodySchema.safeParse(await response.json().catch(() => null));
   return body.success && body.data.error.type === 'rejected_by_access_enforcement'
-    ? 'Usage is not available for this OpenAI sign-in method; chat still works'
+    ? 'OpenAI shows usage for Sign in with ChatGPT only at chatgpt.com/settings/usage. The legacy Codex sign-ins show it here.'
     : 'Session expired \u2014 please re-authenticate with OpenAI';
 };
 
@@ -1157,6 +1158,7 @@ const fetchGoogleModels = async (
   accessToken: string,
   projectId?: string,
   endpoints: readonly string[] = GOOGLE_ENDPOINTS,
+  clientHeaders: Record<string, string> = GOOGLE_HEADERS,
 ) => {
   const body = projectId ? { project: projectId } : {};
 
@@ -1169,7 +1171,7 @@ const fetchGoogleModels = async (
         headers: {
           Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
-          ...GOOGLE_HEADERS,
+          ...clientHeaders,
         },
         body: JSON.stringify(body),
         signal: controller?.signal,
@@ -1346,7 +1348,7 @@ const fetchAntigravityQuotaSummary = async (accessToken: string, projectId?: str
         headers: {
           Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
-          ...GOOGLE_HEADERS,
+          ...antigravityHeaders(),
         },
         body: JSON.stringify(body),
         signal: controller?.signal,
@@ -1395,8 +1397,10 @@ const fetchAntigravityQuota = async (): Promise<ProviderResult> => {
 
   const [summaryPayload, rawModelsPayload] = await Promise.all([
     fetchAntigravityQuotaSummary(accessToken, projectId),
-    fetchGoogleModels(accessToken, projectId, ANTIGRAVITY_ENDPOINTS),
+    fetchGoogleModels(accessToken, projectId, ANTIGRAVITY_ENDPOINTS, antigravityHeaders()),
   ]);
+
+  warnIfGeminiGroupMissing(summaryPayload);
 
   const modelGroupWindows: Array<{
     groupType: 'gemini' | '3p';
@@ -1660,6 +1664,18 @@ const fetchClaudeQuota = async (): Promise<ProviderResult> => {
     claudeCredentialFingerprint = fingerprint;
     claudeCachedUsage = null;
     claudeCooldownUntil = 0;
+  }
+  // An expired token answers 429, not 401, and would park the provider on
+  // "Rate limited" until the token changes. A zero or missing expiry is unknown.
+  const expiresAt = normalizeTimestamp(entry?.expires);
+  if (expiresAt !== null && expiresAt > 0 && expiresAt <= Date.now()) {
+    return buildResult({
+      providerId: 'claude',
+      providerName: 'Claude',
+      ok: false,
+      configured: true,
+      error: 'Claude session expired. Open Claude Code to sign in again.',
+    });
   }
   if (Date.now() < claudeCooldownUntil) return buildClaudeRateLimitResult();
 
@@ -4216,15 +4232,23 @@ const fetchQuotaForProviderUncoalesced = async (providerId: string): Promise<Pro
         // read that fails (no Go in that org, an endpoint change, a hiccup).
         const consoleCredential = openCodeGoConsoleCredential(auth);
         const apiKey = openCodeGoApiKey(auth);
+        let consoleFailure: Error | null = null;
         if (consoleCredential) {
           try {
             return buildResult({ providerId, providerName: 'OpenCode Go', ok: true, configured: true, usage: { windows: await fetchOpenCodeGoUsage(consoleCredential) } });
           } catch (consoleError) {
             if (!apiKey) throw consoleError;
+            consoleFailure = consoleError instanceof Error ? consoleError : new Error('Request failed');
           }
         }
         if (!apiKey) return buildResult({ providerId, providerName: 'OpenCode Go', ok: false, configured: false, error: 'Not configured' });
-        return buildResult({ providerId, providerName: 'OpenCode Go', ok: true, configured: true, usage: { windows: await fetchOpenCodeGoUsage(apiKey) } });
+        try {
+          return buildResult({ providerId, providerName: 'OpenCode Go', ok: true, configured: true, usage: { windows: await fetchOpenCodeGoUsage(apiKey) } });
+        } catch (keyError) {
+          // The expired-key advice is to connect a Console account; with one
+          // already connected, its own failure is the actionable error.
+          throw consoleFailure && keyError instanceof Error && keyError.message === OPENCODE_GO_KEY_EXPIRED ? consoleFailure : keyError;
+        }
       } catch (error) {
         return buildResult({ providerId, providerName: 'OpenCode Go', ok: false, configured: true, error: error instanceof Error ? error.message : 'Request failed' });
       }

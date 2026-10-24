@@ -6,19 +6,13 @@
  */
 
 import { refreshGoogleAccessToken } from '../google/oauth.js';
+import { antigravityHeaders } from './client.js';
 
 const ANTIGRAVITY_ENDPOINTS = [
   'https://daily-cloudcode-pa.googleapis.com',
   'https://daily-cloudcode-pa.sandbox.googleapis.com',
   'https://cloudcode-pa.googleapis.com'
 ];
-
-const ANTIGRAVITY_HEADERS = {
-  'User-Agent': 'antigravity/1.11.5 windows/amd64',
-  'X-Goog-Api-Client': 'google-cloud-sdk vscode_cloudshelleditor/0.1',
-  'Client-Metadata':
-    '{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}'
-};
 
 export const refreshAntigravityToken = async (refreshToken) => {
   const result = await refreshGoogleAccessToken(refreshToken, 'antigravity');
@@ -35,7 +29,7 @@ export const fetchAntigravityModels = async (accessToken, projectId) => {
         headers: {
           Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
-          ...ANTIGRAVITY_HEADERS
+          ...antigravityHeaders()
         },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(15000)
@@ -62,7 +56,7 @@ export const fetchAntigravityQuotaSummary = async (accessToken, projectId) => {
         headers: {
           Authorization: `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
-          ...ANTIGRAVITY_HEADERS
+          ...antigravityHeaders()
         },
         body: JSON.stringify(body),
         signal: AbortSignal.timeout(15000)

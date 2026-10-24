@@ -5,6 +5,11 @@ navigation, expanded sections and editor state. Its `visible` prop combines
 the panel's open state with the selected tab. Hiding via CSS alone does not
 pause React effects.
 
+Tabs belong to the panel's directory, the project root. A view showing a
+repository nested under a root that is not one (Git, Changes) still opens its
+diff and file tabs under that root: a tab keyed by the nested repository is
+stored where the panel never looks, and the click shows nothing.
+
 A panel's content fades in and out with the toggle, but turns inert and
 unclickable only when the closing animation ends, and an opening zone leaves
 `inert` only when its animation ends too (`useOpenWhenSettled`): those
@@ -45,7 +50,21 @@ one it was created from, or the default branch; never the branch itself), so a
 repository without a remote gets it from the reflog and the default branch
 does not get it at all. The default follows the branch until the person picks a scope,
 which is persisted on the tab; coercing a default Branch view back to the
-working tree is not persisted either. Entry points that name what they show keep
+working tree is not persisted either. Such a tab starts on Branch and shows
+the base being resolved until the base is known; it moves to the working tree
+only once the branch is known to have no base, so the view never switches
+under the person a moment after opening (it used to open on the working tree
+and jump to Branch when the base arrived). The Git view and the pull request
+view take the same base for a new pull request and for updates
+(`useBranchPullRequestBase`): a base chosen for the branch, its open pull
+request's target, or the parent it was made on (a lower layer of a stack),
+and the worktree's own guess only when none of those answers. The Git view,
+Changes, mobile Changes and Walkthrough each ask for the branch's pull request
+themselves (`hooks/useBranchPullRequestRequest.ts`) while shown: the base
+prefers its target, and the Git header's pull request chip reads the same
+status. Without asking, a stacked branch checked out in the same worktree
+compared against the default branch, and a project's own checkout (which has no
+sidebar worktree row) showed no chip, until some other surface happened to ask. Entry points that name what they show keep
 their scope: the work-status Changes row counts working-tree changes and opens
 `working`, and a file opened from the Git panel or a tool card opens its own
 working or staged diff.
@@ -56,6 +75,24 @@ re-reads its patch only when its own `revision` from that listing moved
 command costs no patch reads, and an edit costs one for the edited file. A
 listing without revisions falls back to the status revision for every file.
 Desktop Changes and mobile Changes share this.
+
+## Pushing for review
+
+Where the repository's host creates changes by pushing for review
+(`features.createByPush`), the Git panel's change section replaces the pull
+request form: the tip commit's subject read only (the commit message is the
+description), topic, hashtags, work in progress (sharing the draft choice's
+remembered value) and private, and one action, Push for review. It shows on
+the target branch itself too, the usual way to work on such a host. Before it
+is enabled the commits between the target and HEAD are read
+(`git/changeIdPreflight.ts`): none to send, or an older commit without a
+Change-Id, holds it back; the checked-out commit alone without one offers Add
+Change-Id, which amends it after a confirmation (`GitAPI.addChangeIdToHead`).
+With an open change, a strip above it offers Upload patchset while the
+status's `localRevision.uploadedAs` is null. The push is a tracked network
+operation through `useBranchPush().pushForReview`, never Publish. The Git
+header's change chip shows its place in the status's chain
+(`stacks.preview.position`).
 
 ## Nested repositories
 
@@ -86,7 +123,13 @@ whitespace mode, a file's full contents once its collapsed context was
 expanded, a pull request file rebuilt from both sides. A nested repository's row
 resolves to that repository's files, read from that repository and keyed by the
 row path plus their own path, the key their viewers register under. Reads run
-one at a time while the bar is open, and the active match is followed by what it
+one at a time while the bar is open, but on the local scopes the first one asks
+`getGitDiffs` for every file of its side and context in one request
+(`diffFind/findDiffBatch.ts`) and the reads after it are answered from that
+answer while their revision holds; a failed batch, a path it leaves out, or a
+runtime without `getGitDiffs` (VS Code) falls back to the file's own read. The
+range and turn scopes already hold their diffs and read nothing new. While
+files are still being read the total reads `12+`. The active match is followed by what it
 points at, so a file landing or re-read ahead of it does not move the view. A read that fails is counted in the bar
 and read again the next time the bar opens, so one unreadable file never turns
 into a silent zero. A file Git no longer has, or a folder it keeps as one row,
@@ -127,12 +170,25 @@ walkthrough behaves the same on every surface. The panel header never wraps:
 then the step arrows and Generate, then the scope label), with the CSS in
 `index.css`.
 
+The walkthrough's stream column has a zero minimum width so long diff lines
+cannot widen it beyond the panel. Explanations wrap within that column; code
+uses the shared diff wrap preference and scrolls horizontally when wrap is off.
+
 The Git panel header (`git/GitHeader.tsx`) collapses the same way. The
 repository picker truncates down to its icon and chevron first, then the
 branch picker; their names sit in a grid track with no minimum, so neither
 picker shrinks past its icons. Only while the pickers still overflow their slot
 does the sync button drop its word, and at the narrowest widths its counts;
 its tooltip names both. The panel keeps its 320 px minimum.
+
+The Changes toolbar (`DiffView`) drops its labels first, then, only while the
+row still overflows (a picker cut down to its icon does not count), moves its
+view options into "More actions" from the end: side-by-side, whitespace, line
+wrap, the tree view, and last, when the row still does not fit (a repository
+picker at 320 px), the walkthrough, which the rail opens as well. The fit sets
+one attribute per moved
+control; the menu reads them when it opens and shows a check beside each view
+option that is on.
 
 ## Large text files
 
@@ -156,15 +212,49 @@ under the OpenChamber data directory and repository plans in a custom folder.
 accepts comments and trailing commas for preview without changing the source
 text. `JsonTreeView` defaults to strict JSON parsing for other callers.
 
+`FilesView` gives `JsonTreeView` the pane's full height. Its toolbar does not shrink, and its flex body has `min-height: 0`, so `JsonTreeViewer` gets the remaining height as its scroll viewport. Above 200 rows, the virtualizer mounts only the visible range and overscan. Chat callers keep their absolute `400px` and `70vh` height caps.
+
+`JsonTreeViewer` (Files, chat tool output) draws its rows with the file
+tree's parts, `fileTreeRowPaddingLeft` and `FileTreeIndentGuides`, plus a
+copy of `FileTreeChevron`'s look, so nesting reads the same in both trees.
+`flattenTree` adds a closing `}` or `]` row after the last child of every
+expanded container that has children; collapsed and empty containers stay
+one row. The expand arrow stays the
+line's size on touch screens: inline `minHeight`/`minWidth` of 0 beat
+`mobile.css`'s 36px button floor, which made arrow rows taller than leaf rows
+and pushed their keys out of line, and an invisible `::before` covers the
+row's full height and part of the indent as the tap area, 26x24px. That is
+under the 36px floor on purpose: a 36px arrow is what made the rows uneven. The tree is code,
+so it renders `dir="ltr"` in every language; mirrored, it flipped brackets
+and showed `"</head>"` as `"<head/>"`. That is why the chevron is a copy:
+`FileTreeChevron`'s `rtl:-rotate-90` follows `<html dir>` and would point the
+unmirrored arrow up inside the LTR block.
+
+### Why a bounded flex body and not percentage max-height alone
+
+A percentage max-height inside auto-height wrappers let the inner viewport grow to the entire virtual list. The Files pane then scrolled outside the virtualizer, which mounted every row and froze the renderer on large JSON. The flex layout keeps the virtualizer's viewport bounded without changing file limits, preview preferences or saved tabs.
+
 ## Pull request comparisons
 
 DiffView, mobile Changes and walkthrough share `PullRequestComparisonSelector`
 and the selection owned by `usePullRequestComparison`. PR mode reads the
-published patch of a GitHub pull request or a GitLab merge request through
-`/api/walkthrough/pr-diff`, always through the checkout's bound read context;
-without one, PR mode is not offered and reads nothing. On GitLab projects the
-mode, picker and messages use merge-request wording and `!` numbers through
-`changeRequestCopy`. It includes no local edits
+published patch of a change request through `/api/walkthrough/pr-diff`, always
+through the checkout's bound read context, and only for a provider the server
+serves (`useSourceControlProviderServing`); for a provider the server does
+not serve, PR mode is not offered and reads nothing. While the provider list
+is unknown (first visit, the first read out or failed and being retried) PR
+mode stays offered and the picker shows loading: an unknown list is never read
+as "not served" or "not connected". A served provider whose descriptor has
+`features.changeRequestPatch` off lists and opens its change requests but does
+not serve their diff (`usePullRequestComparison().diffUnavailable`): Changes
+and mobile Changes keep the PR mode and picker, read no diff and say so with
+`ChangeRequestDiffUnavailable` (no retry, since nothing failed); the Walkthrough
+does not offer the PR scope, and a PR handed to it shows that note in place of
+generation and loads nothing; the board's Changes and Walkthrough links are
+left out. The scope picker shows a count only once it is known, so an unread
+PR never reads as one with 0 files. The mode, picker and messages use the provider's
+term (`changeRequestCopy(key, term)`: merge-request wording on GitLab) and
+its reference prefix (`!` on GitLab). It includes no local edits
 or unpushed commits. `lib/diff/pullRequestDiff.ts` splits the response once;
 `useGitComparison` serves file patches from that same snapshot. Snapshot revisions
 invalidate the view's patch cache atomically, including edits with unchanged
@@ -191,7 +281,7 @@ on panel switches; opening the picker or changing search still refreshes it.
 Working-tree mutations are unavailable for PR snapshots, and "Load full files"
 does not apply to them. Expanding collapsed context on one file works: the
 expander asks `useGitComparison.fetchFullFile`, which reads both sides of that
-file from GitHub through `/api/walkthrough/pr-file` (merge base and PR head),
+file from the provider through `/api/walkthrough/pr-file` (merge base and PR head),
 never from disk, so local edits and unfetched fork commits cannot leak in or
 block it. Existing inline comment controls still attach selected code to chat.
 Changes hands its PR source to walkthrough; walkthrough's Changes action opens
@@ -210,7 +300,7 @@ return to the panel's project (`lib/surfaces/DOCUMENTATION.md`, Tracker).
 
 Mobile Changes uses the same expansion for branch, commit and PR files: the
 patch opens with 3 lines of context, and expanding reads that file in full once
-(git with whole-file context, or both PR sides from GitHub), then replays the
+(git with whole-file context, or both PR sides from the provider), then replays the
 expansion. A failed read toasts and keeps the patch. Working-tree files there
 already load both full sides, so they expand without a read.
 
@@ -226,7 +316,43 @@ a whitespace-only note. Hunk stage and discard actions are withheld meanwhile,
 because they act on the whole hunk, whitespace included. Line numbers do not
 move, so comments and context expansion work unchanged.
 
+## Sticky horizontal scrollbar
+
+Pierre scrolls each code column sideways on its own (two in a split diff, one
+in a unified one), so the columns' scrollbars sit after the last line. The
+inline layout hides them inside the shadow root and draws one track per column
+in `DiffStickyScrollbar`, a `sticky bottom-0` strip after the diff: while the
+diff runs past the bottom of the panel, its scrollbar stays at that bottom.
+Each track and its column copy each other's `scrollLeft`; sizes are read only
+in ResizeObserver callbacks, so vertical scrolling does no work for it.
+
+Sticky elements stick to their nearest scroll box and keep clear of its
+padding. Everything between a diff and the panel that scrolls it therefore
+clips with `overflow: clip`, never `hidden`, and end space below the list is
+padding on the content, not on the scroller (the Changes panel's `pb-16`).
+
+### Why mirrored tracks and not a scroll area per diff
+
+A per-diff scroll area with its own horizontal bar would have to be as tall as
+the panel to keep the bar on screen, which nests a vertical scroll area inside
+the panel's. #213 removed exactly that after nested scroll areas broke
+scrolling in the All files view (#215). The tracks scroll sideways only, so the
+panel stays the one vertical scroller.
+
 Most focused tests use Bun. `MultiFileDiffEntry.vitest.tsx` exercises the real
 diff component through the web workspace's Vitest runner because its transitive
 UI imports require Vite asset transforms. The web test configuration includes
 UI `*.vitest.tsx` fixtures; the isolated Bun runner intentionally does not.
+
+## Archive page
+
+`ArchiveView` lists archived top-level sessions. A subsession whose parent is
+archived too is left out: it comes back when the parent is restored. A
+subsession archived while its parent stays active is listed, indented under a
+row with the parent's title, and the subsessions of one parent sit together at
+the place of the newest of them. Without that row such a session would show
+nowhere: the sidebar hides archived sessions, and the parent is not in the
+archive. Restore brings it back on its own, under that parent. One rule,
+`isRestorableOnItsOwn` in `sync/session-restore-rule.ts`, decides what the page
+lists, when the chat header's session menu offers Restore, and what the restore
+action accepts, so the three never disagree.

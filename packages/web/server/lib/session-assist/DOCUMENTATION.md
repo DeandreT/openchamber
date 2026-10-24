@@ -54,7 +54,7 @@ formatter is `packages/ui/src/lib/messages/messageMarkdown.ts`.
 
 The server projects those persisted parts into model context without importing
 the UI runtime: code comments, file/chat quotes, browser annotations, PR comments,
-checks, terminal selections, and linked GitHub/Linear items remain attached to
+checks, terminal selections, and linked repository and tracker items remain attached to
 the user turn even when their transport part is synthetic. The OpenCode
 `opencodeComment` mirror is also accepted. Unrecognized synthetic prompts and
 ignored parts are excluded. Malformed attached text fails the generation.
@@ -125,6 +125,13 @@ model context is small. Page/count bounds are not a network-byte quota.
 7. Re-check settings, clamp the enabled fields, and merge into fresh metadata.
    The OpenCode update endpoint has no compare-and-set operation; another
    writer after the final read is not guarded atomically.
+
+`onPendingChange` reports when a session starts waiting for its assist (the
+turn end, unless the recap and the suggestion are both off) and when the wait
+ends: written, ruled out by the turn-end check, failed, or dropped by a new
+turn. `index.js` broadcasts it as `openchamber:session-assist` with the
+session's directory, and clients keep a chat's OpenCode location until the
+wait ends, because these reads would start a stopped directory again.
 
 Stopping the runtime clears pending timers/runs and aborts in-flight operations.
 No failed session blocks another session. A generation failure is logged with

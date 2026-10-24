@@ -37,6 +37,7 @@ import {
     tryParseJsonOutput,
     coerceToText,
     capToolOutputText,
+    unwrapTextBlocks,
 } from '../toolRenderers';
 import { JsonTreeViewer } from '@/components/ui/JsonTreeViewer';
 import { JsonSummaryView } from './JsonSummaryView';
@@ -46,7 +47,6 @@ import { useDefaultDiffViewMode } from '../useDefaultDiffViewMode';
 import { MinDurationShineText } from './MinDurationShineText';
 import { getToolIcon } from './toolPresentation';
 import { GuestToolTable } from './GuestToolTable';
-import type { JsonValue } from '@openchamber/sdk';
 import {
     guestToolTableRows,
     guestToolHeaderReadsOutput,
@@ -80,6 +80,7 @@ import { useStreamingTextThrottle } from '../../hooks/useStreamingTextThrottle';
 import { getStreamingOutputAppend, getToolOutput } from './toolOutput';
 import { toAbsoluteFilePath } from '@/lib/path-utils';
 import { hasTextSelectionInside } from '@/lib/textSelection';
+import { dispatchRowExpand } from '@/components/chat/lib/scroll/timelineScrollIntent';
 import {
     executeOutputTruncation,
     executeScript,
@@ -127,6 +128,8 @@ interface ToolPartProps {
     alwaysShowActions?: boolean;
     onShowPopup?: (content: ToolPopupContent) => void;
     animateTailText?: boolean;
+    /** Why a failed row failed, shown while it stays collapsed. Only `!command` rows pass one. */
+    failureReason?: string;
 }
 
 // A finished run shows tenths; a running one counts whole seconds on the
@@ -675,6 +678,8 @@ const JsonToolOutput: React.FC<{
         useUIStore.getState().setToolJsonViewMode(view);
     }, []);
 
+    const textOutput = jsonViewMode === 'summary' ? unwrapTextBlocks(jsonResult.data) : null;
+
     return (
         <div className="tool-output-surface relative p-2 rounded-xl w-full min-w-0">
             <div className="absolute inset-e-2 top-2 z-10 flex items-center gap-1">
@@ -714,7 +719,19 @@ const JsonToolOutput: React.FC<{
                 <CopyToolOutputButton output={renderedOutput} />
             </div>
             {jsonViewMode === 'summary' ? (
-                <JsonSummaryView data={jsonResult.data} />
+                textOutput !== null ? (
+                    <div className="typography-code pe-12 text-muted-foreground/90">
+                        <WorkerHighlightedCode
+                            language="text"
+                            code={textOutput}
+                            style={TOOL_COLLAPSED_CUSTOM_STYLE}
+                            codeStyle={CODE_TAG_PROPS.style}
+                            wrap
+                        />
+                    </div>
+                ) : (
+                    <JsonSummaryView data={jsonResult.data} />
+                )
             ) : jsonViewMode === 'formatted' ? (
                 <JsonTreeViewer
                     data={jsonResult.data}
@@ -770,9 +787,7 @@ const ToolScrollableTextOutput: React.FC<{
     if (forcedMode === 'table' && presentation?.columns?.length) {
         // A declared table whose output is not a list falls through to the
         // host's own detection, so the user still sees the raw result.
-        // SAFETY: `tryParseJsonOutput` fills `data` from JSON.parse of the tool
-        // output, so a parsed result is a JSON value.
-        const rows = jsonResult.isJson ? guestToolTableRows(jsonResult.data as JsonValue) : null;
+        const rows = jsonResult.isJson ? guestToolTableRows(jsonResult.data) : null;
         if (rows) {
             return <GuestToolTable rows={rows} columns={presentation.columns} />;
         }
@@ -796,7 +811,10 @@ const ToolScrollableTextOutput: React.FC<{
 
     if (isShellTool(part.tool)) {
         return (
-            <div className="relative typography-code text-muted-foreground/90">
+            // min-h-7 holds the copy button (top-1 + h-6): an absolute child taller
+            // than one output line overflows the scroller, and platforms with
+            // classic scrollbars (Windows) then show one for a single line.
+            <div className="relative min-h-7 typography-code text-muted-foreground/90">
                 <div className="absolute inset-e-1 top-1 z-10">
                     <CopyToolOutputButton output={renderedOutput} />
                 </div>
@@ -1097,6 +1115,7 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
     const hasVisualDiffEntry = diffEntries.some((entry) => entry.renderMode === 'diff');
     // `execute` renders its script and its call list itself, below.
     const hideToolInputPreview = part.tool === 'openchamber'
+        || part.tool === 'openchamber_schedule'
         || part.tool === 'openchamber_web'
         || part.tool === 'openchamber_memory'
         || part.tool === 'openchamber_knowledge'
@@ -1566,14 +1585,20 @@ type ToolRowHeader = {
 const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subagentSessionId?: string }> = ({
     part,
     isExpanded,
-    onToggle,
+    onToggle: toggleRow,
     isMobile,
     onShowPopup,
     animateTailText = true,
+    failureReason,
     header,
     subagentSessionId: taskSessionId,
 }) => {
     const { t } = useI18n();
+    const rowRef = React.useRef<HTMLDivElement>(null);
+    const onToggle = (toolId: string) => {
+        if (!isExpanded) dispatchRowExpand(rowRef.current);
+        toggleRow(toolId);
+    };
     const state = part.state;
     const stateWithData = state as ToolStateWithMetadata;
     const metadata = stateWithData.metadata;
@@ -1725,7 +1750,10 @@ const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subage
     );
     const description = guestHeader?.subtitle ?? builtInDescription;
     const displayName = guestHeader?.title ?? getToolMetadata(normalizedPartTool || part.tool).displayName;
-    
+
+    // Opened, the body already carries the whole error and output.
+    const failureDetail = isError && !isExpanded ? failureReason : undefined;
+
     // Tool title/description — shown inline as context. A subtitle the
     // extension declared replaces it, since both land in the same slot.
     const guestSubtitle = guestHeader?.subtitle ?? null;
@@ -1891,7 +1919,7 @@ const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subage
     }
 
     return (
-        <div>
+        <div ref={rowRef}>
             {}
             <div
                 className={cn(
@@ -2050,6 +2078,19 @@ const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subage
                                     </Text>
                                 )
                             )}
+                            {failureDetail ? (
+                                <>
+                                    {justificationText || description ? (
+                                        <span aria-hidden="true" className="flex-shrink-0 text-muted-foreground/60">·</span>
+                                    ) : null}
+                                    <span
+                                        className={cn('max-w-[50%] flex-shrink-0 truncate text-[var(--status-error)]', TOOL_ROW_DESCRIPTION_CLASS)}
+                                        title={failureDetail}
+                                    >
+                                        {failureDetail}
+                                    </span>
+                                </>
+                            ) : null}
                             {diffStats && (
                                 <span className="flex-shrink-0 inline-flex items-center gap-0 typography-meta" style={{ fontSize: '0.8rem', lineHeight: '1' }}>
                                     <span style={{ color: 'var(--status-success)' }}>+{diffStats.added}</span>
@@ -2322,5 +2363,6 @@ export default React.memo(ToolPart, (prev, next) => {
         && prev.isMobile === next.isMobile
         && prev.alwaysShowActions === next.alwaysShowActions
         && prev.onShowPopup === next.onShowPopup
-        && prev.animateTailText === next.animateTailText;
+        && prev.animateTailText === next.animateTailText
+        && prev.failureReason === next.failureReason;
 });

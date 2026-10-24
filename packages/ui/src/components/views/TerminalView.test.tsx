@@ -38,6 +38,8 @@ const runtimeApis = {
   terminal: terminalRuntime,
 };
 const i18n = { t: (key: string) => key };
+let deviceInfo = { isMobile: false, isTablet: false, hasTouchOnlyPointer: false };
+const pasteClipboardCalls: string[] = [];
 
 // The two fields the view reads: a selected session, or an open draft and what it waits for.
 type SessionUiState = {
@@ -102,19 +104,20 @@ mock.module('@/contexts/useThemeSystem', () => ({
   }),
 }));
 mock.module('@/hooks/useFontPreferences', () => ({ useFontPreferences: () => ({ monoFont: 'geist-mono' }) }));
-mock.module('@/lib/device', () => ({ useDeviceInfo: () => ({ isMobile: false, isTablet: false, hasTouchOnlyPointer: false }) }));
+mock.module('@/lib/device', () => ({ useDeviceInfo: () => deviceInfo }));
 mock.module('@/stores/useUIStore', () => ({ useUIStore: useUiStoreMock }));
 mock.module('@/stores/useInlineCommentDraftStore', () => ({ useInlineCommentDraftStore: () => ({ addDraft: () => undefined }) }));
 mock.module('@/components/terminal/TerminalViewport', () => ({
   TerminalViewport: React.forwardRef(function TerminalViewportMock(
     { sessionKey, chunks, isVisible, onResize }: { sessionKey: string; chunks: unknown[]; isVisible: boolean; onResize: (cols: number, rows: number) => void },
-    ref: React.ForwardedRef<{ focus: () => void; fit: () => void; getSelection: () => null }>,
+    ref: React.ForwardedRef<{ focus: () => void; fit: () => void; getSelection: () => null; pasteClipboard: () => Promise<void> }>,
   ) {
     React.useImperativeHandle(ref, () => ({
       focus: () => undefined,
       fit: () => undefined,
       getSelection: () => null,
-    }), []);
+      pasteClipboard: async () => { pasteClipboardCalls.push(sessionKey); },
+    }), [sessionKey]);
     // A real surface reports its fitted grid once it is visible; a visible tab
     // spawns its shell only after that report.
     React.useEffect(() => {
@@ -196,6 +199,8 @@ describe('TerminalView project action tab indicator', () => {
     connectCalls.length = 0;
     ensureDirectoryCalls.length = 0;
     connectBehavior = () => ({ close: () => undefined });
+    deviceInfo = { isMobile: false, isTablet: false, hasTouchOnlyPointer: false };
+    pasteClipboardCalls.length = 0;
     windowInstance = new Window({ url: 'http://localhost/' });
     Object.assign(globalThis, {
       window: windowInstance,
@@ -334,6 +339,27 @@ describe('TerminalView project action tab indicator', () => {
     });
 
     expect(host.querySelectorAll('[data-spinner]').length).toBe(1);
+  });
+
+  test('offers Paste next to Copy only on touch terminals and pastes into the active tab', async () => {
+    await act(async () => {
+      root.render(React.createElement(TerminalView, { visible: false }));
+    });
+    expect(host.querySelector('[aria-label="terminalView.actions.copySelection"]')).not.toBeNull();
+    expect(host.querySelector('[aria-label="terminalView.actions.paste"]')).toBeNull();
+
+    deviceInfo = { isMobile: true, isTablet: false, hasTouchOnlyPointer: true };
+    await act(async () => {
+      root.render(React.createElement(TerminalView, { visible: true }));
+    });
+    await flushEffects();
+    const paste = host.querySelector<HTMLButtonElement>('[aria-label="terminalView.actions.paste"]');
+    expect(paste?.previousElementSibling?.getAttribute('aria-label')).toBe('terminalView.actions.copySelection');
+    expect(paste?.querySelector('[data-icon]')?.getAttribute('data-icon')).toBe('clipboard');
+
+    const activeTabId = useTerminalStore.getState().getDirectoryState('/repo')!.activeTabId;
+    await act(async () => { paste?.click(); });
+    expect(pasteClipboardCalls).toEqual([`/repo::${activeTabId}`]);
   });
 
   test('uses the explicit terminal directory for terminal tabs and session creation while preview ownership stays on the host directory', async () => {

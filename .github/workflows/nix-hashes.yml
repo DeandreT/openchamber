@@ -1,7 +1,7 @@
 # Keeps the flake's baked dependency hashes in step with the two files that
 # decide them: bun.lock (the bun-deps fixed-output derivation) and
 # packages/electron/package.json (the pinned OpenCode CLI tag). When either
-# moves on main, the flake's build-time assertion fails until the hashes are
+# moves on main, the flake fails to evaluate until the tag and hashes are
 # re-baked; this workflow runs the same `nix run .#update-hashes` a
 # contributor would run and opens a PR with the result.
 name: nix-hashes
@@ -29,7 +29,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: cachix/install-nix-action@b85815f71a6de0ddee80b8a80a98d43f4bcc66c7 # v31
+      - uses: cachix/install-nix-action@448cde739abec1eaf0646249e3d25bb8d9bc7702 # v31
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes

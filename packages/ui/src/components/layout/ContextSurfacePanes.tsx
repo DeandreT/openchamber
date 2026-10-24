@@ -15,6 +15,7 @@ import { isRightToLeft, useI18n } from '@/lib/i18n';
 import { resolveProjectContextId } from '@/lib/projectContextApi';
 import { cn } from '@/lib/utils';
 import { registerBrowserCloser, registerBrowserOpener, registerSleepingBrowserTab, setShownBrowserTab } from '@/lib/browser/controlClient';
+import { pickLiveBrowserTabs, touchRecentBrowserTab } from '@/lib/browser/liveTabs';
 import { subscribeOpenchamberEvents } from '@/lib/openchamberEvents';
 import { useGuestsStore } from '@/lib/guests/store';
 import { guestHasSharedSurface, guestSurfaceDocking, type GuestSurfaceDocking } from '@/lib/guests/surfaces';
@@ -95,6 +96,9 @@ type PanelBrowserTab = {
   targetPath: string | null;
   ownerSessionId: string | null;
 };
+
+/** One browser tab across projects: the same id in another project is another tab. */
+const browserTabRenderKey = (directory: string, tabId: string): string => `${directory}\u0000${tabId}`;
 
 // The editor surface's file-tree column: docked on the side the user picked
 // (`fileTreeSide`, right by default), resizable from the edge that faces the
@@ -352,11 +356,14 @@ export const ContextSurfacePanes: React.FC = () => {
   // A browser tab loads its page only once it is needed: shown in an open
   // zone, opened by the agent, or woken by an agent action. Tabs restored
   // from a previous run otherwise stay asleep, since every loaded tab costs a
-  // Chromium process. Once loaded, a tab stays loaded until it is closed.
-  const [wokenBrowserTabIds, setWokenBrowserTabIds] = React.useState<ReadonlySet<string>>(() => new Set());
-  const wakeBrowserTab = React.useCallback((tabId: string) => {
-    setWokenBrowserTabIds((current) => (current.has(tabId) ? current : new Set(current).add(tabId)));
+  // Chromium process. An agent's tab stays loaded until it is closed; the
+  // user's own tabs, in every project together, keep their page only while
+  // among the `liveBrowserTabLimit` most recently used (`liveTabs.ts`).
+  const [recentBrowserTabs, setRecentBrowserTabs] = React.useState<readonly string[]>([]);
+  const wakeBrowserTab = React.useCallback((directory: string, tabId: string) => {
+    setRecentBrowserTabs((current) => touchRecentBrowserTab(current, browserTabRenderKey(directory, tabId)));
   }, []);
+  const liveBrowserTabLimit = useUIStore((state) => state.liveBrowserTabLimit);
 
   // Lets an agent's browser.open create its own tab; the id goes back to the
   // agent so it keeps working there. Registered here because opening a tab is panel state, not
@@ -370,7 +377,7 @@ export const ContextSurfacePanes: React.FC = () => {
     const directory = context.directory ? normalizeContextPanelDirectoryKey(context.directory) : directoryKey;
     if (!directory) return null;
     const tabId = openAgentBrowserTab(directory, url, context.sessionId);
-    if (tabId) wakeBrowserTab(tabId);
+    if (tabId) wakeBrowserTab(directory, tabId);
     return tabId;
   }), [directoryKey, openAgentBrowserTab, wakeBrowserTab]);
   // Lets an agent close a tab it opened. controlClient has already checked the
@@ -499,30 +506,42 @@ export const ContextSurfacePanes: React.FC = () => {
 
   const visibleBrowserTabId = browserZone.isOpen && browserZone.activeTab?.mode === 'browser' ? browserZone.activeTab.id : null;
   React.useEffect(() => {
-    if (visibleBrowserTabId) wakeBrowserTab(visibleBrowserTabId);
-  }, [visibleBrowserTabId, wakeBrowserTab]);
+    if (visibleBrowserTabId && directoryKey) wakeBrowserTab(directoryKey, visibleBrowserTabId);
+  }, [directoryKey, visibleBrowserTabId, wakeBrowserTab]);
   // The browser tabs agents can reach: this project's, and every other
   // project's agent tabs, so a session working in a project the user is not
-  // looking at keeps its page. The user's own tabs in other projects are left
-  // out and unload with their project, as before. Sorted by directory and tab
-  // id, an order that neither the project on screen nor the store's own
-  // reordering of directories can change: a moved webview reloads its page.
+  // looking at keeps its page. The user's own tabs in other projects stay
+  // loaded while among the most recently used, and are left out otherwise.
+  // Sorted by directory and tab id, an order that neither the project on
+  // screen nor the store's own reordering of directories can change: a moved
+  // webview reloads its page.
   const { loadedBrowserTabs, sleepingBrowserTabs } = React.useMemo(() => {
+    const recent = new Set(recentBrowserTabs);
+    const openUserTabs = new Set<string>();
+    for (const [directory, directoryState] of Object.entries(contextPanelByDirectory)) {
+      for (const tab of directoryState.tabs) {
+        if (tab.mode === 'browser' && tab.ownerSessionId === null) openUserTabs.add(browserTabRenderKey(directory, tab.id));
+      }
+    }
+    const liveUserTabs = pickLiveBrowserTabs(recentBrowserTabs, openUserTabs, liveBrowserTabLimit);
     const loaded: PanelBrowserTab[] = [];
     const sleeping: PanelBrowserTab[] = [];
     for (const [directory, directoryState] of Object.entries(contextPanelByDirectory)) {
       const isShownDirectory = directory === directoryKey;
       for (const tab of directoryState.tabs) {
-        if (tab.mode !== 'browser' || (!isShownDirectory && tab.ownerSessionId === null)) continue;
+        if (tab.mode !== 'browser') continue;
+        const key = browserTabRenderKey(directory, tab.id);
+        const isUserTab = tab.ownerSessionId === null;
+        const isLoaded = (isShownDirectory && tab.id === visibleBrowserTabId)
+          || (isUserTab ? liveUserTabs.has(key) : recent.has(key));
+        if (!isLoaded && !isShownDirectory && isUserTab) continue;
         const entry = { directory, id: tab.id, targetPath: tab.targetPath, ownerSessionId: tab.ownerSessionId };
-        const isLoaded = wokenBrowserTabIds.has(tab.id) || (isShownDirectory && tab.id === visibleBrowserTabId);
         (isLoaded ? loaded : sleeping).push(entry);
       }
     }
-    const renderKeyOf = (tab: PanelBrowserTab) => `${tab.directory}\u0000${tab.id}`;
-    loaded.sort((a, b) => (renderKeyOf(a) < renderKeyOf(b) ? -1 : 1));
+    loaded.sort((a, b) => (browserTabRenderKey(a.directory, a.id) < browserTabRenderKey(b.directory, b.id) ? -1 : 1));
     return { loadedBrowserTabs: loaded, sleepingBrowserTabs: sleeping };
-  }, [contextPanelByDirectory, directoryKey, visibleBrowserTabId, wokenBrowserTabIds]);
+  }, [contextPanelByDirectory, directoryKey, liveBrowserTabLimit, recentBrowserTabs, visibleBrowserTabId]);
   React.useEffect(() => {
     // Only a Chromium host mounts views that agents can drive, so only it may
     // offer to wake a tab; anywhere else a claimed action could never run.
@@ -532,7 +551,7 @@ export const ContextSurfacePanes: React.FC = () => {
       directory: tab.directory,
       ownerSessionId: tab.ownerSessionId,
       describe: () => ({ title: '', url: tab.targetPath ?? '' }),
-      wake: () => wakeBrowserTab(tab.id),
+      wake: () => wakeBrowserTab(tab.directory, tab.id),
     }));
     return () => unregister.forEach((release) => release());
   }, [sleepingBrowserTabs, wakeBrowserTab]);
@@ -628,7 +647,7 @@ export const ContextSurfacePanes: React.FC = () => {
             // on the same instance, the view went on showing the previous
             // directory's page, and a space's page would run in the host's
             // session instead of the space's own.
-            key={`${tab.directory}\u0000${tab.id}`}
+            key={browserTabRenderKey(tab.directory, tab.id)}
             zone={browserZone.zone}
             interactive={interactive[browserZone.zone]}
             isOpen={browserZone.isOpen}

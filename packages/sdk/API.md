@@ -74,6 +74,7 @@ Each returns an unsubscribe function. State subscriptions replay the last known 
 | `onItem(listener)`             | `GuestItem              | null`                                                        | The item this surface was opened for: the chip (`AttachIssueRequest`), a message (`GuestMessageItem`), or a session (`GuestSessionItem`); `null` from the rail icon or + menu |
 | `onStatusControl(listener)` | `{ id, value? }` | Host Work Status control activation. Register synchronously; only status frames with advertised status controls receive events |
 | `onPopoverClosed(listener)` | `{ id, reason }` | Dismissal of this frame's anchored popover. Events go to the owner, are not replayed, and identify the opening being closed |
+| `onLateGenerateResult(listener)` | `LateGenerateResult` | A `generate` answer that came after the frame that asked was gone (the user closed the panel, switched project, or the frame reloaded). `{ request, ok: true, result: { text } }` or `{ request, ok: false, code, error }`; `request` is what that frame sent. Each one goes to one frame of the same extension, surface and project in the same window, once. Requires `features.lateGenerateResults`; see Late generate answers below |
 | `onResolve(handler)`           | `{ command, args }` → `Promise<AttachIssueRequest \| null>` | Answers a `contributes.commands` slash command. Return the chip to attach, `null` for nothing (the user sees a short notice), or throw (the message reaches the user). One handler at a time |
 | `onAction(handler)` | `GuestActionItem` → `void \| Promise<void>` | Runs a `mode: "background"` message or session action. Register synchronously after `connectHost`. Await every operation; the frame is removed when the handler settles. Throw to report an error. One handler at a time; returns an unsubscribe function |
 | `onFileOpen(listener)` | `FileEditorDocument` | File editors only: `{ path, name, readOnly, encoding: 'text', content }` or `{ ..., encoding: 'binary', bytes }` (a `Uint8Array`) of the file this frame edits. Replays the last file; the same file pushed again is not repeated. Registering also sends Cmd/Ctrl+S inside the frame to the host's save |
@@ -100,7 +101,7 @@ Each returns an unsubscribe function. State subscriptions replay the last known 
 
 `theme.tokens` includes `primaryText`, `successText`, `warningText`, `errorText`, and `infoText`. The host computes these for text on neutral surfaces and the UI kit's tinted controls. Keep using the base colors for fills and `primaryForeground` for text on a solid primary fill.
 
-`features` is optional and only advertises implemented host operations: `deviceStorage?: true`, `statusControls?: true`, and `popovers?: true`. Optional syntax tokens are `syntaxKeyword`, `syntaxString`, `syntaxNumber`, `syntaxFunction`, `syntaxType`, `syntaxComment`, `syntaxVariable`, and `syntaxOperator`. `applyHostReady` exposes each as `--oc-syntax-*` and the matching legacy `--syntax-*` name, and clears a missing token on a later snapshot. Use a semantic-token fallback in guest CSS when supporting older hosts.
+`features` is optional and only advertises implemented host operations: `deviceStorage?: true`, `statusControls?: true`, `popovers?: true`, and `lateGenerateResults?: true`. Optional syntax tokens are `syntaxKeyword`, `syntaxString`, `syntaxNumber`, `syntaxFunction`, `syntaxType`, `syntaxComment`, `syntaxVariable`, and `syntaxOperator`. `applyHostReady` exposes each as `--oc-syntax-*` and the matching legacy `--syntax-*` name, and clears a missing token on a later snapshot. Use a semantic-token fallback in guest CSS when supporting older hosts.
 
 `applyHostReady` exposes the computed colors as `--primary-text`, `--success-text`, `--warning-text`, `--error-text`, and `--info-text`, with matching `--oc-*-text` aliases. These are required theme fields. Apply each `onReady` snapshot to update them when the theme changes.
 
@@ -140,8 +141,8 @@ Access tokens never appear in `ready` or in request results.
 | Method            | Arguments                         | Returns                        | Behavior                                                                              |
 | ----------------- | --------------------------------- | ------------------------------ | ------------------------------------------------------------------------------------- |
 | `toast` | `{ kind: 'info' \| 'success' \| 'error', message, copy?, dismiss?, persistent? }` | `Promise<void>` | Show a toast, optionally with host-owned Copy and OK buttons; see Toast buttons below |
-| `openUrl`         | `url: string`                     | `Promise<void>`                | Open URL in the host                                                                  |
-| `openSurface`     | `surfaceId: string`               | `Promise<void>`                | Switch host chrome to that surface                                                    |
+| `openUrl`         | `url: string`                     | `Promise<void>`                | Open an http(s) URL. In the desktop app with a project open, a local address (`localhost`, `127.0.0.1`, `[::1]`) opens in the browser panel beside the chat, and other links follow the user's setting for chat links; elsewhere the system browser opens it |
+| `openSurface`     | `surfaceId: string`               | `Promise<void>`                | Show that surface; resolves once it is on screen, rejects `NO_DIRECTORY` or `UNSUPPORTED` when it cannot open |
 | `writeClipboard`  | `text: string`                    | `Promise<void>`                | Copy in the host (1–32000 chars)                                                      |
 | `compose`         | `{ text, mode?: 'append'          | 'replace' }`                   | `Promise<void>`                                                                       |
 | `attach`          | `AttachIssueRequest`              | `Promise<void>`                | Composer chip, alongside other attached items                                         |
@@ -252,6 +253,31 @@ Omit `options`, or pass `{ scope: 'instance' }`, for this existing server-owned 
 
 `setStatusControls` accepts zero to four declarations. A button is `{ kind: 'button', id, label, disabled? }`; a select is `{ kind: 'select', id, label, value, options, disabled? }`, with one to 16 unique options and a selected value in that list. IDs are kebab-case and at most 40 characters; labels are 1 to 60 characters; option values are 1 to 80 characters. Register `onStatusControl` synchronously after `connectHost`, then feature-gate `setStatusControls` with `features.statusControls`. Buttons receive no `value`; select events carry a declared value. The host rejects stale, unknown, disabled, or invalid controls. It accepts at most 20 changed control publications per second per frame and avoids semantic no-op updates. Controls exist only for the expanded, mounted status frame that registered them. Folding or hiding the section removes controls and listeners. A project change clears header controls; publish them again from `onDirectory`. Workspace subscriptions remain active. Old hosts return `UNSUPPORTED`; keep a body control visible until `setStatusControls` succeeds.
 
+#### Sections the app draws
+
+With `source`, the app draws the section itself and loads no frame: `{ source: { path: '/status', interval?: 2000 }, title?: 'Resources' }`. It needs `contributes.service`; a section with a source and no `entry` needs no `panel.entry` either. While the section is shown and expanded, the app sends `GET /status` to your service, then again `interval` ms (1000 to 60000, default 2000) after each answer. The query carries `locale` (the app's language, such as `uk` or `pt-BR`) and `directory` when the panel shows a project. Answer with JSON:
+
+```json
+{
+  "rows": [
+    { "kind": "line", "id": "cpu", "label": "CPU", "content": { "kind": "bar", "value": 25, "tone": "info" }, "value": "25%" },
+    { "kind": "line", "id": "app", "label": "OpenChamber", "value": "1.6 GB",
+      "content": { "kind": "chart", "values": [1.5e9, 1.6e9], "unit": "bytes", "step": 2, "tone": "accent" } },
+    { "kind": "line", "id": "web", "label": "web", "dot": "success",
+      "content": { "kind": "chips", "chips": [{ "id": "port-5173", "label": ":5173", "url": "http://localhost:5173" }] },
+      "actions": [{ "kind": "button", "id": "stop-web", "label": "Stop", "variant": "destructive", "confirm": "Stop web?" }] },
+    { "kind": "note", "id": "hint", "text": "Docker isn't running.", "tone": "warning" }
+  ],
+  "controls": [{ "kind": "button", "id": "refresh", "label": "Refresh" }]
+}
+```
+
+A `line` has a `label` and optionally an `icon` (a Remixicon name; an unknown one is left out), a status `dot`, one `content`, a `value` with `valueTone`, a `badge` `{ label, tone? }`, a `tooltip`, and up to two `actions`. `content` is a `bar` (`value` 0 to 100), a `chart` (`values` oldest first, at most 120; `max`; `unit` `bytes`, `percent` or `count` for the hover label; `step` seconds between points), `chips` (one to six, each with an optional `http(s)` `url` the chip opens), `text`, or a `segmented` choice of two to four options. Actions are a `button` (`variant` `default`, `outline` or `destructive`; `confirm` asks on the first click and acts on the second), a `switch` (`checked`), or a `select`. A `note` is a line of text, `muted` by default or tinted `info`, `warning` or `error`. `controls` are header controls in the `setStatusControls` shape. Tones are `default`, `muted`, `accent`, `success`, `warning`, `error` and `info`; the app takes their colours from its theme. At most 16 rows. Row ids are unique, and so are control ids across the whole answer. Types: `GuestStatusView` and friends in `@openchamber/sdk`; the app checks answers with `guestStatusViewSchema` from `@openchamber/sdk/schemas` and shows an error instead of an answer that does not parse.
+
+When the user activates a control, the app posts `{ "id": "stop-web" }` to the same path, with `value` for a choice (`on` or `off` for a switch), and reads the section again as soon as you answer. Answer 2xx when it worked; otherwise the app shows an error toast with your `{ "message": "..." }` when the body has one. The choice shows at once and stays until a reading taken after your answer.
+
+Keep `entry` beside `source` to support OpenChamber versions that predate it: they ignore `source` and load the frame. Web and desktop only, like every status section.
+
 ### File editors
 
 `contributes.fileEditors` lists up to 8 editors: `{ id: 'canvas', title: 'Excalidraw', match: ['*.excalidraw', '*.excalidraw.md'], entry: 'editor/index.html' }`. `match` holds 1 to 16 file-name patterns, compared case-insensitively with the name only (no `/`); `*` is any run of characters, `?` one, and a pattern must have at least one character that is not a wildcard. `entry` is package `.html` with built scripts, checked at install. `content` is `"text"` (the default) or `"binary"`: a text editor claims only text files and gets the text with `\n` line endings (the host restores the file's own on write); a binary editor claims any matching file, gets its bytes as a `Uint8Array`, returns bytes, and has no source view, and the host saves its unsaved changes before it moves to or from fullscreen. When the user opens a matching file in Files, the viewer loads your page instead of its own preview; the first enabled, approved extension in the list wins, ahead of the built-in viewers. `ctx.surface` is `file`.
@@ -287,6 +313,22 @@ Every background click mounts a fresh sandboxed iframe and sends one `action` re
 The 20-second deadline covers loading and execution. At most eight background invocations may run concurrently. Completion, failure, timeout, disabling, lost approval, extension update/removal, runtime switch, and host unmount release the frame and its listeners. Late messages are ignored. Already completed or server-accepted effects are not undone, and the host does not automatically retry actions. A background action has the same declared capabilities as its extension. It does not hide the extension's rail icon.
 
 See [Actions without opening a panel](./README.md#actions-without-opening-a-panel) for a toast example.
+
+### Late generate answers
+
+A model can take minutes, and the user may close the panel, switch to another project, or reload the frame before `generate` answers. The request still runs to the server's deadline; there is no cancellation. When the answer arrives and the frame that asked is gone, the host keeps it. The next frame of the same extension on the same surface, in the same project and the same window, receives it through `onLateGenerateResult` as soon as it registers a listener; an answer that lands while such a frame already listens arrives at once. Each answer is handed over once. One that reaches the frame after its last listener was removed waits in the SDK for the next listener in that frame. A failed generation is kept as `{ ok: false, code, error }`, so the extension can say what happened. Hidden frames (background actions, and a panel entry the host loads only to answer a slash command) do not advertise the feature: they neither receive kept answers nor leave their own behind.
+
+`request` is the trimmed `{ prompt, system?, maxOutputTokens? }` the frame sent; use it to tell which of your requests this answers. The extension decides what to show; the host shows nothing of its own.
+
+The host keeps answers in memory for one hour, at most 8 per extension, the oldest dropped first. A page reload, an app restart or another window starts empty: the request belongs to the window that sent it. Disabling, removing or reinstalling the extension, or withdrawing its `model` approval, drops its kept answers. Older hosts do not advertise `features.lateGenerateResults` and never deliver them; the SDK then sends nothing. Extension frames load on web and desktop, directly or through the private relay; VS Code and mobile do not load extensions.
+
+```ts
+host.onLateGenerateResult((late) => {
+  if (late.request.system !== SUMMARY_SYSTEM) return;
+  if (late.ok) showSummary(late.result.text);
+  else showError(late.error);
+});
+```
 
 ### Anchored popovers
 
@@ -359,6 +401,8 @@ Use `mountPopoverAnchor` from `@openchamber/sdk/ui` for DOM anchors. It measures
 | `generate` `maxOutputTokens`     | 4 000     |
 | `generate` answer                | 256 000   |
 | `generate` timeout               | 960 000 ms |
+| Late `generate` answers kept per extension | 8 (the oldest goes first) |
+| Late `generate` answer kept for  | 3 600 000 ms |
 
 
 ---
@@ -500,7 +544,8 @@ Used by the OpenChamber host and by tools that validate packages. Guests rarely 
 | `fileEditors`         | Optional, 1–8 editors: unique kebab-case `id`, `title` 1–60 chars, `match` 1–16 file-name patterns (no `/`, not only wildcards), `entry` package `.html` with built scripts, optional `content` `"text"` (default) or `"binary"` (`invalid-file-editors`). See File editors above |
 | `filesystem`          | Optional, 1–16 globs, each 1–256 chars, starting with `/` or `~/`; `**` spans folders, `*` / `?` stay in one segment; no `..`, empty segment, or backslash (`invalid-filesystem`). Declaring it adds the `filesystem` capability and the dialog lists the globs |
 | `integration`         | Optional. Exactly one of `oauth`, `token`, or `host` (`provider: "linear"` only)                                                                                                     |
-| `service`               | Optional. `entry` must be a built `.js` file on disk. `provides: ["browser"]` makes it the agent's browser when the user selects it; `surface: true` gives it a host-drawn live panel the user can take over (no `panel.entry` then). Neither needs a panel or background entry. See [GUEST_SERVICES.md](https://github.com/openchamber/openchamber/blob/main/packages/sdk/GUEST_SERVICES.md) |
+| `service`               | Optional. `entry` must be a built `.js` file on disk. `provides: ["browser"]` makes it the agent's browser when the user selects it; `provides: ["source-control"]` makes it a Git host and needs `sourceControl`; `surface: true` gives it a host-drawn live panel the user can take over (no `panel.entry` then). Neither needs a panel or background entry. See [GUEST_SERVICES.md](https://github.com/openchamber/openchamber/blob/main/packages/sdk/GUEST_SERVICES.md) |
+| `sourceControl`         | Required with `provides: ["source-control"]`, refused without it. The Git host the service implements: `wire: 1`, `label`, `terminology`, `referencePrefix`, `repositoryPath`, `instances`, `capabilities`, `token`, `transport`, `limits`, `trackedItems`, `presentation`. Strict; URL templates use only `{owner}`, `{namespace+}`, `{repo}`, `{number}`. `panel.id` is at most 28 characters (the host id is `ext-<panel.id>`). Change-based hosts may add the `change` term, `capabilities.reviewModel` and `capabilities.revisions`, the `submit` merge method (alone), `presentation.features.submitRequirements`, and `token.scheme: "basic"` with `token.username: true`; older hosts refuse these, so set an `engines.openchamber` floor. Errors are `invalid-service`. See [GUEST_SERVICES.md](https://github.com/openchamber/openchamber/blob/main/packages/sdk/GUEST_SERVICES.md#source-control-provider-provides-source-control) |
 
 
 Extra keys are dropped, not forwarded.
@@ -516,7 +561,8 @@ Extra keys are dropped, not forwarded.
 | `resolveAttachEntry(contributes)`                  | Dialog page from the object form, or `null` when the dialog reuses `panel.entry` |
 | `hasGuestPage(contributes)` | `true` when `panel.entry` is set; background-only and tools-only packages return `false` |
 | `resolveIntegrationAuth` / `resolveIntegrationApi` | Auth kind and API origin                                  |
-| `toPublicIntegration` / `toPublicService`            | Catalog-safe public slices                                |
+| `toPublicIntegration` / `toPublicService` / `toPublicSourceControl` | Catalog-safe public slices                                |
+| `sourceControlProviderIdOf(guestId)` | The provider id a Git host extension gets (`ext-<guestId>`) |
 | `isGuestPackageSvgIcon`                            | Whether icon is a package SVG path                        |
 | `compareOpenChamberVersions`                       | Semver compare                                            |
 | `hostMeetsOpenChamberEngine`                       | Host vs `engines.openchamber` floor                       |
@@ -561,6 +607,8 @@ Panel → `serviceRequest` → host → `127.0.0.1:port` → service process →
 Manifest sketch: `service.entry` (path to **built** JS, e.g. `service/main.js`), `runtime: "host"`, `permissions.sockets` and/or `permissions.exec`. Install refuses with `missing-build` when that file is absent. Declaring a service adds `service` to the capabilities the user approves at install; until then `serviceRequest` is `NO_SERVICE`.
 
 A service with `provides: ["browser"]` answers the agent's `browser.*` actions at `POST /browser-control` instead of the desktop app's browser panel, once the user selects it in Settings → OpenChamber Tools. The host starts it on the first action and stops it when idle. Parse the body with `readBrowserProviderRequest`; request and answer types (`BrowserProviderRequest`, `BrowserProviderResult`, per-action `Browser*Parameters` / `Browser*Data`) and the limits (`BROWSER_PROVIDER_*`) are exported from `@openchamber/sdk`. Full contract in [GUEST_SERVICES.md](https://github.com/openchamber/openchamber/blob/main/packages/sdk/GUEST_SERVICES.md#browser-provider-provides-browser).
+
+A service with `provides: ["source-control"]` is a Git host next to GitHub, GitLab, Gitea and Gerrit, described by `contributes.sourceControl`. OpenChamber keeps the accounts and tokens and forwards reads and mutation steps to `POST /source-control` (`SOURCE_CONTROL_PROVIDER_PATH`); parse the body with `readSourceControlProviderRequest` and answer `{ ok, data }` or `{ ok: false, error }` (`SourceControlProviderResult`). The service reaches the forge only through `createSourceControlForge({ env: process.env }).request(handle, request)`, which goes through OpenChamber's outbound proxy (`OPENCHAMBER_HOST_CALLBACK_URL`); OpenChamber adds the token and keeps the request on the instance. Methods (`SOURCE_CONTROL_PROVIDER_METHODS`), inputs (`SourceControlProviderInputs`), deadlines (`sourceControlProviderTimeoutMs`) and caps (`SOURCE_CONTROL_*`) are exported from `@openchamber/sdk`; the host's answer schemas are `sourceControlProviderSchemasV1` in `@openchamber/sdk/schemas`. Full contract in [GUEST_SERVICES.md](https://github.com/openchamber/openchamber/blob/main/packages/sdk/GUEST_SERVICES.md#source-control-provider-provides-source-control); reference: `examples/source-control-provider`.
 
 A service with `surface: true` shows a live picture in the extension's rail panel: the host pulls frames from `GET /surface/frame`, draws them, sends the user's input to `POST /surface/input`, and owns who is in control (nobody, the agent, the user). Paths, event types, and the `readSurface*` parsers are exported from `@openchamber/sdk`; contract in [GUEST_SERVICES.md](https://github.com/openchamber/openchamber/blob/main/packages/sdk/GUEST_SERVICES.md#shared-surface-surface-true).
 

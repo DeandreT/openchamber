@@ -397,4 +397,18 @@ describe('VS Code entity modules speak OpenCode 2 shapes', () => {
       timeout: { catalog: 30000, execution: 30000 },
     });
   });
+
+  test('writes plugin specs in the form OpenCode loads and refuses the rest', async () => {
+    const { createPluginEntry } = await loadConfig();
+    const configPath = path.join(projectDir, '.opencode', 'opencode.json');
+
+    createPluginEntry({ spec: 'https://github.com/owner/repo.git', scope: 'project' }, projectDir);
+    assert.deepEqual(readJson(configPath).plugins, ['git+https://github.com/owner/repo.git']);
+
+    assert.throws(
+      () => createPluginEntry({ spec: 'https://example.com/plugin.tgz', scope: 'project' }, projectDir),
+      { code: 'UNLOADABLE_SPEC' },
+    );
+    assert.deepEqual(readJson(configPath).plugins, ['git+https://github.com/owner/repo.git']);
+  });
 });

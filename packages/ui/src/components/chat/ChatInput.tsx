@@ -1,5 +1,7 @@
 import React from 'react';
-import { formatChangeRequestReference } from '@/lib/source-control/identity';
+import { formatChangeRequestLabel } from '@/lib/source-control/providers/terminology';
+import { useSourceControlDescriptorOf, useSourceControlProvider } from '@/lib/source-control/providers/registry';
+import { ProviderIcon } from '@/components/sourceControl/ProviderIcon';
 import { ComposerDictation } from '@/components/dictation/ComposerDictation';
 // sessionStore removed — currentSessionId comes from useSessionUIStore
 import { useConfigStore } from '@/stores/useConfigStore';
@@ -21,6 +23,7 @@ import {
     ATTACHMENT_ACCEPT,
     getUnsupportedAttachmentInputs,
     isReadOnSendMentionFilename,
+    prepareAttachmentFile,
     type AttachmentInputModality,
 } from '@/sync/attachment-files';
 import type { AttachedFile } from '@/stores/types/sessionTypes';
@@ -31,7 +34,7 @@ const GuestAttachDialog = React.lazy(() => import('@/components/layout/GuestAtta
 import type { AttachIssueRequest } from '@openchamber/sdk';
 import { getInlineCommentDraftKey, useInlineCommentDraftStore, type InlineCommentDraft, type InlineCommentDraftTarget } from '@/stores/useInlineCommentDraftStore';
 import { useSnippetsStore } from '@/stores/useSnippetsStore';
-import { renderMagicPrompt } from '@/lib/magicPrompts';
+import { loadMagicPrompts } from '@/lib/magicPrompts';
 import { getRuntimeKey, subscribeRuntimeEndpointWillChange } from '@/lib/runtime-switch';
 import { runtimeFetch } from '@/lib/runtime-fetch';
 import {
@@ -95,7 +98,12 @@ import {
     type ComposerReference,
 } from './composer/composerReferences';
 import { usePendingComposerReferences } from './composer/pendingComposerReferences';
-import { postLinearSessionStarted } from '@/lib/linearSessionStatus';
+import { postTrackerSessionStarted } from '@/lib/trackers/sessionStatus';
+import { trackerPresentation } from '@/lib/trackers/presentation';
+import { useTrackerDescriptors } from '@/lib/trackers/registry';
+import { useTrackerSources } from '@/lib/trackers/sources';
+import { trackerReferenceSource, type TrackerReferenceSource } from '@/components/references/referencePickerItems';
+import type { ComposerTrackerPicker } from './composer/ui/ComposerAttachmentControls';
 import { Icon } from "@/components/icon/Icon";
 import { DraftPresetChips } from './DraftPresetChips';
 import type { ResolvedStarter } from './useDraftStarters';
@@ -112,7 +120,7 @@ import { opencodeClient, type SkillMentions } from '@/lib/opencode/client';
 import { buildSkillMentionInstruction } from '@/lib/skillMentionInstruction';
 import { useGitStore } from '@/stores/useGitStore';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
-import { selectSkillsForDirectory, useSkillsStore } from '@/stores/useSkillsStore';
+import { selectAvailableSkillsForDirectory, useSkillsStore } from '@/stores/useSkillsStore';
 import { selectCommandsForDirectory, useCommandsStore } from '@/stores/useCommandsStore';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
@@ -133,6 +141,9 @@ import { eventMatchesShortcut, getEffectiveShortcutCombo, normalizeCombo } from 
 import {
     assignImageAttachmentFilenames,
     buildAttachmentCitationText,
+    buildImagePathCitationText,
+    findImagePathCitationNames,
+    imageSaveModeForModel,
     nextPastedContextFilename,
     renameFileForAttachmentCitation,
 } from './attachmentCitations';
@@ -152,13 +163,14 @@ import {
     classifyMention,
     scanMentions,
 } from './composer/language/mentions';
-import { collectKnownTokenNames } from './composer/language/prefixTokens';
+import { collectKnownTokenNames, lastPrefixSigilIndex } from './composer/language/prefixTokens';
 import { resolveAutocompleteTrigger, type AutocompleteKind } from './composer/language/triggers';
 import { type ComposerLanguageContext } from './composer/language/tokenize';
 import {
     ComposerEditor,
     type ComposerChange,
     type ComposerEditorHandle,
+    type ComposerSelection,
 } from './composer/editor/ComposerEditor';
 import { useComposerHeightLimit } from './composer/editor/useComposerHeightLimit';
 import { usePendingComposerText } from './composer/state/usePendingComposerText';
@@ -223,6 +235,7 @@ import { MobilePillComposer } from './composer/ui/MobilePillComposer';
 import { ComposerContextChips } from './composer/ui/ComposerContextChips';
 import { LargeTextPasteChoice, type LargeTextPasteChoiceAction } from './composer/ui/LargeTextPasteChoice';
 import { LinkedReferenceRow } from './composer/ui/LinkedReferenceRow';
+import { usePlaceholderFitsOneLine } from './composer/ui/usePlaceholderFitsOneLine';
 import { RevertedMessagesStrip } from './RevertedMessagesStrip';
 import { SessionSuggestionChip } from '@/components/chat/SessionSuggestionChip';
 import { SessionDoneHintRow } from '@/components/chat/SessionDoneHintRow';
@@ -270,7 +283,6 @@ const MAX_MOBILE_COMPOSER_LINES = 16;
 const MOBILE_COMPOSER_BOUND_GAP_PX = 4;
 const EMPTY_QUEUE: QueuedMessage[] = [];
 const NO_ATTACH_GUESTS: [] = [];
-const COMPACT_CHAT_PLACEHOLDER_MAX_WIDTH = 560;
 
 const getFileMentionInputSourceForInsertedText = (insertedText: string): FileMentionAutocompleteInputSource => (
     insertedText.includes('@') ? 'paste' : 'manual'
@@ -283,8 +295,8 @@ const getFileMentionInputSourceForInsertedText = (insertedText: string): FileMen
 const collectInlineSkillMentions = (text: string, skillNames: Set<string>): string[] =>
     collectKnownTokenNames(text, '$', skillNames, 'exact');
 
-/** Which reference picker is open, and for GitHub on which tab. */
-type ReferencePickerState = { source: 'github'; kind?: 'issue' | 'pull' } | { source: 'linear' } | null;
+/** Which reference picker is open, and for the repository on which tab. */
+type ReferencePickerState = { source: 'repository'; kind?: 'issue' | 'pull' } | { source: TrackerReferenceSource } | null;
 
 /**
  * Record what a session was pointed at, so the work-status panel can show it
@@ -660,6 +672,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const hasHardwareKeyboard = useHardwareKeyboard();
     const enterToSend = useUIStore((state) => state.enterToSend);
     const enterToSendConfigured = useUIStore((state) => state.enterToSendConfigured);
+    const mobileReturnKeySends = useUIStore((state) => state.mobileReturnKeySends);
     const { enabled: isTabletLayout } = useTabletLayout();
     const setImagePreviewOpen = useUIStore((state) => state.setImagePreviewOpen);
     const inputBarOffset = useUIStore((state) => state.inputBarOffset);
@@ -696,7 +709,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     }, [getLargeTextPasteScope]);
     const { expanded: persistedExpandedInput, setExpanded: setExpandedInput } = useChatColumnExpandedInput();
     const isExpandedInput = !isBtwActive && persistedExpandedInput;
-    const { git: runtimeGit, vscode: vscodeApi, linear: runtimeLinear } = useRuntimeAPIs();
+    const { git: runtimeGit, vscode: vscodeApi, trackers: runtimeTrackers } = useRuntimeAPIs();
     const cycleAgentShortcutOverride = useUIStore((state) => state.shortcutOverrides.cycle_agent);
     const cycleAgentShortcut = React.useMemo(() => (
         getEffectiveShortcutCombo('cycle_agent', cycleAgentShortcutOverride ? { cycle_agent: cycleAgentShortcutOverride } : undefined)
@@ -711,7 +724,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         (state) => currentSessionId ? state.byParent[currentSessionId]?.pendingPermissionMode : undefined,
         [currentSessionId],
     ));
-    const [isNarrowComposer, setIsNarrowComposer] = React.useState(false);
     const [attachmentPreview, setAttachmentPreview] = React.useState<ToolPopupContent>({
         open: false,
         title: '',
@@ -809,31 +821,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const isComposerExpanded = isDesktopExpanded || isMobileExpanded;
     // Rounder composer on mobile (touch UI reads better with a softer corner).
     const chatInputRadius = isMobile ? '1.5rem' : 'var(--radius-xl)';
-    const useCompactChatPlaceholder = isMobile || isNarrowComposer;
-
-    React.useEffect(() => {
-        const element = dropZoneRef.current;
-        if (!element) return;
-
-        const updateWidth = (width: number) => {
-            const next = width > 0 && width < COMPACT_CHAT_PLACEHOLDER_MAX_WIDTH;
-            setIsNarrowComposer((prev) => (prev === next ? prev : next));
-        };
-
-        updateWidth(element.clientWidth);
-
-        if (typeof ResizeObserver === 'undefined') {
-            const handleResize = () => updateWidth(element.clientWidth);
-            window.addEventListener('resize', handleResize);
-            return () => window.removeEventListener('resize', handleResize);
-        }
-
-        const observer = new ResizeObserver((entries) => {
-            updateWidth(entries[0]?.contentRect.width ?? element.clientWidth);
-        });
-        observer.observe(element);
-        return () => observer.disconnect();
-    }, []);
 
     const knownAgentNames = React.useMemo(
         () => new Set(agents.map((agent) => agent.name.toLowerCase())),
@@ -846,7 +833,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     // highlight matching tokens in the composer, the same way confirmed
     // @files are.
     const availableCommands = useCommandsStore((s) => selectCommandsForDirectory(s, currentDirectory));
-    const availableSkills = useSkillsStore((s) => selectSkillsForDirectory(s, currentDirectory));
+    const availableSkills = useSkillsStore((s) => selectAvailableSkillsForDirectory(s, currentDirectory));
     const knownSlashNames = React.useMemo(() => {
         const names = new Set<string>([
             'init', 'review', 'undo', 'redo', 'timeline', 'compact', 'fork', 'btw', 'summary', 'workspace-review', 'plan-feature', 'craft-goal', 'schedule-task', 'catch-up', 'debug', 'weigh', 'explore',
@@ -1394,7 +1381,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             opencodeClient,
         );
         const availableSkillNames = new Set(
-            selectSkillsForDirectory(useSkillsStore.getState(), currentDirectory).map((skill) => skill.name),
+            selectAvailableSkillsForDirectory(useSkillsStore.getState(), currentDirectory).map((skill) => skill.name),
         );
         const skillInstruction = buildSkillMentionInstruction(collectInlineSkillMentions(sanitizedText, availableSkillNames));
         // The server and the VS Code auto-send deliver `text` as is, so its
@@ -1528,8 +1515,8 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                     includeDiff: false,
                     contextText: part.text,
                 });
-            } else if (payload.kind === 'linear-issue') {
-                restored.push({ kind: 'linear-issue', identifier: payload.identifier, title: payload.title, url: payload.url, contextText: part.text });
+            } else if (payload.kind === 'tracker-item') {
+                restored.push({ kind: 'tracker-item', provider: payload.provider, identifier: payload.identifier, title: payload.title, url: payload.url, contextText: part.text });
             } else if (payload.kind === 'guest-issue' || payload.kind === 'guest-pr') {
                 restored.push({
                     kind: 'guest',
@@ -1582,18 +1569,19 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     }, [isBtwActive, isExpandedInput, setExpandedInput]);
 
     const openGitHubPicker = React.useCallback(() => {
-        setReferencePicker({ source: 'github' });
+        setReferencePicker({ source: 'repository' });
     }, []);
     const referencePickerDirectory = currentSessionDirectoryForSync ?? currentDirectory ?? null;
     const repositoryProvider = useRepositoryReferenceProvider(isVSCodeRuntime() ? null : referencePickerDirectory);
+    const repositoryDescriptor = useSourceControlProvider(repositoryProvider);
+    const descriptorOf = useSourceControlDescriptorOf();
     const addLinkedReferences = React.useCallback((references: ComposerReference[]) => {
         setLinkedReferences((current) => withComposerReferences(current, references));
     }, []);
     const attachReferences = useAttachReferences(referencePickerDirectory, addLinkedReferences);
 
-    const openLinearPicker = React.useCallback(() => {
-        setReferencePicker({ source: 'linear' });
-    }, []);
+    const trackerDescriptors = useTrackerDescriptors();
+    const trackerSources = useTrackerSources();
 
     const getSubmitErrorMessage = (error: unknown, fallback: string) => {
         const message = error instanceof Error ? error.message : '';
@@ -1620,6 +1608,16 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         // Snapshot the draft and current-session identity before the first
         // async gap so a later sidebar selection cannot reroute the send.
         const capturedDraftSnapshot = newSessionDraftOpen ? { ...newSessionDraft } : null;
+        // Magic prompts come from the directory this send lands in, routed the
+        // way sendMessage routes it: the /btw fork, the session, else the
+        // draft. A new chat has no folder yet and reads the global prompts.
+        const magicPromptDirectory = isBtwActive
+            ? btwDirectory ?? currentSessionDirectoryForSync ?? currentDirectory
+            : capturedTarget || !capturedDraftSnapshot
+                ? capturedTarget?.directory ?? currentDirectory
+                : capturedDraftSnapshot.target === 'chat'
+                    ? null
+                    : capturedDraftSnapshot.bootstrapPendingDirectory ?? capturedDraftSnapshot.directoryOverride ?? currentDirectory;
         const inputSnapshot = options?.presetText != null
             ? {
                 message: options.presetText,
@@ -1983,7 +1981,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         };
 
         const availableSkillNames = new Set(
-            selectSkillsForDirectory(useSkillsStore.getState(), currentDirectory).map((skill) => skill.name),
+            selectAvailableSkillsForDirectory(useSkillsStore.getState(), currentDirectory).map((skill) => skill.name),
         );
 
         // Comments become synthetic context, which the send-time expansion
@@ -2072,8 +2070,9 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                 const variables = buildCommandVariables(command, argument);
                 try {
                     await sessionActions.waitForConnectionOrThrow();
-                    const visibleText = await renderMagicPrompt(command.visiblePrompt, variables.visible);
-                    const instructionsText = await renderMagicPrompt(command.instructionsPrompt, variables.instructions);
+                    const prompts = await loadMagicPrompts(magicPromptDirectory);
+                    const visibleText = prompts.render(command.visiblePrompt, variables.visible);
+                    const instructionsText = prompts.render(command.instructionsPrompt, variables.instructions);
                     // Before the sent row commits, as for a plain send below.
                     scrollToBottom?.();
                     await sendMessage(
@@ -2228,13 +2227,16 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             if (linkTargetSessionId) {
                 recordLinkedReferences(linkTargetSessionId, linkTargetDirectory, linkedReferences);
             }
-            // A session that starts with a Linear issue attached reports itself
-            // on that issue (the Linear card's Session comments), however it
-            // was started: a draft, a worktree made from the issue.
+            // A session that starts with a tracker item attached reports itself
+            // on that item (the tracker's Session comments, where it has them),
+            // however it was started: a draft, a worktree made from the item.
             if (!currentSessionId && linkTargetSessionId) {
                 for (const reference of linkedReferences) {
-                    if (reference.kind !== 'linear-issue') continue;
-                    postLinearSessionStarted(runtimeLinear, { sessionId: linkTargetSessionId, issueIdentifier: reference.identifier });
+                    if (reference.kind !== 'tracker-item') continue;
+                    void postTrackerSessionStarted(runtimeTrackers, reference.provider, {
+                        sessionId: linkTargetSessionId,
+                        identifier: reference.identifier,
+                    });
                 }
             }
 
@@ -2571,6 +2573,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             isDesktopExpanded,
             enterToSend,
             enterToSendConfigured,
+            returnKeySends: mobileReturnKeySends,
             shiftKey: e.shiftKey,
             ctrlKey: e.ctrlKey,
             metaKey: e.metaKey,
@@ -2644,6 +2647,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     // it. Apply the editor's line and screen bounds before using that height as
     // a floor, otherwise long salvage text can push the action row off-screen.
     const dictationHeightHostRef = React.useRef<HTMLDivElement | null>(null);
+    // The short hint drops the @, $ and / pointers, so it only replaces the
+    // full one when that would wrap.
+    const fullChatPlaceholderFits = usePlaceholderFitsOneLine(dictationHeightHostRef, t('chat.chatInput.placeholder.chat'));
+    const useCompactChatPlaceholder = isMobile || !fullChatPlaceholderFits;
     const [dictationContentHeight, setDictationContentHeight] = React.useState<number | null>(null);
     const handleDictationContentHeightChange = React.useCallback((height: number | null) => {
         setDictationContentHeight((prev) => (prev === height ? prev : height));
@@ -2807,6 +2814,103 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         };
     }, [clearDropTextSuppression, clearFileMentionPasteSuppression]);
 
+    const insertCitationAtSelection = React.useCallback((citationText: string, leadingText: string) => {
+        if (!citationText && !leadingText) return;
+        const editor = composerRef.current;
+        const currentMessage = editor?.getValue() ?? messageRef.current;
+        const selectionStart = editor?.getSelection().start ?? currentMessage.length;
+        const selectionEnd = editor?.getSelection().end ?? currentMessage.length;
+        const insertionText = withInlineInsertionBoundaries(
+            buildImagePasteInsertion(leadingText, citationText),
+            currentMessage.slice(0, selectionStart),
+            currentMessage.slice(selectionEnd),
+        );
+        insertTextAtSelection(insertionText, getFileMentionInputSourceForInsertedText(insertionText));
+    }, [insertTextAtSelection]);
+
+    const savePastedImagesAsFiles = useUIStore((state) => state.savePastedImagesAsFiles);
+    const imageSaveMode = imageSaveModeForModel(savePastedImagesAsFiles, currentModelMetadata?.modalities?.input);
+    const currentModelName = currentModelMetadata?.name ?? currentModelId ?? '';
+    const currentModelKey = `${currentProviderId ?? ''}/${currentModelId ?? ''}`;
+
+    /**
+     * Saves the images where OpenCode runs and cites each saved one in the
+     * draft as `[name](path)`, so the model, a subagent or a tool opens it by
+     * path: in place of the attachment for a model that takes no images
+     * (#5087), next to it for one that does (#5218). Each image gets a name no
+     * attachment or link in the draft uses yet. Answers both groups under
+     * those names; the caller attaches the unsaved ones as before, and in
+     * `alongside` the saved ones too.
+     */
+    const saveImagesWithPathCitation = React.useCallback(async (
+        files: File[],
+        leadingText: string,
+        reservedNames: string[],
+        mode: 'instead' | 'alongside',
+    ): Promise<{ saved: File[]; unsaved: File[] }> => {
+        const attachmentDraftKey = useInputStore.getState().attachmentDraftKey;
+        const names = assignImageAttachmentFilenames(files, [
+            ...reservedNames,
+            ...findImagePathCitationNames(composerRef.current?.getValue() ?? messageRef.current),
+        ]);
+        const images = files.map((file, index) => renameFileForAttachmentCitation(file, names[index]));
+        // A cold or remote OpenCode can take seconds; this toast says what is going on.
+        const savingToastId = toast.loading(t('chat.chatInput.toast.imagesSaving', { files: images.map((file) => file.name).join(', ') }));
+        const prepared = await Promise.all(images.map(async (file) => {
+            const output = await prepareAttachmentFile(file);
+            return output ? { file, filename: output.file.name, bytes: new Uint8Array(await output.file.arrayBuffer()) } : null;
+        }).map((entry) => entry.catch(() => null)));
+        const readable = prepared.filter((entry) => entry !== null);
+        let results: Awaited<ReturnType<typeof opencodeClient.writeOpenCodeTempFiles>>;
+        try {
+            results = readable.length > 0
+                ? await opencodeClient.writeOpenCodeTempFiles(currentDirectory, readable.map(({ filename, bytes }) => ({ filename, bytes })))
+                : [];
+        } catch (error) {
+            results = readable.map(({ filename }) => ({ filename, error: error instanceof Error ? error : new Error(String(error)) }));
+        }
+        toast.dismiss(savingToastId);
+        if (useInputStore.getState().attachmentDraftKey !== attachmentDraftKey) return { saved: [], unsaved: [] };
+
+        const saved = results.flatMap((result) => 'path' in result ? [result] : []);
+        const savedNames = new Set(saved.map((result) => result.filename));
+        const isSaved = (index: number) => {
+            const entry = prepared[index];
+            return Boolean(entry && savedNames.has(entry.filename));
+        };
+        const unsaved = images.filter((_file, index) => !isSaved(index));
+        if (results.some((result) => 'error' in result)) {
+            // The error text can carry the path; the name says what failed.
+            console.warn('[chat] Saving an image failed', results.flatMap((result) => 'error' in result ? [result.error.name] : []));
+        }
+
+        if (saved.length > 0) {
+            insertCitationAtSelection(buildImagePathCitationText(saved), leadingText);
+            const firstPath = saved[0].path.replace(/\\/g, '/');
+            const savedFiles = saved.map((result) => result.filename).join(', ');
+            const folder = firstPath.slice(0, firstPath.lastIndexOf('/'));
+            if (mode === 'alongside') {
+                // One toast for a run of pastes; the newest names the latest folder.
+                toast.info(t('chat.chatInput.toast.imagesSaved', { files: savedFiles, folder }), { id: `images-saved:${currentModelKey}` });
+            } else {
+                // When some failed, the modality warning for those (attached next)
+                // takes the shared id, so this toast keeps its own.
+                toast.info(t('chat.chatInput.toast.imagesSavedForTextModel', {
+                    model: currentModelName,
+                    files: savedFiles,
+                    folder,
+                }), unsaved.length > 0 ? undefined : { id: `attachment-modalities:${currentModelKey}` });
+            }
+        }
+        if (unsaved.length > 0) {
+            const files = unsaved.map((file) => file.name).join(', ');
+            toast.error(mode === 'alongside'
+                ? t('chat.chatInput.toast.imageCopySaveFailed', { files })
+                : t('chat.chatInput.toast.imageSaveFailed', { files }));
+        }
+        return { saved: images.filter((_file, index) => isSaved(index)), unsaved };
+    }, [currentDirectory, currentModelKey, currentModelName, insertCitationAtSelection, t]);
+
     /**
      * Attach files that arrived by paste or drop and cite each one in the
      * draft as `[name]`, the same way pasted images are cited. Images get a
@@ -2819,37 +2923,51 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         leadingText: string = '',
     ): Promise<void> => {
         const attachmentDraftKey = useInputStore.getState().attachmentDraftKey;
-        const imageFiles = files.filter((file) => file.type.startsWith('image/'));
+        let imageFiles = files.filter((file) => file.type.startsWith('image/'));
         const otherFiles = files.filter((file) => !file.type.startsWith('image/'));
 
         const insertCitation = (filenames: string[], text: string) => {
-            if (filenames.length === 0 && !text) return;
-            const citationText = buildAttachmentCitationText(filenames);
-            const editor = composerRef.current;
-            const currentMessage = editor?.getValue() ?? messageRef.current;
-            const selectionStart = editor?.getSelection().start ?? currentMessage.length;
-            const selectionEnd = editor?.getSelection().end ?? currentMessage.length;
-            const insertionText = withInlineInsertionBoundaries(
-                buildImagePasteInsertion(text, citationText),
-                currentMessage.slice(0, selectionStart),
-                currentMessage.slice(selectionEnd),
-            );
-            insertTextAtSelection(insertionText, getFileMentionInputSourceForInsertedText(insertionText));
+            insertCitationAtSelection(filenames.length > 0 ? buildAttachmentCitationText(filenames) : '', text);
         };
 
-        const assignedImageNames = assignImageAttachmentFilenames(
-            imageFiles,
-            [
-                ...useInputStore.getState().attachedFiles.map((file) => file.filename),
-                ...pendingPastedAttachmentFilenamesRef.current,
-            ],
-        );
+        // With the setting on, links to saved images keep their names too, so an
+        // attachment after a failed save never repeats one.
+        const usedNames = () => [
+            ...useInputStore.getState().attachedFiles.map((file) => file.filename),
+            ...pendingPastedAttachmentFilenamesRef.current,
+            ...(savePastedImagesAsFiles ? findImagePathCitationNames(composerRef.current?.getValue() ?? messageRef.current) : []),
+        ];
+
+        let savedAny = false;
+        let attached = false;
+        if (imageSaveMode !== 'attach' && imageFiles.length > 0) {
+            const { saved, unsaved } = await saveImagesWithPathCitation(imageFiles, leadingText, usedNames(), imageSaveMode);
+            if (useInputStore.getState().attachmentDraftKey !== attachmentDraftKey) return;
+            if (saved.length > 0) {
+                savedAny = true;
+                leadingText = '';
+            }
+            if (imageSaveMode === 'alongside') {
+                // The links already name these, so they attach without a second citation.
+                for (const file of saved) {
+                    try {
+                        attached = (await addAttachedFile(file)) || attached;
+                    } catch (error) {
+                        console.error('Clipboard image attach failed', error);
+                        toast.error(error instanceof Error ? error.message : t('chat.chatInput.toast.clipboardAttachFailed'));
+                    }
+                    if (useInputStore.getState().attachmentDraftKey !== attachmentDraftKey) return;
+                }
+            }
+            imageFiles = unsaved;
+        }
+
+        const assignedImageNames = assignImageAttachmentFilenames(imageFiles, usedNames());
         // Pending before the text lands, so the editor draws the citation as a
         // chip in the same transaction that inserts it.
         for (const filename of assignedImageNames) pendingPastedAttachmentFilenamesRef.current.add(filename);
         insertCitation(assignedImageNames, leadingText);
 
-        let attached = false;
         for (let index = 0; index < imageFiles.length; index += 1) {
             const filename = assignedImageNames[index];
             const file = renameFileForAttachmentCitation(imageFiles[index], filename);
@@ -2882,10 +3000,10 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         }
         insertCitation(attachedOtherNames, '');
 
-        if (files.length > 0 && !attached) {
+        if (files.length > 0 && !attached && !savedAny) {
             toast.error(t('chat.chatInput.toast.attachFileFailed'));
         }
-    }, [addAttachedFile, insertTextAtSelection, t]);
+    }, [addAttachedFile, imageSaveMode, insertCitationAtSelection, savePastedImagesAsFiles, saveImagesWithPathCitation, t]);
 
     const handlePaste = React.useCallback(async (event: ClipboardEvent) => {
         const clipboardData = event.clipboardData;
@@ -3214,16 +3332,16 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         const textarea = composerRef.current;
         const cursorPosition = textarea?.getSelection().start ?? message.length;
         const textBeforeCursor = message.substring(0, cursorPosition);
-        const lastDollarSymbol = textBeforeCursor.lastIndexOf('$');
+        const skillSigilIndex = lastPrefixSigilIndex(textBeforeCursor, '$');
 
-        if (lastDollarSymbol !== -1) {
+        if (skillSigilIndex !== -1) {
             const newMessage =
-                message.substring(0, lastDollarSymbol) +
+                message.substring(0, skillSigilIndex) +
                 `$${skillName} ` +
                 message.substring(cursorPosition);
             setMessage(newMessage);
 
-            const nextCursor = lastDollarSymbol + skillName.length + 2;
+            const nextCursor = skillSigilIndex + skillName.length + 2;
             requestAnimationFrame(() => {
                 if (composerRef.current) {
                     composerRef.current.setSelection(nextCursor);
@@ -3477,8 +3595,26 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
 
     const attachFiles = React.useCallback(async (files: FileList | File[]) => {
         const attachmentDraftKey = useInputStore.getState().attachmentDraftKey;
-        const list = Array.isArray(files) ? files : Array.from(files);
+        let list = Array.isArray(files) ? files : Array.from(files);
         let attached = false;
+
+        const images = list.filter((file) => file.type.startsWith('image/'));
+        if (imageSaveMode !== 'attach' && images.length > 0) {
+            const { saved, unsaved } = await saveImagesWithPathCitation(
+                images,
+                '',
+                useInputStore.getState().attachedFiles.map((file) => file.filename),
+                imageSaveMode,
+            );
+            if (useInputStore.getState().attachmentDraftKey !== attachmentDraftKey) return;
+            const others = list.filter((file) => !file.type.startsWith('image/'));
+            if (imageSaveMode === 'alongside') {
+                list = [...others, ...saved, ...unsaved];
+            } else {
+                attached = saved.length > 0;
+                list = [...others, ...unsaved];
+            }
+        }
 
         for (const file of list) {
             try {
@@ -3491,7 +3627,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         if (list.length > 0 && !attached) {
             toast.error(t('chat.chatInput.toast.attachFileFailed'));
         }
-    }, [addAttachedFile, t]);
+    }, [addAttachedFile, imageSaveMode, saveImagesWithPathCitation, t]);
 
     const handleVSCodePickFiles = React.useCallback(async () => {
         try {
@@ -3646,7 +3782,20 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             setLinkedReferences((current) => withComposerReferences(current, references));
         }
     }, [columnPinned, pendingComposerReferenceCount]);
-    const showLinearPicker = Boolean(runtimeLinear) && !isVSCode;
+    // Only signed-in trackers are offered; connecting one happens in Settings.
+    const trackerPickers = React.useMemo<readonly ComposerTrackerPicker[]>(() => (
+        !isVSCode
+            ? trackerSources.map((descriptor) => {
+                const presentation = trackerPresentation(descriptor.id);
+                return {
+                    provider: descriptor.id,
+                    icon: presentation.icon,
+                    label: t('chat.chatInput.actions.linkTrackerItem', { provider: descriptor.name }),
+                    open: () => setReferencePicker({ source: trackerReferenceSource(descriptor.id) }),
+                };
+            })
+            : []
+    ), [isVSCode, t, trackerSources]);
     const showDraftTargetSelectors = newSessionDraftOpen && !isVSCode;
 
     // Which project and directory a new session will target.
@@ -3816,7 +3965,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                                 author={reference.author}
                                 openInBrowserLabel={t('chat.chatInput.linked.issue.openInBrowserAria')}
                                 removeLabel={t('chat.chatInput.linked.issue.removeAria')}
-                                onReopenPicker={() => setReferencePicker({ source: 'github', kind: 'issue' })}
+                                onReopenPicker={() => setReferencePicker({ source: 'repository', kind: 'issue' })}
                                 onRemove={remove}
                             />
                         );
@@ -3824,20 +3973,19 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         return (
                             <LinkedReferenceRow
                                 key={key}
-                                numberLabel={reference.provider === 'github'
-                                    ? t('chat.chatInput.linked.pr.number', { number: reference.number })
-                                    : formatChangeRequestReference(reference.provider, reference.number)}
+                                numberLabel={formatChangeRequestLabel(descriptorOf(reference.provider), reference.number)}
                                 title={reference.title}
                                 url={reference.url}
                                 author={reference.author}
                                 branches={reference.head && reference.base ? { head: reference.head, base: reference.base } : undefined}
-                                openInBrowserLabel={t(changeRequestCopy('chat.chatInput.linked.pr.openInBrowserAria', reference.provider))}
-                                removeLabel={t(changeRequestCopy('chat.chatInput.linked.pr.removeAria', reference.provider))}
-                                onReopenPicker={() => setReferencePicker({ source: 'github', kind: 'pull' })}
+                                openInBrowserLabel={t(changeRequestCopy('chat.chatInput.linked.pr.openInBrowserAria', descriptorOf(reference.provider).terminology.changeRequest))}
+                                removeLabel={t(changeRequestCopy('chat.chatInput.linked.pr.removeAria', descriptorOf(reference.provider).terminology.changeRequest))}
+                                onReopenPicker={() => setReferencePicker({ source: 'repository', kind: 'pull' })}
                                 onRemove={remove}
                             />
                         );
-                    case 'linear-issue':
+                    case 'tracker-item': {
+                        const trackerName = trackerDescriptors.find((descriptor) => descriptor.id === reference.provider)?.name ?? reference.provider;
                         return (
                             <LinkedReferenceRow
                                 key={key}
@@ -3845,12 +3993,13 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                                 title={reference.title}
                                 url={reference.url}
                                 author={reference.author}
-                                openInBrowserLabel={t('chat.chatInput.linked.linearIssue.openInBrowserAria')}
-                                removeLabel={t('chat.chatInput.linked.linearIssue.removeAria')}
-                                onReopenPicker={() => setReferencePicker({ source: 'linear' })}
+                                openInBrowserLabel={t('chat.chatInput.linked.trackerItem.openInBrowserAria', { provider: trackerName })}
+                                removeLabel={t('chat.chatInput.linked.trackerItem.removeAria', { provider: trackerName })}
+                                onReopenPicker={() => setReferencePicker({ source: trackerReferenceSource(reference.provider) })}
                                 onRemove={remove}
                             />
                         );
+                    }
                     case 'guest':
                         return (
                             <LinkedReferenceRow
@@ -3954,6 +4103,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const queueRow = !isBtwActive && !newSessionDraftOpen ? (
         <QueuedMessagesStrip
             target={parentMessageQueueTarget}
+            composerAgentName={currentAgentName}
             onEditMessage={handleQueuedMessageEdit}
             onSendMessage={handleQueuedMessageSend}
         />
@@ -4091,6 +4241,26 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         prevWasAbortedRef.current = pendingAbort;
     }, [abortPromptSessionId, acknowledgeSessionAbort, currentSessionId]);
 
+    // The editor is memoized: stable handlers let it skip the composer's
+    // renders while a reply streams, which change nothing it shows.
+    const handleEditorChange = useStableHandler(handleComposerChange);
+    const handleEditorKeyDown = useStableHandler((event: KeyboardEvent) => {
+        // Every interception branch calls preventDefault, so the event itself
+        // reports whether the composer consumed it.
+        handleKeyDown(event);
+        return event.defaultPrevented;
+    });
+    const handleEditorKeyUp = useStableHandler((event: KeyboardEvent) => largeTextPasteGesture.keyUp(event));
+    const handleEditorSelectionChange = useStableHandler((selection: ComposerSelection) => {
+        largeTextPasteGesture.invalidate();
+        cursorPosRef.current = selection.start;
+        updateAutocompleteOverlayPosition();
+    });
+    const handleEditorBlur = useStableHandler(() => {
+        largeTextPasteGesture.invalidate();
+        mobileShell.onEditorBlur();
+    });
+
     return (
         <>
         <form
@@ -4226,8 +4396,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         onPickLocalFiles={handlePickLocalFiles}
                         onOpenGitHubPicker={openGitHubPicker}
                         repositoryProvider={repositoryProvider}
-                        showLinearPicker={showLinearPicker}
-                        onOpenLinearPicker={openLinearPicker}
+                        trackerPickers={trackerPickers}
                         onOpenAttachSheet={openMobileAttachSheet}
                         onStartDictation={toggleDictation}
                         onAbort={handleAbort}
@@ -4367,26 +4536,13 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                                 data-testid="chat-input"
                                 value={message}
                                 languageContext={languageContext}
-                                onChange={handleComposerChange}
-                                onKeyDown={(event) => {
-                                    // Every interception branch calls
-                                    // preventDefault, so the event itself
-                                    // reports whether the composer consumed it.
-                                    handleKeyDown(event);
-                                    return event.defaultPrevented;
-                                }}
+                                onChange={handleEditorChange}
+                                onKeyDown={handleEditorKeyDown}
                                 onPaste={handlePaste}
-                                onKeyUp={(event) => largeTextPasteGesture.keyUp(event)}
-                                onSelectionChange={(selection) => {
-                                    largeTextPasteGesture.invalidate();
-                                    cursorPosRef.current = selection.start;
-                                    updateAutocompleteOverlayPosition();
-                                }}
+                                onKeyUp={handleEditorKeyUp}
+                                onSelectionChange={handleEditorSelectionChange}
                                 onFocus={mobileShell.onEditorFocus}
-                                onBlur={() => {
-                                    largeTextPasteGesture.invalidate();
-                                    mobileShell.onEditorBlur();
-                                }}
+                                onBlur={handleEditorBlur}
                                 placeholder={isBtwActive
                                     ? t('chat.btw.mainComposerPlaceholder')
                                     : currentSessionId || newSessionDraftOpen
@@ -4397,7 +4553,15 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                                 editable={Boolean(currentSessionId || newSessionDraftOpen)}
                                 autoCorrect={composerAutoCorrect({ isMobile })}
                                 autoCapitalize={isMobile ? 'sentences' : 'none'}
-                                preserveDeferredEnterShift={!enterToSendConfigured || !isMobile}
+                                // Return-key send trusts the deferred Shift only from a
+                                // hardware keyboard: iOS autocapitalization arms a phantom
+                                // Shift at sentence starts that must send, not newline.
+                                preserveDeferredEnterShift={
+                                    isMobile && mobileReturnKeySends
+                                        ? hasHardwareKeyboard
+                                        : !enterToSendConfigured || !isMobile
+                                }
+                                returnKeySends={isMobile && mobileReturnKeySends}
                                 spellCheck={isMobile || inputSpellcheckEnabled}
                                 fillContainer={isComposerExpanded}
                                 maxLines={isMobile ? MAX_MOBILE_COMPOSER_LINES : MAX_VISIBLE_COMPOSER_LINES}
@@ -4440,8 +4604,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         onPickLocalFiles={handlePickLocalFiles}
                         onOpenGitHubPicker={openGitHubPicker}
                         repositoryProvider={repositoryProvider}
-                        showLinearPicker={showLinearPicker}
-                        onOpenLinearPicker={openLinearPicker}
+                        trackerPickers={trackerPickers}
                         attachGuests={isMobile ? NO_ATTACH_GUESTS : guestAttachItems}
                         onOpenGuestAttach={openGuestAttach}
                         onOpenAttachSheet={openMobileAttachSheet}
@@ -4540,7 +4703,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                 purpose="attach"
                 selection="multiple"
                 directory={referencePickerDirectory}
-                initialGitHubKind={referencePicker.source === 'github' ? referencePicker.kind : undefined}
+                initialGitHubKind={referencePicker.source === 'repository' ? referencePicker.kind : undefined}
                 onConfirm={attachReferences}
             />
         ) : null}
@@ -4617,23 +4780,24 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                             requestAnimationFrame(openGitHubPicker);
                         }}
                     >
-                        <Icon name={repositoryProvider === 'gitlab' ? 'gitlab' : 'github'} className="h-[18px] w-[18px] flex-shrink-0 text-muted-foreground" />
-                        {t(repositoryProvider === 'gitlab' ? 'chat.chatInput.actions.linkGitlab' : 'chat.chatInput.actions.linkGithub')}
+                        <ProviderIcon descriptor={repositoryDescriptor} className="h-[18px] w-[18px] flex-shrink-0 text-muted-foreground" />
+                        {t(`chat.chatInput.actions.linkRepositoryItem.${repositoryDescriptor.terminology.changeRequest}`, { provider: repositoryDescriptor.label })}
                     </button>
-                    {showLinearPicker ? (
+                    {trackerPickers.map((picker) => (
                         <button
+                            key={picker.provider}
                             type="button"
                             className="flex w-full cursor-pointer items-center gap-2.5 rounded-lg px-2 py-3 text-start typography-ui-label hover:bg-[var(--interactive-hover)]"
                             onClick={() => {
                                 mobileShell.skipNextOverlayCloseRestore();
                                 setMobileAttachMenuOpen(false);
-                                requestAnimationFrame(openLinearPicker);
+                                requestAnimationFrame(picker.open);
                             }}
                         >
-                            <Icon name="linear" className="h-[18px] w-[18px] flex-shrink-0 text-muted-foreground" />
-                            {t('chat.chatInput.actions.linkLinearIssue')}
+                            <Icon name={picker.icon} className="h-[18px] w-[18px] flex-shrink-0 text-muted-foreground" />
+                            {picker.label}
                         </button>
-                    ) : null}
+                    ))}
                 </div>
             </MobileOverlayPanel>
         ) : null}

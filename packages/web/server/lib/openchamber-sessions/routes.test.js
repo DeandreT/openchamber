@@ -135,11 +135,6 @@ vi.mock('../git/index.js', () => ({
   resolveWorktreeTopLevel: vi.fn(async (directory) => ({ root: directory, prefix: '' })),
 }));
 
-/**
- * Archive state is OpenChamber's own now, so the routes take a store rather
- * than talking to OpenCode. The tests use an in-memory one with the same
- * contract as `archive-store.js`.
- */
 const createMemorySessionMetadataStore = () => {
   const entries = new Map();
   const merge = (current, patch) => {
@@ -177,6 +172,10 @@ const createMemorySessionMetadataStore = () => {
   };
 };
 
+/**
+ * The archive file holds state OpenCode cannot take (deleted directories). The
+ * tests use an in-memory store with the same contract as `archive-store.js`.
+ */
 const createMemoryArchiveStore = () => {
   const entries = new Map();
   let failFor = new Set();
@@ -185,8 +184,11 @@ const createMemoryArchiveStore = () => {
     entries,
     getAll: async () => Object.fromEntries(entries),
     list: async () => Object.fromEntries(entries),
-    isArchived: async (id) => entries.has(id),
-    archivedAt: async (id) => entries.get(id) ?? null,
+    entry: async (id) => entries.get(id),
+    forget: async (ids) => {
+      for (const id of ids) entries.delete(id);
+      return { failedIds: [] };
+    },
     archive: async (ids, archivedAt) => {
       const stamp = Number.isSafeInteger(archivedAt) && archivedAt > 0 ? archivedAt : 1;
       const archived = [];
@@ -203,7 +205,7 @@ const createMemoryArchiveStore = () => {
       const failedIds = [];
       for (const id of ids) {
         if (failFor.has(id)) { failedIds.push(id); continue; }
-        entries.delete(id);
+        entries.set(id, null);
         restored.push({ id, archivedAt: null });
       }
       return { restored, failedIds };
@@ -256,7 +258,8 @@ describe('openchamber session routes', () => {
       updatedAt: Date.now(),
     }));
     sessionCreateMock.mockClear();
-    sessionUpdateMock.mockClear();
+    sessionUpdateMock.mockReset();
+    sessionUpdateMock.mockImplementation(async () => undefined);
     sessionForkMock.mockClear();
     existingSessionMessages = [];
     dispatchedUserMessageSeq = 0;
@@ -286,70 +289,73 @@ describe('openchamber session routes', () => {
   });
 
   describe('archiving a batch of sessions', () => {
-    it('archives every id and reports what it stored', async () => {
+    const tagged = (tag) => Object.assign(new Error(tag), { _tag: tag });
+
+    it('archives every id on OpenCode and leaves the announcement to OpenCode', async () => {
       const { app, archiveStore, broadcastGlobalUiEvent } = createApp();
       const response = await request(app)
         .post('/api/openchamber/sessions/archive')
         .send({ ids: ['ses_a', 'ses_b'], archivedAt: 1700 })
         .expect(200);
 
-      expect(response.body.archived).toEqual([
-        { id: 'ses_a', archivedAt: 1700 },
-        { id: 'ses_b', archivedAt: 1700 },
-      ]);
-      expect(response.body.failedIds).toEqual([]);
-      await expect(archiveStore.getAll()).resolves.toEqual({ ses_a: 1700, ses_b: 1700 });
-      expect(broadcastGlobalUiEvent).toHaveBeenCalledWith({
-        type: 'openchamber:session-archived',
-        properties: { sessionID: 'ses_a', archivedAt: 1700 },
+      expect(response.body).toEqual({
+        archived: [{ id: 'ses_a', archivedAt: 1700 }, { id: 'ses_b', archivedAt: 1700 }],
+        failedIds: [],
       });
+      expect(sessionUpdateMock).toHaveBeenCalledWith({ sessionID: 'ses_a', archived: true });
+      expect(sessionUpdateMock).toHaveBeenCalledWith({ sessionID: 'ses_b', archived: true });
+      await expect(archiveStore.getAll()).resolves.toEqual({});
+      expect(broadcastGlobalUiEvent).not.toHaveBeenCalled();
     });
 
-    it('keeps archiving after a failed session and reports it as failed', async () => {
-      const archiveStore = createMemoryArchiveStore();
-      archiveStore.failIds(['ses_b']);
-      const { app } = createApp({ archiveStore });
+    it('keeps a session whose directory is gone in the archive file, and reports one OpenCode refused', async () => {
+      sessionUpdateMock.mockImplementation(async ({ sessionID }) => {
+        if (sessionID === 'ses_gone') throw tagged('LocationNotFoundError');
+        if (sessionID === 'ses_missing') throw tagged('SessionNotFoundError');
+      });
+      const { app, archiveStore, broadcastGlobalUiEvent } = createApp();
 
       const response = await request(app)
         .post('/api/openchamber/sessions/archive')
-        .send({ ids: ['ses_a', 'ses_b', 'ses_c'] })
+        .send({ ids: ['ses_a', 'ses_gone', 'ses_missing'], archivedAt: 1700 })
         .expect(200);
 
-      expect(response.body.archived.map((session) => session.id)).toEqual(['ses_a', 'ses_c']);
-      expect(response.body.failedIds).toEqual(['ses_b']);
+      expect(response.body.archived.map((session) => session.id)).toEqual(['ses_a', 'ses_gone']);
+      expect(response.body.failedIds).toEqual(['ses_missing']);
+      await expect(archiveStore.getAll()).resolves.toEqual({ ses_gone: 1700 });
+      expect(broadcastGlobalUiEvent.mock.calls.map(([event]) => event)).toEqual([
+        { type: 'openchamber:session-archived', properties: { sessionID: 'ses_gone', archivedAt: 1700 } },
+      ]);
     });
 
-    it('does not announce a session it failed to store', async () => {
+    it('does not announce a session the file failed to store', async () => {
+      sessionUpdateMock.mockRejectedValue(tagged('LocationNotFoundError'));
       const archiveStore = createMemoryArchiveStore();
       archiveStore.failIds(['ses_b']);
       const { app, broadcastGlobalUiEvent } = createApp({ archiveStore });
 
-      await request(app)
+      const response = await request(app)
         .post('/api/openchamber/sessions/archive')
         .send({ ids: ['ses_a', 'ses_b'] })
         .expect(200);
 
-      const announced = broadcastGlobalUiEvent.mock.calls.map(([event]) => event.properties.sessionID);
-      expect(announced).toEqual(['ses_a']);
+      expect(response.body.failedIds).toEqual(['ses_b']);
+      expect(broadcastGlobalUiEvent.mock.calls.map(([event]) => event.properties.sessionID)).toEqual(['ses_a']);
     });
 
-    it('restores a batch and announces the cleared state', async () => {
-      const { app, archiveStore, broadcastGlobalUiEvent } = createApp();
-      await request(app).post('/api/openchamber/sessions/archive').send({ ids: ['ses_a'] }).expect(200);
-      broadcastGlobalUiEvent.mockClear();
+    it('restores on OpenCode and drops the entry the file still had', async () => {
+      const archiveStore = createMemoryArchiveStore();
+      archiveStore.entries.set('ses_a', 1700);
+      const { app } = createApp({ archiveStore });
 
       const response = await request(app)
         .post('/api/openchamber/sessions/unarchive')
         .send({ ids: ['ses_a'] })
         .expect(200);
 
-      expect(response.body.restored).toEqual([{ id: 'ses_a', archivedAt: null }]);
-      expect(response.body.failedIds).toEqual([]);
+      expect(response.body).toEqual({ restored: [{ id: 'ses_a', archivedAt: null }], failedIds: [] });
+      expect(sessionUpdateMock).toHaveBeenCalledWith({ sessionID: 'ses_a', archived: false });
       await expect(archiveStore.getAll()).resolves.toEqual({});
-      expect(broadcastGlobalUiEvent).toHaveBeenCalledWith({
-        type: 'openchamber:session-archived',
-        properties: { sessionID: 'ses_a', archivedAt: null },
-      });
     });
 
     it('rejects an empty batch, an oversized batch, and non-string ids', async () => {
@@ -452,6 +458,34 @@ describe('openchamber session routes', () => {
         .resolves.toMatchObject({ body: { metadata: { a: 1 } } });
       await expect(request(app).get('/api/openchamber/sessions/ses_b/metadata').expect(200))
         .resolves.toMatchObject({ body: { metadata: {} } });
+    });
+
+    it('answers SESSION_DIRECTORY_MISSING when OpenCode refuses the write because the folder is gone', async () => {
+      const locationNotFound = Object.assign(new Error('Location not found: /repo/wt-gone'), {
+        _tag: 'LocationNotFoundError',
+        location: { directory: '/repo/wt-gone' },
+      });
+      const persistSessionMetadata = vi.fn(async () => { throw locationNotFound; });
+      const { app } = createApp({ persistSessionMetadata });
+
+      const response = await request(app)
+        .post('/api/openchamber/sessions/ses_a/metadata')
+        .send({ patch: { openchamber: { work: { state: 'done' } } } })
+        .expect(409);
+
+      expect(response.body).toEqual({ error: 'Location not found: /repo/wt-gone', code: 'SESSION_DIRECTORY_MISSING' });
+    });
+
+    it('keeps any other failed write a plain error without the folder code', async () => {
+      const persistSessionMetadata = vi.fn(async () => { throw new Error('OpenCode is down'); });
+      const { app } = createApp({ persistSessionMetadata });
+
+      const response = await request(app)
+        .post('/api/openchamber/sessions/ses_a/metadata')
+        .send({ patch: { openchamber: { work: { state: 'done' } } } })
+        .expect(500);
+
+      expect(response.body).toEqual({ error: 'OpenCode is down' });
     });
 
     it('rejects a missing or non-object patch', async () => {
@@ -792,6 +826,200 @@ describe('openchamber session routes', () => {
     expect(resolveAutoSelection).not.toHaveBeenCalled();
     expect(await create({ lastSelectedModel: 'openchamber/auto' }, { resolveAutoSelection, isAutoReady: async () => true }))
       .toEqual({ providerID: 'openai', modelID: 'gpt-5.5' });
+  });
+
+  it('runs a named agent on the model it is bound to when the prompt omits one', async () => {
+    useCatalog({
+      agents: [
+        { id: 'build', name: 'Build', mode: 'primary' },
+        { id: 'plan', name: 'Plan', mode: 'primary', model: { providerID: 'anthropic', id: 'claude-sonnet-5', variant: 'high' } },
+      ],
+    });
+    const { app } = createApp({
+      readSettingsFromDiskMigrated: async () => ({
+        defaultModel: 'openai/gpt-5.5',
+        defaultAgent: 'build',
+        projects: [{ id: 'proj_1', path: '/repo/app' }],
+      }),
+    });
+    const response = await request(app)
+      .post('/api/openchamber/sessions')
+      .send({ directory: '/repo/app', prompt: 'Run this', agent: 'plan' })
+      .expect(200);
+
+    // The binding outranks the settings default, and its effort comes with it.
+    expect(response.body.model).toEqual({ providerID: 'anthropic', modelID: 'claude-sonnet-5' });
+    expect(response.body.variant).toBe('high');
+    expect(sessionSwitchModelMock).toHaveBeenCalledWith({
+      sessionID: 'ses_123',
+      model: { id: 'claude-sonnet-5', providerID: 'anthropic', variant: 'high' },
+    });
+    expect(sessionSwitchAgentMock).toHaveBeenCalledWith({ sessionID: 'ses_123', agent: 'plan' });
+  });
+
+  it('falls back to the defaults chain when the named agent binds no model', async () => {
+    useCatalog({
+      agents: [
+        { id: 'build', name: 'Build', mode: 'primary' },
+        { id: 'plan', name: 'Plan', mode: 'primary' },
+      ],
+    });
+    const { app } = createApp({
+      readSettingsFromDiskMigrated: async () => ({
+        defaultModel: 'openai/gpt-5.5',
+        defaultAgent: 'build',
+        projects: [{ id: 'proj_1', path: '/repo/app' }],
+      }),
+    });
+    const response = await request(app)
+      .post('/api/openchamber/sessions')
+      .send({ directory: '/repo/app', prompt: 'Run this', agent: 'plan' })
+      .expect(200);
+
+    expect(response.body.model).toEqual({ providerID: 'openai', modelID: 'gpt-5.5' });
+    expect(response.body.agent).toBe('plan');
+  });
+
+  it('keeps an explicitly requested model over the named agent binding', async () => {
+    useCatalog({
+      agents: [
+        { id: 'build', name: 'Build', mode: 'primary' },
+        { id: 'plan', name: 'Plan', mode: 'primary', model: { providerID: 'anthropic', id: 'claude-sonnet-5' } },
+      ],
+    });
+    const { app } = createApp();
+    const response = await request(app)
+      .post('/api/openchamber/sessions')
+      .send({ directory: '/repo/app', prompt: 'Run this', model: 'openai/gpt-5.5', agent: 'plan' })
+      .expect(200);
+
+    expect(response.body.model).toEqual({ providerID: 'openai', modelID: 'gpt-5.5' });
+    expect(response.body.agent).toBe('plan');
+  });
+
+  it('keeps the session\'s previous model when send names an agent that binds one', async () => {
+    useCatalog({
+      agents: [
+        { id: 'build', name: 'Build', mode: 'primary' },
+        { id: 'plan', name: 'Plan', mode: 'primary', model: { providerID: 'anthropic', id: 'claude-sonnet-5', variant: 'high' } },
+      ],
+    });
+    sessionGetMock.mockImplementation(async ({ sessionID }) => ({
+      id: sessionID,
+      agent: 'build',
+      model: { providerID: 'openai', id: 'gpt-5.5' },
+      location: { directory: '/repo/app' },
+    }));
+    setSessionMessages([{ id: 'msg_before', type: 'assistant', time: { created: 10, completed: 20 } }]);
+
+    // Send/fork keep the session's own selection; the binding only fills a
+    // dispatch that has no model to reuse.
+    const { app } = createApp();
+    const response = await request(app)
+      .post('/api/openchamber/sessions/ses_source/send')
+      .send({ directory: '/repo/app', prompt: 'Continue where you left off', agent: 'plan' })
+      .expect(200);
+
+    expect(response.body.model).toEqual({ providerID: 'openai', modelID: 'gpt-5.5' });
+    expect(response.body.agent).toBe('plan');
+    // The binding did not take over: no switch to its model, no inherited effort.
+    expect(response.body.variant).toBeUndefined();
+    expect(sessionSwitchModelMock).toHaveBeenCalledWith({
+      sessionID: 'ses_source',
+      model: { id: 'gpt-5.5', providerID: 'openai' },
+    });
+  });
+
+  it('runs a sent-to session on the named agent binding when it has no model of its own', async () => {
+    useCatalog({
+      agents: [
+        { id: 'build', name: 'Build', mode: 'primary' },
+        { id: 'plan', name: 'Plan', mode: 'primary', model: { providerID: 'anthropic', id: 'claude-sonnet-5', variant: 'high' } },
+      ],
+    });
+    sessionGetMock.mockImplementation(async ({ sessionID }) => ({
+      id: sessionID,
+      location: { directory: '/repo/app' },
+    }));
+    setSessionMessages([{ id: 'msg_before', type: 'assistant', time: { created: 10, completed: 20 } }]);
+
+    const { app } = createApp();
+    const response = await request(app)
+      .post('/api/openchamber/sessions/ses_source/send')
+      .send({ directory: '/repo/app', prompt: 'Continue where you left off', agent: 'plan' })
+      .expect(200);
+
+    expect(response.body.model).toEqual({ providerID: 'anthropic', modelID: 'claude-sonnet-5' });
+    expect(response.body.variant).toBe('high');
+    expect(sessionSwitchModelMock).toHaveBeenCalledWith({
+      sessionID: 'ses_source',
+      model: { id: 'claude-sonnet-5', providerID: 'anthropic', variant: 'high' },
+    });
+  });
+
+  it('falls back to the catalogue id when the picked model overrides its upstream name', async () => {
+    useCatalog({
+      models: [
+        { id: 'derived-fast', modelID: 'vendor/base', providerID: 'custom-provider', variants: [] },
+      ],
+    });
+    const { app } = createApp();
+
+    await request(app)
+      .post('/api/openchamber/sessions')
+      .send({ directory: '/repo/app', prompt: 'Run this' })
+      .expect(200);
+
+    expect(sessionSwitchModelMock).toHaveBeenCalledWith({
+      sessionID: 'ses_123',
+      model: { id: 'derived-fast', providerID: 'custom-provider' },
+    });
+  });
+
+  it('resolves a reference to the exact catalogue id before a derived entry sharing its upstream name', async () => {
+    useCatalog({
+      models: [
+        { id: 'derived-fast', modelID: 'base', providerID: 'vendor', variants: [{ id: 'high' }] },
+        { id: 'base', modelID: 'base', providerID: 'vendor', variants: [] },
+      ],
+    });
+    const { app } = createApp();
+
+    const response = await request(app)
+      .post('/api/openchamber/sessions')
+      .send({ directory: '/repo/app', prompt: 'Run this', model: 'vendor/base', variant: 'high' })
+      .expect(400);
+
+    // The level belongs to the derived entry, so the base model refuses it.
+    expect(JSON.stringify(response.body)).toContain("Unknown variant 'high' for model 'vendor/base'");
+  });
+
+  it('accepts a provider/id reference whose catalogue id differs from its upstream modelID', async () => {
+    // OpenCode model references are `provider/id` (Model.Ref.parse). A custom
+    // provider may override the upstream name, so `modelID` differs from `id`;
+    // lookups must use the id, not the wire name.
+    useCatalog({
+      models: [
+        {
+          id: 'deepseek-flash',
+          modelID: 'deepseek/deepseek-flash',
+          providerID: 'deepseek-litellm',
+          variants: [{ id: 'high' }],
+        },
+      ],
+    });
+    const { app } = createApp();
+
+    const response = await request(app)
+      .post('/api/openchamber/sessions')
+      .send({ directory: '/repo/app', prompt: 'Run this', model: 'deepseek-litellm/deepseek-flash' })
+      .expect(200);
+
+    expect(response.body.model).toEqual({ providerID: 'deepseek-litellm', modelID: 'deepseek-flash' });
+    expect(sessionSwitchModelMock).toHaveBeenCalledWith({
+      sessionID: 'ses_123',
+      model: { id: 'deepseek-flash', providerID: 'deepseek-litellm' },
+    });
   });
 
   it('resolves an Auto default through the routing hook before switching the session', async () => {

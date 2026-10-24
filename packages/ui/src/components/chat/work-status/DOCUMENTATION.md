@@ -118,6 +118,7 @@ which requests only providers enabled for this panel.
 | Usage | `components/usage/usageGroups.ts` over `useQuotaStore` | grouping shared with the mobile popover; presentation is not |
 | Linked threads | `lib/linkedIssues.ts` over session metadata; state from tracked items | written by the flows that attach an issue or PR, and removable from the row; a linked PR that is also the checked-out branch's PR shows the branch summary, as its sidebar row does |
 | Turn stats | `telemetry.ts` over `useSessionMessageRecords` | computed while authoritatively idle, including when collapsed so the headline stays current; either rate above 5,000 tok/s is reported as unknown (see the two-rate description below) |
+| Keep-warm switch | `useSessionWarmingStore`, mirrored from the server's `lib/session-warming` | on the Context row, shown only while Settings chose per-session warming and for a root session outside an isolated space; the tooltip's countdown ticks only while it is open |
 | Goal | `useSessionGoal` | respects the Settings toggle |
 | MCP | `useMcpStore` | connect/disconnect reuses the dropdown's actions |
 | Pinned messages | `getContextObligatoryMessages` + `state.part`, else one `getSessionMessage` read | see below |
@@ -127,8 +128,13 @@ which requests only providers enabled for this panel.
 
 Subagent status uses the Tasks section's leading icons: blue for busy/retrying,
 green for idle, and a neutral clock while status is unknown. A successful status
-snapshot also establishes idle for omitted sessions in that same directory,
-compared as normalized paths and skipping sessions whose status was invalidated.
+snapshot of the panel's directory also establishes idle for omitted children,
+skipping sessions whose status was invalidated. That snapshot is the server's
+list of running sessions (`getActiveSessionStatuses`): the host's covers every
+host directory, a space's covers only that space. So it covers a child in any
+directory on the same side of that boundary, including one that moved to
+another worktree (`session_move`); comparing the directories themselves left
+such a child on the clock forever once the page reloaded after it finished.
 The global status store fills the gap for children the snapshot does not cover:
 a child it holds as busy runs, and one it saw settle is idle (or failed).
 Permission requests and questions take precedence with a warning icon and text.
@@ -168,8 +174,17 @@ message's output tokens divided by the union of its nonempty text intervals.
 It excludes initial waiting, reasoning tokens and reasoning time, and earlier
 tool steps. It requires complete, valid text timing and a final message without
 tools, errors, synthetic text or ignored text. This measures text delivery from
-stored timestamps, not provider-side decode speed. The header shows only this
-rate; unavailable response timing never falls back to whole-turn speed.
+the live text timestamps, not provider-side decode speed. The header shows only
+this rate; unavailable response timing never falls back to whole-turn speed.
+OpenCode stores no timing for text, so a reloaded or never-watched turn has
+text stamped with its step's `created` and `completed`. A text start equal to
+`created` is that stamp, so Response speed is unknown after a reload.
+
+Hiding it there was weighed against one window for both cases, the whole final
+step from `created` to `completed`. That window gives the same number live and
+after a reload, but it counts the initial wait and reasoning, which the row's
+tooltip excludes, and it read about half the live rate on real turns. A missing
+number is better than a second, lower one for the same turn.
 
 Whole-turn speed uses output plus reasoning tokens from every step, divided by
 elapsed assistant time minus the union of completed and failed tool intervals.
@@ -188,8 +203,8 @@ the final assistant completion. It includes model waits, tool execution,
 compaction, and other gaps; it is not used as a throughput denominator.
 
 Metric labels stay short. Every row is a single hover and keyboard-focus target
-for a shared tooltip, with a 750ms hover delay and a portal outside the panel's
-scroller. Tooltips explain the measurement in every locale. The token row uses
+for a shared tooltip that opens above the row after a 300ms hover delay, with a
+portal outside the panel's scroller. Tooltips explain the measurement in every locale. The token row uses
 compact input/output arrows; its tooltip gives full counts and explains that
 input excludes cached tokens and output includes reasoning across all steps.
 
@@ -268,6 +283,16 @@ The PR surface can watch a concrete remote while passive readers initially know
 only the automatic remote key, so the panel reads the freshest entry for the
 directory and branch across remote keys. This keeps its PR and checks rows in
 sync with the live PR surface without adding another request owner.
+
+### Why checks read "7/9" and not one word per state
+
+The Checks row shows passed out of all after a dot in the run's colour: red
+once any check failed, yellow while any still runs (the dot blinks on the
+shared clock), green when all passed. Skipped and neutral checks count as
+passed, as the server's summary counts them. This is the form GitHub's pull
+request list uses, so the number reads the same in both places. The row once
+showed "1 failed" or "2 running" alone, which gave no sense of how far the run
+was; the per-state counts now live in the row's tooltip.
 
 ### Changed files come from git status, not the session
 
@@ -372,7 +397,25 @@ helper and the host overlay controller. This does not increase the status
 frame's 320px height limit. The public contract is in `packages/sdk/API.md`,
 under Anchored popovers.
 
-`useWorkStatusExtensionSections` lists active guests with a `statusEntry` from
+### Sections the app draws
+
+An extension that declares `statusSection.source` gets no frame. `WorkStatusGuestView` reads its service (`lib/guests/status-view.ts`) and draws the answer with the panel's own row vocabulary: the same 28px rows, muted text, tone colours from the theme, pills for chips and badges, the shared `Button`, `Switch` and dropdown. The body is mounted under the same rule as a frame (shown, expanded), so reading starts and stops with it, and is keyed by guest and directory, so a project change starts from an empty view rather than showing the last project's numbers. Reads pause while the document is hidden. Header controls in the answer go through the same `GuestStatusControlBinding` a frame's `setStatusControls` uses, so `StatusHeaderControls` draws both.
+
+A failed read keeps the last view on screen, faded, under an error note; before the first answer the body says it is reading. An action holds its control, in a row or in the header, while the request runs, shows a chosen value at once, and keeps it until a read that started after the service's answer is on screen (`StatusViewPoller.refresh` resolves then), so a read already under way cannot flip it back. A refused action drops the choice and shows the service's message, or a generic one, in a toast. A row's tooltip covers the whole row, except on a row with a chart, whose own hover label owns the middle; there the tooltip sits on the label.
+
+#### Why the host polls and not the service pushing
+
+Polling a path keeps the service a plain HTTP handler, which is what every extension service already is, and reuses the authenticated `service/request` proxy with its pause, approval and size checks. A push channel would save requests while nothing changes, but needs a socket per section and reconnect logic in every extension. The interval has a floor of one second, reads never overlap, and a hidden document reads nothing.
+
+#### Why only theme tones and not colours
+
+The section sits among the app's own sections and follows the theme, light and dark, without the extension knowing either. An extension that needs its own colours keeps its frame.
+
+#### Why rows keep their objects between reads
+
+`createGuestStatusViewReader` returns the previous view untouched when the answer's body is byte-identical, and otherwise reuses each row object, and the header controls, whose JSON did not change. Rows are memoized by identity and the header binding follows the controls' identity, so a sample that moves one number redraws one row instead of the section and its header.
+
+`useWorkStatusExtensionSections` lists active guests with a `statusEntry` or `statusSource` from
 the catalog store (`useGuestStatusSections`). It is empty on VS Code and
 mobile, which load no guests; the panel is hidden there anyway, but the empty
 list is explicit rather than an accident of visibility. The rail owns loading
@@ -457,6 +500,16 @@ Selection rules live in `usageHeadline.ts` and are pinned by
   label, because showing an unmatched provider's quota would read as the active
   one.
 
+## Provider status line
+
+A provider with no windows shows its status (an error, "no rate limits") on its
+own row, at the row's end. The status sits inside the label, not in the row's
+`value`: a value never shrinks, so a long error such as an expired key with its
+fix ran past the panel edge and pushed the provider name out. The status keeps
+its full width while it fits, the name truncates first, and a status longer
+than the row less a stub of the name truncates too, with the full text in the
+row's tooltip.
+
 ## Actions
 
 Rows that name something the app can already show are buttons:
@@ -478,6 +531,8 @@ Rows that name something the app can already show are buttons:
 | Pinned (text) | jumps the transcript to that message |
 
 ### Project actions outside the panel
+
+Auto-discovery reuses a personal action when its name identifies a dev server or its command runs a conventional dev script. A shared action needs a matching script command as well as the same trust confirmation as choosing it from the menu: renaming an already trusted shared action does not change its trust hash. Arbitrary `start` substrings and unrelated `start:*` scripts must not launch through discovery.
 
 The panel hides whenever a rail panel opens, so the actions cannot depend on
 it. `components/layout/ProjectActionsProvider` mounts one runner
@@ -518,7 +573,7 @@ a tab.
 
 ## Context sources
 
-Linked GitHub threads first, then skills and MCP counts.
+Linked issues and change requests first, then skills and MCP counts.
 
 Agents are deliberately absent: an agent is who does the work, not material
 loaded into the context. Tools are absent too — `Agent.tools` is a per-agent
@@ -556,12 +611,18 @@ Stored in session metadata as a **snapshot** (`lib/linkedIssues.ts`, namespace
 `openchamber.linked_issues`), persisted through the same server-owned metadata
 store as pinned messages. Number, title, url, author and avatar only — the
 body,
-comments and state belong to GitHub, and mirroring them would mean owning their
-staleness. The stored title can drift; that is the price of a store that never
-needs refreshing. A GitHub row opens github.com. A Linear row opens the
-right-hand Linear panel when Linear is connected on desktop/web; otherwise it
-opens the Linear URL (no rail in VS Code or the phone shell, and none while
-disconnected).
+comments and state belong to their provider, and mirroring them would mean
+owning their staleness. The stored title can drift; that is the price of a
+store that never needs refreshing. A repository row opens its link in the
+Tracker. Its live colour comes from the same repository thread the sidebar
+follows (`getRepositoryThreadRef`, `repositoryThread`), whatever the provider,
+and the heading speaks a provider's word for change requests only when every
+attached change shares it, else pull requests. A tracker row (a Linear issue)
+wears its tracker's mark and, once the server follows it, the tracker's own
+state name in the colour of its category (`getTrackerItemStateLook`). It opens
+as a Tracker tab beside the chat on desktop and web, on the issues and PRs
+board on the phone, and in the browser otherwise (VS Code, a tracker the
+server does not serve, or one that is disconnected).
 
 Writes happen **after** the send promise resolves and are deliberately
 swallowed on failure: the message went out, and a missing bookkeeping entry
@@ -608,11 +669,12 @@ Electron dev uses `local`; hosted pages use their HTTP origin. Without this,
 the quota loader treats a working proxy as a transient disconnected runtime
 and skips the initial load.
 
-Quotas, MCP status, skills, agent memory and the Linear/GitHub logins are all
+Quotas, MCP status, skills, agent memory and the tracker and source-control logins are all
 served by whichever OpenChamber instance is connected, and each was cached
 globally or by directory alone — which two instances can share. A switch left
-the previous instance's answers on screen, and its Linear login usable against
-a runtime that has no Linear. `apps/runtimeEndpointReset.ts` now drops all of
+the previous instance's answers on screen, and its tracker login usable against
+a runtime that has no such tracker. The tracker list itself is per runtime
+too (`lib/trackers/registry.ts`). `apps/runtimeEndpointReset.ts` now drops all of
 them, each store guarding its own in-flight requests with a generation so a
 response for the previous instance cannot land in the new one. The MCP and
 skills effects take `isConnected` as a dependency — not a gate — because

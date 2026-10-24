@@ -165,6 +165,108 @@ describe('session assist runtime', () => {
     vi.unstubAllGlobals();
   });
 
+  // A client keeps a left chat's OpenCode location until its assist is done:
+  // the assist reads the session's directory, which would start it again.
+  describe('pending announcements', () => {
+    const records = [
+      { id: 'msg_idle', type: 'idle', outcome: 'succeeded' },
+      { id: 'msg_a', type: 'assistant', content: [{ type: 'text', text: 'All done.' }], finish: 'stop', time: { completed: 2 }, model: { providerID: 'p', id: 'm' } },
+      { id: 'msg_u', type: 'user', text: 'Do the thing' },
+    ];
+    const serveSession = () => vi.stubGlobal('fetch', vi.fn(async (input) => {
+      const url = new URL(String(input));
+      let body;
+      if (url.pathname === '/api/session/ses_1') body = { data: { id: 'ses_1', location: { directory: '/chat' } } };
+      else if (url.pathname === '/api/session/ses_1/message') body = { data: records.slice(0, Number(url.searchParams.get('limit'))), cursor: {} };
+      else throw new Error(`unexpected ${url.pathname}`);
+      return new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    const settle = async (changes) => {
+      for (let i = 0; i < 40 && !changes.some((change) => change.pending === false); i += 1) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    };
+    const run = (overrides) => {
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const changes = [];
+      const persistSessionAssist = vi.fn(async () => undefined);
+      const { runtime } = makeRuntime({
+        persistSessionAssist,
+        buildOpenCodeUrl: (fetchPath) => `http://opencode.test${fetchPath}`,
+        onPendingChange: (change) => changes.push(change),
+        getSmallModelService: async () => ({
+          describeSmallModel: async () => ({ inputCharBudget: 20_000 }),
+          generateSmallModelText: async () => ({ text: '{"recap":"Did the thing.","suggestion":"Verify it."}' }),
+        }),
+        ...overrides,
+      });
+      return { runtime, changes, persistSessionAssist };
+    };
+    afterEach(() => vi.unstubAllGlobals());
+
+    it('announces the wait at the turn end and its end once the assist is written', async () => {
+      serveSession();
+      const { runtime, changes, persistSessionAssist } = run();
+
+      runtime.processPayload(idle(), '/chat');
+      expect(changes).toEqual([{ sessionId: 'ses_1', directory: '/chat', pending: true }]);
+      await settle(changes);
+
+      expect(persistSessionAssist).toHaveBeenCalledTimes(1);
+      expect(changes).toEqual([
+        { sessionId: 'ses_1', directory: '/chat', pending: true },
+        { sessionId: 'ses_1', directory: '/chat', pending: false },
+      ]);
+    });
+
+    it('announces nothing when the recap and the suggestion are both off', async () => {
+      const { runtime, changes } = run({ getTargets: () => ({ recap: false, suggestion: false }) });
+
+      runtime.processPayload(idle(), '/chat');
+      await new Promise((resolve) => setTimeout(resolve, 20));
+
+      expect(changes).toEqual([]);
+    });
+
+    it('ends the wait when the turn-end check rules both fields out', async () => {
+      const { runtime, changes } = run({ evaluateTurn: async () => ({ recap: false, suggestion: false }) });
+
+      runtime.processPayload(idle(), '/chat');
+      await settle(changes);
+
+      expect(changes.map((change) => change.pending)).toEqual([true, false]);
+    });
+
+    it('ends the wait when generation fails', async () => {
+      serveSession();
+      const { runtime, changes, persistSessionAssist } = run({
+        getSmallModelService: async () => ({
+          describeSmallModel: async () => ({ inputCharBudget: 20_000 }),
+          generateSmallModelText: async () => { throw new Error('provider down'); },
+        }),
+      });
+
+      runtime.processPayload(idle(), '/chat');
+      await settle(changes);
+
+      expect(persistSessionAssist).not.toHaveBeenCalled();
+      expect(changes.map((change) => change.pending)).toEqual([true, false]);
+    });
+
+    it('ends the wait when a new turn starts first', async () => {
+      const { runtime, changes } = run({ quietMs: 60_000 });
+
+      runtime.processPayload(idle(), '/chat');
+      runtime.processPayload({ type: 'session.status', properties: { sessionID: 'ses_1', status: { type: 'busy' } } }, '/chat');
+
+      expect(changes).toEqual([
+        { sessionId: 'ses_1', directory: '/chat', pending: true },
+        { sessionId: 'ses_1', directory: '/chat', pending: false },
+      ]);
+    });
+  });
+
   it('discards the result when a new turn starts during the final archive check', async () => {
     vi.spyOn(console, 'log').mockImplementation(() => {});
     const persistSessionAssist = vi.fn(async () => undefined);

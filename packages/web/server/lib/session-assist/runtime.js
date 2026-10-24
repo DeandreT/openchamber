@@ -126,6 +126,11 @@ export const createSessionAssistRuntime = ({
   // `../session-lineage.js`: a known subsession never gets an assist, so its
   // turn end arms nothing and reads nothing.
   lineage = null,
+  // Called with `{ sessionId, directory, pending }` when a session's assist
+  // starts waiting (turn end) and when it is written, skipped, failed or
+  // dropped. Clients keep a chat's OpenCode location until then: the assist
+  // reads the session's directory, and reading a stopped one starts it again.
+  onPendingChange = () => {},
 }) => {
   const timers = new Map();
   // Turn ends waiting for `evaluateTurn`; a newer event replaces or drops the entry.
@@ -134,7 +139,20 @@ export const createSessionAssistRuntime = ({
   const ready = new Map();
   // Sessions holding an assist this process wrote, keyed to their directory.
   const persisted = new Map();
+  // Sessions announced as waiting for an assist, keyed to their directory.
+  const announced = new Map();
   let stopped = false;
+
+  // Announces only transitions, after every change to the four maps above.
+  const announce = (sessionId, directory = '') => {
+    const pending = !stopped && (gates.has(sessionId) || timers.has(sessionId)
+      || inflight.has(sessionId) || ready.has(sessionId));
+    if (pending === announced.has(sessionId)) return;
+    const announcedDirectory = pending ? directory : announced.get(sessionId);
+    if (pending) announced.set(sessionId, directory);
+    else announced.delete(sessionId);
+    onPendingChange({ sessionId, directory: announcedDirectory, pending });
+  };
 
   const clearTimer = (sessionId) => {
     const existing = timers.get(sessionId);
@@ -149,6 +167,7 @@ export const createSessionAssistRuntime = ({
     gates.delete(sessionId);
     ready.delete(sessionId);
     inflight.get(sessionId)?.controller.abort();
+    announce(sessionId);
   };
 
   // A new turn makes the stored recap and suggestion describe an older turn:
@@ -292,6 +311,7 @@ export const createSessionAssistRuntime = ({
           ready.delete(sessionId);
           startGeneration(sessionId, next.directory, next.armedAt, next.allowed);
         }
+        announce(sessionId);
       });
   };
 
@@ -300,9 +320,11 @@ export const createSessionAssistRuntime = ({
     const timer = setTimeout(() => {
       timers.delete(sessionId);
       startGeneration(sessionId, directory, armedAt, allowed);
+      announce(sessionId);
     }, quietMs);
     timer.unref?.();
     timers.set(sessionId, { timer, armedAt });
+    announce(sessionId, directory);
   };
 
   const ALL_FIELDS = { recap: true, suggestion: true };
@@ -312,21 +334,29 @@ export const createSessionAssistRuntime = ({
   const onTurnEnd = (sessionId, directory) => {
     clearTimer(sessionId);
     const armedAt = Date.now();
+    // Both fields off: nothing to generate, so nothing waits.
+    const enabled = getTargets();
+    if (!enabled.recap && !enabled.suggestion) {
+      gates.delete(sessionId);
+      announce(sessionId);
+      return;
+    }
     if (typeof evaluateTurn !== 'function') {
       armTimer(sessionId, directory, armedAt, ALL_FIELDS);
       return;
     }
     const gate = { armedAt };
     gates.set(sessionId, gate);
+    announce(sessionId, directory);
     Promise.resolve()
-      .then(() => evaluateTurn({ sessionId, directory, assist: getTargets() }))
+      .then(() => evaluateTurn({ sessionId, directory, assist: enabled }))
       .catch(() => null)
       .then((allowed) => {
         if (stopped || gates.get(sessionId) !== gate) return;
         gates.delete(sessionId);
         const fields = allowed ?? ALL_FIELDS;
-        if (!fields.recap && !fields.suggestion) return;
-        armTimer(sessionId, directory, armedAt, fields);
+        if (fields.recap || fields.suggestion) armTimer(sessionId, directory, armedAt, fields);
+        announce(sessionId);
       });
   };
 

@@ -8,7 +8,8 @@
  * going through `ChatMessage`. So does a background subagent run, which v2
  * reports as a synthetic message (see `@/lib/opencode/subagent-run`), and the
  * result of a session the agent dispatched with `returnResult` (see
- * `@/lib/opencode/dispatched-session`).
+ * `@/lib/opencode/dispatched-session`), and a session notice that landed
+ * between turns (see `@/lib/opencode/session-notices`).
  */
 
 import React from 'react';
@@ -18,9 +19,12 @@ import { Button } from '@/components/ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { ReasoningTimelineBlock } from './parts/ReasoningPart';
 import ToolPart from './parts/ToolPart';
+import { getLastOutputLine } from './parts/toolOutput';
 import { OPENCODE_TOOLS } from '@/lib/opencode/tools';
 import { isRunningSubagentRunMessage, readSubagentRun, type SubagentRun } from '@/lib/opencode/subagent-run';
 import { readDispatchedSessionResult, type DispatchedSessionResult } from '@/lib/opencode/dispatched-session';
+import { readSessionNotice } from '@/lib/opencode/session-notices';
+import { SessionNoticeBlock } from './SessionNoticeBlock';
 import { openSessionLink } from '@/lib/router/openSessionFromRoute';
 import type { IconName } from '@/components/icon/icons';
 import { useUIStore } from '@/stores/useUIStore';
@@ -89,11 +93,13 @@ const CompactionNotice: React.FC<{ message: Extract<Message, { role: 'compaction
     );
 };
 
+type ShellRow = { part: ToolPartType; failureReason?: string };
+
 /**
  * A `!command` run is shown as the shell tool the agent would have called, so
  * both read the same: the tool row renders it from a synthesized tool part.
  */
-const toShellToolPart = (message: Extract<Message, { role: 'shell' }>): ToolPartType => {
+const toShellRow = (message: Extract<Message, { role: 'shell' }>): ShellRow => {
     const input = { command: message.command };
     const start = message.time.created;
     const end = message.time.completed ?? start;
@@ -112,25 +118,36 @@ const toShellToolPart = (message: Extract<Message, { role: 'shell' }>): ToolPart
         tool: OPENCODE_TOOLS.shell,
     };
     if (message.status === 'running') {
-        return { ...base, state: { status: 'running', input, metadata: { output }, time: { start } } };
+        return { part: { ...base, state: { status: 'running', input, metadata: { output }, time: { start } } } };
     }
     if (failed) {
         const detail = message.signal ?? message.exit;
         const reason = detail !== undefined ? `${message.status} (${detail})` : message.status;
-        return { ...base, state: { status: 'error', input, error: reason, output, time: { start, end } } };
+        // A command that ran to its end prints why it failed as its last line;
+        // for one killed or timed out, how it ended is the reason. A truncated
+        // output keeps only its start, so its last line is not the end.
+        const lastLineIsReason = message.status === 'exited'
+            && message.signal === undefined
+            && message.output?.truncated !== true;
+        return {
+            part: { ...base, state: { status: 'error', input, error: reason, output, time: { start, end } } },
+            failureReason: (lastLineIsReason ? getLastOutputLine(output) : undefined) ?? reason,
+        };
     }
-    return { ...base, state: { status: 'completed', input, output, time: { start, end } } };
+    return { part: { ...base, state: { status: 'completed', input, output, time: { start, end } } } };
 };
 
-const ShellNotice: React.FC<{ message: Extract<Message, { role: 'shell' }> }> = ({ message }) => {
+// A shell row that opens the session gets the top spacing a first user
+// message has, so `!pwd` as the first prompt does not sit against the top.
+const ShellNotice: React.FC<{ message: Extract<Message, { role: 'shell' }>; isFirstRow: boolean }> = ({ message, isFirstRow }) => {
     const isMobile = useUIStore((state) => state.isMobile);
     const [expanded, setExpanded] = React.useState(false);
-    const part = React.useMemo(() => toShellToolPart(message), [message]);
+    const { part, failureReason } = React.useMemo(() => toShellRow(message), [message]);
     const toggle = React.useCallback(() => setExpanded((value) => !value), []);
 
     return (
-        <NoticeRow>
-            <ToolPart part={part} isExpanded={expanded} onToggle={toggle} isMobile={isMobile} />
+        <NoticeRow spacingClassName={cn('pb-2', isFirstRow && (isMobile ? 'pt-2' : 'pt-4'))}>
+            <ToolPart part={part} isExpanded={expanded} onToggle={toggle} isMobile={isMobile} failureReason={failureReason} />
         </NoticeRow>
     );
 };
@@ -314,14 +331,22 @@ const SubagentNotice: React.FC<{ message: SyntheticMessage }> = ({ message }) =>
  * The timeline row for a message, or `null` when the caller should render the
  * message itself.
  */
-export const TimelineNotice: React.FC<{ message: Message }> = ({ message }) => {
+export const TimelineNotice: React.FC<{ message: Message; isFirstRow?: boolean }> = ({ message, isFirstRow = false }) => {
+    const notice = readSessionNotice(message);
+    if (notice) {
+        return (
+            <NoticeRow>
+                <SessionNoticeBlock notice={notice} blockId={`notice:${message.id}`} />
+            </NoticeRow>
+        );
+    }
     switch (message.role) {
         case 'synthetic':
             return <SubagentNotice message={message} />;
         case 'compaction':
             return <CompactionNotice message={message} />;
         case 'shell':
-            return <ShellNotice message={message} />;
+            return <ShellNotice message={message} isFirstRow={isFirstRow} />;
         default:
             return null;
     }

@@ -73,7 +73,7 @@ export function registerGitRoutes(app, {
   networkOperations, managedSshInventory, getSourceControlBinding, contributorProvenance, resolveChangeRequestSource,
   backfillIdentities,
   createHttpsCredentialReference, resolveSourceControlAccount, errorRedactionSecrets = [], worktreeBootstrapStore,
-  emitWorktreeChanged, buildOpenCodeUrl, getOpenCodeAuthHeaders,
+  emitWorktreeChanged, buildOpenCodeUrl, getOpenCodeAuthHeaders, onBranchRewritten,
 } = {}) {
   let gitLibraries = null;
   const getGitLibraries = async () => {
@@ -88,6 +88,8 @@ export function registerGitRoutes(app, {
 
   // A path from an earlier status listing that no longer resolves is a stale
   // row or a nested repository, not a server fault.
+  // The client splits a larger changeset into requests of this size.
+  const GIT_DIFFS_MAX_PATHS = 1000;
   const GIT_PATH_ERROR_STATUS = new Map([['path_not_found', 404], ['nested_repository', 422], ['untracked_directory', 422]]);
   const sendGitPathError = (res, error) => {
     const status = GIT_PATH_ERROR_STATUS.get(error?.code);
@@ -908,6 +910,38 @@ export function registerGitRoutes(app, {
     }
   });
 
+  // The same reads as GET /api/git/diff for many paths of one side, so a
+  // client that needs a whole changeset makes one request instead of one per
+  // file. Per-path failures are entries of the answer, not a failed request.
+  app.post('/api/git/diffs', async (req, res) => {
+    const { getPathDiffs } = await getGitLibraries();
+    try {
+      const directory = req.query.directory;
+      if (!isString(directory) || !directory) {
+        return res.status(400).json({ error: 'directory parameter is required' });
+      }
+
+      const paths = req.body?.paths;
+      if (!Array.isArray(paths) || paths.length === 0 || paths.length > GIT_DIFFS_MAX_PATHS || !paths.every((path) => isString(path) && path)) {
+        return res.status(400).json({ error: `paths must be 1 to ${GIT_DIFFS_MAX_PATHS} non-empty strings` });
+      }
+
+      const staged = req.body?.staged === true;
+      const context = Number(req.body?.context);
+
+      const diffs = await getPathDiffs(directory, {
+        paths,
+        staged,
+        contextLines: Number.isInteger(context) && context >= 0 ? context : 3,
+      });
+
+      res.json({ diffs });
+    } catch (error) {
+      console.error('Failed to get git diffs:', error);
+      res.status(500).json({ error: error.message || 'Failed to get git diffs' });
+    }
+  });
+
   app.get('/api/git/file-diff', async (req, res) => {
     const { getFileDiff } = await getGitLibraries();
     try {
@@ -1235,6 +1269,24 @@ export function registerGitRoutes(app, {
       res.status(500).json({ error: error.message || 'Failed to remove remote' });
     }
   });
+
+  // A review host's preflight: gives the checked-out commit the Change-Id
+  // trailer its commit-msg hook would have added, computed locally.
+  app.post('/api/git/change-id', userAction(async (req, res) => {
+    const directory = resolveDirectoryQuery(req.query?.directory);
+    if (!directory) return res.status(400).json({ error: 'directory parameter is required' });
+    try {
+      const { addChangeIdToHead } = await import('../source-control/change-id.js');
+      const { sha, changeId, branch } = await addChangeIdToHead(directory, req.body?.expectedHead);
+      // The cached status of that branch was read for the old tip.
+      onBranchRewritten?.({ directory, branch });
+      return res.json({ sha, changeId });
+    } catch (error) {
+      if (Number.isInteger(error?.status) && error.status < 500) return res.status(error.status).json({ error: error.message, code: error.code });
+      console.error('Failed to add a Change-Id:', error?.message);
+      return res.status(500).json({ error: 'Failed to add a Change-Id', code: error?.code ?? 'CHANGE_ID_FAILED' });
+    }
+  }));
 
   app.post('/api/git/rebase', userAction(async (req, res) => {
     const { rebase } = await getGitLibraries();

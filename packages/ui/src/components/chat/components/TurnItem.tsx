@@ -3,7 +3,6 @@ import React from 'react';
 import { useDeviceInfo } from '@/lib/device';
 import { useUIStore } from '@/stores/useUIStore';
 import { cn } from '@/lib/utils';
-import { isTurnOpeningNotice } from '../lib/timelineRoles';
 import { isHiddenUserMessage } from '../message/hiddenUserMessage';
 import type { ChatMessageEntry, Turn } from '../lib/turns/types';
 import TurnAssistantBlock from './TurnAssistantBlock';
@@ -42,12 +41,13 @@ const STICKY_HEADER_BACKGROUND_MOBILE = stickyHeaderBackground('0.75rem');
 const TurnItem: React.FC<TurnItemProps> = ({ turn, renderMessage, assistantContent }) => {
     const { isMobile } = useDeviceInfo();
     const stickyUserHeader = useUIStore((state) => state.stickyUserHeader);
-    // A hidden prompt has nothing to pin, and a background report or a
-    // compaction opens its turn as a notice row, which never sticks.
+    // A hidden prompt has nothing to pin, and a turn opened by anything but
+    // a prompt (a background report, a compaction, a notice after an answer)
+    // opens as a notice row, which never sticks.
     const headerSticks = React.useMemo(
         () => stickyUserHeader
-            && !isHiddenUserMessage(turn.userMessage)
-            && !isTurnOpeningNotice(turn.userMessage.info),
+            && turn.userMessage.info.role === 'user'
+            && !isHiddenUserMessage(turn.userMessage),
         [stickyUserHeader, turn.userMessage]
     );
 
@@ -74,6 +74,9 @@ const TurnItem: React.FC<TurnItemProps> = ({ turn, renderMessage, assistantConte
                 renderMessage(turn.userMessage)
             )}
 
+            {turn.waitingNotices?.map((notice) => (
+                <React.Fragment key={notice.info.id}>{renderMessage(notice)}</React.Fragment>
+            ))}
             {assistantContent ?? <TurnAssistantBlock turnId={turn.turnId} assistantMessages={turn.assistantMessages} renderMessage={renderMessage} />}
         </section>
     );

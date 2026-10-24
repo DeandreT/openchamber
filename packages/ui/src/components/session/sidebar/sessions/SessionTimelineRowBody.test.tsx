@@ -28,10 +28,15 @@ afterEach(async () => {
 
 const title = 'درخواست پاسخ فارسی با React';
 
-const renderRow = (compact: boolean, overrides: Partial<React.ComponentProps<typeof SessionTimelineRowBody>> = {}) => root.render(<SessionTimelineRowBody
+const renderRow = (
+  compact: boolean,
+  projectLine = false,
+  overrides: Partial<React.ComponentProps<typeof SessionTimelineRowBody>> = {},
+) => root.render(<SessionTimelineRowBody
   compact={compact}
   project={null}
-  projectLabel={null}
+  projectLabel={projectLine ? 'openchamber' : null}
+  projectLine={projectLine}
   title={title}
   titleClassName=""
   branchLabel={null}
@@ -48,17 +53,18 @@ const renderRow = (compact: boolean, overrides: Partial<React.ComponentProps<typ
 
 // A truncated title in an LTR box clips an RTL title's beginning, because its
 // first word sits at the right edge. dir=auto lets the title own its direction.
-for (const compact of [true, false]) {
-  test(`the title resolves its own direction (compact: ${compact})`, async () => {
-    await act(async () => renderRow(compact));
-    const element = Array.from(document.querySelectorAll('div')).find((node) => node.textContent === title);
+for (const [compact, projectLine] of [[true, false], [false, false], [false, true]] as const) {
+  test(`the title resolves its own direction (compact: ${compact}, project line: ${projectLine})`, async () => {
+    await act(async () => renderRow(compact, projectLine));
+    // The innermost box holding the title is the one that truncates it.
+    const element = Array.from(document.querySelectorAll('div')).reverse().find((node) => node.textContent === title);
     expect(element?.getAttribute('dir')).toBe('auto');
   });
 }
 
 for (const compact of [true, false]) {
   test(`project and provider marks follow the selected row density (compact: ${compact})`, async () => {
-    await act(async () => renderRow(compact, {
+    await act(async () => renderRow(compact, false, {
       project: { id: 'workspace' },
       projectLabel: 'Workspace',
       providerId: 'openai',
@@ -72,3 +78,11 @@ for (const compact of [true, false]) {
     expect(titleElement?.parentElement?.contains(providerMark)).toBe(compact);
   });
 }
+
+// The list by time names the project above the title, with the time beside
+// it, and keeps the branch line, so a row has three lines.
+test('a project line puts the project and time above the title', async () => {
+  await act(async () => renderRow(false, true));
+  const lines = Array.from(document.querySelector('.flex-col')?.children ?? []).map((line) => line.textContent);
+  expect(lines).toEqual(['openchamber1m', title, '']);
+});
