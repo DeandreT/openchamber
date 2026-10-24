@@ -185,6 +185,10 @@ fn step_stats(message: &Message) -> Option<StepStats> {
 
 /// The final reply's output over its merged text intervals; `None` for a
 /// step that failed, ran tools, or whose text times fall outside its window.
+/// A history read stamps text with the step's own creation, which is no
+/// measured first token: dividing by it would count the initial wait, so a
+/// start at the creation leaves the rate unknown, as after a reload on the
+/// web.
 fn response_rate(message: &Message) -> Option<f64> {
     let facts = message.info.assistant.as_ref()?;
     if facts.outcome.error.is_some()
@@ -212,7 +216,7 @@ fn response_rate(message: &Message) -> Option<f64> {
         let (Some(start), Some(end)) = (part.time.start, part.time.end) else {
             return None;
         };
-        if start < created || end > completed || end <= start {
+        if start <= created || end > completed || end <= start {
             return None;
         }
         intervals.push((start, end));
@@ -389,8 +393,9 @@ mod tests {
         }
     }
 
-    /// The reference's `parity: long` turn: one 0.55 s text step 0.6 s after
-    /// the prompt.
+    /// The reference's `parity: long` turn read from history: one 0.55 s
+    /// text step 0.6 s after the prompt, its text stamped with the step's
+    /// creation.
     #[test]
     fn a_text_only_turn_reads_as_the_reference() {
         let messages = [
@@ -406,7 +411,11 @@ mod tests {
             "the creation stamp is no first token"
         );
         assert_eq!(
-            format_rate(stats.response_tokens_per_second.expect("measured")),
+            stats.response_tokens_per_second, None,
+            "a creation stamp measures no response"
+        );
+        assert_eq!(
+            format_rate(stats.tokens_per_second.expect("measured")),
             "~4107 tok/s"
         );
         assert_eq!(
@@ -442,6 +451,16 @@ mod tests {
         assert_eq!(
             format_rate(stats.tokens_per_second.expect("measured")),
             "~667 tok/s"
+        );
+    }
+
+    #[test]
+    fn streamed_text_times_measure_the_response() {
+        let messages = [user(0), step(100, Some(1_100), 600, vec![text(400, 1_000)])];
+        let stats = latest_completed_turn(&messages).expect("a completed turn");
+        assert_eq!(
+            format_rate(stats.response_tokens_per_second.expect("measured")),
+            "~1000 tok/s"
         );
     }
 
