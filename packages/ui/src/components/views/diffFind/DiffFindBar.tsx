@@ -3,7 +3,6 @@ import React from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Icon } from '@/components/icon/Icon';
-import { Spinner } from '@/components/ui/spinner';
 import { isIMECompositionEvent } from '@/lib/ime';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
@@ -21,7 +20,7 @@ export type DiffFindBarProps = {
   currentIndex: number;
   /**
    * True while files in the changeset are still being read, so `total` will
-   * keep growing. Shown as a small spinner beside the count.
+   * keep growing. Shown as a `+` after the total.
    */
   isSearching: boolean;
   /** Files whose read failed; their matches are missing from `total`. */
@@ -46,8 +45,9 @@ export type DiffFindBarProps = {
  * count and the navigation controls.
  *
  * `isSearching` says the changeset is still being read, so the count is not
- * final yet — the spinner beside it makes that visible instead of leaving the
- * reader to wonder why matches trickle in.
+ * final yet: the total reads `12+` until the last file is in. A `+` keeps the
+ * controls still, where a spinner appearing and leaving beside the count moved
+ * the arrows on every search.
  */
 export const DiffFindBar: React.FC<DiffFindBarProps> = ({
   query,
@@ -80,11 +80,14 @@ export const DiffFindBar: React.FC<DiffFindBarProps> = ({
 
   // "No matches" is a verdict, so it waits until every file has been read.
   const hasQuery = query.trim().length > 0 && !isSearching;
-  const countLabel = total > 0
+  const matchesLabel = total > 0
     ? t('diffFind.countAria', { current: currentIndex + 1, total })
     : hasQuery
       ? t('diffFind.noMatches')
       : undefined;
+  const countLabel = isSearching
+    ? [matchesLabel, t('diffFind.searchingAria')].filter(Boolean).join(', ')
+    : matchesLabel;
 
   const handleKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
     // An Escape that dismisses an IME candidate window is not ours: closing the
@@ -127,14 +130,9 @@ export const DiffFindBar: React.FC<DiffFindBarProps> = ({
           {hasQuery && total === 0
             ? t('diffFind.noMatches')
             : total > 0
-              ? `${currentIndex + 1}/${total}`
+              ? `${currentIndex + 1}/${total}${isSearching ? '+' : ''}`
               : ''}
         </span>
-        {isSearching && (
-          <span role="status" aria-label={t('diffFind.searchingAria')} className="me-0.5 flex shrink-0">
-            <Spinner className="size-3.5 text-muted-foreground" />
-          </span>
-        )}
         <Button
           type="button"
           variant="ghost"

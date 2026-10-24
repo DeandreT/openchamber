@@ -19,10 +19,71 @@ The transcript is a LegendList (`@legendapp/list`) owned by `useChatTimelineScro
 - **Folded work above the reader closes without moving them.** When a turn settles in the Collapsed activity mode, its work folds away above the answer. A fold entirely above the visible area (under the sticky header, when it sticks) closes at once, and `holdAnchor` (`holdAnchor.ts`) keeps the content after it where it was; a fold in view animates as before. Without this the answer jumped up by the fold's height under a reader held at its start, since the scroller has `overflow-anchor: none` and the list compensates only rows above the viewport.
 - **Sending glides to the true end.** `scrollToBottomOnSend` asks for a follow glide at once (a snap with reduced motion), and for the send window (`SEND_GLIDE_WINDOW_MS`) every growth glides to the true end, so the sent row and the start of the reply end up whole above the composer. A reader who scrolled away is brought back with a jump, as before.
 - **"At the end" for chrome holds only for the follow's own movement.** `viewportAtEnd` (the recap hint above the composer reads it) stays true while a follow glide is passing through the viewport's position (`isPositionHeldByFollow` in `followScroll.ts`): text arrives ahead of the glide, and measuring then flipped it several times a second, fading the hint in and out. Any other scroll (a gesture, the scrollbar thumb, find in page, `scrollIntoView`) is measured. The measurement runs only on scroll events, so it is also false while the scroll-to-bottom pill is offered: a follow stop leaves the viewport within the 40 px band, and the turn footer that lands below it afterwards fires no scroll, which left the hint shown on top of the pill.
+- **A gesture over a page frame releases the follow too.** The follow lets go only on gesture events the scroll node hears: a wheel up, a vertical swipe, a middle-button pan, an upward key. A wheel or swipe over an `openchamber_render` page scrolls the transcript around the frame, but its events stay inside the frame, so while a reply streamed the follow pulled the reader back to the end on every landing. The page reports each such gesture's direction, and its frame raises it as an `openchamber:frame-scroll` event (`dispatchFrameScroll` / `onFrameScroll` in `timelineScrollIntent.ts`) that the hook reads like touch: up releases, down releases only away from the end.
+- **Opening a row lets go of the end.** A tool, an agent task, a reasoning block or the folded work opens below its header. Held on the end, the reader saw the viewport slide down by the whole row as it grew, and the header they clicked went off the top. The row raises `openchamber:row-expand` (`dispatchRowExpand` / `onRowExpand` in `timelineScrollIntent.ts`) from its element as it opens, before its state changes, and the hook takes it as a gesture: the follow is released, the header stays where it was, and the content opens below it. That also holds while a turn runs, as a scroll up would. Two more pieces belong to it:
+  - The list keeps its own hold on the end it opened the session at (`initialScrollAtEnd`) until the reader scrolls, and re-asserted that end as the row grew. Any scroll command ends the hold, so the release issues one to where the viewport already is.
+  - Growth below a released reader fires no scroll event, so the list never reports them leaving the end. `onTimelineDataChange` measures it instead and offers the pill once the last row passes the visible bottom, as it does with auto-follow off. Closing the row brings the end back to them just as silently, and the follow resumes once the content ends exactly at the viewport's bottom: a closing row animates, and within the usual 40 px band the follow came back mid-animation and pulled the closing header up for a few frames. A row that grew by less than the band never left the reader off the end, so no at-end change fires for it: the hook remembers that a row opening released the follow (`rowExpandReleaseRef`) and resumes it once that row has grown and the content ends at the viewport's bottom again. Without this, the next reply that did not start from this composer went by unfollowed and with no pill.
+  - Closing a row raises nothing: the content below its header shrinks, and only a reader on the end moves, by what the browser clamps.
 
 - **The list header never changes height.** The "Load older" header in `ChatContainer.tsx` is a fixed 48 px slot that is always there; only the button inside it toggles (shown while older history exists and the viewport is within two viewport heights of the top, `nearContentStart` from the hook). LegendList compensates a header size change only while `maintainVisibleContentPosition.size` is on, which is off for a reader on the end, so a header that came and went moved the whole transcript by its height mid-glide (after a revert, the send hid it). Anything else rendered above the rows has to keep its height for the same reason.
 
 - **A side column's width animation holds the end on every frame and defers the rest to its end.** While the session sidebar or the right slot animates its width (`lib/layoutAnimation.ts`, 240 ms), the transcript re-wraps on every frame. The pinned-end write runs on each of them, through the same measured end as a window resize, offset by where the reader sat relative to that end when the animation began (a reader on the document's end sits a few px below it, and the text hopped by that much at every toggle): deferred to the end of the animation, as it once was, the end slid down out of view (over 1000 px as a 640 px panel opened beside a long reply) and jumped back when the animation ended. The active-turn spy, markdown table relayout and the scroll-shadow check each forced a transcript layout per frame; they queue with `runWhenLayoutSettled` and run once, at the final width, one frame after the animation ends, and the end is asserted once more then. Markdown tables are the exception among those: they refit on every frame from column widths measured once (`stabilizeMarkdownTableWidths` with `cachedOnly`), so they move with the prose; only a table that needs measuring waits for the end.
+
+## Connected scroll work
+
+Effect cleanup cancels follow frames and clears their scheduling sentinel, and
+clears the return-to-end reassert timers. Retained hook state can schedule a new
+frame after setup without changing the reader's follow intent. A cancelled
+follow callback cannot consume a later connection's pending frame.
+
+History navigation belongs to the controller's current connected lifetime as
+well as its session identity. Cleanup retires that lifetime, releases local
+render waiters and stops the mobile prepend watchdog. An authoritative loader
+request already sent may still publish its page, but its obsolete local search
+cannot request another batch or finish navigation after reconnect. MessageList
+owns one pending navigation alignment loop; replacement navigation, input,
+session change and layout cleanup cancel its frame and listeners.
+
+### Why cleanup retires navigation without cancelling the loader
+
+The loader owns shared history coverage and request reconciliation. A viewport
+owns only its navigation continuation, so ending that viewport's effects stops
+local movement and subsequent demand without discarding a valid shared read.
+
+## Session list retention
+
+`ChatViewport` keeps up to four `MessageList` subtrees, including the visible
+one, through `KeepAlive`; the mobile surface keeps only the visible one, because
+a phone's web view is killed under memory pressure. Entries are keyed by
+session ID: the composite session key also carries the directory, which settles
+after a session opens, and keying the pool by it retained a hidden second copy
+of the open session. Inside an entry the list still remounts on a session key
+change. The shown selection drives the LRU; loading, error,
+empty and draft placeholders hide the pool without replacing its host. Leaving
+the chat column releases the pool. Each stored JSX entry supplies its own
+`ChatColumnSessionContext`, so hidden messages retain their session identity.
+
+The scroll hook and timeline controller remain shared by the column. List
+registration names the composite session key; a late detach from a hidden list
+cannot clear the selected list. MessageList's imperative ref cleanup clears
+only its own handle, and DOM navigation resolves only its own scroller.
+Scroll-shadow cleanup clears the outgoing node's attributes because hidden
+scrollers remain siblings of the shared fade and still match its CSS selector.
+Restoration and reveal continue through the existing column logic.
+
+The UI pool does not pin histories or change loader retention. Returning to an
+entry supplies current authoritative messages through its existing props.
+Loader request generations do not control UI identity: a tail refresh can
+advance them without replacing history. Runtime changes replace the pool. Hidden JSX
+can retain old message references until LRU eviction or column teardown, so
+the entry limit is a count bound, not a byte budget.
+
+### Why the pool sits at MessageList
+
+This is the existing session-keyed replacement point. Retaining it preserves
+the list, turn state and mounted Markdown without duplicating the composer or
+the column's scroll controller. KeepAlive renders entries in stable key order;
+LRU promotion changes visibility without moving retained iframe DOM.
 
 ## Row identity
 

@@ -40,9 +40,9 @@ import { JsonTreeView } from '@/components/ui/JsonTreeView';
 import { SimpleMarkdownRenderer } from '@/components/chat/MarkdownRenderer';
 import { languageByExtension, loadLanguageByExtension } from '@/lib/codemirror/languageByExtension';
 import { createFlexokiCodeMirrorTheme } from '@/lib/codemirror/flexokiTheme';
-import { shikiHighlightExtension } from '@/lib/codemirror/shikiHighlight';
+import { codeHighlightExtension } from '@/lib/codemirror/codeHighlight';
 import { syncVimMappings } from '@/lib/codemirror/vimModeExtension';
-import { getResolvedShikiTheme } from '@/lib/shiki/appThemeRegistry';
+import { getCodeTokenTheme } from '@/lib/shiki/appThemeRegistry';
 import { File as PierreFile, VirtualizerContext, WorkerPoolContext } from '@pierre/diffs/react';
 import { useWorkerPool } from '@/contexts/DiffWorkerProvider';
 import { useFileViewVirtualizer, type FileViewVirtualizer } from './useFileViewVirtualizer';
@@ -80,6 +80,10 @@ import { highlightSelectionMatches } from '@codemirror/search';
 import { codeFolding } from '@/lib/codemirror/codeFolding';
 import { bracketAids, multipleCursors } from '@/lib/codemirror/editingAids';
 import { gitChangeGutter, setGitChangeBaseline } from '@/lib/codemirror/gitChangeGutter';
+import { importLinks, resolveRelativeImport } from '@/lib/codemirror/importLinks';
+import { indentGuides } from '@/lib/codemirror/indentGuides';
+import { isLintedJsonPath, jsonSyntaxLint } from '@/lib/codemirror/jsonSyntaxLint';
+import { stickyScope } from '@/lib/codemirror/stickyScope';
 import { useThemeSystem } from '@/contexts/useThemeSystem';
 import { normalizeContextPanelDirectoryKey, useUIStore } from '@/stores/useUIStore';
 import { useFilesViewTabsStore } from '@/stores/useFilesViewTabsStore';
@@ -90,11 +94,13 @@ import { moveWorkspacePath } from './files/moveWorkspacePath';
 import { areDirectoryNodesEqual, buildFileTreeStatusIndex } from './files/fileTreeStatus';
 import { BinaryArtifact } from './files/previews/BinaryArtifact';
 import { FontArtifact } from './files/previews/FontArtifact';
-import { ImageArtifact } from './files/previews/ImageArtifact';
+import { ImageArtifact, type ImageNeighbor } from './files/previews/ImageArtifact';
+import { imageNeighborsOf } from './files/imageNeighbors';
 import { MediaArtifact } from './files/previews/MediaArtifact';
 import { TableArtifact } from './files/previews/TableArtifact';
 import { useMarkdownLocalAssets } from './files/previews/useMarkdownLocalAssets';
 import { useHtmlPreviewUrl } from './files/useHtmlPreviewUrl';
+import { useHtmlPreviewAnnotation } from './files/useHtmlPreviewAnnotation';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { useEnterpriseMode } from '@/stores/useEnterprisePolicyStore';
 import { buildCodeMirrorCommentWidgets, FilePreviewCommentMenu, normalizeLineRange, useInlineCommentController } from '@/components/comments';
@@ -121,6 +127,7 @@ import {
 import { Icon } from "@/components/icon/Icon";
 import { useMessageTTS } from '@/hooks/useMessageTTS';
 import { ensurePierreThemeRegistered } from '@/lib/shiki/appThemeRegistry';
+import { DIFFS_HIGHLIGHTER, toDiffsLanguage } from '@/lib/shiki/diffsHighlighter';
 import { getDefaultTheme } from '@/lib/theme/themes';
 import { isBrowserClientRuntime, isDesktopLocalOriginActive, openDesktopFileInApp, openDesktopPath } from '@/lib/desktop';
 import { registerCloseTabTarget } from '@/lib/closeTabTarget';
@@ -195,7 +202,7 @@ const OpenInAppListIcon = ({ label, iconDataUrl }: { label: string; iconDataUrl?
     <span
       className={cn(
         'size-4 rounded-sm flex items-center justify-center',
-        'oc-tile-inset text-[9px] font-medium text-muted-foreground'
+        'oc-tile-inset text-[0.5625rem] font-medium text-muted-foreground'
       )}
     >
       {initial}
@@ -2768,6 +2775,50 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   const isUnsupportedBinary = isSelectedBinary && !isSelectedImage && !isSelectedPdf && !isSelectedMedia && !isSelectedFont;
   // Everything the viewer shows as an artifact rather than as text.
   const isSelectedNonText = isSelectedBinary || (isSelectedImage && !isSvgSource);
+
+  // The image viewer steps through the images of the shown image's folder, in
+  // the tree's order and with its hidden and gitignored settings. The folder is
+  // read again for every image shown, so files added or removed meanwhile
+  // count; the last listing keeps the arrows on screen while it is read. An
+  // image the listing leaves out (a gitignored one with those hidden) gets no
+  // arrows.
+  const imageFolder = visible && selectedFile && isSelectedImage && !isSvgSource ? getParentDirectoryPath(selectedFile.path) : '';
+  const [imageFolderListing, setImageFolderListing] = React.useState<{ scope: string; folder: string; readFor: string; entries: FileNode[] } | null>(null);
+  const imageFolderListingCurrent = Boolean(imageFolder && imageFolderListing?.scope === treeScope && imageFolderListing.folder === imageFolder);
+  const imageFolderHasSelected = Boolean(imageFolderListingCurrent && imageFolderListing?.entries.some((entry) => entry.path === selectedFilePath));
+  const imageFolderNeedsRead = Boolean(imageFolder) && !(imageFolderListingCurrent && imageFolderListing?.readFor === selectedFilePath);
+  React.useEffect(() => {
+    if (!imageFolderNeedsRead) return;
+    let cancelled = false;
+    const scope = treeScope;
+    const folder = imageFolder;
+    const readFor = selectedFilePath;
+    const respectGitignore = !showGitignored;
+    const read = files.listDirectory
+      ? files.listDirectory(folder, { respectGitignore }).then((result) => result.entries)
+      : opencodeClient.listLocalDirectory(folder, { respectGitignore });
+    read.then((entries) => {
+      if (cancelled || treeScopeRef.current !== scope) return;
+      setImageFolderListing({ scope, folder, readFor, entries: mapDirectoryEntries(folder, entries) });
+    }).catch((error) => {
+      // Without the listing the viewer simply shows no arrows.
+      if (!cancelled) console.warn('Failed to list the image folder:', error);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [files, imageFolder, imageFolderNeedsRead, mapDirectoryEntries, selectedFilePath, showGitignored, treeScope]);
+  const imageNeighbors = React.useMemo(() => {
+    if (!imageFolderHasSelected || !imageFolderListing || !panelRoot) return null;
+    const neighbors = imageNeighborsOf(imageFolderListing.entries, selectedFilePath);
+    if (!neighbors) return null;
+    // Opened like a single click in the tree: one preview tab follows the steps.
+    const toNeighbor = (node: FileNode): ImageNeighbor => ({
+      name: node.name,
+      open: () => useUIStore.getState().openContextFile(panelRoot, node.path, { preview: true }),
+    });
+    return { previous: toNeighbor(neighbors.previous), next: toNeighbor(neighbors.next) };
+  }, [imageFolderHasSelected, imageFolderListing, panelRoot, selectedFilePath]);
   const pendingNavigationTargetPath = React.useMemo(
     () => normalizePath(pendingFileNavigation?.path ?? ''),
     [pendingFileNavigation?.path],
@@ -3712,14 +3763,39 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
     },
   }), []);
 
+  // Cmd/Ctrl+click on a relative import opens the file it names. The handler
+  // reads the latest render through a ref, so the extension keeps its identity.
+  const openRelativeImportRef = React.useRef<(specifier: string) => void>(() => {});
+  openRelativeImportRef.current = (specifier) => {
+    const fromFile = selectedFile?.path;
+    if (!fromFile || !panelRoot) return;
+    void resolveRelativeImport(fromFile, specifier, async (directory) => {
+      try {
+        const listing = await files.listDirectory(directory);
+        return new Map(listing.entries.map((entry) => [entry.name, entry.isDirectory]));
+      } catch {
+        return null;
+      }
+    }).then((resolution) => {
+      if (resolution.status === 'found') {
+        useUIStore.getState().openContextFile(panelRoot, resolution.path);
+        return;
+      }
+      toast.error(resolution.status === 'missing'
+        ? t('filesView.editor.importNotFound', { path: specifier })
+        : t('filesView.editor.importLookupFailed', { path: specifier }));
+    });
+  };
+  const importLinksExtension = React.useMemo(() => importLinks((specifier) => openRelativeImportRef.current(specifier)), []);
+
   const editorExtensions = React.useMemo(() => {
     if (!selectedFile?.path) {
       return [createFlexokiCodeMirrorTheme(currentTheme, { fontSize: editorFontSize })];
     }
 
-    // Shiki token colors (worker-backed) match the Shiki file view exactly.
+    // Token colors from the file view's highlighter (see codeHighlight.ts).
     // Same language resolver as the view, so both agree on the language. When
-    // Shiki is the color source, drop the lezer token colors to avoid a
+    // it is the color source, drop the lezer token colors to avoid a
     // competing highlighter (Keep the lezer language for indentation/folding).
     const shikiLanguage = getLanguageFromExtension(selectedFile.path);
     const extensions = [createFlexokiCodeMirrorTheme(currentTheme, shikiLanguage ? { syntaxColors: false, fontSize: editorFontSize } : { fontSize: editorFontSize })];
@@ -3728,10 +3804,10 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
       extensions.push(language);
     }
     if (shikiLanguage) {
-      extensions.push(shikiHighlightExtension({
+      extensions.push(codeHighlightExtension({
         language: shikiLanguage,
         themeName: currentTheme.metadata.id,
-        theme: getResolvedShikiTheme(currentTheme),
+        theme: getCodeTokenTheme(currentTheme),
       }));
     }
     if (wrapLines) {
@@ -3743,13 +3819,26 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
         added: diffColors?.diffAdded ?? currentTheme.colors.status.success,
         modified: diffColors?.diffModified ?? currentTheme.colors.status.info,
         removed: diffColors?.diffRemoved ?? currentTheme.colors.status.error,
+      }, {
+        revert: t('filesView.editor.gitHunk.revert'),
+        close: t('filesView.editor.gitHunk.close'),
       }),
       highlightSelectionMatches({ highlightWordAroundCursor: true, minSelectionLength: 2 }),
       pinPreviewOnEditExtension,
       bracketAids(),
+      indentGuides(),
+      importLinksExtension,
     );
+    if (isLintedJsonPath(selectedFile.path)) {
+      extensions.push(jsonSyntaxLint(t('filesView.editor.jsonSyntaxError'), {
+        error: currentTheme.colors.status.error,
+        tooltipBackground: currentTheme.colors.surface.elevated,
+        tooltipForeground: currentTheme.colors.surface.elevatedForeground,
+        border: currentTheme.colors.interactive.border,
+      }));
+    }
     if (!isMobile) {
-      extensions.push(codeFolding(), multipleCursors({ vimMode: fileEditorKeymap === 'vim' }));
+      extensions.push(codeFolding(), multipleCursors({ vimMode: fileEditorKeymap === 'vim' }), stickyScope());
     }
     if (isMobile) {
       extensions.push(EditorView.updateListener.of((update) => {
@@ -3766,7 +3855,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
       }));
     }
     return extensions;
-  }, [currentTheme, selectedFile?.path, staticLanguageExtension, dynamicLanguageExtension, wrapLines, isMobile, nudgeEditorSelectionAboveKeyboard, editorFontSize, pinPreviewOnEditExtension, fileEditorKeymap]);
+  }, [currentTheme, selectedFile?.path, staticLanguageExtension, dynamicLanguageExtension, wrapLines, isMobile, nudgeEditorSelectionAboveKeyboard, editorFontSize, pinPreviewOnEditExtension, fileEditorKeymap, t, importLinksExtension]);
 
   const pierreTheme = React.useMemo(
     () => ({ light: lightTheme.metadata.id, dark: darkTheme.metadata.id }),
@@ -3783,13 +3872,26 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
 
   const htmlPreviewRequest = React.useMemo(
     () => (selectedFile?.path && isHtml && htmlViewMode === 'preview' && !runtime.isVSCode
-      ? { path: selectedFile.path, directory: root || '', revision: String(fileContentRevision) }
+      ? {
+        path: selectedFile.path,
+        directory: root || '',
+        revision: String(fileContentRevision),
+        outsideWorkspace: selectedFileReadOptions.allowOutsideWorkspace,
+      }
       : null),
-    [selectedFile?.path, isHtml, htmlViewMode, runtime.isVSCode, root, fileContentRevision],
+    [selectedFile?.path, isHtml, htmlViewMode, runtime.isVSCode, root, fileContentRevision, selectedFileReadOptions.allowOutsideWorkspace],
   );
 
   const assetAuthErrorFallback = t('filesView.error.readFileFailed');
   const htmlPreview = useHtmlPreviewUrl(htmlPreviewRequest, assetAuthErrorFallback);
+  const htmlPreviewFrameRef = React.useRef<HTMLIFrameElement | null>(null);
+  const htmlPreviewAnnotation = useHtmlPreviewAnnotation({
+    frameRef: htmlPreviewFrameRef,
+    directory: root,
+    pageKey: htmlPreview.status === 'ready' ? htmlPreview.url : '',
+  });
+  // Like the browser panel, annotation is a pointer tool: phones do not get it.
+  const canAnnotateHtmlPreview = !isMobile && htmlPreview.status === 'ready';
   React.useEffect(() => {
     if (htmlPreview.status === 'error') setFileError(htmlPreview.message);
     else if (htmlPreview.status === 'ready') setFileError(null);
@@ -3846,7 +3948,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   // for both the docked and the fullscreen viewer, so they cannot drift.
   const renderArtifactPreview = (file: FileNode): React.ReactNode => {
     if (isSelectedImage && !isSvgSource) {
-      return <ImageArtifact src={imageSrc} name={file.name} sizeBytes={artifactSize} />;
+      return <ImageArtifact src={imageSrc} name={file.name} sizeBytes={artifactSize} neighbors={imageNeighbors} />;
     }
     if (isSelectedPdf) return renderPdfPreview(file);
     if (isSelectedMedia) {
@@ -4022,17 +4124,13 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
     connectFullscreenVirtualizer(node);
     setFullscreenCodeScroller(node);
   }, [connectFullscreenVirtualizer, setFullscreenCodeScroller]);
-  const [mdPreviewNode, setMdPreviewNode] = React.useState<HTMLDivElement | null>(null);
-  const [mdFullscreenPreviewNode, setMdFullscreenPreviewNode] = React.useState<HTMLDivElement | null>(null);
   const setMainMarkdownScroller = React.useCallback((node: HTMLDivElement | null) => {
     markdownPreviewRef.current = node;
     mdPreviewContainerRef.current = node;
-    setMdPreviewNode(node);
     setMainMarkdownScroll(node);
   }, [setMainMarkdownScroll]);
   const setFullscreenMarkdownScroller = React.useCallback((node: HTMLDivElement | null) => {
     mdFullscreenPreviewContainerRef.current = node;
-    setMdFullscreenPreviewNode(node);
     setFullscreenMarkdownScroll(node);
   }, [setFullscreenMarkdownScroll]);
   // A relative link in a rendered Markdown file opens that file here; on
@@ -4044,16 +4142,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   }, [panelRoot]);
   const markdownLocalAssetsActive = isMarkdown && mdViewMode === 'preview' && !fileLoading;
   const markdownColorScheme = currentTheme.metadata.variant === 'light' ? 'light' : 'dark';
-  useMarkdownLocalAssets({
-    container: mdPreviewNode,
-    filePath: selectedFile?.path ?? null,
-    workspaceRoot: root || null,
-    onOpenFile: openLinkedFile,
-    enabled: markdownLocalAssetsActive,
-    colorScheme: markdownColorScheme,
-  });
-  useMarkdownLocalAssets({
-    container: mdFullscreenPreviewNode,
+  const markdownDocumentAssets = useMarkdownLocalAssets({
     filePath: selectedFile?.path ?? null,
     workspaceRoot: root || null,
     onOpenFile: openLinkedFile,
@@ -4062,7 +4151,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   });
   const shikiWorkerPool = useWorkerPool('unified');
   // Large code previews use the full draft with viewport virtualization and
-  // the shared Shiki worker pool. The threshold does not disable editing.
+  // the shared diff worker pool. The threshold does not disable editing.
   const isLargeFile = draftContent.length > LARGE_FILE_CHAR_THRESHOLD;
   const largeFileCacheKey = React.useMemo(
     () => (isLargeFile && codePreviewActive ? makeFileContentCacheKey(draftContent) : undefined),
@@ -4073,7 +4162,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
     const fileContents = {
       name: file.name,
       contents: content,
-      lang: getLanguageFromExtension(file.path) || undefined,
+      lang: toDiffsLanguage(getLanguageFromExtension(file.path)),
     };
     const pierreFile = (key: string) => (
       <PierreFile
@@ -4084,6 +4173,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
           overflow: wrapLines ? 'wrap' : 'scroll',
           theme: pierreTheme,
           themeType: currentTheme.metadata.variant === 'dark' ? 'dark' : 'light',
+          preferredHighlighter: DIFFS_HIGHLIGHTER,
           onPostRender: restoreScroll,
         }}
         className={isLargeFile ? 'block w-full' : 'block h-full w-full'}
@@ -4096,7 +4186,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
     }
 
     // Large files render through pierre's Virtualizer (viewport-only DOM) and
-    // the shared Shiki worker pool. The pool is created lazily: until it is
+    // the shared diff worker pool. The pool is created lazily: until it is
     // ready the key carries a 'pending' suffix so the file remounts with the
     // worker-backed highlighter instead of silently staying on the main thread.
     return (
@@ -4498,7 +4588,9 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
 
         {!isSelectedNonText && textViewMode === 'edit' && (
           <>
-            {withTooltip(t('filesView.editor.findInFile'),
+            {/* The Markdown preview has its own find button; this one drives the
+                editor, which the preview replaces. */}
+            {!(isMarkdown && getMdViewMode() === 'preview') && withTooltip(t('filesView.editor.findInFile'),
               <Button
                 variant="ghost"
                 size="sm"
@@ -4560,6 +4652,26 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
               saveHtmlViewMode(getHtmlViewMode() === 'preview' ? 'edit' : 'preview');
             }}
           />
+        )}
+
+        {canAnnotateHtmlPreview && (
+          withTooltip(t('contextPanel.browser.annotate.toggle'),
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={htmlPreviewAnnotation.toggle}
+              aria-pressed={htmlPreviewAnnotation.isAnnotating}
+              className={cn(
+                'size-6 p-0 transition-colors hover:bg-[var(--interactive-hover)] focus-visible:bg-[var(--interactive-hover)] active:bg-[var(--interactive-hover)]',
+                htmlPreviewAnnotation.isAnnotating
+                  ? 'bg-[var(--interactive-selection)] text-[var(--interactive-selection-foreground)] hover:bg-[var(--interactive-selection)] focus-visible:bg-[var(--interactive-selection)] active:bg-[var(--interactive-selection)]'
+                  : 'text-muted-foreground opacity-65 hover:opacity-100'
+              )}
+              aria-label={t('contextPanel.browser.annotate.toggle')}
+            >
+              <Icon name="markup" className="size-4" />
+            </Button>
+          )
         )}
 
         {isSelectedSvg && (
@@ -4888,7 +5000,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
               variant="outline"
               onClick={() => void saveAndContinue()}
               disabled={isSaving}
-              className="border-[var(--status-success-border)] bg-[var(--status-success-background)] text-[var(--status-success)] hover:bg-[rgb(var(--status-success)/0.2)]"
+              className="border-[var(--status-success-border)] bg-[var(--status-success-background)] text-[var(--status-success)] hover:bg-[var(--status-success)]/20"
             >
               {t('filesView.unsaved.saveChanges')}
             </Button>
@@ -5115,8 +5227,11 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
             >
               <div className="h-full overflow-auto">
                 <JsonTreeView
+                  className="h-full"
                   jsonString={fileContent}
-                  format={selectedFile.path.toLowerCase().endsWith('.jsonc') ? 'jsonc' : 'json'}
+                  // Config files under a .json name (tsconfig, opencode.json) carry
+                  // comments and trailing commas; the editor's check accepts them too.
+                  format="jsonc"
                   maxHeight="100%"
                   initiallyExpandedDepth={2}
                 />
@@ -5156,6 +5271,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
                   <div style={previewFontStyle}>
                     <SimpleMarkdownRenderer
                       content={fileContent}
+                      documentAssets={markdownDocumentAssets}
                       className="typography-markdown-body"
                       frontmatter="properties"
                       enableFileReferences={false}
@@ -5182,6 +5298,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
             <div className="h-full overflow-hidden">
               {/* No allow-same-origin: the page is untrusted and must not run as the app. */}
               <iframe
+                ref={htmlPreviewFrameRef}
                 src={htmlPreview.status === 'ready' ? htmlPreview.url : undefined}
                 srcDoc={runtime.isVSCode ? (() => {
                   const basePath = selectedFile.path.substring(0, selectedFile.path.lastIndexOf('/') + 1);
@@ -5471,6 +5588,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
                 <div style={previewFontStyle}>
                   <SimpleMarkdownRenderer
                     content={fileContent}
+                    documentAssets={markdownDocumentAssets}
                     className="typography-markdown-body"
                     frontmatter="properties"
                     enableFileReferences={false}

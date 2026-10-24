@@ -203,7 +203,9 @@ minutes later, and the relay is billed for the wait; measured on 2026-10-17,
 six such closes cost ~900 s of Durable Object time and six retire frames ~1 s.
 The tunnel client treats a retire frame exactly like a relay close with that
 code, at any stage of the connection; a host data socket drops itself, and the
-host control socket closes and reconnects as after any drop. Peers that predate
+host control socket closes and takes the frame's code as its close code, so a
+retire with `4001: Control replaced` keeps the 60 s hold-off and counts toward
+the identity conflict, and any other code reconnects as after any drop. Peers that predate
 the frame fail closed on unknown plaintext once the E2EE handshake is done,
 which ends in the same reconnect; before the handshake they ignore it and
 reconnect on their own handshake timeout.

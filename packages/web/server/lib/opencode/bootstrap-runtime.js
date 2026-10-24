@@ -22,6 +22,7 @@ export const createBootstrapRuntime = (dependencies) => {
       serverStartedAt,
       gracefulShutdown,
       getHealthSnapshot,
+      readOpenCodeLoad,
       getServerPort,
       getTunnelUrl,
       verboseRequestLogs,
@@ -66,6 +67,7 @@ export const createBootstrapRuntime = (dependencies) => {
       getCachedZenModels,
       setAutoAcceptSession,
       agentToolRuntime,
+      limitFailoverRuntime,
       pluginNotificationEmitter,
       desktopUpdater,
       skipBodyParsing,
@@ -95,11 +97,13 @@ export const createBootstrapRuntime = (dependencies) => {
       getTunnelUrl,
       tunnelAuthController,
       uiAuthController,
+      readOpenCodeLoad,
     });
 
     registerCommonRequestMiddleware(app, { express, verboseRequestLogs, skipBodyParsing });
 
     registerAgentToolRoutes(app, { express, agentToolRuntime });
+    limitFailoverRuntime?.registerRoutes(app, express);
 
     const notificationEmitRoutes = registerNotificationEmitRoutes(app, {
       express,
@@ -148,12 +152,7 @@ export const createBootstrapRuntime = (dependencies) => {
       getSessionActivitySnapshot: sessionRuntime.getSessionActivitySnapshot,
       getSessionStateSnapshot: sessionRuntime.getSessionStateSnapshot,
       getPendingBlockingRequestsSnapshot: sessionRuntime.getPendingBlockingRequestsSnapshot,
-      getSessionAttentionSnapshot: sessionRuntime.getSessionAttentionSnapshot,
       getSessionState: sessionRuntime.getSessionState,
-      getSessionAttentionState: sessionRuntime.getSessionAttentionState,
-      markSessionViewed: sessionRuntime.markSessionViewed,
-      markSessionUnviewed: sessionRuntime.markSessionUnviewed,
-      markUserMessageSent: sessionRuntime.markUserMessageSent,
       setPushInitialized,
       setAutoAcceptSession,
     });

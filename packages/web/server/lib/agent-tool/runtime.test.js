@@ -44,15 +44,16 @@ const prepareManagedEnv = async (runtime, options) => {
 };
 
 /** Loads the generated plugin and returns the tools it registers, by name. */
-// `hooks` collects the session hooks the plugin registers, by name.
-const loadTools = async (dataDir, tag, hooks = {}) => {
+// `hooks` collects the session hooks the plugin registers, by name, and
+// `removed` the ids of OpenCode's own tools it takes away.
+const loadTools = async (dataDir, tag, hooks = {}, removed = []) => {
   const entrypoint = path.join(pluginDirectoryFor(dataDir), 'index.js');
   const pluginModule = await import(`${pathToFileURL(entrypoint).href}?${tag}=${Date.now()}`);
   const registered = {};
   await pluginModule.default.setup({
     tool: {
       transform: (edit) => {
-        edit({ add: (tool) => { registered[tool.name] = tool; } });
+        edit({ add: (tool) => { registered[tool.name] = tool; }, remove: (id) => { removed.push(id); } });
       },
     },
     session: {
@@ -216,6 +217,47 @@ describe('managed agent tool runtime', () => {
       expect(listed.plans).toEqual([expect.objectContaining({ id: planId, title: 'Agent plan', path: createdPlan.path })]);
       expect(await fs.readFile(listed.plans[0].path, 'utf8')).toBe(raw);
 
+      // Plan work: links, dependencies, filters and the plan session through the
+      // generated tool; null and [] reach storage as clears, never as omissions.
+      const one = (await call('save', { kind: 'todo', body: 'Step one', planId })).data.todo;
+      const two = (await call('save', { kind: 'todo', body: 'Step two', planId, dependsOn: [one.id] })).data.todo;
+      // A model can send dependsOn as a JSON string, nested or beside the
+      // action as a recorded GLM call did. It is parsed once and kept only as an
+      // array; every other value reaches the strict server check unchanged.
+      expect((await call('save', { kind: 'todo', id: two.id, dependsOn: '[]' })).data.todo).not.toHaveProperty('dependsOn');
+      const flat = await tools.openchamber_knowledge.execute(
+        { action: 'knowledge.save', kind: 'todo', id: two.id, dependsOn: JSON.stringify([one.id]) },
+        { sessionID: 'ses_caller', progress: async () => {} },
+      );
+      expect(JSON.parse(flat.content).data.todo).toMatchObject({ dependsOn: [one.id] });
+      for (const dependsOn of ['[not json', JSON.stringify({ id: one.id }), one.id, '[1]']) {
+        expect(await call('save', { kind: 'todo', id: two.id, dependsOn }))
+          .toMatchObject({ ok: false, error: { message: 'dependsOn must be an array of todo ids' } });
+      }
+      expect((await call('save', { kind: 'note', id: noteId, planId })).data.note)
+        .toMatchObject({ body: 'Edited note', planId, origin: { sessionId: 'ses_caller' } });
+      const readyInPlan = async () => (await call('list', { planId, ready: true })).data.todos.map((todo) => todo.text);
+      expect(await readyInPlan()).toEqual(['Step one']);
+      expect((await call('save', { kind: 'todo', id: one.id, completed: true })).ok).toBe(true);
+      expect(await readyInPlan()).toEqual(['Step two']);
+      expect((await call('list', { planId })).data).toMatchObject({
+        notes: [{ id: noteId }], todos: [{ id: two.id }, { id: one.id }], plans: [{ id: planId, path: createdPlan.path }],
+      });
+
+      expect((await call('save', { kind: 'plan', id: planId, sessionId: 'ses_worker' })).data.plan)
+        .toMatchObject({ id: planId, path: createdPlan.path, session: { sessionId: 'ses_worker' } });
+      const beforeMixed = await fs.readFile(projectContextRuntime.contextPathFor(owner), 'utf8');
+      expect(await call('save', { kind: 'plan', id: planId, sessionId: 'ses_other', body: '# Mixed' })).toMatchObject({ ok: false, error: { kind: 'usage' } });
+      expect(await fs.readFile(projectContextRuntime.contextPathFor(owner), 'utf8')).toBe(beforeMixed);
+      expect(await fs.readFile(createdPlan.path, 'utf8')).toBe(raw);
+      expect((await call('save', { kind: 'plan', id: planId, sessionId: null })).data.plan).not.toHaveProperty('session');
+
+      expect((await call('save', { kind: 'note', id: noteId, planId: null })).data.note).not.toHaveProperty('planId');
+      // Deleting the first step drops it from the second's dependencies.
+      expect((await call('delete', { kind: 'todo', id: one.id })).ok).toBe(true);
+      expect((await call('list', { planId })).data.todos).toEqual([expect.not.objectContaining({ dependsOn: expect.anything() })]);
+      expect((await call('delete', { kind: 'todo', id: two.id })).ok).toBe(true);
+
       await fs.mkdir(path.join(dataDir, 'shared-plans'));
       await fs.writeFile(path.join(dataDir, 'shared-plans', 'team.md'), '# Team\n');
       const sharedId = 'shared:team.md';
@@ -247,12 +289,18 @@ describe('managed agent tool runtime', () => {
     const actions = knowledge.input.properties.action.oneOf.map((entry) => entry.const);
     expect(actions).toEqual(['knowledge.list', 'knowledge.save', 'knowledge.delete', 'knowledge.show']);
     const parameters = knowledge.input.properties.parameters.properties;
-    expect(Object.keys(parameters).sort()).toEqual(['body', 'completed', 'directory', 'expected', 'id', 'kind', 'projectId']);
+    expect(Object.keys(parameters).sort()).toEqual(['body', 'completed', 'dependsOn', 'directory', 'expected', 'id', 'kind', 'planId', 'projectId', 'ready', 'sessionId']);
     expect(parameters.kind.enum).toEqual(['note', 'todo', 'plan']);
     expect(parameters.completed.type).toBe('boolean');
+    expect(parameters.ready.type).toBe('boolean');
+    expect(parameters.planId.type).toEqual(['string', 'null']);
+    expect(parameters.sessionId.type).toEqual(['string', 'null']);
+    expect(parameters.dependsOn).toMatchObject({ type: 'array', items: { type: 'string' } });
     expect(tools.openchamber.input.properties.action.oneOf.map((entry) => entry.const)).not.toContain('knowledge.list');
+    // The control tool keeps its own session id, a plain string.
+    expect(tools.openchamber.input.properties.parameters.properties.sessionId).toEqual({ type: 'string' });
     for (const tool of ['openchamber', 'openchamber_web', 'openchamber_memory']) {
-      for (const field of ['kind', 'expected', 'completed']) {
+      for (const field of ['kind', 'expected', 'completed', 'planId', 'dependsOn', 'ready']) {
         expect(tools[tool].input.properties.parameters.properties).not.toHaveProperty(field);
       }
     }
@@ -295,7 +343,7 @@ describe('managed agent tool runtime', () => {
     expect(tool.openchamber.description).toContain('Whether that fits depends on how the user works');
     expect(tool.openchamber.description).toContain('such as a pull request of its own');
     // OpenCode's own worktree_create makes a detached copy of the current commit.
-    expect(tool.openchamber.description).toContain('Unlike worktree_create, it makes a new branch from the default branch');
+    expect(tool.openchamber.description).toContain('Unlike git worktree add, the session moves along');
     expect(tool.openchamber.description).not.toContain('without asking');
     expect(tool.openchamber.input.properties.action.oneOf.map((entry) => entry.const)).toContain('session.moveToWorktree');
     expect(tool.openchamber.input.properties.parameters.properties.carry).toEqual(expect.objectContaining({ type: 'array' }));
@@ -320,12 +368,12 @@ describe('managed agent tool runtime', () => {
     expect(source).not.toContain('"schedule.status"');
     const tool = await loadTools(dataDir, 'schema');
     expect(tool.openchamber.description).toContain('A dispatch returns at once');
-    expect(tool.openchamber.description).toContain('final answer then arrives in this session as a message');
+    expect(tool.openchamber.description).toContain('returnResult brings its final answer back here');
     // Agents also have OpenCode's own subagent tool; the line between the two is drawn up front.
     expect(tool.openchamber.description).toContain('use the subagent tool');
     expect(tool.openchamber.input.properties.action.oneOf).toContainEqual({
       const: 'session.messages',
-      description: 'Read text-only messages and current sessionStatus for sessionId; directory and limit 10 are defaults',
+      description: 'Text messages and sessionStatus of sessionId',
     });
     // An agent never blocks on a session: no wait or timeout in its schema.
     const controlParameters = tool.openchamber.input.properties.parameters.properties;
@@ -348,11 +396,14 @@ describe('managed agent tool runtime', () => {
     const webActions = tool.openchamber_web.input.properties.action.oneOf.map((entry) => entry.const);
     expect(webActions).toContain('browser.open');
     expect(webActions).toContain('browser.close');
+    expect(webActions).toContain('browser.select');
     expect(controlActions).not.toContain('browser.open');
     expect(webActions).not.toContain('session.create');
 
     // Turning one tool off has to remove its inputs too, not just its actions.
     expect(Object.keys(tool.openchamber_web.input.properties.parameters.properties)).toContain('url');
+    expect(Object.keys(tool.openchamber_web.input.properties.parameters.properties)).toContain('label');
+    expect(Object.keys(tool.openchamber_web.input.properties.parameters.properties)).toContain('value');
     expect(Object.keys(tool.openchamber.input.properties.parameters.properties)).not.toContain('url');
     expect(Object.keys(tool.openchamber.input.properties.parameters.properties)).toContain('sessionId');
     expect(Object.keys(tool.openchamber.input.properties.parameters.properties)).toContain('path');
@@ -430,6 +481,48 @@ describe('managed agent tool runtime', () => {
     // v2 tools get no directory; the session id is what OpenChamber resolves from.
     expect(sent[2].sessionID).toBe('ses_1');
     expect(sent[2].contextDirectory).toBeUndefined();
+  });
+
+  it('runs the one action of a single-action tool, reviving a call stuffed into the action as JSON', async () => {
+    const { runtime, dataDir } = await createRuntime();
+    const prepared = await prepareManagedEnv(runtime, { includeControl: true, includeRender: true });
+    const tools = await loadTools(dataDir, 'single-action');
+
+    // Nothing to choose: the schema takes any string and does not require one.
+    expect(tools.openchamber_render.input.properties.action).toEqual({ type: 'string', description: expect.stringContaining('render.page: ') });
+    expect(tools.openchamber_render.input.required).toEqual([]);
+    // A tool with several actions keeps its strict list.
+    expect(tools.openchamber.input.properties.action.oneOf.length).toBeGreaterThan(1);
+    expect(tools.openchamber.input.required).toEqual(['action']);
+
+    const sent = [];
+    const originalFetch = globalThis.fetch;
+    const originalUrl = process.env.OPENCHAMBER_AGENT_TOOL_URL;
+    const originalToken = process.env.OPENCHAMBER_AGENT_TOOL_TOKEN;
+    process.env.OPENCHAMBER_AGENT_TOOL_URL = prepared.OPENCHAMBER_AGENT_TOOL_URL;
+    process.env.OPENCHAMBER_AGENT_TOOL_TOKEN = prepared.OPENCHAMBER_AGENT_TOOL_TOKEN;
+    globalThis.fetch = async (_endpoint, init) => {
+      sent.push(JSON.parse(init.body));
+      return new Response(JSON.stringify({ schemaVersion: 1, ok: true, action: 'render.page', data: {} }));
+    };
+    const context = { sessionID: 'ses_1', agent: 'build', messageID: 'msg_1', id: 'call_1', signal: new AbortController().signal, progress: async () => {} };
+
+    try {
+      // The shape a model produced: title inside a JSON action, html beside it.
+      await tools.openchamber_render.execute({ action: '{"action": "render.page", "title": "Commits"}', html: '<p>a</p>' }, context);
+      // A revived field never replaces one the call carried itself.
+      await tools.openchamber_render.execute({ action: '{"parameters": {"title": "Stuffed"}}', parameters: { html: '<p>b</p>', title: 'Real' } }, context);
+      // No action at all still runs the only one.
+      await tools.openchamber_render.execute({ parameters: { html: '<p>c</p>', title: 'Bare' } }, context);
+    } finally {
+      globalThis.fetch = originalFetch;
+      process.env.OPENCHAMBER_AGENT_TOOL_URL = originalUrl;
+      process.env.OPENCHAMBER_AGENT_TOOL_TOKEN = originalToken;
+    }
+
+    expect(sent[0].input).toEqual({ action: 'render.page', html: '<p>a</p>', title: 'Commits' });
+    expect(sent[1].input).toEqual({ action: 'render.page', html: '<p>b</p>', title: 'Real' });
+    expect(sent[2].input).toEqual({ action: 'render.page', html: '<p>c</p>', title: 'Bare' });
   });
 
   it('normalizes the two string boolean spellings a model sends, and nothing else', async () => {
@@ -547,7 +640,64 @@ describe('managed agent tool runtime', () => {
     expect(Object.keys(tool)).toEqual(['openchamber', 'openchamber_render']);
     expect(Object.keys(tool.openchamber_render.input.properties.parameters.properties).sort()).toEqual(['awaitAnswer', 'html', 'title']);
     expect(Object.keys(tool.openchamber.input.properties.parameters.properties)).not.toContain('html');
-    expect(tool.openchamber_render.description).toContain('--chart-1');
+    // How to write the page rides on its input, which no client cuts short.
+    expect(tool.openchamber_render.input.properties.parameters.properties.html.description).toContain('--chart-1');
+    expect(tool.openchamber_render.description).toContain('add no outer card, border or banner title');
+  });
+
+  it('takes away the OpenCode tools the control tool replaces, and only while it is on', async () => {
+    const { runtime, dataDir } = await createRuntime();
+    await prepareManagedEnv(runtime, { includeControl: true, includeWeb: false, includeMemory: false });
+    const removed = [];
+    await loadTools(dataDir, 'replaced', {}, removed);
+    expect(removed).toEqual(['opencode_worktree_create', 'opencode_models']);
+
+    await runtime.materializePlugin({ includeControl: false, includeWeb: true });
+    const kept = [];
+    await loadTools(dataDir, 'replaced-off', {}, kept);
+    expect(kept).toEqual([]);
+  });
+
+  it('exposes scheduled tasks as their own tool, out of the control tool', async () => {
+    const { runtime, dataDir } = await createRuntime();
+    await prepareManagedEnv(runtime, { includeControl: true, includeSchedule: true, includeWeb: false, includeMemory: false });
+    const tools = await loadTools(dataDir, 'schedule');
+
+    expect(Object.keys(tools)).toEqual(['openchamber', 'openchamber_schedule']);
+    const scheduleActions = tools.openchamber_schedule.input.properties.action.oneOf.map((entry) => entry.const);
+    expect(scheduleActions).toEqual(['schedule.list', 'schedule.create', 'schedule.update', 'schedule.run', 'schedule.delete', 'schedule.toggle']);
+    expect(tools.openchamber.input.properties.action.oneOf.map((entry) => entry.const).filter((action) => action.startsWith('schedule.'))).toEqual([]);
+    const scheduleParameters = tools.openchamber_schedule.input.properties.parameters.properties;
+    expect(Object.keys(scheduleParameters)).toEqual(expect.arrayContaining(['taskId', 'daily', 'cron', 'prompt', 'model', 'projectId']));
+    for (const field of ['taskId', 'daily', 'cron', 'disabled', 'targetSessionId']) {
+      expect(tools.openchamber.input.properties.parameters.properties).not.toHaveProperty(field);
+    }
+    expect(scheduleParameters.disabled.type).toBe('boolean');
+
+    await runtime.materializePlugin({ includeControl: true, includeSchedule: false });
+    expect(await loadTools(dataDir, 'schedule-disabled')).not.toHaveProperty('openchamber_schedule');
+  });
+
+  it('runs a schedule action from the schedule tool and no longer from the control tool', async () => {
+    const { runtime, executeAction } = await createRuntime();
+    const listed = await runtime.execute({ tool: 'openchamber_schedule', input: { action: 'list' }, sessionID: 'ses_a' });
+    expect(listed.ok).toBe(true);
+    expect(executeAction).toHaveBeenCalledWith('schedule.list', expect.anything(), undefined, expect.anything());
+    const refused = await runtime.execute({ tool: 'openchamber', input: { action: 'schedule.list' }, sessionID: 'ses_a' });
+    expect(refused.ok).toBe(false);
+  });
+
+  it('keeps every tool description within the length Claude Code passes on whole', async () => {
+    const { runtime, dataDir } = await createRuntime();
+    await prepareManagedEnv(runtime, { includeSchedule: true, includeKnowledge: true, includeNotify: true, includeRender: true });
+    const tools = await loadTools(dataDir, 'description-length');
+
+    expect(Object.keys(tools).sort()).toEqual(['openchamber', 'openchamber_knowledge', 'openchamber_memory', 'openchamber_notify', 'openchamber_render', 'openchamber_schedule', 'openchamber_web']);
+    for (const tool of Object.values(tools)) {
+      // Claude Code before 2.1.296 cuts an MCP tool description at 2048
+      // characters, and the plugin runs whichever CLI the user installed.
+      expect(tool.description.length).toBeLessThanOrEqual(2048);
+    }
   });
 
   it('returns the answer a page waited for, or ends the wait when the user writes in the chat', async () => {

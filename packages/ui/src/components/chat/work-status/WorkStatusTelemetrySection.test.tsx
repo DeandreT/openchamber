@@ -283,7 +283,7 @@ describe('mounted turn telemetry with live sync stores', () => {
     expect(dom.container.textContent).toContain('Whole turn~6 tok/s');
   });
 
-  test('every metric has a full-row focus target and hover waits 750ms', async () => {
+  test('every metric has a full-row focus target and hover waits 300ms', async () => {
     const earlier = { ...assistant, id: 'earlier', time: { created: 1100, completed: 1900 } };
     await act(async () => store().setState({ sessionStatusReady: true,
       message: { [sessionId]: [user, earlier, assistant] }, part: {
@@ -301,7 +301,7 @@ describe('mounted turn telemetry with live sync stores', () => {
       response.dispatchEvent(new window.MouseEvent('mouseover', { bubbles: true }));
       response.dispatchEvent(new window.MouseEvent('mouseenter', { bubbles: true }));
       response.dispatchEvent(new window.MouseEvent('mousemove', { bubbles: true }));
-      await new Promise((resolve) => setTimeout(resolve, 650));
+      await new Promise((resolve) => setTimeout(resolve, 200));
     });
     expect(document.querySelector('[data-slot="tooltip-content"]')).toBeNull();
     expect(response.hasAttribute('data-popup-open')).toBe(false);

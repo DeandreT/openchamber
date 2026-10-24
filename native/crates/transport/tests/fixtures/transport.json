@@ -1,5 +1,5 @@
 {
-  "client": "@opencode/client@2.0.32",
+  "client": "@opencode/client@2.1.4",
   "baseUrl": "http://127.0.0.1:4799",
   "scopedDirectory": "/home/synthetic/my project/ünï",
   "requests": [

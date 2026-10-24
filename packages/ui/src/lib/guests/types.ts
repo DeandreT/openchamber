@@ -9,6 +9,7 @@ import type {
   PublicService,
   PublicGuestCapabilities,
   PublicIntegration,
+  PublicSourceControl,
 } from '@openchamber/sdk';
 
 export type GuestSource = 'bundled' | 'path' | 'zip' | 'git';
@@ -35,6 +36,8 @@ export type InstalledGuest = {
   pageTitle?: string;
   /** HTML of the extension's Work Status section (`contributes.statusSection`); may exist without `entry`. */
   statusEntry?: string;
+  /** Service path the host reads and draws the section from, without a frame; wins over `statusEntry`. */
+  statusSource?: { path: string; interval: number };
   /** Section header title; the extension name when absent. */
   statusTitle?: string;
   /** Starting frame height in CSS px before the guest reports its own. */
@@ -49,6 +52,8 @@ export type InstalledGuest = {
   /** Declared `contributes.origins`: the frame may exchange data with them once approved. */
   origins?: string[];
   service?: PublicService;
+  /** The Git host from `contributes.sourceControl`, when the service provides `source-control`. */
+  sourceControl?: PublicSourceControl;
   /** Declared `contributes.actions`; the UI shows them only for an active guest. */
   actions?: GuestActionContribution[];
   /** Declared `contributes.commands`; the composer routes them only for an active guest. */

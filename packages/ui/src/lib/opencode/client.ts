@@ -609,6 +609,11 @@ const getDesktopFilesApi = (): FilesAPI | null => {
   return null
 }
 
+// Callers key the answer by the runtime key read at call time, so the route
+// resolves at call time too. `this.baseUrl` follows a switch only once the
+// client is rebound, which the desktop's boot-time host restore does last.
+const FS_HOME_ROUTE = "/api/fs/home"
+
 // /api/fs/home parsing boundary. Older servers answer without chatsRoot;
 // only a valid home response may use the legacy chats-root fallback.
 const fsAbsolutePathSchema = z.string().trim().regex(/^(?:\/|[A-Za-z]:[\\/]|\\\\)/)
@@ -850,6 +855,17 @@ class OpencodeService {
   }
 
   /**
+   * Writes a heap snapshot of the OpenCode server process into OpenCode's log
+   * directory and returns its path on the OpenCode machine (OpenCode 2.1.4;
+   * older servers answer 404). OpenCode pauses while the heap serializes. The
+   * route takes no location, so it starts no MCP servers.
+   */
+  async writeHeapSnapshot(): Promise<{ path: string }> {
+    const result = await call("debug.heapDump", () => this.client.debug.heapDump())
+    return { path: result.path }
+  }
+
+  /**
    * The list is global, but v2 serves it through a location: asked without a
    * directory, OpenCode starts its own working directory (MCP servers
    * included) to answer. The current directory is already running.
@@ -1027,6 +1043,14 @@ class OpencodeService {
    */
   async renameSession(id: string, title: string, directory?: string | null): Promise<void> {
     await call("session.update", () => this.clientFor(directory).session.update({ sessionID: id, title }))
+  }
+
+  /**
+   * Records that the turn which ended at `idle` was seen. OpenCode keeps the
+   * watermark monotone and leaves a turn that ended later unread.
+   */
+  async viewSession(id: string, idle: number, directory?: string | null): Promise<void> {
+    await call("session.view", () => this.clientFor(directory).session.view({ sessionID: id, idle }))
   }
 
   async moveSession(id: string, toDirectory: string, options?: { delivery?: SessionInboxDelivery }): Promise<void> {
@@ -2100,6 +2124,39 @@ class OpencodeService {
   }
 
   // -------------------------------------------------------------------------
+  // Files on the machine OpenCode runs on
+  // -------------------------------------------------------------------------
+
+  /**
+   * Writes files into a new folder under OpenCode's own temp folder
+   * (`GET /api/info` names it; its agents read there without asking) and
+   * answers each file's absolute path as OpenCode wrote it, or its error. The
+   * bytes reach OpenCode through the OpenChamber server, so the files land
+   * where OpenCode runs, also when that is another machine. A fresh folder per
+   * call keeps a repeated name from overwriting; names must be unique within
+   * a call. The write route is experimental in OpenCode 2.x.
+   */
+  async writeOpenCodeTempFiles(
+    directory: string | null | undefined,
+    files: Array<{ filename: string; bytes: Uint8Array }>,
+  ): Promise<Array<{ filename: string; path: string } | { filename: string; error: Error }>> {
+    const client = this.clientFor(directory)
+    const info = await call("server.info", () => client.server.info())
+    const folderName = Array.from(crypto.getRandomValues(new Uint8Array(8)), (byte) => byte.toString(16).padStart(2, "0")).join("")
+    const folder = `${info.paths.tmp.replace(/[\\/]+$/, "")}/openchamber/${folderName}`
+    const results: Array<{ filename: string; path: string } | { filename: string; error: Error }> = []
+    for (const { filename, bytes } of files) {
+      try {
+        const written = await call("file.write", () => client.file.write({ path: `${folder}/${filename}`, payload: bytes }))
+        results.push({ filename, path: written.data.path })
+      } catch (error) {
+        results.push({ filename, error: error instanceof Error ? error : new Error(String(error)) })
+      }
+    }
+    return results
+  }
+
+  // -------------------------------------------------------------------------
   // File System Operations (OpenChamber routes)
   // -------------------------------------------------------------------------
 
@@ -2314,7 +2371,7 @@ class OpencodeService {
     }
 
     try {
-      const response = await runtimeFetch(`${this.baseUrl}/fs/home`, {
+      const response = await runtimeFetch(FS_HOME_ROUTE, {
         method: "GET",
         headers: {
           Accept: "application/json",
@@ -2342,7 +2399,7 @@ class OpencodeService {
   // Both roots must describe the same server response, including on desktop.
   // Failure is distinct from an older server omitting chatsRoot.
   async getFilesystemHomeInfo(): Promise<z.infer<typeof fsHomeResponseSchema>> {
-    const response = await runtimeFetch(`${this.baseUrl}/fs/home`, {
+    const response = await runtimeFetch(FS_HOME_ROUTE, {
       method: "GET",
       headers: {
         Accept: "application/json",

@@ -1,16 +1,17 @@
 import { describe, expect, test } from "bun:test"
 import type { MessagePage } from "@/lib/opencode/client"
 import { projectInboxMessage, type InboxMessageItem } from "@/lib/opencode/projection"
-import type { Message, Part, UserMessage } from "@/lib/opencode/model"
+import type { Message, Part, Session, UserMessage } from "@/lib/opencode/model"
 import { ChildStoreManager } from "./child-store"
 import { SessionMessageLoader, type SessionMessagePageSource } from "./session-message-loader"
+import { olderMessagesCursor } from "@/lib/opencode/messageCursor"
 import {
   createFirstVisibleSessionPerformanceTracker,
   startSessionLoadPerformanceEvent,
 } from "./session-load-performance"
 
-const createRecord = (sessionID: string, id = "msg_1", created = 1) => ({
-  info: { id, sessionID, role: "user", time: { created } } as Message,
+const createRecord = (sessionID: string, id = "msg_1", created = 1, role: Message["role"] = "user") => ({
+  info: { id, sessionID, role, time: { created } } as Message,
   parts: [{ id: `part_${id}`, messageID: id, sessionID, type: "text", text: "hello" }] as Part[],
 })
 
@@ -983,6 +984,124 @@ describe("SessionMessageLoader before OpenCode is ready", () => {
     expect(loader.getSnapshot(opened)).toMatchObject({ status: "ready", resolved: true })
     loader.dispose()
     childStores.disposeAll()
+  })
+
+  describe("trimHistory", () => {
+    // `turns` prompt/reply pairs, oldest first, with ids that sort like their time.
+    const conversation = (sessionID: string, turns: number) => Array.from({ length: turns }, (_, turn) => {
+      const id = String(turn).padStart(4, "0")
+      const prompt = createRecord(sessionID, `msg_${id}_u`, turn * 2 + 1)
+      return [prompt, createRecord(sessionID, `msg_${id}_a`, turn * 2 + 2, "assistant")]
+    }).flat()
+
+    // A session record set in one test is persisted per directory, so a test
+    // that sets one opens its own directory.
+    const openWith = async (turns: number, directory = "/repo") => {
+      const cursors: Array<string | undefined> = []
+      const { childStores, loader } = createLoader(async ({ sessionID, cursor }) => {
+        cursors.push(cursor)
+        return response(cursor ? [] : conversation(sessionID, turns))
+      })
+      const target = { directory, sessionID: "session-a" }
+      await loader.ensure(target, { reason: "navigation" })
+      const ids = () => childStores.getChild(target.directory)?.getState().message[target.sessionID]?.map((message) => message.id) ?? []
+      const parts = () => childStores.getChild(target.directory)?.getState().part ?? {}
+      return { childStores, loader, target, cursors, ids, parts }
+    }
+
+    test("cuts a transcript past the cold window back to its last ten turns", async () => {
+      const { childStores, loader, target, cursors, ids, parts } = await openWith(25)
+      expect(ids()).toHaveLength(50)
+
+      expect(loader.trimHistory(target)).toBe(true)
+
+      expect(ids()).toHaveLength(20)
+      expect(ids()[0]).toBe("msg_0015_u")
+      expect(parts()["msg_0014_a"]).toBeUndefined()
+      expect(parts()["msg_0015_u"]).toBeDefined()
+      expect(loader.getSnapshot(target)).toMatchObject({
+        status: "ready",
+        complete: false,
+        limit: 20,
+        cursor: olderMessagesCursor("msg_0015_u"),
+      })
+
+      // Older history reads again from below the oldest kept prompt.
+      await loader.loadOlder(target)
+      expect(cursors.at(-1)).toBe(olderMessagesCursor("msg_0015_u"))
+      loader.dispose()
+      childStores.disposeAll()
+    })
+
+    test("leaves a transcript within the cold window alone", async () => {
+      const { childStores, loader, target, ids } = await openWith(10)
+
+      expect(loader.trimHistory(target)).toBe(false)
+
+      expect(ids()).toHaveLength(20)
+      expect(loader.getSnapshot(target).complete).toBe(true)
+      loader.dispose()
+      childStores.disposeAll()
+    })
+
+    test("cuts nothing while a history reader or a browsing timeline holds the transcript", async () => {
+      const { childStores, loader, target, ids } = await openWith(25)
+
+      const releaseReader = loader.retainSessionHistory(target)
+      expect(loader.trimHistory(target)).toBe(false)
+      releaseReader()
+      const releaseBrowser = loader.retainSessionHistory(target, "browsing")
+      expect(loader.trimHistory(target)).toBe(false)
+      expect(ids()).toHaveLength(50)
+      releaseBrowser()
+
+      expect(loader.trimHistory(target)).toBe(true)
+      loader.dispose()
+      childStores.disposeAll()
+    })
+
+    test("cuts nothing while a revert hides the tail", async () => {
+      const { childStores, loader, target, ids } = await openWith(25, "/repo-reverted")
+      const session: Session = {
+        id: target.sessionID, projectID: "project", directory: target.directory, title: "Session", cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, time: { created: 1, updated: 2 },
+        revert: { messageID: "msg_0005_u" },
+      }
+      childStores.getChild(target.directory)?.setState({ session: [session] })
+
+      expect(loader.trimHistory(target)).toBe(false)
+      expect(ids()).toHaveLength(50)
+      loader.dispose()
+      childStores.disposeAll()
+    })
+
+    test("keeps the context carriers sent with the oldest kept prompt", async () => {
+      const records = conversation("session-a", 25)
+      const prompt = records.findIndex((record) => record.info.id === "msg_0015_u")
+      records.splice(prompt, 0, createRecord("session-a", "msg_0015_c", 30.5, "synthetic"))
+      const { childStores, loader } = createLoader(async ({ cursor }) => response(cursor ? [] : records))
+      const target = { directory: "/repo", sessionID: "session-a" }
+      await loader.ensure(target, { reason: "navigation" })
+
+      expect(loader.trimHistory(target)).toBe(true)
+
+      const kept = childStores.getChild(target.directory)?.getState().message[target.sessionID] ?? []
+      expect(kept.slice(0, 2).map((message) => message.id)).toEqual(["msg_0015_c", "msg_0015_u"])
+      expect(loader.getSnapshot(target).cursor).toBe(olderMessagesCursor("msg_0015_c"))
+      loader.dispose()
+      childStores.disposeAll()
+    })
+
+    test("cuts nothing after a stream gap the transcript was not confirmed since", async () => {
+      const { childStores, loader, target, ids } = await openWith(25)
+
+      loader.markHistoryStale()
+
+      expect(loader.trimHistory(target)).toBe(false)
+      expect(ids()).toHaveLength(50)
+      loader.dispose()
+      childStores.disposeAll()
+    })
   })
 
   test("a read that fails after OpenCode connected is an error at once", async () => {

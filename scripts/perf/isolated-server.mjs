@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url"
 import process from "node:process"
 
 import { wait } from "./cdp.mjs"
-import { fixtureProviderConfig } from "./fixture-provider.mjs"
+import { AGENT_READ_FILES, agentReadFileContent, fixtureProviderConfig } from "./fixture-provider.mjs"
 import { stopProcessTree } from "./process-tree.mjs"
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..")
@@ -175,6 +175,10 @@ export const isolatedServerEnv = ({ state, dist, config, opencodeBinary, inherit
 export const ensureProject = (project) => {
   mkdirSync(project, { recursive: true })
   if (!existsSync(join(project, ".git"))) execFileSync("git", ["init", "-q"], { cwd: project })
+  for (const file of AGENT_READ_FILES) {
+    mkdirSync(dirname(join(project, file)), { recursive: true })
+    writeFileSync(join(project, file), agentReadFileContent(file))
+  }
 }
 
 /** Replaces `state` with `seed`, or empties it when there is no seed. */

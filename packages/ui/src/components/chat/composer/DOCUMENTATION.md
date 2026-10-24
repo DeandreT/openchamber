@@ -113,7 +113,11 @@ state is one persisted preference in `useUIStore` (`messageQueueExpanded`,
 collapsed by default), shared by every session and surviving session switches
 and reloads. It receives the composer's main-session queue target instead of
 resolving the global selection, so a chat pinned in the side panel addresses
-its own queue. It stays visible under the form and permission docks.
+its own queue. It stays visible under the form and permission docks. A row
+whose captured agent differs from the agent the composer would send as now
+shows that agent before edit, because the item still sends as captured; the
+strip compares against the composer's `currentAgentName`, the same value
+queueing captures.
 
 `selectComposerQueue` in the submission builder excludes server-scheduled items
 before the composer counts manual content or reads captured send configuration.
@@ -240,8 +244,12 @@ panel, draft target selectors and preset chips) are memoized, and the props
 read the text through `messageRef` or `useStableHandler`, derived objects are
 memoized, and `useBtwPanelState` and `useMobileComposerShell` return stable
 objects. `useBtwPanelState` reads the parent and fork sessions as primitives,
-so a streaming turn's `session.updated` events do not re-render the composer.
-`__tests__/ChatInput.keystroke.test.tsx` counts the renders per keystroke.
+and `useChatSearchDirectory` reads only the session's directory, so a
+streaming turn's `session.updated` events do not re-render the composer. The
+editor is memoized and every handler `ChatInput` passes it is a
+`useStableHandler`, so it renders only when what it shows changes.
+`__tests__/ChatInput.keystroke.test.tsx` counts the renders per keystroke and
+per streamed session update.
 
 A glass surface never carries its own shadow: the shadow sits on a wrapper
 (or the glass moves to an inner layer). Chromium grows a backdrop-filter
@@ -269,7 +277,7 @@ so a long preview does not hide its entry actions behind the chat header.
 | `comment/` | Mobile comment mode: quoted-selection state, its scope ownership, and the shell that replaces the composer while a comment is written |
 | `submit/` | Turning what the user has into what gets sent. `guestCommands.ts` routes an extension's slash command (`contributes.commands`) before anything is sent: `/name args` never reaches the model, the extension resolves it into a chip |
 | `attachments/` | Files: paths, drop payloads |
-| `ui/` | Presentation. `ComposerAttachmentControls` lists files, GitHub (issues and PRs in one picker), Linear, then guests with `contributes.attach`; each source is one row. The GitHub and Linear picker is `components/references/` (see its `DOCUMENTATION.md`). `"panel"` opens the rail. `"dialog"` opens `GuestAttachDialog` with that guest iframe and `ready.surface: "dialog"` (loading `attachEntry` when the manifest declared one). `host.attach` writes the composer chip. Clicking that chip reopens the guest with the chip as `ready.item`: dialog guests get it as a prop, panel guests through `lib/guests/item-store.ts` and the rail. Message and session actions (`contributes.actions`) travel the same two roads with a `GuestMessageItem` / `GuestSessionItem` (`lib/guests/dialog-store.ts` `openGuestWithItem`); the dialog they open lives in `layout/GuestHosts.tsx`, not here, and an `attach` from it closes it through `handleGuestAttach`. The chip keeps the guest's opaque `data` (also on the `guest-issue` / `guest-pr` context part metadata and the session `LinkedGuestIssue` snapshot) so it comes back byte-identical; it is never part of the context text. VS Code and mobile skip that list. |
+| `ui/` | Presentation. `ComposerAttachmentControls` lists files, the repository's provider (issues and PRs in one picker), one row per signed-in tracker (`trackerPickers` from `useTrackerSources`, Linear's "Link Linear Issue"; a tracker nobody signed in to is connected from Settings, not offered here), then guests with `contributes.attach`; each source is one row. The repository and tracker picker is `components/references/` (see its `DOCUMENTATION.md`). `"panel"` opens the rail. `"dialog"` opens `GuestAttachDialog` with that guest iframe and `ready.surface: "dialog"` (loading `attachEntry` when the manifest declared one). `host.attach` writes the composer chip. Clicking that chip reopens the guest with the chip as `ready.item`: dialog guests get it as a prop, panel guests through `lib/guests/item-store.ts` and the rail. Message and session actions (`contributes.actions`) travel the same two roads with a `GuestMessageItem` / `GuestSessionItem` (`lib/guests/dialog-store.ts` `openGuestWithItem`); the dialog they open lives in `layout/GuestHosts.tsx`, not here, and an `attach` from it closes it through `handleGuestAttach`. The chip keeps the guest's opaque `data` (also on the `guest-issue` / `guest-pr` context part metadata and the session `LinkedGuestIssue` snapshot) so it comes back byte-identical; it is never part of the context text. VS Code and mobile skip that list. |
 | `parallel/` | "Run in parallel": the launch state of a new-session draft (prompt variants, models per variant, worktrees, setup, auto-fusion) and the strip that renders it above the editor |
 | `text.ts` | How inserted text meets the text already there |
 | `largeTextPaste.ts` | Detect large plain-text pastes, own the double-paste gesture, and build virtual `.txt` files |
@@ -293,6 +301,28 @@ to read the declaration again when the composer takes focus, since the IME reads
 element takes focus and that can be before the report arrives. The paste handler re-checks
 focus as a backstop for that window. Every other runtime pastes images through `handlePaste` unchanged, and an IME
 without content insertion keeps refusing.
+With the profile setting `savePastedImagesAsFiles` on, pasted, dropped and
+picked images (`attachFilesWithCitation`, `attachFiles`) are written into a new
+folder under OpenCode's own temp folder (`opencodeClient.writeOpenCodeTempFiles`:
+`GET /api/info` names the folder, `POST /api/experimental/fs/write` writes it)
+and cited as `[name](absolute path)` (a plain link: a draft starting with `!`
+turns into a shell command), so the model, a subagent or a tool reads the file
+by path; OpenCode's agents may read that folder without asking.
+`imageSaveModeForModel` picks one of three cases. A model whose metadata lists
+no `image` input gets only the link, since it could not read the attachment
+(#5087), and the modality toast says where the images went. Any other model,
+unknown metadata included, also gets the image attached under the link's name,
+with no second `[name]` citation (#5218). An image that could not be saved
+attaches as before, with an error toast. With the setting off nothing is
+saved. One setting covers both cases: a split by model kind read as a puzzle of
+exceptions in Settings, and nobody needs the files for one kind of model only.
+The browser annotation screenshot and comment-field image pastes keep
+attaching. The bytes go through the active runtime's OpenCode route (the
+OpenChamber server's proxy, the VS Code bridge, the relay for a phone), so the
+file lands on the machine OpenCode runs on, which may not be the user's. Why
+OpenCode writes the file and not the OpenChamber server: only OpenCode knows
+its temp folder and its filesystem, and an external OpenCode or a space runs
+elsewhere than the server.
 Large pastes (about 2,000 characters or 25 lines) follow the composer setting
 `largeTextPasteBehavior` (`ask` / `attach` / `inline` / `inline-double-paste`). Attaching creates an
 in-memory `text/plain` file named `pasted-context-N.txt`, inserts a bracket
@@ -343,11 +373,13 @@ copy.
 - `prefixTokens.ts` — `/command`, `$skill`, `#snippet`. Scanning is deliberately
   generous; **membership in the command, skill or snippet registry is the
   authority**, not the pattern. An unknown `/token` or `$token` stays plain
-  prose, so `$5` is just money.
+  prose, so `$5` is just money. The skill sigil also matches the yen and
+  full-width dollar signs a CJK IME types for the Shift+4 key, so `¥5` is
+  money for the same reason.
 - `triggers.ts` — which picker a caret position asks for. Exactly one can be
   active, with precedence `command > skill > snippet > mention`. Commands open
-  only on a `/` in the first column; skills open on `$` at any word boundary,
-  the start of the text included. The two never share a list: the `/` palette
+  only on a `/` in the first column; skills open on `$` or its IME spellings at
+  any word boundary, the start of the text included. The two never share a list: the `/` palette
   holds commands only. Only typing and pasting open a picker: text the app sets
   through the editor's `value` prop (a restored draft, a git conflict prompt)
   arrives with `ComposerChange.fromValueProp` and closes any open picker.
@@ -505,8 +537,11 @@ and the send path reading the same grammar.
   delivers its `instructions` part first. A flow outside the composer hands
   references to the next draft through `pendingComposerReferences.ts`
   (New Worktree does), which `ChatInput` consumes into its chips; a draft's
-  first send with a Linear issue attached posts Linear's session-started
-  status.
+  first send with a tracker item attached posts that tracker's session-started
+  status (`lib/trackers/sessionStatus.ts`), for a tracker whose descriptor
+  offers `sessionComments`. Tracker chips are `tracker-item` references keyed
+  `${provider}:${IDENTIFIER}`; a queued or restored message from before
+  trackers carries `linear-issue`, which reads back as Linear's.
   The same module's `buildComposerContext` captures that context when a message
   is **queued** instead of sent: the chips leave the composer with the message
   (as `QueuedContextPart`s on the queue item), the server or the VS Code
@@ -557,7 +592,11 @@ and the send path reading the same grammar.
   (`/undo`, `/redo`, `/compact`, `/timeline`, `/handoff-review`, `/fork`) take
   only their command text and leave comments, files, and linked context attached;
    magic prompt commands send that
-  context with the prompt they produce. Session actions are planned only when
+  context with the prompt they produce. Their text comes from one read of
+  the Magic Prompts that apply in the directory the send lands in, chosen
+  when the send starts: the `/btw` fork, the session, else the new-session
+  draft; a new chat has no folder yet and reads the global prompts. A failed
+  read sends nothing and restores the input. Session actions are planned only when
   a session exists, so typing one into a new-session draft stays on the normal
   send path. A local command is never queued as text: queueing runs it
   instead. `/fork [text]` (`submit/forkCommand.ts`) forks after the last
@@ -1030,9 +1069,15 @@ suites that install module mocks are order-dependent.
 
 `keyboardPolicy.ts` owns the submission decision. On mobile, Enter and
 Shift+Enter insert a newline regardless of synced settings or CodeMirror's
-deferred Shift modifier. Ctrl/Cmd+Enter remains available for external keyboards;
+deferred Shift modifier, unless the mobile "Return key sends" setting is on. Ctrl/Cmd+Enter remains available for external keyboards;
 Send and Queue buttons retain their normal behavior. The Enter-to-send setting
 and its search entry are hidden on mobile without changing the desktop preference.
+
+The mobile "Return key sends" setting relabels the keycap with
+`enterkeyhint="send"` and makes it submit. Its deferred Enter restores the real
+Shift only while a hardware keyboard is attached: iOS autocapitalization reports
+a phantom Shift at sentence starts, so a soft-keyboard Send always submits, while
+a hardware Shift+Enter still inserts a newline. Ctrl/Cmd+Enter is unchanged.
 
 The expanded desktop composer always inserts a newline with Enter, including
 Shift+Enter, and sends with Ctrl/Cmd+Enter; it ignores the Enter-to-send preference.

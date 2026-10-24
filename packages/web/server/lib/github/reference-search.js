@@ -325,6 +325,77 @@ const detailSchema = z.object({
   }).nullable(),
 });
 
+// A stack is rarely taller than a handful of layers; GitHub pages the rest.
+const STACK_LAYER_LIMIT = 50;
+
+// Asked beside the detail rather than inside it: a host whose schema has no
+// stacks (an older GitHub Enterprise Server) fails this query alone.
+const STACK_QUERY = `
+query PullStack($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    issueOrPullRequest(number: $number) {
+      __typename
+      ... on PullRequest {
+        stack {
+          number
+          baseRefName
+          entries(first: ${STACK_LAYER_LIMIT}) {
+            nodes { position pullRequest { number title url state isDraft headRefName } }
+          }
+        }
+      }
+    }
+  }
+}
+`;
+
+const stackSchema = z.object({
+  repository: z.object({
+    issueOrPullRequest: z.object({
+      __typename: z.string(),
+      stack: z.object({
+        number: z.number().int(),
+        baseRefName: z.string(),
+        entries: z.object({
+          nodes: z.array(z.object({
+            position: z.number().int(),
+            pullRequest: z.object({
+              number: z.number().int(),
+              title: z.string(),
+              url: z.string(),
+              state: z.enum(['OPEN', 'CLOSED', 'MERGED']),
+              isDraft: z.boolean(),
+              headRefName: z.string(),
+            }).nullable(),
+          })),
+        }),
+      }).nullable().optional(),
+    }).nullable(),
+  }).nullable(),
+});
+
+/**
+ * The stack a PR is a layer of, bottom layer first, or null when it is in
+ * none (an issue is in none either).
+ */
+export async function fetchPullStack({ octokit, owner, repo, number }) {
+  const parsed = stackSchema.parse(await octokit.graphql(STACK_QUERY, { owner, repo, number }));
+  const stack = parsed.repository?.issueOrPullRequest?.stack;
+  if (!stack) return null;
+  const layers = stack.entries.nodes
+    .filter((entry) => entry.pullRequest !== null)
+    .sort((left, right) => left.position - right.position)
+    .map(({ pullRequest }) => ({
+      number: pullRequest.number,
+      title: pullRequest.title,
+      url: pullRequest.url,
+      state: PULL_STATES[pullRequest.state],
+      draft: pullRequest.isDraft,
+      head: pullRequest.headRefName,
+    }));
+  return { number: stack.number, base: stack.baseRefName, layers };
+}
+
 const referenceNodeSchema = z.discriminatedUnion('__typename', [issueNodeSchema, pullNodeSchema]);
 
 const REVIEW_DECISIONS = { APPROVED: 'approved', CHANGES_REQUESTED: 'changes_requested', REVIEW_REQUIRED: 'review_required' };
@@ -407,7 +478,13 @@ const byCreatedAt = (left, right) => (Date.parse(left.createdAt ?? '') || 0) - (
  * Null when the repo has no such number.
  */
 export async function fetchReferenceDetail({ octokit, owner, repo, number }) {
-  const parsed = detailSchema.parse(await octokit.graphql(DETAIL_QUERY, { owner, repo, number }));
+  // The stack is read beside the detail; a host that cannot answer it leaves
+  // the PR's stack unknown (absent), which is not the same as in none (null).
+  const [response, stack] = await Promise.all([
+    octokit.graphql(DETAIL_QUERY, { owner, repo, number }),
+    fetchPullStack({ octokit, owner, repo, number }).catch(() => undefined),
+  ]);
+  const parsed = detailSchema.parse(response);
   const item = parsed.repository?.issueOrPullRequest;
   if (!item) return null;
   const comments = item.comments.nodes.map((comment) => ({
@@ -455,7 +532,7 @@ export async function fetchReferenceDetail({ octokit, owner, repo, number }) {
     });
   }
   comments.sort(byCreatedAt);
-  return {
+  const detail = {
     number: item.number,
     comments,
     commentTotal: item.comments.totalCount,
@@ -486,6 +563,8 @@ export async function fetchReferenceDetail({ octokit, owner, repo, number }) {
       commitTotal: item.commits.totalCount,
     },
   };
+  if (stack !== undefined) detail.pull.stack = stack;
+  return detail;
 }
 
 // One request per listed page of PRs.
@@ -493,23 +572,31 @@ const PULL_STATUS_LIMIT = REFERENCE_PAGE_SIZE;
 
 /**
  * The PRs a status request names, `owner/repo#number` joined by commas, as
- * summary refs. Null when the list is empty, malformed or longer than a page.
+ * summary refs. A ref may carry `@host` when it lives on a GitHub Enterprise
+ * instance; a missing (or `github.com`) host is the default. Null when the list
+ * is empty, malformed or longer than a page.
  */
 export function readPullStatusRefs(value) {
   const entries = String(value ?? '').split(',').map((entry) => entry.trim()).filter(Boolean);
   if (entries.length === 0 || entries.length > PULL_STATUS_LIMIT) return null;
   const refs = [];
   for (const entry of entries) {
-    const match = entry.match(/^([^/#\s]+)\/([^/#\s]+)#(\d+)$/);
+    const match = entry.match(/^([^/#\s]+)\/([^/#\s]+)#(\d+)(?:@([^#@\s]+))?$/);
     if (!match) return null;
-    refs.push({ owner: match[1], repo: match[2], number: Number(match[3]) });
+    const ref = { owner: match[1], repo: match[2], number: Number(match[3]) };
+    // A host the ref names, normalized. github.com is the default either way, so
+    // it is left off; only a real enterprise host is carried.
+    const host = match[4]?.trim().toLowerCase();
+    if (host && host !== 'github.com') {
+      ref.host = host;
+    }
+    refs.push(ref);
   }
   return parseSummaryRefs(refs);
 }
 
 const stateSchema = z.enum(['open', 'closed', 'merged', 'all']).catch('open');
 const peopleSchema = z.enum(['any', 'assigned', 'created', 'reviewRequested']).catch('any');
-const kindSchema = z.enum(['issue', 'pull']).nullable().catch(null);
 
 /** A list's state; anything else reads as `open`. */
 export function readReferenceState(value) {
@@ -521,10 +608,6 @@ export function readReferencePeople(value) {
   return peopleSchema.parse(value);
 }
 
-/** `issue` or `pull`; anything else is null. */
-export function readReferenceKind(value) {
-  return kindSchema.parse(value ?? null);
-}
 
 const searchResultSchema = z.object({
   search: z.object({

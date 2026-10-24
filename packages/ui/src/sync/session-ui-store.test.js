@@ -1053,7 +1053,7 @@ describe('createSession draft lifecycle', () => {
     opencodeClient.getDirectoryAvailability = async () => 'missing';
     opencodeClient.createSession = async (_params, directory) => {
       createSessionCalls.push(directory);
-      return { id: 'session-fallback', directory };
+      return { id: 'session-fallback', directory, time: { created: 1, updated: 1 } };
     };
 
     await useSessionUIStore.getState().createSession('Draft title', '/private/deleted-worktree');
@@ -1074,7 +1074,7 @@ describe('createSession draft lifecycle', () => {
     opencodeClient.getDirectoryAvailability = async () => 'missing';
     opencodeClient.createSession = async (_params, directory) => {
       createSessionCalls.push(directory);
-      return { id: 'session-pinned', directory };
+      return { id: 'session-pinned', directory, time: { created: 1, updated: 1 } };
     };
 
     await useSessionUIStore.getState().createSession('Draft title', '/private/deleted-worktree');
@@ -1094,7 +1094,7 @@ describe('createSession draft lifecycle', () => {
     opencodeClient.getDirectoryAvailability = async () => 'missing';
     opencodeClient.createSession = async (_params, directory) => {
       createSessionCalls.push(directory);
-      return { id: 'session-chat-input', directory };
+      return { id: 'session-chat-input', directory, time: { created: 1, updated: 1 } };
     };
 
     await useSessionUIStore.getState().createSession('Draft title', '/private/deleted-worktree');
@@ -1113,7 +1113,7 @@ describe('createSession draft lifecycle', () => {
     opencodeClient.getDirectoryAvailability = async () => 'unknown';
     opencodeClient.createSession = async (_params, directory) => {
       createSessionCalls.push(directory);
-      return { id: 'session-unavailable', directory };
+      return { id: 'session-unavailable', directory, time: { created: 1, updated: 1 } };
     };
 
     await useSessionUIStore.getState().createSession('Draft title', '/private/unavailable-worktree');
@@ -1135,7 +1135,7 @@ describe('createSession draft lifecycle', () => {
     });
     opencodeClient.createSession = async (_params, directory) => {
       createSessionCalls.push(directory);
-      return { id: 'session-race', directory };
+      return { id: 'session-race', directory, time: { created: 1, updated: 1 } };
     };
 
     useSessionUIStore.getState().openNewSessionDraft({ directoryOverride: '/private/deleted-worktree' });
@@ -1209,7 +1209,7 @@ describe('sendMessage draft snapshot (issues #2222 / #2315)', () => {
     };
     opencodeClient.createSession = async (_params, directory) => {
       createSessionCalls.push(directory);
-      return { id: 'session-materialized', directory: directory ?? '/projects/alpha' };
+      return { id: 'session-materialized', directory: directory ?? '/projects/alpha', time: { created: 1, updated: 1 } };
     };
   });
 

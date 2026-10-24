@@ -10,11 +10,14 @@ import {
   GUEST_STATUS_SECTION_HEIGHT_MAX,
   GUEST_STATUS_SECTION_HEIGHT_MIN,
   GUEST_STATUS_SECTION_TITLE_MAX,
+  GUEST_STATUS_SOURCE_INTERVAL_MAX,
+  GUEST_STATUS_SOURCE_INTERVAL_MIN,
   GUEST_SURFACE_DOCKS,
   GUEST_TOOLS_MAX,
   GUEST_TOOL_MATCH,
   GUEST_TOOL_OUTPUTS,
   isFileEditorPattern,
+  isGuestRequestPath,
 } from '@openchamber/sdk';
 import { z } from 'zod';
 
@@ -57,6 +60,14 @@ const publicServiceSchema = z.object({
   // catalog: every other extension must keep working.
   provides: z.array(z.enum(GUEST_SERVICE_PROVIDES)).optional().catch(undefined),
   surface: z.literal(true).optional().catch(undefined),
+});
+
+// The Git host a source-control provider extension adds, as the approval
+// dialog shows it. A malformed slice drops the field, never the row.
+const publicSourceControlSchema = z.object({
+  label: z.string().trim().min(1).max(64),
+  defaultInstances: z.array(z.string().trim().min(1)).max(4),
+  custom: z.boolean(),
 });
 
 const guestActionSchema = z.object({
@@ -113,6 +124,10 @@ const installedGuestSchema = z.object({
   pageEntry: z.string().trim().min(1).optional(),
   pageTitle: z.string().trim().min(1).max(200).optional(),
   statusEntry: z.string().trim().min(1).optional(),
+  statusSource: z.object({
+    path: z.string().refine(isGuestRequestPath),
+    interval: z.number().int().min(GUEST_STATUS_SOURCE_INTERVAL_MIN).max(GUEST_STATUS_SOURCE_INTERVAL_MAX),
+  }).strict().optional(),
   statusTitle: z.string().trim().min(1).max(GUEST_STATUS_SECTION_TITLE_MAX).optional(),
   statusHeight: z.number().int().min(GUEST_STATUS_SECTION_HEIGHT_MIN).max(GUEST_STATUS_SECTION_HEIGHT_MAX).optional(),
   statusDefaultExpanded: z.boolean().optional(),
@@ -121,6 +136,7 @@ const installedGuestSchema = z.object({
   filesystem: z.array(z.string().trim().min(1)).optional(),
   origins: z.array(z.string().trim().min(1)).optional(),
   service: publicServiceSchema.optional(),
+  sourceControl: publicSourceControlSchema.optional().catch(undefined),
   actions: z.array(guestActionSchema).max(GUEST_ACTIONS_MAX).optional(),
   commands: z.array(guestCommandSchema).max(GUEST_COMMANDS_MAX).optional(),
   tools: z.array(guestToolSchema).max(GUEST_TOOLS_MAX).optional(),

@@ -315,16 +315,19 @@ test('the mounted poller recovers real store failure and starts a fresh load on 
  * empty store because its root never did (#4643).
  */
 describe('global session polling root coverage', () => {
-  const rootSources: Array<[string, string]> = [
-    ['App', '../App.tsx'],
-    ['VSCodeApp', '../apps/VSCodeApp.tsx'],
-    ['ElectronMiniChatApp', '../apps/ElectronMiniChatApp.tsx'],
+  // VS Code's Settings editor tab is a VSCodeApp root that lists no
+  // sessions, so there the poller is gated on the panel kind; the chat panel
+  // still polls.
+  const rootSources: Array<[string, string, RegExp]> = [
+    ['App', '../App.tsx', /^\s*useGlobalSessionsPolling\(true\);/m],
+    ['VSCodeApp', '../apps/VSCodeApp.tsx', /^\s*useGlobalSessionsPolling\(!isSettingsPanel\);/m],
+    ['ElectronMiniChatApp', '../apps/ElectronMiniChatApp.tsx', /^\s*useGlobalSessionsPolling\(true\);/m],
   ];
 
-  for (const [rootName, sourcePath] of rootSources) {
+  for (const [rootName, sourcePath, mountCall] of rootSources) {
     test(`${rootName} mounts useGlobalSessionsPolling`, () => {
       const source = readFileSync(new URL(sourcePath, import.meta.url), 'utf8');
-      expect(/^\s*useGlobalSessionsPolling\(true\);/m.test(source)).toBe(true);
+      expect(mountCall.test(source)).toBe(true);
     });
   }
 

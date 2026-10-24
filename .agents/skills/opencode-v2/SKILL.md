@@ -68,12 +68,27 @@ code.
 Each exists because 2.x has no route for it. When a tag adds the route,
 the workaround goes and the record comes from OpenCode.
 
-- **Archive**: 2.x has no archive route. `openchamber-sessions/archive-store.js`
-  keeps it per data dir and the proxy folds it into session reads.
+- **Archive of a session whose directory is gone**: OpenCode holds archive
+  state since 2.1 (`PATCH /api/session/{id}` with `archived`), but the PATCH
+  builds the session's location and answers `LocationNotFoundError` once the
+  folder was deleted, which is where every session of a removed worktree
+  ends up. `POST /api/session/{id}/move` still works there, so
+  `openchamber-sessions/session-archive.js` moves such a session to its
+  project's main folder (`canonical` from the project list) and archives it
+  there; `archive-store.js` marks it archived before the move and keeps only
+  sessions with no folder to move to. Entries written before 2.1 move to
+  OpenCode in one pass after start, one directory at a time, and every
+  location the pass started is unloaded right after
+  (`DELETE /api/debug/location`).
   Session metadata is not a workaround since 2.0.15: it lives on the OpenCode
   record, written by merge-then-PATCH in `session-metadata-store.js`, which
   also migrates the old `sessions-metadata.json`. Provider credentials are
   not one either since 2.0.20: `opencode/auth.js` reads `GET /api/credential`.
+- **MCP elicitation forms without a location**: up to 2.1.3 OpenCode
+  publishes their `form.created` / `form.cancelled` with no directory, so
+  `routeUnlocatedLocationScopedForm` in `packages/ui/src/sync/location-scoped-forms.ts`
+  files them by re-reading the likely directories. 2.1.4 publishes the
+  location; remove that routing when `MINIMUM_OPENCODE_VERSION` reaches 2.1.4.
 - **1.x sessions created after the one-shot migration**:
   `v1-migration-topup.js` rewinds the migration cursor before a managed start,
   only when no revisited session has 2.x activity.
@@ -81,10 +96,14 @@ the workaround goes and the record comes from OpenCode.
   route does not declare, so session update/delete/archive report the status
   without OpenCode's message or log `ref`.
 
-Open asks upstream (OpenCode Slack): declaring 500 bodies on session
+Open asks upstream (OpenCode Slack): archiving a session whose directory is
+gone without building its location, so it need not move; declaring 500 bodies on session
 mutations; `provider.list` and `agent.list` waiting for plugin activation the
 way `model.list` does since 2.0.27, which would retire the cold-catalog
-recovery in `useConfigStore`. Dropped: an import route for missing 1.x
+recovery in `useConfigStore`; built-in provider plugins setting
+attribution headers only when the client has not set its own, so a client can
+name itself to a provider (today some plugins overwrite provider-level
+headers). Dropped: an import route for missing 1.x
 sessions (the top-up workaround is enough). Check the newest tag before re-asking.
 
 ## Behaviour to expect
@@ -137,7 +156,8 @@ gap.
 - Pinned version: `opencodeCli.version` in `packages/electron/package.json`
   (the bundled binary) and `@opencode/client` / `@opencode/schema` in the
   root, ui, web and vscode manifests, plus `@opencode/cli@` in the
-  Dockerfile. They move together.
+  Dockerfile. They move together. The `opencode.url` tag in `flake.nix` is the
+  exception: it follows `opencodeCli.version` on its own (see the bump steps).
 
 ## "What's new in OpenCode 2.0.x?"
 
@@ -157,8 +177,14 @@ tag and the newest tag is classified.
 ## Bumping the pinned OpenCode
 
 Move every pin to the same tag and check out that tag in the reference
-checkout (`git checkout vX.Y.Z` in `~/projects/opencode`), `bun install`, then `tsc` in `packages/ui`,
-`packages/web`, `packages/vscode`; the isolated ui suites; web vitest; vscode
+checkout (`git checkout vX.Y.Z` in `~/projects/opencode`), `bun install`, then `bun run type-check`
+(it covers `packages/ui`, `packages/web` and `packages/vscode`); the isolated ui suites; web vitest; vscode
 tests. A new message `type` or event needs a case in `model.ts` and
 `events.ts` before it renders. Verify `@opencode/cli@<tag>` exists on npm:
 the desktop packaging and the Docker image install it.
+
+Leave `flake.nix`, `flake.lock` and `nix/hashes.json` at the old tag. When the
+bump reaches `main`, the `nix-hashes` workflow runs `nix run .#update-hashes`:
+it moves the `flake.nix` tag to `opencodeCli.version`, re-bakes the hashes, and
+opens a PR. The hashes come only from a Linux nix build, so a tag moved by hand
+still leaves the flake broken until that PR lands.

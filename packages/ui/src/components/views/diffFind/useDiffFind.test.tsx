@@ -490,3 +490,19 @@ test('the active match stays put when an earlier file gains matches', async () =
   expect(api.currentMatch).toEqual(active);
   expect(api.currentIndex).toBe(2);
 });
+
+test('a closed bar takes new sources on every render without re-rendering itself', async () => {
+  // Sources rebuilt on each render, as a range cache does before its effect
+  // runs. With the bar closed nothing is searched, so the render-phase index
+  // sync must not see new matches and loop.
+  let renders = 0;
+  const Unstable = () => {
+    renders += 1;
+    api = useDiffFind({ sources: [{ filePath: 'a.ts', layout: 'inline', revision: 'r', load: async () => null }] });
+    return null;
+  };
+  await act(async () => root.render(<Unstable />));
+  await act(async () => root.render(<Unstable />));
+  expect(api.isOpen).toBe(false);
+  expect(renders).toBeLessThan(6);
+});

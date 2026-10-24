@@ -2590,12 +2590,14 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
 
         const modelPickerLabels = {
             searchPlaceholder: t('chat.modelControls.searchModels'),
+            list: t('chat.modelControls.modelListAria'),
             noResults: t('chat.modelControls.noModelsFound'),
             favorites: t('chat.modelControls.favorites'),
             recent: t('chat.modelControls.recent'),
             keyboardHint: t('chat.modelControls.keyboardHintNavigate'),
             favorite: t('chat.modelControls.favoriteAria'),
             unfavorite: t('chat.modelControls.unfavoriteAria'),
+            provider: t('chat.modelControls.provider'),
             capabilities: t('chat.modelControls.capabilities'),
             capabilityToolCalling: t('chat.modelControls.capability.toolCalling'),
             capabilityReasoning: t('chat.modelControls.capability.reasoning'),
@@ -2949,7 +2951,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
             return null;
         }
 
-        const displayVariant = currentVariant ?? t('chat.modelControls.default');
+        const displayVariant = currentVariant ? formatEffortLabel(currentVariant) : t('chat.modelControls.default');
         const isDefault = !currentVariant;
         const colorClass = isDefault ? 'text-muted-foreground' : 'text-[color:var(--status-info)]';
         // An effort nobody picked in this composer is this model's configured
@@ -3025,7 +3027,7 @@ export const ModelControls: React.FC<ModelControlsProps> = ({
                         {displayVariants.length > 0 && <DropdownMenuSeparator />}
                         {displayVariants.map((variant) => {
                             const selected = currentVariant === variant;
-                            const label = variant.charAt(0).toUpperCase() + variant.slice(1);
+                            const label = formatEffortLabel(variant);
                             return (
                                 <DropdownMenuItem
                                     key={variant}

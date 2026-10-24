@@ -57,17 +57,20 @@ import {
   expandSnippets,
   setWebSearchSelection,
   setWarmingEnabled,
+  setSkillEnabled,
   getWebSearchSource,
   type SnippetScope,
 } from './opencodeConfig';
-import { parseWebSearchSelection } from './opencode-config-v2';
+import { parseWebSearchSelection, skillSwitchRequestSchema } from './opencode-config-v2';
 import {
-  getSkillsCatalog,
+  getSkillsCatalogSourceItems,
+  getSkillsCatalogSources,
   scanSkillsRepository as scanSkillsRepositoryFromGit,
   installSkillsFromRepository as installSkillsFromGit,
   type SkillsCatalogSourceConfig,
 } from './skillsCatalog';
 import { buildAppliedResponse } from './config-mutation-response';
+import { magicPromptRequestSchema, type MagicPromptHttpResponse, type MagicPromptRequest } from './magic-prompts';
 import type { BridgeContext, BridgeResponse } from './bridge';
 import { appendInstalledSources, removeInstalledSources } from '../../web/server/lib/skills-catalog/installed-sources.js';
 
@@ -80,10 +83,8 @@ type BridgeMessageInput = {
 type ConfigRuntimeDeps = {
   readSettings: (ctx?: BridgeContext) => Record<string, unknown>;
   persistSettings: (changes: Record<string, unknown>, ctx?: BridgeContext) => Promise<Record<string, unknown>>;
-  readMagicPromptOverrides: () => { version: number; overrides: Record<string, string> };
-  saveMagicPromptOverride: (id: string, text: string) => Promise<{ version: number; overrides: Record<string, string> }>;
-  resetMagicPromptOverride: (id: string) => Promise<{ version: number; overrides: Record<string, string> }>;
-  resetAllMagicPromptOverrides: () => Promise<{ version: number; overrides: Record<string, string> }>;
+  /** One `/api/magic-prompts` request; the webview answers with the returned status and body. */
+  handleMagicPromptRequest: (request: MagicPromptRequest) => Promise<MagicPromptHttpResponse>;
   fetchOpenCodeSkillsFromApi: (ctx: BridgeContext | undefined, workingDirectory?: string) => Promise<DiscoveredSkill[] | null>;
   clientReloadDelayMs: number;
 };
@@ -221,35 +222,11 @@ export async function handleConfigBridgeMessage(
       };
     }
 
-    case 'api:magic-prompts:get': {
-      return { id, type, success: true, data: deps.readMagicPromptOverrides() };
-    }
-
-    case 'api:magic-prompts:save': {
-      const request = (payload || {}) as { id?: string; text?: string };
-      const promptId = typeof request.id === 'string' ? request.id : '';
-      if (!promptId) {
-        return { id, type, success: false, error: 'Prompt id is required' };
-      }
-      if (typeof request.text !== 'string') {
-        return { id, type, success: false, error: 'Prompt text is required' };
-      }
-      const data = await deps.saveMagicPromptOverride(promptId, request.text);
-      return { id, type, success: true, data };
-    }
-
-    case 'api:magic-prompts:reset': {
-      const request = (payload || {}) as { id?: string };
-      const promptId = typeof request.id === 'string' ? request.id : '';
-      if (!promptId) {
-        return { id, type, success: false, error: 'Prompt id is required' };
-      }
-      const data = await deps.resetMagicPromptOverride(promptId);
-      return { id, type, success: true, data };
-    }
-
-    case 'api:magic-prompts:reset-all': {
-      const data = await deps.resetAllMagicPromptOverrides();
+    case 'api:magic-prompts': {
+      const request = magicPromptRequestSchema.safeParse(payload);
+      const data: MagicPromptHttpResponse = request.success
+        ? await deps.handleMagicPromptRequest(request.data)
+        : { status: 400, body: { error: 'Invalid magic prompt request' } };
       return { id, type, success: true, data };
     }
 
@@ -432,6 +409,20 @@ export async function handleConfigBridgeMessage(
       }
       const result = setWarmingEnabled(enabled);
       return { id, type, success: true, data: { success: true, changed: result.changed } };
+    }
+
+    // PUT /api/config/skill-switch — see the web route in
+    // packages/web/server/lib/opencode/skill-routes.js.
+    case 'api:config/skill-switch': {
+      const parsed = skillSwitchRequestSchema.extend({ directory: z.string().optional() }).safeParse(payload);
+      if (!parsed.success) {
+        return { id, type, success: false, error: 'id must be a skill id, enabled a boolean and scope user or project' };
+      }
+      const workingDirectory = resolveWorkingDirectory(ctx, parsed.data.directory);
+      if (parsed.data.scope === 'project' && !workingDirectory) {
+        return { id, type, success: false, error: 'A project skill needs a directory' };
+      }
+      return { id, type, success: true, data: setSkillEnabled({ ...parsed.data, directory: workingDirectory }) };
     }
 
     case 'api:config/mcp': {
@@ -741,12 +732,19 @@ export async function handleConfigBridgeMessage(
     }
 
     case 'api:config/skills:catalog': {
-      const refresh = Boolean((payload as { refresh?: boolean } | undefined)?.refresh);
+      const sources = getSkillsCatalogSources(parseSkillsCatalogSources(deps.readSettings(ctx)));
+      return { id, type, success: true, data: { ok: true, sources, itemsBySource: {} } };
+    }
+
+    case 'api:config/skills:catalog/source': {
+      const { sourceId, refresh } = (payload || {}) as { sourceId?: string; refresh?: boolean };
       const workingDirectory = ctx?.manager?.getWorkingDirectory() || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-      const settings = deps.readSettings(ctx);
-      const additionalSources = parseSkillsCatalogSources(settings);
-      const installedSkills = await resolveDiscoveredSkills(deps, ctx, workingDirectory);
-      const data = await getSkillsCatalog(workingDirectory, refresh, additionalSources, installedSkills);
+      const data = await getSkillsCatalogSourceItems({
+        sourceId: String(sourceId || ''),
+        refresh: refresh === true,
+        additionalSources: parseSkillsCatalogSources(deps.readSettings(ctx)),
+        installedSkills: await resolveDiscoveredSkills(deps, ctx, workingDirectory),
+      });
       return { id, type, success: true, data };
     }
 

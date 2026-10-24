@@ -143,10 +143,10 @@ iOS Simulator helpers: `mobile:sim:{boot,install,launch,run,serve,list,kill}` (s
 - Manifest: permissions `INTERNET`, `CAMERA` (+ optional camera feature), `POST_NOTIFICATIONS`
   (Android 13+; older versions allow notifications by default). `windowSoftInputMode=adjustResize`.
   FCM `default_notification_icon=@drawable/ic_stat_notify`.
-- Adaptive and themed launcher icon: full-bleed color background + `ic_launcher_foreground` (sources under
-  `packages/mobile/assets/`, regenerable with `@capacitor/assets`). The `<monochrome>` layer
-  (`ic_launcher_monochrome.png`) is hand-maintained: regeneration rewrites `ic_launcher.xml`
-  without it, so re-add the layer afterwards.
+- Adaptive and themed launcher icon: full-bleed color background + `ic_launcher_foreground`, plus the
+  `<monochrome>` layer (`ic_launcher_monochrome.png`). All of them, and `assets/icon-*.png`, are written
+  by `bun run brand:generate` (`scripts/brand`); `@capacitor/assets` would rewrite `ic_launcher.xml`
+  without the monochrome layer, so do not use it for icons.
 
 ## Quirks / gotchas
 
@@ -156,6 +156,15 @@ iOS Simulator helpers: `mobile:sim:{boot,install,launch,run,serve,list,kill}` (s
 - **Android WebView version**: the UI uses `color-mix()` (Tailwind v4 + theme) which needs
   Chromium **111+**. An outdated Android System WebView renders translucency/selection wrong — tell
   testers to keep Android System WebView updated (or use a device with a current one).
+- **Android top inset comes from one place per OS version.** On Android 14 and older,
+  `StatusBar.setOverlaysWebView({ overlay: false })` moves the WebView below the status bar, yet
+  Capacitor still injects the bar height as `--safe-area-inset-top` once the WebView is 140 or
+  newer. Once that call succeeds on those versions (reported by the app-local `WindowLayout`
+  plugin; the WebView user agent is unreliable because GrapheneOS's Vanadium always says
+  `Android 10`), `useNativeMobileChrome` adds `oc-android-below-status-bar` and `mobile.css` zeroes that inset; Android 15+
+  is edge-to-edge and keeps the injected value. Without it the app showed an empty strip under
+  the status bar (#4803). The Android 14 emulator image ships WebView 113, so reproducing it
+  needs a newer `com.android.webview` installed and selected.
 - **Capacitor stream transport is locked to SSE** on the native apps (native WebSocket streaming is
   unreliable on Android). The Chat transport setting shows SSE selected and disables the others in
   the Capacitor shell.
@@ -180,8 +189,9 @@ iOS Simulator helpers: `mobile:sim:{boot,install,launch,run,serve,list,kill}` (s
   an inline `minHeight: 0`.
 - **A custom Control Center icon** must be a custom SF Symbol (`swiftdraw --format sfsymbol`, default
   Small variants) built from an SVG that keeps its `transform` attributes, drawn with bold strokes,
-  referenced as `Label("…", image: "OCLogoSymbol")`. Control Center caches icons system-wide: after
-  changing one, reboot the device.
+  referenced as `Label("…", image: "OCLogoSymbol")`. `bun run brand:generate` builds `OCLogoSymbol` this
+  way on a Mac with `swiftdraw` (`brew install swiftdraw`). Control Center caches icons system-wide:
+  after changing one, reboot the device.
 
 ## Validation
 

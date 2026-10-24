@@ -13,9 +13,12 @@ import { useInputStore } from "./input-store"
 import type { ChildStoreManager } from "./child-store"
 import { computeSubtreeIds } from "./scoped-blocking-requests"
 import { opencodeClient, type SyntheticContextInput } from "@/lib/opencode/client"
+import { findMessagePageItem } from "@/lib/opencode/messagePaging"
 import { toJsonRecord } from "@/lib/opencode/json"
 import { ascendingId } from "@/lib/opencode/ids"
 import { mergeSessionDirectoryMetadata, resolveGlobalSessionDirectory, useGlobalSessionsStore } from "@/stores/useGlobalSessionsStore"
+import { readGlobalSessionLineage } from "@/stores/sessionLineage"
+import { isRestorableOnItsOwn } from "./session-restore-rule"
 import { useConfigStore } from "@/stores/useConfigStore"
 import { waitForOpenCodeStartup } from "./opencode-startup-gate"
 import { registerSessionDirectory } from "./sync-refs"
@@ -42,6 +45,7 @@ import { getImperativeSessionMessageLoader } from "./session-message-loader"
 import { cleanupPersistedSessionState } from "./session-deletion-cleanup"
 import { requestSessionArchiveBatch, requestSessionLinksUpdate, requestSessionMetadataUpdate, requestSessionUnarchiveBatch, type SessionArchiveStamp } from "./session-archive-batch"
 import { registerBulkArchiveEchoes, releaseBulkArchiveEchoes } from "./bulk-archive-echo"
+import { markSessionUnreadSeen } from "./session-unread"
 import { getRuntimeKey } from "@/lib/runtime-switch"
 import { isRelayModeActive } from "@/lib/relay/runtime-tunnel"
 import { getErrorStatus, isAmbiguousSendFailure } from "./send-failure-classification"
@@ -522,17 +526,8 @@ async function fetchSessionMessages(sessionId: string, directory?: string | null
  * target older than that must be searched for across pages, not assumed gone.
  */
 async function findSessionMessageById(sessionId: string, messageId: string, directory?: string | null): Promise<Message | null> {
-  const seenCursors = new Set<string>()
-  let cursor: string | undefined
-  for (;;) {
-    const page = await opencodeClient.getSessionMessages(sessionId, cursor ? { cursor } : undefined, directory)
-    const found = page.items.map(({ info }) => info).find((message) => message.id === messageId)
-    if (found) return found
-    const next = page.cursor.next
-    if (!next || seenCursors.has(next)) return null
-    seenCursors.add(next)
-    cursor = next
-  }
+  const found = await findMessagePageItem(sessionId, (item) => item.info.id === messageId, {}, directory)
+  return found?.info ?? null
 }
 
 /**
@@ -1089,6 +1084,18 @@ function buildMetadataMergePatch(current: Metadata, next: Metadata): Metadata {
   return patch
 }
 
+/**
+ * The session's folder no longer exists, and OpenCode refuses any metadata
+ * write for it. Archive is OpenChamber's own record and still works, so the
+ * UI offers it.
+ */
+export class SessionDirectoryMissingError extends Error {
+  constructor(sessionId: string) {
+    super(`the folder of session ${sessionId} no longer exists`)
+    this.name = "SessionDirectoryMissingError"
+  }
+}
+
 export async function patchSessionMetadata(
   sessionId: string,
   directory: string | null | undefined,
@@ -1108,6 +1115,7 @@ export async function patchSessionMetadata(
   // reporting success would strand a review or btw link that the next load
   // silently drops.
   const result = await requestSessionMetadataUpdate(sessionId, buildMetadataMergePatch(currentMetadata, nextMetadata), targetDirectory)
+  if (result.outcome === "directory-missing") throw new SessionDirectoryMissingError(sessionId)
   if (result.outcome !== "updated") throw new Error(`session metadata update failed: ${result.reason}`)
   const updated: Session = { ...current, metadata: result.metadata }
   if (isStaleRuntime(expectedRuntimeKey)) throw new Error("runtime changed")
@@ -1795,9 +1803,11 @@ function commitArchivedSessions(stamps: SessionArchiveStamp[], directory: string
  * OpenChamber's own (OpenCode has no route for it), so this goes to the
  * OpenChamber unarchive route rather than the OpenCode client.
  *
- * A subsession is the agent's, not the user's: it is never restored on its
- * own. Restoring a top-level session brings its archived subsessions back with
- * it, so the agent runs it holds are whole again.
+ * A subsession is the agent's: under an archived parent it is never restored
+ * on its own. Restoring a top-level session brings its archived subsessions
+ * back with it, so the agent runs it holds are whole again. A subsession
+ * archived alone while its parent stayed active is restored on its own, back
+ * under that parent.
  */
 export async function unarchiveSession(sessionId: string, expectedRuntimeKey = getRuntimeKey()): Promise<boolean> {
   const { restoredIds } = await restoreSessionTree(sessionId, expectedRuntimeKey)
@@ -1805,33 +1815,16 @@ export async function unarchiveSession(sessionId: string, expectedRuntimeKey = g
 }
 
 /** Archived subsessions under a session, each parent before its children. */
-function archivedSubsessionIds(rootId: string): string[] {
-  const childrenByParentId = new Map<string, string[]>()
-  for (const session of useGlobalSessionsStore.getState().archivedSessions) {
-    if (!session.parentID) continue
-    const siblings = childrenByParentId.get(session.parentID) ?? []
-    siblings.push(session.id)
-    childrenByParentId.set(session.parentID, siblings)
-  }
-  const ids: string[] = []
-  const seen = new Set([rootId])
-  const queue = [rootId]
-  for (let index = 0; index < queue.length; index += 1) {
-    for (const childId of childrenByParentId.get(queue[index]) ?? []) {
-      if (seen.has(childId)) continue
-      seen.add(childId)
-      ids.push(childId)
-      queue.push(childId)
-    }
-  }
-  return ids
-}
+const archivedSubsessionIds = (rootId: string): string[] =>
+  readGlobalSessionLineage().descendantsOf(rootId, "archived").map((session) => session.id)
 
 async function restoreSessionTree(
   rootId: string,
   expectedRuntimeKey: string,
 ): Promise<{ restoredIds: string[]; failedIds: string[] }> {
-  if (useGlobalSessionsStore.getState().entityById.get(rootId)?.parentID) {
+  const { entityById } = useGlobalSessionsStore.getState()
+  const root = entityById.get(rootId)
+  if (root && !isRestorableOnItsOwn(root, entityById)) {
     recordSessionActionFailure(rootId, new Error("a subsession is restored with its parent"))
     return { restoredIds: [], failedIds: [rootId] }
   }
@@ -1861,6 +1854,9 @@ async function restoreArchivedSession(sessionId: string, expectedRuntimeKey: str
     }
     const restored = withArchivedAt(sessionId, null)
     if (restored) useGlobalSessionsStore.getState().upsertSession(restored)
+    // Archiving put away whatever the session last did, so a restored session
+    // does not come back unread.
+    markSessionUnreadSeen(sessionId)
     if (sessionDirectory) registerSessionDirectory(sessionId, sessionDirectory)
     promoteRestoredSessionOrdering(sessionId)
     // Archive discarded this session's status. An older directory snapshot
@@ -1908,8 +1904,8 @@ export type UnarchiveSessionsOptions = {
   expectedRuntimeKey?: string
   /**
    * Undo of an archive that just happened: put back exactly the sessions it
-   * moved, subsessions included. Without it a subsession is only restored
-   * with its parent.
+   * moved, subsessions included. Without it a subsession is restored on its
+   * own only while its parent is active (`isRestorableOnItsOwn`).
    */
   undo?: boolean
 }
