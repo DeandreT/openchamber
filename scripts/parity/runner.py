@@ -37,6 +37,7 @@ import virtual_display  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCENARIOS = Path(__file__).with_name("scenarios.json")
+EXCEPTIONS = Path(__file__).with_name("exceptions.json")
 INVENTORY = Path(__file__).with_name("inventory.json")
 ISOLATED_SERVER = REPO_ROOT / "scripts" / "perf" / "isolated-server.mjs"
 FIXTURE_PROVIDER = REPO_ROOT / "scripts" / "perf" / "fixture-provider.mjs"
@@ -295,7 +296,10 @@ def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], dire
             image = directory / f"{name}.png"
             settled = settle(client)
             client.screenshot(image)
+            # The reference's text is where glyph-edge noise may be forgiven.
+            text_boxes = getattr(client, "text_boxes", None)
             checkpoints[name] = {
+                "textBoxes": text_boxes() if text_boxes else [],
                 "image": str(image),
                 "settled": settled,
                 "rows": client.rows(),
@@ -446,6 +450,18 @@ def inventory_coverage(features: list[dict], results: dict[str, dict]) -> dict:
     return counts
 
 
+def approved_glyph_edges() -> set[tuple[str, str]]:
+    """The checkpoints whose glyph-edge noise the user approved, from
+    ``exceptions.json``; each entry names its region, reason and decision."""
+    document = json.loads(EXCEPTIONS.read_text())
+    approved = set()
+    for entry in document["glyphEdges"]:
+        if not all(entry.get(key) for key in ("scenario", "checkpoint", "region", "reason", "decision")):
+            raise ValueError(f"an exception needs its scenario, checkpoint, region, reason and decision: {entry}")
+        approved.add((entry["scenario"], entry["checkpoint"]))
+    return approved
+
+
 def run_scenarios(scenarios: list[dict], wanted: set[str] | None, output: Path, report: dict, args: argparse.Namespace) -> int:
     failed = 0
     for scenario in scenarios:
@@ -463,7 +479,10 @@ def run_scenarios(scenarios: list[dict], wanted: set[str] | None, output: Path, 
                 if candidate is None:
                     comparisons[name] = {"missing": True}
                     continue
-                image = compare.compare_images(Path(reference["image"]), Path(candidate["image"]), work / name, args.tolerance)
+                text_boxes = None
+                if (scenario["id"], name) in approved_glyph_edges():
+                    text_boxes = [[value * args.scale for value in box] for box in reference.get("textBoxes", [])]
+                image = compare.compare_images(Path(reference["image"]), Path(candidate["image"]), work / name, args.tolerance, text_boxes)
                 rects_reference = {row["key"]: row["rect"] for row in reference["rows"]}
                 rects_candidate = {row["key"]: row["rect"] for row in candidate["rows"]}
                 for target, rect in reference.get("targets", {}).items():
@@ -517,6 +536,7 @@ def run_scenarios(scenarios: list[dict], wanted: set[str] | None, output: Path, 
                 continue
             image = comparison["image"]
             print(f"  {name}: {image['differingPixels']} differing pixels ({image['differingShare']:.1%}), "
+                  f"{image['glyphEdgePixels']} glyph-edge pixels, "
                   f"{len(comparison['rows'])} row differences, {len(comparison['geometry'])} geometry differences, "
                   f"{len(comparison['unobserved'])} checks not observable natively, "
                   f"{len(comparison['unmetWaits'])} native waits not met"

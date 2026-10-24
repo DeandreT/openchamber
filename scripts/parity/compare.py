@@ -3,6 +3,16 @@
 Raw pixel equality is a detector, not the verdict: a reported region still
 needs review, and tolerances apply only to verified rasterization noise
 (see docs/rust-desktop/PARITY.md). Nothing here blurs, rescales or masks.
+
+Glyph-edge noise is the one approved kind (`exceptions.json`): Chromium puts
+glyphs on whole pixels and GPUI at sub-pixel phases, and their anti-aliasing
+differs, so the same text differs at its edges. A differing pixel counts as
+that noise only inside a text box of the reference and only when each image's
+colour lies, channel by channel, within the range the other image holds in
+the pixel's 3x3 neighbourhood (give or take `GLYPH_SLACK`): the same ink
+within a pixel, as the one-physical-pixel geometry rule allows. A missing,
+recoloured or further moved glyph leaves colours the other image has nowhere
+near, which still count.
 """
 
 from __future__ import annotations
@@ -14,6 +24,8 @@ import png
 
 # Mismatches are grouped into cells of this many pixels for reporting.
 CELL = 16
+# Channel levels a glyph-edge colour may sit outside the neighbourhood's range.
+GLYPH_SLACK = 8
 
 
 @dataclass
@@ -25,6 +37,9 @@ class ImageDifference:
     size_matches: bool
     differing_pixels: int = 0
     regions: list[dict] = field(default_factory=list)
+    # Differences classified as approved glyph-edge noise; never counted in
+    # `differing_pixels`, always reported.
+    glyph_edge_pixels: int = 0
 
     @property
     def identical(self) -> bool:
@@ -37,13 +52,24 @@ class ImageDifference:
             "sizeMatches": self.size_matches,
             "differingPixels": self.differing_pixels,
             "differingShare": round(self.differing_pixels / max(1, self.width * self.height), 6),
+            "glyphEdgePixels": self.glyph_edge_pixels,
             "regions": self.regions,
         }
 
 
-def compare_images(reference: Path, candidate: Path, output: Path, tolerance: int = 0) -> ImageDifference:
+def compare_images(
+    reference: Path,
+    candidate: Path,
+    output: Path,
+    tolerance: int = 0,
+    text_boxes: list[list[float]] | None = None,
+) -> ImageDifference:
     """Writes ``<output>-diff.png`` and ``<output>-overlay.png`` and reports
-    the pixels whose largest channel difference exceeds ``tolerance``."""
+    the pixels whose largest channel difference exceeds ``tolerance``.
+
+    With ``text_boxes`` (the reference's text, ``[x, y, width, height]`` in
+    image pixels), differences that are glyph-edge noise inside them are
+    counted apart and drawn yellow in the diff image."""
     left = png.read(reference)
     right = png.read(candidate)
     if (left.width, left.height) != (right.width, right.height):
@@ -54,6 +80,8 @@ def compare_images(reference: Path, candidate: Path, output: Path, tolerance: in
             regions=[{"reason": f"reference {left.width}x{left.height}, candidate {right.width}x{right.height}"}],
         )
     width, height = left.width, left.height
+    in_text = text_mask(text_boxes or [], width, height)
+    noise = 0
     diff = bytearray(width * height * 4)
     overlay = bytearray(width * height * 4)
     cells: dict[tuple[int, int], int] = {}
@@ -64,10 +92,16 @@ def compare_images(reference: Path, candidate: Path, output: Path, tolerance: in
         for channel in range(3):
             overlay[offset + channel] = (a[offset + channel] + b[offset + channel]) >> 1
         overlay[offset + 3] = 255
-        if delta > tolerance:
+        pixel = offset // 4
+        if delta > tolerance and in_text[pixel] and (
+            within_neighbourhood(left.rgba, right.rgba, pixel % width, pixel // width, width, height)
+            and within_neighbourhood(right.rgba, left.rgba, pixel % width, pixel // width, width, height)
+        ):
+            noise += 1
+            diff[offset : offset + 4] = b"\xff\xd0\x00\xff"
+        elif delta > tolerance:
             differing += 1
             diff[offset : offset + 4] = b"\xff\x00\x00\xff"
-            pixel = offset // 4
             cell = (pixel % width // CELL, pixel // width // CELL)
             cells[cell] = cells.get(cell, 0) + 1
         else:
@@ -76,8 +110,39 @@ def compare_images(reference: Path, candidate: Path, output: Path, tolerance: in
             diff[offset : offset + 4] = bytes((faded, faded, faded, 255))
     png.write(output.with_name(output.name + "-diff.png"), png.Image(width, height, diff))
     png.write(output.with_name(output.name + "-overlay.png"), png.Image(width, height, overlay))
-    return ImageDifference(width, height, True, differing, merge_cells(cells))
+    return ImageDifference(width, height, True, differing, merge_cells(cells), noise)
 
+
+def text_mask(boxes: list[list[float]], width: int, height: int) -> bytearray:
+    """One byte per pixel, set inside a text box widened by a pixel: an
+    anti-aliased edge can reach just past the box the layout reports."""
+    mask = bytearray(width * height)
+    for x, y, box_width, box_height in boxes:
+        left = max(0, int(x) - 1)
+        top = max(0, int(y) - 1)
+        right = min(width, int(x + box_width + 0.999) + 1)
+        bottom = min(height, int(y + box_height + 0.999) + 1)
+        for row in range(top, bottom):
+            start = row * width
+            mask[start + left : start + right] = b"\x01" * max(0, right - left)
+    return mask
+
+
+def within_neighbourhood(image: bytearray, other: bytearray, x: int, y: int, width: int, height: int) -> bool:
+    """Whether every channel of ``image`` at the pixel lies within the range
+    ``other`` holds in the pixel's 3x3 neighbourhood, give or take
+    ``GLYPH_SLACK``."""
+    offset = (y * width + x) * 4
+    neighbours = [
+        (ny * width + nx) * 4
+        for ny in range(max(0, y - 1), min(height, y + 2))
+        for nx in range(max(0, x - 1), min(width, x + 2))
+    ]
+    for channel in range(3):
+        values = [other[neighbour + channel] for neighbour in neighbours]
+        if not min(values) - GLYPH_SLACK <= image[offset + channel] <= max(values) + GLYPH_SLACK:
+            return False
+    return True
 
 def merge_cells(cells: dict[tuple[int, int], int]) -> list[dict]:
     """Joins touching mismatched cells into rectangles, largest first."""
