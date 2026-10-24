@@ -173,7 +173,7 @@ impl Workspace {
             .items_center()
             .gap(px(8.0))
             .text_color(palette.muted_foreground)
-            .child(glyph("donut-chart", 16.0, palette.muted_foreground))
+            .child(glyph("donut-chart", 14.0, palette.muted_foreground))
             .child(
                 div()
                     .flex_1()
@@ -482,7 +482,7 @@ pub(crate) fn collapsible_section(
             .cursor_pointer()
             .text_color(palette.muted_foreground)
             .hover(move |style| style.text_color(foreground))
-            .child(glyph(section.icon, 16.0, palette.muted_foreground))
+            .child(glyph(section.icon, 14.0, palette.muted_foreground))
             .child(
                 div()
                     .min_w_0()
@@ -602,7 +602,7 @@ pub(crate) fn icon_row(
         .items_center()
         .gap(px(8.0))
         .text_color(palette.muted_foreground)
-        .child(glyph(row.icon, 16.0, palette.muted_foreground))
+        .child(glyph(row.icon, 14.0, palette.muted_foreground))
         .child(
             div()
                 .flex_1()
