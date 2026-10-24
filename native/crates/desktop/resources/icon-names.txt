@@ -28,6 +28,7 @@ donut-chart
 equalizer-2
 error-warning
 eye
+file-copy
 file-edit
 file-text
 flask
@@ -75,4 +76,5 @@ survey
 target
 terminal
 terminal-box
+text-wrap
 tools

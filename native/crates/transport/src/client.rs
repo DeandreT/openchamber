@@ -11,6 +11,7 @@ use openchamber_native_core::session::{LiveStatus, SessionRecord};
 use openchamber_native_core::transcript::Message;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use reqwest::{Method, RequestBuilder, Response, StatusCode, Url};
+use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
@@ -30,6 +31,15 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 /// (`packages/web/server/lib/opencode/message-shells.js`).
 const PART_SHELLS_HEADER: &str = "x-openchamber-part-shells";
 const PART_SHELLS_VERSION: &str = "v1";
+/// Profile settings a client changes; fields left `None` are not sent, so
+/// the server keeps their values.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsChanges {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_block_line_wrap: Option<bool>,
+}
+
 /// The settings surface this client reads and writes.
 const SURFACE: &str = "desktop";
 /// Directories per worktree request; the server caps a batch.
@@ -126,6 +136,8 @@ pub struct ServerSettings {
     pub routing_feature_available: Option<bool>,
     /// `timeFormatPreference`: the clock message times use.
     pub clock: ClockPreference,
+    /// `codeBlockLineWrap`, when the document carries it.
+    pub code_block_line_wrap: Option<bool>,
     /// The model defaults of registered projects that set any.
     pub project_defaults: Vec<ProjectDefaults>,
     /// The display labels of registered projects that set one.
@@ -227,6 +239,10 @@ impl ServerSettings {
                 .and_then(Value::as_str)
                 .map(ClockPreference::from_setting)
                 .unwrap_or_default(),
+            code_block_line_wrap: settings
+                .code_block_line_wrap
+                .as_ref()
+                .and_then(Value::as_bool),
         }
     }
 
@@ -516,6 +532,22 @@ impl ServerClient {
         Ok(ServerSettings::from_wire(settings))
     }
 
+    /// Saves `changes` for this client's surface, as the web's settings
+    /// write does, and returns the merged settings the server answers with.
+    pub async fn save_settings(
+        &self,
+        changes: &SettingsChanges,
+    ) -> Result<ServerSettings, TransportError> {
+        let response = self
+            .authorized(Method::PUT, self.settings_url())
+            .json(changes)
+            .send()
+            .await
+            .map_err(TransportError::from_request)?;
+        let settings: wire::Settings = read_json(response).await?;
+        Ok(ServerSettings::from_wire(settings))
+    }
+
     /// The URL of one worktree batch; `first` routes it as the UI does.
     pub fn worktree_batch_url(&self, first: &str) -> Url {
         let mut url = self.endpoint.url("api/git/project-worktrees");
@@ -748,7 +780,8 @@ mod tests {
                 {"providerID": "perf", "modelID": "d"}
             ],
             "routingFeatureAvailable": "yes",
-            "timeFormatPreference": "24h"
+            "timeFormatPreference": "24h",
+            "codeBlockLineWrap": false
         }))
         .expect("settings with malformed values still parse");
         let settings = ServerSettings::from_wire(wire);
@@ -772,6 +805,22 @@ mod tests {
         );
         assert_eq!(settings.routing_feature_available, None);
         assert_eq!(settings.clock, ClockPreference::TwentyFourHour);
+        assert_eq!(settings.code_block_line_wrap, Some(false));
+    }
+
+    #[test]
+    fn settings_changes_carry_only_what_changed() {
+        let changes = SettingsChanges {
+            code_block_line_wrap: Some(false),
+        };
+        assert_eq!(
+            serde_json::to_value(&changes).expect("serializes"),
+            json!({ "codeBlockLineWrap": false })
+        );
+        assert_eq!(
+            serde_json::to_value(SettingsChanges::default()).expect("serializes"),
+            json!({})
+        );
     }
 
     #[test]

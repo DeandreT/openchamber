@@ -29,6 +29,9 @@ const MARGIN_TOP: f32 = 8.0;
 const MARGIN_BOTTOM: f32 = 4.0;
 const ROW_HEIGHT: f32 = 26.0;
 const ROW_GAP: f32 = 8.0;
+/// The gap to the changed-files line, which a turn that stopped lays out
+/// even when it lists nothing.
+const FILES_GAP: f32 = 6.0;
 /// Copy, continue, pin and more: four 26 px buttons with `gap-1.5`.
 const ACTIONS_WIDTH: f32 = 4.0 * 26.0 + 3.0 * 6.0;
 /// `text-sm`, in rems of the 16 px root, and its pixels for measuring.
@@ -52,6 +55,8 @@ struct Facts {
     agent: Option<SharedString>,
     duration: Option<SharedString>,
     time: Option<SharedString>,
+    /// Whether the turn stopped, which lays out the changed-files line.
+    stopped: bool,
 }
 
 impl Workspace {
@@ -138,6 +143,7 @@ impl Workspace {
                 .mt(px(MARGIN_TOP))
                 .mb(px(MARGIN_BOTTOM))
                 .child(row)
+                .when(facts.stopped, |this| this.pb(px(FILES_GAP)))
                 .into_any_element(),
         )
     }
@@ -200,6 +206,7 @@ impl Workspace {
             duration,
             time,
             model,
+            stopped,
         })
     }
 }
