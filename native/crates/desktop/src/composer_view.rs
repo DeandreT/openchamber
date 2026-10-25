@@ -91,7 +91,7 @@ impl Workspace {
         if self.sidebar_open {
             area -= sidebar_view::SIDEBAR_WIDTH;
         }
-        if self.work_status_open {
+        if self.work_status_inline(window) {
             area -= context_panel::PANEL_WIDTH;
         }
         area

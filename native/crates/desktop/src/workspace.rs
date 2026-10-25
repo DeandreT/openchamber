@@ -115,6 +115,7 @@ pub struct Workspace {
     pub(crate) sidebar_list: ListState,
     pub(crate) sidebar_open: bool,
     pub(crate) work_status_open: bool,
+    pub(crate) work_status_overlay: bool,
     /// Whether the work status card's Context sources section is expanded.
     pub(crate) work_status_context_open: bool,
     /// Turn stats start expanded.
@@ -198,6 +199,7 @@ impl Workspace {
             sidebar_list: ListState::new(0, ListAlignment::Top, px(SIDEBAR_OVERDRAW)),
             sidebar_open: true,
             work_status_open: true,
+            work_status_overlay: false,
             work_status_context_open: false,
             work_status_telemetry_open: true,
             title_drag_armed: false,
@@ -338,8 +340,13 @@ impl Workspace {
         cx.notify();
     }
 
-    pub fn toggle_work_status(&mut self, cx: &mut Context<Self>) {
-        self.work_status_open = !self.work_status_open;
+    pub fn toggle_work_status(&mut self, window: &Window, cx: &mut Context<Self>) {
+        if self.work_status_open && !self.work_status_fits(window) {
+            self.work_status_overlay = !self.work_status_overlay;
+        } else {
+            self.work_status_open = !self.work_status_open;
+            self.work_status_overlay = false;
+        }
         cx.notify();
     }
 

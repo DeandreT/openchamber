@@ -26,6 +26,8 @@ use crate::workspace::Workspace;
 
 /// Width of the docked work status panel.
 pub const PANEL_WIDTH: f32 = 324.0;
+/// `WORK_STATUS_REQUIRED_ROW_WIDTH`: the panel column plus 560 px of chat.
+const REQUIRED_CHAT_AREA_WIDTH: f32 = PANEL_WIDTH + 560.0;
 /// Width of the rail.
 pub const RAIL_WIDTH: f32 = 44.0;
 const CARD_RADIUS: f32 = 12.0;
@@ -60,6 +62,20 @@ const RAIL_SURFACES: &[(&str, &str, &str)] = &[
 ];
 
 impl Workspace {
+    pub(crate) fn work_status_fits(&self, window: &gpui_kit::Window) -> bool {
+        let sidebar = if self.sidebar_open {
+            crate::sidebar_view::SIDEBAR_WIDTH
+        } else {
+            0.0
+        };
+        f32::from(crate::chrome::content_size(window).width) - sidebar - RAIL_WIDTH
+            >= REQUIRED_CHAT_AREA_WIDTH
+    }
+
+    pub(crate) fn work_status_inline(&self, window: &gpui_kit::Window) -> bool {
+        self.work_status_open && self.work_status_fits(window)
+    }
+
     /// The docked work status card.
     pub(crate) fn render_work_status_panel(
         &self,

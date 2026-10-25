@@ -34,6 +34,9 @@ read-only until prompt submission has its error and reconciliation paths.
 - `context_panel.rs` also reads the selected session's context fill against
   the limit `useContextWindowLimits` picks (the record's model, the newest
   answer's, the composer's) and draws its row and meter.
+  The card yields its column below the web's required chat-area width. In
+  that layout its header control opens an overlay, preserving transcript
+  width; widening the window returns it to its inline position.
 - `project_section.rs` draws the card's Project section: the project's
   label, the attention callout, the branch and changed-files rows from the
   session directory's Git status, and the project action row. It reads the
@@ -59,6 +62,10 @@ read-only until prompt submission has its error and reconciliation paths.
   keeping the place of the message actions the web lays out for hover. The
   time is the step's completion in the local time zone (`chrono`), written
   with the locale's exported data; settings choose the clock.
+  Fitted facts paint in one text row so fractional widths do not accumulate
+  rounding between fragments. Narrow rows retain the element-based layout
+  and model truncation. The fitted row exposes the combined text as its
+  accessible label and mirrors fragment placement in right-to-left locales.
 - `sidebar_item.rs` copies the core row model into owned rows. The core model
   borrows session records and entities cannot hold borrows. The default
   projection lists Works under each project. A worktree starts folded, opens

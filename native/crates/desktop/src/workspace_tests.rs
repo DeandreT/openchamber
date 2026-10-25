@@ -108,6 +108,37 @@ fn clicking_a_row_selects_its_session(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn narrow_windows_offer_work_status_as_an_overlay(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        assert!(workspace.read(cx).work_status_inline(window));
+        workspace.update(cx, |workspace, _| workspace.initial_size = None);
+    })
+    .expect("window is open");
+    cx.simulate_window_resize(window, size(px(900.0), px(600.0)));
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            !workspace.read(cx).work_status_inline(window),
+            "the panel leaves room for the transcript"
+        );
+        window.click(ElementId::Name("work-status-toggle".into()), cx);
+        assert!(
+            workspace.read(cx).work_status_overlay,
+            "the header opens the overlay"
+        );
+        window.render_frame(cx);
+        window.click(ElementId::Name("work-status-toggle".into()), cx);
+        assert!(
+            !workspace.read(cx).work_status_overlay,
+            "the same control closes it"
+        );
+    })
+    .expect("window is open");
+}
+
+#[gpui_kit::test]
 fn the_window_opens_on_a_new_session(cx: &mut TestAppContext) {
     let (window, workspace) = open(cx);
     assert_eq!(selected(&workspace, cx), None, "nothing is selected");

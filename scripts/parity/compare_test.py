@@ -77,5 +77,16 @@ class GlyphEdgeTest(unittest.TestCase):
         self.assertGreater(self.compare(glyphs(edge=90), dimmer).differing_pixels, 0)
 
 
+class HiddenGeometryTest(unittest.TestCase):
+    def test_hidden_targets_match_absent_native_nodes(self):
+        for hidden in (None, [50, 20, 200, 0], [50, 20, 0, 200]):
+            self.assertEqual(compare.compare_geometry({"panel": hidden}, {"panel": None}, 1), [])
+
+    def test_visible_missing_targets_still_fail(self):
+        visible = [50, 20, 200, 100]
+        self.assertEqual(len(compare.compare_geometry({"panel": visible}, {"panel": None}, 1)), 1)
+        self.assertEqual(len(compare.compare_geometry({"panel": None}, {"panel": visible}, 1)), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
