@@ -124,6 +124,7 @@ class NativeClient:
         if connected:
             self.wait_for_marker("sessions-shown", timeout_s)
         self._app = self._find_app(timeout_s)
+        self._resize_to_requested(timeout_s)
         # A painted frame after readiness: markers are emitted at paint.
         self._read_marks(0.3)
 
@@ -134,6 +135,31 @@ class NativeClient:
         if not windows:
             raise RuntimeError("the native client has no X11 window")
         return windows[-1]
+
+    def _resize_to_requested(self, timeout_s: float) -> None:
+        """Match physical content dimensions, accounting for the native frame.
+        The application's initial-size hold may briefly restore its startup
+        dimensions, so verify the result and retry within the readiness limit."""
+        target = (round(self.width * self.scale), round(self.height * self.scale))
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            content = self._content()
+            if (content.width, content.height) == target:
+                return
+            window = self._window()
+            geometry = dict(line.split("=", 1) for line in subprocess.run(
+                ["xdotool", "getwindowgeometry", "--shell", window],
+                check=True, capture_output=True, text=True, timeout=10,
+            ).stdout.split())
+            width = target[0] + int(geometry["WIDTH"]) - content.width
+            height = target[1] + int(geometry["HEIGHT"]) - content.height
+            subprocess.run(
+                ["xdotool", "windowsize", window, str(width), str(height)],
+                check=True, capture_output=True, timeout=10,
+            )
+            time.sleep(0.1)
+        content = self._content()
+        raise TimeoutError(f"native content is {content.width}x{content.height}, wanted {target[0]}x{target[1]}")
 
     def _activate(self) -> None:
         """Raises and focuses the client's window, so captures of the active

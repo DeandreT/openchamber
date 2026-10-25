@@ -55,6 +55,9 @@ under X11 and at a fixed device scale: `--force-device-scale-factor` for
 Electron and `GPUI_X11_SCALE_FACTOR` for GPUI. Electron's DevTools endpoint
 cannot size its window; when its viewport differs from the requested size the
 bridge emulates it and the launch record says `emulated: true`.
+The native adapter resizes its owned X11 window and verifies the content
+dimensions after readiness. It accounts for the client-side frame and fails
+if the requested size cannot be reached.
 
 ## The private display
 
@@ -97,7 +100,9 @@ active-window capture without the frame's shadow, and cut to the content root
 is measured from the same root. Runs are serial and each client starts fresh.
 
 A scenario passes only when every checkpoint matches in size and pixels, rows
-and geometry; geometry allows one physical pixel. `--tolerance` ignores
+and geometry; geometry allows one physical pixel. A zero-sized reference
+target and an absent native node both count as hidden; a visible target missing
+from either client still fails. `--tolerance` ignores
 per-channel differences up to its value and is for reviewed rasterization
 noise only. Glyph-edge noise is forgiven only at the checkpoints
 `exceptions.json` lists, each with its region, reason and the user's

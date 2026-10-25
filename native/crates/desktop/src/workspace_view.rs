@@ -55,6 +55,9 @@ impl Render for Workspace {
             self.initial_size = None;
         }
         self.sync_composer_placeholder(window, cx);
+        if self.work_status_fits(window) {
+            self.work_status_overlay = false;
+        }
         self.ensure_send_catalog(cx);
         self.ensure_provider_logos(cx);
         self.ensure_project_readouts(cx);
@@ -118,12 +121,25 @@ impl Render for Workspace {
                     .child(self.render_header(&palette, direction, window, cx))
                     .child(
                         div()
+                            .relative()
                             .flex_1()
                             .min_h_0()
                             .flex_row_from(direction)
                             .child(chat)
-                            .when(self.work_status_open, |this| {
+                            .when(self.work_status_inline(window), |this| {
                                 this.child(self.render_work_status_panel(&palette, direction, cx))
+                            })
+                            .when(self.work_status_overlay, |this| {
+                                this.child(
+                                    div()
+                                        .absolute()
+                                        .top_0()
+                                        .bottom_0()
+                                        .inset_end(direction, px(crate::context_panel::RAIL_WIDTH))
+                                        .child(
+                                            self.render_work_status_panel(&palette, direction, cx),
+                                        ),
+                                )
                             })
                             .child(self.render_rail(&palette, direction, cx)),
                     ),
@@ -263,15 +279,17 @@ impl Workspace {
                                     "list-indefinite",
                                     strings.get("header.workStatusPanel.toggleAria"),
                                 )
-                                .tone(if self.work_status_open {
-                                    ButtonTone::Active
-                                } else {
-                                    ButtonTone::Quiet
-                                })
+                                .tone(
+                                    if self.work_status_inline(window) || self.work_status_overlay {
+                                        ButtonTone::Active
+                                    } else {
+                                        ButtonTone::Quiet
+                                    },
+                                )
                                 .render(
                                     palette,
                                     cx,
-                                    |this, _, cx| this.toggle_work_status(cx),
+                                    |this, window, cx| this.toggle_work_status(window, cx),
                                 ),
                             ),
                     )

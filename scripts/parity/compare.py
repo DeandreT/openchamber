@@ -174,13 +174,17 @@ def merge_cells(cells: dict[tuple[int, int], int]) -> list[dict]:
 def compare_geometry(reference: dict[str, list[float]], candidate: dict[str, list[float]], scale: float) -> list[dict]:
     """Targets whose logical rectangles differ by more than one physical pixel.
 
-    A target present in only one client is reported too: a missing control is
-    a difference, never a skip.
+    A visible target present in only one client is reported too. A zero-sized
+    DOM node and an absent native node both describe a hidden target.
     """
     allowance = 1.0 / scale
     differences = []
     for target in sorted(set(reference) | set(candidate)):
         left, right = reference.get(target), candidate.get(target)
+        left = left if left is not None and left[2] > 0 and left[3] > 0 else None
+        right = right if right is not None and right[2] > 0 and right[3] > 0 else None
+        if left is None and right is None:
+            continue
         if left is None or right is None:
             differences.append({"target": target, "reference": left, "candidate": right, "reason": "missing"})
             continue

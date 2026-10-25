@@ -10,8 +10,9 @@ use std::sync::Arc;
 
 use chrono::{Datelike, Local, NaiveDate, TimeZone, Timelike};
 use gpui_kit::{
-    AnyElement, Context, FontFeatures, Hsla, IntoElement, ParentElement, SharedString, Styled,
-    Window, div, prelude::FluentBuilder, px,
+    AnyElement, App, Context, FontFeatures, Hsla, InteractiveElement, IntoElement, ParentElement,
+    Pixels, Role, SharedString, StatefulInteractiveElement, Styled, TextAlign, Window, canvas, div,
+    point, prelude::FluentBuilder, px,
 };
 use openchamber_native_core::message_time::{ClockPreference, LocalDate, LocalDateTime};
 use openchamber_native_core::send_config::{self, ModelChoice};
@@ -101,41 +102,80 @@ impl Workspace {
         let icon = self
             .render_provider_logo(&facts.model.provider_id, ICON, 1.0, palette)
             .unwrap_or_else(|| div().size(px(ICON)).flex_shrink_0().into_any_element());
-        let model = div()
-            .min_w_0()
-            .flex_shrink(1.0)
-            .flex_row_from(direction)
-            .items_center()
-            .gap(px(FACT_GAP))
-            .child(icon)
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .css_text(TEXT_SIZE, TEXT_LINE, cx)
-                    .child(facts.model_name),
-            );
+        let inline = render_inline_facts(
+            facts.model_name.clone(),
+            [
+                facts
+                    .effort
+                    .clone()
+                    .filter(|_| effort)
+                    .map(|text| (text, Digits::Proportional)),
+                facts
+                    .agent
+                    .clone()
+                    .filter(|_| agent)
+                    .map(|text| (text, Digits::Proportional)),
+                facts.duration.clone().map(|text| (text, Digits::Tabular)),
+                facts
+                    .time
+                    .clone()
+                    .filter(|_| timestamp)
+                    .map(|text| (text, Digits::Tabular)),
+            ]
+            .into_iter()
+            .flatten()
+            .collect(),
+            color,
+            available - ICON - FACT_GAP,
+            direction,
+            window,
+            cx,
+        );
+        let content = if let Some(inline) = inline {
+            div()
+                .flex_1()
+                .min_w_0()
+                .flex_row_from(direction)
+                .items_center()
+                .gap(px(FACT_GAP))
+                .child(icon)
+                .child(inline)
+        } else {
+            let model = div()
+                .min_w_0()
+                .flex_shrink(1.0)
+                .flex_row_from(direction)
+                .items_center()
+                .gap(px(FACT_GAP))
+                .child(icon)
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .css_text(TEXT_SIZE, TEXT_LINE, cx)
+                        .child(facts.model_name),
+                );
+            div()
+                .flex_1()
+                .min_w_0()
+                .overflow_hidden()
+                .flex_row_from(direction)
+                .items_center()
+                .whitespace_nowrap()
+                .text_color(color)
+                .child(model)
+                .children(facts.effort.filter(|_| effort).map(&fact))
+                .children(facts.agent.filter(|_| agent).map(&fact))
+                .children(facts.duration.map(&digits))
+                .children(facts.time.filter(|_| timestamp).map(&digits))
+        };
         let row = div()
             .h(px(ROW_HEIGHT))
             .flex_row_from(direction)
             .items_center()
             .justify_between()
             .gap(px(ROW_GAP))
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .overflow_hidden()
-                    .flex_row_from(direction)
-                    .items_center()
-                    .whitespace_nowrap()
-                    .text_color(color)
-                    .child(model)
-                    .children(facts.effort.filter(|_| effort).map(&fact))
-                    .children(facts.agent.filter(|_| agent).map(&fact))
-                    .children(facts.duration.map(&digits))
-                    .children(facts.time.filter(|_| timestamp).map(&digits)),
-            )
+            .child(content)
             // The message actions appear on hover; their place is kept.
             .child(div().w(px(ACTIONS_WIDTH)).flex_shrink_0());
         Some(
@@ -255,6 +295,104 @@ fn message_time(
     Some(text.into())
 }
 
+/// Shapes the fitted footer as one row. Text widths retain fractional pixels
+/// between fragments, avoiding accumulated rounding from separate layout
+/// nodes. The existing elements handle truncation when the model must shrink.
+fn render_inline_facts(
+    model: SharedString,
+    facts: Vec<(SharedString, Digits)>,
+    color: Hsla,
+    available: f32,
+    direction: Direction,
+    window: &Window,
+    cx: &App,
+) -> Option<AnyElement> {
+    let shape = |text: SharedString, digits: Digits, color: Hsla| {
+        let mut style = window.text_style();
+        style.color = color;
+        if digits == Digits::Tabular {
+            style.font_features = tabular();
+        }
+        let run = style.to_run(text.len());
+        window
+            .text_system()
+            .shape_line(text, px(TEXT_PX), &[run], None)
+    };
+    let mut label = model.to_string();
+    let mut fragments = vec![(shape(model, Digits::Proportional, color), 0.0)];
+    for (text, digits) in facts {
+        label.push_str(" · ");
+        label.push_str(&text);
+        fragments.push((
+            shape(
+                SEPARATOR.into(),
+                Digits::Proportional,
+                color.opacity(SEPARATOR_OPACITY),
+            ),
+            FACT_GAP,
+        ));
+        fragments.push((shape(text, digits, color), FACT_GAP));
+    }
+    let width: f32 = fragments
+        .iter()
+        .map(|(line, gap)| f32::from(line.width) + gap)
+        .sum();
+    if width > available || available <= 0.0 {
+        return None;
+    }
+    let text = canvas(
+        |_, _, _| (),
+        move |bounds, (), window, cx| {
+            let mut x = if direction == Direction::RightToLeft {
+                bounds.right()
+            } else {
+                bounds.left()
+            };
+            for (line, gap) in &fragments {
+                let origin_x = fragment_start(&mut x, line.width, px(*gap), direction);
+                if let Err(error) = line.paint(
+                    point(origin_x, bounds.top()),
+                    px(TEXT_LINE * 16.0),
+                    TextAlign::Left,
+                    None,
+                    window,
+                    cx,
+                ) {
+                    tracing::debug!(%error, "footer text could not be painted");
+                }
+            }
+        },
+    )
+    .size_full()
+    .css_text(TEXT_SIZE, TEXT_LINE, cx);
+    Some(
+        div()
+            .id("footer-facts")
+            .flex_1()
+            .min_w_0()
+            .h(px(TEXT_LINE * 16.0))
+            .role(Role::Label)
+            .aria_label(label)
+            .child(text)
+            .into_any_element(),
+    )
+}
+
+fn fragment_start(cursor: &mut Pixels, width: Pixels, gap: Pixels, direction: Direction) -> Pixels {
+    match direction {
+        Direction::LeftToRight => {
+            *cursor += gap;
+            let start = *cursor;
+            *cursor += width;
+            start
+        }
+        Direction::RightToLeft => {
+            *cursor -= gap + width;
+            *cursor
+        }
+    }
+}
+
 /// One fact after the model: its separator and text.
 fn render_fact(
     text: SharedString,
@@ -300,4 +438,27 @@ fn text_width(text: &str, window: &Window, tabular_digits: bool) -> f32 {
             .layout_line(text, px(TEXT_PX), &[run], None)
             .width,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inline_facts_keep_fractional_widths_and_mirror_positions() {
+        let mut left = px(10.0);
+        let mut right = px(100.0);
+        for (width, gap) in [(1.25, 0.0), (2.4, 6.0), (0.5, 6.0)] {
+            let ltr = fragment_start(&mut left, px(width), px(gap), Direction::LeftToRight);
+            let rtl = fragment_start(&mut right, px(width), px(gap), Direction::RightToLeft);
+            assert!(
+                (f32::from(ltr + rtl) + width - 110.0).abs() < 0.0001,
+                "each fragment mirrors across the same bounds"
+            );
+        }
+        assert!(
+            (f32::from(left) - 26.15).abs() < 0.0001,
+            "layout never rounds an intermediate width"
+        );
+    }
 }
