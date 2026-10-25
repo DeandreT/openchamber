@@ -12,12 +12,14 @@ import { ReferenceMarkdownRewriteContext } from './projectUploads';
 import { REFERENCE_META_TEXT, relativeTimeOf } from './referencePickerItems';
 import type { ReferenceCommentItem, ReferenceCommentThread, ReferenceCommitGroup, ReferenceTimelineEntry } from './referenceTimeline';
 
-/** Writes to a PR's review threads; each settles once the host answered. */
+/** Writes to a PR's review threads or a discussion's comments; each settles once the host answered. */
 export type ReferenceThreadActions = {
     /** True when the reply was posted, so the box can empty. */
     reply: (threadId: string, body: string) => Promise<boolean>;
     /** True when the host has the change; the thread is read again after it. */
     setResolved: (threadId: string, resolved: boolean) => Promise<boolean>;
+    /** A discussion's: choose the comment that opens the thread as its answer, or unchoose it. */
+    setAnswer?: (threadId: string, answer: boolean) => Promise<boolean>;
 };
 
 // Text actions under a thread: a colour change on hover, no fill.
@@ -61,7 +63,7 @@ const ThreadRest: React.FC<{
     const [open, setOpen] = React.useState(!thread.resolved);
     const [replying, setReplying] = React.useState(false);
     const [text, setText] = React.useState('');
-    const [busy, setBusy] = React.useState<'reply' | 'resolve' | null>(null);
+    const [busy, setBusy] = React.useState<'reply' | 'resolve' | 'answer' | null>(null);
     // Resolving folds the thread, reopening unfolds it, as the host shows it.
     const [shownResolved, setShownResolved] = React.useState(thread.resolved);
     if (shownResolved !== thread.resolved) {
@@ -111,6 +113,17 @@ const ThreadRest: React.FC<{
         setBusy('resolve');
         try {
             if (await actions.setResolved(thread.id, !thread.resolved)) setWrittenOn(thread);
+        } finally {
+            setBusy(null);
+        }
+    };
+    const answer = comment.answer;
+    const setAnswer = actions?.setAnswer;
+    const toggleAnswer = async () => {
+        if (!setAnswer || !answer || busy || settling) return;
+        setBusy('answer');
+        try {
+            if (await setAnswer(thread.id, !answer.chosen)) setWrittenOn(thread);
         } finally {
             setBusy(null);
         }
@@ -188,6 +201,14 @@ const ThreadRest: React.FC<{
                             ? <Icon name="loader-4" className="size-3.5 animate-spin" />
                             : <Icon name={thread.resolved ? 'arrow-go-back' : 'check'} className="size-3.5" />}
                         {t(thread.resolved ? 'references.picker.thread.unresolve' : 'references.picker.thread.resolve')}
+                    </Button>
+                ) : null}
+                {setAnswer && answer?.canChange ? (
+                    <Button size="xs" variant="ghost" className={THREAD_ACTION_CLASS} onClick={() => void toggleAnswer()} disabled={busy !== null || settling}>
+                        {busy === 'answer' || settling
+                            ? <Icon name="loader-4" className="size-3.5 animate-spin" />
+                            : <Icon name={answer.chosen ? 'arrow-go-back' : 'checkbox-circle'} className="size-3.5" />}
+                        {t(answer.chosen ? 'references.picker.discussion.unmarkAnswer' : 'references.picker.discussion.markAnswer')}
                     </Button>
                 ) : null}
                 {thread.resolved ? (
@@ -275,6 +296,12 @@ export const ReferenceComments: React.FC<{
                                     <span className="font-medium text-muted-foreground">{entry.author ?? '—'}</span>
                                     {relativeLabel(t, entry.createdAt, now) ? <span>{relativeLabel(t, entry.createdAt, now)}</span> : null}
                                     {entry.context ? <span className="min-w-0 truncate font-mono typography-micro">{entry.context}</span> : null}
+                                    {entry.answer?.chosen ? (
+                                        <span className="inline-flex items-center gap-0.5 rounded-full bg-[var(--status-success-background)] px-1.5 typography-micro font-medium text-[var(--status-success-text)]">
+                                            <Icon name="checkbox-circle" className="size-3" />
+                                            {t('references.picker.discussion.answerBadge')}
+                                        </span>
+                                    ) : null}
                                     {onAttachComment ? (
                                         <button
                                             type="button"

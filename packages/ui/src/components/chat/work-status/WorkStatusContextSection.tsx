@@ -191,7 +191,7 @@ export const WorkStatusContextSection: React.FC<Props> = ({ sessionId, directory
     () => linkedSidebarIssues.flatMap((issue) => (issue.source === 'repository' ? [issue.ref] : [])),
     [linkedSidebarIssues],
   );
-  const repositoryIssueItems = React.useMemo(() => repositoryIssueRefs.map((ref) => repositoryThread('issue', ref)), [repositoryIssueRefs]);
+  const repositoryIssueItems = React.useMemo(() => repositoryIssueRefs.map((ref) => repositoryThread(ref.thread, ref)), [repositoryIssueRefs]);
   const linkedTrackerEntries = React.useMemo(
     () => linkedSidebarIssues.flatMap((issue) => (issue.source === 'tracker' ? [{ key: issue.key, identifier: issue.identifier, item: workItem(issue.provider, issue.identifier) }] : [])),
     [linkedSidebarIssues],

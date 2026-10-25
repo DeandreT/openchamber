@@ -63,6 +63,7 @@ const contextSummary = (payload: ContextPartPayload, t: Translate, descriptorOf:
         case 'chat-quote':
             return t('chat.message.context.chatQuote');
         case 'repository-issue':
+        case 'repository-discussion':
             return `#${payload.number} ${payload.title}`;
         case 'change-request':
             return `${formatChangeRequestReference(descriptorOf(payload.provider), payload.number)} ${payload.title}`;
@@ -91,6 +92,7 @@ const contextBody = (payload: ContextPartPayload): string => {
         case 'chat-quote':
             return payload.quote;
         case 'repository-issue':
+        case 'repository-discussion':
         case 'change-request':
         case 'tracker-item':
         case 'guest-issue':

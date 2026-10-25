@@ -114,8 +114,16 @@ describe('source control provider descriptors', () => {
   // A server without the providers route serves exactly GitHub and GitLab, so
   // the web adapter's fallback stays those two; every provider added since
   // comes after them in the published list.
+  // Discussions came later, so a server that old has none and the fallback leaves them out.
   it('publishes the web adapter fallback for an older server as its leading providers', () => {
-    const published = sourceControlProviderDescriptors.list().map((descriptor, order) => publicProviderDescriptor(descriptor, order));
+    const withoutDiscussions = (descriptor) => {
+      const features = { ...descriptor.features };
+      const urls = { ...descriptor.urls };
+      delete features.discussions;
+      delete urls.discussion;
+      return { ...descriptor, features, urls };
+    };
+    const published = sourceControlProviderDescriptors.list().map((descriptor, order) => withoutDiscussions(publicProviderDescriptor(descriptor, order)));
     expect(published.slice(0, BUILT_IN_SOURCE_CONTROL_PROVIDERS.length)).toEqual(BUILT_IN_SOURCE_CONTROL_PROVIDERS);
     expect(BUILT_IN_SOURCE_CONTROL_PROVIDERS.map((descriptor) => descriptor.id)).toEqual(['github', 'gitlab']);
   });

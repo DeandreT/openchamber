@@ -771,6 +771,19 @@ async function deleteGitWorktree(
   return gitHttp.deleteGitWorktree(directory, payload);
 }
 
+/** Renames the task of the worktree at `directory`; the user's name stays over the agent's. */
+export async function setGitWorktreeTitle(
+  directory: string,
+  title: string,
+): Promise<import('./api/types').GitWorktreeTitleResult> {
+  const runtime = getRuntimeGit();
+  if (runtime?.worktree?.setTitle) {
+    return runtime.worktree.setTitle(directory, title);
+  }
+  if (runtime) throw new Error('Renaming a worktree task is not available here');
+  return gitHttp.setGitWorktreeTitle(directory, title);
+}
+
 export async function snapshotGitWorktree(
   directory: string,
   payload: import('./api/types').GitWorktreeSnapshotPayload
@@ -782,6 +795,30 @@ export async function snapshotGitWorktree(
   return gitHttp.snapshotGitWorktree(directory, payload);
 }
 
+/**
+ * Worktree archives exist where the runtime's git offers them: web and the
+ * desktop app, through the server. VS Code keeps its own list without them.
+ */
+export const canArchiveWorktrees = (): boolean => {
+  const runtime = getRuntimeGit();
+  return runtime ? Boolean(runtime.worktree?.archive && runtime.worktree.listArchives && runtime.worktree.restoreArchive && runtime.worktree.deleteArchive) : true;
+};
+
+const runtimeWorktreeArchives = () => {
+  const runtime = getRuntimeGit();
+  if (!runtime) {
+    return {
+      archive: gitHttp.archiveGitWorktree,
+      listArchives: gitHttp.listGitWorktreeArchives,
+      restoreArchive: gitHttp.restoreGitWorktreeArchive,
+      deleteArchive: gitHttp.deleteGitWorktreeArchive,
+    };
+  }
+  const { archive, listArchives, restoreArchive, deleteArchive } = runtime.worktree ?? {};
+  if (!archive || !listArchives || !restoreArchive || !deleteArchive) throw new Error('Worktree archives are not available here');
+  return { archive, listArchives, restoreArchive, deleteArchive };
+};
+
 export const git = {
   worktree: {
     list: listGitWorktrees,
@@ -789,6 +826,10 @@ export const git = {
     create: createGitWorktree,
     remove: deleteGitWorktree,
     snapshot: snapshotGitWorktree,
+    archive: (directory: string, payload: import('./api/types').ArchiveGitWorktreePayload) => runtimeWorktreeArchives().archive(directory, payload),
+    listArchives: (directory: string) => runtimeWorktreeArchives().listArchives(directory),
+    restoreArchive: (directory: string, id: string) => runtimeWorktreeArchives().restoreArchive(directory, id),
+    deleteArchive: (directory: string, payload: import('./api/types').DeleteGitWorktreeArchivePayload) => runtimeWorktreeArchives().deleteArchive(directory, payload),
   },
 };
 

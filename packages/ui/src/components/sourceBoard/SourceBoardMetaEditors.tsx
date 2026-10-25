@@ -48,7 +48,7 @@ const MetaValue: React.FC<{ empty: boolean; children: React.ReactNode; picker: R
     );
 };
 
-/** An issue's or PR's labels, changed as one set from the repository's labels. */
+/** An issue's, discussion's or PR's labels, changed as one set from the repository's labels. */
 export const SourceBoardLabels: React.FC<{
     reference: RepositoryReference;
     context: SourceControlReadContext;
@@ -70,6 +70,7 @@ export const SourceBoardLabels: React.FC<{
                 labels,
             };
             if (reference.kind === 'pull') await sourceControl.changeRequestSetLabels(payload);
+            else if (reference.kind === 'discussion') await sourceControl.discussionSetLabels(payload);
             else await sourceControl.issueSetLabels(payload);
         } catch (error) {
             toast.error(t('sourceBoard.toast.labelsFailed', { reference: referenceNumberLabel(reference, descriptor) }), {

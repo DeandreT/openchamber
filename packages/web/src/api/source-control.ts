@@ -28,7 +28,11 @@ import type {
   ProjectUpstream,
   ReadyChangeRequestInput,
   CommentInput,
+  DiscussionCloseReason,
+  DiscussionCommentInput,
   ReviewChangeRequestInput,
+  SetDiscussionAnswerInput,
+  SetDiscussionStateInput,
   SetStateInput,
   SetLabelsInput,
   SetReviewersInput,
@@ -204,6 +208,9 @@ type PostBody =
   | (MutationBody<SourceControlExistingMutationTarget> & { state: SetStateInput['state'] })
   | (MutationBody<SourceControlExistingMutationTarget> & { labels: string[] })
   | (MutationBody<SourceControlExistingMutationTarget> & { reviewers: string[] })
+  | (MutationBody<SourceControlExistingMutationTarget> & { body: string; replyTo?: string })
+  | (MutationBody<SourceControlExistingMutationTarget> & { state: SetDiscussionStateInput['state']; reason?: DiscussionCloseReason })
+  | (MutationBody<SourceControlExistingMutationTarget> & { commentId: string; answer: boolean })
   | ReviewBody
   | MutationBody;
 
@@ -1447,6 +1454,39 @@ export const createWebSourceControlAPI = (options: WebSourceControlAPIOptions = 
       const identity = normalizeIdentity(payload);
       const result = await post<MutationReceiptDTO>(fetch, identity, '/issues/comment', {
         ...mutationBody(payload, identity, 'existing'), body: payload.body,
+      });
+      return parseMutationReceipt(result, payload, identity, parseEmptyMutationResult);
+    },
+    discussionComment: async (payload: DiscussionCommentInput) => {
+      const identity = normalizeIdentity(payload);
+      // A reply names the comment whose thread it answers; a comment of its own names none.
+      const body: MutationBody<SourceControlExistingMutationTarget> & { body: string; replyTo?: string } = {
+        ...mutationBody(payload, identity, 'existing'), body: payload.body,
+      };
+      if (payload.replyTo) body.replyTo = payload.replyTo;
+      const result = await post<MutationReceiptDTO>(fetch, identity, '/discussions/comment', body);
+      return parseMutationReceipt(result, payload, identity, parseEmptyMutationResult);
+    },
+    discussionSetState: async (payload: SetDiscussionStateInput) => {
+      const identity = normalizeIdentity(payload);
+      const context = mutationBody(payload, identity, 'existing');
+      // Closing names its reason; reopening names none.
+      const result = await post<MutationReceiptDTO>(fetch, identity, '/discussions/state', payload.state === 'closed'
+        ? { ...context, state: 'closed', reason: payload.reason }
+        : { ...context, state: 'open' });
+      return parseMutationReceipt(result, payload, identity, parseStateMutationResult);
+    },
+    discussionSetAnswer: async (payload: SetDiscussionAnswerInput) => {
+      const identity = normalizeIdentity(payload);
+      const result = await post<MutationReceiptDTO>(fetch, identity, '/discussions/answer', {
+        ...mutationBody(payload, identity, 'existing'), commentId: payload.commentId, answer: payload.answer,
+      });
+      return parseMutationReceipt(result, payload, identity, parseEmptyMutationResult);
+    },
+    discussionSetLabels: async (payload: SetLabelsInput) => {
+      const identity = normalizeIdentity(payload);
+      const result = await post<MutationReceiptDTO>(fetch, identity, '/discussions/labels', {
+        ...mutationBody(payload, identity, 'existing'), labels: payload.labels,
       });
       return parseMutationReceipt(result, payload, identity, parseEmptyMutationResult);
     },

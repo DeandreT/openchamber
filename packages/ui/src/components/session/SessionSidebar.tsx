@@ -23,6 +23,7 @@ import { SidebarHeader } from './sidebar/shell/SidebarHeader';
 import { SidebarFooter } from './sidebar/shell/SidebarFooter';
 import { SidebarSearchEmptyState } from './sidebar/shell/SidebarSearchEmptyState';
 import { SessionProjectCollection } from './sidebar/list/SessionProjectCollection';
+import type { SessionProjectListProps } from './sidebar/projects/SessionProjectScroller';
 import { useUpdateStore } from '@/stores/useUpdateStore';
 import { useShallow } from 'zustand/react/shallow';
 import {
@@ -65,6 +66,15 @@ interface SessionSidebarProps {
   allowReselect?: boolean;
   hideDirectoryControls?: boolean;
   showOnlyMainWorkspace?: boolean;
+  /**
+   * The phone's list: its sheet has the header with the search field, the
+   * footer and the dialogs, and draws the rows itself over the same model.
+   */
+  phone?: {
+    searchQuery: string;
+    clearSearch: () => void;
+    renderList: (props: SessionProjectListProps) => React.ReactNode;
+  };
 }
 
 const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
@@ -74,6 +84,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
   allowReselect = false,
   hideDirectoryControls = false,
   showOnlyMainWorkspace = false,
+  phone,
 }) => {
   streamPerfMark('react.session_sidebar_render');
   streamPerfCount('ui.session_sidebar.render');
@@ -85,10 +96,12 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
   const openSessionSearch = React.useCallback(() => setIsSessionSearchOpen(true), []);
   // The field and its query go together: once the field is hidden, a query
   // still filtering the list would have no place to be cleared from.
+  const clearPhoneSearch = phone?.clearSearch;
   const resetSessionSearch = React.useCallback(() => {
     setSessionSearchQuery('');
     setIsSessionSearchOpen(false);
-  }, []);
+    clearPhoneSearch?.();
+  }, [clearPhoneSearch]);
   // Reported by the session list below: the header cannot see what matched.
   const [searchMatchCount, setSearchMatchCount] = React.useState(0);
   const sessionSearchContainerRef = React.useRef<HTMLDivElement | null>(null);
@@ -139,16 +152,18 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
   const setSessionSwitcherOpen = useUIStore((state) => state.setSessionSwitcherOpen);
   const setWorktreesPageProjectId = useUIStore((state) => state.setWorktreesPageProjectId);
 
+  const searchQuery = phone ? phone.searchQuery : sessionSearchQuery;
   const normalizedSessionSearchQuery = React.useMemo(
-    () => sessionSearchQuery.trim().toLowerCase(),
-    [sessionSearchQuery],
+    () => searchQuery.trim().toLowerCase(),
+    [searchQuery],
   );
 
   const hasSessionSearchQuery = normalizedSessionSearchQuery.length > 0;
 
 
   useSessionSearchEffects({
-    enabled: isVisible,
+    // The phone's search field is its sheet's, without the keyboard shortcuts.
+    enabled: isVisible && !phone,
     isSessionSearchOpen,
     openSessionSearch,
     closeSessionSearch: resetSessionSearch,
@@ -460,11 +475,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
 
   const showArchivedSessions = useSessionDisplayStore((state) => state.showArchivedSessions);
   const storedProjectSortOrder = useSessionDisplayStore((state) => state.projectSortOrder);
-  const rawSidebarViewMode = useSessionDisplayStore((state) => state.sidebarViewMode);
-  // VS Code keeps the projects view only; the mode switch is hidden there.
-  const sidebarViewMode = isVSCode ? 'projects' : rawSidebarViewMode;
-  // The timeline keeps projects in the user's own order; dragging is its only sort.
-  const projectSortOrder = sidebarViewMode === 'timeline' ? 'manual' : storedProjectSortOrder;
+  const projectSortOrder = storedProjectSortOrder;
   const manualProjectOrder = useProjectsStore((state) => state.manualProjectOrder);
 
   const sidebarRenderSources = {
@@ -520,8 +531,8 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
 
   // VS Code has no Archive page: its archived sessions sit inline behind the header toggle.
   const searchEmptyState = React.useMemo(() => (
-    <SidebarSearchEmptyState query={sessionSearchQuery} showArchive={!isVSCode} resetSessionSearch={resetSessionSearch} />
-  ), [isVSCode, resetSessionSearch, sessionSearchQuery]);
+    <SidebarSearchEmptyState query={searchQuery} showArchive={!isVSCode} resetSessionSearch={resetSessionSearch} />
+  ), [isVSCode, resetSessionSearch, searchQuery]);
 
   // Web/desktop route archived sessions to the Archive page; only the VS Code
   // compact webview keeps inline archived buckets behind its toggle.
@@ -622,6 +633,69 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
     };
   }, [isVSCode, worktreeRefreshDependencies]);
 
+  const collection = (
+    <SessionProjectCollection
+      topology={{
+        projects: sortedProjects,
+        availableWorktreesByProject,
+        knownDirectories: knownSessionDirectories,
+        isVSCode,
+        worktreeMetadata,
+        gitBranches,
+        projectRepoStatus,
+        projectRootBranches,
+        lastRepoStatus: lastRepoStatusRef.current,
+      }}
+      view={{
+        isVisible,
+        hasSessionSearchQuery,
+        normalizedSessionSearchQuery,
+        activeProjectId,
+        showInlineArchived,
+        useGroupedSections,
+        homeDirectory,
+        mobileVariant,
+        hideDirectoryControls,
+        showOnlyMainWorkspace,
+        isDesktopShellRuntime,
+        projectSortOrder,
+        emptyState,
+        searchEmptyState,
+        isSessionsLoading,
+        isWorktreeTopologyLoading,
+        unresolvedWorktreeProjectPaths,
+        projectView: projectView.state,
+        onSearchMatchCountChange: setSearchMatchCount,
+      renderList: phone?.renderList,
+      }}
+      actions={{
+        rowActions: {
+          allowReselect,
+          onSessionSelected,
+          resetSessionSearch,
+        },
+        alwaysShowActions: alwaysShowSidebarActions,
+        setActiveProjectIdOnly,
+        setSessionSwitcherOpen,
+        openNewSessionDraft: openNewSessionDraftFromTree,
+        openNewWorktreeDialog,
+        openWorktreesPage: (projectId) => {
+          if (mobileVariant) setSessionSwitcherOpen(false);
+          setWorktreesPageProjectId(projectId);
+        },
+        openProjectEditDialog: setEditingProjectDialogId,
+        removeProject,
+        reorderProjects,
+        startSessionWorktreeMenuLoad: handleSessionWorktreeMenuLoad,
+        initialActiveSessionByProject,
+        persistActiveSessionByProject,
+        projectViewActions: projectView.actions,
+      }}
+    />
+  );
+  // The phone's sheet holds the header, footer and dialogs around its list.
+  if (phone) return <div className="flex min-h-0 flex-1 flex-col">{collection}</div>;
+
   return (
     // One shared tooltip provider for the whole sidebar, matching the opencode
     // sidebar feel: 400ms before the first tooltip opens, instant close on
@@ -657,64 +731,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
         expandAll={projectView.actions.expandAll}
       />
 
-      <SessionProjectCollection
-        topology={{
-          projects: sortedProjects,
-          availableWorktreesByProject,
-          knownDirectories: knownSessionDirectories,
-          isVSCode,
-          worktreeMetadata,
-          gitBranches,
-          projectRepoStatus,
-          projectRootBranches,
-          lastRepoStatus: lastRepoStatusRef.current,
-        }}
-        view={{
-          isVisible,
-          hasSessionSearchQuery,
-          normalizedSessionSearchQuery,
-          activeProjectId,
-          showInlineArchived,
-          useGroupedSections,
-          homeDirectory,
-          mobileVariant,
-          hideDirectoryControls,
-          showOnlyMainWorkspace,
-          isDesktopShellRuntime,
-          projectSortOrder,
-          sidebarViewMode,
-          emptyState,
-          searchEmptyState,
-          isSessionsLoading,
-          isWorktreeTopologyLoading,
-          unresolvedWorktreeProjectPaths,
-          projectView: projectView.state,
-          onSearchMatchCountChange: setSearchMatchCount,
-        }}
-        actions={{
-          rowActions: {
-            allowReselect,
-            onSessionSelected,
-            resetSessionSearch,
-          },
-          alwaysShowActions: alwaysShowSidebarActions,
-          setActiveProjectIdOnly,
-          setSessionSwitcherOpen,
-          openNewSessionDraft: openNewSessionDraftFromTree,
-          openNewWorktreeDialog,
-          openWorktreesPage: (projectId) => {
-            if (mobileVariant) setSessionSwitcherOpen(false);
-            setWorktreesPageProjectId(projectId);
-          },
-          openProjectEditDialog: setEditingProjectDialogId,
-          removeProject,
-          reorderProjects,
-          startSessionWorktreeMenuLoad: handleSessionWorktreeMenuLoad,
-          initialActiveSessionByProject,
-          persistActiveSessionByProject,
-          projectViewActions: projectView.actions,
-        }}
-      />
+      {collection}
 
       <SidebarFooter
         onOpenSettings={handleOpenSettings}

@@ -365,6 +365,7 @@ mock.module("../session-actions", () => ({
 
 mock.module("@/lib/git/branchNameGenerator", () => ({
   generateBranchName: () => "generated-branch",
+  isGeneratedBranchName: (name: string) => name === "generated-branch",
 }))
 
 mock.module("@/lib/openchamberConfig", () => ({

@@ -84,7 +84,8 @@ type LinkedItem =
     includeDiff: boolean;
     selection: ReferencePickerSelection;
   }
-  | { kind: 'issue'; number: number; title: string; url: string; selection: ReferencePickerSelection }
+  /** An issue, or a discussion (`discussion`), which starts work the same way. */
+  | { kind: 'issue'; number: number; title: string; url: string; discussion: boolean; selection: ReferencePickerSelection }
   | { kind: 'tracker'; provider: string; identifier: string; title: string; url: string; selection: ReferencePickerSelection }
   | { kind: 'guest'; guest: AttachIssueRequest };
 
@@ -466,6 +467,7 @@ export function NewWorktreeDialog({
             returnAfterDirectoryCreated: true,
             expectedRevision: prConfig.expectedRevision,
             changeRequestSource: prConfig.changeRequestSource,
+            taskTitle: linkedPr.title,
           };
         }
 
@@ -478,6 +480,8 @@ export function NewWorktreeDialog({
           existingBranch: mode === 'existing-branch' ? normalizedBranch : undefined,
           setupCommands: resolvedSetupCommands,
           returnAfterDirectoryCreated: true,
+          // A worktree for an issue is named by it until the agent names the task.
+          taskTitle: item?.kind === 'issue' || item?.kind === 'tracker' ? item.title : item?.kind === 'guest' ? item.guest.title : undefined,
         };
         if (sourceBranch && startsNewBranch) baseArgs.startRef = sourceBranch;
         return baseArgs;
@@ -548,10 +552,11 @@ export function NewWorktreeDialog({
     }
 
     const { reference } = choice;
-    if (reference.kind === 'issue') {
+    // A discussion starts work the way an issue does: a new branch named after it.
+    if (reference.kind === 'issue' || reference.kind === 'discussion') {
       linkItem(
-        { kind: 'issue', number: reference.number, title: reference.title, url: reference.url, selection: choice },
-        `issue-${reference.number}-${generateBranchSlug()}`,
+        { kind: 'issue', number: reference.number, title: reference.title, url: reference.url, discussion: reference.kind === 'discussion', selection: choice },
+        `${reference.kind}-${reference.number}-${generateBranchSlug()}`,
       );
       return null;
     }
@@ -679,7 +684,7 @@ export function NewWorktreeDialog({
     ? linked.kind === 'pr'
       ? { id: formatChangeRequestLabel(descriptorOf(linked.context.provider), linked.pr.number), title: linked.pr.title, url: linked.pr.url, icon: <Icon name="git-pull-request" className="size-4 shrink-0 text-muted-foreground" /> }
       : linked.kind === 'issue'
-        ? { id: t('session.newWorktree.issueNumber', { number: linked.number }), title: linked.title, url: linked.url, icon: <ProviderIcon descriptor={itemDescriptor} className="size-4 shrink-0 text-muted-foreground" /> }
+        ? { id: t(linked.discussion ? 'session.newWorktree.discussionNumber' : 'session.newWorktree.issueNumber', { number: linked.number }), title: linked.title, url: linked.url, icon: <ProviderIcon descriptor={itemDescriptor} className="size-4 shrink-0 text-muted-foreground" /> }
         : linked.kind === 'tracker'
           ? { id: linked.identifier, title: linked.title, url: linked.url, icon: <Icon name={trackerPresentation(linked.provider).icon} className="size-4 shrink-0 text-muted-foreground" /> }
           : { id: linked.guest.id, title: linked.guest.title, url: linked.guest.url, icon: <GuestIcon icon={linkedGuestEntry?.icon ?? 'window'} iconSrc={linkedGuestEntry?.iconSrc} className="size-4 shrink-0" /> }

@@ -43,11 +43,25 @@ const truncate = (value) => (
  * and the agent would go on editing that session's work. The directory is
  * named too, so a session moved to another worktree reads as a move.
  */
-const describeCheckout = ({ directory, branch }) => (
-  branch
-    ? `This session works in \`${directory}\`, on branch \`${branch}\`.`
-    : `This session works in \`${directory}\`, with no branch checked out.`
-);
+const describeCheckout = ({ directory, branch, placeholder = false }) => {
+  if (!branch) return `This session works in \`${directory}\`, with no branch checked out.`;
+  const where = `This session works in \`${directory}\`, on branch \`${branch}\`.`;
+  return placeholder ? `${where} ${placeholderBranchGuidance(branch)}` : where;
+};
+
+/**
+ * A branch OpenChamber named with a placeholder (Quick worktree's
+ * `agile-chipmunk`) and never pushed is renamed after the task by the agent,
+ * at the moment it names the task. Said here, with the branch, and only while
+ * it holds: once renamed, the entry changes and OpenCode tells the agent so.
+ * `work.name` does the rename (its `branch`) and refuses to name the task
+ * without it, so the two cannot drift apart; a separate `git branch -m` step
+ * was the one weaker models dropped.
+ */
+const placeholderBranchGuidance = (branch) => `Its name \`${branch}\` is a placeholder OpenChamber generated, not one the user chose,`
+  + ' and it is not pushed yet. Name the task with work.name, passing branch too: work.name renames the branch to it.'
+  + " Follow the naming the repository's other branches use (`git branch -a`); with none, `<type>/<short-kebab-case>`"
+  + ' with the conventional commit types, such as `fix/login-timeout`. No tool or app prefix.';
 
 const renderMemorySection = (entries) => entries
   .slice()
@@ -78,6 +92,26 @@ export const SESSION_LINK_GUIDANCE = "Link to this session with the openchamber 
   + " as soon as you know it, each issue or pull or merge request the user gives you to"
   + " work on, fix, investigate or review, that you open for this work, or that the work"
   + " resolves. One merely mentioned in passing stays unlinked. The reply need not say you linked it.";
+
+/**
+ * When to name the task, stated with the linking guidance for the same reason:
+ * an action only its description mentions is never called. The sidebar lists
+ * a task under this name, so it is set early and changed only with the task.
+ */
+export const WORK_NAME_GUIDANCE = "Name the task with the openchamber tool's work.name as soon as it is clear what"
+  + " the task is: at most 4 words naming the task itself, such as \"Login timeout fix\" or \"Sidebar task rows\","
+  + " never a step of it. Rename it only when the work becomes a different task; finishing a step, fixing"
+  + " something on the way or a follow-up within the same task is no reason. A name the user gave stays.";
+
+/**
+ * Where the managed tools are called, stated while they are direct tools (the
+ * default; `agentToolsCodeMode` puts them in Code Mode's catalog instead).
+ * OpenCode's Code Mode teaches the model that tools live in `execute`'s
+ * catalog, and a model that called `tools.openchamber(...)` from a script got
+ * "Unknown tool", concluded the tool did not exist and never named its task.
+ */
+export const DIRECT_TOOLS_GUIDANCE = "The openchamber tools (openchamber, openchamber_render and the others) are direct tool calls:"
+  + " never call them from inside a Code Mode execute script, where they do not exist.";
 
 /**
  * When to draw a page, stated in every session that has the
@@ -153,9 +187,11 @@ const buildPinnedBlock = ({ notes, plans }) => {
   ].join('\n\n');
 };
 
-const buildGuidance = ({ linking, rendering }) => [
+const buildGuidance = ({ linking, rendering, directTools }) => [
   linking ? SESSION_LINK_GUIDANCE : '',
+  linking ? WORK_NAME_GUIDANCE : '',
   rendering ? RENDER_PAGE_GUIDANCE : '',
+  (linking || rendering) && directTools ? DIRECT_TOOLS_GUIDANCE : '',
 ].filter(Boolean).join('\n\n');
 
 /**
@@ -163,11 +199,11 @@ const buildGuidance = ({ linking, rendering }) => [
  * away; a key left out keeps what the session holds, which is what a branch
  * that could not be read means.
  */
-export const buildKnowledgeEntries = ({ notes, plans, memory, linking = false, rendering = false, checkout = null }) => {
+export const buildKnowledgeEntries = ({ notes, plans, memory, linking = false, rendering = false, directTools = true, checkout = null }) => {
   const entries = {
     [KNOWLEDGE_ENTRY_KEYS.pinned]: truncate(buildPinnedBlock({ notes, plans })),
     [KNOWLEDGE_ENTRY_KEYS.memory]: truncate(buildMemoryBlock(memory)),
-    [KNOWLEDGE_ENTRY_KEYS.guidance]: buildGuidance({ linking, rendering }),
+    [KNOWLEDGE_ENTRY_KEYS.guidance]: buildGuidance({ linking, rendering, directTools }),
   };
   // The branch is told while the agent has the tool, whose worktree move is
   // the one thing it can do about a busy branch.
@@ -187,8 +223,14 @@ export const createSessionKnowledgeRuntime = (dependencies) => {
     // The checked-out branch, or '' when none is checked out. Failures throw;
     // read only while the agent has the tool.
     readCheckoutBranch = null,
+    // `(directory, branch)`: that checked-out branch while its name is
+    // OpenChamber's placeholder and it was never pushed, else null.
+    readPlaceholderBranch = null,
     // Whether this session's agent has the `openchamber_render` tool.
     isPageRenderingAvailable = async () => false,
+    // Whether the managed tools run through Code Mode's catalog rather than
+    // as direct tools.
+    areAgentToolsInCodeMode = async () => false,
     // Pins live in OpenChamber's own session metadata store.
     readSessionMetadata = null,
     persistSessionMetadata = null,
@@ -280,11 +322,15 @@ export const createSessionKnowledgeRuntime = (dependencies) => {
     const branch = linking && directory && readCheckoutBranch
       ? await Promise.resolve(readCheckoutBranch(directory)).catch(() => null)
       : null;
-    const checkout = branch !== null ? { directory, branch } : null;
+    const placeholder = Boolean(branch) && readPlaceholderBranch
+      ? await Promise.resolve(readPlaceholderBranch(directory, branch)).then((name) => name === branch, () => false)
+      : false;
+    const checkout = branch !== null ? { directory, branch, placeholder } : null;
 
     const rendering = await Promise.resolve(isPageRenderingAvailable()).catch(() => false);
+    const directTools = !(await Promise.resolve(areAgentToolsInCodeMode()).catch(() => false));
 
-    return { notes, plans, memory, linking, rendering, checkout };
+    return { notes, plans, memory, linking, rendering, directTools, checkout };
   };
 
   /**

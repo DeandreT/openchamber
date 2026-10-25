@@ -91,12 +91,17 @@ function requestIssueNumber(value) {
   return Number.isSafeInteger(number) ? number : null;
 }
 
-/** A list's state and whose items, from the query; unknown values read as open and anyone. */
+/**
+ * A list's state and whose items, from the query; unknown values read as open
+ * and anyone. `unanswered` narrows a list of discussions to open questions
+ * without an answer; no other list has it.
+ */
 function readListFilter(query) {
   const state = requestText(query?.state);
   const people = requestText(query?.people);
+  const states = requestText(query?.kind) === 'discussion' ? ['open', 'closed', 'all', 'unanswered'] : ['open', 'closed', 'merged', 'all'];
   return {
-    state: ['open', 'closed', 'merged', 'all'].includes(state) ? state : 'open',
+    state: states.includes(state) ? state : 'open',
     people: ['any', 'assigned', 'created', 'reviewRequested'].includes(people) ? people : 'any',
   };
 }
@@ -238,6 +243,10 @@ const MUTATION_ROUTES = [
   ['/issues/labels', 'labels'],
   ['/pr/reviewers', 'reviewers'],
   ['/pr/review', 'reviews'],
+  ['/discussions/comment', 'discussions'],
+  ['/discussions/state', 'discussions'],
+  ['/discussions/answer', 'discussions'],
+  ['/discussions/labels', 'discussions'],
 ];
 
 /**
@@ -802,19 +811,23 @@ export function registerProviderRoutes(app, {
     // The reference picker: a searched page of issues or change requests, the
     // same search across several folders, an item's detail, and what colours
     // the change requests a page shows.
+    // Discussions are one more kind where the host keeps them; elsewhere asking for them is unsupported.
+    const discussions = descriptor.capabilities.discussions === true;
     boundRead('referencePicker', '/references', async ({ req, res, impl, instance, directory, trustedContext }) => {
+      const kind = requestText(req.query?.kind);
+      if (kind === 'discussion' && !discussions) return unsupportedCapability(res);
       const read = requireResource(impl, 'references');
       const session = await sessionFor(impl, instance, trustedContext.accountId);
       return res.json(await read({
         session, directory, context: trustedContext, remote: trustedContext.primaryRemote,
-        kind: requestText(req.query?.kind),
+        kind,
         ...readListFilter(req.query),
         query: requestText(req.query?.query),
         cursor: requestText(req.query?.cursor) || null,
       }));
     }, {
-      validate: (req) => (!requestText(req.query?.directory) || !['issue', 'pull'].includes(requestText(req.query?.kind))
-        ? 'directory and kind (issue or pull) are required' : null),
+      validate: (req) => (!requestText(req.query?.directory) || !['issue', 'pull', 'discussion'].includes(requestText(req.query?.kind))
+        ? 'directory and kind (issue, pull or discussion) are required' : null),
     });
 
     // Every folder's context is validated, and read with its own account, by the provider.
@@ -833,7 +846,10 @@ export function registerProviderRoutes(app, {
       }
     });
 
+    // `kind=discussion` reads a discussion; without it, the issue or change request the number names.
     boundRead('referencePicker', '/references/detail', async ({ req, res, impl, instance, directory, trustedContext }) => {
+      const kind = requestText(req.query?.kind) === 'discussion' ? 'discussion' : 'item';
+      if (kind === 'discussion' && !discussions) return unsupportedCapability(res);
       const read = requireResource(impl, 'referenceDetail');
       const session = await sessionFor(impl, instance, trustedContext.accountId);
       return res.json(await read({
@@ -841,6 +857,7 @@ export function registerProviderRoutes(app, {
         project: optionalProject(req),
         number: requestIssueNumber(req.query?.number),
         host: requestText(req.query?.host),
+        kind,
       }));
     }, {
       validate: (req) => (!requestText(req.query?.directory) || !namesProject(req)
@@ -1061,8 +1078,10 @@ export function registerProviderRoutes(app, {
      * instance's current account when the named one no longer resolves
      * (`orCurrent`); GitHub does, GitLab does not.
      */
-    readLiveSummaries: async ({ provider, instance, accountId = null, refs, issueRefs }) => {
+    readLiveSummaries: async ({ provider, instance, accountId = null, refs, issueRefs, discussionRefs = [] }) => {
       const impl = await loadImplementation(requireProvider(provider));
+      // A host without discussions is never asked about them; they stay unanswered (unknown).
+      const askedDiscussions = providers.describe(provider).capabilities.discussions === true ? discussionRefs : [];
       if (!(impl.resources?.liveSummaries instanceof Function)) return { connected: false };
       let session;
       try {
@@ -1073,7 +1092,7 @@ export function registerProviderRoutes(app, {
         if (error?.sourceControlAccountUnavailable) return { connected: false };
         throw error;
       }
-      return { connected: true, ...(await impl.resources.liveSummaries({ session, refs, issueRefs })) };
+      return { connected: true, ...(await impl.resources.liveSummaries({ session, refs, issueRefs, discussionRefs: askedDiscussions })) };
     },
     /** `revision` (40-hex) only for a provider that keeps revisions; others refuse it with 400. */
     readChangeRequestPatch: async ({ context, number, sourceRepo, revision }) => readWithBoundAccount(

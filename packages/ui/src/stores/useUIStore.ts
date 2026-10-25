@@ -1022,6 +1022,8 @@ interface UIStore {
   sessionRetentionOnlyArchived: boolean;
   /** Archive a worktree's sessions and remove it once its PR is merged. Off by default. */
   mergedWorktreeCleanupEnabled: boolean;
+  /** Done on a worktree in work also archives it. Off by default: Done then only takes it out of In work. */
+  worktreeArchiveOnDoneEnabled: boolean;
   autoDeleteLastRunAt: number | null;
   messageLimit: number;
   fontSize: number;
@@ -1098,7 +1100,6 @@ interface UIStore {
   showTerminalQuickKeysOnDesktop: boolean;
   /** Header session tabs (web/desktop), opt-in. Off keeps the plain session title. */
   sessionTabsEnabled: boolean;
-  persistChatDraft: boolean;
   showOpenCodeUpdateNotifications: boolean;
   agentControlToolEnabled: boolean;
   agentScheduleToolEnabled: boolean;
@@ -1304,6 +1305,7 @@ interface UIStore {
   setShowDeletionDialog: (value: boolean) => void;
   setAutoDeleteEnabled: (value: boolean) => void;
   setMergedWorktreeCleanupEnabled: (value: boolean) => void;
+  setWorktreeArchiveOnDoneEnabled: (value: boolean) => void;
   setAutoSaveEnabled: (value: boolean) => void;
   setConfirmFileTreeMove: (value: boolean) => void;
   setLayoutAnimations: (value: boolean) => void;
@@ -1387,7 +1389,6 @@ interface UIStore {
   setSummaryThreshold: (value: number) => void;
   setSummaryLength: (value: number) => void;
   setMaxLastMessageLength: (value: number) => void;
-  setPersistChatDraft: (value: boolean) => void;
   setShowOpenCodeUpdateNotifications: (value: boolean) => void;
   setAgentControlToolEnabled: (value: boolean) => void;
   setAgentScheduleToolEnabled: (value: boolean) => void;
@@ -1559,6 +1560,7 @@ export const useUIStore = create<UIStore>()(
         sessionRetentionAction: 'archive',
         sessionRetentionOnlyArchived: false,
         mergedWorktreeCleanupEnabled: false,
+        worktreeArchiveOnDoneEnabled: false,
         autoDeleteLastRunAt: null,
         messageLimit: 200,
         fontSize: 100,
@@ -1622,7 +1624,6 @@ export const useUIStore = create<UIStore>()(
 
         showTerminalQuickKeysOnDesktop: false,
         sessionTabsEnabled: false,
-        persistChatDraft: true,
         showOpenCodeUpdateNotifications: true,
         agentControlToolEnabled: true,
         agentScheduleToolEnabled: true,
@@ -2670,6 +2671,10 @@ export const useUIStore = create<UIStore>()(
           set({ mergedWorktreeCleanupEnabled: value });
         },
 
+        setWorktreeArchiveOnDoneEnabled: (value) => {
+          set({ worktreeArchiveOnDoneEnabled: value });
+        },
+
         setAutoSaveEnabled: (value) => {
           set({ autoSaveEnabled: value });
         },
@@ -3214,9 +3219,6 @@ export const useUIStore = create<UIStore>()(
         setSummaryThreshold: (value) => { set({ summaryThreshold: value }); },
         setSummaryLength: (value) => { set({ summaryLength: value }); },
         setMaxLastMessageLength: (value) => { set({ maxLastMessageLength: value }); },
-        setPersistChatDraft: (value) => {
-          set({ persistChatDraft: value });
-        },
         setShowOpenCodeUpdateNotifications: (value) => {
           set({ showOpenCodeUpdateNotifications: value });
         },
@@ -3726,6 +3728,7 @@ export const useUIStore = create<UIStore>()(
           sessionRetentionAction: state.sessionRetentionAction,
           sessionRetentionOnlyArchived: state.sessionRetentionOnlyArchived,
           mergedWorktreeCleanupEnabled: state.mergedWorktreeCleanupEnabled,
+          worktreeArchiveOnDoneEnabled: state.worktreeArchiveOnDoneEnabled,
           autoDeleteLastRunAt: state.autoDeleteLastRunAt,
           messageLimit: state.messageLimit,
           fontSize: state.fontSize,
@@ -3773,7 +3776,6 @@ export const useUIStore = create<UIStore>()(
           summaryThreshold: state.summaryThreshold,
           summaryLength: state.summaryLength,
           maxLastMessageLength: state.maxLastMessageLength,
-          persistChatDraft: state.persistChatDraft,
           showOpenCodeUpdateNotifications: state.showOpenCodeUpdateNotifications,
           agentControlToolEnabled: state.agentControlToolEnabled,
           agentScheduleToolEnabled: state.agentScheduleToolEnabled,

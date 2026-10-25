@@ -1,4 +1,5 @@
 import type { SessionSidebarRow } from './sessionSidebarRowModel';
+import { isWorktreeWorkGroup } from './works/sidebarWorks';
 
 const INITIAL_ROW_LIMIT = 24;
 
@@ -28,7 +29,7 @@ const SECTION_SPACING_ESTIMATE = { 'pb-2': 8, 'pb-1.5': 6 } as const;
 type SectionSpacing = keyof typeof SECTION_SPACING_ESTIMATE;
 
 /**
- * Rows that share a kind, surface context and density render at the same height apart
+ * Rows that share a kind and surface context render at the same height apart
  * from their trailing section gap, so one measured row tells the size of every
  * unmeasured one, with whatever gap it ends up having. The virtualizer
  * compensates the scroll position whenever a row above the viewport measures
@@ -36,7 +37,7 @@ type SectionSpacing = keyof typeof SECTION_SPACING_ESTIMATE;
  * user's scroll gesture.
  */
 export const sessionSidebarRowSizeKey = (row: SessionSidebarRow): string => (
-  `${row.kind}:${'renderContext' in row ? row.renderContext : ''}:${row.estimateSize}`
+  `${row.kind}:${'renderContext' in row ? row.renderContext : ''}${'detailed' in row && row.detailed ? ':detailed' : ''}`
 );
 
 /**
@@ -66,10 +67,11 @@ export const estimateSessionSidebarRowSize = (
 };
 
 export const sectionSpacingAfter = (row: SessionSidebarRow, nextRow: SessionSidebarRow | undefined): SectionSpacing | undefined => {
-  // Zones (Chats, In work, Recent) and projects are sections of equal weight,
-  // so each opens with the same gap. A worktree header opens a smaller one
-  // inside its project, so its sessions read as a group of their own.
+  // Zones (Chats, Pinned, In work, the list by time) and projects are sections
+  // of equal weight, so each opens with the same gap. A space or archive
+  // header opens a smaller one inside its project, so its sessions read as a
+  // group of their own. A worktree is a work row among session rows and opens none.
   const startsSection = nextRow?.kind === 'activity-header' || nextRow?.kind === 'project-header';
   if (startsSection) return 'pb-2';
-  return nextRow?.kind === 'group-header' && row.kind !== 'project-header' ? 'pb-1.5' : undefined;
+  return nextRow?.kind === 'group-header' && !isWorktreeWorkGroup(nextRow.group) && row.kind !== 'project-header' ? 'pb-1.5' : undefined;
 };

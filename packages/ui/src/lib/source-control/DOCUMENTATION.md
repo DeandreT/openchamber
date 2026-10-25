@@ -377,6 +377,9 @@ Invariants:
   keeps reading as GitHub-shaped. Patterns name `{owner}` or `{namespace+}`,
   `{repo}` and `{number}`, or `{project+}` (a whole project path, split on its
   last slash) and `{number}`; a pattern that does not name each once is ignored.
+  `urls.discussion` patterns are read only while `features.discussions` is on,
+  so a link reads as `kind: 'discussion'` only on a host that keeps them; a
+  server from before discussions names neither, and both read as off.
 - Remotes are recognised on the instances a caller passes:
   `resolveSourceControlTarget`, `getBoundSourceControlReadContexts` and
   `repositoryLinkFromRemotes` take the connected instances plus each

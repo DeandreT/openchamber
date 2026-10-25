@@ -76,6 +76,8 @@ import { useI18n } from '@/lib/i18n';
 import { generateCommitMessage, stageGitFile, stageGitFiles, unstageGitFile, unstageGitFiles } from '@/lib/gitApi';
 import type { GitRemote } from '@/lib/gitApi';
 import { getLanguageFromExtension, isImageFile } from '@/lib/toolHelpers';
+import { diffCommentOriginFromSource, type DiffCommentOrigin } from '@/lib/diffCommentOrigin';
+import { useWholeFileComment } from '@/components/comments';
 import {
   useGitStore,
   useGitIdentity,
@@ -388,6 +390,11 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
     return null;
   }, [branchComparison.base, currentBranch, mode, prComparison.diffUnavailable, selectedCommitHash, selectedPr]);
   const comparisonRevision = mode === 'branch' ? branchComparison.revision : '';
+  const selectedPrHead = selectedPr ? prComparison.prs.find((pr) => pr.number === selectedPr.number)?.headSha : undefined;
+  const commentOrigin = React.useMemo(
+    () => diffCommentOriginFromSource(comparisonSource, { provider: prComparison.provider, revision: selectedPrHead }),
+    [comparisonSource, prComparison.provider, selectedPrHead],
+  );
   const comparison = useGitComparison(currentDirectory || null, comparisonSource, visible && isGitRepo === true, comparisonRevision, prComparison.readContext, prComparison.provider);
   const { fetchDiff: loadComparisonDiff, fetchFullFile: loadComparisonFullFile } = comparison;
   const comparisonFiles = React.useMemo(() => comparison.files ? [...comparison.files].sort((a, b) => a.path.localeCompare(b.path)) : null, [comparison.files]);
@@ -1177,6 +1184,7 @@ export const MobileChangesPane: React.FC<MobileChangesPaneProps> = ({ rootDirect
       <MobileDiffDetail
         path={activeComparisonPath}
         subtitle={[modeLabel, sourceLabel].filter(Boolean).join(' · ')}
+        commentOrigin={commentOrigin}
         diff={activeFullComparisonDiff ?? (activeComparisonDiff.status === 'ready' ? activeComparisonDiff.diff : null)}
         fileExists={!comparison.files || comparison.files.some((file) => file.path === activeComparisonPath)}
         error={comparison.error ?? (activeComparisonDiff.status === 'error' ? activeComparisonDiff.message : null)}
@@ -1533,12 +1541,15 @@ const MobileDiffDetail: React.FC<{
   onExpandContextRequest?: (request: ContextExpansionRequest) => void;
   pendingContextExpansion?: ContextExpansionRequest | null;
   contextLoading?: boolean;
-}> = ({ path, subtitle, diff, staged = false, fileExists, unavailableReason = null, error = null, onBack, onRetry, onExpandContextRequest, pendingContextExpansion, contextLoading }) => {
+  /** The comparison this file comes from, for comments; absent for uncommitted changes. */
+  commentOrigin?: DiffCommentOrigin;
+}> = ({ path, subtitle, diff, staged = false, fileExists, unavailableReason = null, error = null, onBack, onRetry, onExpandContextRequest, pendingContextExpansion, contextLoading, commentOrigin }) => {
   const { t } = useI18n();
   const language = React.useMemo(() => getLanguageFromExtension(path) || 'text', [path]);
   const hideWhitespace = useUIStore((state) => state.diffHideWhitespace);
   const setHideWhitespace = useUIStore((state) => state.setDiffHideWhitespace);
   const whitespaceState = hideWhitespace ? t('diffView.whitespace.hidden') : t('diffView.whitespace.shown');
+  const wholeFileComment = useWholeFileComment({ fileLabel: path, origin: commentOrigin });
 
   return (
     <div className="flex h-full flex-col overflow-hidden bg-background text-foreground">
@@ -1568,7 +1579,21 @@ const MobileDiffDetail: React.FC<{
         >
           <WhitespaceToggleIcon hidden={hideWhitespace} className="size-5" />
         </button>
+        <button
+          type="button"
+          className={cn(
+            'flex size-9 shrink-0 items-center justify-center rounded-lg hover:bg-interactive-hover hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+            wholeFileComment.isOpen ? 'text-foreground' : 'text-muted-foreground',
+          )}
+          aria-label={t('inlineComment.actions.commentOnFile')}
+          aria-pressed={wholeFileComment.isOpen}
+          title={t('inlineComment.actions.commentOnFile')}
+          onClick={wholeFileComment.open}
+        >
+          <Icon name="chat-1" className="size-5" />
+        </button>
       </header>
+      {wholeFileComment.body}
       <div className="min-h-0 flex-1 overflow-hidden">
         {!fileExists ? (
           <MobileChangesState icon message={t('mobile.changes.diffDetail.missingTitle')} description={t('mobile.changes.diffDetail.missingDescription')} />
@@ -1604,6 +1629,7 @@ const MobileDiffDetail: React.FC<{
               fileDiff={diff.fileDiff}
               language={language}
               fileName={path}
+              commentOrigin={commentOrigin}
               renderSideBySide={false}
               wrapLines={true}
               hideWhitespace={hideWhitespace}

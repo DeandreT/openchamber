@@ -1,7 +1,7 @@
 import * as React from 'react';
 
 import { ReferencePreview } from '@/components/references/ReferencePreview';
-import { DEFAULT_REPOSITORY_FILTER, type ReferencePickerItem } from '@/components/references/referencePickerItems';
+import { canChangeDiscussionState, DEFAULT_REPOSITORY_FILTER, type ReferencePickerItem } from '@/components/references/referencePickerItems';
 import {
     forgetRepositoryPullStatus,
     useRepositoryPullStatuses,
@@ -51,7 +51,7 @@ type TrackerItemViewProps = {
 };
 
 /**
- * One issue, pull or merge request or tracker item in the Tracker, drawn as
+ * One issue, discussion, pull or merge request or tracker item in the Tracker, drawn as
  * the issues and PRs board previews it: description, activity, checks,
  * labels, reviewers, a reply box, merge and close. Nothing here starts a
  * session or a worktree; the item can be attached to the session on screen.
@@ -202,7 +202,8 @@ const RepositoryTrackerItem: React.FC<TrackerItemViewProps & { kind: RepositoryR
                 onOpenChecks={pull && context ? () => setChecksOpen(true) : undefined}
                 onRefresh={context ? refreshFromHost : undefined}
                 threadActions={threadActions}
-                stateMenu={reference.state !== 'merged' && context ? (
+                stateMenu={reference.state !== 'merged' && context
+                    && (reference.kind !== 'discussion' || canChangeDiscussionState(reference, detail.status === 'ready' ? detail.value.discussion : undefined)) ? (
                     <SourceBoardStateMenuItems item={item} context={context} onChanged={() => void refreshItem()} />
                 ) : undefined}
                 commentAttachments={{ onAttach: attachments.attachComment, onAttachAll: attachments.attachComments }}
@@ -210,7 +211,10 @@ const RepositoryTrackerItem: React.FC<TrackerItemViewProps & { kind: RepositoryR
                 reviewersControl={pull && context ? (
                     <SourceBoardReviewers pull={pull} detail={detail} context={context} onChanged={refreshItem} />
                 ) : undefined}
-                reply={context ? <SourceBoardReply reference={reference} context={context} onRefresh={refreshItem} /> : undefined}
+                // A locked discussion takes no comment from someone who may not update it.
+                reply={context && (detail.status !== 'ready' || detail.value.discussion?.canComment !== false)
+                    ? <SourceBoardReply reference={reference} context={context} onRefresh={refreshItem} />
+                    : undefined}
                 pullLinks={pull && context ? (
                     <SourceBoardPullLinks
                         pull={pull}

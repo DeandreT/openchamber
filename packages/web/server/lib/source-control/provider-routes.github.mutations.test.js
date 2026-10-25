@@ -581,7 +581,7 @@ describe('canonical GitHub mutations', () => {
     expect(response.body.result).toEqual({ merged: true });
     expect(requests).toEqual([
       { method: 'GET', path: '/repos/acme/app/pulls/7', body: null },
-      { method: 'PUT', path: '/repos/acme/app/pulls/7/merge-async', body: { merge_method: 'merge', sha: 'abc123' } },
+      { method: 'PUT', path: '/repos/acme/app/pulls/7/merge-async', body: { merge_method: 'merge', sha: 'abc123', bypass_rules: true } },
     ]);
   });
 
@@ -891,6 +891,117 @@ describe('canonical GitHub mutations', () => {
 
       expect(response.body.code).toBe('SOURCE_CONTROL_MUTATION_TARGET_INVALID');
       expect(requests.some((entry) => entry.method === 'POST' && /mutation/.test(entry.body.query))).toBe(false);
+    });
+
+    describe('discussions', () => {
+      const discussionTarget = { project: { owner: 'acme', name: 'app' }, number: 5 };
+      const discussionNode = (overrides = {}) => ({
+        id: 'D_five', number: 5, closed: false, labels: { nodes: [{ id: 'LA_bug', name: 'bug' }] }, ...overrides,
+      });
+      const commentNode = (number = 5, overrides = {}) => ({
+        __typename: 'DiscussionComment', isAnswer: false, replyTo: null, discussion: { number, repository: { name: 'app', owner: { login: 'acme' } } }, ...overrides,
+      });
+      // Every discussion read and write is one GraphQL POST; `writes` answers the mutations.
+      const graphqlRequests = (writes, { discussion = discussionNode(), comment = commentNode(), labels = {} } = {}) => recordRequests((entry) => {
+        const { query } = entry.body;
+        if (/^mutation/.test(query.trim())) return jsonResponse({ data: writes(query, entry.body.variables) });
+        if (query.includes('discussion(number:')) return jsonResponse({ data: { repository: { discussion } } });
+        if (query.includes('label(name:')) {
+          return jsonResponse({ data: { repository: Object.fromEntries(Object.entries(entry.body.variables)
+            .filter(([key]) => /^l\d+$/.test(key)).map(([key, name]) => [key, labels[name] ? { id: labels[name], name } : null])) } });
+        }
+        return jsonResponse({ data: { node: comment } });
+      });
+      const graphqlWrites = (requests) => requests.filter((entry) => /^mutation/.test(entry.body.query.trim())).map((entry) => entry.body.variables);
+
+      it('comments on a discussion and answers a comment of it in its thread', async () => {
+        const account = await auth.setGitHubAuth({ accessToken: 'token-one', user: { id: 1, login: 'actor' } });
+        const requests = graphqlRequests(() => ({ addDiscussionComment: { comment: { id: 'DC_new' } } }));
+        const { app, store } = makeApp();
+
+        await request(app).post('/api/source-control/github/discussions/comment')
+          .send({ ...context(account.accountId, { target: discussionTarget }), body: 'Thanks' }).expect(200);
+        await request(app).post('/api/source-control/github/discussions/comment')
+          .send({ ...context(account.accountId, { target: discussionTarget, idempotencyKey: 'request-two' }), body: 'Agreed', replyTo: 'DC_one' }).expect(200);
+
+        expect(graphqlWrites(requests)).toEqual([
+          { discussionId: 'D_five', body: 'Thanks', replyToId: null },
+          { discussionId: 'D_five', body: 'Agreed', replyToId: 'DC_one' },
+        ]);
+        expect(store.records.get('request-one')).toMatchObject({ kind: 'discussion-comment', state: 'succeeded', target: { number: 5 } });
+      });
+
+      it('refuses a reply to a comment of another discussion, or to a reply, and writes nothing', async () => {
+        const account = await auth.setGitHubAuth({ accessToken: 'token-one', user: { id: 1, login: 'actor' } });
+        const elsewhere = graphqlRequests(() => ({}), { comment: commentNode(6) });
+        const { app } = makeApp();
+        const response = await request(app).post('/api/source-control/github/discussions/comment')
+          .send({ ...context(account.accountId, { target: discussionTarget }), body: 'Agreed', replyTo: 'DC_other' }).expect(409);
+        expect(response.body.code).toBe('SOURCE_CONTROL_MUTATION_TARGET_INVALID');
+        expect(graphqlWrites(elsewhere)).toEqual([]);
+
+        const nested = graphqlRequests(() => ({}), { comment: commentNode(5, { replyTo: { id: 'DC_one' } }) });
+        await request(app).post('/api/source-control/github/discussions/comment')
+          .send({ ...context(account.accountId, { target: discussionTarget, idempotencyKey: 'request-two' }), body: 'Agreed', replyTo: 'DC_reply' }).expect(409);
+        expect(graphqlWrites(nested)).toEqual([]);
+      });
+
+      it('closes a discussion for a reason, reopens it, and chooses an answer', async () => {
+        const account = await auth.setGitHubAuth({ accessToken: 'token-one', user: { id: 1, login: 'actor' } });
+        const requests = graphqlRequests((query) => {
+          if (query.includes('closeDiscussion')) return { closeDiscussion: { discussion: { closed: true } } };
+          if (query.includes('reopenDiscussion')) return { reopenDiscussion: { discussion: { closed: false } } };
+          return { markDiscussionCommentAsAnswer: { discussion: { id: 'D_five' } } };
+        });
+        const { app, store } = makeApp();
+
+        const closed = await request(app).post('/api/source-control/github/discussions/state')
+          .send({ ...context(account.accountId, { target: discussionTarget }), state: 'closed', reason: 'outdated' }).expect(200);
+        await request(app).post('/api/source-control/github/discussions/state')
+          .send({ ...context(account.accountId, { target: discussionTarget, idempotencyKey: 'request-two' }), state: 'open' }).expect(200);
+        await request(app).post('/api/source-control/github/discussions/answer')
+          .send({ ...context(account.accountId, { target: discussionTarget, idempotencyKey: 'request-three' }), commentId: 'DC_one', answer: true }).expect(200);
+        // Closing names why; reopening names none.
+        await request(app).post('/api/source-control/github/discussions/state')
+          .send({ ...context(account.accountId, { target: discussionTarget, idempotencyKey: 'request-four' }), state: 'closed' }).expect(400);
+
+        expect(closed.body.result).toEqual({ state: 'closed' });
+        expect(graphqlWrites(requests)).toEqual([{ discussionId: 'D_five', reason: 'OUTDATED' }, { discussionId: 'D_five' }, { id: 'DC_one' }]);
+        expect(store.records.get('request-three')).toMatchObject({ kind: 'discussion-answer', state: 'succeeded' });
+      });
+
+      it('sets the labels as a whole set by their ids, and refuses a label the repository lacks', async () => {
+        const account = await auth.setGitHubAuth({ accessToken: 'token-one', user: { id: 1, login: 'actor' } });
+        const requests = graphqlRequests(() => ({ addLabelsToLabelable: { clientMutationId: null }, removeLabelsFromLabelable: { clientMutationId: null } }), {
+          labels: { idea: 'LA_idea' },
+        });
+        const { app } = makeApp();
+
+        await request(app).post('/api/source-control/github/discussions/labels')
+          .send({ ...context(account.accountId, { target: discussionTarget }), labels: ['idea'] }).expect(200);
+        const refused = await request(app).post('/api/source-control/github/discussions/labels')
+          .send({ ...context(account.accountId, { target: discussionTarget, idempotencyKey: 'request-two' }), labels: ['idea', 'missing'] }).expect(422);
+
+        expect(graphqlWrites(requests)).toEqual([{ id: 'D_five', labelIds: ['LA_idea'] }, { id: 'D_five', labelIds: ['LA_bug'] }]);
+        expect(refused.body).toEqual({ error: 'Label missing does not exist in this repository', code: 'SOURCE_CONTROL_MUTATION_REJECTED' });
+      });
+
+      it('leaves a label change unknown when the labels were added and the removal was refused', async () => {
+        const account = await auth.setGitHubAuth({ accessToken: 'token-one', user: { id: 1, login: 'actor' } });
+        recordRequests((entry) => {
+          const { query } = entry.body;
+          if (query.includes('removeLabelsFromLabelable')) return jsonResponse({ errors: [{ message: 'Refused' }] });
+          if (query.includes('addLabelsToLabelable')) return jsonResponse({ data: { addLabelsToLabelable: { clientMutationId: null } } });
+          if (query.includes('label(name:')) return jsonResponse({ data: { repository: { l0: { id: 'LA_idea', name: 'idea' } } } });
+          return jsonResponse({ data: { repository: { discussion: discussionNode() } } });
+        });
+        const { app, store } = makeApp();
+
+        await request(app).post('/api/source-control/github/discussions/labels')
+          .send({ ...context(account.accountId, { target: discussionTarget }), labels: ['idea'] });
+
+        expect(store.records.get('request-one')).toMatchObject({ kind: 'discussion-labels', state: 'outcome-unknown' });
+      });
     });
 
     it("passes GitHub's reason when it refuses a review", async () => {

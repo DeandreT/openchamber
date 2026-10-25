@@ -116,7 +116,7 @@ const answerIsAbout = (subpath, params, item) => {
     const query = lower(params.get('query')).trim();
     if (!query) return false;
     if (query === `#${item.number}` || query === String(item.number)) return true;
-    const link = query.match(/\/([^/]+)\/([^/]+)\/(?:-\/)?(?:pull|pulls|issues|merge_requests)\/(\d+)/);
+    const link = query.match(/\/([^/]+)\/([^/]+)\/(?:-\/)?(?:pull|pulls|issues|merge_requests|discussions)\/(\d+)/);
     return Boolean(link) && Number(link[3]) === item.number && sameProject(link[1], link[2]);
   }
   return Number(params.get('number')) === item.number && sameProject(params.get('owner'), params.get('repo'));

@@ -69,6 +69,7 @@ const reference = (kind: 'issue' | 'pull', number: number, title: string): Repos
 const servedReferences = {
   pull: [reference('pull', 12, 'Teach the forge to rebase')],
   issue: [reference('issue', 7, 'Pipelines time out')],
+  discussion: [],
 } satisfies Record<RepositoryReference['kind'], RepositoryReference[]>;
 
 let providerReads = 0;
@@ -90,6 +91,7 @@ const sourceControl: SourceControlAPI = {
   changeRequestStartThread: unexpected, changeRequestReplyToThread: unexpected, changeRequestResolveThread: unexpected,
   changeRequestReview: unexpected, issueComment: unexpected, changeRequestSetState: unexpected,
   issueSetState: unexpected, changeRequestSetLabels: unexpected, issueSetLabels: unexpected,
+  discussionComment: unexpected, discussionSetState: unexpected, discussionSetAnswer: unexpected, discussionSetLabels: unexpected,
   changeRequestSetReviewers: unexpected, refreshProviderReads: unexpected, referenceLabels: unexpected,
   referenceReviewers: unexpected, changeRequestsList: unexpected, changeRequestContext: unexpected,
   issuesList: unexpected, issueGet: unexpected, issueComments: unexpected, projectUpstream: unexpected,

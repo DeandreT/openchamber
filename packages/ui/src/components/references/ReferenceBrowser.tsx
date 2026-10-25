@@ -22,7 +22,6 @@ import { cn } from '@/lib/utils';
 
 import { ReferencePickerRow } from './ReferencePickerRow';
 import {
-    CHANGE_REQUEST_TAB_KEYS,
     REPOSITORY_PEOPLE,
     REPOSITORY_PEOPLE_LABEL_KEYS,
     REPOSITORY_STATE_LABEL_KEYS,
@@ -32,6 +31,8 @@ import {
     TRACKER_PRIORITY_FILTERS,
     TRACKER_PRIORITY_LABEL_KEYS,
     referencePickerItemKey,
+    repositoryKindOfTab,
+    repositoryKindTabs,
     trackerStateFilterLabel,
     type ReferencePickerItem,
 } from './referencePickerItems';
@@ -43,19 +44,18 @@ const NO_PULLS_KEYS = {
     change: 'references.picker.empty.changes',
 } as const satisfies Record<ChangeRequestTerm, I18nKey>;
 
-/** Issues and change requests, named by the provider's term; the repository source only. */
+/** Issues and change requests, named by the provider's term, and discussions where it keeps them; the repository source only. */
 export const ReferenceBrowserTabs: React.FC<{ browser: ReferenceBrowser }> = ({ browser }) => {
     const { t } = useI18n();
     if (browser.source !== 'repository') return null;
+    const tabs = repositoryKindTabs(t, browser.term, browser.discussions)
+        .map((tab) => ({ ...tab, icon: <Icon name={tab.icon} className="size-3.5" /> }));
     return (
-        <div className={cn(browser.isMobile ? 'w-full' : 'w-[16rem]')}>
+        <div className={cn(browser.isMobile ? 'w-full' : tabs.length > 2 ? 'w-[24rem]' : 'w-[16rem]')}>
             <SortableTabsStrip
-                items={[
-                    { id: 'issue', label: t('references.picker.tab.issues'), icon: <Icon name="record-circle" className="size-3.5" /> },
-                    { id: 'pull', label: t(CHANGE_REQUEST_TAB_KEYS[browser.term]), icon: <Icon name="git-pull-request" className="size-3.5" /> },
-                ]}
+                items={tabs}
                 activeId={browser.repositoryKind}
-                onSelect={(id) => browser.selectRepositoryKind(id === 'pull' ? 'pull' : 'issue')}
+                onSelect={(id) => browser.selectRepositoryKind(repositoryKindOfTab(id))}
                 variant="active-pill"
                 layoutMode="fit"
             />
@@ -161,10 +161,13 @@ export const ReferenceBrowserSearch: React.FC<{
     const { t } = useI18n();
     const { source, term, isMobile, list, query, searchRef } = browser;
     const tracked = source !== 'repository';
-    const placeholder = t(tracked ? 'references.picker.search.tracker' : `references.picker.search.${term}`);
+    const discussions = !tracked && browser.repositoryKind === 'discussion';
+    const placeholder = t(tracked ? 'references.picker.search.tracker' : discussions ? 'references.picker.search.discussions' : `references.picker.search.${term}`);
     // The phone's field shares its row with the filter, so it gets the short wording;
     // the label keeps the full one.
-    const shortPlaceholder = t(tracked ? 'references.picker.search.mobile.tracker' : `references.picker.search.mobile.${term}`);
+    const shortPlaceholder = t(tracked
+        ? 'references.picker.search.mobile.tracker'
+        : discussions ? 'references.picker.search.mobile.discussions' : `references.picker.search.mobile.${term}`);
 
     return (
         <div className={cn('flex items-center gap-2', !isMobile && 'min-w-[14rem] flex-1')}>
@@ -254,6 +257,7 @@ export const ReferenceBrowserList: React.FC<{
         if (debouncedQuery.trim()) return t('references.picker.empty.search');
         if (tracker) return t('references.picker.empty.tracker');
         if (repositoryKind === 'issue') return t('references.picker.empty.issues');
+        if (repositoryKind === 'discussion') return t('references.picker.empty.discussions');
         return t(NO_PULLS_KEYS[term]);
     };
 

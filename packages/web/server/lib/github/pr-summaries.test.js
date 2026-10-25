@@ -45,9 +45,9 @@ const prNode = (number, overrides = {}) => ({
   ...overrides,
 });
 
-// Answers every alias of a document from `nodes` (PRs) and `issues` (by
-// number) and records how many refs each document carried.
-const fakeOctokit = (nodes, { fail, issues = new Map() } = {}) => {
+// Answers every alias of a document from `nodes` (PRs), `issues` and
+// `discussions` (by number) and records how many refs each document carried.
+const fakeOctokit = (nodes, { fail, issues = new Map(), discussions = new Map() } = {}) => {
   const documents = [];
   return {
     documents,
@@ -56,6 +56,10 @@ const fakeOctokit = (nodes, { fail, issues = new Map() } = {}) => {
       documents.push(indexes.length);
       const data = Object.fromEntries(indexes.map((index) => {
         const number = variables[`p${index}`];
+        if (query.includes(`discussion(number: $p${index})`)) {
+          const found = discussions.get(number) ?? null;
+          return [`a${index}`, found ? { discussion: found } : null];
+        }
         if (query.includes(`issue(number: $p${index})`)) {
           const issue = issues.get(number) ?? null;
           return [`a${index}`, issue ? { issue } : null];
@@ -150,6 +154,29 @@ describe('summarizeCheckContexts', () => {
 });
 
 describe('fetchPrSummaries', () => {
+  test('reads a discussion\'s state and answer beside PRs, with only the fragments it uses', async () => {
+    const octokit = fakeOctokit(new Map([[1, prNode(1)]]), { discussions: new Map([
+      [5, { number: 5, title: 'Q', closed: false, stateReason: null, isAnswered: true }],
+      [6, { number: 6, title: 'Old', closed: true, stateReason: 'OUTDATED', isAnswered: null }],
+    ]) });
+    const queries = [];
+    const graphql = octokit.graphql;
+    octokit.graphql = async (query, variables) => { queries.push(query); return graphql(query, variables); };
+    const result = await fetchPrSummaries({
+      octokit,
+      refs: [{ owner: 'acme', repo: 'app', number: 1 }],
+      discussionRefs: [{ owner: 'acme', repo: 'app', number: 5 }, { owner: 'acme', repo: 'app', number: 6 }, { owner: 'acme', repo: 'app', number: 7 }],
+    });
+    expect(result.summaries.map((summary) => summary.number)).toEqual([1]);
+    // One GitHub cannot resolve is left out: unknown, never closed.
+    expect(result.discussionSummaries).toEqual([
+      { owner: 'acme', repo: 'app', number: 5, title: 'Q', state: 'open', answered: true },
+      { owner: 'acme', repo: 'app', number: 6, title: 'Old', state: 'outdated', answered: null },
+    ]);
+    expect(queries[0]).toContain('fragment DiscussionSummary on Discussion');
+    expect(queries[0]).not.toContain('fragment IssueSummary');
+  });
+
   test('packs 25 PRs per GraphQL document', async () => {
     const refs = Array.from({ length: 26 }, (_, index) => ({ owner: 'acme', repo: 'app', number: index + 1 }));
     const octokit = fakeOctokit(new Map(refs.map((ref) => [ref.number, prNode(ref.number)])));

@@ -2,7 +2,7 @@ import * as React from 'react';
 
 import { Icon } from '@/components/icon/Icon';
 import { Checkbox } from '@/components/ui/checkbox';
-import type { CISummary, Label, ChangeRequestListStatus, TrackerLabel, TrackerProgress } from '@/lib/api/types';
+import type { CISummary, Label, ChangeRequestListStatus, RepositoryDiscussionReference, TrackerLabel, TrackerProgress } from '@/lib/api/types';
 import { useI18n } from '@/lib/i18n';
 import { useSourceControlProvider } from '@/lib/source-control/providers/registry';
 import { useTrackerDescriptor } from '@/lib/trackers/registry';
@@ -89,6 +89,14 @@ const SubIssueCount: React.FC<{ progress: TrackerProgress }> = ({ progress }) =>
         </span>
     );
 };
+
+/** A discussion's category: its emoji, when it has one, and its name. */
+export const DiscussionCategory: React.FC<{ category: RepositoryDiscussionReference['category'] }> = ({ category }) => (
+    <span className="inline-flex min-w-0 max-w-[12rem] items-center gap-1">
+        {category.emoji ? <span aria-hidden className="shrink-0">{category.emoji}</span> : null}
+        <span className="truncate">{category.name}</span>
+    </span>
+);
 
 export const ChecksGlyph: React.FC<{ checks: CISummary | null }> = ({ checks }) => {
     if (!checks || checks.total === 0) return null;
@@ -185,6 +193,17 @@ export const ReferencePickerRow = React.memo(function ReferencePickerRow({
                             <Icon name="chat-1" className="size-3.5" />
                             {item.reference.commentCount}
                         </span>
+                    ) : null}
+                    {item.source === 'repository' && item.reference.kind === 'discussion' ? (
+                        <>
+                            {item.reference.upvotes > 0 ? (
+                                <span className="inline-flex items-center gap-0.5" title={t('references.picker.discussion.upvotesTitle', { count: item.reference.upvotes })}>
+                                    <Icon name="arrow-up" className="size-3.5" />
+                                    {item.reference.upvotes}
+                                </span>
+                            ) : null}
+                            <DiscussionCategory category={item.reference.category} />
+                        </>
                     ) : null}
                     {item.source === 'repository' && item.reference.kind === 'pull' && diffIncluded ? (
                         <span className="inline-flex items-center gap-0.5" title={t('references.picker.preview.includeDiff')}>

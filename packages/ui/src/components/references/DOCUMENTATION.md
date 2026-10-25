@@ -1,6 +1,7 @@
 # Reference picker
 
-The picker for a project's issues and change requests, on whichever
+The picker for a project's issues, change requests and discussions (where the
+host keeps them), on whichever
 source-control provider hosts it, and each served tracker's work items
 (Linear issues), used by the
 composer (any number of items, attached together) and by New Worktree (one
@@ -86,6 +87,48 @@ descriptor (`sharedNumberSpace`) would have to thread descriptors into every
 caller that keys a selection (New Worktree, attach), while marking every change
 request `!` and every issue `#` keeps keys unique on any provider: where both
 share one number space only one of them can exist.
+
+## Discussions
+
+A provider whose descriptor has `features.discussions` (GitHub) gets a third
+repository tab, Discussions, in the picker, the board's switch and New
+Worktree; elsewhere the tab is absent, and a remembered Discussions tab reads
+as Issues (`useReferenceBrowser`) once the host is known; until the provider
+list and the project's host are known it waits on Discussions instead of
+listing issues and switching. Discussions come only from the provider's
+own search (`referenceSearch`, `referenceDetail` with `kind: 'discussion'`);
+the list-backed reads have none and refuse the kind.
+
+- The list loads only while its tab is open: the background read that makes
+  switching between issues and change requests instant leaves discussions out.
+- Filters: open, unanswered (open questions in a category that takes
+  answers), closed, all; anyone's or the user's own, remembered per kind like
+  the others.
+- State looks (`discussionStateLook`): open in the open colour, with a
+  check while its answer is chosen; resolved in the merged colour; outdated
+  and duplicate in the closed colour. Rows add the category (its emoji and
+  name) and upvotes; the preview adds category, answer status, upvotes and a
+  lock note.
+- Comments are threads: each comment's replies sit under it, and on the board
+  and in a Tracker tab each takes a reply (`threadActions`, `replyTo` the
+  comment's id) and, in a category that takes answers, Mark or Unmark as
+  answer where the host says this account may; the chosen one wears an
+  Answer badge. The reply box at the bottom writes a comment of its own, and
+  is left out of a locked discussion this account may not comment on. The
+  state pill closes an open discussion as resolved, outdated or duplicate, or
+  reopens a closed one, offered only while the detail does not say this
+  account may not (`canChangeDiscussionState`); labels edit as one set.
+- Attached, a discussion becomes a `repository-discussion` chip and context
+  part: `Source control discussion context (JSON)` with the listed item (its
+  description as the list cut it, `bodyTruncated` saying so), its newest
+  comments with their replies and which one is the answer
+  (`resolveComposerReferences.ts`). The session keeps it as an `external`
+  link under its canonical address (`buildLinkedDiscussion`), the id an
+  agent's link to it gets too, so every client keeps it and newer ones read
+  it as a discussion: the sidebar and work status show it among the issues,
+  coloured as an issue reads (resolved done, outdated and duplicate dropped).
+- New Worktree starts from one the way it starts from an issue: a new branch,
+  `discussion-<number>-<slug>`.
 
 ## Lists and the cache
 

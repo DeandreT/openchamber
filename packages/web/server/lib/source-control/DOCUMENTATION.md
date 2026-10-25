@@ -140,6 +140,14 @@ A host that reviews one commit at a time (Gerrit) declares optional extensions t
 - **Older clients.** An app built before these fields reads `change` as a pull request and offers no votes, revisions or push for review; the server cannot tell it apart. The UI drops a merge method it has no words for, so a later method cannot break the merge button.
 - **Branch status.** `change-id.js` (`readBranchChangeIds`) reads the branch tip's `Change-Id` trailer, and with a base the Change-Ids of `base..branch`, oldest first, at most 50 from the tip. The DTO fields a push-create host adds (`ChangeRequestStatus.localRevision`, `stack`; `ChangeRequest.private`, `topic`, `revisionNumber`; `ChangeRequestContext.revisions`) are typed in `provider-contract.d.ts`.
 
+## Repository discussions
+
+A host that keeps repository discussions (GitHub) declares `capabilities.discussions: true`, which needs `capabilities.referencePicker` and `presentation.urls.discussion`; `provider-descriptors.js` refuses the descriptor otherwise. A descriptor that leaves it out publishes exactly as before; one that declares it adds `features.discussions` and `urls.discussion`.
+
+- The reference picker routes take `kind=discussion` (`/references`, `/references/across`, and `/references/detail` with `kind=discussion`, which hands the implementation `kind: 'discussion'` instead of `'item'`). On a provider without the capability they answer `501 SOURCE_CONTROL_CAPABILITY_UNSUPPORTED`. The list filter's `unanswered` state is read only with `kind=discussion`; on every other list an unknown state is `open`, as before.
+- `/discussions/comment`, `/discussions/state`, `/discussions/answer` and `/discussions/labels` are mutation routes gated by the capability, with the record kinds `discussion-comment`, `discussion-state`, `discussion-answer` and `discussion-labels`. Audit records name their target `kind: 'discussion'` (`providerTargetKind` in `audit-storage.js`).
+- `readLiveSummaries` takes `discussionRefs` and hands them only to a provider with the capability; any other provider's are left unanswered, which tracked items read as unknown.
+
 ## Open provider ids
 
 Persisted parsers validate a provider id's syntax only; the registry decides at read time whether that provider is available. A record written by a provider this build does not know therefore never fails a store:
@@ -240,6 +248,10 @@ The executor keys, records and audits a write only in `mutation.perform`. A writ
 ### Why a change request is checked by its target and not by its source
 
 A pull request from a contributor's fork has its head in a repository the maintainer's clone never bound. Requiring the head's repository in the network as well would refuse exactly the review a maintainer does most, from the clone they review in. The host serves the head under the target repository and authorises the token for the request, so the target is the only repository the binding has to cover; a request whose target is outside the network is still refused.
+
+### Why discussions have record kinds of their own and not the issue ones
+
+A record's kind decides how a retry or a restart replays it, and an issue kind replays through the issues API, which knows no discussion. The four `discussion-*` kinds cost what any new kind costs: a build older than them refuses the whole mutation store while a discussion record is kept (succeeded and failed ones expire after seven days). Reusing a kind would have kept downgrades clean and made every replay of a discussion write wrong.
 
 ### Why votes reuse the review kind and not a new one
 

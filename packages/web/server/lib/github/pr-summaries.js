@@ -1,11 +1,11 @@
-// Live status for PRs and issues the client already knows by number.
+// Live status for PRs, issues and discussions the client already knows by number.
 //
 // The sidebar shows many worktrees at once. Asking the full per-branch
 // resolver for each of them costs several REST calls per PR; here one GraphQL
-// document carries up to SUMMARY_ALIASES_PER_QUERY PRs or issues (a PR's
-// state, draft, mergeability and check contexts; an issue's state and close
-// reason), and GitHub prices such a document at a single point of the GraphQL
-// budget.
+// document carries up to SUMMARY_ALIASES_PER_QUERY items (a PR's state,
+// draft, mergeability and check contexts; an issue's state and close reason;
+// a discussion's state and whether it is answered), and GitHub prices such a
+// document at a single point of the GraphQL budget.
 
 import { z } from 'zod';
 
@@ -61,6 +61,14 @@ const ISSUE_FIELDS = `
   title
   state
   stateReason
+`;
+
+const DISCUSSION_FIELDS = `
+  number
+  title
+  closed
+  stateReason
+  isAnswered
 `;
 
 const githubName = z.string().trim().regex(GITHUB_NAME_PATTERN);
@@ -183,6 +191,38 @@ function toIssueSummary(ref, value) {
   };
 }
 
+const DISCUSSION_CLOSE_REASONS = { RESOLVED: 'resolved', OUTDATED: 'outdated', DUPLICATE: 'duplicate' };
+
+/**
+ * A discussion's state: open, or why it was closed. A discussion closed
+ * before GitHub kept reasons reads as resolved, the reason GitHub defaults to.
+ */
+export const toDiscussionState = (node) => (node.closed ? DISCUSSION_CLOSE_REASONS[node.stateReason] ?? 'resolved' : 'open');
+
+const discussionNodeSchema = z.object({
+  number: z.number().int(),
+  title: z.string(),
+  closed: z.boolean(),
+  stateReason: z.string().nullable(),
+  isAnswered: z.boolean().nullable(),
+});
+
+/** `answered` is null where the discussion's category takes no answers. */
+function toDiscussionSummary(ref, value) {
+  const parsed = discussionNodeSchema.safeParse(value);
+  if (!parsed.success || parsed.data.number !== ref.number) {
+    return null;
+  }
+  return {
+    owner: ref.owner,
+    repo: ref.repo,
+    number: ref.number,
+    title: parsed.data.title,
+    state: toDiscussionState(parsed.data),
+    answered: parsed.data.isAnswered,
+  };
+}
+
 const PR_STATES = { OPEN: 'open', CLOSED: 'closed', MERGED: 'merged' };
 
 const toMergeable = (mergeable) => {
@@ -228,14 +268,18 @@ function buildSummaryQuery(entries) {
     variables[`n${index}`] = ref.repo;
     variables[`p${index}`] = ref.number;
     declarations.push(`$o${index}: String!, $n${index}: String!, $p${index}: Int!`);
-    const field = kind === 'issue'
-      ? `issue(number: $p${index}) { ...IssueSummary }`
-      : `pullRequest(number: $p${index}) { ...PrSummary }`;
+    const field = {
+      issue: `issue(number: $p${index}) { ...IssueSummary }`,
+      discussion: `discussion(number: $p${index}) { ...DiscussionSummary }`,
+      pull: `pullRequest(number: $p${index}) { ...PrSummary }`,
+    }[kind];
     selections.push(`a${index}: repository(owner: $o${index}, name: $n${index}) { ${field} }`);
   });
+  // A fragment the document does not use is an error, so each is sent only with its kind.
   const fragments = [
     entries.some((entry) => entry.kind === 'pull') ? `fragment PrSummary on PullRequest {${SUMMARY_FIELDS}}` : '',
     entries.some((entry) => entry.kind === 'issue') ? `fragment IssueSummary on Issue {${ISSUE_FIELDS}}` : '',
+    entries.some((entry) => entry.kind === 'discussion') ? `fragment DiscussionSummary on Discussion {${DISCUSSION_FIELDS}}` : '',
   ].filter(Boolean);
   const query = `query(${declarations.join(', ')}) {\n${selections.join('\n')}\n}\n${fragments.join('\n')}`;
   return { query, variables };
@@ -262,16 +306,19 @@ async function runSummaryQuery(octokit, entries) {
 }
 
 /**
- * Fetch live summaries for known PRs and issues. One GitHub could not resolve
- * is left out of the result: absence means "unknown", never "closed".
+ * Fetch live summaries for known PRs, issues and discussions. One GitHub
+ * could not resolve is left out of the result: absence means "unknown",
+ * never "closed".
  */
-export async function fetchPrSummaries({ octokit, refs, issueRefs = [] }) {
+export async function fetchPrSummaries({ octokit, refs, issueRefs = [], discussionRefs = [] }) {
   const entries = [
     ...refs.map((ref) => ({ kind: 'pull', ref })),
     ...issueRefs.map((ref) => ({ kind: 'issue', ref })),
+    ...discussionRefs.map((ref) => ({ kind: 'discussion', ref })),
   ];
   const summaries = [];
   const issueSummaries = [];
+  const discussionSummaries = [];
   // Chunks run one after another: GitHub's secondary limits punish bursts of
   // concurrent GraphQL documents more than a short sequence.
   for (let start = 0; start < entries.length; start += SUMMARY_ALIASES_PER_QUERY) {
@@ -284,9 +331,14 @@ export async function fetchPrSummaries({ octokit, refs, issueRefs = [] }) {
         if (summary) issueSummaries.push(summary);
         return;
       }
+      if (kind === 'discussion') {
+        const summary = toDiscussionSummary(ref, repository?.discussion);
+        if (summary) discussionSummaries.push(summary);
+        return;
+      }
       const summary = toSummary(ref, repository?.pullRequest);
       if (summary) summaries.push(summary);
     });
   }
-  return { summaries, issueSummaries };
+  return { summaries, issueSummaries, discussionSummaries };
 }

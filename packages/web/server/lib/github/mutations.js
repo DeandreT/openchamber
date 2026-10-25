@@ -17,14 +17,21 @@ import {
  * reconciliation (`reconcile`).
  *
  * Digests cover GitHub's short operation name (`create`, `merge`, ...) while
- * records keep `change-request-<operation>` or the issue kinds; both are
- * persisted in `source-control-mutations.json` and must stay byte-identical,
- * or a retained `running` record would replay as a conflict.
+ * records keep `change-request-<operation>` or the issue and discussion
+ * kinds; both are persisted in `source-control-mutations.json` and must stay
+ * byte-identical, or a retained `running` record would replay as a conflict.
+ * Discussions are written through GraphQL by their node ids, read again at
+ * every write, so no id is kept in a record.
  */
 
 const ISSUE_KINDS = new Set(['issue-comment', 'issue-state', 'issue-labels']);
-const recordKind = (operation) => (ISSUE_KINDS.has(operation) ? operation : `change-request-${operation}`);
-const operationOf = (kind) => (ISSUE_KINDS.has(kind) ? kind : kind.replace(/^change-request-/, ''));
+const DISCUSSION_KINDS = new Set(['discussion-comment', 'discussion-state', 'discussion-answer', 'discussion-labels']);
+// Issue and discussion operations are their own record kinds; the rest are a change request's.
+const ownKind = (operation) => ISSUE_KINDS.has(operation) || DISCUSSION_KINDS.has(operation);
+const recordKind = (operation) => (ownKind(operation) ? operation : `change-request-${operation}`);
+const operationOf = (kind) => (ownKind(kind) ? kind : kind.replace(/^change-request-/, ''));
+// What GitHub calls each reason a discussion is closed for.
+const DISCUSSION_CLOSE_REASONS = Object.freeze({ resolved: 'RESOLVED', outdated: 'OUTDATED', duplicate: 'DUPLICATE' });
 
 /** The route each operation answers on. */
 const ROUTE_OPERATIONS = Object.freeze({
@@ -42,6 +49,10 @@ const ROUTE_OPERATIONS = Object.freeze({
   '/pr/labels': 'labels',
   '/issues/labels': 'issue-labels',
   '/pr/reviewers': 'reviewers',
+  '/discussions/comment': 'discussion-comment',
+  '/discussions/state': 'discussion-state',
+  '/discussions/answer': 'discussion-answer',
+  '/discussions/labels': 'discussion-labels',
 });
 
 const mutationError = (message, code = 'INVALID_SOURCE_CONTROL_MUTATION_CONTEXT', status = 400) => Object.assign(new Error(message), { code, status });
@@ -95,11 +106,12 @@ const commentText = (value, required, maxLength) => {
   if (value.length > maxLength) throw mutationError('body is too long');
   return value;
 };
-// A review thread's GraphQL node id, such as `PRRT_kwDOA...`.
-const reviewThreadId = (value) => {
-  if (!isProviderString(value) || !/^[A-Za-z0-9_=-]{1,200}$/.test(value)) throw mutationError('threadId is invalid');
+// A GraphQL node id, such as a review thread's `PRRT_kwDOA...` or a discussion comment's `DC_kwDOA...`.
+const nodeId = (value, name) => {
+  if (!isProviderString(value) || !/^[A-Za-z0-9_=-]{1,200}$/.test(value)) throw mutationError(`${name} is invalid`);
   return value;
 };
+const reviewThreadId = (value) => nodeId(value, 'threadId');
 // Labels or reviewers as one whole set, so a repeat asks for the same result.
 const nameList = (value, name, limit) => {
   if (!Array.isArray(value) || value.length > limit
@@ -165,9 +177,33 @@ function normalizeOperation(operation, body, context, actor, credential, limits)
     return { input: { method }, digest: (target) => digestOf({ target, method }) };
   }
   if (operation === 'ready') return { input: {}, digest: (target) => digestOf({ target }) };
-  if (operation === 'labels' || operation === 'issue-labels') {
+  if (operation === 'labels' || operation === 'issue-labels' || operation === 'discussion-labels') {
     const labels = nameList(body.labels, 'labels', limits.labelsMax);
     return { input: { labels }, digest: (target) => digestOf({ target, labels }) };
+  }
+  if (operation === 'discussion-comment') {
+    // A reply names the comment whose thread it answers; without one it is a comment of its own.
+    const replyTo = body.replyTo === undefined ? undefined : nodeId(body.replyTo, 'replyTo');
+    const text = commentText(body.body, true, limits.commentMaxLength);
+    return {
+      input: { replyTo, body: text },
+      digest: (target) => digestOf(replyTo === undefined ? { target, body: text } : { target, replyTo, body: text }),
+    };
+  }
+  if (operation === 'discussion-state') {
+    if (body.state === 'open') {
+      if (body.reason !== undefined) throw mutationError('reason is invalid');
+      return { input: { state: 'open' }, digest: (target) => digestOf({ target, state: 'open' }) };
+    }
+    if (body.state !== 'closed' || !Object.hasOwn(DISCUSSION_CLOSE_REASONS, body.reason)) throw mutationError('state is invalid');
+    const { reason } = body;
+    return { input: { state: 'closed', reason }, digest: (target) => digestOf({ target, state: 'closed', reason }) };
+  }
+  if (operation === 'discussion-answer') {
+    const commentId = nodeId(body.commentId, 'commentId');
+    if (body.answer !== true && body.answer !== false) throw mutationError('answer is invalid');
+    const { answer } = body;
+    return { input: { commentId, answer }, digest: (target) => digestOf({ target, commentId, answer }) };
   }
   if (operation === 'reviewers') {
     const reviewers = nameList(body.reviewers, 'reviewers', limits.reviewersMax);
@@ -289,6 +325,9 @@ export function createGitHubMutations({ descriptor, octokitOf, resolveRepo, reso
   // while: most land within seconds, and one still running is reported as
   // such, its outcome arriving with the PR's live state. A host without the
   // endpoint (an older GitHub Enterprise Server) merges the classic way.
+  // The classic endpoint lets a ruleset's bypass actor merge past the rules
+  // without asking; the asynchronous one does so only with `bypass_rules`,
+  // which is sent so both merge the same way. It never widens who may bypass.
   const MERGE_ASYNC_POLL_MS = 1000;
   const MERGE_ASYNC_WAIT_MS = 20_000;
   const MERGE_ASYNC_STATUSES = new Set(['pending', 'merged', 'enqueued', 'failed']);
@@ -318,7 +357,7 @@ export function createGitHubMutations({ descriptor, octokitOf, resolveRepo, reso
     let answer;
     try {
       const response = await octokit.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge-async', {
-        ...route, merge_method: method, sha: target.headSha,
+        ...route, merge_method: method, sha: target.headSha, bypass_rules: true,
       });
       answer = mergeAsyncAnswer(response?.data);
     } catch (error) {
@@ -403,6 +442,130 @@ export function createGitHubMutations({ descriptor, octokitOf, resolveRepo, reso
     if (data?.[field]?.thread?.isResolved !== resolved) throw invalidProviderPayload('GitHub returned an invalid thread state');
     return {};
   };
+  // A discussion lives in GitHub's GraphQL API only: it is written by its node
+  // id, and its labels by theirs.
+  const DISCUSSION_QUERY = `query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    discussion(number: $number) { id number closed labels(first: 100) { nodes { id name } } }
+  }
+}`;
+  const graphqlWrite = async (octokit, query, variables) => {
+    try {
+      return await octokit.graphql(query, variables);
+    } catch (error) {
+      throw graphqlRejection(error);
+    }
+  };
+  const readDiscussion = async (octokit, project, number) => {
+    let data;
+    try {
+      data = await octokit.graphql(DISCUSSION_QUERY, { owner: project.owner, name: project.name, number });
+    } catch (error) {
+      if (!Array.isArray(error?.errors)) throw error;
+      data = error.data;
+    }
+    const discussion = data?.repository?.discussion;
+    if (!isPlainObject(discussion) || discussion.number !== number || !isProviderString(discussion.id) || !discussion.id) {
+      throw mutationError('GitHub discussion was not found', 'SOURCE_CONTROL_MUTATION_TARGET_INVALID', 409);
+    }
+    const labels = requireProviderArray(discussion.labels?.nodes, 'GitHub returned an invalid label list');
+    if (labels.some((label) => !isProviderString(label?.id) || !isProviderString(label?.name))) {
+      throw invalidProviderPayload('GitHub returned an invalid label list');
+    }
+    return { id: discussion.id, closed: discussion.closed === true, labels };
+  };
+  const DISCUSSION_COMMENT_QUERY = `query($id: ID!) {
+  node(id: $id) {
+    __typename
+    ... on DiscussionComment { isAnswer replyTo { id } discussion { number repository { name owner { login } } } }
+  }
+}`;
+  /** The comment `commentId` names, and only one of the target discussion: an id from elsewhere is refused. */
+  const readDiscussionComment = async (octokit, commentId, project, number) => {
+    let data;
+    try {
+      data = await octokit.graphql(DISCUSSION_COMMENT_QUERY, { id: commentId });
+    } catch (error) {
+      if (!Array.isArray(error?.errors)) throw error;
+      data = error.data;
+    }
+    const node = data?.node;
+    const repository = node?.discussion?.repository;
+    if (node?.__typename !== 'DiscussionComment' || node.discussion.number !== number
+      || !isProviderString(repository?.owner?.login) || !isProviderString(repository?.name)
+      || repository.owner.login.toLowerCase() !== project.owner.toLowerCase()
+      || repository.name.toLowerCase() !== project.name.toLowerCase()) {
+      throw mutationError('Comment is not on this discussion', 'SOURCE_CONTROL_MUTATION_TARGET_INVALID', 409);
+    }
+    return { isAnswer: node.isAnswer === true, reply: isPlainObject(node.replyTo) };
+  };
+  const commentOnDiscussion = async (octokit, discussionId, body, replyTo) => {
+    const data = await graphqlWrite(
+      octokit,
+      'mutation($discussionId: ID!, $body: String!, $replyToId: ID) { addDiscussionComment(input: { discussionId: $discussionId, body: $body, replyToId: $replyToId }) { comment { id } } }',
+      { discussionId, body, replyToId: replyTo ?? null },
+    );
+    if (!isProviderString(data?.addDiscussionComment?.comment?.id)) throw invalidProviderPayload('GitHub returned an invalid comment');
+    return {};
+  };
+  const setDiscussionState = async (octokit, discussionId, state, reason) => {
+    const data = state === 'closed'
+      ? await graphqlWrite(
+        octokit,
+        'mutation($discussionId: ID!, $reason: DiscussionCloseReason!) { closeDiscussion(input: { discussionId: $discussionId, reason: $reason }) { discussion { closed } } }',
+        { discussionId, reason: DISCUSSION_CLOSE_REASONS[reason] },
+      )
+      : await graphqlWrite(octokit, 'mutation($discussionId: ID!) { reopenDiscussion(input: { discussionId: $discussionId }) { discussion { closed } } }', { discussionId });
+    const closed = (state === 'closed' ? data?.closeDiscussion : data?.reopenDiscussion)?.discussion?.closed;
+    if (closed !== (state === 'closed')) throw invalidProviderPayload('GitHub returned an unexpected state');
+    return { state };
+  };
+  const setDiscussionAnswer = async (octokit, commentId, answer) => {
+    const field = answer ? 'markDiscussionCommentAsAnswer' : 'unmarkDiscussionCommentAsAnswer';
+    const data = await graphqlWrite(octokit, `mutation($id: ID!) { ${field}(input: { id: $id }) { discussion { id } } }`, { id: commentId });
+    if (!isProviderString(data?.[field]?.discussion?.id)) throw invalidProviderPayload('GitHub returned an invalid answer');
+    return {};
+  };
+  /**
+   * The discussion's labels as one whole set: GitHub adds and removes them by
+   * id, so the names are looked up in the repository first, and a name it
+   * does not have is refused before anything changes. Asking again for the
+   * same set is safe, so a failure between the two writes is fixed by trying again.
+   */
+  const setDiscussionLabels = async (octokit, project, discussion, labels) => {
+    let ids = [];
+    if (labels.length > 0) {
+      const variables = { owner: project.owner, name: project.name };
+      const selections = labels.map((label, index) => {
+        variables[`l${index}`] = label;
+        return `l${index}: label(name: $l${index}) { id name }`;
+      });
+      const declarations = labels.map((_label, index) => `$l${index}: String!`).join(', ');
+      const data = await graphqlWrite(octokit, `query($owner: String!, $name: String!, ${declarations}) { repository(owner: $owner, name: $name) { ${selections.join(' ')} } }`, variables);
+      ids = labels.map((label, index) => {
+        const found = data?.repository?.[`l${index}`];
+        if (!isProviderString(found?.id)) throw mutationError(`Label ${label} does not exist in this repository`, 'SOURCE_CONTROL_MUTATION_REJECTED', 422);
+        return found.id;
+      });
+    }
+    const current = discussion.labels.map((label) => label.id);
+    const add = ids.filter((id) => !current.includes(id));
+    const remove = current.filter((id) => !ids.includes(id));
+    if (add.length) {
+      await graphqlWrite(octokit, 'mutation($id: ID!, $labelIds: [ID!]!) { addLabelsToLabelable(input: { labelableId: $id, labelIds: $labelIds }) { clientMutationId } }', { id: discussion.id, labelIds: add });
+    }
+    if (remove.length) {
+      try {
+        await graphqlWrite(octokit, 'mutation($id: ID!, $labelIds: [ID!]!) { removeLabelsFromLabelable(input: { labelableId: $id, labelIds: $labelIds }) { clientMutationId } }', { id: discussion.id, labelIds: remove });
+      } catch (error) {
+        // Labels were already added: the set moved, so this is no definite
+        // refusal. Without a status it stays outcome-unknown and reconciles by name.
+        if (!add.length) throw error;
+        throw new Error('GitHub changed only part of the labels', { cause: error });
+      }
+    }
+    return {};
+  };
   const setLabels = async (octokit, project, number, labels) => {
     const response = await rejected(() => octokit.rest.issues.setLabels({ owner: project.owner, repo: project.name, issue_number: number, labels }));
     requireProviderArray(response?.data, 'GitHub returned an invalid label list');
@@ -459,8 +622,22 @@ export function createGitHubMutations({ descriptor, octokitOf, resolveRepo, reso
   const reconcileExisting = async (octokit, operation, target, input) => {
     // A comment or a review leaves nothing that tells a lost write from one
     // never sent short of guessing from its text, so the outcome stays unknown.
-    if (['comment', 'review', 'issue-comment', 'thread-reply'].includes(operation)) return unknownOutcome();
+    if (['comment', 'review', 'issue-comment', 'thread-reply', 'discussion-comment'].includes(operation)) return unknownOutcome();
     const project = target.project;
+    if (operation === 'discussion-state') {
+      const discussion = await readDiscussion(octokit, project, target.number);
+      const state = discussion.closed ? 'closed' : 'open';
+      return state === input.state ? { state: 'succeeded', result: { state } } : definiteFailure('SOURCE_CONTROL_MUTATION_NOT_APPLIED');
+    }
+    if (operation === 'discussion-answer') {
+      // Someone may have chosen another answer since: only the asked state is certain.
+      const comment = await readDiscussionComment(octokit, input.commentId, project, target.number);
+      return comment.isAnswer === input.answer ? { state: 'succeeded', result: {} } : unknownOutcome();
+    }
+    if (operation === 'discussion-labels') {
+      const names = (await readDiscussion(octokit, project, target.number)).labels.map((label) => label.name);
+      return sameNames(names, input.labels) ? { state: 'succeeded', result: {} } : unknownOutcome();
+    }
     if (operation === 'thread-resolve') {
       // Someone may have flipped it since: only the asked state is certain.
       const thread = await readReviewThread(octokit, input.threadId, project, target.number);
@@ -542,6 +719,21 @@ export function createGitHubMutations({ descriptor, octokitOf, resolveRepo, reso
       };
     }
     const expected = context.target;
+    if (DISCUSSION_KINDS.has(operation)) {
+      if (expected.head !== undefined || expected.base !== undefined || expected.headSha !== undefined) {
+        throw mutationError('Discussion target is invalid');
+      }
+      const discussion = await readDiscussion(octokit, expectedProject, expected.number);
+      // A reply answers a comment's thread, and only a comment of this discussion takes an answer or a reply.
+      const commentId = operation === 'discussion-answer' ? input.commentId : operation === 'discussion-comment' ? input.replyTo : undefined;
+      if (commentId) {
+        const comment = await readDiscussionComment(octokit, commentId, expectedProject, expected.number);
+        if (operation === 'discussion-comment' && comment.reply) {
+          throw mutationError('A reply answers a comment, not another reply', 'SOURCE_CONTROL_MUTATION_TARGET_INVALID', 409);
+        }
+      }
+      return { providerTarget: { discussion }, target: { ...baseTarget(context, expectedProject), number: expected.number } };
+    }
     if (ISSUE_KINDS.has(operation)) {
       if (expected.head !== undefined || expected.base !== undefined || expected.headSha !== undefined) {
         throw mutationError('Issue target is invalid');
@@ -626,6 +818,14 @@ export function createGitHubMutations({ descriptor, octokitOf, resolveRepo, reso
         return replyToReviewThread(octokit, input.threadId, input.body);
       case 'thread-resolve':
         return setReviewThreadResolved(octokit, input.threadId, input.resolved);
+      case 'discussion-comment':
+        return commentOnDiscussion(octokit, providerTarget.discussion.id, input.body, input.replyTo);
+      case 'discussion-state':
+        return setDiscussionState(octokit, providerTarget.discussion.id, input.state, input.reason);
+      case 'discussion-answer':
+        return setDiscussionAnswer(octokit, input.commentId, input.answer);
+      case 'discussion-labels':
+        return setDiscussionLabels(octokit, project, providerTarget.discussion, input.labels);
       case 'review': {
         const reviewInput = {
           owner: project.owner,
