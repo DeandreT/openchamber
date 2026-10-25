@@ -60,7 +60,11 @@ read-only until prompt submission has its error and reconciliation paths.
   time is the step's completion in the local time zone (`chrono`), written
   with the locale's exported data; settings choose the clock.
 - `sidebar_item.rs` copies the core row model into owned rows. The core model
-  borrows session records and entities cannot hold borrows.
+  borrows session records and entities cannot hold borrows. The default
+  projection lists Works under each project. A worktree starts folded, opens
+  its latest root session from the row, and expands its sessions from the
+  chevron. A work listed in In work leaves its project; Pinned remains
+  exclusive. Worktree expansion is shared across placements.
 - `workspace_view.rs` lays out the frameless window: the sidebar column, the
   header with the window controls, the chat, the work status panel and the
   rail. `sidebar_view.rs`, `startup_view.rs`, `transcript_view.rs`,

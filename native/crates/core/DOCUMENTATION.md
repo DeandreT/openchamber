@@ -18,9 +18,9 @@ rendering asks for a projection and dispatches an action.
   (bundled candidates, then models.dev) and inverts an SVG's paint colors for
   dark themes, as the web's `dark:invert` does.
 - `ownership.rs` and `chat_projection.rs` port `sessionOwnership.ts` and
-  `sessionChatProjection.ts`. `sidebar_rows.rs` ports the normal mode of
-  `sessionSidebarRowModel.ts` in both views (the timeline new installs start
-  on, and the project tree) with the section gaps of
+  `sessionChatProjection.ts`. `sidebar_rows.rs` builds the normal Works view
+  of `sessionSidebarRowModel.ts`, grouping worktree and session works under
+  projects, with the section gaps of
   `sessionSidebarVirtualization.ts`; `grouping.rs` ports
   `buildGroupedSessions` and `buildSidebarChatGroup`; `ordering.rs` ports
   `session-ordering.ts`; `relative_time.rs` ports the sidebar's compact ages.
