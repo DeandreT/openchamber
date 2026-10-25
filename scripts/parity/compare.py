@@ -2,9 +2,9 @@
 
 Raw pixel equality is a detector, not the verdict: a reported region still
 needs review, and tolerances apply only to verified rasterization noise
-(see docs/rust-desktop/PARITY.md). Nothing here blurs, rescales or masks.
+(see docs/rust-desktop/PARITY.md). Images are never blurred or rescaled.
 
-Glyph-edge noise is the one approved kind (`exceptions.json`): Chromium puts
+Glyph-edge noise is approved per checkpoint (`exceptions.json`): Chromium puts
 glyphs on whole pixels and GPUI at sub-pixel phases, and their anti-aliasing
 differs, so the same text differs at its edges. A differing pixel counts as
 that noise only inside a text box of the reference and only when each image's
@@ -18,6 +18,7 @@ near, which still count.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import math
 from pathlib import Path
 
 import png
@@ -26,6 +27,7 @@ import png
 CELL = 16
 # Channel levels a glyph-edge colour may sit outside the neighbourhood's range.
 GLYPH_SLACK = 8
+PAINT_SLACK = 2
 
 
 @dataclass
@@ -40,6 +42,7 @@ class ImageDifference:
     # Differences classified as approved glyph-edge noise; never counted in
     # `differing_pixels`, always reported.
     glyph_edge_pixels: int = 0
+    paint_noise_pixels: int = 0
 
     @property
     def identical(self) -> bool:
@@ -53,6 +56,7 @@ class ImageDifference:
             "differingPixels": self.differing_pixels,
             "differingShare": round(self.differing_pixels / max(1, self.width * self.height), 6),
             "glyphEdgePixels": self.glyph_edge_pixels,
+            "paintNoisePixels": self.paint_noise_pixels,
             "regions": self.regions,
         }
 
@@ -63,6 +67,8 @@ def compare_images(
     output: Path,
     tolerance: int = 0,
     text_boxes: list[list[float]] | None = None,
+    paint_regions: list[list[float]] | None = None,
+    protected_boxes: list[list[float]] | None = None,
 ) -> ImageDifference:
     """Writes ``<output>-diff.png`` and ``<output>-overlay.png`` and reports
     the pixels whose largest channel difference exceeds ``tolerance``.
@@ -81,7 +87,10 @@ def compare_images(
         )
     width, height = left.width, left.height
     in_text = text_mask(text_boxes or [], width, height)
+    in_paint = box_mask(paint_regions or [], width, height)
+    protected = box_mask(protected_boxes or [], width, height, padding=1)
     noise = 0
+    paint_noise = 0
     diff = bytearray(width * height * 4)
     overlay = bytearray(width * height * 4)
     cells: dict[tuple[int, int], int] = {}
@@ -99,6 +108,9 @@ def compare_images(
         ):
             noise += 1
             diff[offset : offset + 4] = b"\xff\xd0\x00\xff"
+        elif tolerance < delta <= PAINT_SLACK and in_paint[pixel] and not protected[pixel] and not in_text[pixel]:
+            paint_noise += 1
+            diff[offset : offset + 4] = b"\x00\xc8\xff\xff"
         elif delta > tolerance:
             differing += 1
             diff[offset : offset + 4] = b"\xff\x00\x00\xff"
@@ -110,18 +122,22 @@ def compare_images(
             diff[offset : offset + 4] = bytes((faded, faded, faded, 255))
     png.write(output.with_name(output.name + "-diff.png"), png.Image(width, height, diff))
     png.write(output.with_name(output.name + "-overlay.png"), png.Image(width, height, overlay))
-    return ImageDifference(width, height, True, differing, merge_cells(cells), noise)
+    return ImageDifference(width, height, True, differing, merge_cells(cells), noise, paint_noise)
 
 
 def text_mask(boxes: list[list[float]], width: int, height: int) -> bytearray:
     """One byte per pixel, set inside a text box widened by a pixel: an
     anti-aliased edge can reach just past the box the layout reports."""
+    return box_mask(boxes, width, height, padding=1)
+
+
+def box_mask(boxes: list[list[float]], width: int, height: int, padding: int = 0) -> bytearray:
     mask = bytearray(width * height)
     for x, y, box_width, box_height in boxes:
-        left = max(0, int(x) - 1)
-        top = max(0, int(y) - 1)
-        right = min(width, int(x + box_width + 0.999) + 1)
-        bottom = min(height, int(y + box_height + 0.999) + 1)
+        left = min(width, max(0, math.floor(x) - padding))
+        top = min(height, max(0, math.floor(y) - padding))
+        right = max(0, min(width, math.ceil(x + box_width) + padding))
+        bottom = max(0, min(height, math.ceil(y + box_height) + padding))
         for row in range(top, bottom):
             start = row * width
             mask[start + left : start + right] = b"\x01" * max(0, right - left)

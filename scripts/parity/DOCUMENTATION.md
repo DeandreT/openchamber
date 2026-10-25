@@ -129,6 +129,15 @@ screenshots and difference images go to `--output`, by default
 The runner turns the session's accessibility flag on for the run and restores
 its previous value.
 
+`exceptions.json` also records approved shadow/gradient noise. At those
+checkpoints only, the reference supplies the exterior shadow bounds of its
+composer and work-status card and its visible `.chat-scroll-fade` bands.
+Shadow bounds use the computed offset, spread and 1.5 times the blur radius.
+The full card and composer rectangles, text, controls, icons and media are
+excluded. Differences of at most two RGB levels per channel count separately
+as `paintNoisePixels` and appear cyan in the diff image. Geometry and larger
+differences remain strict. Other checkpoints use no paint exception.
+
 ## Adding a scenario
 
 Give the feature an inventory entry first, with the reference files and the

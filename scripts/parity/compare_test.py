@@ -77,6 +77,43 @@ class GlyphEdgeTest(unittest.TestCase):
         self.assertGreater(self.compare(glyphs(edge=90), dimmer).differing_pixels, 0)
 
 
+class PaintNoiseTest(unittest.TestCase):
+    def difference(self, delta, regions, protected=None, text=None):
+        left = png.Image(WIDTH, HEIGHT, bytearray((*BACKGROUND, 255)) * (WIDTH * HEIGHT))
+        right = png.Image(WIDTH, HEIGHT, left.rgba.copy())
+        offset = (5 * WIDTH + 5) * 4
+        for channel in range(3):
+            right.rgba[offset + channel] += delta
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            png.write(root / "left.png", left)
+            png.write(root / "right.png", right)
+            return compare.compare_images(root / "left.png", root / "right.png", root / "out",
+                text_boxes=text, paint_regions=regions, protected_boxes=protected)
+
+    def test_only_one_or_two_levels_inside_the_region_are_noise(self):
+        for delta in (1, 2):
+            result = self.difference(delta, [[0, 0, 10, 10]])
+            self.assertEqual(result.differing_pixels, 0)
+            self.assertEqual(result.paint_noise_pixels, 1)
+        result = self.difference(3, [[0, 0, 10, 10]])
+        self.assertEqual(result.differing_pixels, 1)
+        self.assertEqual(result.paint_noise_pixels, 0)
+
+    def test_pixels_outside_the_region_remain_strict(self):
+        result = self.difference(1, [[6, 6, 10, 10]])
+        self.assertEqual(result.differing_pixels, 1)
+        self.assertEqual(result.paint_noise_pixels, 0)
+
+    def test_text_and_controls_are_excluded(self):
+        for protected, text in (([[4, 4, 2, 2]], None), (None, [[4, 4, 2, 2]])):
+            result = self.difference(1, [[0, 0, 10, 10]], protected, text)
+            baseline = self.difference(1, [], protected, text)
+            self.assertEqual(result.differing_pixels, baseline.differing_pixels)
+            self.assertEqual(result.glyph_edge_pixels, baseline.glyph_edge_pixels)
+            self.assertEqual(result.paint_noise_pixels, 0)
+
+
 class HiddenGeometryTest(unittest.TestCase):
     def test_hidden_targets_match_absent_native_nodes(self):
         for hidden in (None, [50, 20, 200, 0], [50, 20, 0, 200]):

@@ -14,5 +14,23 @@
       "reason": "Chromium places glyphs on whole pixels and GPUI at sub-pixel phases, so the anti-aliased edges of the same text differ; moved, missing or recoloured glyphs still count",
       "decision": "Approved by the user on 2026-10-23"
     }
+  ],
+  "paintNoise": [
+    {
+      "scenario": "shell.startup",
+      "checkpoint": "startup",
+      "region": "Exterior shadows of the composer and work-status card, plus visible chat-scroll-fade bands. Text, controls, images, icons and the full card/composer rectangles are excluded.",
+      "maxChannelDelta": 2,
+      "reason": "Chromium and GPUI differ by up to two RGB levels in blur and gradient rasterization. Larger differences and geometry remain strict.",
+      "decision": "Approved by the user on 2026-10-25"
+    },
+    {
+      "scenario": "sessions.select-pointer",
+      "checkpoint": "selected",
+      "region": "Exterior shadows of the composer and work-status card, plus visible chat-scroll-fade bands. Text, controls, images, icons and the full card/composer rectangles are excluded.",
+      "maxChannelDelta": 2,
+      "reason": "Chromium and GPUI differ by up to two RGB levels in blur and gradient rasterization. Larger differences and geometry remain strict.",
+      "decision": "Approved by the user on 2026-10-25"
+    }
   ]
 }
