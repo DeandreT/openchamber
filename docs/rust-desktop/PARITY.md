@@ -6,6 +6,10 @@ baseline before it is complete. Intentional changes require the user's approval.
 Electron remains usable until the replacement qualifies across the full feature
 inventory.
 
+Linux is the initial qualification target. Windows remains a separate later
+target; a Linux result never establishes Windows support. Run Linux visual
+checks on a private display, isolated from the user's desktop and input.
+
 This is the verification design. Implement its runner and capture adapters in
 stage 0 of the [implementation plan](IMPLEMENTATION.md). Existing browser tests
 and profiling commands supply part of the Electron coverage; they do not drive
@@ -83,7 +87,7 @@ Report coverage against the full inventory as well as the feature being ported.
 
 ## 3. Run one scenario through two adapters
 
-Use a native Windows Python runner to orchestrate serial runs. It reads shared
+Use the host's Python runner to orchestrate serial runs. It reads shared
 scenario definitions, sets up isolated state and collects evidence. Two adapters
 translate semantic actions such as selecting a session, typing a draft, pressing
 a shortcut or opening a menu into each runtime's actual controls.
@@ -91,14 +95,15 @@ a shortcut or opening a menu into each runtime's actual controls.
 | Adapter | Mechanism | Evidence |
 | --- | --- | --- |
 | Electron | Existing CDP helpers and real input dispatch; Windows UI Automation for native shell controls | Window screenshots, DOM geometry, accessibility semantics, visible text and server outcomes |
-| Rust | Windows UI Automation through GPUI/AccessKit, plus native pointer/keyboard input | Window screenshots, accessible roles/names/state, focus, text and server outcomes |
+| Rust on Linux | AT-SPI through GPUI/AccessKit, plus native pointer/keyboard input | Window screenshots, accessible roles/names/state, focus, text and server outcomes |
+| Rust on Windows | Windows UI Automation through GPUI/AccessKit, plus native pointer/keyboard input | Separate Windows qualification of the same outcomes |
 | GPUI component checks | Kit's `test-support` facilities | Focused semantic/state assertions, complementary to the real-window run |
 
 Prove the native automation adapter on a small fixture window before relying on
 it. Verify identification of the owned window, capture dimensions, control
 discovery, input, clipboard assertions and cleanup. If a control is inaccessible
 to automation, retain a manual scenario and an explicit automation gap. Headless
-GPUI tests alone cannot qualify the Windows integration. A missing required
+GPUI tests alone cannot qualify a platform integration. A missing required
 accessible role or action is a parity defect even when pointer activation works.
 
 Use stable logical targets mapped to each implementation's element IDs or
@@ -166,7 +171,7 @@ rows being unmounted cannot silently make a required action unreachable.
 ## 5. Configuration coverage
 
 Use a standard fixture configuration of 1,280 by 800 logical client pixels,
-100% Windows scaling, fixed fonts and text size, and the canonical light/dark
+100% display scaling, fixed fonts and text size, and the canonical light/dark
 theme pair. Also capture 900 by 600 and the reference desktop's verified minimum
 supported client size. Derive breakpoint cases from actual baseline behavior.
 
@@ -186,7 +191,7 @@ visibility, selection/draft preservation, transcript scrolling and keyboard
 navigation. A shared text, theme, layout, scroller or input change invalidates
 all inventory entries that depend on it. Run their full matrix. Run the full
 supported feature/configuration matrix at milestone and replacement gates.
-Windows qualification does not imply macOS or Linux qualification.
+Each platform requires independent qualification.
 
 ## 6. Complete one feature at a time
 

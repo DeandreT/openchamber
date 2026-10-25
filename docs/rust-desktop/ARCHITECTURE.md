@@ -57,7 +57,8 @@ stage with its own process-lifetime contract.
 
 | Runtime | Behavior during the desktop migration |
 | --- | --- |
-| Native Windows desktop | GPUI views with Rust application state; synthetic data first, explicit server connection next |
+| Native Linux desktop | Initial qualification target: GPUI views with Rust application state; synthetic data first, explicit server connection next |
+| Native Windows desktop | Later, separately qualified target using the same application core and Windows host adapters |
 | Electron desktop | Existing React client and in-process OpenChamber backend |
 | Web | Existing React client and OpenChamber server |
 | VS Code | Existing webview and extension-host adapters, with workspace-scoped session behavior |
@@ -96,7 +97,8 @@ crates created solely for anticipated future ports.
 ## Packages and version ownership
 
 Pin direct dependencies in the Cargo workspace and commit its lockfile. Use
-Rust 1.97.1 with the Windows MSVC target for the initial implementation.
+Rust 1.97.1 for the initial Linux implementation. Windows builds use the MSVC
+target and retain separate build outputs and platform qualification.
 
 | Dependency | Initial pin | Responsibility |
 | --- | --- | --- |
@@ -312,10 +314,11 @@ Expose loading and failure states in text, with a usable retry action where
 supported. Streaming announcements must not announce the whole transcript for
 each delta.
 
-Test painted semantic trees and a real Windows window. Narrator, keyboard focus,
-IME candidate placement, text selection, zoom/DPI changes and mixed-direction
-text require platform checks. A headless tree test establishes only its own
-semantic assertions.
+Test painted semantic trees and a real Linux window through AT-SPI. Keyboard
+focus, IME candidate placement, text selection, display scaling and
+mixed-direction text require platform checks. Windows later requires its own
+UI Automation and Narrator checks. A headless tree test establishes only its
+own semantic assertions.
 
 ## Browser, terminal and host boundaries
 
@@ -325,11 +328,11 @@ and cancellation. Extensions receive only the host contract, never credentials
 or unrestricted native functions. Keep browser identity and storage separated
 by the owning runtime and extension installation.
 
-Prove Wry composition before selecting it for production: popup layering,
+Prove Wry composition on Linux before selecting it for production: popup layering,
 clipping, resize, focus, devtools/control, profile isolation and shutdown. Its
 documented native child-view overlap limits affect menus and dialogs. Arbitrary
 browser pages, file previews and SDK panels each need their existing security
-contract. Windows success does not qualify Linux or macOS.
+contract. Each later platform needs its own composition checks.
 
 Keep the existing server's terminal sessions initially. Evaluate native bindings
 to the current `libghostty-vt` emulator before changing emulators. PTY creation,

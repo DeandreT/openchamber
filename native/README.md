@@ -4,6 +4,9 @@ The Cargo workspace for the native OpenChamber desktop described in
 [`docs/rust-desktop`](../docs/rust-desktop/ARCHITECTURE.md). It is separate
 from the Bun `packages/*` workspace.
 
+Linux is the first supported-platform qualification target. Windows and macOS
+require separate runtime and release checks before support is claimed.
+
 | Crate | Owns |
 | --- | --- |
 | `crates/core` (`openchamber-native-core`) | Domain records, sidebar membership and rows, transcripts, drafts, scroll memory and synthetic workloads. Standard library only. See its [DOCUMENTATION.md](crates/core/DOCUMENTATION.md). |

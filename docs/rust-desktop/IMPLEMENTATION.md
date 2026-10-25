@@ -12,7 +12,8 @@ compact-sidebar and session-visibility repairs, and pin a reproducible Electron
 reference with synthetic data.
 
 Build shared scenarios with a Python runner, an Electron/CDP adapter and a
-Windows UI Automation adapter for GPUI. Use a small native fixture window to
+Linux AT-SPI adapter for GPUI, followed by Windows UI Automation when that
+platform is qualified. Use a small native fixture window to
 qualify capture and input before relying on the adapter. Match client dimensions,
 fonts, theme, locale, DPI and scenario state. Prove repeatability and verify that
 known visual and behavior defects fail the gate.
@@ -21,14 +22,14 @@ The first comparisons cover compact sidebar selection, transcript reveal and
 nonzero anchor restoration, a draft surviving session switches, Unicode copy
 across virtualized messages and IME-safe submission. Capture screenshots,
 geometry, observable state and accessibility outcomes. Define manual scenarios
-for real Windows behaviors automation cannot establish.
+for real platform behaviors automation cannot establish.
 
 Keep per-feature requirements in source and run results outside the deliverable
 repository. A migrated feature remains incomplete until its required comparisons
 pass. Intentional differences need the user's approval. Carry completed features
 into regression coverage as later stages add functionality.
 
-## 1. Offline Windows client
+## 1. Offline Linux client
 
 Create `native/Cargo.toml`, a toolchain pin and lockfile, with core and desktop
 crates. Keep Cargo artifacts separate from browser and Linux builds. Document
@@ -64,7 +65,7 @@ Acceptance checks:
 1. The core builds and tests without GPUI or network dependencies. Its projection
    matches ordered TypeScript results for empty inputs, fallback roots, owned
    children, missing/archived/temporary parents, cycles and ownership changes.
-2. The release executable opens on native Windows. Session selection changes the
+2. The release executable opens on native Linux. Session selection changes the
    correct transcript. Repeated selection preserves unsent drafts and focuses
    the intended control.
 3. The last row remains reachable. Prepend, streaming and resize preserve a
@@ -74,8 +75,8 @@ Acceptance checks:
 4. Copy matches the selected Unicode text, including across messages and
    virtualized rows. IME, multiline paste, undo and submit/newline shortcuts work
    in a real window. A stream does not steal focus or destroy composition.
-5. Keyboard and Windows accessibility actions reach the same commands. Verify
-   English and a mirrored RTL layout, light/dark themes and Windows DPI changes.
+5. Keyboard and Linux accessibility actions reach the same commands. Verify
+   English and a mirrored RTL layout, light/dark themes and display scaling.
 6. Complete fixture playback matches the expected text and ordering. Close
    during playback leaves no owned task or process alive.
 
@@ -129,13 +130,13 @@ the current emulator contract.
 
 Build a separate WebView composition test before integrating browser-dependent
 features. Prove menu/dialog overlays, focus, resize/clipping, browser control,
-authenticated assets and profile isolation on Windows. Then implement executable
+authenticated assets and profile isolation on Linux. Then implement executable
 HTML answers, previews and SDK panels with their existing capability boundaries.
 Test blocked navigation and attempted access to credentials or native functions.
 
 Browser and terminal support qualify independently. A working Markdown renderer
 does not complete either stage. Record platform gaps explicitly before taking on
-macOS or Linux release support.
+Windows or macOS release support.
 
 ## 5. Native host and release
 
@@ -153,7 +154,8 @@ checks in every applicable path.
 Add package identity, signed distribution, updater behavior, deep links and any
 required profile migration. A real install/update/rollback and shutdown exercise
 is required before replacing an installed application. Qualify each supported
-platform separately. Use existing organization-managed release infrastructure;
+platform separately. Linux qualifies first; Windows and macOS remain separate
+release targets. Use existing organization-managed release infrastructure;
 this migration does not require a new pipeline.
 
 Replacement requires the full parity inventory and supported configuration
