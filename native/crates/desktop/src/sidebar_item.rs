@@ -33,6 +33,13 @@ pub enum SidebarItem {
         collapsed: bool,
         empty: bool,
     },
+    Worktree {
+        key: SharedString,
+        group_key: String,
+        label: GroupLabel,
+        expanded: bool,
+        session_ids: Vec<SessionId>,
+    },
     Session {
         key: SharedString,
         session_id: SessionId,
@@ -78,6 +85,7 @@ impl SidebarItem {
             Self::Zone { key, .. }
             | Self::Project { key, .. }
             | Self::Group { key, .. }
+            | Self::Worktree { key, .. }
             | Self::Session { key, .. }
             | Self::Show { key, .. }
             | Self::Status { key, .. }
@@ -120,6 +128,20 @@ impl SidebarItem {
                 label: label.clone(),
                 collapsed: *collapsed,
                 empty: *empty,
+            },
+            SidebarRow::Worktree {
+                key,
+                group_key,
+                label,
+                expanded,
+                session_ids,
+                ..
+            } => Self::Worktree {
+                key: key.clone().into(),
+                group_key: group_key.clone(),
+                label: label.clone(),
+                expanded: *expanded,
+                session_ids: session_ids.clone(),
             },
             SidebarRow::Session {
                 key,

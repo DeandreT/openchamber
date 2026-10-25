@@ -40,7 +40,7 @@ const HEADER_HEIGHT: f32 = 28.0;
 /// 6 px gap.
 const HEADER_INSET_START: f32 = 16.0;
 const HEADER_GLYPH: f32 = 14.0;
-const SESSION_HEIGHT: f32 = 28.0;
+const SESSION_HEIGHT: f32 = 32.0;
 /// `my-px` around every session row.
 const SESSION_MARGIN: f32 = 1.0;
 /// Timeline rows have no gutter: their content sits 10 px in.
@@ -49,7 +49,7 @@ const TIMELINE_INSET: f32 = 10.0;
 const ROW_LOGO: f32 = 12.0;
 const ROW_LOGO_OPACITY: f32 = 0.45;
 /// Tree geometry: 12 px per level from an 8 px edge, then the slot and a gap.
-const TREE_BASE_PADDING: f32 = 8.0;
+const TREE_BASE_PADDING: f32 = 6.0;
 const TREE_INDENT: f32 = 12.0;
 const TREE_SLOT: f32 = 14.0;
 const TREE_GAP: f32 = 6.0;
@@ -481,6 +481,56 @@ impl Workspace {
                 .test_support()
                 .into_any_element()
             }
+            SidebarItem::Worktree {
+                key,
+                label,
+                expanded,
+                session_ids,
+                ..
+            } => {
+                let (text, icon) = group_label(&strings, label);
+                let selected = self
+                    .selected
+                    .as_ref()
+                    .is_some_and(|id| session_ids.contains(id));
+                let toggle = item.clone();
+                let slot = if session_ids.is_empty() {
+                    div().into_any_element()
+                } else {
+                    on_activate(
+                        div()
+                            .id(SharedString::from(format!("{key}:chevron")))
+                            .role(Role::Button)
+                            .aria_label(text.clone())
+                            .aria_expanded(*expanded)
+                            .child(chevron(!*expanded, direction, &palette)),
+                        cx,
+                        move |this, _, cx| {
+                            cx.stop_propagation();
+                            this.toggle_collapsed(&toggle, cx);
+                        },
+                    )
+                    .test_support()
+                    .into_any_element()
+                };
+                let row = tree_row(key, &palette, direction, 0, slot, selected)
+                    .role(Role::TreeItem)
+                    .aria_label(text.clone())
+                    .aria_expanded(*expanded)
+                    .aria_selected(selected)
+                    .h(px(SESSION_HEIGHT))
+                    .child(glyph(icon, 14.0, palette.muted_foreground))
+                    .child(row_text(text, palette.muted_foreground, cx));
+                if let Some(id) = session_ids.first().cloned() {
+                    on_activate(row, cx, move |this, window, cx| {
+                        this.select_session(id.clone(), window, cx)
+                    })
+                    .test_support()
+                    .into_any_element()
+                } else {
+                    row.test_support().into_any_element()
+                }
+            }
             SidebarItem::Session { context, .. } if !context.has_tree_slot() => {
                 self.timeline_session_row(&item, spacing, &palette, direction, cx)
             }
@@ -528,12 +578,18 @@ impl Workspace {
                 } else {
                     palette.muted_foreground
                 };
-                let row = tree_row(key, &palette, direction, *depth, slot, selected)
+                let node = div()
+                    .id(key.clone())
+                    .accessibility_id(key.clone())
                     .role(Role::TreeItem)
                     .aria_label(title.clone())
                     .aria_selected(selected)
                     .aria_level(depth + 1)
                     .when(*has_children, |this| this.aria_expanded(*expanded))
+                    .pt(px(SESSION_MARGIN))
+                    .pb(px(SESSION_MARGIN + spacing));
+                let target_key = SharedString::from(format!("{key}:target"));
+                let row = tree_row(&target_key, &palette, direction, *depth, slot, selected)
                     .h(px(SESSION_HEIGHT))
                     .child(row_text(title, text_color, cx))
                     .when(streaming, |this| {
@@ -542,11 +598,12 @@ impl Workspace {
                     .when(*pinned && !streaming, |this| {
                         this.child(glyph("pushpin", 16.0, palette.muted_foreground))
                     });
-                on_activate(row, cx, move |this, window, cx| {
+                let (node, row) = on_activate_split(node, row, cx, move |this, window, cx| {
                     this.select_session(id.clone(), window, cx);
-                })
-                .test_support()
-                .into_any_element()
+                });
+                node.child(row.test_support())
+                    .test_support()
+                    .into_any_element()
             }
             SidebarItem::Show {
                 key,
@@ -634,7 +691,7 @@ impl Workspace {
         };
         match item {
             SidebarItem::Zone { .. } | SidebarItem::Project { .. } => row,
-            SidebarItem::Session { context, .. } if !context.has_tree_slot() => row,
+            SidebarItem::Session { .. } => row,
             _ => div().pb(px(spacing)).child(row).into_any_element(),
         }
     }

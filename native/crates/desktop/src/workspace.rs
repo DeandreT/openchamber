@@ -419,11 +419,22 @@ impl Workspace {
             SidebarItem::Project { project_id, .. } => {
                 if !state.collapsed_projects.remove(project_id) {
                     state.collapsed_projects.insert(project_id.clone());
+                    let prefix = format!("{project_id}:");
+                    state
+                        .visible_count_by_container
+                        .retain(|key, _| !key.starts_with(&prefix));
                 }
             }
             SidebarItem::Group { group_key, .. } => {
                 if !state.collapsed_groups.remove(group_key) {
                     state.collapsed_groups.insert(group_key.clone());
+                }
+            }
+            SidebarItem::Worktree { group_key, .. } => {
+                if state.expanded_works.remove(group_key) {
+                    state.visible_count_by_container.remove(group_key);
+                } else {
+                    state.expanded_works.insert(group_key.clone());
                 }
             }
             _ => return,
@@ -873,7 +884,7 @@ fn build_sidebar_items(
     let group_status = HashMap::new();
     let model = sidebar_rows::build(
         &SidebarInputs {
-            view_mode: SidebarViewMode::Timeline,
+            view_mode: SidebarViewMode::Works,
             detailed_zone_rows: false,
             chat_group: chat_group.as_ref(),
             pinned: &[],

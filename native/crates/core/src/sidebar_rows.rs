@@ -2,11 +2,10 @@
 //!
 //! Mirrors the normal mode of `buildSessionSidebarRowModel` in
 //! `packages/ui/src/components/session/sidebar/sessionSidebarRowModel.ts` in
-//! both views: Chats, Pinned and In work zones above the projects, then either
-//! the timeline (one header per project over its root sessions in lifecycle
-//! order) or the project and worktree tree, with reveal controls, status
-//! notices and the empty state. Every row has a stable key so the renderer can
-//! retain row state across rebuilds.
+//! the Works view: Chats, Pinned and In work above projects, each listing
+//! session works and linked worktrees in lifecycle order. Worktrees expand
+//! to their sessions. The earlier tree and timeline projections remain
+//! explicit modes for their callers. Stable keys retain row state.
 
 use std::collections::{HashMap, HashSet};
 
@@ -14,6 +13,7 @@ use crate::grouping::{GroupLabel, ProjectSection, SessionGroup, SessionNode};
 use crate::ids::{ProjectId, SessionId};
 use crate::ordering::SessionOrdering;
 use crate::session::SessionRecord;
+use crate::sidebar_work::{SidebarWork, SidebarWorkIndex, is_worktree_work};
 
 const CHATS_INITIAL_LIMIT: usize = 3;
 const CHATS_INCREMENT: usize = 7;
@@ -41,9 +41,11 @@ impl ActivityKey {
 /// How the projects are arranged.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum SidebarViewMode {
-    /// One header per project over a flat, lifecycle-ordered list of its root
-    /// sessions; the default for new installs.
+    /// Session works and linked worktrees grouped under their project.
     #[default]
+    Works,
+    /// One header per project over a flat, lifecycle-ordered list of its root
+    /// sessions.
     Timeline,
     /// The project and worktree tree.
     Projects,
@@ -80,12 +82,9 @@ impl RenderContext {
         }
     }
 
-    /// Flat zone and timeline rows never expand.
+    /// Legacy flat timeline rows never expand.
     fn expands(self) -> bool {
-        !matches!(
-            self,
-            Self::Timeline | Self::TimelineMixed | Self::MixedCompact
-        )
+        !matches!(self, Self::Timeline | Self::TimelineMixed)
     }
 
     /// Rows that keep the tree's geometry and its slot left of the title.
@@ -139,6 +138,14 @@ pub enum SidebarRow<'a> {
         /// Nothing to list, so the header offers no chevron.
         empty: bool,
     },
+    Worktree {
+        key: String,
+        group_key: String,
+        project_id: ProjectId,
+        label: GroupLabel,
+        expanded: bool,
+        session_ids: Vec<SessionId>,
+    },
     Session {
         key: String,
         session: &'a SessionRecord,
@@ -182,6 +189,7 @@ impl SidebarRow<'_> {
             Self::ActivityHeader { key, .. }
             | Self::ProjectHeader { key, .. }
             | Self::GroupHeader { key, .. }
+            | Self::Worktree { key, .. }
             | Self::Session { key, .. }
             | Self::ShowControl { key, .. }
             | Self::Status { key, .. }
@@ -199,6 +207,8 @@ pub struct SidebarState {
     pub collapsed_groups: HashSet<String>,
     pub collapsed_activities: HashSet<ActivityKey>,
     pub expanded_parents: HashSet<String>,
+    /// Worktrees start folded; their expansion is shared across placements.
+    pub expanded_works: HashSet<String>,
     pub visible_count_by_container: HashMap<String, usize>,
 }
 
@@ -301,11 +311,21 @@ pub fn build<'a>(
             .iter()
             .map(|item| &item.node.session.id)
             .collect(),
+        work_index: if inputs.view_mode == SidebarViewMode::Works {
+            SidebarWorkIndex::new(inputs.sections)
+        } else {
+            SidebarWorkIndex::default()
+        },
     };
     builder.append_chats();
     builder.append_zone(ActivityKey::Pinned, inputs.pinned);
-    builder.append_zone(ActivityKey::Work, inputs.work);
+    if inputs.view_mode == SidebarViewMode::Works {
+        builder.append_work_zone();
+    } else {
+        builder.append_zone(ActivityKey::Work, inputs.work);
+    }
     match inputs.view_mode {
+        SidebarViewMode::Works => builder.append_works_projects(),
         SidebarViewMode::Timeline => builder.append_timeline_projects(),
         SidebarViewMode::Projects => builder.append_projects(),
     }
@@ -347,6 +367,7 @@ struct RowBuilder<'i, 'v, 'a, 'o> {
     model: SidebarRowModel<'a>,
     key_occurrences: HashMap<String, usize>,
     pinned_in_zone: HashSet<&'v SessionId>,
+    work_index: SidebarWorkIndex,
 }
 
 impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
@@ -395,7 +416,7 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
                 pinned_always_visible: true,
                 context: match self.inputs.view_mode {
                     SidebarViewMode::Timeline => RenderContext::TimelineChat,
-                    SidebarViewMode::Projects => RenderContext::TreeChat,
+                    SidebarViewMode::Works | SidebarViewMode::Projects => RenderContext::TreeChat,
                 },
             }),
         );
@@ -429,6 +450,255 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
                     base_depth: 0,
                 },
             );
+        }
+    }
+
+    fn append_work_zone(&mut self) {
+        let sessions: Vec<&SessionRecord> = self
+            .inputs
+            .work
+            .iter()
+            .map(|item| item.node.session)
+            .collect();
+        let works: Vec<SidebarWork> = self
+            .work_index
+            .ordered(&sessions, |_| true)
+            .into_iter()
+            .filter(|work| match work {
+                SidebarWork::Session {
+                    root_session_id, ..
+                } => !self.pinned_in_zone.contains(root_session_id),
+                SidebarWork::Worktree { .. } => true,
+            })
+            .cloned()
+            .collect();
+        if works.is_empty() || self.append_activity_header(ActivityKey::Work) {
+            return;
+        }
+        for work in works {
+            self.append_work(&work, "activity:work:");
+        }
+    }
+
+    /// Works share a project's reveal limit, regardless of their kind.
+    fn append_works_projects(&mut self) {
+        let inputs = self.inputs;
+        let working: HashSet<String> = inputs
+            .work
+            .iter()
+            .filter_map(|item| self.work_index.work_for(&item.node.session.id))
+            .map(SidebarWork::key)
+            .collect();
+        for section in inputs.sections {
+            let project_id = &section.project.id;
+            let collapsed = inputs.state.collapsed_projects.contains(project_id);
+            self.model.sticky_headers.push(self.model.rows.len());
+            self.push(SidebarRow::ProjectHeader {
+                key: format!("project:{project_id}:header"),
+                project_id: project_id.clone(),
+                collapsed,
+            });
+            if collapsed {
+                continue;
+            }
+            for group in &section.groups {
+                if group.space.is_some() && group.sessions.is_empty() {
+                    let group_key = format!("{project_id}:{}", group.id);
+                    self.push(SidebarRow::GroupHeader {
+                        key: format!("{group_key}:header"),
+                        group_key,
+                        project_id: Some(project_id.clone()),
+                        label: group.label.clone(),
+                        directory: group.directory.clone(),
+                        collapsed: false,
+                        empty: true,
+                    });
+                }
+            }
+            let mut sessions: Vec<&SessionRecord> = section
+                .groups
+                .iter()
+                .filter(|group| !group.is_archived_bucket)
+                .flat_map(|group| group.sessions.iter().flat_map(SessionNode::preorder))
+                .collect();
+            sessions.sort_by(|left, right| {
+                self.ordering
+                    .compare(left, right, is_pinned(left), is_pinned(right))
+            });
+            let mut works: Vec<SidebarWork> = self.work_index.ordered(&sessions, |_| true).into_iter()
+                .filter(|work| !working.contains(&work.key()))
+                .filter(|work| !matches!(work, SidebarWork::Session { root_session_id, .. } if self.pinned_in_zone.contains(root_session_id)))
+                .cloned().collect();
+            for group in &section.groups {
+                if is_worktree_work(group) {
+                    let work = SidebarWork::Worktree {
+                        project_id: project_id.clone(),
+                        group_id: group.id.clone(),
+                    };
+                    if !working.contains(&work.key()) && !works.contains(&work) {
+                        works.push(work);
+                    }
+                }
+            }
+            let container = format!("{project_id}:works");
+            let count = inputs
+                .state
+                .visible_count_by_container
+                .get(&container)
+                .copied()
+                .unwrap_or(SESSIONS_INITIAL_LIMIT)
+                .max(SESSIONS_INITIAL_LIMIT)
+                .min(works.len());
+            for work in works.iter().take(count) {
+                self.append_work(work, "");
+            }
+            if works.len() > SESSIONS_INITIAL_LIMIT {
+                let (control, suffix) = if count < works.len() {
+                    (ShowControl::More, "more")
+                } else {
+                    (ShowControl::Fewer, "fewer")
+                };
+                self.push(SidebarRow::ShowControl {
+                    key: format!("{container}:{suffix}"),
+                    control,
+                    container_key: container,
+                    current_count: count,
+                    increment: SESSIONS_INCREMENT,
+                    depth: 0,
+                    flat: false,
+                });
+            }
+            if works.is_empty() {
+                for group in &section.groups {
+                    let group_key = format!("{project_id}:{}", group.id);
+                    if let Some(state) = inputs
+                        .group_status
+                        .get(&group_key)
+                        .copied()
+                        .filter(|state| *state != GroupLoadState::Ready)
+                    {
+                        self.push_status(&group_key, state, 0, false);
+                    }
+                }
+            }
+        }
+    }
+
+    fn append_work(&mut self, work: &SidebarWork, prefix: &str) {
+        let inputs = self.inputs;
+        match work {
+            SidebarWork::Session {
+                project_id,
+                root_session_id,
+            } => {
+                let Some(section) = inputs
+                    .sections
+                    .iter()
+                    .find(|section| &section.project.id == project_id)
+                else {
+                    return;
+                };
+                for group in &section.groups {
+                    if let Some(node) = group
+                        .sessions
+                        .iter()
+                        .find(|node| &node.session.id == root_session_id)
+                    {
+                        let container = if prefix.is_empty() {
+                            format!("{project_id}:{}", group.id)
+                        } else {
+                            prefix.trim_end_matches(':').to_owned()
+                        };
+                        self.append_trees(
+                            std::slice::from_ref(node),
+                            &AppendOptions {
+                                container_key: &container,
+                                project_id: Some(project_id),
+                                archived: false,
+                                context: if prefix.is_empty() {
+                                    RenderContext::Project
+                                } else {
+                                    RenderContext::MixedCompact
+                                },
+                                base_depth: 0,
+                            },
+                        );
+                        return;
+                    }
+                }
+            }
+            SidebarWork::Worktree {
+                project_id,
+                group_id,
+            } => {
+                let Some(group) = inputs
+                    .sections
+                    .iter()
+                    .find(|section| &section.project.id == project_id)
+                    .and_then(|section| section.groups.iter().find(|group| &group.id == group_id))
+                else {
+                    return;
+                };
+                let group_key = format!("{project_id}:{group_id}");
+                let expanded = inputs.state.expanded_works.contains(&group_key);
+                let container = format!("{prefix}{group_key}");
+                self.push(SidebarRow::Worktree {
+                    key: format!("{container}:header"),
+                    group_key: group_key.clone(),
+                    project_id: project_id.clone(),
+                    label: group.label.clone(),
+                    expanded,
+                    session_ids: group
+                        .sessions
+                        .iter()
+                        .flat_map(SessionNode::preorder)
+                        .map(|session| session.id.clone())
+                        .collect(),
+                });
+                if expanded {
+                    let nodes: Vec<&SessionNode<'_>> = group
+                        .sessions
+                        .iter()
+                        .filter(|node| !self.pinned_in_zone.contains(&node.session.id))
+                        .collect();
+                    let count = inputs
+                        .state
+                        .visible_count_by_container
+                        .get(&group_key)
+                        .copied()
+                        .unwrap_or(SESSIONS_INITIAL_LIMIT)
+                        .max(SESSIONS_INITIAL_LIMIT)
+                        .min(nodes.len());
+                    for node in nodes.iter().take(count) {
+                        self.append_trees(
+                            std::slice::from_ref(node),
+                            &AppendOptions {
+                                container_key: &container,
+                                project_id: Some(project_id),
+                                archived: false,
+                                context: RenderContext::Project,
+                                base_depth: 1,
+                            },
+                        );
+                    }
+                    if nodes.len() > SESSIONS_INITIAL_LIMIT {
+                        let (control, suffix) = if count < nodes.len() {
+                            (ShowControl::More, "more")
+                        } else {
+                            (ShowControl::Fewer, "fewer")
+                        };
+                        self.push(SidebarRow::ShowControl {
+                            key: format!("{container}:{suffix}"),
+                            control,
+                            container_key: group_key,
+                            current_count: count,
+                            increment: SESSIONS_INCREMENT,
+                            depth: 1,
+                            flat: false,
+                        });
+                    }
+                }
+            }
         }
     }
 
@@ -997,6 +1267,7 @@ mod tests {
                 }
                 SidebarRow::ProjectHeader { project_id, .. } => format!("project:{project_id}"),
                 SidebarRow::GroupHeader { group_key, .. } => format!("group:{group_key}"),
+                SidebarRow::Worktree { group_key, .. } => format!("worktree:{group_key}"),
                 SidebarRow::Session { session, depth, .. } => format!("{}@{depth}", session.id),
                 SidebarRow::ShowControl { control, .. } => format!("show:{control:?}"),
                 SidebarRow::Status { state, .. } => format!("status:{state:?}"),
@@ -1025,6 +1296,145 @@ mod tests {
             show_only_main_workspace: false,
             active_project_id: None,
         }
+    }
+
+    #[test]
+    fn works_group_worktrees_and_share_expansion_across_placements() {
+        let records = sessions(3);
+        let project = ConfiguredProject {
+            id: ProjectId::from("app"),
+            path: "/p".to_owned(),
+        };
+        let mut feature = group("feature", false, vec![node(&records[1]), node(&records[2])]);
+        feature.label = GroupLabel::Worktree {
+            label: "feature".to_owned(),
+        };
+        let mut empty = group("empty", false, Vec::new());
+        empty.label = GroupLabel::Worktree {
+            label: "empty".to_owned(),
+        };
+        let sections = [ProjectSection {
+            project: &project,
+            groups: vec![group("root", true, vec![node(&records[0])]), feature, empty],
+        }];
+        let statuses = HashMap::new();
+        let state = SidebarState::default();
+        let mut ordering = SessionOrdering::new();
+        let mut input = timeline_inputs(&sections, &[], &[], &state, &statuses);
+        input.view_mode = SidebarViewMode::Works;
+        assert_eq!(
+            kinds(&build(&input, &mut ordering)),
+            [
+                "project:app",
+                "s00@0",
+                "worktree:app:feature",
+                "worktree:app:empty"
+            ]
+        );
+
+        let mut expanded_state = state.clone();
+        expanded_state
+            .expanded_works
+            .insert("app:feature".to_owned());
+        input.state = &expanded_state;
+        assert_eq!(
+            kinds(&build(&input, &mut ordering)),
+            [
+                "project:app",
+                "s00@0",
+                "worktree:app:feature",
+                "s01@1",
+                "s02@1",
+                "worktree:app:empty"
+            ]
+        );
+
+        let work = [ZoneItem {
+            node: node(&records[1]),
+            project_id: Some(project.id.clone()),
+        }];
+        input.work = &work;
+        let model = build(&input, &mut ordering);
+        assert_eq!(
+            kinds(&model),
+            [
+                "zone:work",
+                "worktree:app:feature",
+                "s01@1",
+                "s02@1",
+                "project:app",
+                "s00@0",
+                "worktree:app:empty"
+            ]
+        );
+        assert_eq!(model.rows.iter().filter(|row| matches!(row, SidebarRow::Worktree { group_key, .. } if group_key == "app:feature")).count(), 1);
+    }
+
+    #[test]
+    fn works_do_not_reintroduce_a_pinned_session_when_its_zone_is_collapsed() {
+        let records = sessions(2);
+        let project = ConfiguredProject {
+            id: ProjectId::from("app"),
+            path: "/p".to_owned(),
+        };
+        let sections = [ProjectSection {
+            project: &project,
+            groups: vec![group("root", true, records.iter().map(node).collect())],
+        }];
+        let statuses = HashMap::new();
+        let mut state = SidebarState::default();
+        state.collapsed_activities.insert(ActivityKey::Pinned);
+        let pinned = [ZoneItem {
+            node: node(&records[0]),
+            project_id: Some(project.id.clone()),
+        }];
+        let mut input = timeline_inputs(&sections, &[], &[], &state, &statuses);
+        input.view_mode = SidebarViewMode::Works;
+        input.pinned = &pinned;
+        assert_eq!(
+            kinds(&build(&input, &mut SessionOrdering::new())),
+            ["zone:pinned", "project:app", "s01@0"]
+        );
+    }
+
+    #[test]
+    fn expanded_worktrees_reveal_seven_sessions_before_more() {
+        let records = sessions(10);
+        let project = ConfiguredProject {
+            id: ProjectId::from("app"),
+            path: "/p".to_owned(),
+        };
+        let mut feature = group("feature", false, records.iter().map(node).collect());
+        feature.label = GroupLabel::Worktree {
+            label: "feature".to_owned(),
+        };
+        let sections = [ProjectSection {
+            project: &project,
+            groups: vec![feature],
+        }];
+        let statuses = HashMap::new();
+        let mut state = SidebarState::default();
+        state.expanded_works.insert("app:feature".to_owned());
+        let mut input = timeline_inputs(&sections, &[], &[], &state, &statuses);
+        input.view_mode = SidebarViewMode::Works;
+        let mut ordering = SessionOrdering::new();
+        let initial = build(&input, &mut ordering);
+        assert_eq!(initial.session_order.len(), 7);
+        assert!(
+            matches!(initial.rows.last(), Some(SidebarRow::ShowControl { control: ShowControl::More, container_key, current_count: 7, .. }) if container_key == "app:feature")
+        );
+        let mut more = state.clone();
+        more.reveal("app:feature", ShowControl::More, 7, 7);
+        input.state = &more;
+        let expanded = build(&input, &mut ordering);
+        assert_eq!(expanded.session_order.len(), 10);
+        assert!(matches!(
+            expanded.rows.last(),
+            Some(SidebarRow::ShowControl {
+                control: ShowControl::Fewer,
+                ..
+            })
+        ));
     }
 
     #[test]
