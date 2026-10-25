@@ -98,7 +98,38 @@ struct Subject {
     action_project: Option<String>,
 }
 
+pub(crate) struct HeaderProjectMeta {
+    pub(crate) project: Option<SharedString>,
+    pub(crate) branch: Option<SharedString>,
+}
+
 impl Workspace {
+    /// Header metadata uses the same retained project and Git readouts as
+    /// the status card. Managed Chats carry no project metadata line.
+    pub(crate) fn header_project_meta(&self) -> Option<HeaderProjectMeta> {
+        let subject = self.project_subject()?;
+        if chat_roots::is_chat_directory(
+            self.topology.chat_roots.as_ref(),
+            Some(&subject.directory),
+        ) {
+            return None;
+        }
+        let project = subject
+            .project_path
+            .as_deref()
+            .map(|path| self.project_label(path));
+        let branch = self
+            .project_readouts
+            .git
+            .get(&subject.directory)
+            .and_then(|entry| entry.read.as_ref())
+            .and_then(|read| match read {
+                GitStatusRead::Repository(status) => status.branch.clone().map(SharedString::from),
+                _ => None,
+            });
+        (project.is_some() || branch.is_some()).then_some(HeaderProjectMeta { project, branch })
+    }
+
     fn project_subject(&self) -> Option<Subject> {
         let session = self.selected_session()?;
         let directory = path::normalize_optional(session.directory.as_deref())?;
