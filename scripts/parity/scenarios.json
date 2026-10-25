@@ -204,6 +204,26 @@
       ]
     },
     {
+      "id": "sessions.works-by-time",
+      "feature": "sessions.works-by-time",
+      "description": "Saved time grouping lists project works together while hidden In work and Pinned stay hidden.",
+      "settings": {
+        "sidebarGrouping": "time",
+        "sidebarShowWorkSection": false,
+        "sidebarShowPinnedSection": false
+      },
+      "steps": [
+        {
+          "wait": {
+            "electron": { "expression": "!!document.querySelector('[data-sidebar-row-key=\"activity:timeline:header\"]')" },
+            "native": { "elements": ["activity:timeline:header"] },
+            "timeout": 30
+          }
+        },
+        { "capture": "by-time", "targets": ["composer", "startup-title"] }
+      ]
+    },
+    {
       "id": "sessions.select-pointer",
       "feature": "sessions.select",
       "description": "A pointer click on an In work row selects the session and reveals its transcript.",

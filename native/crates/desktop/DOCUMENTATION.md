@@ -65,6 +65,10 @@ read-only until prompt submission has its error and reconciliation paths.
   its latest root session from the row, and expands its sessions from the
   chevron. A work listed in In work leaves its project; Pinned remains
   exclusive. Worktree expansion is shared across placements.
+  The server's sidebar preferences select project or time grouping, control
+  Chats/Pinned/In work visibility, and keep works in their projects when
+  requested. Legacy Tree/List preferences resolve to the same grouping as
+  the web client. Missing preference fields retain the previous value.
 - `workspace_view.rs` lays out the frameless window: the sidebar column, the
   header with the window controls, the chat, the work status panel and the
   rail. `sidebar_view.rs`, `startup_view.rs`, `transcript_view.rs`,

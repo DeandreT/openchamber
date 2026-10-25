@@ -174,7 +174,7 @@ def seed(args: argparse.Namespace) -> int:
     return 0
 
 
-def copy_seed(root: Path, target: Path, theme: str) -> Path:
+def copy_seed(root: Path, target: Path, theme: str, settings: dict | None = None) -> Path:
     """An independent copy of the seed with the theme pinned. The web reads
     `useSystemTheme: false` together with the derived `themeVariant`, so the
     variant and that variant's theme are pinned too."""
@@ -183,6 +183,8 @@ def copy_seed(root: Path, target: Path, theme: str) -> Path:
     preferences = state / "oc-data" / "preferences.json"
     document = json.loads(preferences.read_text()) if preferences.exists() else {"version": 1, "fields": {}}
     now = int(time.time() * 1000)
+    for key, value in (settings or {}).items():
+        document["fields"][key] = {"value": value, "updatedAt": now}
     variant = theme_variant(theme)
     pinned = (("useSystemTheme", False), ("themeId", theme), ("themeVariant", variant), (f"{variant}ThemeId", theme))
     for key, value in pinned:
@@ -333,7 +335,7 @@ def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], dire
 def run_client(kind: str, scenario: dict, work: Path, args: argparse.Namespace) -> dict:
     directory = work / kind
     directory.mkdir(parents=True)
-    state = copy_seed(args.root.resolve(), directory, args.theme)
+    state = copy_seed(args.root.resolve(), directory, args.theme, scenario.get("settings"))
     server = None
     fixture = None
     started = time.monotonic()

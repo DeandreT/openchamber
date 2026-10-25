@@ -8,6 +8,7 @@ use openchamber_native_core::ids::{MessageId, SessionId};
 use openchamber_native_core::message_time::ClockPreference;
 use openchamber_native_core::ownership::{self, ConfiguredProject, WorktreeInfo};
 use openchamber_native_core::session::{LiveStatus, SessionRecord};
+use openchamber_native_core::sidebar_rows::SidebarViewMode;
 use openchamber_native_core::transcript::Message;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
 use reqwest::{Method, RequestBuilder, Response, StatusCode, Url};
@@ -138,6 +139,13 @@ pub struct ServerSettings {
     pub clock: ClockPreference,
     /// `codeBlockLineWrap`, when the document carries it.
     pub code_block_line_wrap: Option<bool>,
+    /// Sidebar preferences; omitted values preserve the client's defaults.
+    pub sidebar_view: Option<SidebarViewMode>,
+    pub show_chats: Option<bool>,
+    pub show_pinned: Option<bool>,
+    pub show_work: Option<bool>,
+    pub keep_work_in_place: Option<bool>,
+    pub work_enabled: Option<bool>,
     /// The model defaults of registered projects that set any.
     pub project_defaults: Vec<ProjectDefaults>,
     /// The display labels of registered projects that set one.
@@ -241,6 +249,43 @@ impl ServerSettings {
                 .unwrap_or_default(),
             code_block_line_wrap: settings
                 .code_block_line_wrap
+                .as_ref()
+                .and_then(Value::as_bool),
+            sidebar_view: match settings.sidebar_grouping.as_ref().and_then(Value::as_str) {
+                Some("time") => Some(SidebarViewMode::WorksByTime),
+                Some("project") => Some(SidebarViewMode::Works),
+                _ => match settings.sidebar_view_mode.as_ref().and_then(Value::as_str) {
+                    Some("timeline")
+                        if settings
+                            .sidebar_list_session_grouping
+                            .as_ref()
+                            .and_then(Value::as_str)
+                            == Some("time") =>
+                    {
+                        Some(SidebarViewMode::WorksByTime)
+                    }
+                    Some("timeline" | "projects") => Some(SidebarViewMode::Works),
+                    _ => None,
+                },
+            },
+            show_chats: settings
+                .sidebar_show_chats_section
+                .as_ref()
+                .and_then(Value::as_bool),
+            show_pinned: settings
+                .sidebar_show_pinned_section
+                .as_ref()
+                .and_then(Value::as_bool),
+            show_work: settings
+                .sidebar_show_work_section
+                .as_ref()
+                .and_then(Value::as_bool),
+            keep_work_in_place: settings
+                .sidebar_keep_work_in_place
+                .as_ref()
+                .and_then(Value::as_bool),
+            work_enabled: settings
+                .session_work_enabled
                 .as_ref()
                 .and_then(Value::as_bool),
         }
@@ -821,6 +866,46 @@ mod tests {
             serde_json::to_value(SettingsChanges::default()).expect("serializes"),
             json!({})
         );
+    }
+
+    #[test]
+    fn sidebar_settings_read_new_grouping_and_legacy_choices() {
+        for (document, expected) in [
+            (
+                json!({"sidebarGrouping": "time"}),
+                Some(SidebarViewMode::WorksByTime),
+            ),
+            (
+                json!({"sidebarGrouping": "project", "sidebarViewMode": "timeline", "sidebarListSessionGrouping": "time"}),
+                Some(SidebarViewMode::Works),
+            ),
+            (
+                json!({"sidebarViewMode": "timeline", "sidebarListSessionGrouping": "time"}),
+                Some(SidebarViewMode::WorksByTime),
+            ),
+            (
+                json!({"sidebarViewMode": "projects"}),
+                Some(SidebarViewMode::Works),
+            ),
+            (json!({"sidebarGrouping": 42}), None),
+        ] {
+            let settings =
+                ServerSettings::from_wire(serde_json::from_value(document).expect("settings JSON"));
+            assert_eq!(settings.sidebar_view, expected);
+        }
+        let settings = ServerSettings::from_wire(
+            serde_json::from_value(json!({
+                "sidebarShowChatsSection": false, "sidebarShowPinnedSection": true,
+            "sidebarShowWorkSection": "invalid", "sidebarKeepWorkInPlace": true,
+            "sessionWorkEnabled": false,
+            }))
+            .expect("settings JSON"),
+        );
+        assert_eq!(settings.show_chats, Some(false));
+        assert_eq!(settings.show_pinned, Some(true));
+        assert_eq!(settings.show_work, None);
+        assert_eq!(settings.keep_work_in_place, Some(true));
+        assert_eq!(settings.work_enabled, Some(false));
     }
 
     #[test]

@@ -26,6 +26,7 @@ pub enum ActivityKey {
     Chats,
     Pinned,
     Work,
+    Timeline,
 }
 
 impl ActivityKey {
@@ -34,6 +35,7 @@ impl ActivityKey {
             Self::Chats => "chats",
             Self::Pinned => "pinned",
             Self::Work => "work",
+            Self::Timeline => "timeline",
         }
     }
 }
@@ -44,11 +46,19 @@ pub enum SidebarViewMode {
     /// Session works and linked worktrees grouped under their project.
     #[default]
     Works,
+    /// Works from all projects in one lifecycle-ordered list.
+    WorksByTime,
     /// One header per project over a flat, lifecycle-ordered list of its root
     /// sessions.
     Timeline,
     /// The project and worktree tree.
     Projects,
+}
+
+impl SidebarViewMode {
+    fn uses_works(self) -> bool {
+        matches!(self, Self::Works | Self::WorksByTime)
+    }
 }
 
 /// How a session row is drawn.
@@ -253,6 +263,8 @@ pub struct SidebarInputs<'v, 'a> {
     pub view_mode: SidebarViewMode,
     /// Timeline and zone rows show their second line.
     pub detailed_zone_rows: bool,
+    /// Whether In work also keeps its entries under their projects.
+    pub keep_work_in_place: bool,
     pub chat_group: Option<&'v SessionGroup<'a>>,
     pub pinned: &'v [ZoneItem<'a>],
     pub work: &'v [ZoneItem<'a>],
@@ -311,7 +323,7 @@ pub fn build<'a>(
             .iter()
             .map(|item| &item.node.session.id)
             .collect(),
-        work_index: if inputs.view_mode == SidebarViewMode::Works {
+        work_index: if inputs.view_mode.uses_works() {
             SidebarWorkIndex::new(inputs.sections)
         } else {
             SidebarWorkIndex::default()
@@ -319,13 +331,14 @@ pub fn build<'a>(
     };
     builder.append_chats();
     builder.append_zone(ActivityKey::Pinned, inputs.pinned);
-    if inputs.view_mode == SidebarViewMode::Works {
+    if inputs.view_mode.uses_works() {
         builder.append_work_zone();
     } else {
         builder.append_zone(ActivityKey::Work, inputs.work);
     }
     match inputs.view_mode {
         SidebarViewMode::Works => builder.append_works_projects(),
+        SidebarViewMode::WorksByTime => builder.append_works_by_time(),
         SidebarViewMode::Timeline => builder.append_timeline_projects(),
         SidebarViewMode::Projects => builder.append_projects(),
     }
@@ -416,7 +429,9 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
                 pinned_always_visible: true,
                 context: match self.inputs.view_mode {
                     SidebarViewMode::Timeline => RenderContext::TimelineChat,
-                    SidebarViewMode::Works | SidebarViewMode::Projects => RenderContext::TreeChat,
+                    SidebarViewMode::Works
+                    | SidebarViewMode::WorksByTime
+                    | SidebarViewMode::Projects => RenderContext::TreeChat,
                 },
             }),
         );
@@ -480,6 +495,70 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
         }
     }
 
+    fn append_works_by_time(&mut self) {
+        let mut sessions: Vec<&SessionRecord> = self
+            .inputs
+            .sections
+            .iter()
+            .flat_map(|section| &section.groups)
+            .filter(|group| !group.is_archived_bucket)
+            .flat_map(|group| group.sessions.iter().flat_map(SessionNode::preorder))
+            .collect();
+        sessions.sort_by(|left, right| {
+            self.ordering
+                .compare(left, right, is_pinned(left), is_pinned(right))
+        });
+        let working: HashSet<String> = self
+            .inputs
+            .work
+            .iter()
+            .filter_map(|item| self.work_index.work_for(&item.node.session.id))
+            .map(SidebarWork::key)
+            .collect();
+        let mut works: Vec<SidebarWork> = self.work_index.ordered(&sessions, |_| true).into_iter()
+            .filter(|work| !working.contains(&work.key()))
+            .filter(|work| !matches!(work, SidebarWork::Session { root_session_id, .. } if self.pinned_in_zone.contains(root_session_id)))
+            .cloned().collect();
+        for work in self.work_index.worktrees() {
+            if !working.contains(&work.key()) && !works.contains(work) {
+                works.push(work.clone());
+            }
+        }
+        let statuses: Vec<(String, GroupLoadState)> = self
+            .inputs
+            .sections
+            .iter()
+            .filter(|section| {
+                !works.iter().any(|work| match work {
+                    SidebarWork::Session { project_id, .. }
+                    | SidebarWork::Worktree { project_id, .. } => project_id == &section.project.id,
+                })
+            })
+            .flat_map(|section| {
+                section.groups.iter().filter_map(|group| {
+                    let key = format!("{}:{}", section.project.id, group.id);
+                    self.inputs
+                        .group_status
+                        .get(&key)
+                        .copied()
+                        .filter(|state| *state != GroupLoadState::Ready)
+                        .map(|state| (key, state))
+                })
+            })
+            .collect();
+        if (works.is_empty() && statuses.is_empty())
+            || self.append_activity_header(ActivityKey::Timeline)
+        {
+            return;
+        }
+        for work in &works {
+            self.append_work(work, "activity:timeline:");
+        }
+        for (key, state) in statuses {
+            self.push_status(&key, state, 0, false);
+        }
+    }
+
     /// Works share a project's reveal limit, regardless of their kind.
     fn append_works_projects(&mut self) {
         let inputs = self.inputs;
@@ -487,6 +566,7 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
             .work
             .iter()
             .filter_map(|item| self.work_index.work_for(&item.node.session.id))
+            .filter(|_| !inputs.keep_work_in_place)
             .map(SidebarWork::key)
             .collect();
         for section in inputs.sections {
@@ -1286,6 +1366,7 @@ mod tests {
         SidebarInputs {
             view_mode: SidebarViewMode::Timeline,
             detailed_zone_rows: false,
+            keep_work_in_place: false,
             chat_group: None,
             pinned: &[],
             work,
@@ -1438,6 +1519,60 @@ mod tests {
     }
 
     #[test]
+    fn works_by_time_has_no_project_reveal_limit_or_duplicate_work() {
+        let records = sessions(12);
+        let project = ConfiguredProject {
+            id: ProjectId::from("app"),
+            path: "/p".to_owned(),
+        };
+        let sections = [ProjectSection {
+            project: &project,
+            groups: vec![group("root", true, records.iter().map(node).collect())],
+        }];
+        let statuses = HashMap::new();
+        let state = SidebarState::default();
+        let work = [ZoneItem {
+            node: node(&records[0]),
+            project_id: Some(project.id.clone()),
+        }];
+        let mut input = timeline_inputs(&sections, &[], &work, &state, &statuses);
+        input.view_mode = SidebarViewMode::WorksByTime;
+        let model = build(&input, &mut SessionOrdering::new());
+        assert_eq!(model.session_order.len(), 12);
+        assert_eq!(
+            model
+                .session_order
+                .iter()
+                .filter(|id| *id == &records[0].id)
+                .count(),
+            1
+        );
+        assert!(!model.rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::ShowControl { .. } | SidebarRow::ProjectHeader { .. }
+        )));
+        assert!(model.rows.iter().any(|row| matches!(
+            row,
+            SidebarRow::ActivityHeader {
+                activity: ActivityKey::Timeline,
+                ..
+            }
+        )));
+
+        input.view_mode = SidebarViewMode::Works;
+        input.keep_work_in_place = true;
+        let kept = build(&input, &mut SessionOrdering::new());
+        assert_eq!(
+            kept.session_order
+                .iter()
+                .filter(|id| *id == &records[0].id)
+                .count(),
+            2,
+            "keeping a work in place shows both placements"
+        );
+    }
+
+    #[test]
     fn sections_open_with_a_gap_and_worktrees_with_a_smaller_one() {
         let project_header = SidebarRow::ProjectHeader {
             key: "project:p:header".to_owned(),
@@ -1581,6 +1716,7 @@ mod tests {
             &SidebarInputs {
                 view_mode: SidebarViewMode::Projects,
                 detailed_zone_rows: false,
+                keep_work_in_place: false,
                 timeline: &[],
                 chat_group: None,
                 pinned: &[],
@@ -1614,6 +1750,7 @@ mod tests {
                 &SidebarInputs {
                     view_mode: SidebarViewMode::Projects,
                     detailed_zone_rows: false,
+                    keep_work_in_place: false,
                     timeline: &[],
                     chat_group: None,
                     pinned: &[],
@@ -1659,6 +1796,7 @@ mod tests {
                 &SidebarInputs {
                     view_mode: SidebarViewMode::Projects,
                     detailed_zone_rows: false,
+                    keep_work_in_place: false,
                     timeline: &[],
                     chat_group: None,
                     pinned: &[],
@@ -1697,6 +1835,7 @@ mod tests {
             &SidebarInputs {
                 view_mode: SidebarViewMode::Projects,
                 detailed_zone_rows: false,
+                keep_work_in_place: false,
                 timeline: &[],
                 chat_group: None,
                 pinned: &pinned,
@@ -1732,6 +1871,7 @@ mod tests {
             &SidebarInputs {
                 view_mode: SidebarViewMode::Projects,
                 detailed_zone_rows: false,
+                keep_work_in_place: false,
                 timeline: &[],
                 chat_group: None,
                 pinned: &[],

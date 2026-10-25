@@ -435,6 +435,15 @@ impl Workspace {
                 }
                 match settings {
                     Ok(mut settings) => {
+                        if let Some(previous) = &this.send_catalog.settings {
+                            settings.sidebar_view = settings.sidebar_view.or(previous.sidebar_view);
+                            settings.show_chats = settings.show_chats.or(previous.show_chats);
+                            settings.show_pinned = settings.show_pinned.or(previous.show_pinned);
+                            settings.show_work = settings.show_work.or(previous.show_work);
+                            settings.keep_work_in_place =
+                                settings.keep_work_in_place.or(previous.keep_work_in_place);
+                            settings.work_enabled = settings.work_enabled.or(previous.work_enabled);
+                        }
                         this.topology.worktrees.retain(|entry| {
                             settings
                                 .projects

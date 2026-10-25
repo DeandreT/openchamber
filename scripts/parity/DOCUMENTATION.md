@@ -46,6 +46,10 @@ reads the same theme from `OPENCHAMBER_NATIVE_THEME`. Each client runs with
 its copy's own home and XDG directories, so lookups under them, such as the
 file manager's icon, see the same files.
 
+A scenario's optional `settings` object sets preferences in each disposable
+copy before launch. Theme pins still take precedence. The original seed is
+unchanged, and each client receives an independent copy of the same settings.
+
 Both clients run at the standard client size of 1,280 by 800 logical pixels,
 under X11 and at a fixed device scale: `--force-device-scale-factor` for
 Electron and `GPUI_X11_SCALE_FACTOR` for GPUI. Electron's DevTools endpoint

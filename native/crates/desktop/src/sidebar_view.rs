@@ -415,6 +415,7 @@ impl Workspace {
                     ActivityKey::Chats => "chat-4",
                     ActivityKey::Pinned => "pushpin",
                     ActivityKey::Work => "eye",
+                    ActivityKey::Timeline => "folder",
                 };
                 let toggled = item.clone();
                 self.header_row(
@@ -901,6 +902,7 @@ fn zone_label(strings: &Strings, activity: ActivityKey) -> SharedString {
         ActivityKey::Chats => strings.get("sessions.sidebar.activity.chatsTitle"),
         ActivityKey::Pinned => strings.get("sessions.sidebar.activity.pinnedTitle"),
         ActivityKey::Work => strings.get("sessions.sidebar.work.title"),
+        ActivityKey::Timeline => strings.get("sessions.sidebar.activity.projectsTitle"),
     }
 }
 

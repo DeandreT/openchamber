@@ -114,6 +114,7 @@ sessionAuth.error.incorrectPassword
 sessions.sidebar.activity.chatsEmpty
 sessions.sidebar.activity.chatsTitle
 sessions.sidebar.activity.pinnedTitle
+sessions.sidebar.activity.projectsTitle
 sessions.sidebar.empty.noSessions.description
 sessions.sidebar.empty.noSessions.title
 sessions.sidebar.footer.actions.aboutOpenChamber
