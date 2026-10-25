@@ -112,6 +112,9 @@ class ElectronClient:
         pixels."""
         return self._call("textBoxes")["boxes"]
 
+    def paint_regions(self) -> dict:
+        return self._call("paintRegions")
+
     def click(self, row_key: str) -> None:
         row = f'[data-sidebar-row-key="{row_key}"]'
         self._call("click", selector=f"{row} [data-session-row], {row} button", within=row)

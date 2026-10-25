@@ -9,7 +9,7 @@
  * same hit-testing and focus paths as a user's. Nothing here calls
  * application code directly.
  *
- * Commands: launch, wait, rows, inflight, rects, targets, textBoxes, observe, fonts,
+ * Commands: launch, wait, rows, inflight, rects, targets, textBoxes, paintRegions, observe, fonts,
  * click, key, type, text, screenshot, close.
  */
 import { spawn } from "node:child_process"
@@ -199,6 +199,43 @@ const handlers = {
     await client.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 })
     await client.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 })
     return { at: [x, y] }
+  },
+  /** Bounds for the approved shadow/gradient noise exception, in CSS pixels. */
+  async paintRegions() {
+    return await evaluate(`(() => {
+      const box = (rect) => [rect.x, rect.y, rect.width, rect.height]
+      const visible = (element) => element.checkVisibility({ opacityProperty: true, visibilityProperty: true })
+        && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0
+      const protectedBoxes = [...document.querySelectorAll('button, input, textarea, select, a, svg, img, video, canvas, [contenteditable="true"]')]
+        .filter(visible).map((element) => box(element.getBoundingClientRect()))
+      const regions = []
+      for (const element of document.querySelectorAll('.oc-composer-sheen, aside[aria-label="Work status"]')) {
+        if (!visible(element)) continue
+        const rect = element.getBoundingClientRect()
+        protectedBoxes.push(box(rect))
+        const value = getComputedStyle(element).boxShadow
+        let start = 0, depth = 0
+        const shadows = []
+        for (let i = 0; i < value.length; i++) {
+          if (value[i] === '(') depth++
+          if (value[i] === ')') depth--
+          if (value[i] === ',' && depth === 0) { shadows.push(value.slice(start, i)); start = i + 1 }
+        }
+        shadows.push(value.slice(start))
+        for (const shadow of shadows) {
+          if (shadow.includes('inset') || shadow.trim() === 'none') continue
+          const lengths = [...shadow.matchAll(/(-?[0-9]*\\.?[0-9]+)px/g)].map((match) => Number(match[1]))
+          if (lengths.length < 2) continue
+          const [x, y, blur = 0, spread = 0] = lengths
+          const radius = Math.max(0, 1.5 * blur + spread)
+          regions.push({ kind: 'shadow', box: [rect.x + x - radius, rect.y + y - radius, rect.width + 2 * radius, rect.height + 2 * radius] })
+        }
+      }
+      for (const element of document.querySelectorAll('.chat-scroll-fade')) {
+        if (visible(element)) regions.push({ kind: 'gradient', box: box(element.getBoundingClientRect()) })
+      }
+      return { regions, protectedBoxes }
+    })()`)
   },
   async key({ key, code, keyCode, modifiers = 0 }) {
     for (const type of ["rawKeyDown", "keyUp"]) {

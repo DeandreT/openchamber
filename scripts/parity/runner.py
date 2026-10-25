@@ -317,8 +317,12 @@ def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], dire
             client.screenshot(image)
             # The reference's text is where glyph-edge noise may be forgiven.
             text_boxes = getattr(client, "text_boxes", None)
+            paint_reader = getattr(client, "paint_regions", None)
+            paint = paint_reader() if paint_reader else {"regions": [], "protectedBoxes": []}
             checkpoints[name] = {
                 "textBoxes": text_boxes() if text_boxes else [],
+                "paintRegions": paint["regions"],
+                "paintProtected": paint["protectedBoxes"],
                 "image": str(image),
                 "settled": settled,
                 "rows": client.rows(),
@@ -469,14 +473,16 @@ def inventory_coverage(features: list[dict], results: dict[str, dict]) -> dict:
     return counts
 
 
-def approved_glyph_edges() -> set[tuple[str, str]]:
-    """The checkpoints whose glyph-edge noise the user approved, from
+def approved_exceptions(kind: str) -> set[tuple[str, str]]:
+    """The checkpoints whose noise category the user approved, from
     ``exceptions.json``; each entry names its region, reason and decision."""
     document = json.loads(EXCEPTIONS.read_text())
     approved = set()
-    for entry in document["glyphEdges"]:
+    for entry in document.get(kind, []):
         if not all(entry.get(key) for key in ("scenario", "checkpoint", "region", "reason", "decision")):
             raise ValueError(f"an exception needs its scenario, checkpoint, region, reason and decision: {entry}")
+        if kind == "paintNoise" and entry.get("maxChannelDelta") != compare.PAINT_SLACK:
+            raise ValueError("paint noise is limited to the approved channel delta")
         approved.add((entry["scenario"], entry["checkpoint"]))
     return approved
 
@@ -499,9 +505,13 @@ def run_scenarios(scenarios: list[dict], wanted: set[str] | None, output: Path, 
                     comparisons[name] = {"missing": True}
                     continue
                 text_boxes = None
-                if (scenario["id"], name) in approved_glyph_edges():
+                if (scenario["id"], name) in approved_exceptions("glyphEdges"):
                     text_boxes = [[value * args.scale for value in box] for box in reference.get("textBoxes", [])]
-                image = compare.compare_images(Path(reference["image"]), Path(candidate["image"]), work / name, args.tolerance, text_boxes)
+                paint_regions, protected = [], []
+                if (scenario["id"], name) in approved_exceptions("paintNoise"):
+                    paint_regions = [[value * args.scale for value in region["box"]] for region in reference.get("paintRegions", [])]
+                    protected = [[value * args.scale for value in box] for box in reference.get("paintProtected", []) + reference.get("textBoxes", [])]
+                image = compare.compare_images(Path(reference["image"]), Path(candidate["image"]), work / name, args.tolerance, text_boxes, paint_regions, protected)
                 rects_reference = {row["key"]: row["rect"] for row in reference["rows"]}
                 rects_candidate = {row["key"]: row["rect"] for row in candidate["rows"]}
                 for target, rect in reference.get("targets", {}).items():
@@ -556,6 +566,7 @@ def run_scenarios(scenarios: list[dict], wanted: set[str] | None, output: Path, 
             image = comparison["image"]
             print(f"  {name}: {image['differingPixels']} differing pixels ({image['differingShare']:.1%}), "
                   f"{image['glyphEdgePixels']} glyph-edge pixels, "
+                  f"{image['paintNoisePixels']} shadow/gradient pixels, "
                   f"{len(comparison['rows'])} row differences, {len(comparison['geometry'])} geometry differences, "
                   f"{len(comparison['unobserved'])} checks not observable natively, "
                   f"{len(comparison['unmetWaits'])} native waits not met"
