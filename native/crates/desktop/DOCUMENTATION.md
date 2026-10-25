@@ -37,6 +37,9 @@ read-only until prompt submission has its error and reconciliation paths.
   The card yields its column below the web's required chat-area width. In
   that layout its header control opens an overlay, preserving transcript
   width; widening the window returns it to its inline position.
+  While the inline card is hidden, the session header shows the project and
+  branch from these same retained readouts. Rendering the metadata starts no
+  additional requests.
 - `project_section.rs` draws the card's Project section: the project's
   label, the attention callout, the branch and changed-files rows from the
   session directory's Git status, and the project action row. It reads the

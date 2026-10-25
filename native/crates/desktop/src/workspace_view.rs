@@ -168,6 +168,7 @@ impl Workspace {
         &self,
         palette: &Palette,
         direction: Direction,
+        window: &Window,
         cx: &Context<Self>,
     ) -> Option<impl IntoElement> {
         let session = self.selected_session()?;
@@ -178,6 +179,10 @@ impl Workspace {
             session.title.clone().into()
         };
         let foreground = palette.foreground;
+        let metadata = (!self.work_status_inline(window))
+            .then(|| self.header_project_meta())
+            .flatten();
+        let show_metadata = metadata.is_some();
         let actions = on_activate(
             div()
                 .id("session-actions")
@@ -187,6 +192,7 @@ impl Workspace {
                 .aria_label(strings.get("header.sessionActions.openAria"))
                 .w(px(24.0))
                 .h(px(18.0))
+                .when(show_metadata, |this| this.self_start())
                 .flex_shrink_0()
                 .rounded(px(CONTROL_RADIUS))
                 .flex()
@@ -218,10 +224,38 @@ impl Workspace {
                         .aria_label(title.clone())
                         .min_w_0()
                         .px(px(4.0))
-                        .truncate()
-                        .css_text(TITLE_SIZE, TITLE_LINE, cx)
-                        .text_color(palette.foreground)
-                        .child(title),
+                        .flex()
+                        .flex_col()
+                        .child(
+                            div()
+                                .truncate()
+                                .css_text(TITLE_SIZE, TITLE_LINE, cx)
+                                .text_color(palette.foreground)
+                                .child(title),
+                        )
+                        .children(metadata.map(|meta| {
+                            div()
+                                .min_w_0()
+                                .flex_row_from(direction)
+                                .items_center()
+                                .gap(px(6.0))
+                                .css_text(0.65625, 0.9375, cx)
+                                .text_color(palette.muted_foreground.opacity(0.75))
+                                .children(meta.project.map(|label| div().truncate().child(label)))
+                                .children(meta.branch.map(|branch| {
+                                    div()
+                                        .min_w_0()
+                                        .flex_row_from(direction)
+                                        .items_center()
+                                        .gap(px(2.0))
+                                        .child(glyph(
+                                            "git-branch",
+                                            12.0,
+                                            palette.muted_foreground.opacity(0.7),
+                                        ))
+                                        .child(div().truncate().child(branch))
+                                }))
+                        })),
                 )
                 .child(actions),
         )
@@ -256,7 +290,7 @@ impl Workspace {
                     })
                     .child(div().w(px(12.0)).flex_shrink_0())
                     .when_some(
-                        self.render_session_title(palette, direction, cx),
+                        self.render_session_title(palette, direction, window, cx),
                         |this, title| this.child(title),
                     )
                     .child(div().flex_1())
