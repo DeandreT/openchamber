@@ -26,6 +26,7 @@ pub mod send_config;
 pub mod session;
 pub mod session_index;
 pub mod sidebar_rows;
+pub mod sidebar_work;
 pub mod synthetic;
 pub mod tool_names;
 pub mod transcript;
