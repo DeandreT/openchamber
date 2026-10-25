@@ -67,10 +67,19 @@
     {
       "id": "sessions.project-timeline",
       "group": "sessions",
-      "title": "Project sections in the default timeline view: header, sessions newest first, show more",
+      "title": "Works grouped by project: header, session and worktree works, reveal controls",
       "reference": ["packages/ui/src/components/session/sidebar/SessionSidebarRows.tsx"],
       "states": ["collapsed", "expanded", "long list"],
       "scenarios": ["shell.startup"],
+      "coverage": "automated"
+    },
+    {
+      "id": "sessions.works-by-time",
+      "group": "sessions",
+      "title": "Saved grouping and section visibility: one list by time, with In work and Pinned hidden",
+      "reference": ["packages/ui/src/components/session/sidebar/sessionSidebarRowModel.ts"],
+      "states": ["loaded", "empty", "failed"],
+      "scenarios": ["sessions.works-by-time"],
       "coverage": "automated"
     },
     {

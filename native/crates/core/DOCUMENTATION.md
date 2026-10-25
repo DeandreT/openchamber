@@ -49,6 +49,10 @@ rendering asks for a projection and dispatches an action.
   excluded. The first matching session in lifecycle order determines each
   work's position. `tests/sidebar_work_parity.rs` compares membership and
   ordering with the web's `works/sidebarWorks.ts` implementation.
+  Works may be grouped under projects or in one list by time. The time list
+  has no reveal limit. A work listed in In work leaves its project unless
+  `keep_work_in_place` is set; a pinned session is exclusive to Pinned while
+  that zone is shown.
 - `ownership.rs` also derives configured projects from settings paths and a
   project's linked worktrees from the server's listing, as the web client
   does.

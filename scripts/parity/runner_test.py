@@ -5,6 +5,8 @@ Run from this directory with `python3 -m unittest runner_test`.
 
 import argparse
 import itertools
+import json
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -63,6 +65,21 @@ class RunnerInputTest(unittest.TestCase):
         client = Client()
         client.click("session:target")
         self.assertTrue(runner.wait_selected(client, "session:target", timeout_s=1))
+
+
+class ScenarioSettingsTest(unittest.TestCase):
+    def test_settings_are_applied_to_independent_copies_only(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            preferences = root / "seed" / "oc-data" / "preferences.json"
+            preferences.parent.mkdir(parents=True)
+            original = {"version": 1, "fields": {"sidebarGrouping": {"value": "project", "updatedAt": 1}}}
+            preferences.write_text(json.dumps(original))
+            first = runner.copy_seed(root, root / "first", "openchamber-dark", {"sidebarGrouping": "time"})
+            second = runner.copy_seed(root, root / "second", "openchamber-dark")
+            self.assertEqual(json.loads((first / "oc-data" / "preferences.json").read_text())["fields"]["sidebarGrouping"]["value"], "time")
+            self.assertEqual(json.loads((second / "oc-data" / "preferences.json").read_text())["fields"]["sidebarGrouping"]["value"], "project")
+            self.assertEqual(json.loads(preferences.read_text()), original)
 
 
 if __name__ == "__main__":

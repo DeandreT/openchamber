@@ -252,6 +252,14 @@ pub(crate) struct Settings {
     pub routing_feature_available: Option<Value>,
     pub time_format_preference: Option<Value>,
     pub code_block_line_wrap: Option<Value>,
+    pub sidebar_grouping: Option<Value>,
+    pub sidebar_view_mode: Option<Value>,
+    pub sidebar_list_session_grouping: Option<Value>,
+    pub sidebar_show_chats_section: Option<Value>,
+    pub sidebar_show_pinned_section: Option<Value>,
+    pub sidebar_show_work_section: Option<Value>,
+    pub sidebar_keep_work_in_place: Option<Value>,
+    pub session_work_enabled: Option<Value>,
 }
 
 /// OpenCode v2 list routes: `{ location, data }`.

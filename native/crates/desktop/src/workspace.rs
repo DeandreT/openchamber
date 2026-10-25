@@ -27,9 +27,7 @@ use openchamber_native_core::ownership::{
 use openchamber_native_core::scroll_memory::{ScrollKey, ScrollMemory, ScrollPosition};
 use openchamber_native_core::session::{LiveStatus, SessionRecord};
 use openchamber_native_core::session_index::SessionIndex;
-use openchamber_native_core::sidebar_rows::{
-    self, SectionSpacing, SidebarInputs, SidebarState, SidebarViewMode,
-};
+use openchamber_native_core::sidebar_rows::{self, SectionSpacing, SidebarInputs, SidebarState};
 use openchamber_native_core::synthetic::{
     self, ConversationShape, ResponseScript, SyntheticWorkspace, WorkloadSize,
 };
@@ -37,6 +35,7 @@ use openchamber_native_core::transcript::{
     Message, MessageInfo, Part, Role, Transcript, TranscriptChange, TranscriptEvent,
 };
 use openchamber_native_core::turn_stats::TurnStats;
+use openchamber_native_transport::client::ServerSettings;
 
 use crate::chrome::InitialSize;
 use crate::code_card::CodeWrap;
@@ -277,6 +276,7 @@ impl Workspace {
             self.sessions.archived(),
             &self.sidebar_state,
             &mut self.ordering,
+            self.send_catalog.settings.as_ref(),
         );
         let elapsed = started.elapsed();
         let top = self.sidebar_list.logical_scroll_top();
@@ -828,6 +828,7 @@ fn build_sidebar_items(
     archived: &[SessionRecord],
     state: &SidebarState,
     ordering: &mut SessionOrdering,
+    settings: Option<&ServerSettings>,
 ) -> (Vec<SidebarItem>, Vec<Option<SectionSpacing>>) {
     let ownership = SessionOwnershipIndex::build(&OwnershipInputs {
         sessions: active,
@@ -877,18 +878,42 @@ fn build_sidebar_items(
         ));
     }
     let chat_group = grouping::build_chat_group(&chats.chat_sessions, topology.chat_roots.as_ref());
-    // Pinned is hidden by default (`showPinnedSection: false`), so pinned
-    // sessions stay in their projects.
-    let (_pinned, work) = sidebar_rows::zone_items(&sections, chat_group.as_ref(), ordering);
+    let (pinned, work) = sidebar_rows::zone_items(&sections, chat_group.as_ref(), ordering);
     let timeline = sidebar_rows::timeline_items(&sections, ordering);
     let group_status = HashMap::new();
     let model = sidebar_rows::build(
         &SidebarInputs {
-            view_mode: SidebarViewMode::Works,
+            view_mode: settings
+                .and_then(|settings| settings.sidebar_view)
+                .unwrap_or_default(),
             detailed_zone_rows: false,
-            chat_group: chat_group.as_ref(),
-            pinned: &[],
-            work: &work,
+            keep_work_in_place: settings
+                .and_then(|settings| settings.keep_work_in_place)
+                .unwrap_or(false),
+            chat_group: chat_group.as_ref().filter(|_| {
+                settings
+                    .and_then(|settings| settings.show_chats)
+                    .unwrap_or(true)
+            }),
+            pinned: if settings
+                .and_then(|settings| settings.show_pinned)
+                .unwrap_or(true)
+            {
+                &pinned
+            } else {
+                &[]
+            },
+            work: if settings
+                .and_then(|settings| settings.show_work)
+                .unwrap_or(true)
+                && settings
+                    .and_then(|settings| settings.work_enabled)
+                    .unwrap_or(true)
+            {
+                &work
+            } else {
+                &[]
+            },
             timeline: &timeline,
             sections: &sections,
             state,
@@ -940,6 +965,7 @@ mod tests {
             &archived,
             &SidebarState::default(),
             &mut SessionOrdering::new(),
+            None,
         );
         assert_eq!(items.len(), spacing.len(), "one gap entry per row");
         assert!(
@@ -957,5 +983,64 @@ mod tests {
         let before = keys.len();
         keys.dedup();
         assert_eq!(before, keys.len(), "row keys must be unique");
+    }
+
+    #[test]
+    fn sidebar_preferences_control_zone_visibility_and_time_grouping() {
+        use openchamber_native_core::sidebar_rows::{ActivityKey, SidebarViewMode};
+        let data = SyntheticWorkspace::new(WorkloadSize::Small);
+        let topology = Topology {
+            projects: data.projects,
+            worktrees: data.worktrees,
+            chat_roots: Some(data.chat_roots),
+        };
+        let settings = ServerSettings {
+            show_chats: Some(false),
+            show_pinned: Some(false),
+            show_work: Some(false),
+            ..ServerSettings::default()
+        };
+        let (project_items, _) = build_sidebar_items(
+            &topology,
+            &data.sessions,
+            &[],
+            &SidebarState::default(),
+            &mut SessionOrdering::new(),
+            Some(&settings),
+        );
+        assert!(
+            !project_items
+                .iter()
+                .any(|item| matches!(item, SidebarItem::Zone { .. })),
+            "hidden zones have no rows"
+        );
+        let by_time = ServerSettings {
+            sidebar_view: Some(SidebarViewMode::WorksByTime),
+            ..settings
+        };
+        let (time_items, _) = build_sidebar_items(
+            &topology,
+            &data.sessions,
+            &[],
+            &SidebarState::default(),
+            &mut SessionOrdering::new(),
+            Some(&by_time),
+        );
+        assert!(
+            time_items.iter().any(|item| matches!(
+                item,
+                SidebarItem::Zone {
+                    activity: ActivityKey::Timeline,
+                    ..
+                }
+            )),
+            "time grouping has one shared list"
+        );
+        assert!(
+            !time_items
+                .iter()
+                .any(|item| matches!(item, SidebarItem::Project { .. })),
+            "time grouping has no project headers"
+        );
     }
 }
