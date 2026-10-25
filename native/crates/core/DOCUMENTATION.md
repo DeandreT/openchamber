@@ -43,6 +43,12 @@ rendering asks for a projection and dispatches an action.
   archived records, page merges, complete loads and live session changes.
   A record carries the session's current model and agent as the server last
   reported them.
+- `sidebar_work.rs` assigns sessions to Works entries from the project
+  sections. A linked worktree is one work, including an empty worktree;
+  elsewhere each root and its descendants form one work. Archives are
+  excluded. The first matching session in lifecycle order determines each
+  work's position. `tests/sidebar_work_parity.rs` compares membership and
+  ordering with the web's `works/sidebarWorks.ts` implementation.
 - `ownership.rs` also derives configured projects from settings paths and a
   project's linked worktrees from the server's listing, as the web client
   does.

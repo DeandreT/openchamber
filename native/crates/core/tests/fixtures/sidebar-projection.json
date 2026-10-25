@@ -8425,5 +8425,442 @@
         }
       }
     }
+  ],
+  "workScenarios": [
+    {
+      "name": "empty",
+      "input": {
+        "projects": [],
+        "order": [],
+        "include": []
+      },
+      "expected": {
+        "bySession": {},
+        "worktrees": [],
+        "ordered": []
+      }
+    },
+    {
+      "name": "worktree sessions share a work and archives stay out",
+      "input": {
+        "projects": [
+          {
+            "id": "project",
+            "groups": [
+              {
+                "id": "root",
+                "kind": "root",
+                "nodes": [
+                  {
+                    "id": "root",
+                    "children": [
+                      {
+                        "id": "review"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "other"
+                  }
+                ]
+              },
+              {
+                "id": "feature",
+                "kind": "worktree",
+                "nodes": [
+                  {
+                    "id": "one",
+                    "children": [
+                      {
+                        "id": "subagent"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "two"
+                  }
+                ]
+              },
+              {
+                "id": "empty",
+                "kind": "worktree",
+                "nodes": []
+              },
+              {
+                "id": "space",
+                "kind": "space",
+                "nodes": [
+                  {
+                    "id": "isolated"
+                  }
+                ]
+              },
+              {
+                "id": "archive",
+                "kind": "archive",
+                "nodes": [
+                  {
+                    "id": "archived"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "order": [
+          "two",
+          "review",
+          "one",
+          "other",
+          "root",
+          "isolated",
+          "archived"
+        ],
+        "include": [
+          "two",
+          "review",
+          "one",
+          "other",
+          "root",
+          "isolated",
+          "archived"
+        ]
+      },
+      "expected": {
+        "bySession": {
+          "root": "session:root",
+          "review": "session:root",
+          "other": "session:other",
+          "one": "project:feature",
+          "subagent": "project:feature",
+          "two": "project:feature",
+          "isolated": "session:isolated"
+        },
+        "worktrees": [
+          "project:feature",
+          "project:empty"
+        ],
+        "ordered": [
+          "project:feature",
+          "session:root",
+          "session:other",
+          "session:isolated"
+        ]
+      }
+    },
+    {
+      "name": "filtering keeps first matching session order",
+      "input": {
+        "projects": [
+          {
+            "id": "project",
+            "groups": [
+              {
+                "id": "root",
+                "kind": "root",
+                "nodes": [
+                  {
+                    "id": "root",
+                    "children": [
+                      {
+                        "id": "review"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "other"
+                  }
+                ]
+              },
+              {
+                "id": "feature",
+                "kind": "worktree",
+                "nodes": [
+                  {
+                    "id": "one",
+                    "children": [
+                      {
+                        "id": "subagent"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "two"
+                  }
+                ]
+              },
+              {
+                "id": "empty",
+                "kind": "worktree",
+                "nodes": []
+              },
+              {
+                "id": "space",
+                "kind": "space",
+                "nodes": [
+                  {
+                    "id": "isolated"
+                  }
+                ]
+              },
+              {
+                "id": "archive",
+                "kind": "archive",
+                "nodes": [
+                  {
+                    "id": "archived"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "order": [
+          "review",
+          "two",
+          "other",
+          "subagent",
+          "root",
+          "isolated"
+        ],
+        "include": [
+          "two",
+          "root",
+          "isolated"
+        ]
+      },
+      "expected": {
+        "bySession": {
+          "root": "session:root",
+          "review": "session:root",
+          "other": "session:other",
+          "one": "project:feature",
+          "subagent": "project:feature",
+          "two": "project:feature",
+          "isolated": "session:isolated"
+        },
+        "worktrees": [
+          "project:feature",
+          "project:empty"
+        ],
+        "ordered": [
+          "project:feature",
+          "session:root",
+          "session:isolated"
+        ]
+      }
+    },
+    {
+      "name": "duplicate sessions keep the first owner",
+      "input": {
+        "projects": [
+          {
+            "id": "project",
+            "groups": [
+              {
+                "id": "root",
+                "kind": "root",
+                "nodes": [
+                  {
+                    "id": "root",
+                    "children": [
+                      {
+                        "id": "review"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "other"
+                  }
+                ]
+              },
+              {
+                "id": "feature",
+                "kind": "worktree",
+                "nodes": [
+                  {
+                    "id": "one",
+                    "children": [
+                      {
+                        "id": "subagent"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "two"
+                  }
+                ]
+              },
+              {
+                "id": "empty",
+                "kind": "worktree",
+                "nodes": []
+              },
+              {
+                "id": "space",
+                "kind": "space",
+                "nodes": [
+                  {
+                    "id": "isolated"
+                  }
+                ]
+              },
+              {
+                "id": "archive",
+                "kind": "archive",
+                "nodes": [
+                  {
+                    "id": "archived"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "id": "second",
+            "groups": [
+              {
+                "id": "feature",
+                "kind": "worktree",
+                "nodes": [
+                  {
+                    "id": "root"
+                  },
+                  {
+                    "id": "second-only"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "order": [
+          "root",
+          "second-only",
+          "two",
+          "root"
+        ],
+        "include": [
+          "root",
+          "second-only",
+          "two"
+        ]
+      },
+      "expected": {
+        "bySession": {
+          "root": "session:root",
+          "review": "session:root",
+          "other": "session:other",
+          "one": "project:feature",
+          "subagent": "project:feature",
+          "two": "project:feature",
+          "isolated": "session:isolated",
+          "second-only": "second:feature"
+        },
+        "worktrees": [
+          "project:feature",
+          "project:empty",
+          "second:feature"
+        ],
+        "ordered": [
+          "session:root",
+          "second:feature",
+          "project:feature"
+        ]
+      }
+    },
+    {
+      "name": "unknown sessions do not fabricate work",
+      "input": {
+        "projects": [
+          {
+            "id": "project",
+            "groups": [
+              {
+                "id": "root",
+                "kind": "root",
+                "nodes": [
+                  {
+                    "id": "root",
+                    "children": [
+                      {
+                        "id": "review"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "other"
+                  }
+                ]
+              },
+              {
+                "id": "feature",
+                "kind": "worktree",
+                "nodes": [
+                  {
+                    "id": "one",
+                    "children": [
+                      {
+                        "id": "subagent"
+                      }
+                    ]
+                  },
+                  {
+                    "id": "two"
+                  }
+                ]
+              },
+              {
+                "id": "empty",
+                "kind": "worktree",
+                "nodes": []
+              },
+              {
+                "id": "space",
+                "kind": "space",
+                "nodes": [
+                  {
+                    "id": "isolated"
+                  }
+                ]
+              },
+              {
+                "id": "archive",
+                "kind": "archive",
+                "nodes": [
+                  {
+                    "id": "archived"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "order": [
+          "unknown",
+          "archived"
+        ],
+        "include": [
+          "unknown",
+          "archived"
+        ]
+      },
+      "expected": {
+        "bySession": {
+          "root": "session:root",
+          "review": "session:root",
+          "other": "session:other",
+          "one": "project:feature",
+          "subagent": "project:feature",
+          "two": "project:feature",
+          "isolated": "session:isolated"
+        },
+        "worktrees": [
+          "project:feature",
+          "project:empty"
+        ],
+        "ordered": []
+      }
+    }
   ]
 }

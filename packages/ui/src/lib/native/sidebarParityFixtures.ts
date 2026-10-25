@@ -18,6 +18,7 @@ import type { Session } from '@/lib/opencode/model';
 import { ensureChatsRootDirectory } from '@/lib/chatDirectories';
 import type { SpaceMark } from '@/lib/spaces/spaces-store';
 import { projectSidebarChats } from '@/components/session/sidebar/sessions/sessionChatProjection';
+import { sidebarWorkFixtures } from './sidebarWorkFixtures';
 import {
   createSessionOwnershipIndex,
   type DirectoryOwner,
@@ -363,7 +364,8 @@ export const renderSidebarParityFixtures = async (): Promise<string> => {
     input: entry.input,
     expected: runScenario(entry),
   }));
-  return `${JSON.stringify({ home: FIXTURE_HOME, scenarios }, null, 2)}\n`;
+  const workScenarios = sidebarWorkFixtures((id) => toSession({ id }));
+  return `${JSON.stringify({ home: FIXTURE_HOME, scenarios, workScenarios }, null, 2)}\n`;
 };
 
 const writeSidebarParityFixtures = async (): Promise<string> => {
