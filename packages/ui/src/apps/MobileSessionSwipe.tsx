@@ -13,8 +13,8 @@ export const ROW_ACTION_SLOT_WIDTH = 48;
 // Top-level rows add one slot each for Pin and Track / Done when enabled.
 export const ROW_ACTIONS_WIDTH = 4 * ROW_ACTION_SLOT_WIDTH;
 
-export type MobileSessionWorkAction = { inWork: boolean; onToggle: () => void };
-export type MobileSessionPinAction = { pinned: boolean; onToggle: () => void };
+type MobileSessionWorkAction = { inWork: boolean; onToggle: () => void };
+type MobileSessionPinAction = { pinned: boolean; onToggle: () => void };
 const ROW_SWIPE_SNAP_MS = 180;
 
 /** Generic swipe-to-reveal wrapper for drawer rows (sessions, projects,
@@ -97,7 +97,9 @@ export const MobileSwipeActionsRow: React.FC<{
   return (
     <div
       data-active-session={dataActiveSession || undefined}
-      className="relative overflow-hidden"
+      // Rounded as the desktop's rows are: the list is inset from the screen's
+      // edges, and the selection and a swipe's actions keep the row's shape.
+      className="relative overflow-hidden rounded-lg"
       onTouchStart={handleTouchStart}
       onTouchMove={handleTouchMove}
       onTouchEnd={handleTouchEnd}
@@ -108,7 +110,8 @@ export const MobileSwipeActionsRow: React.FC<{
       <div className="absolute inset-y-0 inset-s-0 flex items-stretch" style={{ width: actionsWidth }} aria-hidden={!revealed}>
         {actions}
       </div>
-      <div ref={contentRef} className={contentClassName}>
+      {/* The row keeps its rounded shape while it slides away from its actions. */}
+      <div ref={contentRef} className={`${contentClassName} rounded-[inherit]`}>
         {children}
       </div>
     </div>

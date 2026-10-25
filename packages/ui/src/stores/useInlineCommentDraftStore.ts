@@ -7,6 +7,7 @@ import { getRuntimeKey } from '@/lib/runtime-switch';
 import { normalizePath } from '@/lib/pathNormalization';
 import { createDeferredSafeJSONStorage } from './utils/safeStorage';
 import { chatQuoteAnchorSchema, type ChatQuoteAnchor } from '@/lib/chatQuoteAnchor';
+import { diffCommentOriginSchema, type DiffCommentOrigin } from '@/lib/diffCommentOrigin';
 
 export type InlineCommentSource = 'diff' | 'plan' | 'file' | 'preview-annotation' | 'terminal' | 'pr-comment' | 'pr-check' | 'chat-quote' | 'file-quote';
 
@@ -32,6 +33,8 @@ export interface InlineCommentDraft {
   anchor?: ChatQuoteAnchor;
   /** Whose change request it came from; set only for `pr-comment` and `pr-check`, absent means GitHub. */
   provider?: SourceControlProvider;
+  /** The diff a `diff` comment was written on; absent for uncommitted changes. */
+  origin?: DiffCommentOrigin;
   createdAt: number;
 }
 
@@ -192,6 +195,7 @@ const persistedDraftSchema = z.object({
   terminalId: z.string().optional(),
   anchor: chatQuoteAnchorSchema.optional(),
   provider: sourceControlProviderIdSchema.optional(),
+  origin: diffCommentOriginSchema.optional(),
   createdAt: z.number(),
 });
 

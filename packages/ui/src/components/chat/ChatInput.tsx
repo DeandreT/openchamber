@@ -10,7 +10,7 @@ import { useUIStore } from '@/stores/useUIStore';
 import { isServerOwnedMessageQueue, createMessageQueueTarget, getMessageQueueKey, useMessageQueueStore, type QueuedContextPart, type QueuedMessage, type QueuedMessageGoal } from '@/stores/messageQueueStore';
 import { useAutoReviewStore } from '@/stores/useAutoReviewStore';
 import { useSessionGoalArmStore } from '@/stores/useSessionGoalArmStore';
-import { useSessionUIStore } from '@/sync/session-ui-store';
+import { useSessionUIStore, type NewSessionDraftState } from '@/sync/session-ui-store';
 import { useSelectionStore } from '@/sync/selection-store';
 import { prepareUserMessageResume } from '@/sync/user-message-resume';
 import { prepareLocalAttachments, useDraftAttachedFiles, useInputStore, type SyntheticContextPart } from '@/sync/input-store';
@@ -27,6 +27,7 @@ import {
     type AttachmentInputModality,
 } from '@/sync/attachment-files';
 import type { AttachedFile } from '@/stores/types/sessionTypes';
+import type { RepositoryReferenceKind } from '@/lib/api/types';
 import * as sessionActions from '@/sync/session-actions';
 // Guest surfaces load on demand: VS Code and mobile never mount them, and the
 // composer must not pay for the guest bridge before an extension is installed.
@@ -39,9 +40,10 @@ import { getRuntimeKey, subscribeRuntimeEndpointWillChange } from '@/lib/runtime
 import { runtimeFetch } from '@/lib/runtime-fetch';
 import {
     createChatDraftIdentity,
+    readChatDraftClaimingFolderDraft,
+    workDraftComposerKey,
     getChatDraftIdentityKey,
     clearChatDraft,
-    readChatDraft,
     type ChatDraftIdentity,
     type ChatDraftSnapshot,
 } from '@/lib/chatDraftPersistence';
@@ -76,6 +78,7 @@ import { useSessionActivity } from '@/hooks/useSessionActivity';
 import { useGlobalBlockingRequestsStore } from '@/sync/global-blocking-requests';
 import { toast } from '@/components/ui';
 // useMessageStore removed — messages now come from sync system
+import { getSettingsSurface } from '@/lib/settings/surface';
 import { isVSCodeRuntime } from '@/lib/desktop';
 import { useTabletLayout } from '@/lib/device';
 import { useHardwareKeyboard } from '@/lib/hardwareKeyboard';
@@ -210,6 +213,7 @@ import { runForkCommand } from './composer/submit/forkCommand';
 import { useAutocompletePosition } from './composer/state/useAutocompletePosition';
 import { useMessageHistory } from './composer/state/useMessageHistory';
 import { useComposerDraft } from './composer/state/useComposerDraft';
+import { useSessionDraftPublishing } from './composer/state/useSessionDraftPublishing';
 import { useDictationOrigin } from './composer/state/useDictationOrigin';
 import { useDraftTarget } from './composer/state/useDraftTarget';
 import { useMobileComposerShell } from './composer/state/useMobileComposerShell';
@@ -296,7 +300,7 @@ const collectInlineSkillMentions = (text: string, skillNames: Set<string>): stri
     collectKnownTokenNames(text, '$', skillNames, 'exact');
 
 /** Which reference picker is open, and for the repository on which tab. */
-type ReferencePickerState = { source: 'repository'; kind?: 'issue' | 'pull' } | { source: TrackerReferenceSource } | null;
+type ReferencePickerState = { source: 'repository'; kind?: RepositoryReferenceKind } | { source: TrackerReferenceSource } | null;
 
 /**
  * Record what a session was pointed at, so the work-status panel can show it
@@ -376,6 +380,18 @@ interface ChatInputProps {
 // under the root for the next new Chat to show.
 const NEW_CHAT_DRAFT_DIRECTORY = CHAT_DRAFT_PROJECT_ID;
 
+/**
+ * The composer key of the open project draft (see `workDraftComposerKey`), or
+ * null for a new Chat. The sidebars of the desktop, the web and the phone list
+ * drafts; VS Code has no shared drafts, so it keeps the per-folder key, where
+ * a new draft finds the text left in that folder.
+ */
+const resolveWorkDraftComposerKey = (draft: NewSessionDraftState | null | undefined): string | null => {
+    return draft?.open && draft.target === 'project' && draft.workDraftId && getSettingsSurface() !== 'vscode'
+        ? workDraftComposerKey(draft.workDraftId)
+        : null;
+};
+
 const resolveChatDraftIdentity = (column: ChatColumnSession | null): ChatDraftIdentity | null => {
     const sessionState = useSessionUIStore.getState();
     const sessionId = column ? column.sessionId : sessionState.currentSessionId;
@@ -386,7 +402,7 @@ const resolveChatDraftIdentity = (column: ChatColumnSession | null): ChatDraftId
     const directory = sessionId
         ? sessionState.getDirectoryForSession(sessionId) ?? (column ? column.directory : sessionState.currentSessionDirectory)
         : newSessionDirectory ?? useDirectoryStore.getState().currentDirectory;
-    return createChatDraftIdentity(getRuntimeKey(), directory, sessionId);
+    return createChatDraftIdentity(getRuntimeKey(), directory, sessionId ?? resolveWorkDraftComposerKey(draft));
 };
 
 type AttachmentPickerInputProps = {
@@ -428,7 +444,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const initialDraftSnapshotRef = React.useRef<ChatDraftSnapshot>({ text: '', confirmedMentions: new Set() });
     const [message, setMessage] = React.useState(() => {
         const identity = resolveChatDraftIdentity(chatColumnSession);
-        const snapshot = readChatDraft(identity);
+        const snapshot = readChatDraftClaimingFolderDraft(identity);
         initialDraftIdentityRef.current = identity;
         initialDraftSnapshotRef.current = snapshot;
         if (snapshot.text) {
@@ -539,13 +555,14 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const isNewChatDraft = useSessionUIStore((s) => (
         !columnPinned && !currentSessionId && Boolean(s.newSessionDraft?.open) && s.newSessionDraft.target === 'chat'
     ));
+    const workDraftKey = useSessionUIStore((s) => (columnPinned || currentSessionId ? null : resolveWorkDraftComposerKey(s.newSessionDraft)));
     const chatDraftIdentity = React.useMemo(
         () => createChatDraftIdentity(
             activeRuntimeKey,
             isNewChatDraft ? NEW_CHAT_DRAFT_DIRECTORY : currentSessionDirectoryForSync ?? currentDirectory,
-            isBtwActive ? btwComposerSessionId : currentSessionId,
+            isBtwActive ? btwComposerSessionId : currentSessionId ?? workDraftKey,
         ),
-        [activeRuntimeKey, btwComposerSessionId, currentDirectory, currentSessionDirectoryForSync, currentSessionId, isBtwActive, isNewChatDraft],
+        [activeRuntimeKey, btwComposerSessionId, currentDirectory, currentSessionDirectoryForSync, currentSessionId, isBtwActive, isNewChatDraft, workDraftKey],
     );
     const claimAttachmentSlot = React.useCallback(() => {
         useInputStore.getState().selectAttachmentDraft(chatDraftIdentity);
@@ -676,7 +693,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
     const { enabled: isTabletLayout } = useTabletLayout();
     const setImagePreviewOpen = useUIStore((state) => state.setImagePreviewOpen);
     const inputBarOffset = useUIStore((state) => state.inputBarOffset);
-    const persistChatDraft = useUIStore((state) => state.persistChatDraft);
     const inputSpellcheckEnabled = useUIStore((state) => state.inputSpellcheckEnabled);
     const largeTextPasteBehavior = useUIStore((state) => state.largeTextPasteBehavior);
     const largeTextPasteScope = JSON.stringify([
@@ -1146,7 +1162,6 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         confirmedMentionsRef,
         identity: chatDraftIdentity,
         selectAttachmentsOnIdentityChange: !columnPinned,
-        persistEnabled: persistChatDraft,
         initialDraft: {
             text: initialDraftRef.current ?? '',
             identity: initialDraftIdentityRef.current,
@@ -1167,6 +1182,17 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                 editor.selectAll();
             }
         },
+    });
+
+    // A project's new draft is shared with the server, which lists it in the
+    // sidebar once the user leaves it (the chat identity carries its key only
+    // while it is the one on screen).
+    useSessionDraftPublishing({
+        identity: isBtwActive ? null : chatDraftIdentity,
+        message,
+        confirmedMentionsRef,
+        projectId: newSessionDraftOpen ? newSessionDraft.selectedProjectId ?? null : null,
+        enabled: newSessionDraftOpen && !currentSessionId,
     });
 
     const handleExitBtw = React.useCallback(() => {
@@ -1494,6 +1520,15 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                 restored.push({
                     kind: 'repository-issue',
                     ...(payload.provider ? { provider: payload.provider } : {}),
+                    number: payload.number,
+                    title: payload.title,
+                    url: payload.url,
+                    contextText: part.text,
+                });
+            } else if (payload.kind === 'repository-discussion') {
+                restored.push({
+                    kind: 'repository-discussion',
+                    provider: payload.provider,
                     number: payload.number,
                     title: payload.title,
                     url: payload.url,
@@ -3966,6 +4001,20 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                                 openInBrowserLabel={t('chat.chatInput.linked.issue.openInBrowserAria')}
                                 removeLabel={t('chat.chatInput.linked.issue.removeAria')}
                                 onReopenPicker={() => setReferencePicker({ source: 'repository', kind: 'issue' })}
+                                onRemove={remove}
+                            />
+                        );
+                    case 'repository-discussion':
+                        return (
+                            <LinkedReferenceRow
+                                key={key}
+                                numberLabel={`#${reference.number}`}
+                                title={reference.title}
+                                url={reference.url}
+                                author={reference.author}
+                                openInBrowserLabel={t('chat.chatInput.linked.discussion.openInBrowserAria')}
+                                removeLabel={t('chat.chatInput.linked.discussion.removeAria')}
+                                onReopenPicker={() => setReferencePicker({ source: 'repository', kind: 'discussion' })}
                                 onRemove={remove}
                             />
                         );

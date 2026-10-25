@@ -24,6 +24,7 @@ import {
   requireProviderArray,
 } from './mappers.js';
 import {
+  fetchDiscussionDetail,
   fetchPullStack,
   fetchReferenceDetail,
   mapReferencesAcross,
@@ -764,10 +765,11 @@ export function createGitHubResources({
 
     /**
      * Comments of one issue or PR the picker previews, and a PR's size,
-     * review decision and reviewers. A named enterprise `host` reads with that
+     * review decision and reviewers; with `kind: 'discussion'`, a
+     * discussion's comment threads. A named enterprise `host` reads with that
      * host's Octokit; its repository must still be in the bound network.
      */
-    referenceDetail: ({ session, directory, remote, project, number, host }) => pickerRead(async () => {
+    referenceDetail: ({ session, directory, remote, project, number, host, kind }) => pickerRead(async () => {
       const { octokit: github, rateLimit } = await load();
       const requestedHost = String(host ?? '').trim().toLowerCase();
       const octokit = requestedHost ? await github.getOctokitOrNull(requestedHost) : accountOf(session).octokit;
@@ -787,7 +789,8 @@ export function createGitHubResources({
         repo = await resolveRepoForRequest(octokit, directory, { owner: project.owner, repo: project.name }, remote);
         if (!repo) throw notInProject();
       }
-      return { connected: true, detail: await fetchReferenceDetail({ octokit, owner: repo.owner, repo: repo.repo, number }) };
+      const read = kind === 'discussion' ? fetchDiscussionDetail : fetchReferenceDetail;
+      return { connected: true, detail: await read({ octokit, owner: repo.owner, repo: repo.repo, number }) };
     }),
 
     /**

@@ -54,6 +54,7 @@ import { setZoneBody, setZoneHeaderSlot } from './zoneHosts';
 import { useOpenWhenSettled } from './useOpenUntilSettled';
 import { isZoneExposed } from './zoneInteractiveContext';
 import { DockedPanelSurfaceContext } from '@/hooks/usePageColors';
+import { REPOSITORY_KIND_ICONS } from '@/components/references/referencePickerItems';
 
 const CONTEXT_PANEL_MIN_WIDTH = 320;
 // The panel has no absolute pixel ceiling: on large monitors the user may
@@ -216,7 +217,7 @@ const TrackerTabIcon: React.FC<{ url: string | null }> = ({ url }) => {
   const target = url ? trackerTargetOfUrl(url, urls, trackerUrls) : null;
   const name: IconName = !target ? 'git-branch'
     : target.source === 'tracker' ? trackerPresentation(target.provider).icon
-      : target.kind === 'pull' ? 'git-pull-request' : 'record-circle';
+      : REPOSITORY_KIND_ICONS[target.kind];
   return <Icon name={name} className="h-3.5 w-3.5" />;
 };
 

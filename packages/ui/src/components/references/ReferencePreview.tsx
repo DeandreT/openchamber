@@ -19,7 +19,7 @@ import { useTrackerDescriptor } from '@/lib/trackers/registry';
 import { isSettledTrackerState, trackerStateGlyph } from '@/lib/trackers/stateLook';
 import { ReferenceComments, type ReferenceThreadActions } from './ReferenceComments';
 import { buildReferenceTimeline, type ReferenceCommentItem, type ReferenceTimelineEntry } from './referenceTimeline';
-import { ChecksGlyph, ReferenceLabelChips } from './ReferencePickerRow';
+import { ChecksGlyph, DiscussionCategory, ReferenceLabelChips } from './ReferencePickerRow';
 import { PullStackRows } from './PullStackRows';
 import { useReferenceImagePreview } from './useReferenceImagePreview';
 import {
@@ -124,6 +124,18 @@ export const ChecksSummaryLine: React.FC<{ checks: CISummary }> = ({ checks }) =
         <ChecksSummaryText checks={checks} />
     </>
 );
+
+/** What the agent gets from an attached item, and what a worktree started from one gets. */
+const SENDS_KEYS = {
+    issue: 'references.picker.preview.sends.issue',
+    pull: 'references.picker.preview.sends.pull',
+    discussion: 'references.picker.preview.sends.discussion',
+} as const satisfies Record<RepositoryReference['kind'], I18nKey>;
+const WORKTREE_KEYS = {
+    issue: 'references.picker.preview.worktree.issue',
+    pull: 'references.picker.preview.worktree.pull',
+    discussion: 'references.picker.preview.worktree.discussion',
+} as const satisfies Record<RepositoryReference['kind'], I18nKey>;
 
 const REVIEW_KEYS = {
     approved: 'references.picker.preview.review.approved',
@@ -413,6 +425,7 @@ const RepositoryPreview: React.FC<{
                 context: location ?? (comment.review && comment.review !== 'commented' ? t(REVIEW_VERDICT_KEYS[comment.review]) : null),
                 location,
             };
+            if (comment.answer) item.answer = comment.answer;
             if (comment.thread) {
                 item.thread = {
                     id: comment.thread.id,
@@ -448,9 +461,7 @@ const RepositoryPreview: React.FC<{
     const footer = footerOverride ?? (
         <div className="flex flex-col gap-2">
             <p className="typography-meta text-muted-foreground">
-                {purpose === 'worktree'
-                    ? t(reference.kind === 'pull' ? 'references.picker.preview.worktree.pull' : 'references.picker.preview.worktree.issue')
-                    : t(reference.kind === 'pull' ? 'references.picker.preview.sends.pull' : 'references.picker.preview.sends.issue')}
+                {t((purpose === 'worktree' ? WORKTREE_KEYS : SENDS_KEYS)[reference.kind])}
             </p>
             {reference.kind === 'pull' ? (
                 <label className="flex cursor-pointer items-center gap-2 typography-meta text-foreground">
@@ -531,6 +542,29 @@ const RepositoryPreview: React.FC<{
                         </MetaRow>
                     ) : null}
                     {updated ? <MetaRow label={t('references.picker.preview.updated')}>{updated}</MetaRow> : null}
+                    {reference.kind === 'discussion' ? (
+                        <>
+                            <MetaRow label={t('references.picker.preview.category')}><DiscussionCategory category={reference.category} /></MetaRow>
+                            {reference.category.answerable ? (
+                                <MetaRow label={t('references.picker.preview.answer')}>
+                                    {reference.answered ? (
+                                        <span className="inline-flex items-center gap-1">
+                                            <Icon name="checkbox-circle" className="size-3.5 text-[var(--status-success)]" />
+                                            {t('references.picker.state.answered')}
+                                        </span>
+                                    ) : t('references.picker.discussion.unanswered')}
+                                </MetaRow>
+                            ) : null}
+                            {reference.upvotes > 0 ? (
+                                <MetaRow label={t('references.picker.preview.upvotes')}>
+                                    <span className="tabular-nums">{reference.upvotes}</span>
+                                </MetaRow>
+                            ) : null}
+                            {reference.locked ? (
+                                <MetaRow label={t('references.picker.preview.locked')}>{t('references.picker.discussion.lockedNote')}</MetaRow>
+                            ) : null}
+                        </>
+                    ) : null}
                     {reference.kind === 'pull' ? (
                         <>
                             <MetaRow label={t('references.picker.preview.branch')}>
@@ -824,7 +858,7 @@ export const ReferencePreview: React.FC<{
     onOpenTrackerItem?: (item: TrackerItemSummary) => void;
     /** Reads an issue or PR again from its host, past every cached answer; settles when the reads are asked. */
     onRefresh?: () => Promise<void>;
-    /** Answer and resolve a PR's review threads; without it they are read only. */
+    /** Answer and resolve a PR's review threads, or answer a discussion's comments and choose its answer; without it they are read only. */
     threadActions?: ReferenceThreadActions;
     /** Opens another layer of the previewed PR's stack; without it the layers are plain text. */
     onOpenStackLayer?: (layer: PullRequestStackLayer) => void;

@@ -45,8 +45,9 @@ export const projectSidebarChats = (
   }
   return {
     chatSessions: activeSessions.filter((session) => chatSessionIds.has(session.id)),
-    // Chats rows do not expand. Owned descendants retain their project entry
-    // so moving their root into the fallback cannot hide existing navigation.
+    // Owned descendants retain their project entry so moving their root into
+    // the fallback does not remove existing project navigation. Search
+    // suppresses these duplicates when Chats already lists the matching tree.
     projectSessions: activeSessions.filter((session) => !isChatDirectoryPath(session.directory)
       && (!chatSessionIds.has(session.id) || ownership.bySessionId.has(session.id))),
     projectSessionsByProject,

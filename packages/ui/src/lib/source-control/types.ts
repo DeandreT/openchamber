@@ -756,6 +756,26 @@ export interface SetStateInput extends SourceControlMutationContext<SourceContro
   state: 'open' | 'closed';
 }
 
+/** Why a discussion is closed: answered or settled, no longer relevant, or a copy of another. */
+export type DiscussionCloseReason = 'resolved' | 'outdated' | 'duplicate';
+
+/** A comment on a discussion, or with `replyTo` (a comment's id) a reply in that comment's thread. */
+export interface DiscussionCommentInput extends CommentInput {
+  replyTo?: string;
+}
+
+/** Close a discussion for a reason, or reopen it. */
+export type SetDiscussionStateInput = SourceControlMutationContext<SourceControlExistingMutationTarget> & (
+  | { state: 'closed'; reason: DiscussionCloseReason }
+  | { state: 'open'; reason?: never }
+);
+
+/** Choose a comment as the discussion's answer (`answer: true`), or unchoose it. */
+export interface SetDiscussionAnswerInput extends SourceControlMutationContext<SourceControlExistingMutationTarget> {
+  commentId: string;
+  answer: boolean;
+}
+
 /**
  * A review: a verdict where the host reviews by verdicts, or votes on labels
  * (label name to value) where it reviews by votes. The target's `headSha` is

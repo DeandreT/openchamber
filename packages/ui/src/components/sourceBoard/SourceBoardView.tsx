@@ -26,13 +26,33 @@ import { NewWorktreeDialog } from '@/components/session/NewWorktreeDialog';
 import { ReferenceBrowserList, ReferenceBrowserSearch } from '@/components/references/ReferenceBrowser';
 import { IDLE_PULL_STATUS, readyValue, useReferenceBrowser } from '@/components/references/useReferenceBrowser';
 import { ReferencePreview } from '@/components/references/ReferencePreview';
-import { CHANGE_REQUEST_TAB_KEYS, DEFAULT_REPOSITORY_FILTER, referenceNumberLabel, referencePickerItemKey, trackerOfSource, trackerReferenceSource, type ReferencePickerItem, type ReferencePickerSelection } from '@/components/references/referencePickerItems';
+import {
+    canChangeDiscussionState,
+    DEFAULT_REPOSITORY_FILTER,
+    REPOSITORY_KIND_ICONS,
+    referenceNumberLabel,
+    referencePickerItemKey,
+    repositoryKindOfTab,
+    repositoryKindTabs,
+    trackerOfSource,
+    trackerReferenceSource,
+    type ReferencePickerItem,
+    type ReferencePickerSelection,
+} from '@/components/references/referencePickerItems';
 import { itemDirectory } from '@/components/references/acrossRepositories';
 import { forgetRepositoryPullStatus, forgetRepositoryPullStatuses, useRepositoryAcrossReferenceList, useTrackerItemDetail, useRepositoryHostProvider, useRepositoryReadContext, useRepositoryReferenceList } from '@/components/references/referenceSources';
 import { openExternalUrl } from '@/lib/url';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { useRuntimeAPIs } from '@/hooks/useRuntimeAPIs';
-import type { RepositoryReference, RepositoryReferenceKind, ProjectEntry, PullRequestStackLayer, SourceControlReadContext, TrackerDescriptor, TrackerMappingResult } from '@/lib/api/types';
+import type {
+    ProjectEntry,
+    PullRequestStackLayer,
+    RepositoryReference,
+    RepositoryReferenceKind,
+    SourceControlReadContext,
+    TrackerDescriptor,
+    TrackerMappingResult,
+} from '@/lib/api/types';
 import { isRightToLeft, useI18n } from '@/lib/i18n';
 import { useSourceControlProvider } from '@/lib/source-control/providers/registry';
 import { useRepositoryUrlMatcher } from '@/lib/source-control/repositoryUrlMatcher';
@@ -164,7 +184,7 @@ const MobileBoardHeader: React.FC<{ onClose?: () => void; onBack?: () => void; c
 
 type SourceBoardLayout = 'desktop' | 'mobile';
 
-/** What the board lists: the repository's issues or change requests, or one tracker's items. */
+/** What the board lists: the repository's issues, change requests or discussions, or one tracker's items. */
 type SourceBoardKind = RepositoryReferenceKind | `tracker:${string}`;
 
 const SourceBoard: React.FC<{ layout: SourceBoardLayout; onLeave?: () => void; onClose?: () => void }> = ({ layout, onLeave, onClose }) => {
@@ -267,11 +287,11 @@ const SourceBoard: React.FC<{ layout: SourceBoardLayout; onLeave?: () => void; o
     ) : projectScope;
 
     const selectKind = (kind: SourceBoardKind) => {
-        if (kind !== 'issue' && kind !== 'pull') {
-            updateChoice({ tab: kind });
+        if (kind.startsWith('tracker:')) {
+            updateChoice({ tab: trackerReferenceSource(kind.slice('tracker:'.length)) });
             return;
         }
-        setRepositoryKind(kind);
+        setRepositoryKind(repositoryKindOfTab(kind));
         updateChoice({ tab: 'repository' });
     };
 
@@ -514,6 +534,7 @@ const SourceBoardBody: React.FC<{
     // The project's host names the change-request tab; across repositories, the provider the list asks.
     const kindDescriptor = useSourceControlProvider(kinds.repository?.provider);
     const repositoryTerm = kinds.repository?.provider ? kindDescriptor.terminology.changeRequest : browser.term;
+    const repositoryDiscussions = kinds.repository?.provider ? kindDescriptor.features.discussions : browser.discussions;
 
     // Where a tracker item's session starts, changeable for that item.
     const startIn = tracker && actionProjectEntry ? (
@@ -571,6 +592,11 @@ const SourceBoardBody: React.FC<{
             onAttachFailed={attachments.attachFailedChecks}
         />
     ) : null;
+
+    // What this account may do with the previewed discussion, once its detail says.
+    const previewDiscussion = previewItem?.source === 'repository' && previewItem.reference.kind === 'discussion' && browser.repositoryDetail.status === 'ready'
+        ? browser.repositoryDetail.value.discussion
+        : undefined;
 
     // After a change to an issue or PR: its detail and the list read again.
     const { refreshRepositoryDetail, list: { retry: retryList } } = browser;
@@ -647,7 +673,8 @@ const SourceBoardBody: React.FC<{
             onOpenChecks={previewPull && context ? () => setChecksOpenFor(previewKey) : undefined}
             onRefresh={previewItem?.source === 'repository' && context ? refreshFromHost : undefined}
             threadActions={threadActions}
-            stateMenu={previewItem?.source === 'repository' && previewItem.reference.state !== 'merged' && context ? (
+            stateMenu={previewItem?.source === 'repository' && previewItem.reference.state !== 'merged' && context
+                && (previewItem.reference.kind !== 'discussion' || canChangeDiscussionState(previewItem.reference, previewDiscussion)) ? (
                 <SourceBoardStateMenuItems item={previewItem} context={context} onChanged={refreshRepositoryItem} />
             ) : undefined}
             commentAttachments={previewItem?.source === 'repository'
@@ -666,7 +693,8 @@ const SourceBoardBody: React.FC<{
                 />
             ) : undefined}
             // Keyed by the item: a draft never carries over to another one.
-            reply={previewItem?.source === 'repository' && context ? (
+            // A locked discussion takes no comment from someone who may not update it.
+            reply={previewItem?.source === 'repository' && context && previewDiscussion?.canComment !== false ? (
                 <SourceBoardReply
                     key={referencePickerItemKey(previewItem)}
                     reference={previewItem.reference}
@@ -739,9 +767,7 @@ const SourceBoardBody: React.FC<{
     const itemLabel = previewItem
         ? previewItem.source === 'tracker' ? previewItem.item.identifier : referenceNumberLabel(previewItem.reference, previewDescriptor)
         : t('sourceBoard.list.choose');
-    const itemIcon = tracker
-        ? trackerPresentation(tracker).icon
-        : browser.repositoryKind === 'pull' ? 'git-pull-request' : 'record-circle';
+    const itemIcon = tracker ? trackerPresentation(tracker).icon : REPOSITORY_KIND_ICONS[browser.repositoryKind];
     const itemTrigger = (
         <button
             type="button"
@@ -772,10 +798,9 @@ const SourceBoardBody: React.FC<{
     );
 
     const kindItems = [
-        ...(kinds.repository ? [
-            { id: 'issue', label: t('references.picker.tab.issues'), icon: <Icon name="record-circle" className="size-3.5" /> },
-            { id: 'pull', label: t(CHANGE_REQUEST_TAB_KEYS[repositoryTerm]), icon: <Icon name="git-pull-request" className="size-3.5" /> },
-        ] : []),
+        ...(kinds.repository
+            ? repositoryKindTabs(t, repositoryTerm, repositoryDiscussions).map((tab) => ({ ...tab, icon: <Icon name={tab.icon} className="size-3.5" /> }))
+            : []),
         // A tracker tab carries its product name, untranslated.
         ...kinds.trackers.map((descriptor) => ({
             id: trackerReferenceSource(descriptor.id),
@@ -793,7 +818,7 @@ const SourceBoardBody: React.FC<{
                         onSelectKind(trackerReferenceSource(id.slice('tracker:'.length)));
                         return;
                     }
-                    const kind = id === 'pull' ? 'pull' : 'issue';
+                    const kind = repositoryKindOfTab(id);
                     // From a tracker tab the repository list remounts on the chosen kind.
                     if (tracker) onSelectKind(kind);
                     else browser.selectRepositoryKind(kind);

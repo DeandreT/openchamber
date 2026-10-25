@@ -62,9 +62,10 @@ export const selectComposerQueue = (messages: readonly QueuedMessage[]): readonl
         ? messages.filter((message) => !message.scheduledTask)
         : messages;
 
-/** An issue, PR or tracker item attached to the composer, as it is sent. */
+/** An issue, discussion, PR or tracker item attached to the composer, as it is sent. */
 export type ComposerContextReference =
     | { kind: 'repository-issue'; provider?: SourceControlProvider; number: number; title: string; url: string; contextText: string }
+    | { kind: 'repository-discussion'; provider: SourceControlProvider; number: number; title: string; url: string; contextText: string }
     | { kind: 'change-request'; provider: SourceControlProvider; number: number; title: string; url: string; context: string }
     | { kind: 'tracker-item'; provider: string; identifier: string; title: string; url: string; contextText: string }
     | {
@@ -215,6 +216,11 @@ export function buildComposerContext(
             case 'repository-issue': {
                 const { provider, number, title, url, contextText } = reference;
                 attach(createContextPart({ kind: 'repository-issue', ...(provider ? { provider } : {}), number, title, url }, contextText));
+                break;
+            }
+            case 'repository-discussion': {
+                const { provider, number, title, url, contextText } = reference;
+                attach(createContextPart({ kind: 'repository-discussion', provider, number, title, url }, contextText));
                 break;
             }
             case 'change-request': {

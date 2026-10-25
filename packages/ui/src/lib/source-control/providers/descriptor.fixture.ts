@@ -22,12 +22,12 @@ export const acmeDescriptor = (overrides: Partial<SourceControlProviderDescripto
       { id: 'token', kind: 'personal-access-token', secret: true },
     ],
   },
-  urls: { changeRequest: ['/{owner}/{repo}/pulls/{number}'], issue: ['/{owner}/{repo}/issues/{number}'] },
+  urls: { changeRequest: ['/{owner}/{repo}/pulls/{number}'], issue: ['/{owner}/{repo}/issues/{number}'], discussion: [] },
   features: {
     referenceSearch: false, referenceDetail: false, listStatuses: false, referencesAcross: false,
     startThread: false, authorCanReview: false, projectUploads: false, issueCloseReason: true,
     changeRequestTemplates: [], changeRequestPatch: true, reviewModel: 'verdict', revisions: false,
-    submitRequirements: false, createByPush: false, branchHeads: true,
+    submitRequirements: false, createByPush: false, branchHeads: true, discussions: false,
   },
   ...overrides,
 });
@@ -41,7 +41,8 @@ export const githubLikeDescriptor = (): SourceControlProviderDescriptor => acmeD
     format: 'host', defaultInstance: 'github.com', multiple: true, allowLoopbackHttp: false, allowPort: false,
     reserved: ['github.com'], placeholder: 'https://github.example.com',
   },
-  urls: { changeRequest: ['/{owner}/{repo}/pull/{number}'], issue: ['/{owner}/{repo}/issues/{number}'] },
+  urls: { changeRequest: ['/{owner}/{repo}/pull/{number}'], issue: ['/{owner}/{repo}/issues/{number}'], discussion: ['/{owner}/{repo}/discussions/{number}'] },
+  features: { ...acmeDescriptor().features, discussions: true },
 });
 
 export const gitlabLikeDescriptor = (): SourceControlProviderDescriptor => acmeDescriptor({
@@ -61,6 +62,7 @@ export const gitlabLikeDescriptor = (): SourceControlProviderDescriptor => acmeD
   urls: {
     changeRequest: ['/{namespace+}/{repo}/-/merge_requests/{number}'],
     issue: ['/{namespace+}/{repo}/-/issues/{number}', '/{namespace+}/{repo}/-/work_items/{number}'],
+    discussion: [],
   },
 });
 
@@ -83,7 +85,7 @@ export const changeHostDescriptor = (): SourceControlProviderDescriptor => {
       ],
     },
     repository: { nestedNamespaces: true, pathStyle: 'path' },
-    urls: { changeRequest: ['/c/{project+}/+/{number}'], issue: [] },
+    urls: { changeRequest: ['/c/{project+}/+/{number}'], issue: [], discussion: [] },
     features: {
       ...base.features,
       reviewModel: 'votes', revisions: true, submitRequirements: true, createByPush: true, branchHeads: false,

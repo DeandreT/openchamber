@@ -43,6 +43,12 @@ export interface ProviderCapabilities {
   revisions?: boolean;
   /** Absent means `api` (`/pr/create`). `push`: a change is created by pushing to `refs/for/<branch>`. */
   createVia?: 'api' | 'push';
+  /**
+   * The host keeps repository discussions (GitHub): the reference picker
+   * lists them (`kind: 'discussion'`), and the `/discussions/*` mutations
+   * comment, answer, close and label them. Absent means none.
+   */
+  discussions?: boolean;
 }
 
 /** Synchronous and SDK-free: the Git layer, bindings and tracked items read it directly. */
@@ -96,7 +102,8 @@ export interface ProviderDescriptor {
     instances: { multiple: boolean; allowLoopbackHttp: boolean; allowPort: boolean; reserved: string[]; placeholder: string };
     cliTransport: boolean;
     token?: { scopes: string[]; createPath?: string };
-    urls: { changeRequest: string[]; issue: string[] };
+    /** `discussion` only where `capabilities.discussions` is declared. */
+    urls: { changeRequest: string[]; issue: string[]; discussion?: string[] };
     features: {
       referenceSearch: boolean; referenceDetail: boolean; listStatuses: boolean; referencesAcross: boolean;
       startThread: boolean; authorCanReview: boolean; projectUploads: boolean; issueCloseReason: boolean;
@@ -161,10 +168,10 @@ export interface PublicProviderDescriptor {
     token?: { scopes: string[]; createPath?: string };
   };
   settings: { fields: Array<{ id: string; kind: SettingsFieldKind; secret: boolean }> };
-  urls: { changeRequest: string[]; issue: string[] };
+  urls: { changeRequest: string[]; issue: string[]; discussion?: string[] };
   /**
-   * The presentation features, plus the capability-derived ones a change
-   * host declares (`reviewModel`, `revisions`, `createByPush`).
+   * The presentation features, plus the capability-derived ones a host
+   * declares (`reviewModel`, `revisions`, `createByPush`, `discussions`).
    * Each is published only when declared, so a host that declares none
    * publishes exactly what it did before.
    */
@@ -175,6 +182,8 @@ export interface PublicProviderDescriptor {
     revisions?: boolean;
     /** `capabilities.createVia === 'push'`. */
     createByPush?: boolean;
+    /** `capabilities.discussions`. */
+    discussions?: boolean;
   };
   /** Present when an installed extension serves the provider. */
   extension?: { guestId: string; name: string; version: string };
@@ -296,7 +305,8 @@ export interface ProviderImplementation {
     readChangeRequestFile?(input: ReadInput & {
       number: number; sourceRepo?: { owner: string; repo: string }; path: string; previousPath?: string; status?: string; revision?: string;
     }): Promise<Json>;
-    liveSummaries?(input: { session: ProviderSession; refs: Json[]; issueRefs: Json[] }): Promise<Json>;
+    /** `discussionRefs` only reach a provider with `capabilities.discussions`; it answers them as `discussionSummaries`. */
+    liveSummaries?(input: { session: ProviderSession; refs: Json[]; issueRefs: Json[]; discussionRefs: Json[] }): Promise<Json>;
     readChangeRequestHead?(input: ReadInput & { number: number }): Promise<{
       project: { id: string; owner: string; name: string }; headSha: string; headBranch: string; headOwner: string;
     }>;
@@ -304,11 +314,12 @@ export interface ProviderImplementation {
       project: { id: string; owner: string; name: string }; number: number;
       expectedHeadSha: string; requestedRemoteName: string;
     }): Promise<Json>;
-    /** Capability `referencePicker`: one searched page of issues or change requests. */
-    references?(input: ReadInput & { kind: 'issue' | 'pull'; state: string; people: string; query: string; cursor: string | null }): Promise<Json>;
+    /** Capability `referencePicker`: one searched page of issues, change requests or (`discussions`) discussions. */
+    references?(input: ReadInput & { kind: 'issue' | 'pull' | 'discussion'; state: string; people: string; query: string; cursor: string | null }): Promise<Json>;
     /** The same search across folders; each folder's context goes through `validateReadContext` and its own account. */
     referencesAcross?(input: { body: Json; validateReadContext(context: Json): Promise<Json> }): Promise<Json>;
-    referenceDetail?(input: ReadInput & { project: ProjectSelector; number: number; host: string }): Promise<Json>;
+    /** `kind: 'discussion'` reads a discussion's detail; otherwise the issue or change request the number names. */
+    referenceDetail?(input: ReadInput & { project: ProjectSelector; number: number; host: string; kind: 'item' | 'discussion' }): Promise<Json>;
     /** Statuses of listed change requests (`owner/repo#n[@host]`, comma separated); read with each host's account, so no session. */
     referenceStatuses?(input: Omit<ReadInput, 'session'> & { pulls: string }): Promise<Json>;
   };

@@ -74,6 +74,9 @@
         ],
         "issue": [
           "/{owner}/{repo}/issues/{number}"
+        ],
+        "discussion": [
+          "/{owner}/{repo}/discussions/{number}"
         ]
       },
       "features": {
@@ -86,7 +89,8 @@
         "projectUploads": false,
         "issueCloseReason": true,
         "changeRequestTemplates": [],
-        "changeRequestPatch": true
+        "changeRequestPatch": true,
+        "discussions": true
       }
     },
     {

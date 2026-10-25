@@ -341,7 +341,7 @@ export function useOverviewData(): OverviewData {
     for (const session of followed) {
       for (const change of getLinkedSidebarChanges(session, urlMatcher)) if (change.repository) items.push(repositoryThread('pull', change.repository));
       for (const issue of getLinkedSidebarIssues(session, urlMatcher)) {
-        if (issue.source === 'repository') items.push(repositoryThread('issue', issue.ref));
+        if (issue.source === 'repository') items.push(repositoryThread(issue.ref.thread, issue.ref));
         else if (issue.source === 'tracker') items.push(workItem(issue.provider, issue.identifier));
       }
     }
@@ -377,7 +377,7 @@ export function useOverviewData(): OverviewData {
       add(readTrackedPullVisualSummary(trackedRecords, { item: repositoryThread('pull', change.repository), url: change.url, title: change.title }));
     }
     const issues = getLinkedSidebarIssues(session, urlMatcher).map((issue) => {
-      if (issue.source === 'repository') return issueStateOf(readTrackedIssueState(trackedRecords, repositoryThread('issue', issue.ref)));
+      if (issue.source === 'repository') return issueStateOf(readTrackedIssueState(trackedRecords, repositoryThread(issue.ref.thread, issue.ref)));
       if (issue.source === 'tracker') {
         return trackerStateOf(readTrackedWorkItemState(trackedRecords, workItem(issue.provider, issue.identifier)));
       }

@@ -349,6 +349,36 @@ describe('GET /api/source-control/github/references', () => {
     expect(res.body.hasMore).toBe(false);
   });
 
+  it('lists discussions with their own search and reads one with its comment threads', async () => {
+    const discussionNode = { ...issueNode(9), __typename: 'Discussion', url: 'https://github.com/example/project/discussions/9',
+      closed: false, isAnswered: false, locked: false, upvoteCount: 2, category: { name: 'Q&A', emojiHTML: '<div>🙏</div>', isAnswerable: true } };
+    delete discussionNode.state;
+    serveGitHub((body) => {
+      if (body.query.includes('DiscussionDetail')) {
+        return response({ data: { repository: { discussion: {
+          number: 9, locked: false, viewerCanUpdate: true, viewerCanClose: true, viewerCanReopen: false, category: { isAnswerable: true },
+          comments: { totalCount: 0, nodes: [] },
+        } } } });
+      }
+      expect(body.query).toContain('type: DISCUSSION');
+      // The board's unanswered list: open questions without an answer.
+      expect(body.variables.q).toBe('repo:example/project is:open is:unanswered sort:updated-desc');
+      return response({ data: { search: { discussionCount: 1, pageInfo: { hasNextPage: false, endCursor: null }, nodes: [discussionNode] } } });
+    });
+
+    const list = await request(app).get('/api/source-control/github/references')
+      .query({ ...readContext(project), kind: 'discussion', state: 'unanswered' })
+      .expect(200);
+    expect(list.body.items).toEqual([expect.objectContaining({ kind: 'discussion', number: 9, state: 'open', answered: false })]);
+
+    const detail = await request(app).get('/api/source-control/github/references/detail')
+      .query({ ...readContext(project), owner: 'example', repo: 'project', number: '9', kind: 'discussion' })
+      .expect(200);
+    expect(detail.body).toEqual({ connected: true, detail: {
+      number: 9, comments: [], commentTotal: 0, pull: null, discussion: { canComment: true, canClose: true, canReopen: false },
+    } });
+  });
+
   it('reads one item detail, only from the project repo network', async () => {
     const fetch = serveGitHub(() => response({ data: { repository: { issueOrPullRequest: {
       __typename: 'PullRequest',

@@ -17,6 +17,7 @@ function contextPreview(payload: ContextPartPayload): string {
         case 'terminal':
             return payload.output.trim() || payload.terminalLabel;
         case 'repository-issue':
+        case 'repository-discussion':
         case 'change-request':
         case 'tracker-item':
         case 'guest-issue':

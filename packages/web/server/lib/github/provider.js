@@ -282,18 +282,17 @@ export function createProvider({
       resolveChangeRequestSource: resources.resolveChangeRequestSource,
 
       /**
-       * Live state of known pull requests and issues for tracked items, read
-       * with the session's Octokit. Rate limits and a refused token are this
-       * host's alone and come back as `{ status }`: the per-host cooldown
-       * answers `unavailable`, a 401 answers `disconnected`.
+       * Live state of known pull requests, issues and discussions for tracked
+       * items, read with the session's Octokit. Rate limits and a refused
+       * token are this host's alone and come back as `{ status }`: the
+       * per-host cooldown answers `unavailable`, a 401 answers `disconnected`.
        */
-      liveSummaries: async ({ session, refs = [], issueRefs = [] }) => {
+      liveSummaries: async ({ session, refs = [], issueRefs = [], discussionRefs = [] }) => {
         const { summaries: { fetchPrSummaries, isGraphqlRateLimitError }, rateLimit } = await modules();
         const host = session.instance;
         if (rateLimit.isGitHubRateLimited(host)) return { status: 'unavailable' };
         try {
-          const { summaries, issueSummaries } = await fetchPrSummaries({ octokit: accountOf(session).octokit, refs, issueRefs });
-          return { summaries, issueSummaries };
+          return await fetchPrSummaries({ octokit: accountOf(session).octokit, refs, issueRefs, discussionRefs });
         } catch (error) {
           if ((error?.status ?? error?.response?.status) === 401) return { status: 'disconnected' };
           if (isGraphqlRateLimitError(error) || rateLimit.isGitHubRateLimitError(error)) {

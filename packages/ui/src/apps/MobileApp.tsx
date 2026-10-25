@@ -53,16 +53,7 @@ import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { useSourceControlAuthStore } from '@/stores/useSourceControlAuthStore';
 import { useSourceControlProviderRegistry } from '@/lib/source-control/providers/registry';
 import { refreshTrackers } from '@/stores/useTrackerAuthStore';
-import { useGitStore } from '@/stores/useGitStore';
 import { useMcpConfigStore, type McpDraft } from '@/stores/useMcpConfigStore';
-import { useProjectsStore } from '@/stores/useProjectsStore';
-import {
-  listProjectWorktrees,
-  partitionWorktreesByRegisteredProject,
-  worktreeMapsEqual,
-} from '@/lib/worktrees/worktreeManager';
-import { refreshWorktreeTopologyForChange } from '@/lib/worktrees/worktreeTopologyRefresh';
-import { useSessionMoveWorktreeRefresh } from '@/lib/worktrees/useSessionMoveWorktreeRefresh';
 import { useUIStore } from '@/stores/useUIStore';
 import { closeTopmostBackLayer } from '@/lib/mobileBackLayers';
 import { useUpdateStore } from '@/stores/useUpdateStore';
@@ -552,7 +543,7 @@ const MobileShell: React.FC<{ onActiveConnectionDeleted: () => void }> = ({ onAc
             >
               <ErrorBoundary>
                 <MobileSessionsSheet
-                  open
+                  open={sidebarOpen}
                   variant="sidebar"
                   // The surface asks to close after picking a session/project
                   // or creating a worktree: give the space back to the chat
@@ -833,7 +824,6 @@ function MobileAppContent({ apis }: MobileAppProps) {
   const setIsMobile = useUIStore((state) => state.setIsMobile);
   const refreshSourceControlAuth = useSourceControlAuthStore((state) => state.refreshAll);
   const refreshSourceControlProviders = useSourceControlProviderRegistry((state) => state.refresh);
-  const projects = useProjectsStore((state) => state.projects);
   // The mobile shell has no layout-level session list sync, so a lost
   // `session.deleted` is reconciled here from the same complete global
   // active+archived snapshots, refreshed whenever the sessions sheet opens.
@@ -1250,78 +1240,9 @@ function MobileAppContent({ apis }: MobileAppProps) {
     void refreshTrackers(apis.trackers);
   }, [apis.sourceControl, apis.trackers, isConnected, refreshSourceControlAuth, refreshSourceControlProviders]);
 
-  // Discover all worktrees for every known project so the draft session's
-  // worktree/branch dropdown can list every available branch — not only the
-  // current one. Mirrors ElectronMiniChatApp + desktop SessionSidebar.
-  // Gated on isConnected: running before the runtime is reachable made every
-  // per-project probe fail silently, leaving the map empty until some later
-  // projects-store update happened to re-run this effect (the "switch projects
-  // back and forth to see worktrees" bug).
-  React.useEffect(() => {
-    if (!isConnected || projects.length === 0) return;
-    let cancelled = false;
-
-    const run = async () => {
-      const worktreesByProject = new Map(useSessionUIStore.getState().availableWorktreesByProject);
-
-      await Promise.all(
-        projects.map(async (project) => {
-          const projectPath = project.path.replace(/\\/g, '/').replace(/\/+$/, '');
-          if (!projectPath) return;
-          try {
-            const cachedIsGitRepo = useGitStore.getState().directories.get(projectPath)?.isGitRepo;
-            const isGitRepo =
-              cachedIsGitRepo ?? (await import('@/lib/gitApi').then((m) => m.checkIsGitRepository(projectPath)));
-            if (!isGitRepo) return;
-            const worktrees = await listProjectWorktrees({ id: project.id, path: projectPath });
-            if (cancelled) return;
-            worktreesByProject.set(projectPath, worktrees);
-          } catch {
-            // Worktree discovery is best-effort per project: a failed probe keeps
-            // that project's previously known (persisted) worktrees instead of
-            // wiping the whole map.
-          }
-        }),
-      );
-
-      if (cancelled) return;
-
-      const partitionedWorktreesByProject = partitionWorktreesByRegisteredProject(projects, worktreesByProject);
-
-      // Skip update if nothing changed — see worktreeMapsEqual JSDoc.
-      const currentByProject = useSessionUIStore.getState().availableWorktreesByProject;
-      if (!worktreeMapsEqual(partitionedWorktreesByProject, currentByProject)) {
-        useSessionUIStore.setState({
-          availableWorktrees: [...partitionedWorktreesByProject.values()].flat(),
-          availableWorktreesByProject: partitionedWorktreesByProject,
-        });
-      }
-    };
-
-    void run();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [isConnected, projects]);
-
-  // A worktree added or removed anywhere (another window, an agent, a
-  // terminal) arrives as a server control event; refresh only the projects it
-  // names so the draft's worktree picker stays current without polling.
-  React.useEffect(() => {
-    if (!isConnected) return;
-    let cancelled = false;
-    const unsubscribe = subscribeOpenchamberEvents((event) => {
-      if (event.type !== 'worktree-changed') return;
-      void refreshWorktreeTopologyForChange(projects, event.directories, () => cancelled);
-    });
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
-  }, [isConnected, projects]);
-
-  useSessionMoveWorktreeRefresh(projects, isConnected);
+  // Worktree discovery for every project, and its refresh on the server's
+  // worktree and session events, run in the sessions drawer's list, which is
+  // the desktop sidebar's and stays mounted while the drawer is closed.
 
   React.useEffect(() => {
     if (!error) return;

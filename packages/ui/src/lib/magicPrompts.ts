@@ -18,6 +18,7 @@ export type MagicPromptId =
   | 'git.commit.generate.instructions'
   | 'git.pr.generate.visible'
   | 'git.pr.generate.instructions'
+  | 'walkthrough.instructions'
   | 'git.conflict.resolve.visible'
   | 'git.conflict.resolve.instructions'
   | 'git.integrate.cherrypick.resolve.visible'
@@ -156,6 +157,15 @@ Commits in range (base...head):
 
 Files changed across these commits:
 {{changed_files}}{{additional_context_block}}{{pr_template_block}}`,
+  },
+  {
+    id: 'walkthrough.instructions',
+    title: 'Walkthrough Instructions',
+    group: 'Git',
+    description: 'Your preferences for Changes walkthroughs: tone, emphasis, what to dwell on or leave out. The server adds them to its own prompt, so they cannot change the walkthrough format. Empty means none.',
+    // No built-in text, on purpose: the server reads only the override, so a
+    // default here would be text the server never sends.
+    template: '',
   },
   {
     id: 'git.conflict.resolve.visible',

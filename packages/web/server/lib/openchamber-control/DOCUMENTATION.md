@@ -192,6 +192,27 @@ other.
   directory and does not erase other session results.
 - Destructive session/worktree deletion and project-path registration are not
   part of the action contract.
+- `session.create` called from a session passes that session as
+  `originSessionId`; the session service writes it to the new session as
+  `metadata.openchamber.originSessionID` before the prompt goes out, so the
+  sidebar lists it under the caller's work (a fork records its source itself).
+  A failed write leaves the session a root of its own and fails nothing.
+- `work.name` names the task the session (default: the calling one) works on
+  (`../openchamber-sessions/work-naming.js`, wired through the `workNaming`
+  dependency; without it the action answers 503). In a linked worktree it sets
+  the branch description (`setWorktreeTaskTitle` in `../git`); in the main
+  checkout it renames the task's root session, found through the same lineage
+  the sidebar nests by, and records `metadata.openchamber.workTitle`. A name
+  the user gave stays: the call changes nothing and answers `named: false`
+  with the current name. When to call it is in the session context, next to
+  the linking guidance (`WORK_NAME_GUIDANCE`). While the worktree's branch is
+  OpenChamber's unpushed placeholder (`readRenameableGeneratedBranch`), the
+  call also requires `branch` and renames it (`renameGeneratedWorktreeBranch`),
+  answering `branch` and `branchRenamed: true`; without `branch` it fails with
+  400, says how to call it, and names nothing. Any other branch, and the main
+  checkout, is not renamed: a `branch` passed there answers
+  `branchRenamed: false` with a note, so the agent does not take the call for
+  a rename.
 - `session.link` records a code change under review or an issue on a session
   (`../openchamber-sessions/session-link.js`), defaulting to the calling
   session. When to link is not in the action's description but at the head of
@@ -207,6 +228,10 @@ other.
   `/api/linear` alias exists, so older bundled UIs keep showing and keeping
   it; other trackers are `kind: 'tracker'`, see
   `../trackers/DOCUMENTATION.md`), anything else an `external` entry shown by identifier.
+  A github.com discussion is such an external entry, identified `#N` unless the
+  agent named it, under the id the UI writes when one is attached
+  (`link:<origin>/<owner>/<repo>/discussions/<N>`), and newer UIs read it as a
+  discussion by its address.
   A change request or issue address that a source-control provider's
   `urls.thread` names (GitLab's `/-/merge_requests/N` shape on any host) is
   keyed by the thread, so linking it again from a tab like `/diffs` or with a

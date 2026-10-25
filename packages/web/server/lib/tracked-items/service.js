@@ -81,9 +81,9 @@ const publicState = (key, entry) => ({ key, item: entry.item, state: entry.state
 
 /**
  * `readers` answer one provider batch each and never see other providers:
- * - `sourceControl({ provider, instance, accountId, pulls, issues })` with
- *   `{ owner, repo, number }` refs, answering `{ status: 'ok', pulls, issues }`
- *   in the live summary shape;
+ * - `sourceControl({ provider, instance, accountId, pulls, issues, discussions })`
+ *   with `{ owner, repo, number }` refs, answering `{ status: 'ok', pulls,
+ *   issues, discussions }` in the live summary shape;
  * - `workItems({ provider, identifiers })` answering `{ status: 'ok', items }`
  *   (tracker live summaries, whose `state.category` sets the cadence);
  * - or `{ status: 'disconnected' }` (no account there) /
@@ -230,7 +230,7 @@ export function createTrackedItemsService({
       return answers;
     }
     const byThread = new Map(batch.map(([key, entry]) => [`${entry.item.kind}:${threadAnswerKey(entry.item)}`, key]));
-    for (const [kind, summaries] of [['pull', result.pulls], ['issue', result.issues]]) {
+    for (const [kind, summaries] of [['pull', result.pulls], ['issue', result.issues], ['discussion', result.discussions]]) {
       for (const summary of summaries ?? []) {
         const key = byThread.get(`${kind}:${threadAnswerKey(summary)}`);
         if (key) answers.set(key, summary);
@@ -244,10 +244,14 @@ export function createTrackedItemsService({
     if (isWorkItem(first)) {
       return readers.workItems({ provider: first.provider, identifiers: batch.map(([, entry]) => entry.item.identifier) });
     }
-    const pulls = batch.filter(([, entry]) => entry.item.kind === 'pull').map(([, entry]) => threadRef(entry.item));
-    const issues = batch.filter(([, entry]) => entry.item.kind === 'issue').map(([, entry]) => threadRef(entry.item));
+    const refsOf = (kind) => batch.filter(([, entry]) => entry.item.kind === kind).map(([, entry]) => threadRef(entry.item));
     return readers.sourceControl({
-      provider: first.provider, instance: threadInstance(first), accountId: first.accountId ?? null, pulls, issues,
+      provider: first.provider,
+      instance: threadInstance(first),
+      accountId: first.accountId ?? null,
+      pulls: refsOf('pull'),
+      issues: refsOf('issue'),
+      discussions: refsOf('discussion'),
     });
   };
 
