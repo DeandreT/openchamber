@@ -4928,11 +4928,12 @@ export async function getWorktrees(directory) {
       ['worktree', 'list', '--porcelain'],
       'Failed to list git worktrees'
     );
-    const titles = await readBranchTitles(listingDirectory);
+    const [titles, pins] = await Promise.all([readBranchTitles(listingDirectory), readBranchPins(listingDirectory)]);
     return parseWorktreePorcelain(result.stdout)
       .filter((entry) => entry.bare !== true)
       .map((entry) => {
         const title = entry.branch ? titles.get(entry.branch) : undefined;
+        const pinnedAt = entry.branch ? pins.get(entry.branch) : undefined;
         return {
           head: entry.head || '',
           name: path.basename(entry.worktree || ''),
@@ -4941,6 +4942,7 @@ export async function getWorktrees(directory) {
           prunable: entry.prunable === true,
           // Absent until the task is named; JSON leaves an undefined key out.
           title: title || undefined,
+          pinnedAt,
         };
       });
   } catch (error) {
@@ -4998,17 +5000,92 @@ const readBranchTitles = async (repositoryDirectory) => {
   return titles;
 };
 
+// ---------------------------------------------------------------------------
+// Pinned worktrees
+//
+// The user pins a worktree's task to keep it at the top of the sidebar. The pin
+// sits beside the task title in the branch's config
+// (`branch.<name>.openchamberPinned`, the time it was pinned), for the same
+// reasons: every client of this server reads it, a rename carries it and
+// deleting the branch drops it.
+// ---------------------------------------------------------------------------
+
+const BRANCH_PIN_KEY_PATTERN = '^branch\\..*\\.openchamberpinned$';
+// git lowercases the variable name in what it prints.
+const BRANCH_PIN_KEY_SUFFIX = '.openchamberpinned';
+
+/** Every pinned branch with the time it was pinned, in one read; a failed read pins nothing. */
+const readBranchPins = async (repositoryDirectory) => {
+  const pins = new Map();
+  const result = await runGitCommand(repositoryDirectory, ['config', '-z', '--get-regexp', BRANCH_PIN_KEY_PATTERN]);
+  if (!result.success) return pins;
+  for (const record of String(result.stdout || '').split('\0')) {
+    const newline = record.indexOf('\n');
+    if (newline <= 0) continue;
+    const branch = record.slice('branch.'.length, newline - BRANCH_PIN_KEY_SUFFIX.length);
+    const pinnedAt = Number(record.slice(newline + 1).trim());
+    if (branch && Number.isFinite(pinnedAt) && pinnedAt > 0) pins.set(branch, pinnedAt);
+  }
+  return pins;
+};
+
+/**
+ * Pin or unpin the task of the worktree at `directory`. A detached worktree
+ * has no branch to keep the pin and is refused with 409. Clients re-list the
+ * worktrees on the topology event published after a write.
+ */
+export async function setWorktreePinned(directory, pinned, now = Date.now()) {
+  const directoryPath = normalizeDirectoryPath(directory);
+  if (!directoryPath || !fs.existsSync(directoryPath)) {
+    const error = new Error('The worktree folder does not exist');
+    error.status = 404;
+    throw error;
+  }
+  const head = await runGitCommandOrThrow(directoryPath, ['symbolic-ref', '--quiet', '--short', 'HEAD'], 'The worktree is not on a branch')
+    .catch((cause) => {
+      const error = new Error('The worktree is not on a branch, so it cannot be pinned');
+      error.status = 409;
+      error.cause = cause;
+      throw error;
+    });
+  const branch = String(head.stdout || '').trim();
+  const key = `branch.${branch}.openchamberPinned`;
+  const current = Number(await readGitConfigValue(directoryPath, key));
+  const isPinned = Number.isFinite(current) && current > 0;
+  if (isPinned !== pinned) {
+    await writeGitConfigValue(directoryPath, key, pinned ? String(now) : '');
+    void publishWorktreeTopologyChange(directoryPath);
+  }
+  return { pinned, branch };
+}
+
 const readGitConfigValue = async (directory, key) => {
   const result = await runGitCommand(directory, ['config', '--get', key]);
   return result.success ? String(result.stdout || '').replace(/\r?\n$/, '') : '';
 };
 
+// A worktree made in the background (`returnAfterDirectoryCreated`) runs git
+// while the request that made it goes on to write its branch's records, and
+// git holds `.git/config.lock` for each of its own config writes. A write that
+// lands on that lock is tried again a few times instead of being lost.
+const CONFIG_LOCK_RETRY_DELAYS_MS = [50, 100, 200, 400, 800];
+const isConfigLockError = (result) => /could not lock config file/i.test([result?.message, result?.stderr].filter(Boolean).join('\n'));
+const runGitConfigWrite = async (directory, args) => {
+  for (let attempt = 0; ; attempt += 1) {
+    const result = await runGitCommand(directory, ['config', ...args]);
+    const delay = CONFIG_LOCK_RETRY_DELAYS_MS[attempt];
+    if (result.success || delay === undefined || !isConfigLockError(result)) return result;
+    await wait(delay);
+  }
+};
+
 const writeGitConfigValue = async (directory, key, value) => {
   if (value) {
-    await runGitCommandOrThrow(directory, ['config', key, value], `Failed to write ${key}`);
+    const result = await runGitConfigWrite(directory, [key, value]);
+    if (!result.success) throw new Error(result.message || `Failed to write ${key}`);
     return;
   }
-  const result = await runGitCommand(directory, ['config', '--unset', key]);
+  const result = await runGitConfigWrite(directory, ['--unset', key]);
   // Status 5: the key was not set, which is what unsetting asks for.
   if (!result.success && result.exitCode !== 5) throw new Error(`Failed to clear ${key}`);
 };

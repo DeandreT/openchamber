@@ -317,9 +317,12 @@ the files on disk.
 
 A file's header in Changes, mobile Changes and the walkthrough also takes a
 comment on the whole file (`components/comments/useWholeFileComment.tsx`): a
-diff draft with lines 0-0, the same origin, and no code. Its editor and saved
-cards render under the header, never inside the diff, so the viewer filters
-those drafts out of its line annotations. The trigger is always visible, like
+diff draft with lines 0-0, the same origin, and no code. Its saved cards
+render under the header, never inside the diff, so the viewer filters those
+drafts out of its line annotations. Its editor renders inside the sticky
+header itself (mobile's header is fixed above the scroller anyway): opened
+from a file scrolled far down, an editor under the header in the flow sat at
+the file's top, out of view. The trigger is always visible, like
 the header's other actions, and toggles the editor: a second click closes it
 unsaved, so an empty editor never stays stuck open.
 Changes hands its PR source to walkthrough; walkthrough's Changes action opens

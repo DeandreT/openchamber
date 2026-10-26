@@ -14,12 +14,17 @@ const projects: Input['projects'] = [{
     { id: 'root', kind: 'root', nodes: [{ id: 'root', children: [{ id: 'review' }] }, { id: 'other' }] },
     { id: 'feature', kind: 'worktree', nodes: [{ id: 'one', children: [{ id: 'subagent' }] }, { id: 'two' }] },
     { id: 'empty', kind: 'worktree', nodes: [] },
-    { id: 'space', kind: 'space', nodes: [{ id: 'isolated' }] },
+    { id: 'space', kind: 'space', nodes: [{ id: 'isolated', children: [{ id: 'space-child' }] }, { id: 'isolated-two' }] },
+    { id: 'empty-space', kind: 'space', nodes: [] },
     { id: 'archive', kind: 'archive', nodes: [{ id: 'archived' }] },
   ],
 }];
 
 const cases: { name: string; input: Input }[] = [
+  { name: 'space roots and descendants share a work with empty spaces retained', input: {
+    projects, order: ['isolated-two', 'two', 'space-child', 'isolated'],
+    include: ['isolated-two', 'two', 'space-child', 'isolated'],
+  } },
   { name: 'empty', input: { projects: [], order: [], include: [] } },
   { name: 'worktree sessions share a work and archives stay out', input: {
     projects, order: ['two', 'review', 'one', 'other', 'root', 'isolated', 'archived'],
@@ -57,7 +62,7 @@ export const sidebarWorkFixtures = (session: (id: string) => Session) => cases.m
   const included = new Set(input.include);
   return { name, input, expected: {
     bySession: Object.fromEntries([...index.bySessionId].map(([id, work]) => [id, work.key])),
-    worktrees: index.worktreeWorks.map((work) => work.key),
+    groups: index.groupWorks.map((work) => work.key),
     ordered: orderSidebarWorks(input.order.map(session), index, (entry) => included.has(entry.id)).map((work) => work.key),
   } };
 });

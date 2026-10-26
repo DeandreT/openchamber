@@ -150,6 +150,14 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     isAvailable: (ctx) => !ctx.isMobile,
   },
   {
+    id: 'appearance.interface-font-weight',
+    page: 'appearance',
+    titleKey: 'settings.openchamber.visual.field.interfaceFontWeight',
+    descriptionKey: 'settings.openchamber.visual.field.interfaceFontWeightInfo',
+    keywords: ['font', 'weight', 'bold', 'medium', 'thickness', 'text'],
+    isAvailable: (ctx) => !ctx.isMobile,
+  },
+  {
     id: 'appearance.terminal-font-size',
     page: 'appearance',
     titleKey: 'settings.openchamber.visual.field.terminalFontSize',

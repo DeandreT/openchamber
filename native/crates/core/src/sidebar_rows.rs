@@ -3,7 +3,7 @@
 //! Mirrors the normal mode of `buildSessionSidebarRowModel` in
 //! `packages/ui/src/components/session/sidebar/sessionSidebarRowModel.ts` in
 //! the Works view: Chats, Pinned and In work above projects, each listing
-//! session works and linked worktrees in lifecycle order. Worktrees expand
+//! session works, linked worktrees and isolated spaces in lifecycle order. Group works expand
 //! to their sessions. The earlier tree and timeline projections remain
 //! explicit modes for their callers. Stable keys retain row state.
 
@@ -13,7 +13,7 @@ use crate::grouping::{GroupLabel, ProjectSection, SessionGroup, SessionNode};
 use crate::ids::{ProjectId, SessionId};
 use crate::ordering::SessionOrdering;
 use crate::session::SessionRecord;
-use crate::sidebar_work::{SidebarWork, SidebarWorkIndex, is_worktree_work};
+use crate::sidebar_work::{SidebarWork, SidebarWorkIndex, is_group_work};
 
 const CHATS_INITIAL_LIMIT: usize = 3;
 const CHATS_INCREMENT: usize = 7;
@@ -43,7 +43,7 @@ impl ActivityKey {
 /// How the projects are arranged.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub enum SidebarViewMode {
-    /// Session works and linked worktrees grouped under their project.
+    /// Session and group works listed under their project.
     #[default]
     Works,
     /// Works from all projects in one lifecycle-ordered list.
@@ -148,6 +148,7 @@ pub enum SidebarRow<'a> {
         /// Nothing to list, so the header offers no chevron.
         empty: bool,
     },
+    /// A linked worktree or isolated space, distinguished by its group label.
     Worktree {
         key: String,
         group_key: String,
@@ -483,7 +484,7 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
                 SidebarWork::Session {
                     root_session_id, ..
                 } => !self.pinned_in_zone.contains(root_session_id),
-                SidebarWork::Worktree { .. } => true,
+                SidebarWork::Group { .. } => true,
             })
             .cloned()
             .collect();
@@ -519,7 +520,7 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
             .filter(|work| !working.contains(&work.key()))
             .filter(|work| !matches!(work, SidebarWork::Session { root_session_id, .. } if self.pinned_in_zone.contains(root_session_id)))
             .cloned().collect();
-        for work in self.work_index.worktrees() {
+        for work in self.work_index.groups() {
             if !working.contains(&work.key()) && !works.contains(work) {
                 works.push(work.clone());
             }
@@ -531,7 +532,7 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
             .filter(|section| {
                 !works.iter().any(|work| match work {
                     SidebarWork::Session { project_id, .. }
-                    | SidebarWork::Worktree { project_id, .. } => project_id == &section.project.id,
+                    | SidebarWork::Group { project_id, .. } => project_id == &section.project.id,
                 })
             })
             .flat_map(|section| {
@@ -581,20 +582,6 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
             if collapsed {
                 continue;
             }
-            for group in &section.groups {
-                if group.space.is_some() && group.sessions.is_empty() {
-                    let group_key = format!("{project_id}:{}", group.id);
-                    self.push(SidebarRow::GroupHeader {
-                        key: format!("{group_key}:header"),
-                        group_key,
-                        project_id: Some(project_id.clone()),
-                        label: group.label.clone(),
-                        directory: group.directory.clone(),
-                        collapsed: false,
-                        empty: true,
-                    });
-                }
-            }
             let mut sessions: Vec<&SessionRecord> = section
                 .groups
                 .iter()
@@ -610,8 +597,8 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
                 .filter(|work| !matches!(work, SidebarWork::Session { root_session_id, .. } if self.pinned_in_zone.contains(root_session_id)))
                 .cloned().collect();
             for group in &section.groups {
-                if is_worktree_work(group) {
-                    let work = SidebarWork::Worktree {
+                if is_group_work(group) {
+                    let work = SidebarWork::Group {
                         project_id: project_id.clone(),
                         group_id: group.id.clone(),
                     };
@@ -707,7 +694,7 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
                     }
                 }
             }
-            SidebarWork::Worktree {
+            SidebarWork::Group {
                 project_id,
                 group_id,
             } => {
@@ -1449,6 +1436,83 @@ mod tests {
             ]
         );
         assert_eq!(model.rows.iter().filter(|row| matches!(row, SidebarRow::Worktree { group_key, .. } if group_key == "app:feature")).count(), 1);
+    }
+
+    #[test]
+    fn works_group_space_sessions_and_retain_empty_spaces() {
+        use crate::ids::SpaceId;
+
+        let records = sessions(3);
+        let project = ConfiguredProject {
+            id: ProjectId::from("app"),
+            path: "/p".to_owned(),
+        };
+        let mut root = node(&records[0]);
+        root.children.push(node(&records[1]));
+        let mut space = group("space", false, vec![root, node(&records[2])]);
+        space.space = Some(SpaceId::from("space"));
+        space.label = GroupLabel::Space {
+            name: Some("space".to_owned()),
+        };
+        let mut empty = group("empty-space", false, Vec::new());
+        empty.space = Some(SpaceId::from("empty-space"));
+        empty.label = GroupLabel::Space {
+            name: Some("empty-space".to_owned()),
+        };
+        let sections = [ProjectSection {
+            project: &project,
+            groups: vec![space, empty],
+        }];
+        let statuses = HashMap::new();
+        let mut state = SidebarState::default();
+        state.expanded_works.insert("app:space".to_owned());
+        let work = [ZoneItem {
+            node: node(&records[2]),
+            project_id: Some(project.id.clone()),
+        }];
+        for mode in [SidebarViewMode::Works, SidebarViewMode::WorksByTime] {
+            for in_work in [false, true] {
+                let mut ordering = SessionOrdering::new();
+                let mut input = timeline_inputs(&sections, &[], &[], &state, &statuses);
+                input.view_mode = mode;
+                if in_work {
+                    input.work = &work;
+                }
+                let model = build(&input, &mut ordering);
+                let groups: Vec<_> = model
+                    .rows
+                    .iter()
+                    .filter_map(|row| match row {
+                        SidebarRow::Worktree {
+                            group_key,
+                            label,
+                            session_ids,
+                            ..
+                        } => {
+                            assert!(
+                                matches!(label, GroupLabel::Space { .. }),
+                                "space label survives projection"
+                            );
+                            Some((group_key.as_str(), session_ids.len()))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(
+                    groups,
+                    [("app:space", 3), ("app:empty-space", 0)],
+                    "spaces appear once in {mode:?}, in work {in_work}"
+                );
+                assert!(
+                    !model
+                        .rows
+                        .iter()
+                        .any(|row| matches!(row, SidebarRow::GroupHeader { .. })),
+                    "empty spaces use the same work row as populated spaces"
+                );
+                assert!(model.rows.iter().any(|row| matches!(row, SidebarRow::Session { session, depth: 1, .. } if session.id == records[2].id)), "expanded spaces show their root sessions");
+            }
+        }
     }
 
     #[test]
