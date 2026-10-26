@@ -32,8 +32,8 @@ const ACTION_GLYPH: f32 = 18.0;
 const TOOLBAR_PADDING_X: f32 = 10.0;
 const START_GAP: f32 = 6.0;
 const END_GAP: f32 = 12.0;
-/// Attach, focus mode, permissions and goal.
-const START_ACTIONS: f32 = 4.0;
+/// Attach, permissions and goal.
+const START_ACTIONS: f32 = 3.0;
 /// A custom Kit size whose text is 14 px; its editor insets text by 8 px
 /// across and 2 px down.
 const EDITOR_SIZE: f32 = 16.0;
@@ -320,11 +320,6 @@ impl Workspace {
                                 "composer-attach",
                                 "add-circle",
                                 "chat.chatInput.actions.addAttachment",
-                            ))
-                            .child(action(
-                                "composer-focus-mode",
-                                "fullscreen",
-                                "chat.chatInput.focusMode.toggleAria",
                             ))
                             .child(action(
                                 "composer-permissions",
