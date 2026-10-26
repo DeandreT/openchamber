@@ -1,0 +1,17 @@
+[package]
+name = "gpui-logical-layout-tests"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+gpui = { package = "gpui-pre", version = "=0.3.9", features = ["test-support"] }
+
+[patch.crates-io]
+gpui-pre = { path = ".." }
+
+[[test]]
+name = "logical_layout"
+path = "logical_layout.rs"

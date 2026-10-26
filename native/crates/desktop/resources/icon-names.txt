@@ -26,6 +26,7 @@ code
 command
 compass-3
 donut-chart
+edit
 equalizer-2
 error-warning
 eye

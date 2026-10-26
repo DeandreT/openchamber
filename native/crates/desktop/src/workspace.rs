@@ -55,9 +55,10 @@ const CHUNK_INTERVAL: Duration = Duration::from_millis(24);
 /// Pixels rendered beyond the viewport in either direction.
 const TRANSCRIPT_OVERDRAW: f32 = 800.0;
 const SIDEBAR_OVERDRAW: f32 = 300.0;
-/// The draft of the new session the startup view composes. No project is
-/// chosen yet, so it is keyed on the filesystem root of its runtime.
-const NEW_SESSION_DRAFT: &str = "new-session";
+/// Unassigned and directory-bound drafts keep different IDs even when the
+/// chosen project is the filesystem root.
+pub(crate) const PROJECT_DRAFT_ID: &str = "new-session";
+const UNASSIGNED_DRAFT_ID: &str = "unassigned-new-session";
 const NEW_SESSION_DIRECTORY: &str = "/";
 
 /// Where the workspace's data comes from.
@@ -140,8 +141,9 @@ pub struct Workspace {
     pub(crate) scroll_memory: ScrollMemory,
     pub(crate) composer: Entity<TextareaState>,
     pub(crate) composer_key: Option<DraftKey>,
+    pub(crate) draft_previews: HashMap<DraftKey, SharedString>,
+    pub(crate) draft_rows: HashMap<DraftKey, usize>,
     pub(crate) draft_projects: HashMap<RuntimeId, String>,
-    pub(crate) startup_runtime: RuntimeId,
     pub(crate) project_chooser: Option<crate::project_chooser::ProjectChooser>,
     /// Whether the composer shows the short placeholder; unknown until the
     /// first frame measures it.
@@ -206,7 +208,6 @@ impl Workspace {
         let mut workspace = Self {
             topology,
             sessions,
-            startup_runtime: runtime.clone(),
             runtime,
             ordering: SessionOrdering::new(),
             sidebar_state: SidebarState::default(),
@@ -228,6 +229,8 @@ impl Workspace {
             scroll_memory: ScrollMemory::new(),
             composer,
             composer_key: None,
+            draft_previews: HashMap::new(),
+            draft_rows: HashMap::new(),
             draft_projects: HashMap::new(),
             project_chooser: None,
             composer_placeholder_compact: None,
@@ -293,7 +296,7 @@ impl Workspace {
     /// inserted or removed elsewhere.
     pub fn rebuild_sidebar(&mut self) {
         let started = Instant::now();
-        let (items, spacing) = build_sidebar_items(
+        let (mut items, mut spacing) = build_sidebar_items(
             &self.topology,
             self.sessions.active(),
             self.sessions.archived(),
@@ -301,6 +304,7 @@ impl Workspace {
             &mut self.ordering,
             self.send_catalog.settings.as_ref(),
         );
+        self.append_draft_rows(&mut items, &mut spacing);
         let elapsed = started.elapsed();
         let top = self.sidebar_list.logical_scroll_top();
         let anchor = self
@@ -335,12 +339,15 @@ impl Workspace {
     }
 
     pub(crate) fn new_session_draft_key(&self) -> Option<DraftKey> {
+        let directory = self.draft_projects.get(&self.runtime);
         DraftKey::new(
             self.runtime.clone(),
-            self.draft_projects
-                .get(&self.runtime)
-                .map_or(NEW_SESSION_DIRECTORY, String::as_str),
-            DraftTarget::NewSession(DraftId::from(NEW_SESSION_DRAFT)),
+            directory.map_or(NEW_SESSION_DIRECTORY, String::as_str),
+            DraftTarget::NewSession(DraftId::from(if directory.is_some() {
+                PROJECT_DRAFT_ID
+            } else {
+                UNASSIGNED_DRAFT_ID
+            })),
         )
     }
 
@@ -368,19 +375,6 @@ impl Workspace {
         self.ensure_send_catalog(cx);
         self.focus_composer(window, cx);
         cx.notify();
-    }
-
-    pub(crate) fn reconcile_startup_runtime(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.startup_runtime != self.runtime {
-            self.startup_runtime = self.runtime.clone();
-            self.project_chooser = None;
-            self.composer_key = self.new_session_draft_key();
-            self.restore_composer_draft(window, cx);
-        }
     }
 
     /// Leaves the selected session for the new-session view, keeping both
@@ -629,7 +623,7 @@ impl Workspace {
         }
     }
 
-    fn save_scroll_position(&mut self) {
+    pub(crate) fn save_scroll_position(&mut self) {
         let Some(id) = &self.selected else {
             return;
         };
@@ -666,10 +660,11 @@ impl Workspace {
             text: composer.value().to_string(),
             selection: composer.selected_range(),
         };
+        self.save_draft_preview(&key, &draft.text);
         self.drafts.save(key, draft);
     }
 
-    fn restore_composer_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn restore_composer_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let draft = self
             .composer_key
             .as_ref()
@@ -680,6 +675,7 @@ impl Workspace {
             composer.set_value(draft.text.clone(), window, cx);
             composer.set_selected_range(draft.selection.clone(), cx);
         });
+        self.sync_draft_preview(cx);
     }
 
     pub fn focus_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -694,6 +690,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if matches!(event, InputEvent::Change) {
+            self.sync_draft_preview(cx);
+        }
         if let InputEvent::PressEnter { shift: false, .. } = event {
             self.submit(window, cx);
         }

@@ -2,7 +2,7 @@ use std::rc::Rc;
 
 use gpui::{
     AnyElement, App, ElementId, FocusHandle, IntoElement, KeyBinding, ParentElement, RenderOnce,
-    StyleRefinement, Styled, Window, prelude::FluentBuilder as _,
+    SharedString, StyleRefinement, Styled, Window, prelude::FluentBuilder as _,
 };
 
 use crate::{
@@ -41,6 +41,8 @@ pub struct Combobox {
     disabled: bool,
     focus_handle: Option<FocusHandle>,
     content_focus_handle: Option<FocusHandle>,
+    accessibility_label: Option<SharedString>,
+    accessibility_value: Option<SharedString>,
     style: StyleRefinement,
     children: Vec<AnyElement>,
     on_open_change: Option<OpenChangeHandler>,
@@ -56,6 +58,8 @@ impl Combobox {
             disabled: false,
             focus_handle: None,
             content_focus_handle: None,
+            accessibility_label: None,
+            accessibility_value: None,
             style: StyleRefinement::default(),
             children: Vec::new(),
             on_open_change: None,
@@ -81,6 +85,18 @@ impl Combobox {
 
     pub fn content_focus_handle(mut self, focus_handle: &FocusHandle) -> Self {
         self.content_focus_handle = Some(focus_handle.clone());
+        self
+    }
+
+    /// Sets the accessible name of the combobox trigger.
+    pub fn accessibility_label(mut self, label: impl Into<SharedString>) -> Self {
+        self.accessibility_label = Some(label.into());
+        self
+    }
+
+    /// Sets the readable committed value, independently of the search query.
+    pub fn accessibility_value(mut self, value: impl Into<SharedString>) -> Self {
+        self.accessibility_value = Some(value.into());
         self
     }
 
@@ -127,6 +143,12 @@ impl RenderOnce for Combobox {
             .open(self.open)
             .disabled(self.disabled)
             .key_context(CONTEXT)
+            .when_some(self.accessibility_label, |this, label| {
+                this.accessibility_label(label)
+            })
+            .when_some(self.accessibility_value, |this, value| {
+                this.accessibility_value(value)
+            })
             .when_some(self.focus_handle, |this, handle| this.focus_handle(&handle))
             .when_some(self.content_focus_handle, |this, handle| {
                 this.content_focus_handle(&handle)

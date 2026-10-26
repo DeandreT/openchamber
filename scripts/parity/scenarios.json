@@ -107,7 +107,7 @@
     },
     "choose-project": {
       "electron": {
-        "selector": ".chat-input-column button[aria-haspopup=\"dialog\"]"
+        "selector": "button[aria-haspopup=\"dialog\"]"
       },
       "native": "choose-project"
     },
@@ -256,7 +256,7 @@
       "steps": [
         { "clickTarget": "choose-project" },
         { "wait": {
-          "electron": { "expression": "!!document.querySelector('input[placeholder=\"Search projects...\"]')" },
+          "electron": { "expression": "document.activeElement?.getAttribute('placeholder') === 'Search projects...'" },
           "native": { "named": { "role": "entry", "name": "Search projects..." } }
         } },
         { "type": "project" },
@@ -270,7 +270,7 @@
         { "capture": "selected", "targets": ["choose-project", "composer"] },
         { "clickTarget": "choose-project" },
         { "wait": {
-          "electron": { "expression": "!!document.querySelector('input[placeholder=\"Search projects...\"]')" },
+          "electron": { "expression": "document.activeElement?.getAttribute('placeholder') === 'Search projects...'" },
           "native": { "named": { "role": "entry", "name": "Search projects..." } }
         } },
         { "key": "Return" },

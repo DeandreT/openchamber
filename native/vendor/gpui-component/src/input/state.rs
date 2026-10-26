@@ -52,6 +52,27 @@ macro_rules! dispatch {
 }
 
 impl TextInputState {
+    #[cfg(test)]
+    pub(crate) fn accessibility_set_value(
+        &self,
+        data: Option<&gpui::accesskit::ActionData>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        dispatch!(self, |state| state.update(cx, |state, cx| {
+            state.accessibility_set_value(data, window, cx)
+        }))
+    }
+
+    pub(crate) fn set_accessibility(
+        &self,
+        accessibility: gpui_base::input::InputAccessibility,
+        cx: &mut App,
+    ) {
+        dispatch!(self, |state| state
+            .update(cx, |state, _| { state.set_accessibility(accessibility) }))
+    }
+
     pub(crate) fn has_selection_focus(&self, window: &Window, cx: &App) -> bool {
         dispatch!(self, |state| state.read(cx).has_selection_focus(window, cx))
     }
@@ -217,11 +238,6 @@ impl TextInputState {
         dispatch!(self, |state| super::overlay::render_overlays(
             state, window, cx
         ))
-    }
-
-    pub(crate) fn replace_all(&self, value: String, window: &mut Window, cx: &mut App) {
-        dispatch!(self, |state| state
-            .update(cx, |state, cx| state.replace_all(value, window, cx)))
     }
 
     /// The text element itself, as a child to place in the frame.

@@ -38,6 +38,7 @@ fn open(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<Workspace>) {
             },
             cx,
             |window, cx| {
+                window.set_layout_mode(gpui_kit::LayoutMode::Logical);
                 cx.new(|cx| Workspace::new(Source::Synthetic(WorkloadSize::Small), window, cx))
             },
         )
@@ -129,6 +130,20 @@ fn project_chooser_pointer_selects_a_filtered_project_in_rtl(cx: &mut TestAppCon
         cx.read(|cx| workspace.read(cx).config_directory()),
         Some(directory)
     );
+    cx.read(|cx| {
+        let state = workspace.read(cx);
+        assert_eq!(
+            state.draft_project_label().as_deref(),
+            Some("Custom project label")
+        );
+        assert_eq!(
+            state
+                .header_project_meta()
+                .and_then(|metadata| metadata.project)
+                .as_deref(),
+            Some("Custom project label")
+        );
+    });
 }
 
 #[gpui_kit::test]
@@ -264,6 +279,90 @@ fn project_chooser_reselection_returns_to_the_composer(cx: &mut TestAppContext) 
 }
 
 #[gpui_kit::test]
+fn sidebar_drafts_reopen_and_discard_only_their_own_text(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let directories = cx.read(|cx| {
+        workspace
+            .read(cx)
+            .topology
+            .projects
+            .iter()
+            .take(2)
+            .map(|project| project.path.clone())
+            .collect::<Vec<_>>()
+    });
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.choose_draft_project(&directories[0], window, cx)
+        });
+        window.input("First line\nsecond line", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    let first = cx.read(|cx| {
+        workspace
+            .read(cx)
+            .sidebar_items
+            .iter()
+            .find_map(|item| match item {
+                SidebarItem::Draft { draft, title, .. } if title.as_ref() == "First line" => {
+                    Some(draft.clone())
+                }
+                _ => None,
+            })
+            .expect("the first nonempty line is shown in the sidebar")
+    });
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.choose_draft_project(&directories[1], window, cx)
+        });
+        window.input("Other project", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    let second = cx.read(|cx| {
+        workspace
+            .read(cx)
+            .composer_key
+            .clone()
+            .expect("second draft has a key")
+    });
+    let session = session_rows(&workspace, cx)[0].1.clone();
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.select_session(session, window, cx);
+            workspace.open_draft(&first, window, cx);
+        });
+    })
+    .expect("window is open");
+    assert_eq!(composer_text(&workspace, cx), "First line\nsecond line");
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.discard_draft(&second, window, cx)
+        });
+    })
+    .expect("window is open");
+    assert_eq!(composer_text(&workspace, cx), "First line\nsecond line");
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.discard_draft(&first, window, cx)
+        });
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    assert_eq!(composer_text(&workspace, cx), "");
+    cx.read(|cx| {
+        assert!(
+            !workspace
+                .read(cx)
+                .sidebar_items
+                .iter()
+                .any(|item| matches!(item, SidebarItem::Draft { .. }))
+        )
+    });
+}
+
+#[gpui_kit::test]
 fn project_chooser_isolates_the_same_directory_between_runtimes(cx: &mut TestAppContext) {
     let (window, workspace) = open(cx);
     cx.update_window(window, |_, window, cx| {
@@ -281,9 +380,8 @@ fn project_chooser_isolates_the_same_directory_between_runtimes(cx: &mut TestApp
         let original = workspace.read(cx).runtime.clone();
         workspace.update(cx, |workspace, cx| {
             let projects = workspace.topology.projects.clone();
-            workspace.switch_runtime("another-runtime".into(), cx);
+            workspace.switch_runtime("another-runtime".into(), window, cx);
             workspace.topology.projects = projects;
-            workspace.reconcile_startup_runtime(window, cx);
             workspace.choose_draft_project(&directory, window, cx);
         });
         assert_eq!(
@@ -294,9 +392,8 @@ fn project_chooser_isolates_the_same_directory_between_runtimes(cx: &mut TestApp
         window.input("another runtime draft", cx);
         workspace.update(cx, |workspace, cx| {
             let projects = workspace.topology.projects.clone();
-            workspace.switch_runtime(original, cx);
+            workspace.switch_runtime(original, window, cx);
             workspace.topology.projects = projects;
-            workspace.reconcile_startup_runtime(window, cx);
         });
         assert_eq!(
             workspace.read(cx).composer.read(cx).value().as_ref(),
@@ -305,6 +402,194 @@ fn project_chooser_isolates_the_same_directory_between_runtimes(cx: &mut TestApp
         assert_eq!(
             workspace.read(cx).config_directory().as_deref(),
             Some(directory.as_str())
+        );
+    })
+    .expect("window is open");
+}
+
+#[gpui_kit::test]
+fn editing_a_hidden_draft_preserves_project_collapse(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        let project = workspace.read(cx).topology.projects[0].clone();
+        workspace.update(cx, |state, cx| {
+            state.choose_draft_project(&project.path, window, cx);
+            state.sidebar_state.collapsed_projects.insert(project.id);
+            state.rebuild_sidebar();
+        });
+        window.input("latest preview", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    cx.read(|cx| {
+        assert!(
+            !workspace
+                .read(cx)
+                .sidebar_items
+                .iter()
+                .any(|item| matches!(item, SidebarItem::Draft { .. }))
+        )
+    });
+    cx.update_window(window, |_, _, cx| {
+        workspace.update(cx, |state, cx| {
+            let id = &state.topology.projects[0].id;
+            let header = state.sidebar_items.iter().find(|item| matches!(item, SidebarItem::Project { project_id, .. } if project_id == id)).expect("project header exists").clone();
+            state.toggle_collapsed(&header, cx);
+        });
+    }).expect("window is open");
+    cx.read(|cx| assert!(workspace.read(cx).sidebar_items.iter().any(|item| matches!(item, SidebarItem::Draft { title, .. } if title.as_ref() == "latest preview"))));
+}
+
+#[gpui_kit::test]
+fn draft_discard_is_reachable_from_the_keyboard(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        let directory = workspace.read(cx).topology.projects[0].path.clone();
+        workspace.update(cx, |state, cx| {
+            state.choose_draft_project(&directory, window, cx)
+        });
+        window.input("keyboard draft", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        let key = workspace
+            .read(cx)
+            .sidebar_items
+            .iter()
+            .find_map(|item| match item {
+                SidebarItem::Draft { key, .. } => Some(key.clone()),
+                _ => None,
+            })
+            .expect("draft row is visible");
+        let discard = ElementId::Name(format!("{key}:discard").into());
+        for _ in 0..50 {
+            window.press("tab", cx);
+            window.render_frame(cx);
+            if window.find(discard.clone()).focused() == Some(true) {
+                window.press("space", cx);
+                break;
+            }
+        }
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    assert_eq!(
+        composer_text(&workspace, cx),
+        "",
+        "Space discards the focused draft"
+    );
+}
+
+#[gpui_kit::test]
+fn draft_preview_edits_preserve_unrelated_sidebar_rows(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        let directory = workspace.read(cx).topology.projects[0].path.clone();
+        workspace.update(cx, |state, cx| {
+            state.choose_draft_project(&directory, window, cx)
+        });
+        window.input("First", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    let before = cx.read(|cx| {
+        workspace
+            .read(cx)
+            .sidebar_items
+            .iter()
+            .filter(|item| !matches!(item, SidebarItem::Draft { .. }))
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    cx.update_window(window, |_, window, cx| window.input(" changed", cx))
+        .expect("window is open");
+    cx.run_until_parked();
+    cx.read(|cx| {
+        let state = workspace.read(cx);
+        let unrelated = state
+            .sidebar_items
+            .iter()
+            .filter(|item| !matches!(item, SidebarItem::Draft { .. }))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(unrelated, before);
+        let drafts: Vec<_> = state
+            .sidebar_items
+            .iter()
+            .filter_map(|item| match item {
+                SidebarItem::Draft { title, .. } => Some(title.as_ref()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(drafts, ["First changed"]);
+    });
+}
+
+#[gpui_kit::test]
+fn stale_draft_actions_cannot_touch_another_runtime(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let old = cx
+        .update_window(window, |_, window, cx| {
+            let directory = workspace.read(cx).topology.projects[0].path.clone();
+            workspace.update(cx, |state, cx| {
+                state.choose_draft_project(&directory, window, cx)
+            });
+            window.input("old runtime", cx);
+            workspace
+                .read(cx)
+                .composer_key
+                .clone()
+                .expect("draft key exists")
+        })
+        .expect("window is open");
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |state, cx| {
+            state.switch_runtime("other-runtime".into(), window, cx);
+        });
+        window.input("new runtime", cx);
+        workspace.update(cx, |state, cx| {
+            state.discard_draft(&old, window, cx);
+            state.open_draft(&old, window, cx);
+        });
+    })
+    .expect("window is open");
+    assert_eq!(composer_text(&workspace, cx), "new runtime");
+}
+
+#[gpui_kit::test]
+fn an_unassigned_draft_does_not_alias_a_project_at_filesystem_root(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.input("unassigned text", cx);
+        let unassigned = workspace
+            .read(cx)
+            .composer_key
+            .clone()
+            .expect("unassigned draft has a key");
+        workspace.update(cx, |state, cx| {
+            state
+                .topology
+                .projects
+                .push(openchamber_native_core::ownership::ConfiguredProject {
+                    id: "root-project".into(),
+                    path: "/".to_owned(),
+                });
+            state.choose_draft_project("/", window, cx);
+        });
+        assert_ne!(workspace.read(cx).composer_key.as_ref(), Some(&unassigned));
+        assert_eq!(workspace.read(cx).composer.read(cx).value().as_ref(), "");
+        window.input("root project text", cx);
+        workspace.update(cx, |state, cx| {
+            state.save_composer_draft(cx);
+            state.draft_projects.remove(&state.runtime);
+            state.composer_key = state.new_session_draft_key();
+            state.restore_composer_draft(window, cx);
+        });
+        assert_eq!(
+            workspace.read(cx).composer.read(cx).value().as_ref(),
+            "unassigned text"
         );
     })
     .expect("window is open");
@@ -323,6 +608,30 @@ fn clicking_a_row_selects_its_session(cx: &mut TestAppContext) {
     .expect("window is open");
     assert_eq!(selected(&workspace, cx), Some(session.clone()));
     assert!(transcript_len(&workspace, &session, cx) > 0);
+}
+
+#[gpui_kit::test]
+fn multiline_unicode_paste_is_one_undo_step(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let (row, _) = session_rows(&workspace, cx)[0].clone();
+    let text = "First e\u{301} line\nمرحبا 你好 👩‍💻\nLast line";
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id(&row), cx);
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text.to_owned()));
+        window.press("ctrl-v", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    assert_eq!(composer_text(&workspace, cx), text);
+    cx.update_window(window, |_, window, cx| window.press("ctrl-z", cx))
+        .expect("window is open");
+    cx.run_until_parked();
+    assert_eq!(
+        composer_text(&workspace, cx),
+        "",
+        "one undo removes the whole paste"
+    );
 }
 
 #[gpui_kit::test]

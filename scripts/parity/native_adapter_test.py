@@ -22,6 +22,13 @@ class SizedClient(NativeClient):
 
 
 class NativeSizeTest(unittest.TestCase):
+    def test_accessibility_root_can_arrive_after_the_application_node(self):
+        client = SizedClient()
+        client.content = SimpleNamespace(width=900, height=600)
+        with patch.object(client, "_content", side_effect=[LookupError("not published"), client.content]), patch.object(client, "_read_marks") as wait:
+            client._resize_to_requested(1)
+        wait.assert_called_once_with(0.05)
+
     def test_resize_adds_only_the_frame_and_respects_scale(self):
         for scale in (1, 1.25, 1.5):
             client = SizedClient(scale)

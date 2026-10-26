@@ -115,6 +115,13 @@ class PaintNoiseTest(unittest.TestCase):
 
 
 class HiddenGeometryTest(unittest.TestCase):
+    def test_fractional_scale_keeps_the_one_pixel_boundary(self):
+        reference = {"control": [300.95, 306.3999938964844, 100, 28]}
+        candidate = {"control": [300.8, 307.2, 100, 28]}
+        self.assertEqual(compare.compare_geometry(reference, candidate, 1.25), [])
+        candidate["control"][1] = reference["control"][1] + 1.001 / 1.25
+        self.assertEqual(len(compare.compare_geometry(reference, candidate, 1.25)), 1)
+
     def test_hidden_targets_match_absent_native_nodes(self):
         for hidden in (None, [50, 20, 200, 0], [50, 20, 0, 200]):
             self.assertEqual(compare.compare_geometry({"panel": hidden}, {"panel": None}, 1), [])

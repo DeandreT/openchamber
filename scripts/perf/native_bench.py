@@ -104,6 +104,14 @@ def apply_backend(env: dict[str, str], backend: str) -> dict[str, str]:
 def native_env(args: argparse.Namespace) -> dict[str, str]:
     env = {key: value for key, value in os.environ.items() if not key.startswith(("OPENCHAMBER_", "OPENCODE_"))}
     env = apply_backend(env, args.backend)
+    home = args.native_home
+    env.update(
+        HOME=str(home),
+        XDG_CONFIG_HOME=str(home / ".config"),
+        XDG_DATA_HOME=str(home / ".local/share"),
+        XDG_CACHE_HOME=str(home / ".cache"),
+        XDG_STATE_HOME=str(home / ".local/state"),
+    )
     env.update(
         OPENCHAMBER_NATIVE_DIAGNOSTICS="1",
         OPENCHAMBER_NATIVE_WORKLOAD=args.workload,
@@ -496,6 +504,9 @@ def main() -> int:
     scenarios = {scenario.strip() for scenario in args.scenarios.split(",") if scenario.strip()}
     output = args.output or REPO_ROOT / "artifacts" / f"native-bench-{time.strftime('%Y%m%dT%H%M%S')}"
     output.mkdir(parents=True, exist_ok=True)
+    scratch = "/tmp/opencode" if Path("/tmp/opencode").is_dir() else None
+    native_profile = tempfile.TemporaryDirectory(prefix="native-bench-profile-", dir=scratch)
+    args.native_home = Path(native_profile.name)
     receipt: dict = {
         "generatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "revision": git_revision(),
@@ -543,6 +554,7 @@ def main() -> int:
                     set_a11y(previous)
                 receipt["a11yRestoredTo"] = previous
     finally:
+        native_profile.cleanup()
         if electron_home is not None:
             shutil.rmtree(electron_home, ignore_errors=True)
 

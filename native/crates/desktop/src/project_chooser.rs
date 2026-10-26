@@ -4,13 +4,14 @@ use gpui_kit::component::combobox::{Combobox, ComboboxEvent, ComboboxState};
 use gpui_kit::component::searchable_list::{SearchableListItem, SearchableVec};
 use gpui_kit::{
     AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement, Role,
-    SharedString, StatefulInteractiveElement, Styled, Subscription, TestSupportExt, Window, div,
-    px,
+    SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Subscription,
+    TestSupportExt, Window, div, px,
 };
 
 use crate::baseline::CssTextExt;
 use crate::chrome::{CONTROL_RADIUS, glyph};
 use crate::connection::ConnectionState;
+use crate::elevation;
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
 use crate::send_catalog::Load;
@@ -199,17 +200,44 @@ impl Workspace {
             .clone();
         let empty = strings.get(status);
         let foreground = palette.foreground;
+        let muted = palette.muted_foreground;
         let accessible_state = state.clone();
         div().key_context("ProjectChooser").h(px(28.0)).child(
             Combobox::new(&state)
+                .placeholder(strings.get("chat.chatInput.chooseProject"))
                 .appearance(false)
                 .border_0()
                 .p_0()
                 .w_auto()
                 .h(px(28.0))
                 .menu_width(px(288.0))
+                .menu_offset(px(4.0))
+                .menu_align(if direction == Direction::RightToLeft {
+                    gpui_kit::base::Align::End
+                } else {
+                    gpui_kit::base::Align::Start
+                })
+                .menu_style(
+                    StyleRefinement::default()
+                        .border_0()
+                        .rounded(px(12.0))
+                        .bg(palette.elevated)
+                        .shadow(elevation::floating(palette)),
+                )
+                .search_clearable(false)
+                .check_icon(
+                    gpui_kit::component::Icon::default().path(crate::assets::icon_path("check")),
+                )
                 .search_placeholder(strings.get("chat.chatInput.draftPicker.searchProjects"))
-                .empty(move |_, _| div().p(px(12.0)).child(empty.clone()))
+                .empty(move |_, cx| {
+                    div()
+                        .px(px(12.0))
+                        .py(px(24.0))
+                        .text_center()
+                        .text_color(muted)
+                        .css_text(0.84375, 1.25, cx)
+                        .child(empty.clone())
+                })
                 .render_trigger(move |trigger, _, cx| {
                     let accessible_state = accessible_state.clone();
                     let open = trigger.is_open();

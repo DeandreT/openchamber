@@ -42,6 +42,9 @@ SESSION_VARIABLES = (
     "WAYLAND_DISPLAY", "WAYLAND_SOCKET", "DISPLAY", "XAUTHORITY",
     "DBUS_SESSION_BUS_ADDRESS", "AT_SPI_BUS_ADDRESS", "XDG_SESSION_TYPE",
 )
+INPUT_SESSION_VARIABLES = (
+    "IBUS_ADDRESS", "IBUS_USE_PORTAL", "XMODIFIERS", "GTK_IM_MODULE", "QT_IM_MODULE",
+)
 
 
 def inside() -> bool:
@@ -104,23 +107,37 @@ def stop_process(process: subprocess.Popen) -> None:
 
 
 def run_inside(command: list[str], width: int, height: int) -> int:
+    stopping = False
+    def request_stop(_signal, _frame):
+        nonlocal stopping
+        stopping = True
+    previous = signal.signal(signal.SIGTERM, request_stop)
+    try:
+        return _run_inside(command, width, height, lambda: stopping)
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+
+
+def _run_inside(command: list[str], width: int, height: int, stopping) -> int:
     base = "/tmp/opencode" if Path("/tmp/opencode").is_dir() else None
     with tempfile.TemporaryDirectory(prefix="openchamber-parity-display-", dir=base) as temporary, ExitStack() as cleanup:
         work = Path(temporary)
         work.chmod(0o700)
-        env = {key: value for key, value in os.environ.items() if key not in SESSION_VARIABLES}
+        env = {key: value for key, value in os.environ.items() if key not in SESSION_VARIABLES + INPUT_SESSION_VARIABLES}
         env.update({INSIDE: "1", "XDG_RUNTIME_DIR": str(work), "XAUTHORITY": str(work / "Xauthority")})
         env["GSETTINGS_BACKEND"] = "memory"
         with (work / "xvfb.log").open("wb") as log:
             xvfb = None
             for _ in range(20):
+                if stopping():
+                    return 128 + signal.SIGTERM
                 number = 1000 + secrets.randbelow(20000)
                 if Path(f"/tmp/.X{number}-lock").exists() or Path(f"/tmp/.X11-unix/X{number}").exists():
                     continue
                 display = f":{number}"
                 subprocess.run(["xauth", "-f", env["XAUTHORITY"], "source", "-"],
                     input=f"add {display} . {secrets.token_hex(16)}\n", text=True,
-                    check=True, capture_output=True)
+                    check=True, capture_output=True, timeout=5)
                 env["DISPLAY"] = display
                 xvfb = subprocess.Popen([
                     "Xvfb", display, "-screen", "0", f"{width + MARGIN}x{height + MARGIN}x24",
@@ -130,6 +147,8 @@ def run_inside(command: list[str], width: int, height: int) -> int:
                 deadline = time.monotonic() + 10
                 ready = False
                 while xvfb.poll() is None and time.monotonic() < deadline:
+                    if stopping():
+                        return 128 + signal.SIGTERM
                     probe = subprocess.run(["xdpyinfo"], env=env, capture_output=True, timeout=2)
                     if probe.returncode == 0:
                         ready = True
@@ -165,9 +184,16 @@ def run_inside(command: list[str], width: int, height: int) -> int:
             script.chmod(0o700)
             session = None
             try:
+                if stopping():
+                    return 128 + signal.SIGTERM
                 session = subprocess.Popen(["dbus-run-session", f"--config-file={bus_config}", "--", str(script)],
                     env=env, start_new_session=True)
-                return session.wait()
+                while not stopping():
+                    try:
+                        return session.wait(timeout=0.2)
+                    except subprocess.TimeoutExpired:
+                        pass
+                return 128 + signal.SIGTERM
             finally:
                 if bus_record.exists():
                     stop_attached(bus_record.read_text())

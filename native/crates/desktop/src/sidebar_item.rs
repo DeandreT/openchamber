@@ -15,6 +15,11 @@ use openchamber_native_core::sidebar_rows::{
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum SidebarItem {
+    Draft {
+        key: SharedString,
+        draft: openchamber_native_core::draft::DraftKey,
+        title: SharedString,
+    },
     Zone {
         key: SharedString,
         activity: ActivityKey,
@@ -82,7 +87,8 @@ pub enum SidebarItem {
 impl SidebarItem {
     pub fn key(&self) -> &str {
         match self {
-            Self::Zone { key, .. }
+            Self::Draft { key, .. }
+            | Self::Zone { key, .. }
             | Self::Project { key, .. }
             | Self::Group { key, .. }
             | Self::Worktree { key, .. }

@@ -15,6 +15,7 @@ mod composer_view;
 mod connection;
 mod context_panel;
 mod diagnostics;
+mod draft_sidebar;
 mod elevation;
 mod fonts;
 mod install_id;
@@ -135,6 +136,7 @@ fn main() {
                 ..WindowOptions::default()
             };
             let opened = gpui_kit::open_window(options, cx, |window, cx| {
+                window.set_layout_mode(gpui_kit::LayoutMode::Logical);
                 cx.new(|cx| {
                     let mut workspace = Workspace::new(source, window, cx);
                     workspace.initial_size = Some(chrome::InitialSize::new(size(

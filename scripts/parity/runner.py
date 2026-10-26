@@ -296,6 +296,9 @@ def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], dire
             condition = step["wait"]
             met = client.wait_for(condition[kind], float(condition.get("timeout", 30)))
             waits.append({"condition": condition[kind], "met": met})
+            if not met:
+                client.screenshot(directory / "wait-failed.png")
+                raise TimeoutError(f"required wait failed before further input: {condition[kind]}")
         elif "click" in step:
             # Hydration can move rows between resolving a target and pressing
             # it. A quiet startup is a prerequisite for reproducible input.
@@ -303,12 +306,17 @@ def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], dire
                 raise TimeoutError("the client never settled before row selection")
             key = resolve_row(client.rows(), step["click"])
             client.click(key)
-            waits.append({"condition": {"selectedRow": key}, "met": wait_selected(client, key)})
+            selected = wait_selected(client, key)
+            waits.append({"condition": {"selectedRow": key}, "met": selected})
+            if not selected:
+                client.screenshot(directory / "wait-failed.png")
+                raise TimeoutError(f"required row selection failed before further input: {key}")
         elif "key" in step:
             client.key(step["key"])
         elif "clickTarget" in step:
             if not settle(client):
-                raise TimeoutError("the client never settled before control activation")
+                pending = getattr(client, "pending_requests", lambda: [])()
+                raise TimeoutError(f"the client never settled before control activation; pending route prefixes: {pending}")
             client.click_target(targets[step["clickTarget"]][kind])
         elif "type" in step:
             client.type_text(step["type"])
@@ -356,8 +364,8 @@ def run_client(kind: str, scenario: dict, work: Path, args: argparse.Namespace) 
             fixture = FixtureProvider(directory)
             fixture.wait_ready(args.timeout)
             client = ElectronClient(args.electron_app, electron_env(state, fixture.opencode_config), args.scale, args.width, args.height)
-        launched = client.launch()
         try:
+            launched = client.launch()
             client.wait_ready(args.timeout, connected=True)
             checkpoints = perform(client, kind, scenario["steps"], args.targets, directory, args)
         finally:
@@ -372,10 +380,26 @@ def run_client(kind: str, scenario: dict, work: Path, args: argparse.Namespace) 
             fixture.stop()
 
 
+def comparable_rows(rows: list[dict]) -> list[dict]:
+    """Draft IDs are client-generated; compare their group and displayed order."""
+    drafts: dict[str, int] = {}
+    result = []
+    for row in rows:
+        prefix, separator, draft = row["key"].rpartition(":draft:")
+        if separator and draft and ":" not in draft:
+            ordinal = drafts.get(prefix, 0)
+            drafts[prefix] = ordinal + 1
+            result.append({**row, "key": f"{prefix}:draft:{ordinal}"})
+        else:
+            result.append(row)
+    return result
+
+
 def compare_rows(reference: list[dict], candidate: list[dict], unobservable: frozenset[str] = frozenset(), unobserved: list[dict] | None = None) -> list[dict]:
     """Differences in row identity, order, label and state. A field the
     candidate's platform cannot report is listed in ``unobserved`` instead:
     neither a difference nor a match."""
+    reference, candidate = comparable_rows(reference), comparable_rows(candidate)
     differences = []
     reference_keys = [row["key"] for row in reference]
     candidate_keys = [row["key"] for row in candidate]
@@ -446,9 +470,12 @@ def check_contracts(scenarios: list[dict], features: list[dict], targets: dict[s
         for step in scenario["steps"]:
             if "wait" in step and set(step["wait"]) - {"timeout"} != {"electron", "native"}:
                 problems.append(f"scenario {scenario['id']} has a wait without a condition for each client")
+            named_targets = list(step.get("targets", []))
+            if "clickTarget" in step:
+                named_targets.append(step["clickTarget"])
             problems.extend(
-                f"scenario {scenario['id']} captures undefined target {target}"
-                for target in step.get("targets", [])
+                f"scenario {scenario['id']} references undefined target {target}"
+                for target in named_targets
                 if set(targets.get(target, {})) != {"electron", "native"}
             )
     for feature in features:
@@ -516,8 +543,8 @@ def run_scenarios(scenarios: list[dict], wanted: set[str] | None, output: Path, 
                     paint_regions = [[value * args.scale for value in region["box"]] for region in reference.get("paintRegions", [])]
                     protected = [[value * args.scale for value in box] for box in reference.get("paintProtected", []) + reference.get("textBoxes", [])]
                 image = compare.compare_images(Path(reference["image"]), Path(candidate["image"]), work / name, args.tolerance, text_boxes, paint_regions, protected)
-                rects_reference = {row["key"]: row["rect"] for row in reference["rows"]}
-                rects_candidate = {row["key"]: row["rect"] for row in candidate["rows"]}
+                rects_reference = {row["key"]: row["rect"] for row in comparable_rows(reference["rows"])}
+                rects_candidate = {row["key"]: row["rect"] for row in comparable_rows(candidate["rows"])}
                 for target, rect in reference.get("targets", {}).items():
                     rects_reference[f"target:{target}"] = rect
                 for target, rect in candidate.get("targets", {}).items():

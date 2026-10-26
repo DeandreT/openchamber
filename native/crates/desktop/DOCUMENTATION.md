@@ -36,6 +36,11 @@ read-only until prompt submission has its error and reconciliation paths.
   directory and catalog scope without creating a server session. Draft text
   stays with its runtime and directory. Failed discovery remains distinct from
   an empty project list, and a failed refresh keeps previously loaded projects.
+- `draft_sidebar.rs` projects local new-session drafts into project-grouped
+  sidebar rows. The first nonempty line supplies the preview. Opening and
+  discarding a row use its captured runtime/directory key. Preview edits update
+  one row; adding or removing a draft rebuilds the structural projection. This
+  in-memory projection does not publish drafts to the server.
 - `context_panel.rs` also reads the selected session's context fill against
   the limit `useContextWindowLimits` picks (the record's model, the newest
   answer's, the composer's) and draws its row and meter.
@@ -109,6 +114,8 @@ read-only until prompt submission has its error and reconciliation paths.
   and logical order. Rendered geometry can expire without losing selected text.
   Custom children keep their identity while their source range grows. Session
   switches clear the outgoing selection before activating the incoming document.
+  Each message exposes its rendered Markdown text as the accessible paragraph
+  name; Markdown delimiters are not part of that name.
 - `code_wrap_state.rs` orders code-wrap changes for one runtime. It permits
   one request at a time and coalesces pending toggles to their newest value.
   A settings read captures its revision and cannot overwrite later choices.
@@ -121,8 +128,13 @@ read-only until prompt submission has its error and reconciliation paths.
   requested content size; `logical.rs` maps start and end sides to the layout
   direction; `elevation.rs` mirrors the design system's ring and shadow
   recipes.
+- `elevation.rs` converts CSS blur radii to Gaussian sigma and reverses CSS
+  shadow order for GPUI's painter. The sidebar's inward shadow is a separate
+  overlay inside its divider, so it paints above the content in both directions.
 - `baseline.rs` places text on Chromium's baseline (`css_text`), and
-  `tracked_text.rs` draws text with CSS letter spacing.
+  `tracked_text.rs` draws text with CSS letter spacing. The new-session title
+  uses one shaped line with a medium-weight run for the chosen project label,
+  keeping the label in the same measured line as the surrounding text.
 - `theme.rs`, `locale.rs` and `assets.rs` load the generated resources in
   `resources/`; `bun run native:resources` owns their content. `fonts.rs`
   resolves the web client's default font stacks against the installed fonts.
@@ -179,8 +191,9 @@ read-only until prompt submission has its error and reconciliation paths.
   unrelated session. The new-session draft has its own key, so its text
   survives visiting sessions.
 - Runtime changes save the outgoing composer under its captured key before
-  replacing runtime state. The startup view restores the incoming runtime's
-  draft before it paints; project selection never moves text between drafts.
+  replacing runtime state, then restore the incoming draft in that same
+  transition. No input event can snapshot the previous text under the new key;
+  project selection never moves text between drafts.
 - Retained Markdown uses the same parser extensions before and after painting.
   Copy includes unpainted intermediate messages exactly once, preserves selected
   whitespace and uses fixed UTF-8 endpoints across compatible appends and reflow.
@@ -189,6 +202,9 @@ read-only until prompt submission has its error and reconciliation paths.
 - Layout uses logical sides: English is laid out as measured from the
   reference and right-to-left locales mirror it. Window controls keep their
   physical order and the right edge in every language, as in the web client.
+- The main window selects `LayoutMode::Logical` before its first layout. Lists
+  retain fractional logical measurements and translations until final painting,
+  so independently rounded rows cannot accumulate display-scale drift.
 - The content keeps the reference size inside a client-side frame: the
   window grows by the frame line, and sizes the web client takes from the
   viewport (`6vh`) come from `chrome::content_size`. For two seconds after

@@ -78,6 +78,10 @@ struct ComboboxOptions {
     search_placeholder: Option<SharedString>,
     menu_width: Length,
     menu_max_h: Length,
+    menu_style: StyleRefinement,
+    menu_offset: Pixels,
+    menu_align: gpui_base::Align,
+    search_clearable: bool,
     disabled: bool,
     appearance: bool,
     focus_ring_enabled: bool,
@@ -95,6 +99,10 @@ impl Default for ComboboxOptions {
             search_placeholder: None,
             menu_width: Length::Auto,
             menu_max_h: rems(20.).into(),
+            menu_style: StyleRefinement::default(),
+            menu_offset: px(6.),
+            menu_align: gpui_base::Align::Start,
+            search_clearable: true,
             disabled: false,
             appearance: true,
             focus_ring_enabled: true,
@@ -117,6 +125,10 @@ where
     multiple: bool,
     searchable: bool,
     confirm_on_reselect: bool,
+    menu_style: StyleRefinement,
+    menu_offset: Pixels,
+    menu_align: gpui_base::Align,
+    search_clearable: bool,
     trigger_icon: Option<Icon>,
     check_icon: Option<Icon>,
     render_trigger: Option<
@@ -278,6 +290,10 @@ where
             multiple: false,
             searchable: false,
             confirm_on_reselect: false,
+            menu_style: StyleRefinement::default(),
+            menu_offset: px(6.),
+            menu_align: gpui_base::Align::Start,
+            search_clearable: true,
             trigger_icon: None,
             check_icon: None,
             render_trigger: None,
@@ -735,6 +751,10 @@ where
                             self.state.search_placeholder.clone(),
                             self.state.size,
                             self.state.menu_max_h,
+                            &self.menu_style,
+                            self.menu_offset,
+                            self.menu_align,
+                            self.search_clearable,
                             bounds,
                             footer_el,
                             dismiss_handler,
@@ -820,6 +840,30 @@ where
     /// Set the maximum height of the dropdown menu.
     pub fn menu_max_h(mut self, max_h: impl Into<Length>) -> Self {
         self.options.menu_max_h = max_h.into();
+        self
+    }
+
+    /// Refine the popup surface independently of the trigger.
+    pub fn menu_style(mut self, style: StyleRefinement) -> Self {
+        self.options.menu_style = style;
+        self
+    }
+
+    /// The gap between the trigger and the popup, 6 pixels by default.
+    pub fn menu_offset(mut self, offset: Pixels) -> Self {
+        self.options.menu_offset = offset;
+        self
+    }
+
+    /// Align the popup with the trigger's physical start or end edge.
+    pub fn menu_align(mut self, align: gpui_base::Align) -> Self {
+        self.options.menu_align = align;
+        self
+    }
+
+    /// Whether the search field shows its clear button. Defaults to true.
+    pub fn search_clearable(mut self, clearable: bool) -> Self {
+        self.options.search_clearable = clearable;
         self
     }
 
@@ -954,6 +998,10 @@ where
             this.state.search_placeholder = opts.search_placeholder;
             this.state.menu_width = opts.menu_width;
             this.state.menu_max_h = opts.menu_max_h;
+            this.menu_style = opts.menu_style;
+            this.menu_offset = opts.menu_offset;
+            this.menu_align = opts.menu_align;
+            this.search_clearable = opts.search_clearable;
             this.state.disabled = opts.disabled;
             this.state.appearance = opts.appearance;
             this.focus_ring_enabled = opts.focus_ring_enabled;
@@ -968,11 +1016,29 @@ where
         });
 
         let is_open = self.state.read(cx).state.open;
+        let accessibility_label = self
+            .state
+            .read(cx)
+            .state
+            .placeholder
+            .clone()
+            .unwrap_or_else(|| t!("Combobox.placeholder").into());
+        let accessibility_value = self
+            .state
+            .read(cx)
+            .state
+            .selection
+            .iter()
+            .map(|(_, item)| item.title().to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
         let content_focus_handle = self.state.read(cx).state.list.focus_handle(cx);
         let open_state = self.state.clone();
         let confirm_state = self.state.clone();
 
         BaseCombobox::new(self.id)
+            .accessibility_label(accessibility_label)
+            .accessibility_value(accessibility_value)
             .open(is_open)
             .disabled(disabled)
             .focus_handle(&focus_handle)
@@ -1076,6 +1142,10 @@ fn render_popup_shell<D: SearchableListDelegate + 'static>(
     search_placeholder: Option<SharedString>,
     size: Size,
     menu_max_h: Length,
+    menu_style: &StyleRefinement,
+    menu_offset: Pixels,
+    menu_align: gpui_base::Align,
+    search_clearable: bool,
     bounds: Bounds<Pixels>,
     footer_el: Option<AnyElement>,
     dismiss_handler: Box<dyn Fn(&MouseDownEvent, &mut Window, &mut App) + 'static>,
@@ -1093,8 +1163,10 @@ fn render_popup_shell<D: SearchableListDelegate + 'static>(
                 Length::Definite(w) => this.w(w),
             })
             .popover_style(cx)
+            .refine_style(menu_style)
             .child(
                 List::new(list)
+                    .search_clearable(search_clearable)
                     .when_some(search_placeholder, |this, placeholder| {
                         this.search_placeholder(placeholder)
                     })
@@ -1114,6 +1186,8 @@ fn render_popup_shell<D: SearchableListDelegate + 'static>(
             .on_mouse_down_out(dismiss_handler),
         cx,
     )
+    .offset(menu_offset)
+    .align(menu_align)
     .into_any_element()
 }
 

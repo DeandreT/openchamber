@@ -65,11 +65,27 @@ recorded wire samples in `crates/transport/tests/fixtures/wire/` and rewrites
 
 ## Accessibility on Linux
 
+The private-display qualification commands and their dependencies are documented
+in [`scripts/parity/DOCUMENTATION.md`](../scripts/parity/DOCUMENTATION.md).
+Window controls use Openbox on the owned Xvfb display. IME checks use IBus with
+libpinyin; screen-reader checks use Orca and a private, silent Speech Dispatcher.
+These tools are test dependencies and are not bundled into the application.
+
 Local toolkit patches are pinned under `vendor/`: retained Markdown selection in
 [`gpui-base`](vendor/gpui-base/DOCUMENTATION.md), single-choice confirmation in
 [`gpui-component`](vendor/gpui-component/DOCUMENTATION.md), and AT-SPI expansion
 state in the bridge below. Each patch documents its compatibility and removal
 conditions.
+
+The native window enables the local [`gpui-pre`](vendor/gpui-pre/DOCUMENTATION.md)
+logical-layout mode before its first layout. Fractional row sizes remain exact
+through list measurement; painting snaps the final absolute edges.
+
+X11 input uses the local [`xim-ctext`](vendor/xim-ctext/DOCUMENTATION.md) and
+[`zed-xim`](vendor/zed-xim/DOCUMENTATION.md) decoding patches with the
+[`gpui-pre-linux`](vendor/gpui-pre-linux/DOCUMENTATION.md) lifecycle patch.
+These keep supported compound-text input valid and malformed callbacks
+recoverable without discarding the input connection.
 
 The workspace uses a [local AT-SPI translation patch](vendor/accesskit_atspi_common/DOCUMENTATION.md)
 for the pinned AccessKit dependency so expandable controls expose their expanded

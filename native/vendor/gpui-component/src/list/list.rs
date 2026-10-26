@@ -48,6 +48,7 @@ struct ListOptions {
     size: Size,
     scrollbar_visible: bool,
     search_placeholder: Option<SharedString>,
+    search_clearable: bool,
     max_height: Option<Length>,
     paddings: EdgesRefinement<DefiniteLength>,
 }
@@ -59,6 +60,7 @@ impl Default for ListOptions {
             scrollbar_visible: true,
             max_height: None,
             search_placeholder: None,
+            search_clearable: true,
             paddings: EdgesRefinement::default(),
         }
     }
@@ -486,6 +488,7 @@ where
         let id = SharedString::from(format!("list-item-{}", ix));
 
         let total_items = self.rows_cache.items_count();
+        let accessibility_label = self.delegate.accessibility_label(ix, cx);
 
         div()
             .id(id)
@@ -493,6 +496,15 @@ where
             .aria_position_in_set(ix.row + 1)
             .aria_size_of_set(total_items)
             .aria_selected(selected)
+            .when_some(accessibility_label, |this, label| {
+                this.aria_label(label).when(selected, |this| {
+                    if self.searchable {
+                        this.aria_active_descendant_for(&self.query_input.focus_handle(cx))
+                    } else {
+                        this.aria_active_descendant()
+                    }
+                })
+            })
             .w_full()
             .relative()
             .overflow_hidden()
@@ -687,7 +699,7 @@ where
                                     Icon::new(IconName::Search)
                                         .text_color(cx.theme().muted_foreground),
                                 )
-                                .cleanable(true)
+                                .cleanable(self.options.search_clearable)
                                 .p_0()
                                 .appearance(false),
                         ),
@@ -747,6 +759,12 @@ where
     /// Sets the placeholder text for the search input.
     pub fn search_placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
         self.options.search_placeholder = Some(placeholder.into());
+        self
+    }
+
+    /// Whether the search field shows its clear button. Defaults to true.
+    pub fn search_clearable(mut self, clearable: bool) -> Self {
+        self.options.search_clearable = clearable;
         self
     }
 }

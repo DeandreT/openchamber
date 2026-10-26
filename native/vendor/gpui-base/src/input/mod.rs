@@ -7,6 +7,9 @@
 
 use gpui::App;
 
+#[path = "base/accessibility.rs"]
+mod accessibility;
+
 /// Character used by masked editor modes.
 pub(crate) const MASK_CHAR: char = '•';
 

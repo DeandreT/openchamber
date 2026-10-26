@@ -7,8 +7,9 @@ use gpui::{
     Action, App, AppContext, Bounds, ClipboardItem, Context, Edges, Entity, EntityInputHandler,
     EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement, KeyBinding,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _, Pixels, Point,
-    Render, ScrollHandle, ScrollWheelEvent, SharedString, Styled as _, Subscription,
-    UTF16Selection, WeakFocusHandle, Window, actions, div, point, prelude::FluentBuilder as _, px,
+    Render, ScrollHandle, ScrollWheelEvent, SharedString, StatefulInteractiveElement as _,
+    Styled as _, Subscription, UTF16Selection, WeakFocusHandle, Window, actions, div, point,
+    prelude::FluentBuilder as _, px,
 };
 use ropey::{Rope, RopeSlice};
 use serde::Deserialize;
@@ -22,6 +23,7 @@ use unicode_segmentation::*;
 use super::{
     DiagnosticSet, DisplayMap, InputContextMenuCapabilities, InputEditorStyle,
     InputHighlighterFactory, MASK_CHAR, MaskPattern, NativeMenu, NumberStep, WrappingIndent,
+    accessibility::InputTextSnapshot,
     blink_cursor::BlinkCursor,
     change::Change,
     cursor::{CursorSelection, Selections},
@@ -40,7 +42,7 @@ use crate::input::movement::MoveDirection;
 use crate::input::{
     InputExtras as _, Position, RopeExt as _, element::RIGHT_MARGIN, layout::LastLayout,
 };
-use crate::{AutoScroll, StepAction};
+use crate::{AutoScroll, StepAction, TestSupportExt as _};
 
 /// Vertical clearance to retain when revealing a text position.
 pub(crate) enum ScrollPadding {
@@ -404,6 +406,7 @@ pub struct InputBaseState<M: InputModeKind> {
     /// State only this mode needs. See [`InputModeKind::Extras`].
     pub(crate) extras: M::Extras,
     pub(super) focus_handle: FocusHandle,
+    accessibility: Option<InputAccessibility>,
     selection_focus: Option<WeakFocusHandle>,
     pub(super) mode: LayoutMode,
     pub(super) text: Rope,
@@ -802,6 +805,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         Self {
             extras: M::Extras::default(),
             focus_handle: focus_handle.clone(),
+            accessibility: None,
             selection_focus: None,
             text: "".into(),
             display_map: DisplayMap::new(text_style.font(), window.rem_size(), None),
@@ -4587,6 +4591,75 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
     }
 }
 
+/// Presentation supplied by a styled input for the engine's keyboard-focus node.
+/// Values are read from the engine at render time and never retained here.
+#[derive(Clone, Debug)]
+pub struct InputAccessibility {
+    /// Resolved role, or `None` for a deliberately presentational editor.
+    pub role: Option<gpui::Role>,
+    /// Accessible name resolved by the owning control.
+    pub label: Option<SharedString>,
+    /// Placeholder hint, separate from the accessible name.
+    pub placeholder: Option<SharedString>,
+    /// Stable author-provided identifier exposed to assistive technology.
+    pub id: Option<SharedString>,
+    /// Suppress the value even when the visual mask has been toggled off.
+    pub secret: bool,
+}
+
+impl<M: InputModeKind> InputBaseState<M> {
+    /// Set accessibility presentation without moving keyboard dispatch to a wrapper.
+    pub fn set_accessibility(&mut self, accessibility: InputAccessibility) {
+        self.accessibility = Some(accessibility);
+    }
+
+    /// Apply an assistive technology value edit through the normal editing engine.
+    pub fn accessibility_set_value(
+        &mut self,
+        data: Option<&gpui::accesskit::ActionData>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.is_editable()
+            && let Some(gpui::accesskit::ActionData::Value(value)) = data
+        {
+            self.replace_all(value.to_string(), window, cx);
+        }
+    }
+
+    fn accessibility_set_selection(
+        &mut self,
+        snapshot: &InputTextSnapshot,
+        data: Option<&gpui::accesskit::ActionData>,
+        cx: &mut Context<Self>,
+    ) {
+        if self.disabled
+            || self.masked
+            || self.token_is_secret()
+            || self
+                .accessibility
+                .as_ref()
+                .is_some_and(|presentation| presentation.secret || presentation.role.is_none())
+            || self.ime_marked_range.is_some()
+            || self.document_revision != snapshot.revision
+            || !self.text.chars().eq(snapshot.text.chars())
+        {
+            return;
+        }
+        let Some(gpui::accesskit::ActionData::SetTextSelection(selection)) = data else {
+            return;
+        };
+        let Some(anchor) = snapshot.byte_offset(selection.anchor) else {
+            return;
+        };
+        let Some(focus) = snapshot.byte_offset(selection.focus) else {
+            return;
+        };
+        self.move_to(anchor, None, cx);
+        self.select_to(focus, cx);
+    }
+}
+
 impl<M: InputModeKind> Focusable for InputBaseState<M> {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
@@ -4619,10 +4692,99 @@ impl<M: InputModeKind> Render for InputBaseState<M> {
             self._pending_update = false;
         }
 
+        let accessibility = self
+            .accessibility
+            .clone()
+            .unwrap_or_else(|| InputAccessibility {
+                role: Some(if self.is_multi_line() {
+                    gpui::Role::MultilineTextInput
+                } else {
+                    gpui::Role::TextInput
+                }),
+                label: (!self.placeholder.is_empty()).then(|| self.placeholder.clone()),
+                placeholder: (!self.placeholder.is_empty()).then(|| self.placeholder.clone()),
+                id: None,
+                secret: false,
+            });
+        let value = ((window.is_a11y_active() || cfg!(feature = "test-support"))
+            && !self.masked
+            && !self.token_is_secret()
+            && !accessibility.secret)
+            .then(|| SharedString::from(self.text.to_string()));
+        let accessible_text = value
+            .as_ref()
+            .filter(|_| window.is_a11y_active())
+            .map(|text| {
+                let selection = self.active_selection();
+                let (anchor, focus) = if selection.reversed {
+                    (selection.end, selection.start)
+                } else {
+                    (selection.start, selection.end)
+                };
+                Rc::new(InputTextSnapshot::new(
+                    text.clone(),
+                    self.document_revision,
+                    anchor,
+                    focus,
+                ))
+            });
+        let text_for_tree = accessible_text.clone();
+        let disabled = self.disabled;
+        let readonly = self.readonly;
         let element = div()
             .id("input-state")
             .key_context(CONTEXT)
-            .track_focus(&self.focus_handle)
+            .when_some(accessibility.role, |this, role| this.role(role))
+            .when_some(accessibility.id, |this, id| this.accessibility_id(id))
+            .when_some(accessibility.label, |this, label| this.aria_label(label))
+            .when_some(accessibility.placeholder, |this, placeholder| {
+                this.aria_placeholder(placeholder)
+            })
+            .when_some(value, |this, value| this.aria_value(value))
+            .when(window.is_a11y_active(), |this| {
+                this.a11y_synthetic_children(move |builder| {
+                    if disabled {
+                        builder.parent_node().set_disabled();
+                    }
+                    if readonly {
+                        builder.parent_node().set_read_only();
+                    }
+                    if let Some(snapshot) = text_for_tree {
+                        snapshot.emit(builder);
+                    }
+                })
+            })
+            .when_some(accessible_text.filter(|_| !disabled), |this, text| {
+                let entity = entity.clone();
+                this.on_a11y_action(
+                    gpui::AccessibleAction::SetTextSelection,
+                    move |data, _, cx| {
+                        entity.update(cx, |state, cx| {
+                            state.accessibility_set_selection(&text, data, cx);
+                        });
+                    },
+                )
+            })
+            .on_a11y_action(gpui::AccessibleAction::Focus, {
+                let entity = entity.clone();
+                move |_, window, cx| {
+                    entity.update(cx, |state, cx| {
+                        if !state.disabled {
+                            state.focus(window, cx);
+                        }
+                    })
+                }
+            })
+            .when(self.is_editable(), |this| {
+                this.on_a11y_action(gpui::AccessibleAction::SetValue, {
+                    let entity = entity.clone();
+                    move |data, window, cx| {
+                        entity.update(cx, |state, cx| {
+                            state.accessibility_set_value(data, window, cx);
+                        })
+                    }
+                })
+            })
             .when(self.is_editable(), |this| {
                 this.on_action(window.listener_for(&entity, InputBaseState::backspace))
                     .on_action(window.listener_for(&entity, InputBaseState::delete))
@@ -4758,6 +4920,8 @@ impl<M: InputModeKind> Render for InputBaseState<M> {
         // Actions only one mode handles are registered by that mode, where
         // `Self` is concrete enough to name its own entity type.
         M::register_actions(element, &entity, window)
+            .test_support()
+            .track_focus(&self.focus_handle)
     }
 }
 

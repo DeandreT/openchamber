@@ -1179,6 +1179,8 @@ copy of the app on the bus would otherwise receive the clicks. Every launch is
 a new process group that the script stops and reaps; the receipt lists any
 process that outlived `SIGTERM`. The Electron launch uses `profile:startup`'s
 isolation (own home, data directory and Electron profile).
+The native client also gets a disposable home and XDG directories, so connected
+runs cannot create or replace the installed application's client identity.
 
 Receipts go to `artifacts/native-bench-<time>/receipt.json` with the revision,
 binary hash, host, configuration, raw samples and summaries.
