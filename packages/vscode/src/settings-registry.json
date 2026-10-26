@@ -813,6 +813,10 @@
       "scope": "device",
       "local": true
     },
+    "contextZoneSizes": {
+      "scope": "device",
+      "local": true
+    },
     "contextRailOrder": {
       "scope": "device",
       "local": true
