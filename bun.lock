@@ -90,7 +90,7 @@
     },
     "packages/electron": {
       "name": "@openchamber/electron",
-      "version": "2.5.1",
+      "version": "2.5.2",
       "dependencies": {
         "@openchamber/web": "workspace:*",
         "electron-context-menu": "^4.1.2",
@@ -128,7 +128,7 @@
     },
     "packages/sdk": {
       "name": "@openchamber/sdk",
-      "version": "2.5.1",
+      "version": "2.5.2",
       "bin": {
         "openchamber-guest-bundle": "./scripts/bundle-guest.ts",
       },
@@ -208,7 +208,7 @@
     },
     "packages/ui": {
       "name": "@openchamber/ui",
-      "version": "2.5.1",
+      "version": "2.5.2",
       "dependencies": {
         "@aparajita/capacitor-secure-storage": "^8.0.0",
         "@base-ui/react": "^1.4.0",
@@ -263,6 +263,7 @@
         "express": "^5.1.0",
         "fflate": "^0.8.3",
         "fuse.js": "^7.1.0",
+        "gemoji": "8.1.0",
         "heic2any": "^0.0.4",
         "html-to-image": "^1.11.13",
         "http-proxy-middleware": "^3.0.5",
@@ -314,7 +315,7 @@
     },
     "packages/vscode": {
       "name": "openchamber",
-      "version": "2.5.1",
+      "version": "2.5.2",
       "dependencies": {
         "@openchamber/ui": "workspace:*",
         "@opencode/client": "2.1.4",
@@ -337,7 +338,7 @@
     },
     "packages/web": {
       "name": "@openchamber/web",
-      "version": "2.5.1",
+      "version": "2.5.2",
       "bin": {
         "openchamber": "./bin/cli.js",
       },
@@ -2135,6 +2136,8 @@
     "functions-have-names": ["functions-have-names@1.2.3", "", {}, "sha512-xckBUXyTIqT97tq2x2AMb+g163b5JFysYk0x4qxNFwbfQkmNZoiRHb6sPzI9/QV33WeuvVYBUIiD4NzNIyqaRQ=="],
 
     "fuse.js": ["fuse.js@7.1.0", "", {}, "sha512-trLf4SzuuUxfusZADLINj+dE8clK1frKdmqiJNb1Es75fmI5oY6X2mxLVUciLLjxqw/xr72Dhy+lER6dGd02FQ=="],
+
+    "gemoji": ["gemoji@8.1.0", "", {}, "sha512-HA4Gx59dw2+tn+UAa7XEV4ufUKI4fH1KgcbenVA9YKSj1QJTT0xh5Mwv5HMFNN3l2OtUe3ZIfuRwSyZS5pLIWw=="],
 
     "generator-function": ["generator-function@2.0.1", "", {}, "sha512-SFdFmIJi+ybC0vjlHN0ZGVGHc3lgE0DxPAT0djjVg+kjOnSqclqmj0KQ7ykTOLP6YxoqOvuAODGdcHJn+43q3g=="],
 
