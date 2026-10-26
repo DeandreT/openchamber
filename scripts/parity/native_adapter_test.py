@@ -1,4 +1,4 @@
-"""Content-size checks without launching an application or a display."""
+"""Content-size and row-state checks without launching an application."""
 
 import itertools
 import subprocess
@@ -54,6 +54,59 @@ class NativeSizeTest(unittest.TestCase):
         with patch("native_adapter.subprocess.run", return_value=result), patch("native_adapter.time.sleep"), patch("native_adapter.time.monotonic", side_effect=lambda: next(ticks)):
             with self.assertRaisesRegex(TimeoutError, "wanted 900x600"):
                 client._resize_to_requested(1)
+
+
+class RowNode:
+    def __init__(self, key, states=(), children=()):
+        self.key, self.states, self.children = key, set(states), children
+        self.cache_clears = 0
+
+    def get_accessible_id(self):
+        return self.key
+
+    def get_child_count(self):
+        return len(self.children)
+
+    def get_child_at_index(self, index):
+        return self.children[index]
+
+    def get_name(self):
+        return self.key
+
+    def get_state_set(self):
+        return SimpleNamespace(contains=lambda value: value in self.states)
+
+    def clear_cache(self):
+        self.cache_clears += 1
+
+
+class RowClient(NativeClient):
+    def __init__(self, root):
+        self.root = root
+
+    def _find(self, key):
+        assert key == "sidebar"
+        return self.root
+
+    def _content(self):
+        return None
+
+    def _rect(self, node, content=None):
+        return [0, 0, 100, 30]
+
+
+class NativeExpansionTest(unittest.TestCase):
+    def test_row_states_distinguish_absent_collapsed_and_expanded(self):
+        row = RowNode("row")
+        client = RowClient(RowNode("sidebar", children=[row]))
+        states = SimpleNamespace(SELECTED="selected", EXPANDABLE="expandable", EXPANDED="expanded")
+        with patch("native_adapter._atspi", return_value=SimpleNamespace(StateType=states)):
+            self.assertIsNone(client.rows()[0]["expanded"])
+            row.states = {"expandable"}
+            self.assertIs(client.rows()[0]["expanded"], False)
+            row.states = {"expandable", "expanded"}
+            self.assertIs(client.rows()[0]["expanded"], True)
+        self.assertEqual(row.cache_clears, 3)
 
 
 if __name__ == "__main__":
