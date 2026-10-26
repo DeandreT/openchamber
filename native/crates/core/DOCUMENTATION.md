@@ -95,6 +95,10 @@ crate owns wire parsing and authority checks, and hands the core records and
 - A delta for a part the transcript never saw start returns
   `NeedsReconcile` instead of building text without its beginning. The first
   delta after a full-text snapshot appends only what the snapshot lacks.
+- Message deletions retain their revision for the transcript's lifetime,
+  including IDs not loaded yet. History reads and older pages discard those
+  records when the deletion is newer than the read. A later authoritative
+  live record may restore the ID.
 - A tool result a history page left out (`PartContent::Tool::elided`) never
   replaces the whole result a transcript holds for the same call and status,
   through `replace` or `push`. A live transition with output, or the whole

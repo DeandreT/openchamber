@@ -139,6 +139,68 @@ fn narrow_windows_offer_work_status_as_an_overlay(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn prompt_navigator_shortcut_preserves_the_draft_and_jumps_to_a_prompt(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let (key, session) = session_rows(&workspace, cx)[1].clone();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id(&key), cx);
+        window.input("keep this draft", cx);
+        window.press("ctrl-k", cx);
+        window.press("n", cx);
+    })
+    .expect("window is open");
+    let prompt_ids = cx.read(|cx| {
+        workspace.read(cx).open_sessions[&session]
+            .transcript
+            .messages()
+            .iter()
+            .filter(|message| message.info.role == openchamber_native_core::transcript::Role::User)
+            .map(|message| message.info.id.clone())
+            .collect::<Vec<_>>()
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find(ElementId::Name("prompt-list".into())).visible());
+        window.press("ctrl-p", cx);
+        window.render_frame(cx);
+        let previous = &prompt_ids[prompt_ids.len() - 2];
+        assert_eq!(
+            window
+                .find(ElementId::Name(format!("prompt-row-{previous}").into()))
+                .selected(),
+            Some(true)
+        );
+        window.press("ctrl-n", cx);
+        window.render_frame(cx);
+        let last = prompt_ids.last().expect("prompts exist");
+        assert_eq!(
+            window
+                .find(ElementId::Name(format!("prompt-row-{last}").into()))
+                .selected(),
+            Some(true)
+        );
+        window.press("home", cx);
+        window.press("enter", cx);
+    })
+    .expect("window is open");
+    assert_eq!(composer_text(&workspace, cx), "keep this draft");
+    cx.read(|cx| {
+        let workspace = workspace.read(cx);
+        assert!(
+            workspace.prompt_panel.is_none(),
+            "choosing a prompt closes the panel"
+        );
+        let open = &workspace.open_sessions[&session];
+        assert_eq!(
+            open.list.logical_scroll_top().item_ix,
+            0,
+            "Home selects the first prompt"
+        );
+    });
+}
+
+#[gpui_kit::test]
 fn the_window_opens_on_a_new_session(cx: &mut TestAppContext) {
     let (window, workspace) = open(cx);
     assert_eq!(selected(&workspace, cx), None, "nothing is selected");
@@ -327,6 +389,57 @@ fn alt_down_selects_the_next_session_row(cx: &mut TestAppContext) {
     })
     .expect("window is open");
     assert_eq!(selected(&workspace, cx), Some(rows[1].1.clone()));
+}
+
+#[gpui_kit::test]
+fn prepending_history_preserves_the_visible_message_and_offset(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let rich = session_rows(&workspace, cx)
+        .into_iter()
+        .find(|(_, session)| ConversationShape::for_session(session) == ConversationShape::Rich)
+        .expect("a rich conversation");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id(&rich.0), cx);
+        window.render_frame(cx);
+        window.scroll(
+            "transcript",
+            ScrollDelta::Pixels(point(px(0.0), px(1337.0))),
+            cx,
+        );
+        window.render_frame(cx);
+    })
+    .expect("window is open");
+    let before = cx.read(|cx| {
+        let open = &workspace.read(cx).open_sessions[&rich.1];
+        let anchor = open.list.logical_scroll_top();
+        (
+            open.transcript.messages()[anchor.item_ix].info.id.clone(),
+            anchor.offset_in_item,
+        )
+    });
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let open = workspace
+                .open_sessions
+                .get_mut(&rich.1)
+                .expect("session is open");
+            let mut older = open.transcript.messages()[0].clone();
+            older.info.id = "older-test-message".into();
+            let revision = open.transcript.revision();
+            let change = open.transcript.prepend_page(vec![older], revision);
+            crate::server_sync::apply_list_change(open, &change);
+            cx.notify();
+        });
+        window.render_frame(cx);
+    })
+    .expect("window is open");
+    cx.read(|cx| {
+        let open = &workspace.read(cx).open_sessions[&rich.1];
+        let anchor = open.list.logical_scroll_top();
+        assert_eq!(open.transcript.messages()[anchor.item_ix].info.id, before.0);
+        assert_eq!(anchor.offset_in_item, before.1);
+    });
 }
 
 #[gpui_kit::test]

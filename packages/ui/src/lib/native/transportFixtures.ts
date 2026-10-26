@@ -246,6 +246,12 @@ export const renderTransportFixtures = async (): Promise<string> => {
   const shelled = await global.named('latest messages, shelled', () =>
     global.client.message.list({ sessionID: TOOLS_SESSION, limit: 50 }, { headers: { [PART_SHELLS_HEADER]: PART_SHELLS_VERSION } }),
   );
+  await global.named('earlier messages, shelled', () =>
+    global.client.message.list(
+      { sessionID: TOOLS_SESSION, limit: 50, cursor: 'CURSOR_FROM_PREVIOUS_PAGE' },
+      { headers: { [PART_SHELLS_HEADER]: PART_SHELLS_VERSION } },
+    ),
+  );
   const single = await global.named('whole message', () => global.client.session.message.get({ sessionID: TOOLS_SESSION, messageID: TOOLS_MESSAGE }));
   // The composer's catalogs, read in the active project as `getProvidersForConfig`,
   // `listAgents`, `getConfig` and `listMcpServers` do.

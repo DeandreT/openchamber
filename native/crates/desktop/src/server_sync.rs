@@ -32,7 +32,7 @@ use crate::code_card::CodeWrap;
 use crate::code_wrap_state::CodeWrapState;
 use crate::connection::{ConnectionFailure, ConnectionState};
 use crate::diagnostics::Marker;
-use crate::workspace::{History, OpenSession, Topology, Workspace};
+use crate::workspace::{EarlierHistory, History, OpenSession, Topology, Workspace};
 
 /// Messages read when a session opens, as the web client reads.
 const HISTORY_PAGE_SIZE: usize = 100;
@@ -44,6 +44,9 @@ const PAGE_QUEUE: usize = 4;
 impl Workspace {
     /// Starts a connection attempt, cancelling the previous one's work.
     pub(crate) fn connect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for open in self.open_sessions.values_mut() {
+            open.earlier = EarlierHistory::Idle;
+        }
         let Some(connection) = self.connection.as_mut() else {
             return;
         };
@@ -129,6 +132,9 @@ impl Workspace {
     /// Replaces every runtime-scoped record. Drafts and scroll positions keep
     /// their runtime keys, so they never restore into another server.
     fn switch_runtime(&mut self, runtime: RuntimeId, cx: &mut Context<Self>) {
+        self.prompt_panel = None;
+        self.prompt_hover_task = None;
+        self.prompt_hover_suppressed = false;
         self.code_wrap_save_task = None;
         self.code_wrap_state = CodeWrapState::default();
         cx.set_global(CodeWrap::default());
@@ -443,6 +449,9 @@ impl Workspace {
                             settings.keep_work_in_place =
                                 settings.keep_work_in_place.or(previous.keep_work_in_place);
                             settings.work_enabled = settings.work_enabled.or(previous.work_enabled);
+                            settings.prompt_navigator_enabled = settings
+                                .prompt_navigator_enabled
+                                .or(previous.prompt_navigator_enabled);
                         }
                         this.topology.worktrees.retain(|entry| {
                             settings
@@ -506,6 +515,7 @@ impl Workspace {
         let Some(open) = self.open_sessions.get_mut(id) else {
             return;
         };
+        open.earlier = EarlierHistory::Idle;
         let since = open.transcript.revision();
         let requested = Instant::now();
         let request_id = id.clone();
@@ -557,6 +567,88 @@ impl Workspace {
                 open.history = History::Failed(ConnectionFailure::from_error(&error));
             }
         }
+        cx.notify();
+    }
+
+    /// Loads one older page without replacing the held transcript or moving
+    /// its visible anchor. Failure preserves the cursor for an explicit retry.
+    pub(crate) fn load_earlier_prompts(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.selected.clone() else {
+            return;
+        };
+        let Some(connection) = self.connection.as_ref() else {
+            return;
+        };
+        let Some(client) = connection.client.clone() else {
+            return;
+        };
+        let Some(open) = self.open_sessions.get_mut(&id) else {
+            return;
+        };
+        if matches!(open.earlier, EarlierHistory::Loading { .. }) {
+            return;
+        }
+        let Some(cursor) = open.older.clone() else {
+            return;
+        };
+        let generation = connection.generation;
+        let runtime = self.runtime.clone();
+        let since = open.transcript.revision();
+        let request_id = id.clone();
+        let request_cursor = cursor.clone();
+        let task = connection.network.run(async move {
+            let page = client
+                .earlier_messages(&request_id, &request_cursor, HISTORY_PAGE_SIZE)
+                .await?;
+            if page.older.as_ref() == Some(&request_cursor) {
+                return Err(TransportError::Malformed(
+                    "the older message cursor did not advance".to_owned(),
+                ));
+            }
+            Ok(page)
+        });
+        open.earlier = EarlierHistory::Loading {
+            _read: cx.spawn(async move |this, cx| {
+                let result = task.await.unwrap_or(Err(TransportError::Cancelled));
+                let _ = this.update(cx, |this, cx| {
+                    if this.runtime != runtime
+                        || !this
+                            .connection
+                            .as_ref()
+                            .is_some_and(|connection| connection.generation == generation)
+                    {
+                        return;
+                    }
+                    let Some(open) = this.open_sessions.get_mut(&id) else {
+                        return;
+                    };
+                    if open.older.as_ref() != Some(&cursor) {
+                        return;
+                    }
+                    match result {
+                        Ok(page) => {
+                            let before = crate::prompt_rail::prompt_rows(&open.transcript).len();
+                            let change = open.transcript.prepend_page(page.messages, since);
+                            open.older = page.older;
+                            open.earlier = EarlierHistory::Idle;
+                            apply_list_change(open, &change);
+                            let added = crate::prompt_rail::prompt_rows(&open.transcript)
+                                .len()
+                                .saturating_sub(before);
+                            if this.selected.as_ref() == Some(&id) {
+                                this.prompt_history_prepended(added);
+                            }
+                        }
+                        Err(error) => {
+                            tracing::warn!(%error, "earlier prompts could not be read");
+                            open.earlier =
+                                EarlierHistory::Failed(ConnectionFailure::from_error(&error));
+                        }
+                    }
+                    cx.notify();
+                });
+            }),
+        };
         cx.notify();
     }
 

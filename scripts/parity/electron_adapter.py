@@ -119,6 +119,9 @@ class ElectronClient:
         row = f'[data-sidebar-row-key="{row_key}"]'
         self._call("click", selector=f"{row} [data-session-row], {row} button", within=row)
 
+    def click_target(self, spec: dict) -> None:
+        self._call("click", selector=spec["selector"])
+
     def key(self, name: str) -> None:
         codes = {"Return": ("Enter", "Enter", 13), "Escape": ("Escape", "Escape", 27), "Down": ("ArrowDown", "ArrowDown", 40), "Up": ("ArrowUp", "ArrowUp", 38)}
         key, code, key_code = codes[name]

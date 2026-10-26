@@ -333,6 +333,9 @@ class NativeClient:
             raise LookupError(f"{accessible_id!r} offers no accessibility action")
         action.do_action(0)
 
+    def click_target(self, accessible_id: str) -> None:
+        self.click(accessible_id)
+
     def key(self, name: str) -> None:
         self._input_mark = len(self.marks)
         atspi = _atspi()

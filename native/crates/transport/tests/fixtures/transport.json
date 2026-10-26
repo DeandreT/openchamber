@@ -103,6 +103,23 @@
       "partShellsHeader": "v1"
     },
     {
+      "name": "earlier messages, shelled",
+      "method": "GET",
+      "path": "/api/session/ses_e9b3bfe12ffeMuiZLLg25eNcms/message",
+      "query": [
+        [
+          "cursor",
+          "CURSOR_FROM_PREVIOUS_PAGE"
+        ],
+        [
+          "limit",
+          "50"
+        ]
+      ],
+      "directoryHeader": null,
+      "partShellsHeader": "v1"
+    },
+    {
       "name": "whole message",
       "method": "GET",
       "path": "/api/session/ses_e9b3bfe12ffeMuiZLLg25eNcms/message/msg_164c422cf001JfI01Q6WJWl0lr",

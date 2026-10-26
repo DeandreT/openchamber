@@ -306,6 +306,10 @@ def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], dire
             waits.append({"condition": {"selectedRow": key}, "met": wait_selected(client, key)})
         elif "key" in step:
             client.key(step["key"])
+        elif "clickTarget" in step:
+            if not settle(client):
+                raise TimeoutError("the client never settled before control activation")
+            client.click_target(targets[step["clickTarget"]][kind])
         elif "type" in step:
             client.type_text(step["type"])
         elif "settle" in step:

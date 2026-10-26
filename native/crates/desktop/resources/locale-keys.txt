@@ -29,7 +29,10 @@ chat.modelControls.default
 chat.modelControls.selectAgent
 chat.modelControls.selectModel
 chat.promptNavigator.aria
+chat.promptNavigator.currentPrompt
+chat.promptNavigator.loadMore
 chat.scrollToBottom.aria
+chat.timeline.noTextContent
 chat.workStatus.action.openContext
 chat.workStatus.ariaLabel
 chat.workStatus.attention.bisect

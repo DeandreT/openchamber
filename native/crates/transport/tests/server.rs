@@ -340,6 +340,33 @@ fn description() -> ClientDescription {
 }
 
 #[tokio::test]
+async fn older_messages_use_the_cursor_without_an_order_or_directory() {
+    let server = Server::start(
+        |request| {
+            assert_eq!(request.method, "GET");
+            assert_eq!(
+                request.target,
+                "/prefix/api/session/s/message?limit=10&cursor=%2B%2F%3D"
+            );
+            assert_eq!(request.header("x-opencode-directory"), None);
+            Reply::json(json!({"data": [], "cursor": {"next": "ignored"}}))
+        },
+        vec![],
+    )
+    .await;
+    let client = ServerClient::new(server.endpoint(), Credential::None).expect("a client");
+    let page = client
+        .earlier_messages(&"s".into(), "+/=", 10)
+        .await
+        .expect("older page succeeds");
+    assert!(page.messages.is_empty());
+    assert_eq!(
+        page.older, None,
+        "an empty page ends pagination even with a cursor"
+    );
+}
+
+#[tokio::test]
 async fn settings_writes_preserve_the_prefix_surface_and_unrelated_fields() {
     let server = Server::start(
         |request| {

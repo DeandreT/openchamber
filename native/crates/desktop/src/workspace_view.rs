@@ -29,6 +29,8 @@ actions!(
         StopGenerating,
         /// Turns line wrapping in code blocks on or off.
         ToggleCodeWrap,
+        /// Opens or closes the prompt navigation panel.
+        TogglePromptNavigator,
     ]
 );
 
@@ -43,6 +45,8 @@ pub fn bind_keys(cx: &mut gpui_kit::App) {
         KeyBinding::new("alt-down", SelectNextSession, Some(KEY_CONTEXT)),
         KeyBinding::new("alt-up", SelectPreviousSession, Some(KEY_CONTEXT)),
         KeyBinding::new("escape", StopGenerating, Some(KEY_CONTEXT)),
+        KeyBinding::new("ctrl-k n", TogglePromptNavigator, Some(KEY_CONTEXT)),
+        KeyBinding::new("cmd-k n", TogglePromptNavigator, Some(KEY_CONTEXT)),
     ]);
 }
 
@@ -55,6 +59,22 @@ impl Render for Workspace {
             self.initial_size = None;
         }
         self.sync_composer_placeholder(window, cx);
+        if self.prompt_panel.is_some()
+            && (self
+                .send_catalog
+                .settings
+                .as_ref()
+                .and_then(|settings| settings.prompt_navigator_enabled)
+                == Some(false)
+                || self
+                    .selected
+                    .as_ref()
+                    .and_then(|id| self.open_sessions.get(id))
+                    .is_none_or(|open| crate::prompt_rail::prompt_rows(&open.transcript).len() < 2))
+        {
+            self.prompt_panel = None;
+            self.prompt_hover_task = None;
+        }
         if self.work_status_fits(window) {
             self.work_status_overlay = false;
         }
@@ -98,7 +118,16 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &SelectPreviousSession, window, cx| {
                 this.select_adjacent(-1, window, cx);
             }))
-            .on_action(cx.listener(|this, _: &StopGenerating, _, cx| this.stop(cx)))
+            .on_action(cx.listener(|this, _: &StopGenerating, window, cx| {
+                if this.prompt_panel.is_some() {
+                    this.close_prompt_panel(window, cx);
+                } else {
+                    this.stop(cx);
+                }
+            }))
+            .on_action(cx.listener(|this, _: &TogglePromptNavigator, window, cx| {
+                this.toggle_prompt_navigator(window, cx);
+            }))
             .on_action(cx.listener(|this, _: &ToggleCodeWrap, _, cx| {
                 this.toggle_code_wrap(cx);
             }))

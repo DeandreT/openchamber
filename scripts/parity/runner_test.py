@@ -66,6 +66,14 @@ class RunnerInputTest(unittest.TestCase):
         client.click("session:target")
         self.assertTrue(runner.wait_selected(client, "session:target", timeout_s=1))
 
+    def test_control_clicks_use_the_runtime_target(self):
+        client = Client()
+        calls = []
+        client.click_target = calls.append
+        runner.perform(client, "native", [{"clickTarget": "menu"}],
+            {"menu": {"native": "menu-control"}}, Path("unused"), argparse.Namespace())
+        self.assertEqual(calls, ["menu-control"])
+
 
 class ScenarioSettingsTest(unittest.TestCase):
     def test_settings_are_applied_to_independent_copies_only(self):

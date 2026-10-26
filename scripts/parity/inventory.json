@@ -74,6 +74,15 @@
       "coverage": "automated"
     },
     {
+      "id": "transcript.prompt-navigation",
+      "group": "transcript",
+      "title": "Corner prompt indicator and prompt list navigation",
+      "reference": ["packages/ui/src/components/chat/components/PromptNavigatorRail.tsx"],
+      "states": ["closed", "open", "selected", "loading earlier"],
+      "scenarios": ["transcript.prompt-navigation"],
+      "coverage": "automated"
+    },
+    {
       "id": "sessions.works-by-time",
       "group": "sessions",
       "title": "Saved grouping and section visibility: one list by time, with In work and Pinned hidden",

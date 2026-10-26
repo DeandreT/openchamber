@@ -97,16 +97,12 @@ impl Workspace {
         area
     }
 
-    /// The composer box's width: the chat column, less the transcript's
-    /// navigation gutter when a session is open, capped and padded as
+    /// The composer box's width: the chat column capped and padded as
     /// `.chat-input-column`.
     pub(crate) fn composer_width(&self, window: &Window) -> f32 {
-        let mut column = self.chat_area_width(window);
-        if self.selected.is_some() {
-            column -= chrome::NAVIGATION_GUTTER;
-        }
+        let column = self.chat_area_width(window);
         column.min(chrome::CHAT_COLUMN_MAX_WIDTH)
-            - 2.0 * f32::from(chrome::chat_column_padding(window))
+            - 2.0 * f32::from(chrome::chat_column_padding(window, column))
     }
 
     /// Shows the full placeholder, or the short one when the full one would
@@ -175,7 +171,6 @@ impl Workspace {
             .bottom_0()
             .left_0()
             .right_0()
-            .padding_end(direction, px(chrome::NAVIGATION_GUTTER))
             .pb(px(16.0))
             .flex()
             .justify_center()
@@ -184,7 +179,10 @@ impl Workspace {
                 div()
                     .w_full()
                     .max_w(px(chrome::CHAT_COLUMN_MAX_WIDTH))
-                    .px(chrome::chat_column_padding(window))
+                    .px(chrome::chat_column_padding(
+                        window,
+                        self.chat_area_width(window),
+                    ))
                     .child(self.render_composer_box(palette, direction, window, cx)),
             )
     }

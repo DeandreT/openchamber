@@ -55,11 +55,13 @@ read-only until prompt submission has its error and reconciliation paths.
   `turn_stats`, recomputed while the session is idle and kept while it
   works; `context_panel.rs` holds the card's shared collapsible section and
   readout row.
-- `prompt_rail.rs` draws the prompt navigator at the transcript's end edge:
-  one tick per prompt, the current one longer, following the reading line
-  as `scrollSpy.ts` does, in the narrow clipping gutter when the message
-  column reaches under the full one. A scroll that moves the current prompt
-  redraws it.
+- `prompt_rail.rs` draws the corner prompt indicator and the prompt-list
+  panel. The indicator follows `scrollSpy.ts`'s reading line. Hover, click
+  and the keyboard shortcut open the panel; arrows, Ctrl+N/P, Home and End
+  move its highlight, and Enter or Space selects a prompt. The panel keeps
+  its own scroll position and closes on selection, Escape, keyboard blur,
+  outside click or session change. Earlier pages prepend without moving
+  the transcript's anchor or the panel's highlighted message.
 - `turn_footer.rs` draws the facts under a finished turn (model, effort,
   agent, duration, time) and fits them to the row as `useFactsFit` does,
   keeping the place of the message actions the web lays out for hover. The

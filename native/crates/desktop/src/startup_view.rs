@@ -54,7 +54,7 @@ impl Workspace {
         let title = strings.get("chat.emptyState.draftTitle");
         // `pb-[6vh]`: six percent of the content's height.
         let lift = chrome::content_size(window).height * 0.06;
-        let column_padding = chrome::chat_column_padding(window);
+        let column_padding = chrome::chat_column_padding(window, self.chat_area_width(window));
         let project_chooser = on_activate(
             div()
                 .id("choose-project")
