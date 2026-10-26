@@ -663,6 +663,7 @@ export const LOCAL_DEVICE_KEYS = [
   'sidebarFoldedForExpandedZone',
   'sidebarWidth',
   'contextPanelByDirectory',
+  'contextZoneSizes',
   'contextRailOrder',
   'contextRailHiddenSurfaces',
   'mobileWorkspaceTabOrder',
