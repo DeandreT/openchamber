@@ -288,7 +288,7 @@ impl Workspace {
                                 .items_center()
                                 .gap(px(6.0))
                                 .css_text(0.65625, 0.9375, cx)
-                                .text_color(palette.muted_foreground.opacity(0.75))
+                                .text_color(palette.muted_foreground)
                                 .children(meta.project.map(|label| div().truncate().child(label)))
                                 .children(meta.branch.map(|branch| {
                                     div()
@@ -296,11 +296,7 @@ impl Workspace {
                                         .flex_row_from(direction)
                                         .items_center()
                                         .gap(px(2.0))
-                                        .child(glyph(
-                                            "git-branch",
-                                            12.0,
-                                            palette.muted_foreground.opacity(0.7),
-                                        ))
+                                        .child(glyph("git-branch", 12.0, palette.muted_foreground))
                                         .child(div().truncate().child(branch))
                                 }))
                         })),

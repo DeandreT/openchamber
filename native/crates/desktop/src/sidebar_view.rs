@@ -27,6 +27,7 @@ use crate::logical::LogicalStyledExt;
 use crate::sidebar_item::SidebarItem;
 use crate::theme::Palette;
 use crate::workspace::Workspace;
+use gpui_kit::component::Colorize as _;
 
 /// Default sidebar width of the desktop layout.
 pub const SIDEBAR_WIDTH: f32 = 280.0;
@@ -35,7 +36,7 @@ const FOOTER_HEIGHT: f32 = 40.0;
 /// The list's inline padding (`ps-2.5 pe-2`); row slots span the rest.
 const LIST_PADDING_START: f32 = 10.0;
 const LIST_PADDING_END: f32 = 8.0;
-const HEADER_HEIGHT: f32 = 28.0;
+const HEADER_HEIGHT: f32 = 30.0;
 /// Zone and project headers: text after a 16 px inset, a 14 px glyph and a
 /// 6 px gap.
 const HEADER_INSET_START: f32 = 16.0;
@@ -56,7 +57,8 @@ const TREE_GAP: f32 = 6.0;
 /// The design system's type scale, in rems of the 16 px root.
 const LABEL_SIZE: f32 = 0.843_75;
 const LABEL_LINE: f32 = 1.25;
-const HEADER_SIZE: f32 = 0.875;
+const HEADER_SIZE: f32 = 0.9375;
+const HEADER_LINE: f32 = 1.375;
 const MICRO_SIZE: f32 = 0.75;
 const XS_SIZE: f32 = 0.75;
 const XS_LINE: f32 = 0.9375;
@@ -448,7 +450,7 @@ impl Workspace {
                         .flex_row_from(direction)
                         .items_center()
                         .gap(px(6.0))
-                        .child(glyph("edit", 12.0, palette.muted_foreground.opacity(0.7)))
+                        .child(glyph("edit", 12.0, palette.muted_foreground))
                         .child(
                             div()
                                 .min_w_0()
@@ -458,7 +460,7 @@ impl Workspace {
                                 .text_color(if selected {
                                     palette.selection_foreground
                                 } else {
-                                    palette.muted_foreground
+                                    resting_title(&palette)
                                 })
                                 .child(title.clone()),
                         ),
@@ -585,8 +587,9 @@ impl Workspace {
                     .aria_label(text.clone())
                     .aria_expanded(!*collapsed)
                     .h(px(SESSION_HEIGHT))
+                    .font_weight(FontWeight::MEDIUM)
                     .child(glyph(icon, 16.0, palette.muted_foreground))
-                    .child(row_text(text, palette.muted_foreground, cx));
+                    .child(row_text(text, container_title(&palette), cx));
                 let toggled = item.clone();
                 on_activate(row, cx, move |this, _, cx| {
                     this.toggle_collapsed(&toggled, cx)
@@ -632,8 +635,17 @@ impl Workspace {
                     .aria_expanded(*expanded)
                     .aria_selected(selected)
                     .h(px(SESSION_HEIGHT))
+                    .font_weight(FontWeight::MEDIUM)
                     .child(glyph(icon, 14.0, palette.muted_foreground))
-                    .child(row_text(text, palette.muted_foreground, cx));
+                    .child(row_text(
+                        text,
+                        if selected {
+                            palette.selection_foreground
+                        } else {
+                            container_title(&palette)
+                        },
+                        cx,
+                    ));
                 if let Some(id) = session_ids.first().cloned() {
                     on_activate(row, cx, move |this, window, cx| {
                         this.select_session(id.clone(), window, cx)
@@ -689,7 +701,7 @@ impl Workspace {
                 } else if streaming {
                     palette.foreground
                 } else {
-                    palette.muted_foreground
+                    resting_title(&palette)
                 };
                 let node = div()
                     .id(key.clone())
@@ -706,10 +718,10 @@ impl Workspace {
                     .h(px(SESSION_HEIGHT))
                     .child(row_text(title, text_color, cx))
                     .when(streaming, |this| {
-                        this.child(glyph("circle", 16.0, palette.info))
+                        this.child(glyph("circle", 12.0, palette.info))
                     })
-                    .when(*pinned && !streaming, |this| {
-                        this.child(glyph("pushpin", 16.0, palette.muted_foreground))
+                    .when(*pinned, |this| {
+                        this.child(glyph("pushpin", 12.0, palette.primary))
                     });
                 let (node, row) = on_activate_split(node, row, cx, move |this, window, cx| {
                     this.select_session(id.clone(), window, cx);
@@ -746,7 +758,7 @@ impl Workspace {
                     .flex_row_from(direction)
                     .cursor_pointer()
                     .css_text(XS_SIZE, XS_LINE, cx)
-                    .text_color(palette.muted_foreground.opacity(0.7))
+                    .text_color(palette.muted_foreground)
                     .hover(move |style| style.text_color(foreground).underline())
                     .child(label);
                 let revealed = item.clone();
@@ -820,7 +832,7 @@ impl Workspace {
         action: impl Fn(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static,
     ) -> AnyElement {
         let group: SharedString = format!("{}:hover", header.key).into();
-        let icon_color = palette.muted_foreground.opacity(0.8);
+        let icon_color = palette.muted_foreground;
         let node = div()
             .id(header.key.clone())
             .role(Role::Button)
@@ -866,8 +878,8 @@ impl Workspace {
                 div()
                     .min_w_0()
                     .truncate()
-                    .css_text(HEADER_SIZE, LABEL_LINE, cx)
-                    .font_weight(FontWeight::SEMIBOLD)
+                    .css_text(HEADER_SIZE, HEADER_LINE, cx)
+                    .font_weight(FontWeight::BOLD)
                     .text_color(palette.foreground)
                     .child(header.label),
             );
@@ -911,7 +923,7 @@ impl Workspace {
         } else if streaming {
             palette.foreground
         } else {
-            palette.muted_foreground
+            resting_title(palette)
         };
         let age = compact_age(strings, *activity_ms);
         let hover_fill = palette.hover.opacity(0.6);
@@ -1132,6 +1144,15 @@ fn notice_row(
         .text_size(rems(MICRO_SIZE))
         .text_color(color)
         .child(label)
+}
+
+/// The sidebar's opaque `oc-title-rest` mix, independent of the row background.
+fn resting_title(palette: &Palette) -> Hsla {
+    palette.foreground.mix_oklab(palette.muted_foreground, 0.5)
+}
+
+fn container_title(palette: &Palette) -> Hsla {
+    palette.foreground.mix_oklab(palette.muted_foreground, 0.75)
 }
 
 fn row_text(text: SharedString, color: Hsla, cx: &gpui_kit::App) -> impl IntoElement {
