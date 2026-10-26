@@ -16,7 +16,6 @@ use crate::activation::on_activate;
 use crate::chrome::{self, glyph};
 use crate::connection::ConnectionFailure;
 use crate::locale::{self, Direction};
-use crate::logical::LogicalStyledExt;
 use crate::markdown_view::{self, Author};
 use crate::theme::Palette;
 use crate::workspace::{History, Workspace};
@@ -92,6 +91,7 @@ impl Workspace {
             direction,
             locale::strings(cx).get("chat.promptNavigator.aria"),
             window,
+            cx,
         );
         let rows = list(
             open.list.clone(),
@@ -104,7 +104,6 @@ impl Workspace {
             .accessibility_id("transcript")
             .absolute()
             .inset_0()
-            .padding_end(direction, px(chrome::NAVIGATION_GUTTER))
             .child(rows)
             .children(rail)
             .when(!following, |this| {
@@ -211,7 +210,10 @@ impl Workspace {
                 div()
                     .w_full()
                     .max_w(px(chrome::CHAT_COLUMN_MAX_WIDTH))
-                    .px(chrome::chat_column_padding(window))
+                    .px(chrome::chat_column_padding(
+                        window,
+                        self.chat_area_width(window),
+                    ))
                     .child(body),
             )
             .into_any_element()

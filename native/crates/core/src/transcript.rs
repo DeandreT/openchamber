@@ -298,6 +298,9 @@ pub struct Transcript {
     revision: u64,
     /// The revision that last changed each message.
     changed_at: HashMap<MessageId, u64>,
+    /// Deletions stay known while this transcript lives, including messages
+    /// not loaded yet, so older in-flight pages cannot restore them.
+    removed_at: HashMap<MessageId, u64>,
     /// Text parts whose next delta may repeat the end of a full snapshot.
     overlapping_delta: HashSet<PartId>,
 }
@@ -407,8 +410,23 @@ impl Transcript {
         TranscriptChange::Inserted { rows: 0..count }
     }
 
+    /// Prepends a page requested at `since`, preserving newer deletions.
+    pub fn prepend_page(&mut self, page: Vec<Message>, since: u64) -> TranscriptChange {
+        let page = page
+            .into_iter()
+            .filter(|message| {
+                !self
+                    .removed_at
+                    .get(&message.info.id)
+                    .is_some_and(|revision| *revision > since)
+            })
+            .collect();
+        self.prepend(page)
+    }
+
     /// Appends a message, or updates it in place when already held.
     pub fn push(&mut self, mut message: Message) -> TranscriptChange {
+        self.removed_at.remove(&message.info.id);
         if let Some(row) = self.row_of(&message.info.id) {
             keep_whole_results(&self.messages[row], &mut message);
             if self.messages[row] == message {
@@ -498,6 +516,8 @@ impl Transcript {
                 TranscriptChange::Updated { row }
             }
             TranscriptEvent::MessageRemoved { message_id } => {
+                self.revision += 1;
+                self.removed_at.insert(message_id.clone(), self.revision);
                 let Some(row) = self.row_of(&message_id) else {
                     return TranscriptChange::Unchanged;
                 };
@@ -505,7 +525,6 @@ impl Transcript {
                 self.row_by_id.remove(&message_id);
                 self.changed_at.remove(&message_id);
                 self.reindex(row);
-                self.revision += 1;
                 TranscriptChange::Removed { rows: row..row + 1 }
             }
             TranscriptEvent::PartsReplaced { message_id, parts } => {
@@ -641,6 +660,15 @@ impl Transcript {
     /// read does not list are older pages when they precede its oldest message
     /// and deletions when they follow it.
     pub fn materialize(&mut self, history: Vec<Message>, since: u64) -> TranscriptChange {
+        let history: Vec<Message> = history
+            .into_iter()
+            .filter(|message| {
+                !self
+                    .removed_at
+                    .get(&message.info.id)
+                    .is_some_and(|revision| *revision > since)
+            })
+            .collect();
         let history_ids: HashSet<&MessageId> =
             history.iter().map(|message| &message.info.id).collect();
         let first_shared = self
@@ -945,6 +973,52 @@ fn keep_whole_results(held: &Message, next: &mut Message) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delayed_history_cannot_restore_a_deleted_message() {
+        let deleted = message("deleted", Role::User, "old");
+        let kept = message("kept", Role::Assistant, "kept");
+        let mut transcript = Transcript::from_history(vec![deleted.clone(), kept.clone()]);
+        let since = transcript.revision();
+        let _ = transcript.apply(TranscriptEvent::MessageRemoved {
+            message_id: deleted.info.id.clone(),
+        });
+        assert_eq!(
+            transcript.materialize(vec![deleted.clone(), kept], since),
+            TranscriptChange::Unchanged
+        );
+        assert!(
+            transcript.row_of(&deleted.info.id).is_none(),
+            "a stale newest-page read cannot undo a deletion"
+        );
+        assert_eq!(
+            transcript.prepend_page(vec![deleted.clone()], since),
+            TranscriptChange::Unchanged
+        );
+        assert!(
+            transcript.row_of(&deleted.info.id).is_none(),
+            "a stale older page cannot undo a deletion"
+        );
+
+        let unseen = message("unseen", Role::User, "older");
+        let since = transcript.revision();
+        let _ = transcript.apply(TranscriptEvent::MessageRemoved {
+            message_id: unseen.info.id.clone(),
+        });
+        assert_eq!(
+            transcript.prepend_page(vec![unseen.clone()], since),
+            TranscriptChange::Unchanged
+        );
+        assert!(
+            transcript.row_of(&unseen.info.id).is_none(),
+            "deletions also cover messages not loaded yet"
+        );
+        let _ = transcript.push(unseen.clone());
+        assert!(
+            transcript.row_of(&unseen.info.id).is_some(),
+            "a new authoritative live record may restore an id"
+        );
+    }
 
     fn message(id: &str, role: Role, text: &str) -> Message {
         Message {

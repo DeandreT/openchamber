@@ -146,7 +146,8 @@ Give the feature an inventory entry first, with the reference files and the
 states it covers, then add steps to `scenarios.json` that name it. The runner
 refuses a scenario whose feature is not in the inventory and an inventory entry
 that lists a scenario that does not exist. Steps are `click` (a row by zone
-prefix and title), `key`, `type`, `wait`, `settle` and `capture`. A capture
+prefix and title), `clickTarget` (a named control with an Electron selector
+and a native accessible ID), `key`, `type`, `wait`, `settle` and `capture`. A capture
 can list `targets` from the scenario file's shared target table.
 
 Prefer `wait` to `settle`: it names the observable state a checkpoint needs,

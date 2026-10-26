@@ -43,6 +43,8 @@ counts and identifiers only.
   authority to remove sessions it did not reach.
 - A message page shorter than its limit is the oldest page, whatever cursor
   the server still names.
+- Older message reads preserve the server's cursor and omit explicit order
+  and directory headers, matching the official client's request.
 - Session and message routes send no directory header: the server resolves
   the session's own location. Directory-scoped reads encode the directory as
   `encodeURIComponent` does.

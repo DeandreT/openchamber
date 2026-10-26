@@ -1,6 +1,14 @@
 {
   "$comment": "Parity scenarios. Rows are addressed by key prefix and title, never by seeded session IDs. Targets name controls: a CSS selector or a button's exact text in Electron, an accessible ID in the native client. See scripts/parity/DOCUMENTATION.md.",
   "targets": {
+    "prompt-indicator": {
+      "electron": { "selector": "nav[aria-label='Prompt navigation'] button[aria-haspopup='listbox']" },
+      "native": "prompt-indicator"
+    },
+    "prompt-list": {
+      "electron": { "selector": "nav[aria-label='Prompt navigation'] [role='listbox']" },
+      "native": "prompt-list"
+    },
     "app-menu": {
       "electron": {
         "selector": "button[aria-label=\"Open OpenChamber menu\"]"
@@ -201,6 +209,24 @@
             "starter-add"
           ]
         }
+      ]
+    },
+    {
+      "id": "transcript.prompt-navigation",
+      "feature": "transcript.prompt-navigation",
+      "description": "The corner indicator opens the prompt list over the transcript.",
+      "steps": [
+        { "click": { "zone": "activity:work:session:", "title": "parity: long" } },
+        { "wait": {
+          "electron": { "expression": "!!document.querySelector(\"nav[aria-label='Prompt navigation'] button[aria-haspopup='listbox']\")" },
+          "native": { "elements": ["prompt-indicator"] }, "timeout": 30
+        } },
+        { "clickTarget": "prompt-indicator" },
+        { "wait": {
+          "electron": { "expression": "!!document.querySelector(\"nav[aria-label='Prompt navigation'] [role='listbox']\")" },
+          "native": { "elements": ["prompt-list"] }, "timeout": 30
+        } },
+        { "capture": "prompt-list", "targets": ["prompt-list", "composer"] }
       ]
     },
     {

@@ -300,6 +300,25 @@ fn requests_match_the_official_client() {
         shelled.part_shells_header.as_deref()
     );
     assert!(built.headers().get("x-opencode-directory").is_none());
+    let earlier = request(&fixture, "earlier messages, shelled");
+    let built = shells
+        .earlier_messages_request(
+            &SessionId::from(TOOLS_SESSION),
+            "CURSOR_FROM_PREVIOUS_PAGE",
+            50,
+        )
+        .build()
+        .expect("the older-page request builds");
+    assert_eq!(built.url().path(), earlier.path);
+    assert_eq!(sorted_query(built.url()), earlier.query);
+    assert_eq!(
+        built
+            .headers()
+            .get("x-openchamber-part-shells")
+            .and_then(|value| value.to_str().ok()),
+        earlier.part_shells_header.as_deref()
+    );
+    assert!(built.headers().get("x-opencode-directory").is_none());
     let plain = client
         .latest_messages_request(&SessionId::from(TOOLS_SESSION), 50)
         .build()

@@ -260,6 +260,7 @@ pub(crate) struct Settings {
     pub sidebar_show_work_section: Option<Value>,
     pub sidebar_keep_work_in_place: Option<Value>,
     pub session_work_enabled: Option<Value>,
+    pub prompt_navigator_enabled: Option<Value>,
 }
 
 /// OpenCode v2 list routes: `{ location, data }`.

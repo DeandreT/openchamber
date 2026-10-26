@@ -146,6 +146,7 @@ pub struct ServerSettings {
     pub show_work: Option<bool>,
     pub keep_work_in_place: Option<bool>,
     pub work_enabled: Option<bool>,
+    pub prompt_navigator_enabled: Option<bool>,
     /// The model defaults of registered projects that set any.
     pub project_defaults: Vec<ProjectDefaults>,
     /// The display labels of registered projects that set one.
@@ -286,6 +287,10 @@ impl ServerSettings {
                 .and_then(Value::as_bool),
             work_enabled: settings
                 .session_work_enabled
+                .as_ref()
+                .and_then(Value::as_bool),
+            prompt_navigator_enabled: settings
+                .prompt_navigator_enabled
                 .as_ref()
                 .and_then(Value::as_bool),
         }
@@ -530,12 +535,43 @@ impl ServerClient {
         session_id: &SessionId,
         limit: usize,
     ) -> RequestBuilder {
-        let request = self.authorized(Method::GET, self.messages_url(session_id, limit));
+        self.message_page_request(self.messages_url(session_id, limit))
+    }
+
+    fn message_page_request(&self, url: Url) -> RequestBuilder {
+        let request = self.authorized(Method::GET, url);
         if self.part_shells {
             request.header(PART_SHELLS_HEADER, PART_SHELLS_VERSION)
         } else {
             request
         }
+    }
+
+    /// Reads the next older message page using the server's opaque cursor.
+    /// A cursor request carries no explicit order, matching the official client.
+    pub async fn earlier_messages(
+        &self,
+        session_id: &SessionId,
+        cursor: &str,
+        limit: usize,
+    ) -> Result<MessagePage, TransportError> {
+        let response = self
+            .earlier_messages_request(session_id, cursor, limit)
+            .send()
+            .await
+            .map_err(TransportError::from_request)?;
+        message_page(read_json(response).await?, limit)
+    }
+
+    pub(crate) fn earlier_messages_request(
+        &self,
+        session_id: &SessionId,
+        cursor: &str,
+        limit: usize,
+    ) -> RequestBuilder {
+        let mut url = self.messages_url(session_id, limit);
+        url.query_pairs_mut().append_pair("cursor", cursor);
+        self.message_page_request(url)
     }
 
     /// The URL of one whole message.

@@ -45,6 +45,7 @@ use crate::connection::{Connection, ConnectionFailure};
 use crate::diagnostics::{self, Marker};
 use crate::locale;
 use crate::project_section::ProjectReadouts;
+use crate::prompt_rail::PromptPanel;
 use crate::provider_logos::ProviderLogos;
 use crate::send_catalog::SendCatalog;
 use crate::sidebar_item::SidebarItem;
@@ -87,6 +88,12 @@ pub enum History {
     Failed(ConnectionFailure),
 }
 
+pub enum EarlierHistory {
+    Idle,
+    Loading { _read: Task<()> },
+    Failed(ConnectionFailure),
+}
+
 /// A visited session's transcript and its retained scroll state.
 ///
 /// The list state stays alive while the client runs, so returning to a
@@ -97,6 +104,7 @@ pub struct OpenSession {
     pub history: History,
     /// The cursor of the next older page, when the server has one.
     pub older: Option<String>,
+    pub earlier: EarlierHistory,
     /// The prompt the rail last showed as current.
     pub rail_current: Option<usize>,
     /// The statistics the Turn stats section last committed while idle.
@@ -116,6 +124,9 @@ pub struct Workspace {
     pub(crate) sidebar_open: bool,
     pub(crate) work_status_open: bool,
     pub(crate) work_status_overlay: bool,
+    pub(crate) prompt_panel: Option<PromptPanel>,
+    pub(crate) prompt_hover_task: Option<Task<()>>,
+    pub(crate) prompt_hover_suppressed: bool,
     /// Whether the work status card's Context sources section is expanded.
     pub(crate) work_status_context_open: bool,
     /// Turn stats start expanded.
@@ -200,6 +211,9 @@ impl Workspace {
             sidebar_open: true,
             work_status_open: true,
             work_status_overlay: false,
+            prompt_panel: None,
+            prompt_hover_task: None,
+            prompt_hover_suppressed: false,
             work_status_context_open: false,
             work_status_telemetry_open: true,
             title_drag_armed: false,
@@ -324,6 +338,9 @@ impl Workspace {
     /// Leaves the selected session for the new-session view, keeping both
     /// drafts and the session's reading position.
     pub fn show_new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.prompt_panel = None;
+        self.prompt_hover_task = None;
+        self.prompt_hover_suppressed = false;
         if self.selected.is_some() {
             self.save_composer_draft(cx);
             self.save_scroll_position();
@@ -353,6 +370,9 @@ impl Workspace {
     /// Selects a session: saves the outgoing draft and position under their
     /// captured identities, then restores the incoming ones before paint.
     pub fn select_session(&mut self, id: SessionId, window: &mut Window, cx: &mut Context<Self>) {
+        self.prompt_panel = None;
+        self.prompt_hover_task = None;
+        self.prompt_hover_suppressed = false;
         if self.selected.as_ref() == Some(&id) {
             self.focus_composer(window, cx);
             return;
@@ -526,6 +546,7 @@ impl Workspace {
                 list,
                 history: History::Complete,
                 older: None,
+                earlier: EarlierHistory::Idle,
                 rail_current: None,
                 turn_stats: Cell::new(None),
             },
