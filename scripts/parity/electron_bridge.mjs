@@ -82,7 +82,7 @@ const handlers = {
     const port = await reservePort()
     // The basic password store keeps Chromium off the desktop's secret
     // service, which would ask the user to unlock their keyring.
-    const args = [`--remote-debugging-port=${port}`, `--force-device-scale-factor=${scale}`, "--password-store=basic"]
+    const args = [`--remote-debugging-port=${port}`, `--force-device-scale-factor=${scale}`, "--password-store=basic", "--ozone-platform=x11", "--disable-features=MacAppCodeSignClone"]
     child = spawn(app, args, { env, stdio: "ignore", detached: true })
     child.unref()
     const page = await pageTarget(port, Date.now() + timeoutMs)
