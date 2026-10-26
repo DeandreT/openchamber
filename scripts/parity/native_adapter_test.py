@@ -109,5 +109,27 @@ class NativeExpansionTest(unittest.TestCase):
         self.assertEqual(row.cache_clears, 3)
 
 
+class NamedElementWaitTest(unittest.TestCase):
+    def test_name_wait_checks_role_and_identity(self):
+        node = SimpleNamespace(
+            get_name=lambda: "Search projects...",
+            get_role_name=lambda: "entry",
+            get_accessible_id=lambda: "project-search",
+        )
+        client = NativeClient.__new__(NativeClient)
+        for wanted, expected in (
+            ({"name": "Search projects...", "role": "entry"}, True),
+            ({"name": "Search projects...", "id": "project-search"}, True),
+            ({"name": "Search projects...", "role": "button"}, False),
+            ({"name": "Search projects...", "id": "other-search"}, False),
+            ({"name": "A different field"}, False),
+        ):
+            ticks = itertools.count(step=0.1)
+            with patch.object(client, "_walk", return_value=[node]), patch.object(client, "_read_marks"), patch("native_adapter.time.monotonic", side_effect=lambda: next(ticks)):
+                self.assertEqual(client.wait_for({"named": wanted}, 0.5), expected)
+        with patch.object(client, "_walk", return_value=[]), patch.object(client, "_read_marks"):
+            self.assertTrue(client.wait_for({"named": {"name": "Search projects..."}, "present": False}, 0.5))
+
+
 if __name__ == "__main__":
     unittest.main()

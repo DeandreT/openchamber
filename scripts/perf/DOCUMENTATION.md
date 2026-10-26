@@ -1169,8 +1169,10 @@ native startup rows then measure a client joining a running server, while
 Electron's startup includes starting its server and OpenCode; the printed
 scopes say so.
 
-Both clients run under X11 by default (`--backend`), because a covered Wayland
-window stops drawing and handling accessibility actions. The switch scenario
+Both clients run on an authenticated, owned Xvfb display through the parity
+runner's `virtual_display.py`. The benchmark starts that display when needed
+and checks its ownership before each launch. Inherited Wayland and session-type
+variables are removed, and Chromium explicitly selects X11. The switch scenario
 turns the session accessibility flag on for its runs and restores the previous
 value. AT-SPI applications are matched by process ID, never by name: another
 copy of the app on the bus would otherwise receive the clicks. Every launch is

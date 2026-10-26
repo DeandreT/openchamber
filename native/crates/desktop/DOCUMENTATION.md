@@ -31,6 +31,11 @@ read-only until prompt submission has its error and reconciliation paths.
   does.
 - `provider_logos.rs` resolves, loads and caches provider logos for the
   composer, the sidebar rows and the turn footers.
+- `project_chooser.rs` lists and searches registered projects for a new-session
+  draft, using saved project labels. Choosing a project changes the draft's
+  directory and catalog scope without creating a server session. Draft text
+  stays with its runtime and directory. Failed discovery remains distinct from
+  an empty project list, and a failed refresh keeps previously loaded projects.
 - `context_panel.rs` also reads the selected session's context fill against
   the limit `useContextWindowLimits` picks (the record's model, the newest
   answer's, the composer's) and draws its row and meter.
@@ -98,6 +103,12 @@ read-only until prompt submission has its error and reconciliation paths.
   `server_sync.rs`. Code-card actions retain focus handles, participate in
   Tab navigation, and use GPUI's keyboard-generated clicks for Enter and
   Space. Pointer, keyboard and accessibility clicks use the same callback.
+- `transcript_selection.rs` owns one retained selection document per open
+  session, with stable message/part identities and retained custom-block views.
+  Text deltas update only their message; structural changes reconcile membership
+  and logical order. Rendered geometry can expire without losing selected text.
+  Custom children keep their identity while their source range grows. Session
+  switches clear the outgoing selection before activating the incoming document.
 - `code_wrap_state.rs` orders code-wrap changes for one runtime. It permits
   one request at a time and coalesces pending toggles to their newest value.
   A settings read captures its revision and cannot overwrite later choices.
@@ -167,6 +178,14 @@ read-only until prompt submission has its error and reconciliation paths.
   session that leaves the list returns the window there; it never selects an
   unrelated session. The new-session draft has its own key, so its text
   survives visiting sessions.
+- Runtime changes save the outgoing composer under its captured key before
+  replacing runtime state. The startup view restores the incoming runtime's
+  draft before it paints; project selection never moves text between drafts.
+- Retained Markdown uses the same parser extensions before and after painting.
+  Copy includes unpainted intermediate messages exactly once, preserves selected
+  whitespace and uses fixed UTF-8 endpoints across compatible appends and reflow.
+  Deleted endpoints clear selection; deleted intermediate messages stop
+  contributing immediately. Offscreen members have no hitboxes.
 - Layout uses logical sides: English is laid out as measured from the
   reference and right-to-left locales mirror it. Window controls keep their
   physical order and the right edge in every language, as in the web client.
@@ -179,10 +198,17 @@ read-only until prompt submission has its error and reconciliation paths.
 - Text sized with `css_text` sits where Chromium puts it; text in an element
   with other children or a background gets its own `css_text` element, since
   the correction moves the whole element.
+- Linux uses grayscale text antialiasing to match Chromium's desktop rendering.
+  Other platforms retain their platform rendering mode until separately qualified.
 - The transcript's last row, shown or not, carries the tail spacer: the
   docked composer's resting slot plus a gap, growing only once the composer
   grows past an allowance (`composerTailInset.ts`). The slot is measured
   while painting, and a new inset remeasures that row.
+- The transcript paints a 48 px top fade when scrolled and a bottom fade
+  covering the measured composer slot plus 48 px. These non-interactive
+  overlays sit below the prompt navigator and composer. Their paint reads
+  current list geometry so scroll-only frames update them without changing
+  the list's layout or selection targets.
 - A provider logo is bundled, loading, drawn or absent. Bundled logos draw at
   once; any other is fetched once for the app's lifetime, keeps its box while
   loading and is left out when the fetch or the SVG fails, as the web drops a

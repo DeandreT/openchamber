@@ -157,6 +157,12 @@ client) and a timeout. A reference that never reaches its state blocks the
 scenario; a native client that never does fails it, and its evidence is still
 captured.
 
+Native waits can also match a named accessible node with
+`{"named": {"name": "Search projects...", "role": "entry"}}`. Optional `id`
+and `role` fields distinguish matching labels; `"present": false` waits for
+the node to disappear. Typing starts only after the
+popup's search field mounts.
+
 Session-row clicks first require a settled client, then verify that the exact
 requested row is selected. An unrelated selected row cannot satisfy this
 postcondition. `runner_test.py` covers these input checks; run it from this

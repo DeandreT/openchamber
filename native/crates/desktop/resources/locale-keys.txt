@@ -4,6 +4,8 @@ chat.chatInput.actions.addAttachment
 chat.chatInput.actions.sendMessageAria
 chat.chatInput.actions.stopGeneratingAria
 chat.chatInput.chooseProject
+chat.chatInput.draftPicker.noProjectsFound
+chat.chatInput.draftPicker.searchProjects
 chat.chatInput.permissionMode.ask
 chat.chatInput.placeholder.chat
 chat.chatInput.placeholder.chatCompact

@@ -100,6 +100,7 @@ pub enum EarlierHistory {
 /// session restores the exact message and pixel offset the reader left.
 pub struct OpenSession {
     pub transcript: Transcript,
+    pub(crate) selection: Entity<crate::transcript_selection::TranscriptSelection>,
     pub list: ListState,
     pub history: History,
     /// The cursor of the next older page, when the server has one.
@@ -139,6 +140,9 @@ pub struct Workspace {
     pub(crate) scroll_memory: ScrollMemory,
     pub(crate) composer: Entity<TextareaState>,
     pub(crate) composer_key: Option<DraftKey>,
+    pub(crate) draft_projects: HashMap<RuntimeId, String>,
+    pub(crate) startup_runtime: RuntimeId,
+    pub(crate) project_chooser: Option<crate::project_chooser::ProjectChooser>,
     /// Whether the composer shows the short placeholder; unknown until the
     /// first frame measures it.
     pub(crate) composer_placeholder_compact: Option<bool>,
@@ -202,6 +206,7 @@ impl Workspace {
         let mut workspace = Self {
             topology,
             sessions,
+            startup_runtime: runtime.clone(),
             runtime,
             ordering: SessionOrdering::new(),
             sidebar_state: SidebarState::default(),
@@ -223,6 +228,8 @@ impl Workspace {
             scroll_memory: ScrollMemory::new(),
             composer,
             composer_key: None,
+            draft_projects: HashMap::new(),
+            project_chooser: None,
             composer_placeholder_compact: None,
             playback: HashMap::new(),
             live_status: HashMap::new(),
@@ -330,14 +337,66 @@ impl Workspace {
     pub(crate) fn new_session_draft_key(&self) -> Option<DraftKey> {
         DraftKey::new(
             self.runtime.clone(),
-            NEW_SESSION_DIRECTORY,
+            self.draft_projects
+                .get(&self.runtime)
+                .map_or(NEW_SESSION_DIRECTORY, String::as_str),
             DraftTarget::NewSession(DraftId::from(NEW_SESSION_DRAFT)),
         )
+    }
+
+    /// Changes only the client draft target, after checking registered topology.
+    pub(crate) fn choose_draft_project(
+        &mut self,
+        directory: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.selected.is_some()
+            || !self
+                .topology
+                .projects
+                .iter()
+                .any(|project| project.path == directory)
+        {
+            return;
+        }
+        self.save_composer_draft(cx);
+        self.draft_projects
+            .insert(self.runtime.clone(), directory.to_owned());
+        self.composer_key = self.new_session_draft_key();
+        self.restore_composer_draft(window, cx);
+        self.ensure_send_catalog(cx);
+        self.focus_composer(window, cx);
+        cx.notify();
+    }
+
+    pub(crate) fn reconcile_startup_runtime(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.startup_runtime != self.runtime {
+            self.startup_runtime = self.runtime.clone();
+            self.project_chooser = None;
+            self.composer_key = self.new_session_draft_key();
+            self.restore_composer_draft(window, cx);
+        }
     }
 
     /// Leaves the selected session for the new-session view, keeping both
     /// drafts and the session's reading position.
     pub fn show_new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(open) = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.open_sessions.get(id))
+        {
+            open.selection
+                .read(cx)
+                .document
+                .clone()
+                .deactivate(window, cx);
+        }
         self.prompt_panel = None;
         self.prompt_hover_task = None;
         self.prompt_hover_suppressed = false;
@@ -376,6 +435,17 @@ impl Workspace {
         if self.selected.as_ref() == Some(&id) {
             self.focus_composer(window, cx);
             return;
+        }
+        if let Some(open) = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.open_sessions.get(id))
+        {
+            open.selection
+                .read(cx)
+                .document
+                .clone()
+                .deactivate(window, cx);
         }
         let Some(session) = self.session(&id) else {
             return;
@@ -539,10 +609,13 @@ impl Workspace {
                 }
             }
         }
+        let selection =
+            cx.new(|cx| crate::transcript_selection::TranscriptSelection::new(&transcript, cx));
         self.open_sessions.insert(
             id.clone(),
             OpenSession {
                 transcript,
+                selection,
                 list,
                 history: History::Complete,
                 older: None,
@@ -584,7 +657,7 @@ impl Workspace {
         );
     }
 
-    fn save_composer_draft(&mut self, cx: &App) {
+    pub(crate) fn save_composer_draft(&mut self, cx: &App) {
         let Some(key) = self.composer_key.clone() else {
             return;
         };
@@ -685,9 +758,8 @@ impl Workspace {
                 parts: vec![Part::text(part_id.clone(), String::new())],
             },
         ] {
-            if let TranscriptChange::Inserted { rows } = open.transcript.push(message) {
-                open.list.splice(rows.start..rows.start, rows.len());
-            }
+            let change = open.transcript.push(message);
+            crate::server_sync::apply_list_change(open, &change, cx);
         }
         open.list.scroll_to_end();
         self.observe_phase(&session_id, ActivityPhase::Active, now);
@@ -775,8 +847,8 @@ impl Workspace {
             part_id: part_id.clone(),
             delta: chunk.to_owned(),
         });
-        if let TranscriptChange::Updated { row } = change {
-            open.list.remeasure_items(row..row + 1);
+        if matches!(change, TranscriptChange::Updated { .. }) {
+            crate::server_sync::apply_list_change(open, &change, cx);
             cx.notify();
         }
     }

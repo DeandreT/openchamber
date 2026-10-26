@@ -65,6 +65,12 @@ recorded wire samples in `crates/transport/tests/fixtures/wire/` and rewrites
 
 ## Accessibility on Linux
 
+Local toolkit patches are pinned under `vendor/`: retained Markdown selection in
+[`gpui-base`](vendor/gpui-base/DOCUMENTATION.md), single-choice confirmation in
+[`gpui-component`](vendor/gpui-component/DOCUMENTATION.md), and AT-SPI expansion
+state in the bridge below. Each patch documents its compatibility and removal
+conditions.
+
 The workspace uses a [local AT-SPI translation patch](vendor/accesskit_atspi_common/DOCUMENTATION.md)
 for the pinned AccessKit dependency so expandable controls expose their expanded
 or collapsed state and state-change notifications.

@@ -93,6 +93,224 @@ fn transcript_len(
 }
 
 #[gpui_kit::test]
+fn project_chooser_pointer_selects_a_filtered_project_in_rtl(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let directory = cx.read(|cx| workspace.read(cx).topology.projects[1].path.clone());
+    cx.update_window(window, |_, window, cx| {
+        cx.set_global(Strings::load("ar"));
+        theme::apply(Palette::default_for(Appearance::Light), cx);
+        workspace.update(cx, |workspace, _| {
+            workspace.send_catalog.settings =
+                Some(openchamber_native_transport::client::ServerSettings {
+                    project_labels: vec![openchamber_native_transport::client::ProjectLabel {
+                        path: directory.clone(),
+                        label: "Custom project label".to_owned(),
+                    }],
+                    ..Default::default()
+                });
+        });
+        window.render_frame(cx);
+        window.click(ElementId::Name("choose-project".into()), cx);
+        window.render_frame(cx);
+        window.input("Custom project", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(
+            ElementId::Name(format!("project-option:{directory}").into()),
+            cx,
+        );
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    assert_eq!(
+        cx.read(|cx| workspace.read(cx).config_directory()),
+        Some(directory)
+    );
+}
+
+#[gpui_kit::test]
+fn project_chooser_pointer_opens_search_and_keyboard_selects(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(ElementId::Name("choose-project".into()), cx);
+        window.render_frame(cx);
+        window.press("ctrl-n", cx);
+        window.press("enter", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    cx.read(|cx| {
+        let workspace = workspace.read(cx);
+        assert!(
+            workspace.draft_projects.contains_key(&workspace.runtime),
+            "choosing a popup row commits its directory"
+        );
+        assert!(workspace.selected.is_none());
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.input("after choosing", cx);
+    })
+    .expect("window is open");
+    assert_eq!(
+        composer_text(&workspace, cx),
+        "after choosing",
+        "selection returns focus to the composer"
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.press("ctrl-a", cx);
+    })
+    .expect("window is open");
+    cx.read(|cx| {
+        assert_eq!(
+            workspace
+                .read(cx)
+                .composer
+                .read(cx)
+                .selected_text()
+                .to_string(),
+            "after choosing"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn project_chooser_preserves_directory_drafts_and_catalog_scope(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        let projects = workspace.read(cx).topology.projects.clone();
+        assert!(projects.len() >= 2, "the fixture has separate projects");
+        let first = projects[0].path.clone();
+        let second = projects[1].path.clone();
+        let sessions = workspace.read(cx).sessions.active().len();
+        workspace.update(cx, |workspace, cx| {
+            workspace.choose_draft_project(&first, window, cx)
+        });
+        window.render_frame(cx);
+        window.input("first project draft", cx);
+        workspace.update(cx, |workspace, cx| {
+            workspace.choose_draft_project(&second, window, cx)
+        });
+        assert_eq!(workspace.read(cx).composer.read(cx).value().as_ref(), "");
+        assert_eq!(
+            workspace.read(cx).config_directory().as_deref(),
+            Some(second.as_str())
+        );
+        window.input("second project draft", cx);
+        workspace.update(cx, |workspace, cx| {
+            workspace.choose_draft_project(&first, window, cx)
+        });
+        assert_eq!(
+            workspace.read(cx).composer.read(cx).value().as_ref(),
+            "first project draft"
+        );
+        assert_eq!(
+            workspace
+                .read(cx)
+                .composer_key
+                .as_ref()
+                .expect("draft key")
+                .directory(),
+            first
+        );
+        workspace.update(cx, |workspace, cx| {
+            workspace.choose_draft_project("/unregistered", window, cx)
+        });
+        assert_eq!(
+            workspace.read(cx).config_directory().as_deref(),
+            Some(first.as_str())
+        );
+        assert!(workspace.read(cx).selected.is_none());
+        assert_eq!(
+            workspace.read(cx).sessions.active().len(),
+            sessions,
+            "selection creates no server session"
+        );
+        workspace.update(cx, |workspace, cx| {
+            workspace.choose_draft_project(&second, window, cx)
+        });
+        assert_eq!(
+            workspace.read(cx).composer.read(cx).value().as_ref(),
+            "second project draft"
+        );
+    })
+    .expect("window is open");
+}
+
+#[gpui_kit::test]
+fn project_chooser_reselection_returns_to_the_composer(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let directory = cx.read(|cx| workspace.read(cx).topology.projects[0].path.clone());
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.choose_draft_project(&directory, window, cx)
+        });
+        window.render_frame(cx);
+        window.input("kept", cx);
+        window.click(ElementId::Name("choose-project".into()), cx);
+        window.render_frame(cx);
+        window.press("enter", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.input(" after selection", cx);
+    })
+    .expect("window is open");
+    assert_eq!(composer_text(&workspace, cx), "kept after selection");
+}
+
+#[gpui_kit::test]
+fn project_chooser_isolates_the_same_directory_between_runtimes(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        let directory = workspace.read(cx).topology.projects[0].path.clone();
+        workspace.update(cx, |workspace, cx| {
+            workspace.choose_draft_project(&directory, window, cx)
+        });
+        window.render_frame(cx);
+        window.input("original runtime draft", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        let directory = workspace.read(cx).topology.projects[0].path.clone();
+        let original = workspace.read(cx).runtime.clone();
+        workspace.update(cx, |workspace, cx| {
+            let projects = workspace.topology.projects.clone();
+            workspace.switch_runtime("another-runtime".into(), cx);
+            workspace.topology.projects = projects;
+            workspace.reconcile_startup_runtime(window, cx);
+            workspace.choose_draft_project(&directory, window, cx);
+        });
+        assert_eq!(
+            workspace.read(cx).composer.read(cx).value().as_ref(),
+            "",
+            "the new runtime cannot inherit old text"
+        );
+        window.input("another runtime draft", cx);
+        workspace.update(cx, |workspace, cx| {
+            let projects = workspace.topology.projects.clone();
+            workspace.switch_runtime(original, cx);
+            workspace.topology.projects = projects;
+            workspace.reconcile_startup_runtime(window, cx);
+        });
+        assert_eq!(
+            workspace.read(cx).composer.read(cx).value().as_ref(),
+            "original runtime draft"
+        );
+        assert_eq!(
+            workspace.read(cx).config_directory().as_deref(),
+            Some(directory.as_str())
+        );
+    })
+    .expect("window is open");
+}
+
+#[gpui_kit::test]
 fn clicking_a_row_selects_its_session(cx: &mut TestAppContext) {
     let (window, workspace) = open(cx);
     let rows = session_rows(&workspace, cx);
@@ -428,7 +646,7 @@ fn prepending_history_preserves_the_visible_message_and_offset(cx: &mut TestAppC
             older.info.id = "older-test-message".into();
             let revision = open.transcript.revision();
             let change = open.transcript.prepend_page(vec![older], revision);
-            crate::server_sync::apply_list_change(open, &change);
+            crate::server_sync::apply_list_change(open, &change, cx);
             cx.notify();
         });
         window.render_frame(cx);

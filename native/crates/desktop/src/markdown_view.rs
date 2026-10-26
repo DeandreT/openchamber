@@ -8,17 +8,21 @@
 //! selection running across a custom block takes it whole; one inside it
 //! stays within its nested view.
 
+use std::sync::Arc;
+
 use gpui_kit::base::text::{
-    MarkdownNode, MarkdownParseContext, MarkdownPlugin, TextView, TextViewStyle, markdown_ast,
+    MarkdownExtensions, MarkdownNode, MarkdownParseContext, MarkdownPlugin, TextView,
+    TextViewStyle, markdown_ast,
 };
 use gpui_kit::{
-    App, ElementId, FontWeight, HighlightStyle, Hsla, IntoElement, ParentElement, Styled, Window,
-    div, relative, rems,
+    App, ElementId, FontWeight, HighlightStyle, Hsla, IntoElement, ParentElement, Styled,
+    WeakEntity, Window, div, relative, rems,
 };
 
 use crate::code_card::CodeFence;
 use crate::markdown_list::{ListDepth, MarkdownList};
 use crate::theme::{Appearance, Palette};
+use crate::transcript_selection::{self, RetainedText};
 
 /// Body text: 14 px at 90 % of the foreground, 0.65 em between blocks.
 pub(crate) const BODY_SIZE: f32 = 0.875;
@@ -63,15 +67,36 @@ pub(crate) fn markdown(id: &str, text: &str, palette: &Palette, author: Author) 
 /// A text view of `text` with the message's styles and custom blocks; also
 /// the view inside a heading or list item.
 pub(crate) fn view(id: ElementId, text: String, palette: &Palette, nesting: Nesting) -> TextView {
-    TextView::markdown(id, text)
-        .style(body_style(palette, body_color(palette, nesting.author)))
+    styled(
+        TextView::markdown(id, text)
+            .markdown_extensions(extensions(nesting, None).as_ref().clone()),
+        palette,
+        nesting.author,
+    )
+}
+
+pub(crate) fn styled(view: TextView, palette: &Palette, author: Author) -> TextView {
+    view.style(body_style(palette, body_color(palette, author)))
         .selectable(true)
         .text_size(rems(BODY_SIZE))
-        .plugin(CodeFence {
-            author: nesting.author,
-        })
-        .plugin(MarkdownHeading { nesting })
-        .plugin(MarkdownList { nesting })
+}
+
+pub(crate) fn extensions(
+    nesting: Nesting,
+    owner: Option<WeakEntity<RetainedText>>,
+) -> Arc<MarkdownExtensions> {
+    Arc::new(
+        MarkdownExtensions::default()
+            .plugin(CodeFence {
+                author: nesting.author,
+                owner: owner.clone(),
+            })
+            .plugin(MarkdownHeading {
+                nesting,
+                owner: owner.clone(),
+            })
+            .plugin(MarkdownList { nesting, owner }),
+    )
 }
 
 /// The body text color of a message by `author`.
@@ -92,7 +117,8 @@ fn body_style(palette: &Palette, foreground: Hsla) -> TextViewStyle {
         .with_border(palette.border)
         .with_paragraph_gap(rems(BLOCK_GAP))
         .with_inline_code(HighlightStyle {
-            background_color: Some(palette.hover),
+            color: Some(palette.inline_code.opacity(0.9)),
+            background_color: Some(palette.inline_code_background.opacity(0.5)),
             ..HighlightStyle::default()
         })
         .with_dark(palette.appearance == Appearance::Dark)
@@ -149,6 +175,7 @@ fn inline_only(text: &str) -> String {
 /// Draws a heading at the web's size and spacing.
 struct MarkdownHeading {
     nesting: Nesting,
+    owner: Option<WeakEntity<RetainedText>>,
 }
 
 /// A heading's level, inline Markdown, and whether it opens the document.
@@ -207,16 +234,24 @@ impl MarkdownPlugin for MarkdownHeading {
             _ => 0.875,
         };
         let color = palette.foreground.opacity(HEADING_ALPHA);
-        let text = view(
-            ElementId::Name(format!("heading-{key}").into()),
-            heading.text.clone(),
-            &palette,
-            self.nesting,
-        )
-        .style(body_style(&palette, color))
-        .text_size(rems(size))
-        .line_height(relative(HEADING_LINE))
-        .font_weight(FontWeight::SEMIBOLD);
+        let retained = self.owner.as_ref().and_then(|owner| {
+            node.source_range().and_then(|range| {
+                transcript_selection::child(owner, range, 0, &heading.text, Some(self.nesting), cx)
+            })
+        });
+        let text = retained
+            .unwrap_or_else(|| {
+                view(
+                    ElementId::Name(format!("heading-{key}").into()),
+                    heading.text.clone(),
+                    &palette,
+                    self.nesting,
+                )
+            })
+            .style(body_style(&palette, color))
+            .text_size(rems(size))
+            .line_height(relative(HEADING_LINE))
+            .font_weight(FontWeight::SEMIBOLD);
         // The block gap above already stands for part of the space.
         let above = if heading.first {
             0.0
@@ -230,6 +265,19 @@ impl MarkdownPlugin for MarkdownHeading {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn inline_code_uses_the_markdown_theme_tokens() {
+        for appearance in [Appearance::Light, Appearance::Dark] {
+            let palette = Palette::default_for(appearance);
+            let style = body_style(&palette, palette.foreground).inline_code();
+            assert_eq!(style.color, Some(palette.inline_code.opacity(0.9)));
+            assert_eq!(
+                style.background_color,
+                Some(palette.inline_code_background.opacity(0.5))
+            );
+        }
+    }
 
     #[test]
     fn heading_text_never_starts_a_block() {

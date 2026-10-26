@@ -25,6 +25,7 @@ mod markdown_view;
 mod model_controls;
 mod network;
 mod open_in_app;
+mod project_chooser;
 mod project_section;
 mod prompt_rail;
 mod provider_logos;
@@ -35,6 +36,7 @@ mod sidebar_view;
 mod startup_view;
 mod theme;
 mod tracked_text;
+mod transcript_selection;
 mod transcript_view;
 mod turn_footer;
 mod turn_stats_section;
@@ -93,6 +95,9 @@ fn main() {
         .with_assets(AppAssets)
         .run(move |cx| {
             gpui_kit::init(cx);
+            // Chromium's Linux reference renders glyphs with grayscale antialiasing.
+            #[cfg(target_os = "linux")]
+            cx.set_text_rendering_mode(gpui_kit::TextRenderingMode::Grayscale);
             let strings = Strings::load(&locale::requested_locale());
             tracing::info!(locale = strings.locale(), "locale selected");
             cx.set_global(strings);

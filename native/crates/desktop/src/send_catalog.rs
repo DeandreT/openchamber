@@ -4,8 +4,8 @@
 //!
 //! Mirrors the catalog loads of `packages/ui/src/stores/useConfigStore.ts`:
 //! the config directory is the selected session's directory, or on the
-//! new-session view the last directory when it is a known project or
-//! worktree, else the active project, else the first one. Each directory's
+//! new-session view the chosen draft project, then the last directory when
+//! it is a known project or worktree, else the active project, else the first one. Each directory's
 //! catalogs load once and reload when OpenCode announces a rebuild; a reread
 //! that fails keeps what the directory held. OpenCode starts a location
 //! lazily and plugins register agents while it already serves, so the first
@@ -57,7 +57,7 @@ impl<T> Load<T> {
     }
 
     /// Takes a read's result; a failed reread keeps what was held.
-    fn settle(&mut self, outcome: Option<T>) {
+    pub(crate) fn settle(&mut self, outcome: Option<T>) {
         match outcome {
             Some(value) => *self = Self::Ready(value),
             None if matches!(self, Self::Ready(_)) => {}
@@ -82,6 +82,7 @@ pub(crate) struct DirectoryCatalog {
 pub(crate) struct SendCatalog {
     /// Absent until the settings document was read.
     pub settings: Option<ServerSettings>,
+    pub settings_load: Load<()>,
     directories: HashMap<String, DirectoryCatalog>,
     recheck: Option<Task<()>>,
 }
@@ -196,6 +197,9 @@ impl Workspace {
     pub(crate) fn config_directory(&self) -> Option<String> {
         if let Some(session) = self.selected_session() {
             return session.directory.as_deref().and_then(path::normalize);
+        }
+        if let Some(directory) = self.draft_projects.get(&self.runtime) {
+            return path::normalize(directory);
         }
         let settings = self.send_catalog.settings.as_ref()?;
         let known = |directory: &str| {

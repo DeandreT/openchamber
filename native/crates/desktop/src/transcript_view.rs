@@ -6,9 +6,9 @@
 //! the end.
 
 use gpui_kit::{
-    AnyElement, Context, ElementId, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    Role, StatefulInteractiveElement, Styled, TestSupportExt, Window, div, list,
-    prelude::FluentBuilder, px, rems,
+    AnyElement, Bounds, Context, ElementId, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, Role, StatefulInteractiveElement, Styled, TestSupportExt, Window, canvas, div,
+    fill, linear_color_stop, linear_gradient, list, point, prelude::FluentBuilder, px, rems, size,
 };
 use openchamber_native_core::transcript::{Message, PartContent, Role as MessageRole};
 
@@ -27,7 +27,7 @@ impl Workspace {
         &self,
         palette: &Palette,
         direction: Direction,
-        window: &Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let Some(open) = self
@@ -45,6 +45,11 @@ impl Workspace {
                 .child(locale::strings(cx).get("chat.chatInput.placeholder.selectSession"))
                 .into_any_element();
         };
+        open.selection
+            .read(cx)
+            .document
+            .clone()
+            .activate(window, cx);
         if let History::Failed(failure) = &open.history
             && open.transcript.is_empty()
         {
@@ -98,6 +103,41 @@ impl Workspace {
             cx.processor(|this, index: usize, window, cx| this.render_message(index, window, cx)),
         )
         .size_full();
+        let list = open.list.clone();
+        let composer_slot = self.composer_slot.clone();
+        let background = palette.chat_background;
+        // `index.css`: the fades sit above the transcript and below its controls.
+        // Read the current scroll geometry during paint, including scroll-only frames.
+        let fades = canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                let band = px(48.0);
+                if list.scroll_px_offset_for_scrollbar().y < px(-1.0) {
+                    window.paint_quad(fill(
+                        Bounds::new(bounds.origin, size(bounds.size.width, band)),
+                        linear_gradient(
+                            180.0,
+                            linear_color_stop(background, 0.0),
+                            linear_color_stop(background.opacity(0.0), 1.0),
+                        ),
+                    ));
+                }
+                let height = px(composer_slot.get().height()) + band;
+                window.paint_quad(fill(
+                    Bounds::new(
+                        point(bounds.left(), bounds.bottom() - height),
+                        size(bounds.size.width, height),
+                    ),
+                    linear_gradient(
+                        180.0,
+                        linear_color_stop(background.opacity(0.0), 0.0),
+                        linear_color_stop(background, 1.0),
+                    ),
+                ));
+            },
+        )
+        .absolute()
+        .inset_0();
         div()
             .id("transcript")
             .role(Role::Log)
@@ -105,6 +145,7 @@ impl Workspace {
             .absolute()
             .inset_0()
             .child(rows)
+            .child(fades)
             .children(rail)
             .when(!following, |this| {
                 this.child(
@@ -164,12 +205,17 @@ impl Workspace {
         };
         let direction = locale::strings(cx).direction();
         let body = match message.info.role {
-            MessageRole::User => Some(user_message(message, &palette)),
+            MessageRole::User => Some(user_message(message, &palette, open.selection.read(cx), cx)),
             MessageRole::Assistant => Some(
                 div()
                     .flex()
                     .flex_col()
-                    .child(assistant_message(message, &palette))
+                    .child(assistant_message(
+                        message,
+                        &palette,
+                        open.selection.read(cx),
+                        cx,
+                    ))
                     .children(
                         self.render_turn_footer(index, message, &palette, direction, window, cx),
                     )
@@ -220,7 +266,12 @@ impl Workspace {
     }
 }
 
-fn user_message(message: &Message, palette: &Palette) -> AnyElement {
+fn user_message(
+    message: &Message,
+    palette: &Palette,
+    selection: &crate::transcript_selection::TranscriptSelection,
+    cx: &gpui_kit::App,
+) -> AnyElement {
     let text = message.plain_text();
     let part_id = message
         .parts
@@ -237,12 +288,14 @@ fn user_message(message: &Message, palette: &Palette) -> AnyElement {
                 .py_2()
                 .rounded(px(12.0))
                 .bg(palette.user_message_background)
-                .child(markdown_view::markdown(
-                    &part_id,
-                    &text,
-                    palette,
-                    Author::User,
-                )),
+                .child(
+                    selection
+                        .view(&message.info.id, None, cx)
+                        .map(|view| markdown_view::styled(view, palette, Author::User))
+                        .unwrap_or_else(|| {
+                            markdown_view::markdown(&part_id, &text, palette, Author::User)
+                        }),
+                ),
         )
         .into_any_element()
 }
@@ -258,17 +311,24 @@ fn notice_message(message: &Message, palette: &Palette) -> AnyElement {
         .into_any_element()
 }
 
-fn assistant_message(message: &Message, palette: &Palette) -> AnyElement {
+fn assistant_message(
+    message: &Message,
+    palette: &Palette,
+    selection: &crate::transcript_selection::TranscriptSelection,
+    cx: &gpui_kit::App,
+) -> AnyElement {
     // The text parts' `my-1`.
     let mut column = div().py(px(4.0)).flex().flex_col().gap_2();
     for part in &message.parts {
         column = match &part.content {
-            PartContent::Text { text } => column.child(markdown_view::markdown(
-                part.id.as_str(),
-                text,
-                palette,
-                Author::Assistant,
-            )),
+            PartContent::Text { text } => column.child(
+                selection
+                    .view(&message.info.id, Some(&part.id), cx)
+                    .map(|view| markdown_view::styled(view, palette, Author::Assistant))
+                    .unwrap_or_else(|| {
+                        markdown_view::markdown(part.id.as_str(), text, palette, Author::Assistant)
+                    }),
+            ),
             PartContent::Reasoning { text } => column.child(
                 div()
                     .text_size(rems(META_SIZE))

@@ -63,6 +63,11 @@ pub(crate) struct ComposerSlot {
 }
 
 impl ComposerSlot {
+    /// The inset covered by the floating composer, including its outer spacing.
+    pub(crate) fn height(self) -> f32 {
+        self.height.unwrap_or(DEFAULT_SLOT_HEIGHT)
+    }
+
     /// Records a measured height; a zero height is a slot not laid out yet.
     fn measured(self, height: f32) -> Self {
         if height <= 0.0 {
@@ -384,5 +389,15 @@ mod tests {
         assert_eq!(resting.measured(180.0).tail_inset(), 195.0);
         assert_eq!(resting.measured(250.0).tail_inset(), 242.0);
         assert_eq!(resting.measured(250.0).measured(115.0).tail_inset(), 195.0);
+    }
+
+    #[test]
+    fn the_fade_tracks_current_composer_height_without_the_tail_gap() {
+        let unmeasured = ComposerSlot::default();
+        assert_eq!(unmeasured.height(), DEFAULT_SLOT_HEIGHT);
+        let resting = unmeasured.measured(115.0);
+        assert_eq!(resting.height(), 115.0);
+        assert_eq!(resting.measured(250.0).height(), 250.0);
+        assert_eq!(resting.measured(250.0).measured(115.0).height(), 115.0);
     }
 }

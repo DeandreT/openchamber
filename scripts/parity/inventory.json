@@ -119,6 +119,15 @@
       "coverage": "automated"
     },
     {
+      "id": "composer.project-choice",
+      "group": "composer",
+      "title": "New-session project search, selection and reselection preserve the draft and composer focus",
+      "reference": ["packages/ui/src/components/chat/composer/ui/DraftTargetSelectors.tsx"],
+      "states": ["open", "filtered", "selected", "reselected"],
+      "scenarios": ["composer.project-choice"],
+      "coverage": "automated"
+    },
+    {
       "id": "runtime.connection-states",
       "group": "runtime",
       "title": "Connecting, reconnecting and failed connections keep the last valid state and explain the failure",
