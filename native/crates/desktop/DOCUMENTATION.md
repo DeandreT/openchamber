@@ -202,6 +202,10 @@ read-only until prompt submission has its error and reconciliation paths.
 - Layout uses logical sides: English is laid out as measured from the
   reference and right-to-left locales mirror it. Window controls keep their
   physical order and the right edge in every language, as in the web client.
+- Sidebar section headers use the reference's 15 px bold type and 22 px line
+  inside a 30 px row. Resting session titles and container labels use opaque
+  Oklab mixes of foreground and muted foreground, matching `oc-title-rest` and
+  `oc-title-container`; transparency would change their color with the row fill.
 - The main window selects `LayoutMode::Logical` before its first layout. Lists
   retain fractional logical measurements and translations until final painting,
   so independently rounded rows cannot accumulate display-scale drift.
