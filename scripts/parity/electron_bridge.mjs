@@ -22,7 +22,7 @@ let child = null
 let client = null
 // Fetch and XHR requests the page started and that have not ended. Streams
 // that stay open by design (EventSource) are not counted.
-const inflight = new Set()
+const inflight = new Map()
 const TRACKED_REQUESTS = new Set(["Fetch", "XHR"])
 
 const evaluate = async (expression) => {
@@ -70,8 +70,10 @@ const ROWS = `(() => [...document.querySelectorAll('[data-sidebar-row-key]')]
     }
   }))()`
 
-const rectOf = (selector) => `(() => {
-  const element = document.querySelector(${JSON.stringify(selector)})
+const rectOf = (selector, button) => `(() => {
+  const element = ${button === undefined
+    ? `document.querySelector(${JSON.stringify(selector)})`
+    : `[...document.querySelectorAll(${JSON.stringify(selector ?? "button")})].find(element => element.innerText.trim() === ${JSON.stringify(button)})`}
   if (!element) return null
   const rect = element.getBoundingClientRect()
   return [rect.x, rect.y, rect.width, rect.height]
@@ -89,8 +91,14 @@ const handlers = {
     client = new CdpClient(page.webSocketDebuggerUrl)
     await client.connect()
     await client.send("Runtime.enable")
-    client.on("Network.requestWillBeSent", ({ requestId, type }) => {
-      if (TRACKED_REQUESTS.has(type)) inflight.add(requestId)
+    client.on("Network.requestWillBeSent", ({ requestId, type, request }) => {
+      if (TRACKED_REQUESTS.has(type)) {
+        const url = new URL(request.url)
+        const route = url.protocol === "http:" || url.protocol === "https:"
+          ? url.pathname.split("/").slice(0, 3).join("/")
+          : url.protocol
+        inflight.set(requestId, route)
+      }
     })
     client.on("Network.loadingFinished", ({ requestId }) => inflight.delete(requestId))
     client.on("Network.loadingFailed", ({ requestId }) => inflight.delete(requestId))
@@ -126,7 +134,7 @@ const handlers = {
   },
   /** How many fetch and XHR requests are still in flight. */
   async inflight() {
-    return { count: inflight.size }
+    return { count: inflight.size, routes: [...new Set(inflight.values())] }
   },
   async rects({ selectors }) {
     const rects = {}
@@ -137,12 +145,7 @@ const handlers = {
   async targets({ specs }) {
     const rects = {}
     for (const [name, spec] of Object.entries(specs)) {
-      rects[name] = await evaluate(spec.button === undefined ? rectOf(spec.selector) : `(() => {
-        const element = [...document.querySelectorAll('button')].find((button) => button.innerText.trim() === ${JSON.stringify(spec.button)})
-        if (!element) return null
-        const rect = element.getBoundingClientRect()
-        return [rect.x, rect.y, rect.width, rect.height]
-      })()`)
+      rects[name] = await evaluate(rectOf(spec.selector, spec.button))
     }
     return { rects }
   },
@@ -180,13 +183,13 @@ const handlers = {
    * point must be inside `within` before the press: a list that is still
    * settling can move another row under a centre read a moment earlier.
    */
-  async click({ selector, within, timeoutMs = 5_000 }) {
+  async click({ selector, button, within, timeoutMs = 5_000 }) {
     const deadline = Date.now() + timeoutMs
     let x
     let y
     for (;;) {
-      const rect = await evaluate(rectOf(selector))
-      if (!rect) throw new Error(`no element for ${selector}`)
+      const rect = await evaluate(rectOf(selector, button))
+      if (!rect) throw new Error(`no element for ${button ?? selector}`)
       x = rect[0] + rect[2] / 2
       y = rect[1] + rect[3] / 2
       if (!within) break

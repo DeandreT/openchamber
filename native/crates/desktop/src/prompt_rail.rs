@@ -485,7 +485,7 @@ impl Workspace {
                 .flex_col()
                 .rounded(px(12.0))
                 .bg(palette.elevated)
-                .shadow(elevation::composer(palette))
+                .shadow(elevation::floating(palette))
                 .on_mouse_down_out(
                     cx.listener(|this, _, window, cx| this.close_prompt_panel(window, cx)),
                 )

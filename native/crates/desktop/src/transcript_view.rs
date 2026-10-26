@@ -247,6 +247,15 @@ impl Workspace {
         };
         div()
             .id(ElementId::Name(message.info.id.as_str().to_owned().into()))
+            .role(Role::Paragraph)
+            .accessibility_id(format!("message:{}", message.info.id))
+            .when(window.is_a11y_active(), |row| {
+                row.aria_label(
+                    open.selection
+                        .read(cx)
+                        .accessible_text(&message.info.id, cx),
+                )
+            })
             .w_full()
             .pt(px(above))
             .pb(px(below + tail.unwrap_or_default()))

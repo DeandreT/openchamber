@@ -9,13 +9,14 @@
 //! laid out as ordinary wrapped text without the spacing.
 
 use std::cell::RefCell;
+use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
 use gpui_kit::{
-    App, AvailableSpace, Bounds, Element, ElementId, GlobalElementId, Hsla, InspectorElementId,
-    IntoElement, LayoutId, LineLayout, Pixels, SharedString, Size, Style, TextAlign, Window,
-    WrappedLine, point, size,
+    App, AvailableSpace, Bounds, Element, ElementId, FontWeight, GlobalElementId, Hsla,
+    InspectorElementId, IntoElement, LayoutId, LineLayout, Pixels, SharedString, Size, Style,
+    TextAlign, Window, WrappedLine, point, size,
 };
 
 /// `text` with `letter_spacing` in ems, aligned in its box like `text-align`.
@@ -29,6 +30,7 @@ pub(crate) fn tracked_text(
         letter_spacing,
         align,
         metrics: None,
+        emphasis: None,
     }
 }
 
@@ -38,6 +40,18 @@ pub(crate) struct TrackedText {
     align: TextAlign,
     /// The inherited text style, read during layout.
     metrics: Option<Metrics>,
+    emphasis: Option<Range<usize>>,
+}
+
+impl TrackedText {
+    pub(crate) fn emphasize(mut self, range: Range<usize>) -> Self {
+        self.emphasis = self
+            .text
+            .get(range.clone())
+            .filter(|text| !text.is_empty())
+            .map(|_| range);
+        self
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -95,6 +109,26 @@ impl Element for TrackedText {
         };
         self.metrics = Some(metrics);
         let run = style.to_run(self.text.len());
+        let runs = if let Some(range) = &self.emphasis {
+            let mut runs = Vec::new();
+            if range.start > 0 {
+                let mut before = run.clone();
+                before.len = range.start;
+                runs.push(before);
+            }
+            let mut emphasized = run.clone();
+            emphasized.len = range.end - range.start;
+            emphasized.font.weight = FontWeight::MEDIUM;
+            runs.push(emphasized);
+            if range.end < self.text.len() {
+                let mut after = run;
+                after.len = self.text.len() - range.end;
+                runs.push(after);
+            }
+            runs
+        } else {
+            vec![run]
+        };
         let spacing = metrics.font_size * self.letter_spacing;
         let text = self.text.clone();
         let shaped = Rc::new(RefCell::new(None));
@@ -106,7 +140,6 @@ impl Element for TrackedText {
                     AvailableSpace::Definite(width) => Some(width),
                     AvailableSpace::MinContent | AvailableSpace::MaxContent => None,
                 });
-                let runs = [run.clone()];
                 let layout =
                     window
                         .text_system()
@@ -238,6 +271,28 @@ fn has_right_to_left(text: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn emphasis_keeps_utf8_boundaries() {
+        assert_eq!(
+            tracked_text("é project", 0.0, TextAlign::Center)
+                .emphasize(3..10)
+                .emphasis,
+            Some(3..10)
+        );
+        assert!(
+            tracked_text("é project", 0.0, TextAlign::Center)
+                .emphasize(1..3)
+                .emphasis
+                .is_none()
+        );
+        assert!(
+            tracked_text("é project", 0.0, TextAlign::Center)
+                .emphasize(2..2)
+                .emphasis
+                .is_none()
+        );
+    }
 
     #[test]
     fn right_to_left_scripts_are_recognized() {

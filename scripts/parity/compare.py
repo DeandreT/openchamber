@@ -193,7 +193,9 @@ def compare_geometry(reference: dict[str, list[float]], candidate: dict[str, lis
     A visible target present in only one client is reported too. A zero-sized
     DOM node and an absent native node both describe a hidden target.
     """
-    allowance = 1.0 / scale
+    # DOM rectangles pass through float32 coordinates. Keep the one-physical-
+    # pixel contract while avoiding a failure at 1.000007 from conversion noise.
+    allowance = (1.0 + 0.0001) / scale
     differences = []
     for target in sorted(set(reference) | set(candidate)):
         left, right = reference.get(target), candidate.get(target)

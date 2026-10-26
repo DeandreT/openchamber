@@ -2,10 +2,9 @@ use std::rc::Rc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AccessibleAction, AnyElement, App, DefiniteLength, Edges, ElementId, Entity, Hsla,
-    InteractiveElement as _, IntoElement, MouseButton, ParentElement as _, Rems, RenderOnce, Role,
-    SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled, TextAlign, TouchPhase,
-    Window, div, px, relative,
+    AnyElement, App, DefiniteLength, Edges, ElementId, Entity, Hsla, InteractiveElement as _,
+    IntoElement, MouseButton, ParentElement as _, Rems, RenderOnce, Role, SharedString,
+    StyleRefinement, Styled, TextAlign, TouchPhase, Window, div, px, relative,
 };
 
 use crate::button::{Button, ButtonRounded, ButtonVariants as _};
@@ -490,21 +489,17 @@ impl Input {
             })
     }
 
+    #[cfg(test)]
     fn handle_accessibility_set_value(
         state: &TextInputState,
         data: Option<&gpui::accesskit::ActionData>,
         window: &mut Window,
         cx: &mut App,
     ) {
-        let Some(gpui::accesskit::ActionData::Value(value)) = data else {
-            return;
-        };
-        if !state.presentation(cx).is_editable() {
-            return;
-        }
-        state.replace_all(value.to_string(), window, cx);
+        state.accessibility_set_value(data, window, cx);
     }
 
+    #[cfg(test)]
     fn handle_accessibility_focus(state: &TextInputState, window: &mut Window, cx: &mut App) {
         if !state.presentation(cx).is_disabled() {
             state.focus(window, cx);
@@ -677,12 +672,6 @@ impl RenderOnce for Input {
         let disabled = self.disabled;
         let is_multi_line = presentation.is_multi_line();
         let accessibility_role = accessibility_role(is_multi_line, content_type, self.role);
-        let accessibility_state = state.clone();
-        // Tests read the same accessibility value as assistive technology.
-        // Avoid materializing the rope in normal builds without a client.
-        let accessibility_value = ((window.is_a11y_active() || cfg!(feature = "test-support"))
-            && exposes_accessibility_value(presentation.is_masked(), content_type))
-        .then(|| state.text(cx).to_string());
         let input_focused =
             presentation.focus_handle().is_focused(window) && !presentation.is_disabled();
         if input_focused {
@@ -738,7 +727,18 @@ impl RenderOnce for Input {
         let id = self
             .id
             .unwrap_or_else(|| ("input", state.entity_id()).into());
+        state.set_accessibility(
+            gpui_base::input::InputAccessibility {
+                role: accessibility_role,
+                label: aria_label,
+                placeholder,
+                id: self.accessibility_id,
+                secret: !exposes_accessibility_value(false, content_type),
+            },
+            cx,
+        );
         BaseInput::new(id)
+            .role(None)
             .focused(focused)
             .disabled(disabled)
             .track_focus(&frame_focus_handle)
@@ -760,22 +760,6 @@ impl RenderOnce for Input {
                         self.appearance && self.bordered && self.focus_bordered,
                         |style| style.border_1().border_color(cx.theme().ring),
                     )
-                })
-            })
-            .role(accessibility_role)
-            .when_some(self.accessibility_id, |this, id| this.accessibility_id(id))
-            .when_some(aria_label, |this, label| this.aria_label(label))
-            .when_some(placeholder, |this, placeholder| {
-                this.aria_placeholder(placeholder)
-            })
-            .when_some(accessibility_value, |this, value| this.aria_value(value))
-            .on_a11y_action(AccessibleAction::Focus, {
-                let state = state.clone();
-                move |_, window, cx| Self::handle_accessibility_focus(&state, window, cx)
-            })
-            .when(presentation.is_editable(), |this| {
-                this.on_a11y_action(AccessibleAction::SetValue, move |data, window, cx| {
-                    Self::handle_accessibility_set_value(&accessibility_state, data, window, cx);
                 })
             })
             .flex()
@@ -1070,12 +1054,17 @@ mod tests {
                 div()
                     .child(Input::new(&state))
                     .on_prepaint(move |_, window, cx| {
-                        let input = Input::new(&state).render(window, cx).into_element();
+                        let _ = Input::new(&state).render(window, cx);
                         let mut node = gpui::accesskit::Node::new(Role::TextInput);
-                        input.write_a11y_info(&mut node);
+                        state.update(cx, |state, cx| {
+                            state
+                                .render(window, cx)
+                                .into_element()
+                                .write_a11y_info(&mut node);
+                        });
                         *emitted.lock().unwrap() = Some((
                             node.value().map(ToOwned::to_owned),
-                            node.supports_action(AccessibleAction::SetValue),
+                            node.supports_action(gpui::AccessibleAction::SetValue),
                         ));
                     })
             }
@@ -1204,10 +1193,13 @@ mod tests {
                 div().on_prepaint(move |_, window, cx| {
                     let mut author_id_of = |input: Input| {
                         let mut node = gpui::accesskit::Node::new(Role::TextInput);
-                        input
-                            .render(window, cx)
-                            .into_element()
-                            .write_a11y_info(&mut node);
+                        let _ = input.render(window, cx);
+                        state.update(cx, |state, cx| {
+                            state
+                                .render(window, cx)
+                                .into_element()
+                                .write_a11y_info(&mut node);
+                        });
                         node.author_id().map(ToOwned::to_owned)
                     };
 

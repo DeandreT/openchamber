@@ -191,6 +191,23 @@ impl TranscriptSelection {
             .map(|member| member.state.read(cx).element())
     }
 
+    /// Spoken message content uses the same Markdown projection as selection.
+    pub(crate) fn accessible_text(&self, message: &MessageId, cx: &App) -> String {
+        let mut text = String::new();
+        if let Some(members) = self.rows.get(message) {
+            for id in members {
+                if let Some(member) = self.members.get(id) {
+                    if !text.is_empty() {
+                        text.push('\n');
+                    }
+                    let rendered = member.state.read(cx).text.read(cx).rendered_text();
+                    text.push_str(rendered.as_str());
+                }
+            }
+        }
+        text
+    }
+
     pub(crate) fn sync(
         &mut self,
         transcript: &Transcript,
@@ -309,6 +326,31 @@ impl TranscriptSelection {
 mod tests {
     use super::*;
     use gpui_kit::base::text::TextViewSelectionPosition;
+
+    #[gpui_kit::test]
+    fn spoken_text_uses_rendered_markdown_before_the_row_is_painted(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        cx.update(gpui_kit::init);
+        cx.update(|cx| {
+            let mut messages = openchamber_native_core::synthetic::conversation(
+                &openchamber_native_core::ids::SessionId::from("spoken"),
+                openchamber_native_core::synthetic::ConversationShape::Short,
+            );
+            let message = &mut messages[1];
+            let id = message.info.id.clone();
+            message.parts = vec![openchamber_native_core::transcript::Part::text(
+                PartId::from("spoken-part"),
+                "# Title\n\nUse **bold** and `code`.".to_owned(),
+            )];
+            let transcript = Transcript::from_history(messages);
+            let selection = TranscriptSelection::new(&transcript, cx);
+            assert_eq!(
+                selection.accessible_text(&id, cx),
+                "Title\nUse bold and code.\n"
+            );
+        });
+    }
 
     #[gpui_kit::test]
     fn growing_custom_blocks_keep_one_child_and_its_selection(cx: &mut gpui_kit::TestAppContext) {

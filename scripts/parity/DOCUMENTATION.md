@@ -26,6 +26,9 @@ PyGObject with AT-SPI, `busctl`, `dbus-run-session`, `xsettingsd` and fontconfig
 | `scenarios.json` | Scenario steps. Rows are addressed by key prefix and title, never by seeded IDs. |
 | `electron_adapter.py`, `electron_bridge.mjs` | Electron through CDP (`scripts/perf/cdp.mjs`): launch, input dispatch, rows, geometry, screenshots, and read-only `observe` of layout and computed styles and `fonts` of the faces a node is drawn with, for porting. |
 | `native_adapter.py` | The native window through AT-SPI: launch, activation, generated pointer and key input, accessibility actions, rows, geometry, and content capture. |
+| `clipboard_probe.py` | Asynchronous clipboard ownership and exact text after a real copy action on the private display. |
+| `native_platform.py` | Synthetic native window-manager and IBus checks with private profiles and service logs. |
+| `native_accessibility.py` | Orca-generated control announcements and AT-SPI transcript exposure, with silent private speech services. |
 | `compare.py` | Pixel, row and geometry comparison. |
 | `png.py` | PNG reading and writing with the standard library. |
 
@@ -94,6 +97,11 @@ disclosure state comes from its own toggle, never from a menu trigger inside
 it. Native rows are the accessible elements of the sidebar, whose accessible
 IDs are the same row keys; a row's own controls are not rows.
 
+New-session draft IDs are allocated independently by each client. Their
+comparison keys use the containing group and displayed draft ordinal; counts,
+labels, states and rectangles still have to match. Checkpoint records retain
+the original IDs. Session and project IDs remain exact.
+
 Electron is captured with `Page.captureScreenshot`, which is its viewport. The
 native window is raised and focused with `xdotool`, captured through Xlib
 without a desktop screenshot service, and cut to the content root
@@ -101,7 +109,8 @@ without a desktop screenshot service, and cut to the content root
 is measured from the same root. Runs are serial and each client starts fresh.
 
 A scenario passes only when every checkpoint matches in size and pixels, rows
-and geometry; geometry allows one physical pixel. A zero-sized reference
+and geometry; geometry allows one physical pixel, with 0.0001 physical pixels
+for floating-point conversion error at that boundary. A zero-sized reference
 target and an absent native node both count as hidden; a visible target missing
 from either client still fails. `--tolerance` ignores
 per-channel differences up to its value and is for reviewed rasterization
@@ -140,6 +149,54 @@ excluded. Differences of at most two RGB levels per channel count separately
 as `paintNoisePixels` and appear cyan in the diff image. Geometry and larger
 differences remain strict. Other checkpoints use no paint exception.
 
+## Native Linux platform checks
+
+`native_platform.py` runs the synthetic native client on its own Xvfb display
+with Openbox. It verifies maximize, restored content size, minimize and clean
+close through real pointer input; an accessibility substitution fails the check.
+Its selection check drags across Unicode messages, copies while the selected
+rows are visible, scrolls them offscreen, then returns and compares both copies.
+The optional IBus check exercises libpinyin preedit and commit, including Enter
+committing a composition without submitting the draft. It does not qualify the
+candidate popup or every IME and language.
+
+```sh
+python3 scripts/parity/native_platform.py --checks windows
+python3 scripts/parity/native_platform.py --checks selection
+python3 scripts/parity/native_platform.py --checks windows,ime
+```
+
+Openbox is required for these checks; `ime` also requires IBus, libpinyin and
+`gsettings`. All service configuration and state is private to the run.
+Reports and service logs go under a new directory in `native/target/tmp`, or an
+empty directory supplied with `--output`. The run never uses the user's input
+method or window manager. The display wrapper removes inherited IME addresses.
+Platform and Orca child processes receive an allowlisted environment, without
+provider credentials or inherited application configuration.
+
+`ClipboardProbe` primes a private clipboard sentinel and waits for a new owner
+and the exact returned text. It dispatches a copy once and fails on timeout;
+re-reading an old clipboard cannot count as a passing copy check. GTK clipboard
+initialization happens before the client opens so it cannot disturb input focus.
+Timeout and completion cancel any outstanding clipboard read.
+
+`native_accessibility.py` starts Orca and a private Speech Dispatcher with a
+silent module. It checks generated speech for the project trigger, search field,
+highlighted option and restored composer, plus rendered transcript text in the
+AT-SPI tree. Audio-server addresses point at nonexistent private sockets; the
+test never plays speech through the user's desktop. Audible playback and full
+screen-reader browsing remain separate checks.
+
+```sh
+python3 scripts/parity/native_accessibility.py
+```
+
+It requires Orca and Speech Dispatcher. Reports and debug logs go into a new
+directory under `native/target/tmp`, with the same isolated display and profile
+rules as the window and IME checks.
+Both native check commands accept `--scale 1`, `1.25`, `1.5` or `2`; the
+logical viewport stays 1280 by 800 and the private display grows to fit it.
+
 ## Adding a scenario
 
 Give the feature an inventory entry first, with the reference files and the
@@ -154,8 +211,9 @@ Prefer `wait` to `settle`: it names the observable state a checkpoint needs,
 with one condition per client (a page expression for Electron; accessible
 elements or a diagnostic marker emitted since the last input for the native
 client) and a timeout. A reference that never reaches its state blocks the
-scenario; a native client that never does fails it, and its evidence is still
-captured.
+scenario; a native client that never does fails it. Either failure captures
+`wait-failed.png` and stops the remaining inputs, so a failed popup wait cannot
+turn later typing into a composer submission.
 
 Native waits can also match a named accessible node with
 `{"named": {"name": "Search projects...", "role": "entry"}}`. Optional `id`

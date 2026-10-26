@@ -125,6 +125,13 @@ impl Workspace {
                     .child(rows),
             )
             .child(self.render_sidebar_footer(&strings, palette, direction, cx))
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .inset_end(direction, px(1.0))
+                    .shadow(crate::elevation::sidebar(direction)),
+            )
             // The edge toward the chat, over the column rather than inside it,
             // so the rows keep their full slot.
             .child(
@@ -391,7 +398,7 @@ impl Workspace {
     fn render_sidebar_row(
         &mut self,
         index: usize,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let Some(item) = self.sidebar_items.get(index).cloned() else {
@@ -406,6 +413,111 @@ impl Workspace {
         let strings = locale::strings(cx).clone();
         let direction = strings.direction();
         let row = match &item {
+            SidebarItem::Draft { key, draft, title } => {
+                let selected = self.selected.is_none() && self.composer_key.as_ref() == Some(draft);
+                let group: SharedString = format!("{key}:hover").into();
+                let open_key = draft.clone();
+                let discard_key = draft.clone();
+                let open_focus = window
+                    .use_keyed_state(
+                        SharedString::from(format!("{key}:open-focus")),
+                        cx,
+                        |_, cx| cx.focus_handle().tab_index(0).tab_stop(true),
+                    )
+                    .read(cx)
+                    .clone();
+                let discard_focus = window
+                    .use_keyed_state(
+                        SharedString::from(format!("{key}:discard-focus")),
+                        cx,
+                        |_, cx| cx.focus_handle().tab_index(0).tab_stop(true),
+                    )
+                    .read(cx)
+                    .clone();
+                let open = on_activate(
+                    div()
+                        .id(SharedString::from(format!("{key}:open")))
+                        .role(Role::Button)
+                        .accessibility_id(format!("{key}:open"))
+                        .aria_label(
+                            strings.format("sessions.sidebar.draft.openAria", &[("label", title)]),
+                        )
+                        .flex_1()
+                        .min_w_0()
+                        .padding_end(direction, px(10.0))
+                        .flex_row_from(direction)
+                        .items_center()
+                        .gap(px(6.0))
+                        .child(glyph("edit", 12.0, palette.muted_foreground.opacity(0.7)))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .italic()
+                                .css_text(LABEL_SIZE, LABEL_LINE, cx)
+                                .text_color(if selected {
+                                    palette.selection_foreground
+                                } else {
+                                    palette.muted_foreground
+                                })
+                                .child(title.clone()),
+                        ),
+                    cx,
+                    move |this, window, cx| this.open_draft(&open_key, window, cx),
+                )
+                .test_support()
+                .track_focus(&open_focus);
+                let discard = on_activate(
+                    div()
+                        .id(SharedString::from(format!("{key}:discard")))
+                        .role(Role::Button)
+                        .accessibility_id(format!("{key}:discard"))
+                        .aria_label(strings.get("sessions.sidebar.draft.discard"))
+                        .absolute()
+                        .inset_end(direction, px(4.0))
+                        .top(px(8.0))
+                        .size(px(16.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .opacity(0.0)
+                        .focus(|style| style.opacity(1.0))
+                        .group_hover(group.clone(), |style| style.opacity(1.0))
+                        .child(glyph("close", 12.0, palette.muted_foreground)),
+                    cx,
+                    move |this, window, cx| this.discard_draft(&discard_key, window, cx),
+                )
+                .test_support()
+                .track_focus(&discard_focus);
+                div()
+                    .id(key.clone())
+                    .role(Role::Group)
+                    .accessibility_id(key.clone())
+                    .aria_label(title.clone())
+                    .h(px(36.0))
+                    .py(px(2.0))
+                    .child(
+                        div()
+                            .relative()
+                            .tab_group()
+                            .group(group)
+                            .h(px(32.0))
+                            .px(px(8.0))
+                            .rounded(px(6.0))
+                            .cursor_pointer()
+                            .flex_row_from(direction)
+                            .items_center()
+                            .gap(px(4.0))
+                            .when(selected, |row| row.bg(palette.selection.opacity(0.7)))
+                            .when(!selected, |row| {
+                                row.hover(|row| row.bg(palette.hover.opacity(0.6)))
+                            })
+                            .child(open)
+                            .child(discard),
+                    )
+                    .test_support()
+                    .into_any_element()
+            }
             SidebarItem::Zone {
                 key,
                 activity,

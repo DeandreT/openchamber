@@ -12,6 +12,10 @@ The local patch owns opt-in selection across virtualized Markdown TextViews.
 TextView parsing and the rendered-text index supply the text and leaf offsets.
 The application owns transcript identity, ordering, view lifetimes and updates.
 
+The combobox root also forwards an application-provided accessible name and
+committed value to its Select root. Its search query remains separate from the
+value announced by assistive technology.
+
 ## Application contract
 
 Retain one `TextViewSelectionDocument` for each session and retain the attached

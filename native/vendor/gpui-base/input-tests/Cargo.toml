@@ -1,0 +1,28 @@
+[package]
+name = "gpui-input-accessibility-tests"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+gpui-base = { path = "..", features = ["test-support"] }
+gpui-component = { path = "../../gpui-component", features = ["test-support"] }
+gpui = { package = "gpui-pre", version = "=0.3.9", features = ["test-support"] }
+
+[patch.crates-io]
+gpui-base = { path = ".." }
+gpui-pre = { path = "../../gpui-pre" }
+
+[[test]]
+name = "input_accessibility"
+path = "input_accessibility.rs"
+
+[[test]]
+name = "active_descendant"
+path = "active_descendant.rs"
+
+[[test]]
+name = "editable_text"
+path = "editable_text.rs"

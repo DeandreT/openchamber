@@ -49,11 +49,23 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let strings = locale::strings(cx).clone();
-        let title = strings.get("chat.emptyState.draftTitle");
+        let project_label = self.draft_project_label();
+        let title = if let Some(project) = &project_label {
+            strings.format(
+                "chat.emptyState.draftTitleWithProject",
+                &[("project", project.as_ref())],
+            )
+        } else {
+            strings.get("chat.emptyState.draftTitle")
+        };
+        let emphasis = project_label.as_ref().and_then(|project| {
+            title
+                .find(project.as_ref())
+                .map(|start| start..start + project.len())
+        });
         // `pb-[6vh]`: six percent of the content's height.
         let lift = chrome::content_size(window).height * 0.06;
         let column_padding = chrome::chat_column_padding(window, self.chat_area_width(window));
-        self.reconcile_startup_runtime(window, cx);
         let project_chooser = self.render_project_chooser(palette, direction, window, cx);
         let hover_fill = palette.hover;
         let foreground = palette.foreground;
@@ -146,7 +158,15 @@ impl Workspace {
                                 .justify_center()
                                 .css_text(TITLE_SIZE, TITLE_LINE, cx)
                                 .text_color(palette.foreground)
-                                .child(tracked_text(title, TITLE_TRACKING, TextAlign::Center)),
+                                .child({
+                                    let text =
+                                        tracked_text(title, TITLE_TRACKING, TextAlign::Center);
+                                    if let Some(range) = emphasis {
+                                        text.emphasize(range)
+                                    } else {
+                                        text
+                                    }
+                                }),
                         ),
                     )
                     .child(

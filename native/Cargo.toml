@@ -55,6 +55,10 @@ todo = "warn"
 debug = "line-tables-only"
 
 [patch.crates-io]
+gpui-pre = { path = "vendor/gpui-pre" }
 accesskit_atspi_common = { path = "vendor/accesskit_atspi_common" }
 gpui-base = { path = "vendor/gpui-base" }
 gpui-component = { path = "vendor/gpui-component" }
+zed-xim = { path = "vendor/zed-xim" }
+xim-ctext = { path = "vendor/xim-ctext" }
+gpui-pre-linux = { path = "vendor/gpui-pre-linux" }

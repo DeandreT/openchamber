@@ -57,7 +57,7 @@ def set_accessibility(enabled: bool) -> None:
 class NativeClient:
     """One native desktop process under test."""
 
-    def __init__(self, binary: Path, env: dict[str, str], scale: float, width: int, height: int):
+    def __init__(self, binary: Path, env: dict[str, str], scale: float, width: int, height: int, stderr=None):
         self.binary = binary
         self.env = env
         self.scale = scale
@@ -68,6 +68,7 @@ class NativeClient:
         self._selector = selectors.DefaultSelector()
         self._buffer = ""
         self._app = None
+        self._stderr = subprocess.DEVNULL if stderr is None else stderr
         # Markers before this index came before the last input.
         self._input_mark = 0
         # Inputs this host could not deliver and what replaced them.
@@ -83,7 +84,7 @@ class NativeClient:
             [str(self.binary)],
             env=env,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=self._stderr,
             start_new_session=True,
         )
         self._selector.register(self.process.stdout, selectors.EVENT_READ)
@@ -137,8 +138,13 @@ class NativeClient:
         dimensions, so verify the result and retry within the readiness limit."""
         target = (round(self.width * self.scale), round(self.height * self.scale))
         deadline = time.monotonic() + timeout_s
+        content = None
         while time.monotonic() < deadline:
-            content = self._content()
+            try:
+                content = self._content()
+            except LookupError:
+                self._read_marks(0.05)
+                continue
             if (content.width, content.height) == target:
                 return
             window = self._window()
@@ -153,7 +159,8 @@ class NativeClient:
                 check=True, capture_output=True, timeout=10,
             )
             time.sleep(0.1)
-        content = self._content()
+        if content is None:
+            raise TimeoutError("the native accessibility content never appeared")
         raise TimeoutError(f"native content is {content.width}x{content.height}, wanted {target[0]}x{target[1]}")
 
     def _activate(self) -> None:

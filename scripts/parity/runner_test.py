@@ -9,7 +9,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import runner
 
@@ -61,6 +61,18 @@ class RunnerInputTest(unittest.TestCase):
         client.click("session:target")
         self.assertFalse(runner.wait_selected(client, "session:target", timeout_s=1))
 
+    def test_failed_row_selection_stops_later_input(self):
+        client = Client(selects_target=False)
+        client.screenshot = Mock()
+        client.type_text = Mock()
+        with self.assertRaisesRegex(TimeoutError, "required row selection failed"):
+            runner.perform(client, "native", [
+                {"click": {"zone": "session:", "title": "target"}},
+                {"type": "must not be entered"},
+            ], {}, Path("unused"), argparse.Namespace())
+        client.screenshot.assert_called_once_with(Path("unused/wait-failed.png"))
+        client.type_text.assert_not_called()
+
     def test_the_requested_selected_session_satisfies_the_wait(self):
         client = Client()
         client.click("session:target")
@@ -74,8 +86,58 @@ class RunnerInputTest(unittest.TestCase):
             {"menu": {"native": "menu-control"}}, Path("unused"), argparse.Namespace())
         self.assertEqual(calls, ["menu-control"])
 
+    def test_failed_wait_captures_state_and_stops_later_input(self):
+        client = Client()
+        captures = []
+        inputs = []
+        client.wait_for = lambda condition, timeout: False
+        client.screenshot = captures.append
+        client.type_text = inputs.append
+        with self.assertRaisesRegex(TimeoutError, "before further input"):
+            runner.perform(client, "native", [
+                {"wait": {"native": {"elements": ["project-search"]}}},
+                {"type": "must not reach the composer"},
+            ], {}, Path("unused"), argparse.Namespace())
+        self.assertEqual(captures, [Path("unused/wait-failed.png")])
+        self.assertEqual(inputs, [])
+
 
 class ScenarioSettingsTest(unittest.TestCase):
+    def test_launch_failure_closes_client_and_services(self):
+        for kind in ("native", "electron"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:
+                client = Mock()
+                client.launch.side_effect = RuntimeError("launch failed")
+                service = Mock(url="http://localhost", opencode_config={})
+                args = argparse.Namespace(root=Path(temporary), theme="test", timeout=1,
+                    native_binary=Path("native"), electron_app=Path("electron"), scale=1, width=1280, height=800)
+                with patch.object(runner, "copy_seed", return_value=Path(temporary)), \
+                     patch.object(runner, "native_env", return_value={}), \
+                     patch.object(runner, "electron_env", return_value={}), \
+                     patch.object(runner, "NativeClient", return_value=client), \
+                     patch.object(runner, "ElectronClient", return_value=client), \
+                     patch.object(runner, "IsolatedServer", return_value=service), \
+                     patch.object(runner, "FixtureProvider", return_value=service):
+                    result = runner.run_client(kind, {"steps": []}, Path(temporary), args)
+                self.assertEqual(result, {"error": "launch failed"})
+                client.close.assert_called_once_with()
+                service.stop.assert_called_once_with()
+
+    def test_unknown_click_targets_are_rejected_before_launch(self):
+        scenarios = [{"id": "check", "feature": "feature", "steps": [{"clickTarget": "missing"}]}]
+        features = [{"id": "feature", "scenarios": ["check"]}]
+        self.assertEqual(runner.check_contracts(scenarios, features, {}), ["scenario check references undefined target missing"])
+
+    def test_only_client_generated_draft_ids_are_normalized(self):
+        reference = [{"key": "project:root:draft:random-id", "label": "draft", "selected": False, "expanded": None}]
+        candidate = [{**reference[0], "key": "project:root:draft:new-session"}]
+        self.assertEqual(runner.compare_rows(reference, candidate), [])
+        self.assertTrue(runner.compare_rows(reference, []))
+        self.assertTrue(runner.compare_rows(reference, [{**candidate[0], "label": "different"}]))
+        two_drafts = reference + [{**reference[0], "key": "project:root:draft:another-id"}]
+        self.assertEqual(runner.comparable_rows(two_drafts)[1]["key"], "project:root:draft:1")
+        session = [{**reference[0], "key": "project:root:session:one"}]
+        self.assertTrue(runner.compare_rows(session, [{**session[0], "key": "project:root:session:two"}]))
     def test_settings_are_applied_to_independent_copies_only(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

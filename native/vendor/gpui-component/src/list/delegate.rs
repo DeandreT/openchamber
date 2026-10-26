@@ -10,6 +10,11 @@ use crate::{
 pub trait ListDelegate: Sized + 'static {
     type Item: Selectable + IntoElement;
 
+    /// A readable row name for accessibility focus during keyboard navigation.
+    fn accessibility_label(&self, _ix: IndexPath, _cx: &App) -> Option<gpui::SharedString> {
+        None
+    }
+
     /// When Query Input change, this method will be called.
     /// You can perform search here.
     fn perform_search(

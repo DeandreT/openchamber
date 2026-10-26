@@ -65,6 +65,10 @@ impl<D: SearchableListDelegate + 'static> SearchableListAdapter<D> {
 impl<D: SearchableListDelegate + 'static> ListDelegate for SearchableListAdapter<D> {
     type Item = SearchableListItemElement;
 
+    fn accessibility_label(&self, ix: IndexPath, _: &App) -> Option<gpui::SharedString> {
+        self.delegate.item(ix).map(|item| item.title())
+    }
+
     fn sections_count(&self, cx: &App) -> usize {
         self.delegate.sections_count(cx)
     }

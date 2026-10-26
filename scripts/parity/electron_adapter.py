@@ -89,6 +89,10 @@ class ElectronClient:
         panel whose data has not arrived can hold still for a while."""
         return self._call("inflight")["count"] > 0
 
+    def pending_requests(self) -> list[str]:
+        """Route prefixes only; query strings and request content stay private."""
+        return self._call("inflight")["routes"]
+
     def wait_for(self, condition: dict, timeout_s: float) -> bool:
         """Whether the page expression ``{"expression": ...}`` held within the
         timeout, followed by a painted frame."""
@@ -119,7 +123,7 @@ class ElectronClient:
         self._call("click", selector=f"{row} [data-session-row], {row} button", within=row)
 
     def click_target(self, spec: dict) -> None:
-        self._call("click", selector=spec["selector"])
+        self._call("click", **spec)
 
     def key(self, name: str) -> None:
         codes = {"Return": ("Enter", "Enter", 13), "Escape": ("Escape", "Escape", 27), "Down": ("ArrowDown", "ArrowDown", 40), "Up": ("ArrowUp", "ArrowUp", 38)}

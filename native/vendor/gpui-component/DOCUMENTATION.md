@@ -15,6 +15,14 @@ the pinned `gpui-kit` dependency.
 - Opted-in single selection opens with an empty query and the committed value
   highlighted, so Enter can repeat that choice.
 - Both pointer/list confirmation and direct item selection apply the option.
+- Combobox triggers expose their placeholder as their accessible name and their
+  committed item titles as their value. Searchable list rows expose those titles
+  and mark their highlighted row as the active descendant. Other list delegates
+  opt into named active descendants through `accessibility_label`.
+- Comboboxes can refine their popup style and trigger gap independently, and
+  searchable lists can hide the clear button. Defaults retain the package's
+  existing appearance; the native project chooser supplies the web client's
+  popup dimensions and controls.
 
 ## Decisions
 

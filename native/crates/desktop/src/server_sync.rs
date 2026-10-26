@@ -109,7 +109,7 @@ impl Workspace {
                 connection.client = Some(client);
                 connection.state = ConnectionState::Connected;
                 if runtime != self.runtime {
-                    self.switch_runtime(runtime, cx);
+                    self.switch_runtime(runtime, window, cx);
                 }
                 self.subscribe(generation, window, cx);
                 self.save_code_wrap(cx);
@@ -131,8 +131,25 @@ impl Workspace {
 
     /// Replaces every runtime-scoped record. Drafts and scroll positions keep
     /// their runtime keys, so they never restore into another server.
-    pub(crate) fn switch_runtime(&mut self, runtime: RuntimeId, cx: &mut Context<Self>) {
+    pub(crate) fn switch_runtime(
+        &mut self,
+        runtime: RuntimeId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.save_composer_draft(cx);
+        self.save_scroll_position();
+        if let Some(open) = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.open_sessions.get(id))
+        {
+            open.selection
+                .read(cx)
+                .document
+                .clone()
+                .deactivate(window, cx);
+        }
         self.prompt_panel = None;
         self.prompt_hover_task = None;
         self.prompt_hover_suppressed = false;
@@ -147,7 +164,9 @@ impl Workspace {
         self.open_sessions.clear();
         self.live_status.clear();
         self.selected = None;
+        self.project_chooser = None;
         self.composer_key = self.new_session_draft_key();
+        self.restore_composer_draft(window, cx);
         self.rebuild_sidebar();
     }
 

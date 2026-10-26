@@ -131,8 +131,12 @@ impl Workspace {
     }
 
     fn project_subject(&self) -> Option<Subject> {
-        let session = self.selected_session()?;
-        let directory = path::normalize_optional(session.directory.as_deref())?;
+        let directory = if self.selected.is_some() {
+            let session = self.selected_session()?;
+            path::normalize_optional(session.directory.as_deref())?
+        } else {
+            path::normalize(self.draft_projects.get(&self.runtime)?)?
+        };
         let project_path = self.project_of_directory(&directory);
         let in_chat =
             chat_roots::is_chat_directory(self.topology.chat_roots.as_ref(), Some(&directory));
@@ -152,6 +156,13 @@ impl Workspace {
             project_path,
             action_project,
         })
+    }
+
+    pub(crate) fn draft_project_label(&self) -> Option<SharedString> {
+        self.draft_projects
+            .get(&self.runtime)
+            .map(|path| self.project_label(path))
+            .filter(|label| !label.is_empty())
     }
 
     /// `resolveProjectForSessionDirectory`: the registered project the

@@ -2,6 +2,7 @@
 
 import argparse
 import os
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -21,13 +22,15 @@ class NativeBenchmarkEnvironmentTest(unittest.TestCase):
         check.assert_called_once_with(source)
 
     def test_native_keeps_verified_environment_and_removes_inherited_server(self):
-        args = argparse.Namespace(backend="x11", workload="small", theme="openchamber-dark", server=None)
-        with patch.dict(os.environ, {"OPENCHAMBER_NATIVE_SERVER": "https://not-the-fixture"}):
+        args = argparse.Namespace(backend="x11", workload="small", theme="openchamber-dark", server=None, native_home=Path("/private/native-profile"))
+        with patch.dict(os.environ, {"OPENCHAMBER_NATIVE_SERVER": "https://not-the-fixture"}, clear=True):
             with patch.object(native_bench.virtual_display, "child_environment", side_effect=lambda env: {**env, "DISPLAY": ":1234"}):
                 env = native_bench.native_env(args)
         self.assertEqual(env["DISPLAY"], ":1234")
         self.assertEqual(env["OPENCHAMBER_NATIVE_WORKLOAD"], "small")
         self.assertNotIn("OPENCHAMBER_NATIVE_SERVER", env)
+        self.assertEqual(env["HOME"], "/private/native-profile")
+        self.assertEqual(env["XDG_CONFIG_HOME"], "/private/native-profile/.config")
 
 
 if __name__ == "__main__":
