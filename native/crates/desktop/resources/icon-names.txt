@@ -34,7 +34,6 @@ file-text
 flask
 folder
 folder-add
-fullscreen
 fullscreen-exit
 git-branch
 git-pull-request
