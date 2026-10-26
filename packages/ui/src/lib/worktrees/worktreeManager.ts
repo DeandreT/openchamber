@@ -326,7 +326,9 @@ export const worktreeMapsEqual = (
         // The task title changes while the worktree stays: the agent names
         // the task, the user renames it. Left out, a renamed list read as
         // unchanged and the sidebar kept the old name.
-        || next.title !== current.title) return false;
+        || next.title !== current.title
+        // Pinning changes it the same way.
+        || next.pinnedAt !== current.pinnedAt) return false;
     }
   }
   return true;
@@ -569,6 +571,7 @@ const readProjectWorktrees = async (projectDirectory: string): Promise<WorktreeM
         headState: canonical.headState,
         worktreeSource: canonical.worktreeSource,
         title: entry.title?.trim() || undefined,
+        pinnedAt: (entry.pinnedAt ?? 0) > 0 ? entry.pinnedAt : undefined,
         ...(entry.provenance ? { provenance: entry.provenance } : {}),
       };
     })

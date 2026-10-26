@@ -181,6 +181,8 @@ import {
 } from './composer/language/mentions';
 import { collectKnownTokenNames, lastPrefixSigilIndex } from './composer/language/prefixTokens';
 import { resolveAutocompleteTrigger, type AutocompleteKind } from './composer/language/triggers';
+import { hasSessionMention } from './sessionMentionResults';
+import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import { type ComposerLanguageContext } from './composer/language/tokenize';
 import {
     ComposerEditor,
@@ -304,6 +306,15 @@ const NO_ATTACH_GUESTS: [] = [];
 const getFileMentionInputSourceForInsertedText = (insertedText: string): FileMentionAutocompleteInputSource => (
     insertedText.includes('@') ? 'paste' : 'manual'
 );
+
+// Asks the snapshot the `@` picker ranks, which it loads when it opens, with
+// the same session left out, so the picker never stays open over nothing.
+const continuesSessionMention = (query: string, currentSessionId: string | null): boolean => {
+    const { hasLoaded, activeSessions, archivedSessions } = useGlobalSessionsStore.getState();
+    if (!hasLoaded) return false;
+    return hasSessionMention(activeSessions, query, currentSessionId)
+        || hasSessionMention(archivedSessions, query, currentSessionId);
+};
 
 /**
  * Skills the user named with `$name`. Matched against the registry's exact
@@ -2830,10 +2841,15 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
             mentionsEnabled: !isBtwActive,
             inputSource,
             insertedText,
+            // Session titles hold spaces, so `@release notes` keeps looking.
+            // VS Code lists no sessions under `@`.
+            mentionContinuesPastSpace: isVSCodeRuntime()
+                ? undefined
+                : (query) => continuesSessionMention(query, currentSessionId),
         });
         setOpenAutocomplete(trigger?.kind ?? null);
         setAutocompleteQuery(trigger?.query ?? '');
-    }, [inputMode, isBtwActive]);
+    }, [currentSessionId, inputMode, isBtwActive]);
 
     const insertTextAtSelection = React.useCallback((
         text: string,
@@ -4016,6 +4032,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
         selectedDraftDirectoryHasUncommittedChanges,
         projectRootBranchOption,
         worktreeBranchOptions,
+        spaceBranchOptions,
         draftBranchItems,
         shouldShowDraftBranchSelector,
         handleDraftProjectChange,
@@ -4548,6 +4565,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                             hasUncommittedChanges={selectedDraftDirectoryHasUncommittedChanges}
                             projectRootBranchOption={projectRootBranchOption}
                             worktreeBranchOptions={worktreeBranchOptions}
+                            spaceBranchOptions={spaceBranchOptions}
                             branchItems={draftBranchItems}
                             showBranchSelector={shouldShowDraftBranchSelector}
                             onProjectChange={handleDraftProjectChange}
@@ -4654,6 +4672,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                         onAgentSelect={handleAgentSelect}
                         // VS Code shows no reference chips, so it cannot hold one.
                         onSessionSelect={isVSCode ? undefined : handleSessionSelect}
+                        currentSessionId={currentSessionId}
                         onEmojiSelect={handleEmojiSelect}
                         onClose={closeAutocomplete}
                     />
@@ -5037,6 +5056,7 @@ const ChatInputComponent: React.FC<ChatInputProps> = ({
                 hasUncommittedChanges={selectedDraftDirectoryHasUncommittedChanges}
                 projectRootBranchOption={projectRootBranchOption}
                 worktreeBranchOptions={worktreeBranchOptions}
+                spaceBranchOptions={spaceBranchOptions}
                 branchItems={draftBranchItems}
                 showBranchSelector={shouldShowDraftBranchSelector}
                 onProjectChange={handleDraftProjectChange}

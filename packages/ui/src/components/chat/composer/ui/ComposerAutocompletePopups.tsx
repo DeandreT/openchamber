@@ -67,6 +67,8 @@ interface ComposerAutocompletePopupsProps {
     onAgentSelect: (agentName: string) => void;
     /** Mentions another session; absent where the composer cannot attach one. */
     onSessionSelect?: (session: Session) => void;
+    /** The session this composer writes to, which `@` never offers. */
+    currentSessionId: string | null;
     onEmojiSelect: (emoji: string) => void;
     onClose: () => void;
 }
@@ -131,6 +133,7 @@ function AutocompletePopup(props: ComposerAutocompletePopupsProps & { open: Auto
                     onFileSelect={props.onFileSelect}
                     onAgentSelect={props.onAgentSelect}
                     onSessionSelect={props.onSessionSelect}
+                    currentSessionId={props.currentSessionId}
                     onClose={onClose}
                     style={style}
                 />

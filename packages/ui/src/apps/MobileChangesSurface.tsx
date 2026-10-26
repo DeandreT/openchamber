@@ -1593,7 +1593,8 @@ const MobileDiffDetail: React.FC<{
           <Icon name="chat-1" className="size-5" />
         </button>
       </header>
-      {wholeFileComment.body}
+      {wholeFileComment.cards}
+      {wholeFileComment.editor}
       <div className="min-h-0 flex-1 overflow-hidden">
         {!fileExists ? (
           <MobileChangesState icon message={t('mobile.changes.diffDetail.missingTitle')} description={t('mobile.changes.diffDetail.missingDescription')} />

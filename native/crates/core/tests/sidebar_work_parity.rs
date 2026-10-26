@@ -64,7 +64,7 @@ struct Node {
 #[serde(rename_all = "camelCase")]
 struct Expected {
     by_session: BTreeMap<String, String>,
-    worktrees: Vec<String>,
+    groups: Vec<String>,
     ordered: Vec<String>,
 }
 
@@ -171,7 +171,7 @@ fn works_match_reference_membership_and_order() {
                         .map(|work| (id.clone(), work.key()))
                 })
                 .collect(),
-            worktrees: index.worktrees().map(|work| work.key()).collect(),
+            groups: index.groups().map(|work| work.key()).collect(),
             ordered: index
                 .ordered(&order, |session| included.contains(session.id.as_str()))
                 .iter()

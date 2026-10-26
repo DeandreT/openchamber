@@ -1384,8 +1384,9 @@ export const MultiFileDiffEntry = React.memo<MultiFileDiffEntryProps>(({
                         />
                     </div>
                 </div>
+                {wholeFileComment.editor}
             </div>
-            {wholeFileComment.body}
+            {wholeFileComment.cards}
             {isExpanded && (
                 // Clip, not hidden: a hidden overflow is a scroll box of its
                 // own, and the diff's sticky scrollbar would stick to it

@@ -8,7 +8,7 @@ import { SEMANTIC_TYPOGRAPHY, getTypographyVariable, type SemanticTypographyKey 
 import type { ShortcutCombo } from '@/lib/shortcuts';
 import type { DraftStarterRef } from '@/lib/draftStarters';
 import type { CustomProviderIcon } from '@/lib/customProviderIcons';
-import { DEFAULT_MONO_FONT, DEFAULT_UI_FONT, type MonoFontOption, type UiFontOption } from '@/lib/fontOptions';
+import { DEFAULT_MONO_FONT, DEFAULT_UI_FONT, DEFAULT_UI_FONT_WEIGHT, type MonoFontOption, type UiFontOption, type UiFontWeight } from '@/lib/fontOptions';
 import { getStoredMobileKeyboardMode, type MobileKeyboardMode } from '@/lib/mobileKeyboardMode';
 import type { TerminalShell } from '@/lib/api/types';
 import type { PermissionMode } from './utils/permissionAutoAccept';
@@ -1054,6 +1054,8 @@ interface UIStore {
   /** Family names used when `uiFont` / `monoFont` is `custom`. */
   customUiFont: string;
   customMonoFont: string;
+  /** Weight of regular interface text. */
+  uiFontWeight: UiFontWeight;
   padding: number;
   cornerRadius: number;
   inputBarOffset: number;
@@ -1115,6 +1117,8 @@ interface UIStore {
   showTerminalQuickKeysOnDesktop: boolean;
   /** Header session tabs (web/desktop), opt-in. Off keeps the plain session title. */
   sessionTabsEnabled: boolean;
+  /** Separate header tabs for each project root, worktree and space (`lib/sessionTabScope.ts`). */
+  sessionTabsPerWorkspace: boolean;
   showOpenCodeUpdateNotifications: boolean;
   agentControlToolEnabled: boolean;
   agentScheduleToolEnabled: boolean;
@@ -1352,6 +1356,7 @@ interface UIStore {
   setMonoFont: (font: MonoFontOption) => void;
   setCustomUiFont: (family: string) => void;
   setCustomMonoFont: (family: string) => void;
+  setUiFontWeight: (weight: UiFontWeight) => void;
   setPadding: (size: number) => void;
   setCornerRadius: (radius: number) => void;
   setInputBarOffset: (offset: number) => void;
@@ -1399,6 +1404,7 @@ interface UIStore {
   setNotificationMode: (mode: 'always' | 'hidden-only') => void;
   setShowTerminalQuickKeysOnDesktop: (value: boolean) => void;
   setSessionTabsEnabled: (value: boolean) => void;
+  setSessionTabsPerWorkspace: (value: boolean) => void;
   setNotifyOnSubtasks: (value: boolean) => void;
   setDockBadgeEnabled: (value: boolean) => void;
   setAlwaysShowScrollbars: (value: boolean) => void;
@@ -1600,6 +1606,7 @@ export const useUIStore = create<UIStore>()(
         monoFont: DEFAULT_MONO_FONT,
         customUiFont: '',
         customMonoFont: '',
+        uiFontWeight: DEFAULT_UI_FONT_WEIGHT,
         padding: 100,
         cornerRadius: 18,
         inputBarOffset: 0,
@@ -1651,6 +1658,7 @@ export const useUIStore = create<UIStore>()(
 
         showTerminalQuickKeysOnDesktop: false,
         sessionTabsEnabled: false,
+        sessionTabsPerWorkspace: false,
         showOpenCodeUpdateNotifications: true,
         agentControlToolEnabled: true,
         agentScheduleToolEnabled: true,
@@ -2802,6 +2810,10 @@ export const useUIStore = create<UIStore>()(
           set({ customMonoFont: family.slice(0, 100) });
         },
 
+        setUiFontWeight: (weight) => {
+          set({ uiFontWeight: weight });
+        },
+
         setPadding: (size) => {
           // Clamp between 50% and 200%
           const clampedSize = Math.max(50, Math.min(200, size));
@@ -3215,6 +3227,10 @@ export const useUIStore = create<UIStore>()(
 
         setSessionTabsEnabled: (value) => {
           set({ sessionTabsEnabled: value });
+        },
+
+        setSessionTabsPerWorkspace: (value) => {
+          set({ sessionTabsPerWorkspace: value });
         },
 
         setNotifyOnSubtasks: (value) => {
@@ -3780,6 +3796,7 @@ export const useUIStore = create<UIStore>()(
           monoFont: state.monoFont,
           customUiFont: state.customUiFont,
           customMonoFont: state.customMonoFont,
+          uiFontWeight: state.uiFontWeight,
           padding: state.padding,
           cornerRadius: state.cornerRadius,
           favoriteModels: state.favoriteModels,
@@ -3804,6 +3821,7 @@ export const useUIStore = create<UIStore>()(
           notificationMode: state.notificationMode,
           showTerminalQuickKeysOnDesktop: state.showTerminalQuickKeysOnDesktop,
           sessionTabsEnabled: state.sessionTabsEnabled,
+          sessionTabsPerWorkspace: state.sessionTabsPerWorkspace,
           notifyOnSubtasks: state.notifyOnSubtasks,
           dockBadgeEnabled: state.dockBadgeEnabled,
           alwaysShowScrollbars: state.alwaysShowScrollbars,

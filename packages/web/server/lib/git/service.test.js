@@ -39,6 +39,7 @@ import {
   listStashes,
   getWorktrees,
   setWorktreeTaskTitle,
+  setWorktreePinned,
   seedBranchTaskTitle,
   markGeneratedBranchName,
   readRenameableGeneratedBranch,
@@ -6526,6 +6527,16 @@ describe('worktree task titles', () => {
     expect(await renameGeneratedWorktreeBranch(linked, 'fix/other')).toBeNull();
   });
 
+  it('records a generated name even while another git process holds the config lock', async () => {
+    const { repo, linked } = createLinkedWorktree();
+    const lock = path.join(repo, '.git', 'config.lock');
+    fs.writeFileSync(lock, '');
+    // Git holds the lock for a moment, as a worktree being made in the background does.
+    setTimeout(() => fs.rmSync(lock), 120);
+    await markGeneratedBranchName(repo, 'feature/task', 'feature/');
+    expect(await readRenameableGeneratedBranch(linked)).toBe('feature/task');
+  });
+
   it('keeps the recorded prefix of an issue branch when renaming it', async () => {
     const { repo, linked } = createLinkedWorktree();
     runGit(linked, ['branch', '-m', 'feature/task', 'issue-180-merry-salamander']);
@@ -6549,5 +6560,21 @@ describe('worktree task titles', () => {
     const detached = path.join(createTempDir(), 'detached');
     runGit(repo, ['worktree', 'add', '--detach', detached]);
     await expect(setWorktreeTaskTitle(detached, { title: 'Name', by: 'user' })).rejects.toMatchObject({ status: 409 });
+    await expect(setWorktreePinned(detached, true)).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('pins a worktree in its branch config, listed with the time it was pinned', async () => {
+    const { repo, linked } = createLinkedWorktree();
+    const entryOf = async () => (await getWorktrees(repo)).find((worktree) => fs.realpathSync(worktree.path) === fs.realpathSync(linked));
+
+    expect((await entryOf())?.pinnedAt).toBeUndefined();
+    expect(await setWorktreePinned(linked, true, 1234)).toEqual({ pinned: true, branch: 'feature/task' });
+    expect((await entryOf())?.pinnedAt).toBe(1234);
+    // Pinning again keeps the first pin's time.
+    await setWorktreePinned(linked, true, 5678);
+    expect((await entryOf())?.pinnedAt).toBe(1234);
+
+    expect(await setWorktreePinned(linked, false)).toEqual({ pinned: false, branch: 'feature/task' });
+    expect((await entryOf())?.pinnedAt).toBeUndefined();
   });
 });

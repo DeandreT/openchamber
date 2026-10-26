@@ -19,7 +19,7 @@ rendering asks for a projection and dispatches an action.
   dark themes, as the web's `dark:invert` does.
 - `ownership.rs` and `chat_projection.rs` port `sessionOwnership.ts` and
   `sessionChatProjection.ts`. `sidebar_rows.rs` builds the normal Works view
-  of `sessionSidebarRowModel.ts`, grouping worktree and session works under
+   of `sessionSidebarRowModel.ts`, grouping worktree, space and session works under
   projects, with the section gaps of
   `sessionSidebarVirtualization.ts`; `grouping.rs` ports
   `buildGroupedSessions` and `buildSidebarChatGroup`; `ordering.rs` ports
@@ -44,11 +44,14 @@ rendering asks for a projection and dispatches an action.
   A record carries the session's current model and agent as the server last
   reported them.
 - `sidebar_work.rs` assigns sessions to Works entries from the project
-  sections. A linked worktree is one work, including an empty worktree;
+   sections. A linked worktree or isolated space is one group work, even empty;
   elsewhere each root and its descendants form one work. Archives are
   excluded. The first matching session in lifecycle order determines each
-  work's position. `tests/sidebar_work_parity.rs` compares membership and
-  ordering with the web's `works/sidebarWorks.ts` implementation.
+   work's position. `tests/sidebar_work_parity.rs` compares membership and
+   ordering with the web's `works/sidebarWorks.ts` implementation.
+   Group works retain their `GroupLabel`, so the shared expandable row keeps
+   the space's name and icon. Empty spaces use that same work row and count
+   toward the project's reveal limit.
   Works may be grouped under projects or in one list by time. The time list
   has no reveal limit. A work listed in In work leaves its project unless
   `keep_work_in_place` is set; a pinned session is exclusive to Pinned while

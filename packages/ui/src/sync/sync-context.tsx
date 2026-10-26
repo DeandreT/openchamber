@@ -80,6 +80,7 @@ import { subscribeSessionFoldersSync } from "./session-folders-sync"
 import { subscribeSessionDraftsSync } from "./session-drafts-sync"
 import { subscribePermissionPolicySync, subscribeSpacePermissionModes } from "./permission-mode-sync"
 import { spaceFoldersOfProject, subscribeSpaceCatalogs } from "./space-catalog-sync"
+import { subscribeSpaceSessionProject } from "./space-session-project"
 import {
   processVSCodePermissionAutoAccept,
   processVSCodeReconciledPermissionAutoAccept,
@@ -138,7 +139,7 @@ import { isFilesystemError } from "@/lib/api/files-errors"
 import { formatMessage, useI18nStore } from "@/lib/i18n"
 import { sessionEvents } from "@/lib/sessionEvents"
 import { fileTreeChanges } from "@/lib/fileTreeChanges"
-import { listGlobalSessionPages, splitGlobalSessionsByArchived, type SessionPageLister } from "@/stores/globalSessions"
+import { listGlobalSessionPages, splitGlobalSessionsByArchived, type GlobalSessionRecord, type SessionPageLister } from "@/stores/globalSessions"
 import { areRequestArraysReferentiallyEqual, collectScopedBlockingRequests } from "./scoped-blocking-requests"
 import { EMPTY_USER_MESSAGE_HISTORY_SNAPSHOT, buildUserMessageHistorySnapshot, type TranscriptPrompt, type UserMessageHistorySnapshot } from "./user-message-history"
 import {
@@ -3160,6 +3161,7 @@ export function SyncProvider(props: {
       (event) => handleEvent("global", event, childStores, routingIndex, runtimeKey),
     )
     const unsubscribeSpaceCatalogs = subscribeSpaceCatalogs(runtimeKey)
+    const unsubscribeSpaceSessionProject = subscribeSpaceSessionProject(runtimeKey)
     const resyncAfterStreamGap = (reason: SessionMaterializationReason) => {
       // Cached transcripts may have missed events too; each revalidates its
       // tail the next time it is opened. Mark first so the active sessions'
@@ -3302,6 +3304,7 @@ export function SyncProvider(props: {
       unsubscribeSpaceModes()
       unsubscribePermissionPolicy()
       unsubscribeSpaceCatalogs()
+      unsubscribeSpaceSessionProject()
     }
   }, [props.sdk, childStores, messageLoader, routingIndex, messageStreamTransport, runtimeKey, triggerDirectoryResync])
 
@@ -3322,13 +3325,15 @@ export function SyncProvider(props: {
       if (childDiscoveryDirectories.has(directory)) return
       childDiscoveryDirectories.add(directory)
       try {
-        // Paginated so directories with > pageSize sessions are fully
-        // discovered; a single 200-record page silently truncated the list and
-        // left subagent children beyond it undiscovered.
-        const { active: allSessions } = splitGlobalSessionsByArchived(
-          await listGlobalSessionPages(listSessionPage, { directory, pageSize: 200 }),
-        )
-        if (stopped || childStores.getChild(directory) !== store) return
+        // Each live parent's children only, every page of them. Listing the
+        // whole directory every 15 s moved megabytes per read in a directory
+        // with a thousand sessions, for as long as any of them was working.
+        const listed: GlobalSessionRecord[] = []
+        for (const parentID of parentSessionIds) {
+          listed.push(...await listGlobalSessionPages(listSessionPage, { directory, parentID, pageSize: 200 }))
+          if (stopped || childStores.getChild(directory) !== store) return
+        }
+        const { active: allSessions } = splitGlobalSessionsByArchived(listed)
         childDiscoveryBackoff.delete(directory)
         const state = store.getState()
         const globalEntities = useGlobalSessionsStore.getState().entityById

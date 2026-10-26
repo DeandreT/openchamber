@@ -1,7 +1,7 @@
 //! Sidebar work membership and order, matching `works/sidebarWorks.ts`.
 //!
-//! A linked worktree groups all its sessions into one work. Outside linked
-//! worktrees, each root session owns the sessions nested beneath it. Archived
+//! A linked worktree or isolated space groups all its sessions into one work.
+//! Elsewhere, each root session owns the sessions nested beneath it. Archived
 //! groups do not contribute work. Ordered session input determines work order.
 
 use std::collections::{HashMap, HashSet};
@@ -17,7 +17,7 @@ pub enum SidebarWork {
         project_id: ProjectId,
         root_session_id: SessionId,
     },
-    Worktree {
+    Group {
         project_id: ProjectId,
         group_id: String,
     },
@@ -30,7 +30,7 @@ impl SidebarWork {
             Self::Session {
                 root_session_id, ..
             } => format!("session:{root_session_id}"),
-            Self::Worktree {
+            Self::Group {
                 project_id,
                 group_id,
             } => format!("{project_id}:{group_id}"),
@@ -38,12 +38,12 @@ impl SidebarWork {
     }
 }
 
-/// Work ownership of every listed session, with empty worktrees retained.
+/// Work ownership of every listed session, with empty group works retained.
 #[derive(Clone, Debug, Default)]
 pub struct SidebarWorkIndex {
     works: Vec<SidebarWork>,
     by_session: HashMap<SessionId, usize>,
-    worktrees: Vec<usize>,
+    groups: Vec<usize>,
 }
 
 impl SidebarWorkIndex {
@@ -56,13 +56,13 @@ impl SidebarWorkIndex {
                 if group.is_archived_bucket {
                     continue;
                 }
-                if is_worktree_work(group) {
+                if is_group_work(group) {
                     let work = index.works.len();
-                    index.works.push(SidebarWork::Worktree {
+                    index.works.push(SidebarWork::Group {
                         project_id: section.project.id.clone(),
                         group_id: group.id.clone(),
                     });
-                    index.worktrees.push(work);
+                    index.groups.push(work);
                     for node in &group.sessions {
                         index.claim(node, work);
                     }
@@ -100,9 +100,9 @@ impl SidebarWorkIndex {
             .map(|index| &self.works[*index])
     }
 
-    /// Every linked worktree in section order, including empty ones.
-    pub fn worktrees(&self) -> impl Iterator<Item = &SidebarWork> {
-        self.worktrees.iter().map(|index| &self.works[*index])
+    /// Every linked worktree and isolated space in section order, even empty ones.
+    pub fn groups(&self) -> impl Iterator<Item = &SidebarWork> {
+        self.groups.iter().map(|index| &self.works[*index])
     }
 
     /// Each work once, ordered by the first session `include` accepts.
@@ -129,11 +129,9 @@ impl SidebarWorkIndex {
     }
 }
 
-/// Only linked worktrees form a work of their own. Project roots, isolated
-/// spaces, and archived buckets retain session-root membership.
-pub fn is_worktree_work(group: &SessionGroup<'_>) -> bool {
+/// Linked worktrees and isolated spaces form a work of their own.
+pub fn is_group_work(group: &SessionGroup<'_>) -> bool {
     !group.is_main
         && !group.is_archived_bucket
-        && group.space.is_none()
-        && matches!(group.label, GroupLabel::Worktree { .. })
+        && (group.space.is_some() || matches!(group.label, GroupLabel::Worktree { .. }))
 }

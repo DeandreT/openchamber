@@ -565,6 +565,9 @@
     "customMonoFont": {
       "scope": "profile"
     },
+    "uiFontWeight": {
+      "scope": "profile"
+    },
     "padding": {
       "scope": "profile",
       "perSurface": true
@@ -850,6 +853,10 @@
       "local": true
     },
     "contextEditorTreeWidth": {
+      "scope": "device",
+      "local": true
+    },
+    "contextZoneSizes": {
       "scope": "device",
       "local": true
     },

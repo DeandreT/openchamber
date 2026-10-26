@@ -388,7 +388,12 @@ copy.
   holds commands only. Emoji open on a typed `:` plus two letters of a name
   after whitespace (`matchEmojiTrigger` in `lib/emoji/shortcodes.ts`), never on
   a paste, so `12:30`, `http://` and `:)` stay text; choosing one writes the
-  emoji itself, so the agent gets the character, not a shortcode. Only typing and pasting open a picker: text the app sets
+  emoji itself, so the agent gets the character, not a shortcode. A space
+  ends an `@` query, because paths and agent names hold none, except while
+  the whole query still matches a session title (`mentionContinuesPastSpace`,
+  `hasSessionMention`); the picker then lists sessions alone and closes on the
+  first word no title holds, so `@release notes are done` turns back into
+  prose. Only typing and pasting open a picker: text the app sets
   through the editor's `value` prop (a restored draft, a git conflict prompt)
   arrives with `ComposerChange.fromValueProp` and closes any open picker.
 - `tokenize.ts` — one pass producing every highlight range. Adding a construct
@@ -653,7 +658,13 @@ and the send path reading the same grammar.
   in the project or worktree picker always applies and clears it, because a
   project without git never lists a branch and its pin never clears by itself.
   Re-picking what a pinned draft already shows changes nothing, so one click
-  cannot drop an unlisted space or worktree directory. Only a worktree still being created (`pendingWorktreeRequestId`,
+  cannot drop an unlisted space or worktree directory. The project's isolated
+  spaces are listed in a section of their own by name (`spaceBranchOptions`),
+  and a space's directory keeps its pin: picked from the list it is pinned at
+  once, and being listed never clears it, because it exists inside the space
+  only and the host's directory probe at send would call it missing and start
+  the chat in the project. The session store backs this up: a draft opened in
+  a space's directory starts pinned, and the probe never runs for one. Only a worktree still being created (`pendingWorktreeRequestId`,
   `bootstrapPendingDirectory`) keeps both pickers inert. The hook also owns the
   advisory dirty state for the selected directory, clearing it as soon as the
   target changes so a warning never names a previous branch. It re-reads the

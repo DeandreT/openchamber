@@ -61,6 +61,7 @@ import { ActivityRowSkipContext, isActivityRowPart, isToolRowShown } from '../li
 import { LiveFinalActivityContext, LiveTurnHoistedPagesContext } from '../components/liveActivityContext';
 import { useProjectContextStore } from '@/stores/useProjectContextStore';
 import { resolveProjectForSessionDirectory } from '@/lib/projectResolution';
+import { useSpaceProjectDirectory } from '@/lib/spaces/spaces-store';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { useI18n } from '@/lib/i18n';
 import { FileTypeIcon } from '@/components/icons/FileTypeIcon';
@@ -587,7 +588,7 @@ const UserMessageBody = React.memo(({ messageId, parts, messageCreatedAt, isMobi
                     <Tooltip>
                         <TooltipTrigger asChild>
                             <span
-                                className="me-1 flex items-center gap-1 text-sm tabular-nums text-muted-foreground/60"
+                                className="me-1 flex items-center gap-1 text-sm tabular-nums text-muted-foreground"
                                 aria-label={`Message time: ${timestamp}`}
                             >
                                 <Icon name="time" className="h-3.5 w-3.5" />
@@ -1374,13 +1375,14 @@ const AssistantMessageBody = React.memo(({
     const effectiveStreamPhase: StreamPhase = hasStopFinish ? 'completed' : streamPhase;
 
     const availableWorktreesByProject = useSessionUIStore((state) => state.availableWorktreesByProject);
+    const sessionDirectory = effectiveDirectory
+        ?? (currentSessionId ? getDirectoryForSession(currentSessionId) : null)
+        ?? '';
+    const spaceProjectDirectory = useSpaceProjectDirectory(sessionDirectory);
     const sessionProjectRef = React.useMemo(() => {
-        const directory = effectiveDirectory
-            ?? (currentSessionId ? getDirectoryForSession(currentSessionId) : null)
-            ?? '';
-        const resolved = resolveProjectForSessionDirectory(projects, availableWorktreesByProject, directory);
+        const resolved = resolveProjectForSessionDirectory(projects, availableWorktreesByProject, sessionDirectory, spaceProjectDirectory);
         return resolved ? { id: resolved.id, path: resolved.path } : null;
-    }, [availableWorktreesByProject, currentSessionId, effectiveDirectory, getDirectoryForSession, projects]);
+    }, [availableWorktreesByProject, projects, sessionDirectory, spaceProjectDirectory]);
     const currentProjectRef = canUseProjectPlanActions ? sessionProjectRef : null;
 
     const hasCopyableText = Boolean(hasTextContent) && !awaitingMessageCompletion;
@@ -1938,7 +1940,7 @@ const AssistantMessageBody = React.memo(({
         return formatted.length > 0 ? formatted : null;
     }, [messageCompletedAt, messageCreatedAt, timeFormatPreference, locale]);
 
-    const footerTimestampClassName = 'text-sm text-muted-foreground/60 tabular-nums';
+    const footerTimestampClassName = 'text-sm text-muted-foreground tabular-nums';
 
     // Touch surfaces have no hover, so the footer would have to show every
     // action at all times — four 36px targets that pushed the metadata onto its
@@ -2278,7 +2280,7 @@ const AssistantMessageBody = React.memo(({
                             narrows: first the time, then the agent, then the thinking
                             effort. Model and duration never leave — the model only
                             truncates once those two alone stop fitting. */}
-                        <div ref={footerFactsRef} className="message-footer__facts whitespace-nowrap text-sm text-muted-foreground/60">
+                        <div ref={footerFactsRef} className="message-footer__facts whitespace-nowrap text-sm text-muted-foreground">
                             {footerModelName ? (
                                 <span className="flex min-w-0 shrink items-center gap-1.5">
                                     {footerHasLogo && footerLogoSrc ? (
