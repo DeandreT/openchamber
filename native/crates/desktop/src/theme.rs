@@ -126,6 +126,7 @@ pub struct Palette {
     pub divider: Hsla,
     pub link: Hsla,
     pub inline_code: Hsla,
+    pub inline_code_background: Hsla,
     pub syntax_background: Hsla,
     pub syntax_foreground: Hsla,
     /// Code highlighting from the theme's syntax tokens.
@@ -201,6 +202,7 @@ impl Palette {
             divider: color("chat.divider"),
             link: color("markdown.link"),
             inline_code: color("markdown.inlineCode"),
+            inline_code_background: color("markdown.inlineCodeBackground"),
             syntax_background: color("syntax.base.background"),
             syntax_foreground: color("syntax.base.foreground"),
             highlight: Arc::new(highlight_theme(entry)),

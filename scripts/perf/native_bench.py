@@ -42,6 +42,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "scripts" / "parity"))
+import virtual_display
+
 DEFAULT_BINARY = REPO_ROOT / "native" / "target" / "release" / "openchamber-native"
 MARK_PREFIX = "OPENCHAMBER_NATIVE_MARK "
 CLOCK_TICKS = os.sysconf("SC_CLK_TCK")
@@ -92,21 +95,15 @@ class NativeRun:
 
 
 def apply_backend(env: dict[str, str], backend: str) -> dict[str, str]:
-    """Selects the display backend for both clients.
-
-    Under Wayland a covered window receives no frame callbacks, so neither
-    client draws or handles accessibility actions until it is uncovered. X11
-    through XWayland keeps drawing, which makes unattended runs repeatable.
-    """
-    if backend == "x11":
-        env.pop("WAYLAND_DISPLAY", None)
-        env["XDG_SESSION_TYPE"] = "x11"
-    return env
+    """Pins both clients to the benchmark's owned Xvfb display."""
+    if backend != "x11":
+        raise ValueError("native benchmarks require the owned X11 display")
+    return virtual_display.child_environment(env)
 
 
 def native_env(args: argparse.Namespace) -> dict[str, str]:
     env = {key: value for key, value in os.environ.items() if not key.startswith(("OPENCHAMBER_", "OPENCODE_"))}
-    apply_backend(env, args.backend)
+    env = apply_backend(env, args.backend)
     env.update(
         OPENCHAMBER_NATIVE_DIAGNOSTICS="1",
         OPENCHAMBER_NATIVE_WORKLOAD=args.workload,
@@ -396,7 +393,7 @@ def electron_memory_once(args: argparse.Namespace, home: Path) -> dict:
     """Samples the Electron process tree after the same settle as native."""
     spawned_ns = time.monotonic_ns()
     process = subprocess.Popen(
-        [str(args.electron_app)],
+        [str(args.electron_app), "--ozone-platform=x11", "--disable-features=MacAppCodeSignClone", "--password-store=basic"],
         env=electron_env(home, args),
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -472,7 +469,7 @@ def main() -> int:
     parser.add_argument("--warmup", type=int, default=1, help="discarded launches per client")
     parser.add_argument("--workload", default="representative", choices=["representative", "stress", "small"])
     parser.add_argument("--theme", default="openchamber-dark")
-    parser.add_argument("--backend", default="x11", choices=["x11", "wayland"], help="display backend for both clients")
+    parser.add_argument("--backend", default="x11", choices=["x11"], help="owned Xvfb display for both clients")
     parser.add_argument("--switches", type=int, default=10, help="rows visited per switch order")
     parser.add_argument("--switch-pause", type=float, default=0.25, help="seconds between switches")
     parser.add_argument("--settle", type=float, default=1.5, help="seconds after usable before sampling memory")
@@ -485,6 +482,13 @@ def main() -> int:
     parser.add_argument("--server-pid", type=int, help="the server's process, sampled for the full-application memory")
     parser.add_argument("--output", type=Path, help="receipt directory")
     args = parser.parse_args()
+
+    if not virtual_display.inside():
+        problem = virtual_display.available()
+        if problem:
+            print(f"no private display: {problem}", file=sys.stderr)
+            return 2
+        return virtual_display.run_inside([sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]], 1280, 800)
 
     if not args.binary.exists():
         print(f"native binary not found: {args.binary}; run bun run native:build", file=sys.stderr)

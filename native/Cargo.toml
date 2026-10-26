@@ -56,3 +56,5 @@ debug = "line-tables-only"
 
 [patch.crates-io]
 accesskit_atspi_common = { path = "vendor/accesskit_atspi_common" }
+gpui-base = { path = "vendor/gpui-base" }
+gpui-component = { path = "vendor/gpui-component" }

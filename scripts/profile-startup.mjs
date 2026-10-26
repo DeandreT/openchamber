@@ -484,7 +484,9 @@ const launchOnce = async ({ build, run, layout, env, cdpPort, options, outputDir
     : null
 
   const spawnAt = Date.now()
-  const child = spawn(build.executable, [`--remote-debugging-port=${cdpPort}`], { env, stdio: "ignore", detached: true })
+  const launchArgs = [`--remote-debugging-port=${cdpPort}`, "--disable-features=MacAppCodeSignClone"]
+  if (process.env.OPENCHAMBER_PARITY_DISPLAY) launchArgs.push("--ozone-platform=x11", "--password-store=basic")
+  const child = spawn(build.executable, launchArgs, { env, stdio: "ignore", detached: true })
   child.unref()
   const pid = child.pid
   // A crash at startup ends the launch as a failure at once: not a timeout

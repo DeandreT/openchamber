@@ -6,13 +6,13 @@
 //! middle (`pb-[6vh]`).
 
 use gpui_kit::{
-    Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Role,
-    StatefulInteractiveElement, Styled, TestSupportExt, TextAlign, Window, div, px,
+    Context, InteractiveElement, IntoElement, ParentElement, Role, StatefulInteractiveElement,
+    Styled, TestSupportExt, TextAlign, Window, div, px,
 };
 
 use crate::activation::on_activate;
 use crate::baseline::CssTextExt;
-use crate::chrome::{self, CONTROL_RADIUS, glyph};
+use crate::chrome::{self, glyph};
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
 use crate::theme::Palette;
@@ -25,8 +25,6 @@ const TITLE_SIZE: f32 = 1.875;
 const TITLE_LINE: f32 = 2.25;
 /// `tracking-tight`, in ems.
 const TITLE_TRACKING: f32 = -0.025;
-const LABEL_SIZE: f32 = 0.843_75;
-const LABEL_LINE: f32 = 1.25;
 const META_SIZE: f32 = 0.781_25;
 const META_LINE: f32 = 1.125;
 
@@ -44,42 +42,19 @@ const STARTERS: &[(&str, &str)] = &[
 
 impl Workspace {
     pub(crate) fn render_startup(
-        &self,
+        &mut self,
         palette: &Palette,
         direction: Direction,
-        window: &Window,
-        cx: &Context<Self>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let strings = locale::strings(cx).clone();
         let title = strings.get("chat.emptyState.draftTitle");
         // `pb-[6vh]`: six percent of the content's height.
         let lift = chrome::content_size(window).height * 0.06;
         let column_padding = chrome::chat_column_padding(window, self.chat_area_width(window));
-        let project_chooser = on_activate(
-            div()
-                .id("choose-project")
-                .role(Role::Button)
-                .accessibility_id("choose-project")
-                .aria_label(strings.get("chat.chatInput.chooseProject"))
-                .h(px(28.0))
-                .px(px(6.0))
-                .rounded(px(CONTROL_RADIUS))
-                .flex_row_from(direction)
-                .items_center()
-                .gap(px(6.0))
-                .cursor_pointer()
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(palette.foreground)
-                .child(
-                    div()
-                        .css_text(LABEL_SIZE, LABEL_LINE, cx)
-                        .child(strings.get("chat.chatInput.chooseProject")),
-                )
-                .child(glyph("arrow-down-s", 16.0, palette.foreground).opacity(0.5)),
-            cx,
-            |_, _, _| {},
-        )
-        .test_support();
+        self.reconcile_startup_runtime(window, cx);
+        let project_chooser = self.render_project_chooser(palette, direction, window, cx);
         let hover_fill = palette.hover;
         let foreground = palette.foreground;
         let chip = |id: &str, icon: &'static str| {

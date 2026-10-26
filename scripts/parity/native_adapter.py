@@ -295,6 +295,17 @@ class NativeClient:
                     return True
                 except LookupError:
                     pass
+            elif "named" in condition:
+                wanted = condition["named"]
+                present = any(
+                    node.get_name() == wanted["name"]
+                    and ("role" not in wanted or node.get_role_name() == wanted["role"])
+                    and ("id" not in wanted or node.get_accessible_id() == wanted["id"])
+                    for node in self._walk()
+                )
+                if present == condition.get("present", True):
+                    self._read_marks(0.3)
+                    return True
             elif any(mark["marker"] == condition["marker"] for mark in self.marks[self._input_mark:]):
                 self._read_marks(0.3)
                 return True

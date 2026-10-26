@@ -107,7 +107,7 @@
     },
     "choose-project": {
       "electron": {
-        "button": "Choose project"
+        "selector": ".chat-input-column button[aria-haspopup=\"dialog\"]"
       },
       "native": "choose-project"
     },
@@ -247,6 +247,39 @@
           }
         },
         { "capture": "by-time", "targets": ["composer", "startup-title"] }
+      ]
+    },
+    {
+      "id": "composer.project-choice",
+      "feature": "composer.project-choice",
+      "description": "Choosing and reselecting a registered project returns focus to the same draft.",
+      "steps": [
+        { "clickTarget": "choose-project" },
+        { "wait": {
+          "electron": { "expression": "!!document.querySelector('input[placeholder=\"Search projects...\"]')" },
+          "native": { "named": { "role": "entry", "name": "Search projects..." } }
+        } },
+        { "type": "project" },
+        { "capture": "project-list", "targets": ["choose-project", "composer"] },
+        { "key": "Return" },
+        { "wait": {
+          "electron": { "expression": "!document.querySelector('input[placeholder=\"Search projects...\"]')" },
+          "native": { "named": { "id": "choose-project", "name": "project" } }
+        } },
+        { "type": "Project draft" },
+        { "capture": "selected", "targets": ["choose-project", "composer"] },
+        { "clickTarget": "choose-project" },
+        { "wait": {
+          "electron": { "expression": "!!document.querySelector('input[placeholder=\"Search projects...\"]')" },
+          "native": { "named": { "role": "entry", "name": "Search projects..." } }
+        } },
+        { "key": "Return" },
+        { "wait": {
+          "electron": { "expression": "!document.querySelector('input[placeholder=\"Search projects...\"]')" },
+          "native": { "named": { "role": "entry", "name": "Search projects..." }, "present": false }
+        } },
+        { "type": " kept" },
+        { "capture": "reselected", "targets": ["choose-project", "composer"] }
       ]
     },
     {

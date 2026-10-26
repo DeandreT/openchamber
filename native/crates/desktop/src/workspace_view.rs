@@ -47,6 +47,16 @@ pub fn bind_keys(cx: &mut gpui_kit::App) {
         KeyBinding::new("escape", StopGenerating, Some(KEY_CONTEXT)),
         KeyBinding::new("ctrl-k n", TogglePromptNavigator, Some(KEY_CONTEXT)),
         KeyBinding::new("cmd-k n", TogglePromptNavigator, Some(KEY_CONTEXT)),
+        KeyBinding::new(
+            "ctrl-n",
+            gpui_kit::base::actions::SelectDown,
+            Some("ProjectChooser > List"),
+        ),
+        KeyBinding::new(
+            "ctrl-p",
+            gpui_kit::base::actions::SelectUp,
+            Some("ProjectChooser > List"),
+        ),
     ]);
 }
 
@@ -131,6 +141,15 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &ToggleCodeWrap, _, cx| {
                 this.toggle_code_wrap(cx);
             }))
+            .on_action(cx.listener(
+                |_, action: &crate::project_chooser::ChooseDraftProject, window, cx| {
+                    let directory = action.directory.clone();
+                    window.dispatch_action(Box::new(gpui_kit::base::actions::Cancel), cx);
+                    cx.defer_in(window, move |this, window, cx| {
+                        this.choose_draft_project(&directory, window, cx);
+                    });
+                },
+            ))
             .size_full()
             .flex_row_from(direction)
             .bg(palette.background)

@@ -1,0 +1,15 @@
+[package]
+name = "gpui-base-selection-tests"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[dependencies]
+gpui-base = { path = "..", features = ["test-support"] }
+gpui = { package = "gpui-pre", version = "=0.3.9", features = ["test-support"] }
+
+[[test]]
+name = "retained_selection"
+path = "retained_selection.rs"

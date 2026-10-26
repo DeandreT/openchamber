@@ -11,12 +11,13 @@
 
 use gpui_kit::base::text::{MarkdownNode, MarkdownParseContext, MarkdownPlugin, markdown_ast};
 use gpui_kit::{
-    App, ElementId, FontFeatures, IntoElement, ParentElement, Styled, Window, div,
+    App, ElementId, FontFeatures, IntoElement, ParentElement, Styled, WeakEntity, Window, div,
     prelude::FluentBuilder, px, rems,
 };
 
 use crate::markdown_view::{self, Nesting};
 use crate::theme::Palette;
+use crate::transcript_selection::{self, RetainedText};
 
 /// Item insets: 1.25 rem for bullets, 2 em of the 14 px body for numbers.
 const BULLET_INSET: f32 = 1.25;
@@ -65,6 +66,7 @@ struct List {
 /// Draws lists as the web does.
 pub(crate) struct MarkdownList {
     pub(crate) nesting: Nesting,
+    pub(crate) owner: Option<WeakEntity<RetainedText>>,
 }
 
 const LIST: &str = "openchamber-list";
@@ -128,6 +130,21 @@ impl MarkdownPlugin for MarkdownList {
         };
         let space = space_width(window);
         let rows = list.items.iter().enumerate().map(|(index, item)| {
+            let retained = self.owner.as_ref().and_then(|owner| {
+                node.source_range().and_then(|range| {
+                    transcript_selection::child(owner, range, index, item, Some(inner), cx)
+                })
+            });
+            let text = retained
+                .map(|view| markdown_view::styled(view, &palette, inner.author))
+                .unwrap_or_else(|| {
+                    markdown_view::view(
+                        ElementId::Name(format!("list-{key}-{index}").into()),
+                        item.clone(),
+                        &palette,
+                        inner,
+                    )
+                });
             let marker = match list.kind {
                 ListKind::Bulleted => bullet(self.nesting.lists.bulleted, inset, color, window),
                 ListKind::Numbered { start } => {
@@ -155,12 +172,7 @@ impl MarkdownPlugin for MarkdownList {
                 .pl(rems(inset))
                 .when(index > 0, |this| this.mt(rems(ITEM_GAP)))
                 .child(marker)
-                .child(markdown_view::view(
-                    ElementId::Name(format!("list-{key}-{index}").into()),
-                    item.clone(),
-                    &palette,
-                    inner,
-                ))
+                .child(text)
         });
         div().flex().flex_col().children(rows).into_any_element()
     }

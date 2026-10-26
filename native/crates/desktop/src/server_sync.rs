@@ -131,7 +131,8 @@ impl Workspace {
 
     /// Replaces every runtime-scoped record. Drafts and scroll positions keep
     /// their runtime keys, so they never restore into another server.
-    fn switch_runtime(&mut self, runtime: RuntimeId, cx: &mut Context<Self>) {
+    pub(crate) fn switch_runtime(&mut self, runtime: RuntimeId, cx: &mut Context<Self>) {
+        self.save_composer_draft(cx);
         self.prompt_panel = None;
         self.prompt_hover_task = None;
         self.prompt_hover_suppressed = false;
@@ -404,6 +405,9 @@ impl Workspace {
             return;
         };
         let generation = connection.generation;
+        if self.send_catalog.settings.is_none() {
+            self.send_catalog.settings_load = crate::send_catalog::Load::Loading;
+        }
         let wrap_revision = self.code_wrap_state.revision();
         let task = connection.network.run(async move {
             let roots = client.chat_roots().await;
@@ -439,6 +443,9 @@ impl Workspace {
                     Ok(roots) => this.topology.chat_roots = roots,
                     Err(error) => tracing::warn!(%error, "the Chats roots could not be read"),
                 }
+                this.send_catalog
+                    .settings_load
+                    .settle(settings.as_ref().ok().map(|_| ()));
                 match settings {
                     Ok(mut settings) => {
                         if let Some(previous) = &this.send_catalog.settings {
@@ -555,7 +562,7 @@ impl Workspace {
                 let change = open.transcript.materialize(page.messages, since);
                 open.older = page.older;
                 open.history = History::Complete;
-                apply_list_change(open, &change);
+                apply_list_change(open, &change, cx);
                 if was_empty {
                     restore_position(open, &position);
                     let count = open.transcript.len();
@@ -631,7 +638,7 @@ impl Workspace {
                             let change = open.transcript.prepend_page(page.messages, since);
                             open.older = page.older;
                             open.earlier = EarlierHistory::Idle;
-                            apply_list_change(open, &change);
+                            apply_list_change(open, &change, cx);
                             let added = crate::prompt_rail::prompt_rows(&open.transcript)
                                 .len()
                                 .saturating_sub(before);
@@ -692,7 +699,7 @@ impl Workspace {
                     {
                         git_changed.push(session_id.clone());
                     }
-                    if self.apply_transcript_event(&session_id, event)
+                    if self.apply_transcript_event(&session_id, event, cx)
                         && !reread.contains(&session_id)
                     {
                         reread.push(session_id);
@@ -753,7 +760,12 @@ impl Workspace {
 
     /// Applies a live transcript event to a visited session. Returns whether
     /// the session needs an authoritative read.
-    fn apply_transcript_event(&mut self, id: &SessionId, event: TranscriptEvent) -> bool {
+    fn apply_transcript_event(
+        &mut self,
+        id: &SessionId,
+        event: TranscriptEvent,
+        cx: &mut Context<Self>,
+    ) -> bool {
         let Some(open) = self.open_sessions.get_mut(id) else {
             return false;
         };
@@ -762,7 +774,7 @@ impl Workspace {
             // A read in flight covers what the event referred to.
             return !matches!(open.history, History::Loading { .. });
         }
-        apply_list_change(open, &change);
+        apply_list_change(open, &change, cx);
         false
     }
 
@@ -810,7 +822,14 @@ impl Workspace {
 }
 
 /// Mirrors a transcript change in the list's measured rows.
-pub(crate) fn apply_list_change(open: &OpenSession, change: &TranscriptChange) {
+pub(crate) fn apply_list_change(
+    open: &OpenSession,
+    change: &TranscriptChange,
+    cx: &mut gpui_kit::App,
+) {
+    open.selection.update(cx, |selection, cx| {
+        selection.sync(&open.transcript, change, cx)
+    });
     match change {
         TranscriptChange::Inserted { rows } => open.list.splice(rows.start..rows.start, rows.len()),
         TranscriptChange::Updated { row } => open.list.remeasure_items(*row..row + 1),

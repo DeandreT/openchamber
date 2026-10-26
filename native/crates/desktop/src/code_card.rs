@@ -16,13 +16,14 @@ use gpui_kit::{
     AccessibleAction, AnyElement, App, Bounds, ClipboardItem, ElementId, FontFeatures, Global,
     InteractiveElement, IntoElement, ParentElement, Pixels, Role, SharedString,
     StatefulInteractiveElement, StyleRefinement, Styled, TestSupportExt, TextAlign, TextRun,
-    Toggled, Window, canvas, div, font, point, px, rems, transparent_black,
+    Toggled, WeakEntity, Window, canvas, div, font, point, px, rems, transparent_black,
 };
 
 use crate::chrome::glyph;
 use crate::locale;
 use crate::markdown_view::Author;
 use crate::theme::{Appearance, Palette};
+use crate::transcript_selection::{self, RetainedText};
 use crate::workspace_view::ToggleCodeWrap;
 
 /// The card: a 2 rem header in 13 px text, 12/23 px code inset
@@ -62,6 +63,7 @@ impl Global for CodeWrap {}
 /// Draws fenced code as the web's code card; Mermaid keeps Kit's block.
 pub(crate) struct CodeFence {
     pub(crate) author: Author,
+    pub(crate) owner: Option<WeakEntity<RetainedText>>,
 }
 
 /// A fenced block's language and text.
@@ -107,7 +109,13 @@ impl MarkdownPlugin for CodeFence {
         match node.data::<Fence>() {
             Some(fence) => {
                 let key = node.source_range().map_or(0, |range| range.start);
-                code_card(fence, key, self.author, window, cx)
+                let source = fenced(fence.language.as_deref(), &fence.code);
+                let retained = self.owner.as_ref().and_then(|owner| {
+                    node.source_range().and_then(|range| {
+                        transcript_selection::child(owner, range, 0, &source, None, cx)
+                    })
+                });
+                code_card(fence, key, self.author, retained, window, cx)
             }
             None => div().into_any_element(),
         }
@@ -118,6 +126,7 @@ fn code_card(
     fence: &Fence,
     key: usize,
     author: Author,
+    retained: Option<TextView>,
     window: &mut Window,
     cx: &mut App,
 ) -> AnyElement {
@@ -168,15 +177,18 @@ fn code_card(
         .py(px(CODE_PADDING_Y))
         .child(gutter)
         .child(
-            TextView::markdown(
-                ElementId::Name(format!("code-{key}").into()),
-                fenced(fence.language.as_deref(), &fence.code),
-            )
-            .style(code_style(&palette, wrap))
-            .selectable(true)
-            // Actions in place of Kit's language label, which the header
-            // already shows.
-            .code_block_actions(|_, _, _| div()),
+            retained
+                .unwrap_or_else(|| {
+                    TextView::markdown(
+                        ElementId::Name(format!("code-{key}").into()),
+                        fenced(fence.language.as_deref(), &fence.code),
+                    )
+                })
+                .style(code_style(&palette, wrap))
+                .selectable(true)
+                // Actions in place of Kit's language label, which the header
+                // already shows.
+                .code_block_actions(|_, _, _| div()),
         );
     div()
         .id(ElementId::Name(format!("code-card-{key}").into()))
@@ -474,7 +486,7 @@ mod tests {
                     cx.set_global(CodeWrap(!wrap));
                     cx.notify();
                 }))
-                .child(code_card(&fence, 0, Author::Assistant, window, cx))
+                .child(code_card(&fence, 0, Author::Assistant, None, window, cx))
         }
     }
 

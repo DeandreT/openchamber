@@ -110,6 +110,7 @@ def run_inside(command: list[str], width: int, height: int) -> int:
         work.chmod(0o700)
         env = {key: value for key, value in os.environ.items() if key not in SESSION_VARIABLES}
         env.update({INSIDE: "1", "XDG_RUNTIME_DIR": str(work), "XAUTHORITY": str(work / "Xauthority")})
+        env["GSETTINGS_BACKEND"] = "memory"
         with (work / "xvfb.log").open("wb") as log:
             xvfb = None
             for _ in range(20):
