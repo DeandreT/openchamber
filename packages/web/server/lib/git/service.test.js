@@ -6505,6 +6505,24 @@ describe('worktree task titles', () => {
     expect(await renameGeneratedWorktreeBranch(linked, 'fix/other')).toBeNull();
   });
 
+  it('keeps the recorded prefix of an issue branch when renaming it', async () => {
+    const { repo, linked } = createLinkedWorktree();
+    runGit(linked, ['branch', '-m', 'feature/task', 'issue-180-merry-salamander']);
+    await markGeneratedBranchName(repo, 'issue-180-merry-salamander', 'issue-180-');
+
+    expect(await renameGeneratedWorktreeBranch(linked, 'fix/documentation-catalog'))
+      .toEqual({ from: 'issue-180-merry-salamander', to: 'issue-180-documentation-catalog' });
+  });
+
+  it('takes a name that already carries the prefix as it is', async () => {
+    const { repo, linked } = createLinkedWorktree();
+    runGit(linked, ['branch', '-m', 'feature/task', 'issue-180-merry-salamander']);
+    await markGeneratedBranchName(repo, 'issue-180-merry-salamander', 'issue-180-');
+
+    expect(await renameGeneratedWorktreeBranch(linked, 'issue-180-docs-catalog'))
+      .toEqual({ from: 'issue-180-merry-salamander', to: 'issue-180-docs-catalog' });
+  });
+
   it('refuses a detached worktree, which has no branch to hold a title', async () => {
     const { repo } = createLinkedWorktree();
     const detached = path.join(createTempDir(), 'detached');

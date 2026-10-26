@@ -5062,15 +5062,22 @@ const applyBranchTaskTitle = async (directory, branch, by, title) => {
  * `agile-chipmunk`), not one the user chose: `branch.<name>.openchamberGeneratedName`
  * holds the generated name itself, so once the branch is renamed the record,
  * which `git branch -m` carries along, no longer matches and stops applying.
- * Best effort.
+ * `prefix`, the start of the name an issue's branch keeps (`issue-180-`), is
+ * recorded beside it in `openchamberGeneratedPrefix`. Best effort.
  */
-export async function markGeneratedBranchName(directory, branch) {
+export async function markGeneratedBranchName(directory, branch, prefix = null) {
   const branchName = String(branch || '').trim();
   const directoryPath = normalizeDirectoryPath(directory);
   if (!branchName || !directoryPath) return;
-  await writeGitConfigValue(directoryPath, `branch.${branchName}.openchamberGeneratedName`, branchName).catch((error) => {
+  const keep = String(prefix || '').trim();
+  try {
+    await writeGitConfigValue(directoryPath, `branch.${branchName}.openchamberGeneratedName`, branchName);
+    if (keep && keep.length < branchName.length && branchName.startsWith(keep)) {
+      await writeGitConfigValue(directoryPath, `branch.${branchName}.openchamberGeneratedPrefix`, keep);
+    }
+  } catch (error) {
     console.warn('Failed to mark a generated branch name:', error instanceof Error ? error.message : String(error));
-  });
+  }
 }
 
 /**
@@ -5102,13 +5109,19 @@ export async function readRenameableGeneratedBranch(directory, checkedOutBranch 
  * name and it was never pushed (`readRenameableGeneratedBranch`), for
  * `work.name`. Answers `{ from, to }`, or null when the branch is not such a
  * placeholder, which then stays as it is. A name git does not accept, the
- * placeholder itself, or one already taken fails with a status.
+ * placeholder itself, or one already taken fails with a status. A placeholder
+ * with a recorded prefix keeps it: `fix/login-timeout` for
+ * `issue-180-merry-salamander` becomes `issue-180-login-timeout`.
  */
 export async function renameGeneratedWorktreeBranch(directory, newName) {
   const directoryPath = normalizeDirectoryPath(directory);
   const current = directoryPath ? await readRenameableGeneratedBranch(directoryPath) : null;
   if (!current) return null;
-  const name = String(newName || '').trim();
+  const prefix = (await readGitConfigValue(directoryPath, `branch.${current}.openchamberGeneratedPrefix`)).trim();
+  const requested = String(newName || '').trim();
+  const name = prefix && requested && !requested.startsWith(prefix)
+    ? `${prefix}${requested.split('/').pop() || requested}`
+    : requested;
   const fail = (message, status) => Object.assign(new Error(message), { status });
   if (!name || name === current) throw fail(`Name the branch after the task, not \`${current}\``, 400);
   const valid = await runGitCommand(directoryPath, ['check-ref-format', '--branch', name]);

@@ -177,6 +177,9 @@
     "agentKnowledgeToolEnabled": {
       "scope": "instance"
     },
+    "agentWorkflowToolEnabled": {
+      "scope": "instance"
+    },
     "isolatedSpacesEnabled": {
       "scope": "instance"
     },
@@ -187,6 +190,10 @@
       "scope": "instance"
     },
     "agentMemoryFeatureAvailable": {
+      "scope": "instance",
+      "computed": true
+    },
+    "agentWorkflowFeatureAvailable": {
       "scope": "instance",
       "computed": true
     },
@@ -819,6 +826,10 @@
       "local": true
     },
     "mobileWorkspaceHiddenTabs": {
+      "scope": "device",
+      "local": true
+    },
+    "mobileWorkStatusHiddenSections": {
       "scope": "device",
       "local": true
     },
