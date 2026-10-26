@@ -46,15 +46,14 @@ class ElectronClient:
         return reply
 
     def launch(self) -> dict:
+        import virtual_display
+        env = virtual_display.child_environment(self.env)
         self._bridge = subprocess.Popen(
             ["node", str(BRIDGE)],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             text=True,
         )
-        env = dict(self.env)
-        env.pop("WAYLAND_DISPLAY", None)
-        env["XDG_SESSION_TYPE"] = "x11"
         return self._call("launch", app=str(self.app), env=env, scale=self.scale, width=self.width, height=self.height)
 
     def wait_ready(self, timeout_s: float, connected: bool) -> None:

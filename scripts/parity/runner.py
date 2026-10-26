@@ -602,8 +602,8 @@ def main() -> int:
     runner.add_argument("--tolerance", type=int, default=0, help="largest per-channel difference ignored; reviewed noise only")
     runner.add_argument("--output", type=Path, help="report directory, outside the repository's sources")
     runner.add_argument(
-        "--display", choices=("private", "session"), default="private",
-        help="private: a headless compositor nothing else reaches (default); session: the desktop's own display",
+        "--display", choices=("private",), default="private",
+        help="run on an owned Xvfb display with a private accessibility bus",
     )
     args = parser.parse_args()
     if args.command == "seed":
@@ -611,7 +611,7 @@ def main() -> int:
     if args.display == "private" and not virtual_display.inside():
         problem = virtual_display.available()
         if problem:
-            print(f"no private display: {problem}; pass --display session to use the desktop's", file=sys.stderr)
+            print(f"no private display: {problem}", file=sys.stderr)
             return 1
         command = [sys.executable, "-u", str(Path(__file__).resolve()), *sys.argv[1:]]
         return virtual_display.run_inside(command, args.width, args.height)

@@ -5,7 +5,7 @@ keys the web sidebar puts in `data-sidebar-row-key`. Pointer input goes
 through AT-SPI's generated X input at the target's centre, keyboard input
 through generated key events, and accessibility activation through the
 target's AT-SPI action; each path is a separate scenario variant. The
-client area is captured with spectacle (KDE) while the window is active and
+client area is captured directly from its X11 window while it is active and
 cut to the application's content root, the `workspace` element; geometry is
 measured from the same origin, as a web page measures from its viewport.
 """
@@ -21,6 +21,8 @@ import time
 from pathlib import Path
 
 import png
+import virtual_display
+import x11_capture
 
 MARK_PREFIX = "OPENCHAMBER_NATIVE_MARK "
 # Physical pixels a client-side frame line may add on each side of the content.
@@ -72,10 +74,8 @@ class NativeClient:
         self.substitutions: list[dict] = []
 
     def launch(self) -> dict:
-        env = dict(self.env)
-        env.pop("WAYLAND_DISPLAY", None)
+        env = virtual_display.child_environment(self.env)
         env.update(
-            XDG_SESSION_TYPE="x11",
             GPUI_X11_SCALE_FACTOR=str(self.scale),
             OPENCHAMBER_NATIVE_DIAGNOSTICS="1",
         )
@@ -159,10 +159,11 @@ class NativeClient:
     def _activate(self) -> None:
         """Raises and focuses the client's window, so captures of the active
         window and pointer input reach it. The window it opens can lose focus to
-        whatever the previous client left active. Only captures and clicks
-        activate it, right before they act, so a person using the desktop
-        during a run has as little time as possible to type into it."""
-        subprocess.run(["xdotool", "windowactivate", "--sync", self._window()], check=True, capture_output=True, timeout=10)
+        whatever the previous client left active on the private display."""
+        virtual_display.verify_owned_display()
+        window = self._window()
+        subprocess.run(["xdotool", "windowraise", window], check=True, capture_output=True, timeout=10)
+        subprocess.run(["xdotool", "windowfocus", "--sync", window], check=True, capture_output=True, timeout=10)
 
     def _screen_point(self, node) -> tuple[int, int]:
         """The screen position of a node's centre. AccessKit reports screen
@@ -301,9 +302,8 @@ class NativeClient:
         return False
 
     def click(self, accessible_id: str) -> None:
-        """A real pointer click at the target's centre. A compositor that drops
-        synthetic pointer input (KWin on Wayland without a remote-control grant)
-        gets the target's accessibility action instead, recorded as a
+        """A real pointer click at the target's centre. If synthetic pointer
+        input fails, use the target's accessibility action, recorded as a
         substitution so the pointer path is never reported as verified."""
         self._input_mark = len(self.marks)
         atspi = _atspi()
@@ -355,7 +355,11 @@ class NativeClient:
         """The application's content: the active window's client area, cut to
         the content root inside any client-side frame line."""
         self._activate()
-        subprocess.run(["spectacle", "-b", "-n", "-a", "-e", "-S", "-o", str(path)], check=True, capture_output=True)
+        window = self._window()
+        geometry = dict(line.split("=", 1) for line in subprocess.run(
+            ["xdotool", "getwindowgeometry", "--shell", window], check=True, capture_output=True, text=True,
+        ).stdout.split())
+        x11_capture.capture(window, int(geometry["WIDTH"]), int(geometry["HEIGHT"]), path)
         content = self._content()
         image = png.read(path)
         # The capture leaves out the frame's shadow band but keeps its line,

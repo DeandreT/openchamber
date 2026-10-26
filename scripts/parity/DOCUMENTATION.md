@@ -13,8 +13,8 @@ bun run parity run --scenarios shell.startup --output /tmp/parity-run
 `run` needs the packaged Electron build (`packages/electron/dist/...`), the
 native release build (`bun run native:build`), the staged web UI and the
 bundled OpenCode binary; the defaults point at the repository's build outputs.
-On Linux it also needs KDE's `spectacle`, `xdotool`, PyGObject with AT-SPI,
-`busctl`, `kwin_wayland`, `dbus-run-session`, `xsettingsd` and fontconfig.
+On Linux it also needs `Xvfb`, `xauth`, `xdpyinfo`, `xdotool`, libX11,
+PyGObject with AT-SPI, `busctl`, `dbus-run-session`, `xsettingsd` and fontconfig.
 
 ## Layout
 
@@ -61,18 +61,19 @@ if the requested size cannot be reached.
 
 ## The private display
 
-`run` re-executes itself inside a headless KWin (`kwin_wayland --virtual`)
-with its own XWayland and its own D-Bus session, so the clients share no
-screen, input, focus or accessibility bus with the desktop. `--display
-session` runs on the desktop's own display instead. The private bus activates
-no services: KWin's startup would otherwise start a desktop portal and a
-secret service on it, which outlive the run and ask the user to unlock their
-keyring. The session starts the accessibility bus and registry itself, and
+`run` re-executes itself inside an owned Xvfb server with a private X authority
+file, runtime directory and D-Bus session. Each client verifies the Xvfb PID,
+display, owner and private directory before starting. Chromium explicitly uses
+X11; Wayland and inherited session-type variables are removed. The clients share
+no screen, input, focus or accessibility bus with the desktop. The private bus
+activates no desktop services. The session starts the accessibility bus and registry itself, and
 `xsettingsd` publishes fontconfig's `system-ui` family as the GTK font, which
 Chromium's `system-ui` follows on a desktop. When the run ends, every process
 attached to the private bus is stopped. The session's work directory lives in
 `XDG_RUNTIME_DIR` (else `/tmp`): the bus socket inside it must stay within
-the 108-byte socket path limit whatever `TMPDIR` is.
+the 108-byte socket path limit whatever `TMPDIR` is. Xvfb has no window manager:
+OS-level minimize, maximize and window-decoration behavior requires separate
+isolated desktop checks.
 
 Ad hoc probes that open windows use the same display:
 
@@ -94,8 +95,8 @@ it. Native rows are the accessible elements of the sidebar, whose accessible
 IDs are the same row keys; a row's own controls are not rows.
 
 Electron is captured with `Page.captureScreenshot`, which is its viewport. The
-native window is activated with `xdotool`, captured with spectacle's
-active-window capture without the frame's shadow, and cut to the content root
+native window is raised and focused with `xdotool`, captured through Xlib
+without a desktop screenshot service, and cut to the content root
 (the `workspace` element) inside any client-side frame line; native geometry
 is measured from the same root. Runs are serial and each client starts fresh.
 
@@ -118,8 +119,7 @@ the comparison changes. The pinned local AccessKit patch supplies AT-SPI
 expandable, expanded and collapsed states; row comparisons check these states.
 A check the candidate's platform API cannot report is listed as unobserved,
 never as a match, and so
-is a pointer click the host dropped (KWin on Wayland ignores synthetic X input
-without a remote-control grant), which the native adapter replaces with the
+is a pointer click the host dropped, which the native adapter replaces with the
 target's accessibility action; a scenario that is otherwise clean is then
 `incomplete`. The report records
 `passed`, `incomplete`, `failed` (the native client differs or failed) or
