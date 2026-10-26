@@ -114,8 +114,10 @@ levels): the same ink within a pixel, as the geometry rule allows. Such pixels a
 yellow in the difference image; moved, missing or recoloured glyphs leave
 solid differences and still count. `compare_test.py` checks that split
 (`python3 -m unittest compare_test`, from this directory); rerun it whenever
-the comparison changes. A check the candidate's platform API cannot report (AT-SPI carries
-no expand or collapse state) is listed as unobserved, never as a match, and so
+the comparison changes. The pinned local AccessKit patch supplies AT-SPI
+expandable, expanded and collapsed states; row comparisons check these states.
+A check the candidate's platform API cannot report is listed as unobserved,
+never as a match, and so
 is a pointer click the host dropped (KWin on Wayland ignores synthetic X input
 without a remote-control grant), which the native adapter replaces with the
 target's accessibility action; a scenario that is otherwise clean is then

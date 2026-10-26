@@ -65,6 +65,10 @@ recorded wire samples in `crates/transport/tests/fixtures/wire/` and rewrites
 
 ## Accessibility on Linux
 
+The workspace uses a [local AT-SPI translation patch](vendor/accesskit_atspi_common/DOCUMENTATION.md)
+for the pinned AccessKit dependency so expandable controls expose their expanded
+or collapsed state and state-change notifications.
+
 AccessKit registers with AT-SPI only while the session's accessibility bus
 reports `org.a11y.Status.IsEnabled`. A screen reader turns it on; automation
 can set it with

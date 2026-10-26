@@ -55,11 +55,6 @@ def set_accessibility(enabled: bool) -> None:
 class NativeClient:
     """One native desktop process under test."""
 
-    # Row state AT-SPI cannot report: AccessKit's AT-SPI bridge exposes no
-    # expand or collapse state, so disclosure is verified where the platform
-    # API carries it (UI Automation on Windows), never assumed here.
-    unobservable = frozenset({"expanded"})
-
     def __init__(self, binary: Path, env: dict[str, str], scale: float, width: int, height: int):
         self.binary = binary
         self.env = env
@@ -248,12 +243,13 @@ class NativeClient:
                 for index in reversed(range(node.get_child_count())):
                     stack.append(node.get_child_at_index(index))
                 continue
+            node.clear_cache()
             states = node.get_state_set()
             rows.append({
                 "key": accessible_id,
                 "label": node.get_name() or "",
                 "selected": states.contains(atspi.StateType.SELECTED),
-                "expanded": None,
+                "expanded": states.contains(atspi.StateType.EXPANDED) if states.contains(atspi.StateType.EXPANDABLE) else None,
                 "rect": self._rect(node, content),
             })
         rows.sort(key=lambda row: row["rect"][1])
