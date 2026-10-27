@@ -6,6 +6,7 @@ Run from this directory with `python3 -m unittest runner_test`.
 import argparse
 import itertools
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -103,6 +104,45 @@ class RunnerInputTest(unittest.TestCase):
 
 
 class ScenarioSettingsTest(unittest.TestCase):
+    def test_both_clients_drop_inherited_credentials_and_configuration(self):
+        inherited = {"PATH": "/test/bin", "DISPLAY": ":1001", "OPENAI_API_KEY": "private",
+                     "OPENCODE_CONFIG_CONTENT": "private", "OPENCHAMBER_NATIVE_PASSWORD": "private"}
+        with patch.dict(os.environ, inherited, clear=True):
+            native = runner.native_env(Path("state"), "http://localhost:1", "openchamber-dark")
+            electron = runner.electron_env(Path("state"), "synthetic-config")
+        for env in (native, electron):
+            self.assertNotIn("OPENAI_API_KEY", env)
+            self.assertNotIn("OPENCHAMBER_NATIVE_PASSWORD", env)
+            self.assertEqual(env["DISPLAY"], ":1001")
+            self.assertEqual(env["LANG"], "en_US.UTF-8")
+        self.assertNotIn("OPENCODE_CONFIG_CONTENT", native)
+        self.assertEqual(electron["OPENCODE_CONFIG_CONTENT"], "synthetic-config")
+
+    def test_composer_noise_needs_both_clients_and_protects_candidate_content(self):
+        reference = {"composerGradientProtectionComplete": True, "composerGradientRegions": [[0, 0, 100, 50]], "composerGradientProtected": [[0, 0, 1, 1]], "textBoxes": [[5, 5, 10, 10]]}
+        candidate = {"composerGradientProtectionComplete": True, "composerGradientRegions": [[10, 10, 100, 50]], "composerGradientProtected": [[25, 20, 10, 5]]}
+        regions, protected = runner.composer_gradient_masks(reference, candidate, 1.25)
+        self.assertEqual(regions, [[12.5, 12.5, 112.5, 50.0]])
+        self.assertIn([31.25, 25.0, 12.5, 6.25], protected)
+        self.assertIn([6.25, 6.25, 12.5, 12.5], protected)
+        self.assertEqual(runner.composer_gradient_masks(reference, {}, 1), ([], []))
+        missing_protection = {key: value for key, value in candidate.items() if key != "composerGradientProtected"}
+        self.assertEqual(runner.composer_gradient_masks(reference, missing_protection, 1), ([], []))
+        candidate["composerGradientProtectionComplete"] = False
+        self.assertEqual(runner.composer_gradient_masks(reference, candidate, 1), ([], []))
+
+    def test_composer_exception_cannot_raise_its_approved_limit(self):
+        entry = {"scenario": "shell.startup", "checkpoint": "startup", "region": "blank gradient", "reason": "dither", "decision": "approved", "maxChannelDelta": 2}
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "exceptions.json"
+            path.write_text(json.dumps({"composerGradientNoise": [entry]}))
+            with patch.object(runner, "EXCEPTIONS", path):
+                with self.assertRaisesRegex(ValueError, "one RGB level"):
+                    runner.approved_exceptions("composerGradientNoise")
+                entry["maxChannelDelta"] = 1
+                path.write_text(json.dumps({"composerGradientNoise": [entry]}))
+                self.assertEqual(runner.approved_exceptions("composerGradientNoise"), {("shell.startup", "startup")})
+
     def test_launch_failure_closes_client_and_services(self):
         for kind in ("native", "electron"):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temporary:

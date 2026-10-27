@@ -4,6 +4,7 @@
     "en": {
       "direction": "ltr",
       "messages": {
+        "chat.errorBoundary.title": "Chat Error",
         "chat.chatInput.actions.addAttachment": "Add attachment",
         "chat.chatInput.actions.sendMessageAria": "Send message",
         "chat.chatInput.actions.stopGeneratingAria": "Stop generating",
@@ -164,6 +165,7 @@
     "de": {
       "direction": "ltr",
       "messages": {
+        "chat.errorBoundary.title": "Chat-Fehler",
         "chat.chatInput.actions.addAttachment": "Anhang hinzufügen",
         "chat.chatInput.actions.sendMessageAria": "Nachricht senden",
         "chat.chatInput.actions.stopGeneratingAria": "Generierung stoppen",
@@ -324,6 +326,7 @@
     "fr": {
       "direction": "ltr",
       "messages": {
+        "chat.errorBoundary.title": "Erreur de discussion",
         "chat.chatInput.actions.addAttachment": "Ajouter une pièce jointe",
         "chat.chatInput.actions.sendMessageAria": "Envoyer un message",
         "chat.chatInput.actions.stopGeneratingAria": "Arrêter de générer",
@@ -484,6 +487,7 @@
     "nl": {
       "direction": "ltr",
       "messages": {
+        "chat.errorBoundary.title": "Chatfout",
         "chat.chatInput.actions.addAttachment": "Bijlage toevoegen",
         "chat.chatInput.actions.sendMessageAria": "Bericht verzenden",
         "chat.chatInput.actions.stopGeneratingAria": "Genereren stoppen",
@@ -644,6 +648,7 @@
     "zh-CN": {
       "direction": "ltr",
       "messages": {
+        "chat.errorBoundary.title": "聊天错误",
         "chat.chatInput.actions.addAttachment": "添加附件",
         "chat.chatInput.actions.sendMessageAria": "发送消息",
         "chat.chatInput.actions.stopGeneratingAria": "停止生成",
@@ -804,6 +809,7 @@
     "zh-TW": {
       "direction": "ltr",
       "messages": {
+        "chat.errorBoundary.title": "聊天錯誤",
         "chat.chatInput.actions.addAttachment": "加入附件",
         "chat.chatInput.actions.sendMessageAria": "傳送訊息",
         "chat.chatInput.actions.stopGeneratingAria": "停止生成",
@@ -964,6 +970,7 @@
     "uk": {
       "direction": "ltr",
       "messages": {
+        "chat.errorBoundary.title": "Помилка чату",
         "chat.chatInput.actions.addAttachment": "Додати вкладення",
         "chat.chatInput.actions.sendMessageAria": "Надіслати повідомлення",
         "chat.chatInput.actions.stopGeneratingAria": "Припинити генерацію",
@@ -1124,6 +1131,7 @@
     "es": {
       "direction": "ltr",
       "messages": {
+        "chat.errorBoundary.title": "Error en la conversación",
         "chat.chatInput.actions.addAttachment": "Añadir adjunto",
         "chat.chatInput.actions.sendMessageAria": "Enviar mensaje",
         "chat.chatInput.actions.stopGeneratingAria": "Detener generación",
@@ -1284,6 +1292,7 @@
     "pt-BR": {
       "direction": "ltr",
       "messages": {
+        "chat.errorBoundary.title": "Erro na conversa",
         "chat.chatInput.actions.addAttachment": "Adicionar adjunto",
         "chat.chatInput.actions.sendMessageAria": "Enviar mensagem",
         "chat.chatInput.actions.stopGeneratingAria": "Parar geração",
@@ -1444,6 +1453,7 @@
     "ko": {
       "direction": "ltr",
       "messages": {
+        "chat.errorBoundary.title": "채팅 오류",
         "chat.chatInput.actions.addAttachment": "첨부 파일 추가",
         "chat.chatInput.actions.sendMessageAria": "보내기 메시지",
         "chat.chatInput.actions.stopGeneratingAria": "생성 중지",
@@ -1604,6 +1614,7 @@
     "pl": {
       "direction": "ltr",
       "messages": {
+        "chat.errorBoundary.title": "Błąd Czatu",
         "chat.chatInput.actions.addAttachment": "Dodaj załącznik",
         "chat.chatInput.actions.sendMessageAria": "Send message",
         "chat.chatInput.actions.stopGeneratingAria": "Stop generating",
@@ -1764,6 +1775,7 @@
     "ja": {
       "direction": "ltr",
       "messages": {
+        "chat.errorBoundary.title": "チャットエラー",
         "chat.chatInput.actions.addAttachment": "添付ファイルを追加",
         "chat.chatInput.actions.sendMessageAria": "メッセージを送信",
         "chat.chatInput.actions.stopGeneratingAria": "生成を停止",
@@ -1924,6 +1936,7 @@
     "tr": {
       "direction": "ltr",
       "messages": {
+        "chat.errorBoundary.title": "Sohbet Hatası",
         "chat.chatInput.actions.addAttachment": "Ek ekle",
         "chat.chatInput.actions.sendMessageAria": "Mesaj gönder",
         "chat.chatInput.actions.stopGeneratingAria": "Üretmeyi durdur",
@@ -2084,6 +2097,7 @@
     "ar": {
       "direction": "rtl",
       "messages": {
+        "chat.errorBoundary.title": "خطأ في المحادثة",
         "chat.chatInput.actions.addAttachment": "إضافة مرفق",
         "chat.chatInput.actions.sendMessageAria": "إرسال الرسالة",
         "chat.chatInput.actions.stopGeneratingAria": "إيقاف التوليد",
@@ -2244,6 +2258,7 @@
     "he": {
       "direction": "rtl",
       "messages": {
+        "chat.errorBoundary.title": "שגיאת צ'אט",
         "chat.chatInput.actions.addAttachment": "הוסף קובץ מצורף",
         "chat.chatInput.actions.sendMessageAria": "שלח הודעה",
         "chat.chatInput.actions.stopGeneratingAria": "עצור יצירה",

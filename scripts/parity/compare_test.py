@@ -78,7 +78,7 @@ class GlyphEdgeTest(unittest.TestCase):
 
 
 class PaintNoiseTest(unittest.TestCase):
-    def difference(self, delta, regions, protected=None, text=None):
+    def difference(self, delta, regions, protected=None, text=None, composer=None, composer_protected=None):
         left = png.Image(WIDTH, HEIGHT, bytearray((*BACKGROUND, 255)) * (WIDTH * HEIGHT))
         right = png.Image(WIDTH, HEIGHT, left.rgba.copy())
         offset = (5 * WIDTH + 5) * 4
@@ -89,7 +89,25 @@ class PaintNoiseTest(unittest.TestCase):
             png.write(root / "left.png", left)
             png.write(root / "right.png", right)
             return compare.compare_images(root / "left.png", root / "right.png", root / "out",
-                text_boxes=text, paint_regions=regions, protected_boxes=protected)
+                text_boxes=text, paint_regions=regions, protected_boxes=protected,
+                composer_gradient_regions=composer, composer_gradient_protected=composer_protected)
+
+    def test_composer_gradient_allows_only_one_level_in_its_own_region(self):
+        result = self.difference(1, [], composer=[[0, 0, 10, 10]])
+        self.assertEqual(result.differing_pixels, 0)
+        self.assertEqual(result.composer_gradient_noise_pixels, 1)
+        self.assertEqual(result.paint_noise_pixels, 0)
+        for delta, region in ((2, [[0, 0, 10, 10]]), (1, []), (1, [[6, 6, 10, 10]])):
+            result = self.difference(delta, [], composer=region)
+            self.assertEqual(result.differing_pixels, 1)
+            self.assertEqual(result.composer_gradient_noise_pixels, 0)
+
+    def test_composer_gradient_cannot_hide_protected_content_or_edges(self):
+        result = self.difference(1, [], composer=[[0, 0, 10, 10]], composer_protected=[[4, 4, 2, 2]])
+        self.assertEqual(result.differing_pixels, 1)
+        self.assertEqual(result.composer_gradient_noise_pixels, 0)
+        result = self.difference(1, [], text=[[4, 4, 2, 2]], composer=[[0, 0, 10, 10]])
+        self.assertEqual(result.composer_gradient_noise_pixels, 0)
 
     def test_only_one_or_two_levels_inside_the_region_are_noise(self):
         for delta in (1, 2):

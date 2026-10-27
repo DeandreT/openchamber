@@ -94,6 +94,119 @@ fn transcript_len(
 }
 
 #[gpui_kit::test]
+fn rejected_send_restores_its_owner_across_selection_and_runtime_switches(cx: &mut TestAppContext) {
+    use crate::send_attempt::tests::attempt;
+    use openchamber_native_core::draft::Draft;
+    use openchamber_native_core::ids::RuntimeId;
+    use openchamber_native_transport::error::TransportError;
+    use openchamber_native_transport::prompt::{PromptAdmission, SendError, SendStage};
+
+    let (window, workspace) = open(cx);
+    let rows = session_rows(&workspace, cx);
+    let origin = rows[0].1.clone();
+    let other = rows[1].1.clone();
+    for switch_runtime in [false, true] {
+        cx.update_window(window, |_, window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.select_session(origin.clone(), window, cx);
+                let key = workspace.mutation_key(&origin);
+                let owner = workspace
+                    .composer_key
+                    .clone()
+                    .expect("selected session owns draft");
+                let mut pending = attempt(&key);
+                pending.owner = owner.clone();
+                let message_id = pending.prompt.message_id.clone();
+                let open = workspace
+                    .open_sessions
+                    .get_mut(&origin)
+                    .expect("selected session is open");
+                let change = open.transcript.push(pending.optimistic.clone());
+                crate::server_sync::apply_list_change(open, &change, cx);
+                assert!(workspace.send_attempts.begin(key.clone(), pending));
+                workspace
+                    .composer
+                    .update(cx, |composer, cx| composer.set_value("", window, cx));
+                workspace.select_session(other.clone(), window, cx);
+                if switch_runtime {
+                    workspace.switch_runtime(RuntimeId::from("another-runtime"), window, cx);
+                }
+                workspace.composer.update(cx, |composer, cx| {
+                    composer.set_value("current owner text", window, cx)
+                });
+                workspace
+                    .drafts
+                    .save(owner.clone(), Draft::new("newer origin text"));
+                workspace.finish_send(
+                    &key,
+                    Some(Err(SendError {
+                        session_id: origin.clone(),
+                        message_id: message_id.clone(),
+                        stage: SendStage::Prompt,
+                        admission: PromptAdmission::Rejected,
+                        source: TransportError::Cancelled,
+                    })),
+                    window,
+                    cx,
+                );
+                assert_eq!(
+                    workspace.composer.read(cx).value().to_string(),
+                    "current owner text"
+                );
+                assert_eq!(
+                    workspace
+                        .drafts
+                        .get(&owner)
+                        .expect("origin draft restored")
+                        .text,
+                    "newer origin text\n\nsubmitted text"
+                );
+                if !switch_runtime {
+                    assert!(
+                        workspace.open_sessions[&origin]
+                            .transcript
+                            .row_of(&message_id)
+                            .is_none()
+                    );
+                }
+            });
+        })
+        .expect("window remains open");
+    }
+}
+
+#[gpui_kit::test]
+fn failed_abort_does_not_change_live_status(cx: &mut TestAppContext) {
+    use openchamber_native_core::session::LiveStatus;
+    use openchamber_native_transport::error::TransportError;
+    use openchamber_native_transport::prompt::AbortError;
+    let (window, workspace) = open(cx);
+    let session = session_rows(&workspace, cx)[0].1.clone();
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace
+                .live_status
+                .insert(session.clone(), LiveStatus::Busy);
+            let key = workspace.mutation_key(&session);
+            assert!(workspace.send_attempts.begin_abort(key.clone()));
+            workspace.finish_abort(
+                &key,
+                Some(Err(AbortError {
+                    session_id: session.clone(),
+                    outcome_unknown: true,
+                    source: TransportError::Cancelled,
+                })),
+                window,
+                cx,
+            );
+            assert_eq!(workspace.live_status.get(&session), Some(&LiveStatus::Busy));
+            assert!(workspace.send_attempts.can_send(&key));
+        });
+    })
+    .expect("window remains open");
+}
+
+#[gpui_kit::test]
 fn project_chooser_pointer_selects_a_filtered_project_in_rtl(cx: &mut TestAppContext) {
     let (window, workspace) = open(cx);
     let directory = cx.read(|cx| workspace.read(cx).topology.projects[1].path.clone());

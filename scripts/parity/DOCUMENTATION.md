@@ -48,6 +48,8 @@ and that variant's theme ID, all of which the web reads); the native client
 reads the same theme from `OPENCHAMBER_NATIVE_THEME`. Each client runs with
 its copy's own home and XDG directories, so lookups under them, such as the
 file manager's icon, see the same files.
+Both clients receive an allowlisted environment. Inherited provider credentials
+and application configuration stay outside the test processes.
 
 A scenario's optional `settings` object sets preferences in each disposable
 copy before launch. Theme pins still take precedence. The original seed is
@@ -148,6 +150,19 @@ The full card and composer rectangles, text, controls, icons and media are
 excluded. Differences of at most two RGB levels per channel count separately
 as `paintNoisePixels` and appear cyan in the diff image. Geometry and larger
 differences remain strict. Other checkpoints use no paint exception.
+
+The separately approved `composerGradientNoise` exception allows one RGB level
+in blank pixels of the dark composer's vertical sheen, only at its named
+checkpoints. Chromium dithers that low-alpha gradient in raster-tile coordinates,
+which vary with its renderer settings. The reference accepts only the complete
+single-layer vertical 1%-to-transparent-at-50% definition and supplies its
+upper-half bounds and protection boxes. The candidate supplies a conservative
+central region and protects its whole editor, named content and controls.
+The gate intersects both regions and excludes protection boxes from both clients,
+including reference text, caret, selections, borders and corners. Missing
+candidate coverage, light composers and unknown gradient shapes get no allowance.
+These pixels are reported separately as `composerGradientNoisePixels`; larger
+differences, content and geometry remain failures.
 
 ## Native Linux platform checks
 

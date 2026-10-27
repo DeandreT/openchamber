@@ -412,7 +412,7 @@ impl Workspace {
     /// What a send would use, once the config directory's agents, models
     /// and config are known: the directory's default selection, refined by a
     /// selected session's record.
-    fn send_selection(&self) -> Option<(String, Selection)> {
+    pub(crate) fn send_selection(&self) -> Option<(String, Selection)> {
         let directory = self.config_directory()?;
         let entry = self.send_catalog.directory(&directory)?;
         let agents = entry.agents.ready()?;

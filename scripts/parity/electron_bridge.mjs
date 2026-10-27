@@ -17,6 +17,7 @@ import { writeFileSync } from "node:fs"
 import { createInterface } from "node:readline"
 
 import { CdpClient, reservePort, wait } from "../perf/cdp.mjs"
+import { isComposerSheen } from "./composer_sheen.mjs"
 
 let child = null
 let client = null
@@ -206,6 +207,7 @@ const handlers = {
   /** Bounds for the approved shadow/gradient noise exception, in CSS pixels. */
   async paintRegions() {
     return await evaluate(`(() => {
+      const isComposerSheen = ${isComposerSheen.toString()}
       const box = (rect) => [rect.x, rect.y, rect.width, rect.height]
       const visible = (element) => element.checkVisibility({ opacityProperty: true, visibilityProperty: true })
         && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0
@@ -237,7 +239,40 @@ const handlers = {
       for (const element of document.querySelectorAll('.chat-scroll-fade')) {
         if (visible(element)) regions.push({ kind: 'gradient', box: box(element.getBoundingClientRect()) })
       }
-      return { regions, protectedBoxes }
+      const composerGradientRegions = []
+      const composerGradientDefinitions = []
+      const composerGradientProtected = [...document.querySelectorAll('button, input, textarea, select, a, svg, img, video, canvas, [role="button"], [role="slider"], [role="switch"], [role="menuitem"], .cm-cursor, .cm-selectionBackground, .cm-activeLine')]
+        .filter(visible).map((element) => box(element.getBoundingClientRect()))
+      const selection = getSelection()
+      for (let index = 0; selection && index < selection.rangeCount; index++) {
+        for (const rect of selection.getRangeAt(index).getClientRects()) composerGradientProtected.push(box(rect))
+      }
+      for (const element of document.querySelectorAll('.dark .oc-composer-sheen')) {
+        if (!visible(element)) continue
+        const style = getComputedStyle(element)
+        composerGradientDefinitions.push(style.backgroundImage)
+        // This exception is specific to the current vertical 50% sheen.
+        if (!isComposerSheen(style.backgroundImage)) continue
+        const rect = element.getBoundingClientRect()
+        const radii = ['borderTopLeftRadius', 'borderTopRightRadius', 'borderBottomLeftRadius', 'borderBottomRightRadius'].map((property) => style[property])
+        if (radii.some((radius) => !/^[0-9.]+px$/.test(radius))) continue
+        composerGradientRegions.push([rect.x, rect.y, rect.width, rect.height / 2])
+        const edge = 2
+        composerGradientProtected.push(
+          [rect.x, rect.y, rect.width, edge],
+          [rect.x, rect.bottom - edge, rect.width, edge],
+          [rect.x, rect.y, edge, rect.height],
+          [rect.right - edge, rect.y, edge, rect.height],
+        )
+        for (const [property, right, bottom] of [
+          ['borderTopLeftRadius', false, false], ['borderTopRightRadius', true, false],
+          ['borderBottomLeftRadius', false, true], ['borderBottomRightRadius', true, true],
+        ]) {
+          const radius = Math.max(edge, parseFloat(style[property]) + edge)
+          composerGradientProtected.push([right ? rect.right - radius : rect.x, bottom ? rect.bottom - radius : rect.y, radius, radius])
+        }
+      }
+      return { regions, protectedBoxes, composerGradientRegions, composerGradientProtected, composerGradientDefinitions, composerGradientProtectionComplete: true }
     })()`)
   },
   async key({ key, code, keyCode, modifiers = 0 }) {

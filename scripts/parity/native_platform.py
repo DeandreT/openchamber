@@ -36,6 +36,21 @@ def editable_text(node):
     return _atspi().Text.get_text(text, 0, -1)
 
 
+def check_text_extents(node, text):
+    """Visible short CJK input must expose nonempty character geometry."""
+    api = _atspi()
+    interface = node.get_text_iface()
+    if interface is None:
+        raise RuntimeError("the composer exposes no accessible text interface")
+    area = node.get_extents(api.CoordType.WINDOW)
+    for offset in range(len(text)):
+        box = api.Text.get_character_extents(interface, offset, api.CoordType.WINDOW)
+        if (box.width <= 0 or box.height <= 0 or box.x < area.x - 1 or box.y < area.y - 1
+                or box.x + box.width > area.x + area.width + 1
+                or box.y + box.height > area.y + area.height + 1):
+            raise RuntimeError(f"a committed character has missing or misplaced accessible bounds: character=({box.x}, {box.y}, {box.width}, {box.height}), editor=({area.x}, {area.y}, {area.width}, {area.height})")
+
+
 def command(env, *args, timeout=20):
     result = subprocess.run(args, env=env, capture_output=True, text=True, timeout=timeout)
     if result.returncode:
@@ -209,6 +224,7 @@ def qualify(args):
                 wait_for("the second composition did not appear", lambda: bool(input_text()))
                 command(env, "xdotool", "key", "space")
                 wait_for("Space did not commit the Chinese candidate", lambda: input_text() == "你好")
+                check_text_extents(editor(), "你好")
                 set_engine("xkb:us::eng")
                 text = copy_input()
                 client.screenshot(args.output / "ime-committed.png")

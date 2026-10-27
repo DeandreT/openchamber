@@ -407,6 +407,7 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(crate) extras: M::Extras,
     pub(super) focus_handle: FocusHandle,
     accessibility: Option<InputAccessibility>,
+    pub(super) accessibility_text: Option<Rc<InputTextSnapshot>>,
     selection_focus: Option<WeakFocusHandle>,
     pub(super) mode: LayoutMode,
     pub(super) text: Rope,
@@ -806,6 +807,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             extras: M::Extras::default(),
             focus_handle: focus_handle.clone(),
             accessibility: None,
+            accessibility_text: None,
             selection_focus: None,
             text: "".into(),
             display_map: DisplayMap::new(text_style.font(), window.rem_size(), None),
@@ -4729,6 +4731,7 @@ impl<M: InputModeKind> Render for InputBaseState<M> {
                 ))
             });
         let text_for_tree = accessible_text.clone();
+        self.accessibility_text = accessible_text.clone();
         let disabled = self.disabled;
         let readonly = self.readonly;
         let element = div()

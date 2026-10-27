@@ -28,6 +28,7 @@ CELL = 16
 # Channel levels a glyph-edge colour may sit outside the neighbourhood's range.
 GLYPH_SLACK = 8
 PAINT_SLACK = 2
+COMPOSER_GRADIENT_SLACK = 1
 
 
 @dataclass
@@ -43,6 +44,7 @@ class ImageDifference:
     # `differing_pixels`, always reported.
     glyph_edge_pixels: int = 0
     paint_noise_pixels: int = 0
+    composer_gradient_noise_pixels: int = 0
 
     @property
     def identical(self) -> bool:
@@ -57,6 +59,7 @@ class ImageDifference:
             "differingShare": round(self.differing_pixels / max(1, self.width * self.height), 6),
             "glyphEdgePixels": self.glyph_edge_pixels,
             "paintNoisePixels": self.paint_noise_pixels,
+            "composerGradientNoisePixels": self.composer_gradient_noise_pixels,
             "regions": self.regions,
         }
 
@@ -69,6 +72,8 @@ def compare_images(
     text_boxes: list[list[float]] | None = None,
     paint_regions: list[list[float]] | None = None,
     protected_boxes: list[list[float]] | None = None,
+    composer_gradient_regions: list[list[float]] | None = None,
+    composer_gradient_protected: list[list[float]] | None = None,
 ) -> ImageDifference:
     """Writes ``<output>-diff.png`` and ``<output>-overlay.png`` and reports
     the pixels whose largest channel difference exceeds ``tolerance``.
@@ -89,8 +94,11 @@ def compare_images(
     in_text = text_mask(text_boxes or [], width, height)
     in_paint = box_mask(paint_regions or [], width, height)
     protected = box_mask(protected_boxes or [], width, height, padding=1)
+    in_composer_gradient = box_mask(composer_gradient_regions or [], width, height)
+    composer_protected = box_mask(composer_gradient_protected or [], width, height, padding=1)
     noise = 0
     paint_noise = 0
+    composer_gradient_noise = 0
     diff = bytearray(width * height * 4)
     overlay = bytearray(width * height * 4)
     cells: dict[tuple[int, int], int] = {}
@@ -111,6 +119,9 @@ def compare_images(
         elif tolerance < delta <= PAINT_SLACK and in_paint[pixel] and not protected[pixel] and not in_text[pixel]:
             paint_noise += 1
             diff[offset : offset + 4] = b"\x00\xc8\xff\xff"
+        elif tolerance < delta <= COMPOSER_GRADIENT_SLACK and in_composer_gradient[pixel] and not composer_protected[pixel] and not in_text[pixel]:
+            composer_gradient_noise += 1
+            diff[offset : offset + 4] = b"\x80\xc8\xff\xff"
         elif delta > tolerance:
             differing += 1
             diff[offset : offset + 4] = b"\xff\x00\x00\xff"
@@ -122,7 +133,7 @@ def compare_images(
             diff[offset : offset + 4] = bytes((faded, faded, faded, 255))
     png.write(output.with_name(output.name + "-diff.png"), png.Image(width, height, diff))
     png.write(output.with_name(output.name + "-overlay.png"), png.Image(width, height, overlay))
-    return ImageDifference(width, height, True, differing, merge_cells(cells), noise, paint_noise)
+    return ImageDifference(width, height, True, differing, merge_cells(cells), noise, paint_noise, composer_gradient_noise)
 
 
 def text_mask(boxes: list[list[float]], width: int, height: int) -> bytearray:

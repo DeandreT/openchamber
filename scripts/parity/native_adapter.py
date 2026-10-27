@@ -286,6 +286,43 @@ class NativeClient:
         """Rectangles of controls by accessible ID."""
         return self.rects(specs)
 
+    def paint_regions(self) -> dict:
+        """Conservative blank-composer coverage; the full editor stays protected."""
+        result = {"regions": [], "protectedBoxes": [], "composerGradientRegions": [],
+                  "composerGradientProtected": [], "composerGradientProtectionComplete": False}
+        try:
+            composer = self._find("composer")
+        except LookupError:
+            return result
+        content = self._content()
+        x, y, width, height = self._rect(composer, content)
+        protected = []
+        has_editor = False
+        stack = [(composer, 0)]
+        while stack:
+            node, depth = stack.pop()
+            count = node.get_child_count()
+            if depth >= 24 and count:
+                return result
+            if node is not composer:
+                role = node.get_role_name()
+                has_editor |= role == "entry"
+                if node.get_name() or count == 0 or role not in ("filler", "panel", "section", "group"):
+                    box = self._rect(node, content)
+                    if box[2] > 0 and box[3] > 0:
+                        protected.append(box)
+                        continue
+                    else:
+                        return result
+            stack.extend((node.get_child_at_index(index), depth + 1) for index in range(count))
+        if not has_editor or width <= height or height <= 4:
+            return result
+        # The central strip is inside every legal rounded corner. Keep the
+        # full text-entry box, including its caret/selection, out of the mask.
+        result.update(composerGradientRegions=[[x + height / 2, y + 2, width - height, height / 2 - 2]],
+                      composerGradientProtected=protected, composerGradientProtectionComplete=True)
+        return result
+
     # --- input -----------------------------------------------------------
 
     def wait_for(self, condition: dict, timeout_s: float) -> bool:

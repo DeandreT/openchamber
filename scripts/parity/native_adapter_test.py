@@ -138,5 +138,44 @@ class NamedElementWaitTest(unittest.TestCase):
             self.assertTrue(client.wait_for({"named": {"name": "Search projects..."}, "present": False}, 0.5))
 
 
+class ComposerCoverageTest(unittest.TestCase):
+    def client(self, children):
+        root = RowNode("composer", children=children)
+        client = NativeClient.__new__(NativeClient)
+        client._find = lambda key: root
+        client._content = lambda: None
+        client._rect = lambda node, content=None: [0, 0, 200, 100] if node is root else node.rect
+        return client
+
+    def node(self, role, rect):
+        node = RowNode(role)
+        node.rect = rect
+        node.get_role_name = lambda: role
+        return node
+
+    def test_whole_editor_and_candidate_only_controls_stay_protected(self):
+        editor = self.node("entry", [5, 16, 190, 21])
+        extra = self.node("push button", [70, 4, 20, 10])
+        result = self.client([editor, extra]).paint_regions()
+        self.assertTrue(result["composerGradientProtectionComplete"])
+        self.assertEqual(result["composerGradientRegions"], [[50, 2, 100, 48]])
+        self.assertEqual(result["composerGradientProtected"], [extra.rect, editor.rect])
+
+    def test_missing_editor_or_unmeasured_content_disables_the_allowance(self):
+        self.assertFalse(self.client([]).paint_regions()["composerGradientProtectionComplete"])
+        editor = self.node("entry", [5, 16, 190, 21])
+        hidden = self.node("push button", [0, 0, 0, 0])
+        self.assertFalse(self.client([editor, hidden]).paint_regions()["composerGradientProtectionComplete"])
+
+    def test_unnamed_and_unknown_leaf_controls_are_protected(self):
+        for role in ("slider", "check box", "unknown", "filler"):
+            editor = self.node("entry", [5, 16, 190, 21])
+            extra = self.node(role, [70, 4, 20, 10])
+            extra.get_name = lambda: ""
+            result = self.client([editor, extra]).paint_regions()
+            self.assertTrue(result["composerGradientProtectionComplete"])
+            self.assertIn(extra.rect, result["composerGradientProtected"])
+
+
 if __name__ == "__main__":
     unittest.main()

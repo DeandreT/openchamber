@@ -2888,6 +2888,11 @@ impl<M: InputModeKind> Element for TextElement<M> {
         });
         self.state.update(cx, |state, _| {
             state.prepaint_caret_geometry = caret_geometry;
+            if let Some(snapshot) = &state.accessibility_text
+                && snapshot.revision == state.document_revision
+            {
+                snapshot.set_layout(&last_layout, bounds, window.scale_factor());
+            }
         });
 
         let search_match_paths = self.layout_search_matches(&last_layout, &mut bounds, cx);

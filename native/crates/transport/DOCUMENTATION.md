@@ -17,6 +17,7 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `client.rs` | `ServerClient`: identity probe, password login, session pages, message pages, whole messages, running status, settings reads and writes, Chats roots, projects and worktrees. |
 | `catalog.rs` | The composer's catalogs in one directory: agents, the flat model catalog with OpenCode's default model, folded config defaults, the skill count and the connected MCP count. |
 | `project.rs` | A directory's Git status (`GET /api/git/status`) and a project's configured actions (`GET /api/projects/:projectId/config`, the path-derived ID). |
+| `prompt.rs` | Typed text submission, ordered session model/agent selection, inbox admission receipts and interruption of one named session. |
 | `public_asset.rs` | `PublicAssetClient`: public assets the web client loads from third-party hosts, such as models.dev's provider logos. |
 | `wire.rs` | Serde shapes of the fields the client reads. Private. |
 | `projection.rs` | Wire records to core records, mirroring `packages/ui/src/lib/opencode/projection.ts`. Private. |
@@ -37,6 +38,45 @@ counts and identifiers only.
   never moves to another origin.
 - A credential appears only in the `Authorization` header, marked sensitive.
   It is never part of a URL, an error, a log line or `Debug` output.
+- `send_text` posts a model selection to `/api/session/:id/model`, then an
+  agent selection to `/api/session/:id/agent` when supplied, and finally the
+  text and exact client-generated message ID to `/api/session/:id/prompt`.
+  Selection responses are 204. The prompt's 200 response contains an inbox
+  user item under `data`; it acknowledges admission, not turn completion.
+  Model references use `providerID`, `id` and optional `variant`. Omitting a
+  variant clears the previous effort selection, matching `toModelRef`.
+- Prompt IDs must carry the pinned protocol's `msg_` prefix. Validation runs
+  before any selection mutation, and `TextPrompt` debug output redacts its text.
+- Prompt failures retain the session and message IDs and the failed stage.
+  `NotAttempted` means selection or local validation failed before the prompt.
+  `Rejected` identifies a declared rejection or authentication refusal.
+  `Unknown` covers lost responses, conflicts, refused redirects, server failures,
+  unexpected status and malformed or mismatched receipts. A conflict can refer
+  to an already admitted ID. Keep the draft on every failure and
+  reconcile the exact ID through inbox, events or history before resending an
+  unknown outcome. An inbox item may not yet appear in history.
+- No mutation retries or selection rollbacks occur. A successful model
+  selection survives a later agent or prompt failure. The authenticated HTTP
+  client disables reqwest's default protocol-NACK retries for every request.
+  A lost selection response
+  may also have applied; re-read session selection before presenting it as
+  authoritative. Dropping a submission future cancels local I/O only; retain
+  its ID for reconciliation because admission may already have occurred.
+  Selection and admission are separate requests, so concurrent clients can
+  change session selection between them. The receipt does not attest which
+  model will run; session and assistant-step events remain authoritative.
+- `TextPrompt` accepts text only. Files, agent mentions, skills, metadata,
+  synthetic context and slash-command execution require separate typed flows.
+  A slash-prefixed string sent through this API is literal text. Admission
+  receipts validate the message ID, session and user type, and parse the server's
+  timestamp and delivery. They intentionally leave prepared payloads to history
+  and events. OpenCode's `session.prompt` hook can transform text, add metadata
+  and attachments, and change delivery; a successful receipt does not promise
+  an exact echo of the request.
+- `abort_session` posts only to the named session's `/interrupt` route with no
+  body or resume query. Its boolean is the server's `interrupted` value; false
+  is a successful no-op. A lost or malformed response leaves the interruption
+  outcome unknown. It never interrupts other sessions or stops the server.
 - Every failure is a distinct `TransportError`. None is an empty success; a
   caller keeps its last valid state.
 - `all_sessions` walks every page or fails as a whole. A partial list has no
@@ -127,6 +167,34 @@ sessions and messages, and the same older-page cursors. It also replays the
 recorded event frames and requires them to converge on the history the server
 returns for the same session. The fixture's own UI test fails when it is
 stale, so a client upgrade or projection change surfaces in both languages.
+
+The mutation samples are synthetic contract fixtures, not live provider calls.
+The generator records the pinned SDK's model, agent, prompt and interrupt
+requests including JSON bodies and content type, and its decoded admission and
+interrupt responses. Scripted loopback tests cover rejection, disconnect after
+receiving a prompt, local cancellation and the no-redirect credential policy.
+
+### Why submission errors identify the admission stage
+
+OpenCode 2.x persists model and agent selections separately from prompt
+admission. A later failure cannot undo an earlier selection. Stage and admission
+certainty let the caller preserve its draft and reconcile by message ID without
+automatically repeating a mutation that may already be running.
+
+### Why admission does not compare prompt content
+
+OpenCode 2.1.4's [`SessionPrompt.prepare`](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/core/src/session/prompt.ts)
+invokes plugin hooks before admission. The prepared text, attachments, metadata
+and delivery can differ from the request. The receipt projects only admission
+identity, creation time and delivery; history and events supply prepared content.
+This leaves the outbound text-only contract unchanged.
+
+[`SessionInbox.reconcile`](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/core/src/session/inbox.ts)
+uses first-admission-wins for an existing message ID with the same session and
+type, including an item already promoted into history. Its response can describe
+an earlier admission's content. Clients must retain IDs for reconciliation and
+must not reuse one for an edited draft. This transport performs no automatic
+retry.
 
 ### Recording wire samples
 

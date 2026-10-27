@@ -1,4 +1,4 @@
-//! Provider logos for the composer and the sidebar, as
+//! Provider logos for the composer and turn footers, as
 //! `packages/ui/src/components/ui/ProviderLogo.tsx` draws them.
 //!
 //! A bundled logo (`resources/provider-logos.json`, exported from the web's
@@ -10,7 +10,6 @@
 //! inverted for dark ones (the web's `dark:invert`).
 
 use std::collections::HashMap;
-use std::mem;
 use std::sync::{Arc, OnceLock};
 
 use gpui_kit::{Context, Image, ImageFormat, Task};
@@ -115,13 +114,8 @@ pub(crate) struct ProviderLogos {
 }
 
 impl Workspace {
-    /// Starts loading the logos the composer and the sidebar rows show.
+    /// Starts loading the logos the composer and selected turn footers show.
     pub(crate) fn ensure_provider_logos(&mut self, cx: &mut Context<Self>) {
-        let sidebar = mem::take(&mut self.sidebar_providers);
-        for provider_id in &sidebar {
-            self.ensure_provider_logo(provider_id, cx);
-        }
-        self.sidebar_providers = sidebar;
         if let ModelControl::Model { provider_id, .. } = self.model_control() {
             self.ensure_provider_logo(&provider_id, cx);
         }

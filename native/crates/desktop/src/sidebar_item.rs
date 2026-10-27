@@ -8,9 +8,8 @@ use std::collections::HashMap;
 use gpui_kit::SharedString;
 use openchamber_native_core::grouping::GroupLabel;
 use openchamber_native_core::ids::{ProjectId, SessionId};
-use openchamber_native_core::ordering;
 use openchamber_native_core::sidebar_rows::{
-    ActivityKey, EmptyKind, GroupLoadState, RenderContext, ShowControl, SidebarRow,
+    ActivityKey, EmptyKind, GroupLoadState, ShowControl, SidebarRow,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -54,13 +53,6 @@ pub enum SidebarItem {
         expanded: bool,
         expansion_key: String,
         pinned: bool,
-        context: RenderContext,
-        /// When the session last had a conversation, for its age.
-        activity_ms: i64,
-        /// The owning project's name, where sessions of every project mix.
-        project_label: Option<SharedString>,
-        /// The provider of the session's model, for its logo.
-        provider_id: Option<SharedString>,
     },
     Show {
         key: SharedString,
@@ -156,8 +148,6 @@ impl SidebarItem {
                 has_children,
                 expanded,
                 expansion_key,
-                context,
-                project_id,
                 ..
             } => Self::Session {
                 key: key.clone().into(),
@@ -168,13 +158,6 @@ impl SidebarItem {
                 expanded: *expanded,
                 expansion_key: expansion_key.clone(),
                 pinned: session.overlay.pinned_at.is_some(),
-                context: *context,
-                activity_ms: ordering::activity_time(session),
-                project_label: (*context == RenderContext::TimelineMixed)
-                    .then_some(project_id.as_ref())
-                    .flatten()
-                    .map(|project_id| project_label(project_paths, project_id)),
-                provider_id: session.provider_id().map(SharedString::new),
             },
             SidebarRow::ShowControl {
                 key,

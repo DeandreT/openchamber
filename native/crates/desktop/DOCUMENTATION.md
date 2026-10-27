@@ -6,7 +6,8 @@ lifetime to the `Workspace` entity. Without a configured server the window
 runs on deterministic synthetic data from the core and makes no network or
 provider calls. With `OPENCHAMBER_NATIVE_SERVER` it reads one OpenChamber
 server through `openchamber-native-transport`; the connected client is
-read-only until prompt submission has its error and reconciliation paths.
+read-only while selected-session mutation activation is gated in
+`session_mutations::CONNECTED_MUTATIONS_ENABLED`.
 
 ## Ownership
 
@@ -19,6 +20,12 @@ read-only until prompt submission has its error and reconciliation paths.
 - `server_sync.rs` is the workspace's connected behavior: the connection
   sequence, global session, status and topology reads, history reads and live
   event delivery.
+- `session_mutations.rs` owns selected-session text submission and named-session
+  abort orchestration. `send_attempt.rs` retains the captured runtime, session,
+  draft owner, text, selection, resolved model/variant and agent until an
+  authoritative identity or definite rejection settles the attempt.
+  `message_id.rs` produces the pinned OpenCode `msg_` identity layout. Its
+  randomized suffix is a uniqueness aid and carries no authentication authority.
 - `connection.rs` holds the configured server, the connection state the views
   explain and the tasks of the current connection attempt.
 - `network.rs` owns the Tokio runtime. GPUI tasks await `NetworkTask`s, and
@@ -30,7 +37,7 @@ read-only until prompt submission has its error and reconciliation paths.
   hides their labels by the controls' width as the web's container query
   does.
 - `provider_logos.rs` resolves, loads and caches provider logos for the
-  composer, the sidebar rows and the turn footers.
+  composer and turn footers. Sidebar rows do not request provider logos.
 - `project_chooser.rs` lists and searches registered projects for a new-session
   draft, using saved project labels. Choosing a project changes the draft's
   directory and catalog scope without creating a server session. Draft text
@@ -91,6 +98,9 @@ read-only until prompt submission has its error and reconciliation paths.
   Chats/Pinned/In work visibility, and keep works in their projects when
   requested. Legacy Tree/List preferences resolve to the same grouping as
   the web client. Missing preference fields retain the previous value.
+  Compact sessions use a shared leading kind/chevron slot and trailing pin
+  and running-state marks. Resting rows show no recency date. The project
+  separator paints inside the existing preceding gap without changing row size.
 - `workspace_view.rs` lays out the frameless window: the sidebar column, the
   header with the window controls, the chat, the work status panel and the
   rail. `sidebar_view.rs`, `startup_view.rs`, `transcript_view.rs`,
@@ -194,6 +204,26 @@ read-only until prompt submission has its error and reconciliation paths.
   replacing runtime state, then restore the incoming draft in that same
   transition. No input event can snapshot the previous text under the new key;
   project selection never moves text between drafts.
+- Connected mutation tasks belong to the window, independently of the selected
+  runtime. A completion restores only its captured draft owner. Closing the
+  window cancels local requests without stopping the server or its turn.
+- A runtime/session permits one in-flight send or abort chain. Other sessions
+  proceed independently. A send clears its draft and appends one optimistic user
+  message with its exact client ID. It never creates an assistant or changes
+  live status. A definite failure removes only that optimistic message and
+  restores its text and selection. Newer owner text remains first, followed by
+  two newlines and the failed text.
+- Acknowledgement establishes inbox admission. The conservative send gate stays
+  held until an exact-ID user message arrives through events or history. A lost
+  response retains an explicit uncertain attempt and cannot trigger a resend.
+  An omitted history item cannot establish rejection or discard attempted text.
+  Authoritative content replaces optimistic parts, including plugin-prepared
+  content. Admission observed before an HTTP failure prevents false rollback.
+- Pending attempts survive runtime switches in memory. They are not persisted
+  across window closure. Public connected mutation activation remains disabled
+  until unknown-admission recovery, restart durability and runtime qualification
+  are resolved. Existing localized chat-error notifications cover definite
+  failures; they do not provide a complete uncertain-admission recovery flow.
 - Retained Markdown uses the same parser extensions before and after painting.
   Copy includes unpainted intermediate messages exactly once, preserves selected
   whitespace and uses fixed UTF-8 endpoints across compatible appends and reflow.
@@ -235,6 +265,22 @@ read-only until prompt submission has its error and reconciliation paths.
   broken image. A fetch cut short by a closing connection is tried again.
 
 ## Decisions
+
+### Why an admission gate remains after acknowledgement
+
+The client retains one attempt per runtime/session until authoritative message
+content replaces its optimistic item. This bounds retained state and prevents
+an uncertain admission from being submitted twice. Abort can run after the send
+request finishes and leaves running status to the live channel. New-session
+creation, attachments, queue controls and selection controls are outside this
+module's text-only contract.
+
+### Why mutation completion survives a runtime switch
+
+The captured client sends to the original endpoint, and the result belongs to
+the original draft owner even after the visible composer changes. Dropping a
+mutation merely because selection changes could lose both its result and the
+submitted text. Each window retains the task and owner until completion.
 
 ### Why one `ListState` per visited session
 

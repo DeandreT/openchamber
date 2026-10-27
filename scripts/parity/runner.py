@@ -217,9 +217,12 @@ def state_dirs(state: Path) -> dict[str, str]:
     }
 
 
+CLIENT_ENV_KEYS = ("PATH", "DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "LANG", "USER",
+                   "LD_LIBRARY_PATH", "VK_ICD_FILENAMES", "LIBGL_DRIVERS_PATH", "MESA_LOADER_DRIVER_OVERRIDE")
+
+
 def electron_env(state: Path, opencode_config: str) -> dict[str, str]:
-    keep = ("PATH", "DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "LANG", "USER")
-    env = {key: os.environ[key] for key in keep if key in os.environ}
+    env = {key: os.environ[key] for key in CLIENT_ENV_KEYS if key in os.environ}
     env.update(state_dirs(state))
     env.update(
         SHELL="/bin/zsh",
@@ -232,13 +235,14 @@ def electron_env(state: Path, opencode_config: str) -> dict[str, str]:
 
 
 def native_env(state: Path, server_url: str, theme: str) -> dict[str, str]:
-    env = {key: value for key, value in os.environ.items() if not key.startswith(("OPENCHAMBER_", "OPENCODE_"))}
+    env = {key: os.environ[key] for key in CLIENT_ENV_KEYS if key in os.environ}
     env.update(state_dirs(state))
     env.update(
         OPENCHAMBER_NATIVE_SERVER=server_url,
         OPENCHAMBER_NATIVE_THEME=theme,
         OPENCHAMBER_NATIVE_LOCALE="en",
         OPENCHAMBER_NATIVE_LOG="warn",
+        LANG="en_US.UTF-8",
     )
     return env
 
@@ -303,7 +307,8 @@ def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], dire
             # Hydration can move rows between resolving a target and pressing
             # it. A quiet startup is a prerequisite for reproducible input.
             if not settle(client):
-                raise TimeoutError("the client never settled before row selection")
+                pending = getattr(client, "pending_requests", lambda: [])()
+                raise TimeoutError(f"the client never settled before row selection; pending route prefixes: {pending}")
             key = resolve_row(client.rows(), step["click"])
             client.click(key)
             selected = wait_selected(client, key)
@@ -335,6 +340,10 @@ def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], dire
                 "textBoxes": text_boxes() if text_boxes else [],
                 "paintRegions": paint["regions"],
                 "paintProtected": paint["protectedBoxes"],
+                "composerGradientRegions": paint.get("composerGradientRegions", []),
+                "composerGradientDefinitions": paint.get("composerGradientDefinitions", []),
+                "composerGradientProtected": paint.get("composerGradientProtected", []),
+                "composerGradientProtectionComplete": paint.get("composerGradientProtectionComplete", False),
                 "image": str(image),
                 "settled": settled,
                 "rows": client.rows(),
@@ -514,8 +523,30 @@ def approved_exceptions(kind: str) -> set[tuple[str, str]]:
             raise ValueError(f"an exception needs its scenario, checkpoint, region, reason and decision: {entry}")
         if kind == "paintNoise" and entry.get("maxChannelDelta") != compare.PAINT_SLACK:
             raise ValueError("paint noise is limited to the approved channel delta")
+        if kind == "composerGradientNoise" and entry.get("maxChannelDelta") != compare.COMPOSER_GRADIENT_SLACK:
+            raise ValueError("composer gradient noise is limited to one RGB level")
         approved.add((entry["scenario"], entry["checkpoint"]))
     return approved
+
+
+def composer_gradient_masks(reference: dict, candidate: dict, scale: float) -> tuple[list, list]:
+    """Require blank coverage from both clients; missing metadata grants nothing."""
+    if not all(checkpoint.get("composerGradientProtectionComplete") is True
+               and checkpoint.get("composerGradientRegions")
+               and checkpoint.get("composerGradientProtected")
+               for checkpoint in (reference, candidate)):
+        return [], []
+    regions = []
+    for left in reference.get("composerGradientRegions", []):
+        for right in candidate.get("composerGradientRegions", []):
+            x, y = max(left[0], right[0]), max(left[1], right[1])
+            width = min(left[0] + left[2], right[0] + right[2]) - x
+            height = min(left[1] + left[3], right[1] + right[3]) - y
+            if width > 0 and height > 0:
+                regions.append([value * scale for value in (x, y, width, height)])
+    protected = [box for checkpoint in (reference, candidate)
+                 for box in checkpoint.get("composerGradientProtected", []) + checkpoint.get("textBoxes", [])]
+    return regions, [[value * scale for value in box] for box in protected]
 
 
 def run_scenarios(scenarios: list[dict], wanted: set[str] | None, output: Path, report: dict, args: argparse.Namespace) -> int:
@@ -542,7 +573,10 @@ def run_scenarios(scenarios: list[dict], wanted: set[str] | None, output: Path, 
                 if (scenario["id"], name) in approved_exceptions("paintNoise"):
                     paint_regions = [[value * args.scale for value in region["box"]] for region in reference.get("paintRegions", [])]
                     protected = [[value * args.scale for value in box] for box in reference.get("paintProtected", []) + reference.get("textBoxes", [])]
-                image = compare.compare_images(Path(reference["image"]), Path(candidate["image"]), work / name, args.tolerance, text_boxes, paint_regions, protected)
+                composer_regions, composer_protected = [], []
+                if (scenario["id"], name) in approved_exceptions("composerGradientNoise"):
+                    composer_regions, composer_protected = composer_gradient_masks(reference, candidate, args.scale)
+                image = compare.compare_images(Path(reference["image"]), Path(candidate["image"]), work / name, args.tolerance, text_boxes, paint_regions, protected, composer_regions, composer_protected)
                 rects_reference = {row["key"]: row["rect"] for row in comparable_rows(reference["rows"])}
                 rects_candidate = {row["key"]: row["rect"] for row in comparable_rows(candidate["rows"])}
                 for target, rect in reference.get("targets", {}).items():
@@ -598,6 +632,7 @@ def run_scenarios(scenarios: list[dict], wanted: set[str] | None, output: Path, 
             print(f"  {name}: {image['differingPixels']} differing pixels ({image['differingShare']:.1%}), "
                   f"{image['glyphEdgePixels']} glyph-edge pixels, "
                   f"{image['paintNoisePixels']} shadow/gradient pixels, "
+                  f"{image['composerGradientNoisePixels']} composer-gradient pixels, "
                   f"{len(comparison['rows'])} row differences, {len(comparison['geometry'])} geometry differences, "
                   f"{len(comparison['unobserved'])} checks not observable natively, "
                   f"{len(comparison['unmetWaits'])} native waits not met"

@@ -19,19 +19,34 @@ render. The engine supplies default text-input semantics to unstyled callers.
   `replace_all`, preserving normal validation, undo and change notifications.
 - Non-secret inputs expose synthetic TextRun children and the active selection
   through AccessKit. Text runs use UTF-8 character lengths, keep CRLF atomic,
-  preserve logical lines and link fragments of long lines. Empty documents
+  preserve logical lines and link fragments of long visual lines. Empty documents
   retain an empty run so their Text interface remains available.
 - Text snapshots are built only while accessibility is active. Selection actions
-   validate node IDs, character indices, document revision and current text before using normal
+  validate node IDs, character indices, document revision and current text before using normal
   cursor movement. Readonly inputs allow selection; disabled or secret inputs
-   reject it. Actions do not interrupt an in-progress IME composition.
-   Run IDs include the document revision so positions from a replaced document
-   stay invalid after redraw, including when edits restore the same text.
-- Run geometry and soft-wrapped visual-line boundaries are not exposed. Logical
-  text navigation and selection use document offsets; geometric hit-testing
-  requires a separate layout-backed implementation.
+  reject it. Actions do not interrupt an in-progress IME composition.
+  Run IDs include the document revision and byte range so positions from a
+  replaced document or changed wrap segmentation stay invalid after redraw.
+- Prepaint supplies TextRun bounds, character positions and advance widths from
+  the same shaped layout used by cursor positioning. Coordinates include text
+  alignment, continuation indentation, gutter width and scrolling. CRLF has one
+  zero-width position at the end of its visual line.
+  Bounds and character metrics are converted to physical window pixels, matching
+  AccessKit's parent nodes at fractional display scales.
+- Runs split at the current layout's soft-wrap boundaries. Same-line links join
+  only fragments of the same visual line. Text outside the laid-out buffer lines
+  retains logical navigation and selection but has no advertised geometry or
+  soft-wrap boundaries. No estimated or zero-origin rectangle substitutes for
+  missing geometry. Non-monotonic bidirectional runs also omit geometry.
 
 ## Decisions
+
+### Why geometry is attached during prepaint
+
+The editor's shaped layout is current during prepaint, before its parent emits
+synthetic accessibility children. A frame-local shared snapshot receives those
+coordinates and wrap boundaries. Reading paint-time `last_layout` during render
+would publish the previous frame's positions after edits, resize or scrolling.
 
 ### Why semantics belong to the editor focus node
 

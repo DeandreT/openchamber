@@ -13,6 +13,7 @@ use openchamber_native_transport::credential::Credential;
 use openchamber_native_transport::endpoint::Endpoint;
 use openchamber_native_transport::error::TransportError;
 use openchamber_native_transport::event::ServerEvent;
+use openchamber_native_transport::prompt::{Delivery, PromptAdmission, SendStage, TextPrompt};
 use openchamber_native_transport::stream::{EventStream, StreamItem};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -82,6 +83,406 @@ enum WsStep {
 }
 
 type HttpHandler = dyn Fn(&Recorded) -> Reply + Send + Sync;
+
+fn text_prompt() -> TextPrompt {
+    use openchamber_native_core::ids::MessageId;
+    use openchamber_native_core::send_config::ModelChoice;
+    TextPrompt {
+        message_id: MessageId::new("msg_native_fixture_exact"),
+        text: "Hello\n世界 ".to_owned(),
+        model: Some(ModelChoice {
+            provider_id: "fixture".to_owned(),
+            model_id: "text-model".to_owned(),
+            variant: Some("high".to_owned()),
+        }),
+        agent: Some("build".to_owned()),
+        delivery: Some(Delivery::Queue),
+    }
+}
+
+#[tokio::test]
+async fn abort_failures_do_not_retry_and_keep_named_session() {
+    use openchamber_native_core::ids::SessionId;
+    for (status, body, unknown) in [
+        (401, "{}", false),
+        (307, "{}", true),
+        (500, "{}", true),
+        (200, "{}", true),
+    ] {
+        let server = Server::start(
+            move |_| Reply::with_status(status, "application/json", body),
+            vec![],
+        )
+        .await;
+        let client = ServerClient::new(server.endpoint(), Credential::None).expect("client");
+        let session = SessionId::new("ses_named");
+        let error = client
+            .abort_session(&session)
+            .await
+            .expect_err("failed interrupt");
+        assert_eq!(error.session_id, session);
+        assert_eq!(error.outcome_unknown, unknown);
+        let requests = server.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            requests[0].target,
+            "/prefix/api/session/ses_named/interrupt"
+        );
+    }
+}
+
+#[tokio::test]
+async fn invalid_text_prompt_never_changes_session_selection() {
+    use openchamber_native_core::ids::SessionId;
+    let server = Server::start(|_| Reply::json(json!({})), vec![]).await;
+    let client = ServerClient::new(server.endpoint(), Credential::None).expect("client");
+    let prompt = TextPrompt {
+        text: " \n ".to_owned(),
+        ..text_prompt()
+    };
+    let error = client
+        .send_text(&SessionId::new("ses_named"), &prompt)
+        .await
+        .expect_err("blank prompt");
+    assert_eq!(error.admission, PromptAdmission::NotAttempted);
+    assert_eq!(error.stage, SendStage::Validation);
+    assert_eq!(error.message_id, prompt.message_id);
+    let invalid_id = TextPrompt {
+        message_id: openchamber_native_core::ids::MessageId::new("invalid"),
+        ..text_prompt()
+    };
+    let error = client
+        .send_text(&SessionId::new("ses_named"), &invalid_id)
+        .await
+        .expect_err("invalid ID");
+    assert_eq!(error.admission, PromptAdmission::NotAttempted);
+    assert_eq!(error.stage, SendStage::Validation);
+    assert!(server.requests().is_empty());
+}
+
+#[tokio::test]
+async fn prompt_admission_selects_in_order_and_abort_names_only_that_session() {
+    use openchamber_native_core::ids::SessionId;
+    let server = Server::start(
+        |request| {
+            if request.target.ends_with("/prompt") {
+                Reply::with_status(
+                    200,
+                    "application/json",
+                    include_str!("fixtures/wire/prompt-admitted.json"),
+                )
+            } else if request.target.ends_with("/interrupt") {
+                Reply::json(json!({"interrupted": true}))
+            } else {
+                Reply::with_status(204, "application/json", "")
+            }
+        },
+        vec![],
+    )
+    .await;
+    let client = ServerClient::new(
+        server.endpoint(),
+        Credential::ClientToken("oc_client_test".to_owned()),
+    )
+    .expect("client");
+    let session = SessionId::new("ses_e9b49c443ffefXcWWPhCOga6nH");
+    let prompt = text_prompt();
+    let receipt = client.send_text(&session, &prompt).await.expect("admitted");
+    assert_eq!(
+        receipt.message_id, prompt.message_id,
+        "client ID is preserved exactly"
+    );
+    assert_eq!(receipt.session_id, session);
+    assert_eq!(receipt.delivery, Delivery::Queue);
+    assert!(client.abort_session(&session).await.expect("interrupt"));
+    let requests = server.requests();
+    assert_eq!(requests.len(), 4);
+    for (request, operation) in requests
+        .iter()
+        .zip(["model", "agent", "prompt", "interrupt"])
+    {
+        assert_eq!(request.method, "POST");
+        assert_eq!(
+            request.target,
+            format!("/prefix/api/session/{}/{operation}", session.as_str())
+        );
+        assert_eq!(
+            request.header("authorization"),
+            Some("Bearer oc_client_test")
+        );
+        assert_eq!(request.header("x-opencode-directory"), None);
+        assert_eq!(request.header("x-openchamber-part-shells"), None);
+    }
+    assert_eq!(
+        requests[0].json(),
+        json!({"model":{"providerID":"fixture","id":"text-model","variant":"high"}})
+    );
+    assert_eq!(requests[1].json(), json!({"agent":"build"}));
+    assert_eq!(
+        requests[2].json(),
+        json!({"id":"msg_native_fixture_exact","text":"Hello\n世界 ","delivery":"queue"})
+    );
+    assert!(requests[3].body.is_empty());
+}
+
+#[tokio::test]
+async fn prompt_admission_accepts_prepared_content_and_metadata() {
+    use openchamber_native_core::ids::SessionId;
+    for payload in [
+        json!({"text":"Hello\n世界 ","metadata":{"source":"plugin"}}),
+        json!({
+            "text":"Prepared text from the session.prompt hook",
+            "metadata":{"source":"plugin"},
+            "files":[{"data":"aGk=","mime":"text/plain","source":{"type":"inline"},"name":"context.txt"}],
+            "agents":[{"name":"plan"}],
+            "skills":[{"id":"skill_fixture","name":"fixture","text":"Prepared skill context"}]
+        }),
+    ] {
+        let server = Server::start(
+            move |_| {
+                Reply::json(json!({"data":{
+                    "id":"msg_native_fixture_exact", "sessionID":"ses_named", "type":"user",
+                    "time":{"created":1800000000000_u64}, "delivery":"steer", "payload":payload
+                }}))
+            },
+            vec![],
+        )
+        .await;
+        let client = ServerClient::new(server.endpoint(), Credential::None).expect("client");
+        let session = SessionId::new("ses_named");
+        let prompt = TextPrompt {
+            model: None,
+            agent: None,
+            ..text_prompt()
+        };
+        let receipt = client
+            .send_text(&session, &prompt)
+            .await
+            .expect("prepared user item is admitted");
+        assert_eq!(receipt.session_id, session);
+        assert_eq!(receipt.message_id, prompt.message_id);
+        assert_eq!(receipt.created, 1800000000000);
+        assert_eq!(
+            receipt.delivery,
+            Delivery::Steer,
+            "preparation may change delivery too"
+        );
+        let requests = server.requests();
+        assert_eq!(requests.len(), 1, "admission needs no retry");
+        assert_eq!(
+            requests[0].json(),
+            json!({
+                "id":"msg_native_fixture_exact", "text":"Hello\n世界 ", "delivery":"queue"
+            }),
+            "request stays text-only and preserves the caller's text"
+        );
+    }
+}
+
+#[tokio::test]
+async fn prompt_failures_preserve_correlation_and_never_retry() {
+    use openchamber_native_core::ids::SessionId;
+    for (status, body, admission) in [
+        (400, "{}", PromptAdmission::Rejected),
+        (401, "{}", PromptAdmission::Rejected),
+        (403, "{}", PromptAdmission::Rejected),
+        (404, "{}", PromptAdmission::Rejected),
+        (409, "{}", PromptAdmission::Unknown),
+        (500, "{}", PromptAdmission::Unknown),
+        (200, "not json", PromptAdmission::Unknown),
+        (204, "", PromptAdmission::Unknown),
+        (
+            200,
+            r#"{"data":{"id":"wrong","sessionID":"s","time":{"created":1},"type":"user","payload":{"text":"Hello"},"delivery":"queue"}}"#,
+            PromptAdmission::Unknown,
+        ),
+        (
+            200,
+            r#"{"data":{"id":"msg_native_fixture_exact","sessionID":"wrong","time":{"created":1},"type":"user","payload":{"text":"Hello"},"delivery":"queue"}}"#,
+            PromptAdmission::Unknown,
+        ),
+        (
+            200,
+            r#"{"data":{"id":"msg_native_fixture_exact","sessionID":"s","time":{"created":1},"type":"synthetic","payload":{"text":"Hello"},"delivery":"queue"}}"#,
+            PromptAdmission::Unknown,
+        ),
+    ] {
+        let server = Server::start(
+            move |_| Reply::with_status(status, "application/json", body),
+            vec![],
+        )
+        .await;
+        let client = ServerClient::new(server.endpoint(), Credential::None).expect("client");
+        let prompt = TextPrompt {
+            model: None,
+            agent: None,
+            ..text_prompt()
+        };
+        let session = SessionId::new("s");
+        let error = client
+            .send_text(&session, &prompt)
+            .await
+            .expect_err("failed receipt");
+        assert_eq!(error.stage, SendStage::Prompt);
+        assert_eq!(error.admission, admission, "HTTP {status}");
+        assert_eq!(error.message_id, prompt.message_id);
+        assert_eq!(error.session_id, session);
+        assert_eq!(server.requests().len(), 1, "no mutation retry");
+    }
+}
+
+#[tokio::test]
+async fn selection_failure_stops_before_prompt_and_keeps_prior_selection() {
+    use openchamber_native_core::ids::SessionId;
+    for (failed_operation, stage, count) in [
+        ("model", SendStage::Model, 1),
+        ("agent", SendStage::Agent, 2),
+    ] {
+        let server = Server::start(
+            move |request| {
+                if request.target.ends_with(failed_operation) {
+                    Reply::with_status(500, "application/json", "{}")
+                } else {
+                    Reply::with_status(204, "application/json", "")
+                }
+            },
+            vec![],
+        )
+        .await;
+        let client = ServerClient::new(server.endpoint(), Credential::None).expect("client");
+        let error = client
+            .send_text(&SessionId::new("s"), &text_prompt())
+            .await
+            .expect_err("selection failed");
+        assert_eq!(error.stage, stage);
+        assert_eq!(error.admission, PromptAdmission::NotAttempted);
+        assert_eq!(
+            server.requests().len(),
+            count,
+            "no rollback or prompt follows failure"
+        );
+    }
+}
+
+#[tokio::test]
+async fn prompt_redirect_is_not_followed_and_abort_idle_is_authoritative() {
+    use openchamber_native_core::ids::SessionId;
+    let target = Server::start(|_| Reply::json(json!({})), vec![]).await;
+    let redirect = format!("http://{}/stolen", target.address);
+    let server = Server::start(
+        move |request| {
+            if request.target.ends_with("/interrupt") {
+                return Reply::json(json!({"interrupted":false}));
+            }
+            let mut reply = Reply::with_status(307, "application/json", "{}");
+            reply.headers.push(("location", redirect.clone()));
+            reply
+        },
+        vec![],
+    )
+    .await;
+    let client = ServerClient::new(
+        server.endpoint(),
+        Credential::ClientToken("oc_client_test".to_owned()),
+    )
+    .expect("client");
+    let prompt = TextPrompt {
+        model: None,
+        agent: None,
+        ..text_prompt()
+    };
+    let error = client
+        .send_text(&SessionId::new("s"), &prompt)
+        .await
+        .expect_err("redirect refused");
+    assert!(matches!(error.source, TransportError::Redirected));
+    assert_eq!(error.admission, PromptAdmission::Unknown);
+    assert!(
+        target.requests().is_empty(),
+        "credentials cannot follow redirects"
+    );
+    assert!(
+        !client
+            .abort_session(&SessionId::new("s"))
+            .await
+            .expect("idle answer")
+    );
+}
+
+#[tokio::test]
+async fn lost_prompt_response_is_ambiguous_and_is_not_retried() {
+    use openchamber_native_core::ids::SessionId;
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("loopback");
+    let address = listener.local_addr().expect("address");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("connection");
+        let request = read_request(&mut socket, &mut Vec::new())
+            .await
+            .expect("request before disconnect");
+        drop(socket);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), listener.accept())
+                .await
+                .is_err(),
+            "no retry after disconnect"
+        );
+        request
+    });
+    let client = ServerClient::new(
+        Endpoint::parse(&format!("http://{address}")).expect("endpoint"),
+        Credential::None,
+    )
+    .expect("client");
+    let prompt = TextPrompt {
+        model: None,
+        agent: None,
+        ..text_prompt()
+    };
+    let error = client
+        .send_text(&SessionId::new("s"), &prompt)
+        .await
+        .expect_err("lost response");
+    assert_eq!(error.admission, PromptAdmission::Unknown);
+    assert_eq!(error.message_id, prompt.message_id);
+    assert_eq!(
+        server.await.expect("server").json()["id"],
+        "msg_native_fixture_exact"
+    );
+}
+
+#[tokio::test]
+async fn cancelling_prompt_io_does_not_interrupt_or_retry_server_work() {
+    use openchamber_native_core::ids::SessionId;
+    let server = Server::start(
+        |_| {
+            let mut reply = Reply::json(json!({}));
+            reply.delay = Duration::from_secs(5);
+            reply
+        },
+        vec![],
+    )
+    .await;
+    let client = ServerClient::new(server.endpoint(), Credential::None).expect("client");
+    let prompt = TextPrompt {
+        model: None,
+        agent: None,
+        ..text_prompt()
+    };
+    let session = SessionId::new("s");
+    assert!(
+        tokio::time::timeout(
+            Duration::from_millis(100),
+            client.send_text(&session, &prompt)
+        )
+        .await
+        .is_err()
+    );
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(requests[0].target.ends_with("/prompt"));
+    assert_eq!(requests[0].json()["id"], prompt.message_id.as_str());
+}
 
 /// A scripted server on a loopback port.
 struct Server {
