@@ -14,7 +14,9 @@
         ]
       ],
       "directoryHeader": null,
-      "partShellsHeader": null
+      "partShellsHeader": null,
+      "contentType": null,
+      "body": null
     },
     {
       "name": "global sessions next page",
@@ -31,7 +33,9 @@
         ]
       ],
       "directoryHeader": null,
-      "partShellsHeader": null
+      "partShellsHeader": null,
+      "contentType": null,
+      "body": null
     },
     {
       "name": "directory sessions page",
@@ -48,7 +52,9 @@
         ]
       ],
       "directoryHeader": "%2Fhome%2Fsynthetic%2Fmy%20project%2F%C3%BCn%C3%AF",
-      "partShellsHeader": null
+      "partShellsHeader": null,
+      "contentType": null,
+      "body": null
     },
     {
       "name": "latest messages",
@@ -61,7 +67,9 @@
         ]
       ],
       "directoryHeader": null,
-      "partShellsHeader": null
+      "partShellsHeader": null,
+      "contentType": null,
+      "body": null
     },
     {
       "name": "latest messages, long session",
@@ -74,7 +82,9 @@
         ]
       ],
       "directoryHeader": null,
-      "partShellsHeader": null
+      "partShellsHeader": null,
+      "contentType": null,
+      "body": null
     },
     {
       "name": "latest messages, tools session",
@@ -87,7 +97,9 @@
         ]
       ],
       "directoryHeader": null,
-      "partShellsHeader": null
+      "partShellsHeader": null,
+      "contentType": null,
+      "body": null
     },
     {
       "name": "latest messages, shelled",
@@ -100,7 +112,9 @@
         ]
       ],
       "directoryHeader": null,
-      "partShellsHeader": "v1"
+      "partShellsHeader": "v1",
+      "contentType": null,
+      "body": null
     },
     {
       "name": "earlier messages, shelled",
@@ -117,7 +131,9 @@
         ]
       ],
       "directoryHeader": null,
-      "partShellsHeader": "v1"
+      "partShellsHeader": "v1",
+      "contentType": null,
+      "body": null
     },
     {
       "name": "whole message",
@@ -125,7 +141,9 @@
       "path": "/api/session/ses_e9b3bfe12ffeMuiZLLg25eNcms/message/msg_164c422cf001JfI01Q6WJWl0lr",
       "query": [],
       "directoryHeader": null,
-      "partShellsHeader": null
+      "partShellsHeader": null,
+      "contentType": null,
+      "body": null
     },
     {
       "name": "agents",
@@ -133,7 +151,9 @@
       "path": "/api/agent",
       "query": [],
       "directoryHeader": "%2Fhome%2Fsynthetic%2Fmy%20project%2F%C3%BCn%C3%AF",
-      "partShellsHeader": null
+      "partShellsHeader": null,
+      "contentType": null,
+      "body": null
     },
     {
       "name": "models",
@@ -141,7 +161,9 @@
       "path": "/api/model",
       "query": [],
       "directoryHeader": "%2Fhome%2Fsynthetic%2Fmy%20project%2F%C3%BCn%C3%AF",
-      "partShellsHeader": null
+      "partShellsHeader": null,
+      "contentType": null,
+      "body": null
     },
     {
       "name": "default model",
@@ -149,7 +171,9 @@
       "path": "/api/model/default",
       "query": [],
       "directoryHeader": "%2Fhome%2Fsynthetic%2Fmy%20project%2F%C3%BCn%C3%AF",
-      "partShellsHeader": null
+      "partShellsHeader": null,
+      "contentType": null,
+      "body": null
     },
     {
       "name": "providers",
@@ -157,7 +181,9 @@
       "path": "/api/provider",
       "query": [],
       "directoryHeader": "%2Fhome%2Fsynthetic%2Fmy%20project%2F%C3%BCn%C3%AF",
-      "partShellsHeader": null
+      "partShellsHeader": null,
+      "contentType": null,
+      "body": null
     },
     {
       "name": "config",
@@ -165,7 +191,9 @@
       "path": "/api/config",
       "query": [],
       "directoryHeader": "%2Fhome%2Fsynthetic%2Fmy%20project%2F%C3%BCn%C3%AF",
-      "partShellsHeader": null
+      "partShellsHeader": null,
+      "contentType": null,
+      "body": null
     },
     {
       "name": "mcp servers",
@@ -173,9 +201,101 @@
       "path": "/api/mcp",
       "query": [],
       "directoryHeader": "%2Fhome%2Fsynthetic%2Fmy%20project%2F%C3%BCn%C3%AF",
-      "partShellsHeader": null
+      "partShellsHeader": null,
+      "contentType": null,
+      "body": null
+    },
+    {
+      "name": "select prompt model",
+      "method": "POST",
+      "path": "/api/session/ses_e9b49c443ffefXcWWPhCOga6nH/model",
+      "query": [],
+      "directoryHeader": null,
+      "partShellsHeader": null,
+      "contentType": "application/json",
+      "body": "{\"model\":{\"providerID\":\"fixture\",\"id\":\"text-model\",\"variant\":\"high\"}}"
+    },
+    {
+      "name": "clear prompt variant",
+      "method": "POST",
+      "path": "/api/session/ses_e9b49c443ffefXcWWPhCOga6nH/model",
+      "query": [],
+      "directoryHeader": null,
+      "partShellsHeader": null,
+      "contentType": "application/json",
+      "body": "{\"model\":{\"providerID\":\"fixture\",\"id\":\"text-model\"}}"
+    },
+    {
+      "name": "select prompt agent",
+      "method": "POST",
+      "path": "/api/session/ses_e9b49c443ffefXcWWPhCOga6nH/agent",
+      "query": [],
+      "directoryHeader": null,
+      "partShellsHeader": null,
+      "contentType": "application/json",
+      "body": "{\"agent\":\"build\"}"
+    },
+    {
+      "name": "submit text prompt",
+      "method": "POST",
+      "path": "/api/session/ses_e9b49c443ffefXcWWPhCOga6nH/prompt",
+      "query": [],
+      "directoryHeader": null,
+      "partShellsHeader": null,
+      "contentType": "application/json",
+      "body": "{\"id\":\"msg_native_fixture_exact\",\"text\":\"Hello\\n世界 \",\"delivery\":\"queue\"}"
+    },
+    {
+      "name": "submit default delivery",
+      "method": "POST",
+      "path": "/api/session/ses_e9b49c443ffefXcWWPhCOga6nH/prompt",
+      "query": [],
+      "directoryHeader": null,
+      "partShellsHeader": null,
+      "contentType": "application/json",
+      "body": "{\"id\":\"msg_native_fixture_exact\",\"text\":\"Hello\\n世界 \"}"
+    },
+    {
+      "name": "interrupt named session",
+      "method": "POST",
+      "path": "/api/session/ses_e9b49c443ffefXcWWPhCOga6nH/interrupt",
+      "query": [],
+      "directoryHeader": null,
+      "partShellsHeader": null,
+      "contentType": null,
+      "body": null
+    },
+    {
+      "name": "interrupt idle session",
+      "method": "POST",
+      "path": "/api/session/ses_e9b49c443ffefXcWWPhCOga6nH/interrupt",
+      "query": [],
+      "directoryHeader": null,
+      "partShellsHeader": null,
+      "contentType": null,
+      "body": null
     }
   ],
+  "mutations": {
+    "admitted": {
+      "id": "msg_native_fixture_exact",
+      "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+      "type": "user",
+      "time": {
+        "created": 1800000000000
+      },
+      "payload": {
+        "text": "Hello\n世界 "
+      },
+      "delivery": "queue"
+    },
+    "interrupted": {
+      "interrupted": true
+    },
+    "idle": {
+      "interrupted": false
+    }
+  },
   "sessions": [
     {
       "id": "ses_e9b406d39ffeelt67y1XaTjhrs",

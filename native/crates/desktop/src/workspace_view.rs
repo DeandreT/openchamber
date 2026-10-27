@@ -132,7 +132,7 @@ impl Render for Workspace {
                 if this.prompt_panel.is_some() {
                     this.close_prompt_panel(window, cx);
                 } else {
-                    this.stop(cx);
+                    this.stop(window, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &TogglePromptNavigator, window, cx| {

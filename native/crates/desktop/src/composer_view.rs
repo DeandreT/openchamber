@@ -213,9 +213,8 @@ impl Workspace {
             .as_ref()
             .is_some_and(|id| self.is_streaming(id));
         let empty = self.composer.read(cx).value().trim().is_empty();
-        // A server connection stays read-only until prompts have their error
-        // and reconciliation paths.
-        let can_send = !empty && self.is_synthetic() && self.selected.is_some();
+        let can_send =
+            !empty && self.selected.is_some() && (self.is_synthetic() || self.can_send_connected());
         let strings = locale::strings(cx);
         let (label, icon) = if streaming {
             (
@@ -251,7 +250,7 @@ impl Workspace {
             cx,
             move |this, window, cx| {
                 if streaming {
-                    this.stop(cx);
+                    this.stop(window, cx);
                 } else {
                     this.submit(window, cx);
                 }

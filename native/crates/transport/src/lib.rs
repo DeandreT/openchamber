@@ -16,6 +16,7 @@ pub mod identity;
 mod parity_tests;
 pub mod project;
 mod projection;
+pub mod prompt;
 pub mod public_asset;
 pub mod stream;
 mod wire;

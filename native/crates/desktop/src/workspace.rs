@@ -155,6 +155,9 @@ pub struct Workspace {
     pub(crate) connection: Option<Connection>,
     /// The composer's catalogs and defaults; empty for synthetic data.
     pub(crate) send_catalog: SendCatalog,
+    pub(crate) send_attempts: crate::send_attempt::SendAttempts,
+    pub(crate) mutation_tasks: HashMap<crate::send_attempt::SessionKey, Task<()>>,
+    pub(crate) message_ids: crate::message_id::MessageIds,
     pub(crate) code_wrap_state: CodeWrapState,
     pub(crate) code_wrap_save_task: Option<Task<()>>,
     pub(crate) provider_logos: ProviderLogos,
@@ -163,8 +166,6 @@ pub struct Workspace {
     pub(crate) initial_size: Option<InitialSize>,
     /// The docked composer's slot, measured while painting.
     pub(crate) composer_slot: Rc<Cell<ComposerSlot>>,
-    /// The providers whose logos the sidebar rows show, without repeats.
-    pub(crate) sidebar_providers: Vec<SharedString>,
     prompt_sequence: usize,
     pub(crate) focus_handle: FocusHandle,
     pending_switch: Option<Instant>,
@@ -238,13 +239,15 @@ impl Workspace {
             live_status: HashMap::new(),
             connection,
             send_catalog: SendCatalog::default(),
+            send_attempts: crate::send_attempt::SendAttempts::default(),
+            mutation_tasks: HashMap::new(),
+            message_ids: crate::message_id::MessageIds::default(),
             code_wrap_state: CodeWrapState::default(),
             code_wrap_save_task: None,
             provider_logos: ProviderLogos::default(),
             project_readouts: ProjectReadouts::default(),
             initial_size: None,
             composer_slot: Rc::default(),
-            sidebar_providers: Vec::new(),
             prompt_sequence: 0,
             focus_handle: cx.focus_handle(),
             pending_switch: None,
@@ -312,18 +315,6 @@ impl Workspace {
             .get(top.item_ix)
             .map(|item| item.key().to_owned());
         let count = items.len();
-        let mut providers: Vec<SharedString> = Vec::new();
-        for item in &items {
-            if let SidebarItem::Session {
-                provider_id: Some(provider_id),
-                ..
-            } = item
-                && !providers.contains(provider_id)
-            {
-                providers.push(provider_id.clone());
-            }
-        }
-        self.sidebar_providers = providers;
         self.sidebar_items = items;
         self.sidebar_spacing = spacing;
         self.sidebar_list.reset(count);
@@ -698,12 +689,12 @@ impl Workspace {
         }
     }
 
-    /// Sends the composer text to the selected session's synthetic stream.
-    ///
-    /// A server connection is read-only until prompt submission has its
-    /// error and reconciliation paths; the draft stays in the composer.
+    /// Sends to an existing selected session. New-session drafts stay local.
     pub fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.is_synthetic() {
+            if crate::session_mutations::CONNECTED_MUTATIONS_ENABLED {
+                self.submit_connected(window, cx);
+            }
             return;
         }
         let Some(session_id) = self.selected.clone() else {
@@ -816,7 +807,13 @@ impl Workspace {
     }
 
     /// Stops the selected session's stream, keeping the text received so far.
-    pub fn stop(&mut self, cx: &mut Context<Self>) {
+    pub fn stop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.is_synthetic() {
+            if crate::session_mutations::CONNECTED_MUTATIONS_ENABLED {
+                self.abort_connected(window, cx);
+            }
+            return;
+        }
         let Some(id) = self.selected.clone() else {
             return;
         };

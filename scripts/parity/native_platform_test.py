@@ -4,12 +4,27 @@ import os
 from pathlib import Path
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import native_platform
 
 
 class PlatformEnvironmentTest(unittest.TestCase):
+    def test_character_extents_must_be_inside_the_editor(self):
+        node = Mock()
+        node.get_extents.return_value = SimpleNamespace(x=10, y=20, width=100, height=30)
+        api = Mock()
+        valid = SimpleNamespace(x=15, y=22, width=14, height=21)
+        for box, fails in ((valid, False), (SimpleNamespace(x=0, y=0, width=0, height=0), True), (SimpleNamespace(x=500, y=22, width=14, height=21), True)):
+            api.Text.get_character_extents.return_value = box
+            with patch.object(native_platform, "_atspi", return_value=api):
+                if fails:
+                    with self.assertRaisesRegex(RuntimeError, "accessible bounds"):
+                        native_platform.check_text_extents(node, "你好")
+                else:
+                    native_platform.check_text_extents(node, "你好")
+
     def test_editable_text_uses_the_text_interface_method(self):
         node = Mock()
         interface = node.get_text_iface.return_value

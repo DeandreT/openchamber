@@ -15,6 +15,24 @@
       "decision": "Approved by the user on 2026-10-23"
     }
   ],
+  "composerGradientNoise": [
+    {
+      "scenario": "shell.startup",
+      "checkpoint": "startup",
+      "region": "Visible dark composer sheen only, excluding text, caret, selection, icons, buttons, borders and corners.",
+      "maxChannelDelta": 1,
+      "reason": "Chromium dithers the premultiplied gradient in raster-tile coordinates; native alpha blending quantizes it differently. Only one-level RGB differences in blank gradient pixels are equivalent.",
+      "decision": "Approved by the user on 2026-10-26"
+    },
+    {
+      "scenario": "sessions.select-pointer",
+      "checkpoint": "selected",
+      "region": "Visible dark composer sheen only, excluding text, caret, selection, icons, buttons, borders and corners.",
+      "maxChannelDelta": 1,
+      "reason": "Chromium dithers the premultiplied gradient in raster-tile coordinates; native alpha blending quantizes it differently. Only one-level RGB differences in blank gradient pixels are equivalent.",
+      "decision": "Approved by the user on 2026-10-26"
+    }
+  ],
   "paintNoise": [
     {
       "scenario": "shell.startup",

@@ -24,4 +24,9 @@ the native app on an isolated display.
 
 Editable-text tests inspect the real emitted TextRun nodes, Unicode and CRLF
 character lengths, long-line links, empty text, selection direction, platform
-selection actions, text updates and secret-value suppression.
+selection actions, text updates and secret-value suppression. They compare
+character positions with the editor's fresh prepaint caret coordinates across
+soft wraps and Unicode offsets, check selection after resize, reject obsolete
+run IDs, and verify that scrolling replaces geometry without assigning bounds
+to unlaid-out ranges. These coordinates come from GPUI's in-memory layout test
+platform; platform font shaping and AT-SPI extents still require native testing.

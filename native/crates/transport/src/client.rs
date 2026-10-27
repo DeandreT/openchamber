@@ -357,6 +357,9 @@ impl ServerClient {
     pub fn new(endpoint: Endpoint, credential: Credential) -> Result<Self, TransportError> {
         let http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
+            // A mutation with a lost answer is reconciled by its caller.
+            // Disable reqwest's default protocol-NACK retry as well.
+            .retry(reqwest::retry::never())
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(REQUEST_TIMEOUT)
             .build()
@@ -795,7 +798,9 @@ pub fn encode_directory(directory: &str) -> String {
 }
 
 /// Reads a JSON body after checking status and content type.
-async fn read_json<T: DeserializeOwned>(response: Response) -> Result<T, TransportError> {
+pub(crate) async fn read_json<T: DeserializeOwned>(
+    response: Response,
+) -> Result<T, TransportError> {
     let status = response.status();
     if status.is_redirection() {
         return Err(TransportError::Redirected);

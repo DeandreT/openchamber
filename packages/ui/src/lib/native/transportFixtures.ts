@@ -52,6 +52,8 @@ type RecordedRequest = {
   query: string[][];
   directoryHeader: string | null;
   partShellsHeader: string | null;
+  contentType: string | null;
+  body: string | null;
 };
 
 const responseFor = (path: string, shelled: boolean): string => {
@@ -84,8 +86,15 @@ const createRecordingClient = (requests: RecordedRequest[], headers?: Record<str
         query: [...url.searchParams.entries()].sort(([left], [right]) => (left < right ? -1 : 1)),
         directoryHeader: request.headers.get('x-opencode-directory'),
         partShellsHeader: request.headers.get(PART_SHELLS_HEADER),
+        contentType: request.headers.get('content-type'),
+        body: request.body ? await request.text() : null,
       });
       const shelled = request.headers.get(PART_SHELLS_HEADER) === PART_SHELLS_VERSION;
+      if (request.method === 'POST') {
+        if (url.pathname.endsWith('/model') || url.pathname.endsWith('/agent')) return new Response(null, { status: 204 });
+        if (url.pathname.endsWith('/prompt')) return new Response(readWire('prompt-admitted'), { headers: { 'content-type': 'application/json' } });
+        if (url.pathname.endsWith('/interrupt')) return Response.json({ interrupted: pendingName !== 'interrupt idle session' });
+      }
       return new Response(responseFor(url.pathname, shelled), { headers: { 'content-type': 'application/json' } });
     },
   });
@@ -262,6 +271,23 @@ export const renderTransportFixtures = async (): Promise<string> => {
   const config = mergeConfigDocuments(await scoped.named('config', () => scoped.client.config.get()));
   const mcp = await scoped.named('mcp servers', () => scoped.client.mcp.list());
 
+  // Synthetic protocol samples, decoded by the pinned SDK. No live mutation.
+  await global.named('select prompt model', () => global.client.session.switchModel({
+    sessionID: RECORDED_SESSION, model: { providerID: 'fixture', id: 'text-model', variant: 'high' },
+  }));
+  await global.named('clear prompt variant', () => global.client.session.switchModel({
+    sessionID: RECORDED_SESSION, model: { providerID: 'fixture', id: 'text-model' },
+  }));
+  await global.named('select prompt agent', () => global.client.session.switchAgent({ sessionID: RECORDED_SESSION, agent: 'build' }));
+  const admitted = await global.named('submit text prompt', () => global.client.session.prompt({
+    sessionID: RECORDED_SESSION, id: 'msg_native_fixture_exact', text: 'Hello\n世界 ', delivery: 'queue',
+  }));
+  await global.named('submit default delivery', () => global.client.session.prompt({
+    sessionID: RECORDED_SESSION, id: 'msg_native_fixture_exact', text: 'Hello\n世界 ',
+  }));
+  const interrupted = await global.named('interrupt named session', () => global.client.session.interrupt({ sessionID: RECORDED_SESSION }));
+  const idle = await global.named('interrupt idle session', () => global.client.session.interrupt({ sessionID: RECORDED_SESSION }));
+
   const normalizeMessages = (data: Parameters<typeof projectMessages>[0], sessionID: string) =>
     projectMessages(data, sessionID).map(({ message, parts }) => ({
       id: message.id,
@@ -303,6 +329,7 @@ export const renderTransportFixtures = async (): Promise<string> => {
     baseUrl: BASE_URL,
     scopedDirectory: SCOPED_DIRECTORY,
     requests,
+    mutations: { admitted, interrupted, idle },
     sessions: sessions.data.map(projectSession).map(normalizeSession),
     nextCursor: sessions.cursor.next ?? null,
     messages: {

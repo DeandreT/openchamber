@@ -3,7 +3,7 @@
 //! Geometry follows the web client's timeline sidebar
 //! (`packages/ui/src/components/session/sidebar/`): rows keep a 262 px slot
 //! inside the list's `ps-2.5 pe-2` padding while zone and project headers
-//! paint across the full width, timeline rows carry no tree gutter, and the
+//! paint across the full width, compact rows retain their kind slot, and the
 //! gap that opens each section comes from the core row model.
 
 use gpui_kit::{
@@ -12,7 +12,6 @@ use gpui_kit::{
     prelude::FluentBuilder, px, rems,
 };
 use openchamber_native_core::grouping::GroupLabel;
-use openchamber_native_core::relative_time::{self, AgeUnit};
 use openchamber_native_core::session_index::IndexStatus;
 use openchamber_native_core::sidebar_rows::{
     ActivityKey, EmptyKind, GroupLoadState, SectionSpacing, ShowControl,
@@ -44,11 +43,8 @@ const HEADER_GLYPH: f32 = 14.0;
 const SESSION_HEIGHT: f32 = 32.0;
 /// `my-px` around every session row.
 const SESSION_MARGIN: f32 = 1.0;
-/// Timeline rows have no gutter: their content sits 10 px in.
+/// Trailing inset of compact rows and leading inset of flat notices.
 const TIMELINE_INSET: f32 = 10.0;
-/// The provider logo before a compact row's age: `h-3 w-3 opacity-45`.
-const ROW_LOGO: f32 = 12.0;
-const ROW_LOGO_OPACITY: f32 = 0.45;
 /// Tree geometry: 12 px per level from an 8 px edge, then the slot and a gap.
 const TREE_BASE_PADDING: f32 = 6.0;
 const TREE_INDENT: f32 = 12.0;
@@ -656,9 +652,6 @@ impl Workspace {
                     row.test_support().into_any_element()
                 }
             }
-            SidebarItem::Session { context, .. } if !context.has_tree_slot() => {
-                self.timeline_session_row(&item, spacing, &palette, direction, cx)
-            }
             SidebarItem::Session {
                 key,
                 session_id,
@@ -716,13 +709,21 @@ impl Workspace {
                 let target_key = SharedString::from(format!("{key}:target"));
                 let row = tree_row(&target_key, &palette, direction, *depth, slot, selected)
                     .h(px(SESSION_HEIGHT))
-                    .child(row_text(title, text_color, cx))
-                    .when(streaming, |this| {
-                        this.child(glyph("circle", 12.0, palette.info))
-                    })
-                    .when(*pinned, |this| {
-                        this.child(glyph("pushpin", 12.0, palette.primary))
-                    });
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex_row_from(direction)
+                            .items_center()
+                            .gap(px(4.0))
+                            .child(row_text(title, text_color, cx))
+                            .when(*pinned, |this| {
+                                this.child(glyph("pushpin", 12.0, palette.primary))
+                            })
+                            .when(streaming, |this| {
+                                this.child(glyph("circle", 12.0, palette.info))
+                            }),
+                    );
                 let (node, row) = on_activate_split(node, row, cx, move |this, window, cx| {
                     this.select_session(id.clone(), window, cx);
                 });
@@ -814,10 +815,34 @@ impl Workspace {
                     .into_any_element(),
             },
         };
-        match item {
+        let row = match item {
             SidebarItem::Zone { .. } | SidebarItem::Project { .. } => row,
             SidebarItem::Session { .. } => row,
             _ => div().pb(px(spacing)).child(row).into_any_element(),
+        };
+        // The web paints this inside the existing trailing gap. The first
+        // project has no divider unless another row precedes it.
+        if spacing > 0.0
+            && matches!(
+                self.sidebar_items.get(index + 1),
+                Some(SidebarItem::Project { .. })
+            )
+        {
+            div()
+                .relative()
+                .child(row)
+                .child(
+                    div()
+                        .absolute()
+                        .inset_start(direction, px(8.0))
+                        .inset_end(direction, px(8.0))
+                        .bottom(px(4.0))
+                        .h(px(1.0))
+                        .bg(palette.border.mix_oklab(palette.foreground, 0.78)),
+                )
+                .into_any_element()
+        } else {
+            row
         }
     }
 
@@ -888,98 +913,6 @@ impl Workspace {
             .test_support()
             .into_any_element()
     }
-
-    /// A one-line row of the timeline, Chats or the mixed zones: no gutter,
-    /// the project's glyph where projects mix, the title and the age.
-    fn timeline_session_row(
-        &self,
-        item: &SidebarItem,
-        spacing: f32,
-        palette: &Palette,
-        direction: Direction,
-        cx: &Context<Self>,
-    ) -> AnyElement {
-        let SidebarItem::Session {
-            key,
-            session_id,
-            title,
-            activity_ms,
-            project_label,
-            provider_id,
-            ..
-        } = item
-        else {
-            return div().into_any_element();
-        };
-        let logo = provider_id.as_ref().and_then(|provider_id| {
-            self.render_provider_logo(provider_id, ROW_LOGO, ROW_LOGO_OPACITY, palette)
-        });
-        let strings = locale::strings(cx);
-        let selected = self.selected.as_ref() == Some(session_id);
-        let streaming = self.is_streaming(session_id);
-        let title = display_title(strings, title);
-        let title_color = if selected {
-            palette.selection_foreground
-        } else if streaming {
-            palette.foreground
-        } else {
-            resting_title(palette)
-        };
-        let age = compact_age(strings, *activity_ms);
-        let hover_fill = palette.hover.opacity(0.6);
-        let node = div()
-            .id(key.clone())
-            .role(Role::TreeItem)
-            .accessibility_id(key.clone())
-            .aria_label(title.clone())
-            .aria_selected(selected)
-            .pt(px(SESSION_MARGIN))
-            .pb(px(SESSION_MARGIN + spacing));
-        let target = div()
-            .id(SharedString::from(format!("{key}:target")))
-            .h(px(SESSION_HEIGHT))
-            .rounded(px(CONTROL_RADIUS))
-            .flex_row_from(direction)
-            .items_center()
-            .gap(px(4.0))
-            .px(px(TIMELINE_INSET))
-            .cursor_pointer()
-            .when(selected, |this| this.bg(palette.selection.opacity(0.7)))
-            .when(!selected, |this| {
-                this.hover(move |style| style.bg(hover_fill))
-            })
-            .when_some(project_label.clone(), |this, _| {
-                this.child(glyph(
-                    "folder",
-                    12.0,
-                    palette.muted_foreground.opacity(0.75),
-                ))
-            })
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .truncate()
-                    .css_text(LABEL_SIZE, LABEL_LINE, cx)
-                    .text_color(title_color)
-                    .child(title),
-            )
-            .children(logo)
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .css_text(MICRO_SIZE, MICRO_SIZE, cx)
-                    .text_color(palette.muted_foreground.opacity(0.5))
-                    .child(age),
-            );
-        let id = session_id.clone();
-        let (node, target) = on_activate_split(node, target, cx, move |this, window, cx| {
-            this.select_session(id.clone(), window, cx);
-        });
-        node.child(target.test_support())
-            .test_support()
-            .into_any_element()
-    }
 }
 
 /// What a zone or project header shows.
@@ -1000,25 +933,6 @@ fn display_title(strings: &Strings, title: &SharedString) -> SharedString {
     } else {
         title.clone()
     }
-}
-
-/// The compact age of a session's last conversation, such as `12m`.
-fn compact_age(strings: &Strings, activity_ms: i64) -> SharedString {
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| {
-            i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
-        });
-    let age = relative_time::compact_age(now_ms, activity_ms);
-    let key = match age.unit {
-        AgeUnit::Minutes => "common.relative.minutesAgoCompact",
-        AgeUnit::Hours => "common.relative.hoursAgoCompact",
-        AgeUnit::Days => "common.relative.daysAgoCompact",
-        AgeUnit::Weeks => "common.relative.weeksAgoCompact",
-        AgeUnit::Months => "common.relative.monthsAgoCompact",
-        AgeUnit::Years => "common.relative.yearsAgoCompact",
-    };
-    strings.format(key, &[("count", &age.count.to_string())])
 }
 
 fn zone_label(strings: &Strings, activity: ActivityKey) -> SharedString {

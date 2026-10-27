@@ -3,8 +3,8 @@ use gpui::accesskit::{
     TreeUpdate,
 };
 use gpui::{
-    App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render, Styled as _,
-    TestAppContext, Window, div,
+    App, AppContext as _, Context, Entity, IntoElement, ParentElement as _, Pixels, Render,
+    Styled as _, TestAppContext, Window, div, px,
 };
 use gpui_component::input::{Input, InputContentType, InputState, Textarea, TextareaState};
 
@@ -13,6 +13,7 @@ struct Fields {
     textarea: Entity<TextareaState>,
     secret: Option<InputContentType>,
     readonly: bool,
+    width: Option<Pixels>,
 }
 
 impl Render for Fields {
@@ -20,6 +21,7 @@ impl Render for Fields {
         use gpui::prelude::FluentBuilder as _;
         div()
             .size_full()
+            .when_some(self.width, |this, width| this.w(width))
             .child(
                 Input::new(&self.input)
                     .aria_label("Entry")
@@ -77,6 +79,140 @@ fn text(tree: &TreeUpdate, editor: &Node) -> String {
 }
 
 #[gpui::test]
+fn geometry_tracks_wrapped_carets_resize_and_selection(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let source = "Wide 🦀 narrow iii words wrap here and continue\r\nnext 界e\u{301}\n";
+    let (page, cx) = cx.add_window_view(|window, cx| {
+        window.set_scale_factor(1.25);
+        window.activate_accessibility_for_test();
+        Fields {
+            input: cx.new(|cx| InputState::new(window, cx)),
+            textarea: cx.new(|cx| TextareaState::new(window, cx).default_value(source)),
+            secret: None,
+            readonly: false,
+            width: Some(px(120.)),
+        }
+    });
+    cx.update(|window, cx| {
+        let textarea = page.read(cx).textarea.clone();
+        textarea.update(cx, |state, cx| state.focus(window, cx));
+        let initial = tree(window, cx);
+        let (_, editor) = entry(&initial, "Multiline");
+        assert_eq!(text(&initial, editor), source);
+        let old_position = TextPosition {
+            node: editor.children()[0],
+            character_index: 1,
+        };
+        assert!(
+            editor.children().len() > 3,
+            "narrow editor wraps the first logical line"
+        );
+        // Compare AccessKit positions with the actual caret's shaped prepaint
+        // coordinates, including movement onto continuation rows and scrolling.
+        for offset in source
+            .char_indices()
+            .map(|(offset, _)| offset)
+            .chain([source.len()])
+        {
+            if source[..offset].ends_with('\r') {
+                continue;
+            }
+            textarea.update(cx, |state, cx| state.set_selected_range(offset..offset, cx));
+            let snapshot = tree(window, cx);
+            let (_, editor) = entry(&snapshot, "Multiline");
+            let position = editor.text_selection().expect("caret selection").focus;
+            let run = node(&snapshot, position.node);
+            let bounds = run.bounds().expect("laid-out caret run bounds");
+            let relative_x = if position.character_index == run.character_lengths().len() {
+                bounds.width()
+            } else {
+                f64::from(
+                    run.character_positions().expect("character positions")
+                        [position.character_index],
+                )
+            };
+            let geometry = textarea
+                .read(cx)
+                .prepaint_caret_geometry()
+                .expect("fresh caret geometry");
+            let caret = geometry.cursor_bounds();
+            assert!(
+                (bounds.x0 + relative_x
+                    - f64::from(f32::from(caret.origin.x) * window.scale_factor()))
+                .abs()
+                    < 0.01,
+                "caret x at byte {offset}"
+            );
+            let caret_line_top = caret.origin.y - (geometry.line_height() - caret.size.height) / 2.
+                + geometry.scroll_offset().y;
+            assert!(
+                (bounds.y0 - f64::from(f32::from(caret_line_top) * window.scale_factor())).abs()
+                    < 0.01,
+                "caret y at byte {offset}"
+            );
+            assert_eq!(
+                run.character_widths().expect("character widths").len(),
+                run.character_lengths().len()
+            );
+        }
+        page.update(cx, |page, cx| {
+            page.width = Some(px(360.));
+            cx.notify();
+        });
+        let snapshot = tree(window, cx);
+        let (id, editor) = entry(&snapshot, "Multiline");
+        assert_ne!(
+            editor.children()[0],
+            old_position.node,
+            "changed run boundaries get new IDs"
+        );
+        let before = textarea.read(cx).selected_range();
+        window.dispatch_accessibility_action_for_test(
+            ActionRequest {
+                action: Action::SetTextSelection,
+                target_tree: TreeId::ROOT,
+                target_node: id,
+                data: Some(ActionData::SetTextSelection(TextSelection {
+                    anchor: old_position,
+                    focus: old_position,
+                })),
+            },
+            cx,
+        );
+        assert_eq!(
+            textarea.read(cx).selected_range(),
+            before,
+            "old wrapped positions cannot select different text after resize"
+        );
+        let first = editor.children()[0];
+        let second = editor.children()[1];
+        let first_bytes = node(&snapshot, first).value().expect("first run").len();
+        window.dispatch_accessibility_action_for_test(
+            ActionRequest {
+                action: Action::SetTextSelection,
+                target_tree: TreeId::ROOT,
+                target_node: id,
+                data: Some(ActionData::SetTextSelection(TextSelection {
+                    anchor: TextPosition {
+                        node: first,
+                        character_index: 0,
+                    },
+                    focus: TextPosition {
+                        node: second,
+                        character_index: 1,
+                    },
+                })),
+            },
+            cx,
+        );
+        assert_eq!(
+            textarea.read(cx).selected_range(),
+            0..first_bytes + usize::from(node(&snapshot, second).character_lengths()[0])
+        );
+    });
+}
+
+#[gpui::test]
 fn entry_text_selection_and_platform_selection_actions(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let (page, cx) = cx.add_window_view(|window, cx| {
@@ -86,6 +222,7 @@ fn entry_text_selection_and_platform_selection_actions(cx: &mut TestAppContext) 
             textarea: cx.new(|cx| TextareaState::new(window, cx)),
             secret: None,
             readonly: true,
+            width: None,
         }
     });
     cx.update(|window, cx| {
@@ -215,6 +352,62 @@ fn entry_text_selection_and_platform_selection_actions(cx: &mut TestAppContext) 
 }
 
 #[gpui::test]
+fn unlaid_out_text_has_no_geometry_and_scroll_replaces_visible_geometry(cx: &mut TestAppContext) {
+    cx.update(gpui_component::init);
+    let source = "row with Unicode 界\n".repeat(200);
+    let end = source.len();
+    let (page, cx) = cx.add_window_view(|window, cx| {
+        window.activate_accessibility_for_test();
+        Fields {
+            input: cx.new(|cx| InputState::new(window, cx).default_value("x".repeat(600))),
+            textarea: cx.new(|cx| TextareaState::new(window, cx).default_value(source)),
+            secret: None,
+            readonly: false,
+            width: Some(px(360.)),
+        }
+    });
+    cx.update(|window, cx| {
+        let textarea = page.read(cx).textarea.clone();
+        textarea.update(cx, |state, cx| {
+            state.focus(window, cx);
+            state.set_selected_range(0..0, cx);
+        });
+        let snapshot = tree(window, cx);
+        let (_, editor) = entry(&snapshot, "Multiline");
+        assert!(node(&snapshot, editor.children()[0]).bounds().is_some());
+        let last = node(&snapshot, *editor.children().last().expect("last run"));
+        assert!(
+            last.bounds().is_none(),
+            "unlaid-out text must not claim a rectangle"
+        );
+        assert!(last.character_positions().is_none());
+        let (_, single) = entry(&snapshot, "Entry");
+        let first = node(&snapshot, single.children()[0]);
+        let second = node(&snapshot, single.children()[1]);
+        assert_eq!(first.character_lengths().len(), 255);
+        assert_eq!(first.next_on_line(), Some(single.children()[1]));
+        assert_eq!(second.previous_on_line(), Some(single.children()[0]));
+        assert_eq!(
+            first.bounds().expect("first fragment").y0,
+            second.bounds().expect("second fragment").y0
+        );
+        textarea.update(cx, |state, cx| state.set_selected_range(end..end, cx));
+        tree(window, cx);
+        let snapshot = tree(window, cx);
+        let (_, editor) = entry(&snapshot, "Multiline");
+        let last = node(&snapshot, *editor.children().last().expect("last run"));
+        assert!(
+            last.bounds().is_some(),
+            "scrolling lays out the final caret"
+        );
+        assert!(
+            node(&snapshot, editor.children()[0]).bounds().is_none(),
+            "old visible geometry is cleared"
+        );
+    });
+}
+
+#[gpui::test]
 fn multiline_runs_preserve_long_lines_crlf_and_empty_document(cx: &mut TestAppContext) {
     cx.update(gpui_component::init);
     let source = format!("{}\r\nnext\n", "x".repeat(300));
@@ -226,6 +419,7 @@ fn multiline_runs_preserve_long_lines_crlf_and_empty_document(cx: &mut TestAppCo
             textarea: cx.new(|cx| TextareaState::new(window, cx).default_value(source)),
             secret: None,
             readonly: false,
+            width: None,
         }
     });
     cx.update(|window, cx| {
@@ -236,9 +430,13 @@ fn multiline_runs_preserve_long_lines_crlf_and_empty_document(cx: &mut TestAppCo
         assert_eq!(text(&snapshot, editor), expected);
         let first = node(&snapshot, editor.children()[0]);
         let second = node(&snapshot, editor.children()[1]);
-        assert_eq!(first.character_lengths().len(), 255);
-        assert_eq!(first.next_on_line(), Some(editor.children()[1]));
-        assert_eq!(second.previous_on_line(), Some(editor.children()[0]));
+        assert!(first.character_lengths().len() <= 255);
+        assert_eq!(first.next_on_line(), None, "soft wrap ends the visual line");
+        assert_eq!(second.previous_on_line(), None);
+        assert!(
+            second.bounds().expect("second visual line").y0
+                > first.bounds().expect("first visual line").y0
+        );
         assert_eq!(
             second.character_lengths().last(),
             Some(&2),
@@ -249,6 +447,7 @@ fn multiline_runs_preserve_long_lines_crlf_and_empty_document(cx: &mut TestAppCo
         let snapshot = tree(window, cx);
         let (_, editor) = entry(&snapshot, "Multiline");
         assert_eq!(text(&snapshot, editor), "");
+        assert!(node(&snapshot, editor.children()[0]).bounds().is_some());
         assert_eq!(
             editor.children().len(),
             1,
@@ -279,6 +478,7 @@ fn secret_inputs_never_expose_plaintext_runs(cx: &mut TestAppContext) {
             textarea: cx.new(|cx| TextareaState::new(window, cx)),
             secret: None,
             readonly: false,
+            width: None,
         }
     });
     cx.update(|window, cx| {

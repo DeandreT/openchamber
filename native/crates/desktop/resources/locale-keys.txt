@@ -1,5 +1,6 @@
 # Locale keys the native desktop resolves. `bun run native:resources` exports
 # them for every locale into locales.json and checks placeholder parity.
+chat.errorBoundary.title
 chat.chatInput.actions.addAttachment
 chat.chatInput.actions.sendMessageAria
 chat.chatInput.actions.stopGeneratingAria

@@ -32,6 +32,7 @@ use crate::code_card::CodeWrap;
 use crate::code_wrap_state::CodeWrapState;
 use crate::connection::{ConnectionFailure, ConnectionState};
 use crate::diagnostics::Marker;
+use crate::send_attempt::HistoryMerge;
 use crate::workspace::{EarlierHistory, History, OpenSession, Topology, Workspace};
 
 /// Messages read when a session opens, as the web client reads.
@@ -567,6 +568,7 @@ impl Workspace {
         outcome: Result<MessagePage, TransportError>,
         cx: &mut Context<Self>,
     ) {
+        let mutation_key = self.mutation_key(id);
         let position = self.scroll_memory.position(&ScrollKey {
             runtime: self.runtime.clone(),
             session: id.clone(),
@@ -578,7 +580,13 @@ impl Workspace {
         match outcome {
             Ok(page) => {
                 let was_empty = open.transcript.is_empty();
-                let change = open.transcript.materialize(page.messages, since);
+                let change = self.send_attempts.merge_history(
+                    &mutation_key,
+                    &mut open.transcript,
+                    page.messages,
+                    since,
+                    HistoryMerge::Latest,
+                );
                 open.older = page.older;
                 open.history = History::Complete;
                 apply_list_change(open, &change, cx);
@@ -645,6 +653,7 @@ impl Workspace {
                     {
                         return;
                     }
+                    let mutation_key = this.mutation_key(&id);
                     let Some(open) = this.open_sessions.get_mut(&id) else {
                         return;
                     };
@@ -654,7 +663,13 @@ impl Workspace {
                     match result {
                         Ok(page) => {
                             let before = crate::prompt_rail::prompt_rows(&open.transcript).len();
-                            let change = open.transcript.prepend_page(page.messages, since);
+                            let change = this.send_attempts.merge_history(
+                                &mutation_key,
+                                &mut open.transcript,
+                                page.messages,
+                                since,
+                                HistoryMerge::Earlier,
+                            );
                             open.older = page.older;
                             open.earlier = EarlierHistory::Idle;
                             apply_list_change(open, &change, cx);
@@ -785,10 +800,21 @@ impl Workspace {
         event: TranscriptEvent,
         cx: &mut Context<Self>,
     ) -> bool {
+        let mutation_key = matches!(
+            &event,
+            TranscriptEvent::MessageUpdated(info)
+                if info.role == openchamber_native_core::transcript::Role::User
+        )
+        .then(|| self.mutation_key(id));
         let Some(open) = self.open_sessions.get_mut(id) else {
             return false;
         };
-        let change = open.transcript.apply(event);
+        let change = match mutation_key {
+            Some(key) => self
+                .send_attempts
+                .apply_event(&key, &mut open.transcript, event),
+            None => open.transcript.apply(event),
+        };
         if change == TranscriptChange::NeedsReconcile {
             // A read in flight covers what the event referred to.
             return !matches!(open.history, History::Loading { .. });

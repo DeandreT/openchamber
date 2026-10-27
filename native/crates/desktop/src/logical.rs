@@ -44,6 +44,14 @@ pub trait LogicalStyledExt: Styled + Sized + FluentBuilder {
         }
     }
 
+    /// Distance of an absolutely placed element from the start side.
+    fn inset_start(self, direction: Direction, value: Pixels) -> Self {
+        match direction {
+            Direction::LeftToRight => self.left(value),
+            Direction::RightToLeft => self.right(value),
+        }
+    }
+
     /// Distance of an absolutely placed element from the end side.
     fn inset_end(self, direction: Direction, value: Pixels) -> Self {
         match direction {
