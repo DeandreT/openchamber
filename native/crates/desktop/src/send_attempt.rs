@@ -17,11 +17,13 @@ pub(crate) struct SessionKey {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Admission {
+    Preparing,
     Sending { observed: bool },
     Admitted,
     Uncertain,
 }
 
+#[derive(Clone)]
 pub(crate) struct SendAttempt {
     pub owner: DraftKey,
     pub draft: Draft,
@@ -33,7 +35,13 @@ pub(crate) struct SendAttempt {
 #[derive(Default)]
 pub(crate) struct SendAttempts {
     attempts: HashMap<SessionKey, SendAttempt>,
-    active: HashSet<SessionKey>,
+    active: HashMap<SessionKey, ActiveMutation>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ActiveMutation {
+    Send,
+    Abort,
 }
 
 pub(crate) enum HistoryMerge {
@@ -42,29 +50,119 @@ pub(crate) enum HistoryMerge {
 }
 
 impl SendAttempts {
+    /// Captures durable prompts only. Abort tasks have no replayable payload.
+    pub(crate) fn snapshot(&self) -> Vec<(SessionKey, SendAttempt)> {
+        self.attempts
+            .iter()
+            .map(|(key, attempt)| (key.clone(), attempt.clone()))
+            .collect()
+    }
+
+    /// Restores a validated journal into a fresh store without starting tasks.
+    /// Interrupted sends remain blocked until their exact identity reconciles.
+    pub(crate) fn from_snapshot(
+        snapshot: Vec<(SessionKey, SendAttempt)>,
+    ) -> Result<Self, &'static str> {
+        use openchamber_native_core::draft::DraftTarget;
+
+        let mut restored = Self::default();
+        let mut identities = HashSet::new();
+        for (key, mut attempt) in snapshot {
+            if attempt.owner.runtime() != &key.runtime
+                || attempt.owner.target() != &DraftTarget::Session(key.session.clone())
+                || restored.attempts.contains_key(&key)
+                || !identities.insert((key.runtime.clone(), attempt.prompt.message_id.clone()))
+            {
+                return Err("invalid or duplicate attempt owner or identity");
+            }
+            if matches!(
+                attempt.admission,
+                Admission::Preparing | Admission::Sending { .. }
+            ) {
+                attempt.admission = Admission::Uncertain;
+            }
+            restored.attempts.insert(key, attempt);
+        }
+        Ok(restored)
+    }
+
     pub(crate) fn can_send(&self, key: &SessionKey) -> bool {
-        !self.attempts.contains_key(key) && !self.active.contains(key)
+        !self.attempts.contains_key(key) && !self.active.contains_key(key)
     }
 
     pub(crate) fn begin(&mut self, key: SessionKey, attempt: SendAttempt) -> bool {
         if !self.can_send(&key) {
             return false;
         }
-        self.active.insert(key.clone());
+        self.active.insert(key.clone(), ActiveMutation::Send);
         self.attempts.insert(key, attempt);
         true
     }
 
     pub(crate) fn begin_abort(&mut self, key: SessionKey) -> bool {
-        self.active.insert(key)
+        use std::collections::hash_map::Entry;
+        let Entry::Vacant(entry) = self.active.entry(key) else {
+            return false;
+        };
+        entry.insert(ActiveMutation::Abort);
+        true
+    }
+
+    pub(crate) fn is_active(&self, key: &SessionKey) -> bool {
+        self.active.contains_key(key)
+    }
+
+    pub(crate) fn prepared(&mut self, key: &SessionKey, id: &MessageId) -> bool {
+        let Some(attempt) = self.attempts.get_mut(key) else {
+            return false;
+        };
+        if attempt.prompt.message_id != *id || attempt.admission != Admission::Preparing {
+            return false;
+        }
+        attempt.admission = Admission::Sending { observed: false };
+        true
+    }
+
+    pub(crate) fn begin_retry(&mut self, key: &SessionKey) -> bool {
+        if !self
+            .attempts
+            .get(key)
+            .is_some_and(|attempt| attempt.admission == Admission::Uncertain)
+            || self.active.contains_key(key)
+        {
+            return false;
+        }
+        self.active.insert(key.clone(), ActiveMutation::Send);
+        true
+    }
+
+    pub(crate) fn confirm_pending(&mut self, key: &SessionKey, id: &MessageId) -> bool {
+        let Some(attempt) = self.attempts.get_mut(key) else {
+            return false;
+        };
+        if attempt.prompt.message_id != *id {
+            return false;
+        }
+        attempt.admission = if self.active.get(key) == Some(&ActiveMutation::Send) {
+            Admission::Sending { observed: true }
+        } else {
+            Admission::Admitted
+        };
+        true
     }
 
     pub(crate) fn finish_abort(&mut self, key: &SessionKey) {
-        self.active.remove(key);
+        if self.active.get(key) == Some(&ActiveMutation::Abort) {
+            self.active.remove(key);
+        }
     }
 
     pub(crate) fn attempt(&self, key: &SessionKey) -> Option<&SendAttempt> {
         self.attempts.get(key)
+    }
+
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&SessionKey, &SendAttempt)> {
+        self.attempts.iter()
     }
 
     pub(crate) fn apply_event(
@@ -151,8 +249,10 @@ impl SendAttempts {
             HistoryMerge::Earlier => transcript.prepend_page(messages, since),
         };
         let restored = self.attempt(key).is_some_and(|attempt| {
-            if attempt.admission == (Admission::Sending { observed: true })
-                || transcript.row_of(&attempt.prompt.message_id).is_some()
+            if matches!(
+                attempt.admission,
+                Admission::Preparing | Admission::Sending { observed: true }
+            ) || transcript.row_of(&attempt.prompt.message_id).is_some()
             {
                 return false;
             }
@@ -175,13 +275,22 @@ impl SendAttempts {
             return false;
         }
         match attempt.admission {
+            Admission::Preparing => {
+                self.attempts.remove(key);
+                self.active.remove(key);
+                true
+            }
             Admission::Sending { observed: true } => false,
             Admission::Sending { observed: false } => {
                 attempt.admission = Admission::Sending { observed: true };
                 true
             }
             Admission::Admitted | Admission::Uncertain => {
-                self.attempts.remove(key);
+                if self.active.get(key) == Some(&ActiveMutation::Send) {
+                    attempt.admission = Admission::Sending { observed: true };
+                } else {
+                    self.attempts.remove(key);
+                }
                 true
             }
         }
@@ -194,10 +303,15 @@ impl SendAttempts {
         key: &SessionKey,
         outcome: Result<(), PromptAdmission>,
     ) -> Option<SendAttempt> {
-        self.active.remove(key);
+        if self.active.get(key) == Some(&ActiveMutation::Send) {
+            self.active.remove(key);
+        }
         let attempt = self.attempts.get_mut(key)?;
         if attempt.admission == (Admission::Sending { observed: true }) {
             self.attempts.remove(key);
+            return None;
+        }
+        if attempt.admission == Admission::Uncertain && outcome.is_err() {
             return None;
         }
         match outcome {
@@ -457,6 +571,115 @@ pub(crate) mod tests {
         assert_eq!(pending.prompt.text, "submitted text");
         assert_eq!(pending.prompt.message_id, id);
         assert!(attempts.observe(&key, &id));
+        assert!(attempts.can_send(&key));
+    }
+
+    #[test]
+    fn preparation_waits_for_its_exact_durable_identity() {
+        let key = key("runtime", "session");
+        let mut local = attempt(&key);
+        local.admission = Admission::Preparing;
+        let id = local.prompt.message_id.clone();
+        let mut attempts = SendAttempts::default();
+        assert!(attempts.begin(key.clone(), local));
+        let mut transcript = Transcript::new();
+        let _ = attempts.merge_history(&key, &mut transcript, vec![], 0, HistoryMerge::Latest);
+        assert!(
+            transcript.is_empty(),
+            "an uncommitted preparation is not an optimistic send"
+        );
+        assert!(!attempts.prepared(&key, &MessageId::from("msg_other")));
+        let recovered = SendAttempts::from_snapshot(attempts.snapshot()).expect("valid snapshot");
+        assert_eq!(
+            recovered.attempt(&key).expect("retained").admission,
+            Admission::Uncertain
+        );
+        assert!(attempts.prepared(&key, &id));
+        assert_eq!(
+            attempts.attempt(&key).expect("retained").admission,
+            Admission::Sending { observed: false }
+        );
+    }
+
+    #[test]
+    fn a_failed_retry_cannot_reject_the_original_uncertain_send() {
+        let key = key("runtime", "session");
+        let mut attempts = SendAttempts::default();
+        attempts.begin(key.clone(), attempt(&key));
+        attempts.finish(&key, Err(PromptAdmission::Unknown));
+        let id = attempts
+            .attempt(&key)
+            .expect("retained")
+            .prompt
+            .message_id
+            .clone();
+        assert!(attempts.begin_retry(&key));
+        assert!(!attempts.begin_retry(&key));
+        assert!(
+            attempts
+                .finish(&key, Err(PromptAdmission::Rejected))
+                .is_none()
+        );
+        assert_eq!(
+            attempts.attempt(&key).expect("retained").admission,
+            Admission::Uncertain
+        );
+        assert_eq!(
+            attempts.attempt(&key).expect("retained").prompt.message_id,
+            id
+        );
+    }
+
+    #[test]
+    fn observing_an_active_retry_keeps_ownership_until_its_response() {
+        let key = key("runtime", "session");
+        let mut attempts = SendAttempts::default();
+        attempts.begin(key.clone(), attempt(&key));
+        attempts.finish(&key, Err(PromptAdmission::Unknown));
+        let id = attempts
+            .attempt(&key)
+            .expect("retained")
+            .prompt
+            .message_id
+            .clone();
+        assert!(attempts.begin_retry(&key));
+        assert!(attempts.observe(&key, &id));
+        assert!(
+            attempts.attempt(&key).is_some(),
+            "the response still owns the attempt"
+        );
+        assert!(!attempts.can_send(&key));
+        assert!(
+            attempts
+                .finish(&key, Err(PromptAdmission::Unknown))
+                .is_none()
+        );
+        assert!(
+            attempts.can_send(&key),
+            "completion releases the observed retry"
+        );
+    }
+
+    #[test]
+    fn observing_during_abort_does_not_create_a_phantom_send() {
+        let key = key("runtime", "session");
+        let mut attempts = SendAttempts::default();
+        attempts.begin(key.clone(), attempt(&key));
+        attempts.finish(&key, Err(PromptAdmission::Unknown));
+        let id = attempts
+            .attempt(&key)
+            .expect("retained")
+            .prompt
+            .message_id
+            .clone();
+        assert!(attempts.begin_abort(key.clone()));
+        assert!(attempts.observe(&key, &id));
+        assert!(
+            attempts.attempt(&key).is_none(),
+            "the authoritative message resolves the prompt"
+        );
+        assert!(!attempts.can_send(&key), "the abort still owns its slot");
+        attempts.finish_abort(&key);
         assert!(attempts.can_send(&key));
     }
 

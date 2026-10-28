@@ -22,6 +22,47 @@ class ClipboardProbe:
         self.display = Gdk.Display.get_default()
         self.clipboard = self.display.get_clipboard()
 
+    def paste(self, text, dispatch, observed, timeout_ms=5000):
+        """Serve exact Unicode to a real paste and wait for its visible result."""
+        virtual_display.verify_owned_display()
+        if observed():
+            raise ValueError("paste result is already present before dispatch")
+        loop = self.glib.MainLoop()
+        finished = False
+        timed_out = False
+
+        def check():
+            nonlocal finished
+            try:
+                finished = observed()
+            except (LookupError, RuntimeError):
+                return True
+            if finished:
+                loop.quit()
+                return False
+            return True
+
+        def expire():
+            nonlocal timed_out
+            timed_out = True
+            loop.quit()
+            return False
+
+        poll = self.glib.timeout_add(20, check)
+        timer = self.glib.timeout_add(timeout_ms, expire)
+        try:
+            self.clipboard.set(text)
+            self.display.sync()
+            dispatch()
+            loop.run()
+        finally:
+            if not finished:
+                self.glib.source_remove(poll)
+            if not timed_out:
+                self.glib.source_remove(timer)
+        if not finished:
+            raise TimeoutError("paste did not produce the expected text")
+
     def copy(self, dispatch, timeout_ms=5000) -> str:
         """Dispatch once and wait for a new clipboard owner and its exact text."""
         virtual_display.verify_owned_display()

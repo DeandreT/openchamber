@@ -67,6 +67,7 @@ impl Workspace {
         let lift = chrome::content_size(window).height * 0.06;
         let column_padding = chrome::chat_column_padding(window, self.chat_area_width(window));
         let project_chooser = self.render_project_chooser(palette, direction, window, cx);
+        let composer = self.render_composer_box(palette, direction, window, cx);
         let hover_fill = palette.hover;
         let foreground = palette.foreground;
         let chip = |id: &str, icon: &'static str| {
@@ -182,7 +183,7 @@ impl Workspace {
                                     .items_center()
                                     .child(project_chooser),
                             )
-                            .child(self.render_composer_box(palette, direction, window, cx)),
+                            .child(composer),
                     )
                     .child(
                         div()

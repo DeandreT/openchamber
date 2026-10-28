@@ -274,6 +274,26 @@
       "partShellsHeader": null,
       "contentType": null,
       "body": null
+    },
+    {
+      "name": "observe prompt inbox",
+      "method": "GET",
+      "path": "/api/session/ses_e9b49c443ffefXcWWPhCOga6nH/inbox",
+      "query": [],
+      "directoryHeader": null,
+      "partShellsHeader": null,
+      "contentType": null,
+      "body": null
+    },
+    {
+      "name": "observe exact prompt history",
+      "method": "GET",
+      "path": "/api/session/ses_e9b49c443ffefXcWWPhCOga6nH/message/msg_native_fixture_exact",
+      "query": [],
+      "directoryHeader": null,
+      "partShellsHeader": null,
+      "contentType": null,
+      "body": null
     }
   ],
   "mutations": {
@@ -294,6 +314,30 @@
     },
     "idle": {
       "interrupted": false
+    }
+  },
+  "observations": {
+    "pending": [
+      {
+        "id": "msg_native_fixture_exact",
+        "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+        "type": "user",
+        "time": {
+          "created": 1792691938000
+        },
+        "delivery": "queue",
+        "payload": {
+          "text": "Prepared by the server"
+        }
+      }
+    ],
+    "delivered": {
+      "id": "msg_native_fixture_exact",
+      "type": "user",
+      "time": {
+        "created": 1792691938000
+      },
+      "text": "Prepared by the server"
     }
   },
   "sessions": [

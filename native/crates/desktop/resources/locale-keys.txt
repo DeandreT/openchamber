@@ -1,6 +1,26 @@
 # Locale keys the native desktop resolves. `bun run native:resources` exports
 # them for every locale into locales.json and checks placeholder parity.
 chat.errorBoundary.title
+chat.nativeRecovery.title
+chat.nativeRecovery.preparing
+chat.nativeRecovery.sending
+chat.nativeRecovery.queued
+chat.nativeRecovery.unknown
+chat.nativeRecovery.checking
+chat.nativeRecovery.notObserved
+chat.nativeRecovery.checkFailed
+chat.nativeRecovery.check
+chat.nativeRecovery.retry
+chat.nativeRecovery.loading
+chat.nativeRecovery.closing
+chat.nativeRecovery.storageFailed
+chat.nativeRecovery.invalidJournal
+chat.nativeRecovery.profileLocked
+chat.nativeRecovery.syncUncertain
+chat.nativeRecovery.retryStorage
+chat.nativeRecovery.sendFailed
+chat.nativeRecovery.abortFailed
+chat.nativeRecovery.saveRejected
 chat.chatInput.actions.addAttachment
 chat.chatInput.actions.sendMessageAria
 chat.chatInput.actions.stopGeneratingAria

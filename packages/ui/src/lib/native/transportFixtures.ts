@@ -64,6 +64,8 @@ const responseFor = (path: string, shelled: boolean): string => {
   if (path === '/api/provider') return readWire('providers');
   if (path === '/api/config') return readWire('config');
   if (path === '/api/mcp') return readWire('mcp');
+  if (path === `/api/session/${RECORDED_SESSION}/inbox`) return readWire('prompt-inbox');
+  if (path === `/api/session/${RECORDED_SESSION}/message/msg_native_fixture_exact`) return readWire('prompt-history');
   if (path === `/api/session/${RECORDED_SESSION}/message`) return readWire('messages-recorded');
   if (path === `/api/session/${LONG_SESSION}/message`) return readWire('messages-long');
   if (path === `/api/session/${TOOLS_SESSION}/message`) return readWire(shelled ? 'messages-tools-shelled' : 'messages-tools');
@@ -287,6 +289,10 @@ export const renderTransportFixtures = async (): Promise<string> => {
   }));
   const interrupted = await global.named('interrupt named session', () => global.client.session.interrupt({ sessionID: RECORDED_SESSION }));
   const idle = await global.named('interrupt idle session', () => global.client.session.interrupt({ sessionID: RECORDED_SESSION }));
+  const pending = await global.named('observe prompt inbox', () => global.client.session.inbox.list({ sessionID: RECORDED_SESSION }));
+  const delivered = await global.named('observe exact prompt history', () => global.client.session.message.get({
+    sessionID: RECORDED_SESSION, messageID: 'msg_native_fixture_exact',
+  }));
 
   const normalizeMessages = (data: Parameters<typeof projectMessages>[0], sessionID: string) =>
     projectMessages(data, sessionID).map(({ message, parts }) => ({
@@ -330,6 +336,7 @@ export const renderTransportFixtures = async (): Promise<string> => {
     scopedDirectory: SCOPED_DIRECTORY,
     requests,
     mutations: { admitted, interrupted, idle },
+    observations: { pending, delivered },
     sessions: sessions.data.map(projectSession).map(normalizeSession),
     nextCursor: sessions.cursor.next ?? null,
     messages: {

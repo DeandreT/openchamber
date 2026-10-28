@@ -13,7 +13,9 @@ use openchamber_native_transport::credential::Credential;
 use openchamber_native_transport::endpoint::Endpoint;
 use openchamber_native_transport::error::TransportError;
 use openchamber_native_transport::event::ServerEvent;
-use openchamber_native_transport::prompt::{Delivery, PromptAdmission, SendStage, TextPrompt};
+use openchamber_native_transport::prompt::{
+    Delivery, PromptAdmission, PromptObservation, SendStage, TextPrompt,
+};
 use openchamber_native_transport::stream::{EventStream, StreamItem};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -98,6 +100,268 @@ fn text_prompt() -> TextPrompt {
         agent: Some("build".to_owned()),
         delivery: Some(Delivery::Queue),
     }
+}
+
+#[tokio::test]
+async fn lookup_prompt_observes_pending_then_history_without_mutation() {
+    use openchamber_native_core::ids::{MessageId, SessionId};
+    let session = SessionId::new("ses_e9b49c443ffefXcWWPhCOga6nH");
+    let message = MessageId::new("msg_native_fixture_exact");
+    let inbox: Value =
+        serde_json::from_str(include_str!("fixtures/wire/prompt-inbox.json")).expect("inbox");
+    let history: Value =
+        serde_json::from_str(include_str!("fixtures/wire/prompt-history.json")).expect("history");
+    for pending in [true, false] {
+        let inbox = inbox.clone();
+        let history = history.clone();
+        let server = Server::start(
+            move |request| {
+                if request.target.ends_with("/inbox") {
+                    Reply::json(if pending {
+                        inbox.clone()
+                    } else {
+                        json!({"data": []})
+                    })
+                } else {
+                    Reply::json(history.clone())
+                }
+            },
+            vec![],
+        )
+        .await;
+        let client = ServerClient::new(
+            server.endpoint(),
+            Credential::ClientToken("lookup-secret".to_owned()),
+        )
+        .expect("client");
+        let observed = client
+            .lookup_prompt(&session, &message)
+            .await
+            .expect("observation");
+        match observed {
+            PromptObservation::Pending(receipt) => {
+                assert!(pending);
+                assert_eq!(receipt.session_id, session);
+                assert_eq!(receipt.message_id, message);
+                assert_eq!(receipt.delivery, Delivery::Queue);
+                assert_eq!(receipt.created, 1792691938000);
+            }
+            PromptObservation::Delivered(record) => {
+                assert!(!pending);
+                assert_eq!(record.info.id, message);
+                assert_eq!(record.plain_text(), "Prepared by the server");
+            }
+            PromptObservation::NotObserved => panic!("fixture establishes admission"),
+        }
+        let requests = server.requests();
+        assert_eq!(requests.len(), if pending { 1 } else { 2 });
+        assert_eq!(
+            requests[0].target,
+            format!("/prefix/api/session/{}/inbox", session.as_str())
+        );
+        if !pending {
+            assert_eq!(
+                requests[1].target,
+                format!(
+                    "/prefix/api/session/{}/message/{}",
+                    session.as_str(),
+                    message.as_str()
+                )
+            );
+        }
+        for request in requests {
+            assert_eq!(request.method, "GET");
+            assert!(request.body.is_empty());
+            assert!(request.header("x-opencode-directory").is_none());
+            assert!(request.header("x-openchamber-part-shells").is_none());
+            assert_eq!(
+                request.header("authorization"),
+                Some("Bearer lookup-secret")
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn lookup_prompt_absence_and_failures_remain_distinct() {
+    use openchamber_native_core::ids::{MessageId, SessionId};
+    for (inbox_status, history_status, expected) in [
+        (200, 404, "absent"),
+        (404, 200, "http"),
+        (500, 200, "http"),
+        (200, 500, "http"),
+        (401, 200, "auth"),
+        (200, 403, "auth"),
+        (307, 200, "redirect"),
+        (200, 307, "redirect"),
+        (200, 200, "malformed"),
+    ] {
+        let server = Server::start(
+            move |request| {
+                let inbox = request.target.ends_with("/inbox");
+                Reply::with_status(
+                    if inbox { inbox_status } else { history_status },
+                    "application/json",
+                    if inbox { r#"{"data":[]}"# } else { "{}" },
+                )
+            },
+            vec![],
+        )
+        .await;
+        let client = ServerClient::new(server.endpoint(), Credential::None).expect("client");
+        let result = client
+            .lookup_prompt(&SessionId::new("ses_named"), &MessageId::new("msg_exact"))
+            .await;
+        match expected {
+            "absent" => assert_eq!(
+                result.expect("read completed"),
+                PromptObservation::NotObserved
+            ),
+            "auth" => assert!(matches!(
+                result,
+                Err(TransportError::AuthenticationRequired)
+            )),
+            "redirect" => assert!(matches!(result, Err(TransportError::Redirected))),
+            "http" => assert!(matches!(result, Err(TransportError::Http { .. }))),
+            _ => assert!(matches!(result, Err(TransportError::Malformed(_)))),
+        }
+        assert_eq!(
+            server.requests().len(),
+            if inbox_status == 200 { 2 } else { 1 }
+        );
+    }
+}
+
+#[tokio::test]
+async fn lookup_prompt_rejects_malformed_duplicate_and_conflicting_identities() {
+    use openchamber_native_core::ids::{MessageId, SessionId};
+    let valid = json!({"id":"msg_exact", "sessionID":"ses_named", "type":"user", "time":{"created":1}, "delivery":"queue"});
+    let mut cases = vec![
+        json!({}),
+        json!({"data":null}),
+        json!({"data":[valid.clone(), valid.clone()]}),
+    ];
+    for (key, value) in [
+        ("id", json!(null)),
+        ("sessionID", json!("ses_other")),
+        ("type", json!("synthetic")),
+        ("type", json!("future")),
+        ("time", json!(null)),
+        ("time", json!({"created":-1})),
+        ("delivery", json!(null)),
+        ("delivery", json!("secret-invalid-value")),
+    ] {
+        let mut item = valid.clone();
+        item[key] = value;
+        cases.push(json!({"data":[item]}));
+    }
+    for body in cases {
+        let server = Server::start(move |_| Reply::json(body.clone()), vec![]).await;
+        let client = ServerClient::new(server.endpoint(), Credential::None).expect("client");
+        let error = client
+            .lookup_prompt(&SessionId::new("ses_named"), &MessageId::new("msg_exact"))
+            .await
+            .expect_err("invalid inbox");
+        assert!(matches!(error, TransportError::Malformed(_)));
+        assert!(!format!("{error:?}").contains("secret-invalid-value"));
+        assert_eq!(
+            server.requests().len(),
+            1,
+            "invalid inbox never becomes absence"
+        );
+    }
+    for (id, kind) in [("msg_other", "user"), ("msg_exact", "assistant")] {
+        let server = Server::start(move |request| {
+            Reply::json(if request.target.ends_with("/inbox") {
+                json!({"data":[{"id":"msg_unrelated", "sessionID":"ses_named", "type":"compaction"}]})
+            } else {
+                json!({"data":{"id":id,"type":kind,"time":{"created":1},"text":"prepared"}})
+            })
+        }, vec![]).await;
+        let client = ServerClient::new(server.endpoint(), Credential::None).expect("client");
+        assert!(matches!(
+            client
+                .lookup_prompt(&SessionId::new("ses_named"), &MessageId::new("msg_exact"))
+                .await,
+            Err(TransportError::Malformed(_))
+        ));
+        assert_eq!(server.requests().len(), 2);
+    }
+}
+
+#[tokio::test]
+async fn lookup_prompt_disconnect_is_an_error_without_retry() {
+    use openchamber_native_core::ids::{MessageId, SessionId};
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("loopback");
+    let address = listener.local_addr().expect("address");
+    let server = tokio::spawn(async move {
+        let (mut socket, _) = listener.accept().await.expect("connection");
+        let request = read_request(&mut socket, &mut Vec::new())
+            .await
+            .expect("request");
+        drop(socket);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), listener.accept())
+                .await
+                .is_err(),
+            "no retry after disconnect"
+        );
+        request
+    });
+    let client = ServerClient::new(
+        Endpoint::parse(&format!("http://{address}")).expect("endpoint"),
+        Credential::None,
+    )
+    .expect("client");
+    assert!(
+        client
+            .lookup_prompt(&SessionId::new("ses_named"), &MessageId::new("msg_exact"))
+            .await
+            .is_err()
+    );
+    let request = server.await.expect("server");
+    assert_eq!(request.method, "GET");
+    assert!(request.target.ends_with("/inbox"));
+}
+
+#[tokio::test]
+async fn lookup_prompt_rejects_missing_user_text_and_invalid_input() {
+    use openchamber_native_core::ids::{MessageId, SessionId};
+    let server = Server::start(
+        |request| {
+            Reply::json(if request.target.ends_with("/inbox") {
+                json!({"data":[]})
+            } else {
+                json!({"data":{"id":"msg_exact","type":"user","time":{"created":1}}})
+            })
+        },
+        vec![],
+    )
+    .await;
+    let client = ServerClient::new(server.endpoint(), Credential::None).expect("client");
+    assert!(
+        client
+            .lookup_prompt(&SessionId::new(""), &MessageId::new("msg_exact"))
+            .await
+            .is_err()
+    );
+    assert!(
+        client
+            .lookup_prompt(&SessionId::new("ses_named"), &MessageId::new("invalid"))
+            .await
+            .is_err()
+    );
+    assert!(
+        server.requests().is_empty(),
+        "local validation sends no request"
+    );
+    assert!(matches!(
+        client
+            .lookup_prompt(&SessionId::new("ses_named"), &MessageId::new("msg_exact"))
+            .await,
+        Err(TransportError::Malformed(_))
+    ));
+    assert_eq!(server.requests().len(), 2);
 }
 
 #[tokio::test]

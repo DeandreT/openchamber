@@ -101,6 +101,11 @@ impl DraftStore {
         self.drafts.get(key)
     }
 
+    /// Borrow every retained draft for a complete persistence snapshot.
+    pub fn iter(&self) -> impl Iterator<Item = (&DraftKey, &Draft)> {
+        self.drafts.iter()
+    }
+
     /// Removes and returns the draft, as a send does.
     pub fn take(&mut self, key: &DraftKey) -> Option<Draft> {
         self.drafts.remove(key)

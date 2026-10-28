@@ -29,6 +29,7 @@ PyGObject with AT-SPI, `busctl`, `dbus-run-session`, `xsettingsd` and fontconfig
 | `clipboard_probe.py` | Asynchronous clipboard ownership and exact text after a real copy action on the private display. |
 | `native_platform.py` | Synthetic native window-manager and IBus checks with private profiles and service logs. |
 | `native_accessibility.py` | Orca-generated control announcements and AT-SPI transcript exposure, with silent private speech services. |
+| `native_workflow.py`, `workflow_proxy.py` | Connected native send/stop/restart checks and loopback-only loss injection before or after admission. |
 | `compare.py` | Pixel, row and geometry comparison. |
 | `png.py` | PNG reading and writing with the standard library. |
 
@@ -211,6 +212,30 @@ directory under `native/target/tmp`, with the same isolated display and profile
 rules as the window and IME checks.
 Both native check commands accept `--scale 1`, `1.25`, `1.5` or `2`; the
 logical viewport stays 1280 by 800 and the private display grows to fit it.
+
+## Connected native workflow
+
+`native_workflow.py` uses an independent copy of the parity seed and the local
+fixture provider. It checks a real send and stop, exact Unicode draft restoration
+after normal close, and that reopening does not resubmit the message.
+
+```sh
+python3 scripts/parity/native_workflow.py --scale 1.25
+python3 scripts/parity/native_workflow.py --scale 1.25 --fault before
+python3 scripts/parity/native_workflow.py --scale 1.25 --fault after
+```
+
+The fault proxy accepts only a loopback upstream. It loses one prompt response
+before forwarding or after the server answered, and temporarily blocks observation
+reads and event delivery. After restarting the client, the check first proves that
+a failed lookup sends nothing. It then permits a fresh check: an existing message
+resolves without another POST; a missing message retries only through the explicit
+action and keeps the original ID. The server-side user-message count must remain one.
+
+Unicode is supplied through a real clipboard paste. AT-SPI string key synthesis
+does not reliably preserve non-ASCII text on X11; it is not a valid Unicode input
+probe. `ClipboardProbe.paste` serves the private clipboard and waits for the exact
+visible result. These workflow checks qualify outcomes, not timing or visual parity.
 
 ## Adding a scenario
 

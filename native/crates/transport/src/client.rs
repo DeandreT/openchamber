@@ -596,6 +596,18 @@ impl ServerClient {
         let single: wire::Single<wire::MessageEnvelope> = self
             .get_json(self.session_message_url(session_id, message_id), None)
             .await?;
+        if single.data.id != message_id.as_str()
+            || (single.data.kind == "user"
+                && !single
+                    .data
+                    .body
+                    .get("text")
+                    .is_some_and(serde_json::Value::is_string))
+        {
+            return Err(TransportError::Malformed(
+                "invalid whole-message identity or user content".to_owned(),
+            ));
+        }
         projection::message(single.data)?.ok_or_else(|| {
             TransportError::Malformed("the message has a type this client does not know".to_owned())
         })

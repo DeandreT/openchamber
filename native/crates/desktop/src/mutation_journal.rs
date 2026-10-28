@@ -1,0 +1,673 @@
+//! Private, versioned local drafts and unresolved text submissions.
+//!
+//! The caller supplies a path inside the existing native configuration directory.
+//! Hold one journal for the application's lifetime. Run open/save on a serialized
+//! background worker, and hydrate before accepting edits. A send must wait for a
+//! durable snapshot containing its Sending attempt before contacting the server.
+//! This module neither starts requests nor chooses a profile directory.
+//!
+//! The lock is a separate stable inode and must never be removed while in use.
+//! Writes replace the whole snapshot, so callers must enqueue snapshots in mutation
+//! order. A failed open grants no write handle: malformed stores are left intact.
+
+use std::collections::HashSet;
+use std::fmt;
+use std::fs::{self, File, OpenOptions};
+use std::io::{self, Read, Write};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use openchamber_native_core::draft::{Draft, DraftKey, DraftTarget};
+use openchamber_native_core::ids::{DraftId, MessageId, PartId, RuntimeId, SessionId};
+use openchamber_native_core::send_config::ModelChoice;
+use openchamber_native_core::transcript::{Message, MessageInfo, Part, Role};
+use openchamber_native_transport::prompt::{Delivery, TextPrompt};
+use serde::{Deserialize, Serialize};
+
+use crate::send_attempt::{Admission, SendAttempt, SessionKey};
+
+const VERSION: u32 = 1;
+const MAX_FILE: u64 = 16 * 1024 * 1024;
+const MAX_TEXT: usize = 1024 * 1024;
+const MAX_ENTRIES: usize = 4096;
+const MAX_ID: usize = 4096;
+const MAX_DIRECTORY: usize = 16 * 1024;
+static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+/// Contains no tasks, endpoints, authorization headers or credentials.
+#[derive(Default)]
+pub(crate) struct JournalSnapshot {
+    pub drafts: Vec<(DraftKey, Draft)>,
+    pub attempts: Vec<(SessionKey, SendAttempt)>,
+}
+
+pub(crate) enum LoadedJournal {
+    Missing,
+    Present(JournalSnapshot),
+}
+
+/// Error messages contain schema reasons only, never persisted field values.
+#[derive(Debug)]
+pub(crate) enum JournalError {
+    Io(io::Error),
+    Locked,
+    Invalid(&'static str),
+    UnsupportedVersion(u32),
+}
+
+impl fmt::Display for JournalError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(error) => write!(f, "journal I/O failure: {}", error.kind()),
+            Self::Locked => f.write_str("journal is already locked"),
+            Self::Invalid(reason) => write!(f, "invalid journal: {reason}"),
+            Self::UnsupportedVersion(version) => write!(f, "unsupported journal version {version}"),
+        }
+    }
+}
+
+impl std::error::Error for JournalError {}
+
+impl From<io::Error> for JournalError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
+/// Rename has committed in both cases. An unsynced directory is an explicit
+/// durability uncertainty; the caller must keep sending disabled and surface it.
+/// Returning it separately avoids claiming a failed write preserved the old file
+/// after the filesystem has already replaced it.
+#[derive(Debug)]
+pub(crate) enum JournalCommit {
+    Durable,
+    DirectorySyncUncertain(io::Error),
+}
+
+pub(crate) struct MutationJournal {
+    path: PathBuf,
+    parent: File,
+    _lock: File,
+}
+
+impl MutationJournal {
+    /// Opens and validates the complete store under an exclusive nonblocking lock.
+    /// Missing differs from a successfully persisted empty snapshot. Failure
+    /// returns no writer and never repairs, truncates or rewrites the target.
+    pub(crate) fn open(path: &Path) -> Result<(Self, LoadedJournal), JournalError> {
+        if !path.is_absolute() || path.file_name().is_none() {
+            return Err(JournalError::Invalid(
+                "journal path must be an absolute file path",
+            ));
+        }
+        let parent_path = path
+            .parent()
+            .ok_or(JournalError::Invalid("missing parent"))?;
+        private_directory(parent_path)?;
+        let parent = File::open(parent_path)?;
+        let lock_path = sibling(path, ".lock");
+        let lock = match private_options().create_new(true).open(&lock_path) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                check_private_file(&lock_path)?;
+                OpenOptions::new().read(true).write(true).open(&lock_path)?
+            }
+            Err(error) => return Err(error.into()),
+        };
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(std::fs::TryLockError::WouldBlock) => return Err(JournalError::Locked),
+            Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
+        }
+        let journal = Self {
+            path: path.to_owned(),
+            parent,
+            _lock: lock,
+        };
+        let loaded = journal.load()?;
+        Ok((journal, loaded))
+    }
+
+    fn load(&self) -> Result<LoadedJournal, JournalError> {
+        match fs::symlink_metadata(&self.path) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                return Ok(LoadedJournal::Missing);
+            }
+            Err(error) => return Err(error.into()),
+            Ok(_) => check_private_file(&self.path)?,
+        }
+        let file = File::open(&self.path)?;
+        let mut bytes = Vec::new();
+        file.take(MAX_FILE + 1).read_to_end(&mut bytes)?;
+        if bytes.len() as u64 > MAX_FILE {
+            return Err(JournalError::Invalid("file size limit exceeded"));
+        }
+        // Read the version separately so a future format fails as unsupported,
+        // even when its payload shape differs. Full parsing rejects duplicates.
+        #[derive(Deserialize)]
+        struct Version {
+            version: u32,
+        }
+        let version: Version = serde_json::from_slice(&bytes)
+            .map_err(|_| JournalError::Invalid("malformed JSON or version"))?;
+        if version.version != VERSION {
+            return Err(JournalError::UnsupportedVersion(version.version));
+        }
+        let store: Store = serde_json::from_slice(&bytes)
+            .map_err(|_| JournalError::Invalid("malformed schema"))?;
+        Ok(LoadedJournal::Present(store.into_snapshot()?))
+    }
+
+    /// Atomically replaces the complete store. Every Err occurs before rename,
+    /// preserving the previous target. No failed snapshot is silently dropped.
+    /// Existing unrelated writers must obey the same stable lock protocol.
+    pub(crate) fn save(
+        &mut self,
+        snapshot: &JournalSnapshot,
+    ) -> Result<JournalCommit, JournalError> {
+        let store = Store::capture(snapshot)?;
+        let mut bytes = BoundedBytes(Vec::new());
+        serde_json::to_writer(&mut bytes, &store)
+            .map_err(|_| JournalError::Invalid("encoded file size limit exceeded"))?;
+        let (temporary, mut file) = create_temporary(&self.path)?;
+        let result = (|| {
+            file.write_all(&bytes.0)?;
+            file.flush()?;
+            file.sync_all()?;
+            fs::rename(&temporary, &self.path)?;
+            Ok::<(), io::Error>(())
+        })();
+        if let Err(error) = result {
+            drop(file);
+            let _ = fs::remove_file(&temporary);
+            return Err(error.into());
+        }
+        Ok(match self.parent.sync_all() {
+            Ok(()) => JournalCommit::Durable,
+            Err(error) => JournalCommit::DirectorySyncUncertain(error),
+        })
+    }
+}
+
+/// Bounds JSON escaping expansion before allocating the encoded snapshot.
+struct BoundedBytes(Vec<u8>);
+
+impl Write for BoundedBytes {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        if self.0.len().saturating_add(bytes.len()) as u64 > MAX_FILE {
+            return Err(io::Error::other("journal size limit exceeded"));
+        }
+        self.0.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn sibling(path: &Path, suffix: &str) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .expect("validated journal filename")
+        .to_os_string();
+    name.push(suffix);
+    path.with_file_name(name)
+}
+
+fn create_temporary(path: &Path) -> io::Result<(PathBuf, File)> {
+    // A crash can leave a temp file behind, and process IDs can be reused.
+    // Skip collisions without reading, truncating or deleting that file.
+    for _ in 0..32 {
+        let sequence = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let temporary = sibling(path, &format!(".{}.{}.tmp", std::process::id(), sequence));
+        match private_options().create_new(true).open(&temporary) {
+            Ok(file) => return Ok((temporary, file)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "journal temporary file collisions",
+    ))
+}
+
+fn private_options() -> OpenOptions {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options
+}
+
+fn private_directory(path: &Path) -> Result<(), JournalError> {
+    let mut builder = fs::DirBuilder::new();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        builder.mode(0o700);
+    }
+    match builder.create(path) {
+        Ok(()) => {
+            // Persist the newly-created directory's name as well as its contents.
+            if let Some(parent) = path.parent() {
+                File::open(parent)?.sync_all()?;
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+        Err(error) => return Err(error.into()),
+    }
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        return Err(JournalError::Invalid("parent must be a real directory"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+fn check_private_file(path: &Path) -> Result<(), JournalError> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_file() || metadata.file_type().is_symlink() {
+        return Err(JournalError::Invalid("expected a regular private file"));
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if metadata.mode() & 0o077 != 0 || metadata.nlink() != 1 {
+            return Err(JournalError::Invalid(
+                "file permissions or link count are unsafe",
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Store {
+    version: u32,
+    drafts: Vec<StoredDraft>,
+    attempts: Vec<StoredAttempt>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Owner {
+    runtime: String,
+    directory: String,
+    target: Target,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+enum Target {
+    Session(String),
+    NewSession(String),
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredDraft {
+    owner: Owner,
+    text: String,
+    start: usize,
+    end: usize,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredAttempt {
+    runtime: String,
+    session: String,
+    draft: StoredDraft,
+    prompt: StoredPrompt,
+    optimistic_part_id: String,
+    created: i64,
+    admission: StoredAdmission,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredPrompt {
+    message_id: String,
+    text: String,
+    model: Option<StoredModel>,
+    agent: Option<String>,
+    delivery: Option<StoredDelivery>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredModel {
+    provider: String,
+    model: String,
+    variant: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredDelivery {
+    Steer,
+    Queue,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredAdmission {
+    Sending,
+    Admitted,
+    Uncertain,
+}
+
+fn identifier(value: &str) -> Result<(), JournalError> {
+    if value.is_empty() || value.len() > MAX_ID || value.chars().any(char::is_control) {
+        return Err(JournalError::Invalid("invalid identifier"));
+    }
+    Ok(())
+}
+
+fn validate_draft(draft: &Draft) -> Result<(), JournalError> {
+    if draft.text.len() > MAX_TEXT {
+        return Err(JournalError::Invalid("text size limit exceeded"));
+    }
+    if draft.selection.start > draft.selection.end
+        || !draft.text.is_char_boundary(draft.selection.start)
+        || !draft.text.is_char_boundary(draft.selection.end)
+    {
+        return Err(JournalError::Invalid(
+            "selection must use ordered UTF-8 boundaries",
+        ));
+    }
+    Ok(())
+}
+
+impl Owner {
+    fn capture(key: &DraftKey) -> Self {
+        Self {
+            runtime: key.runtime().to_string(),
+            directory: key.directory().to_owned(),
+            target: match key.target() {
+                DraftTarget::Session(id) => Target::Session(id.to_string()),
+                DraftTarget::NewSession(id) => Target::NewSession(id.to_string()),
+            },
+        }
+    }
+
+    fn into_key(self) -> Result<DraftKey, JournalError> {
+        identifier(&self.runtime)?;
+        if self.directory.len() > MAX_DIRECTORY || self.directory.chars().any(char::is_control) {
+            return Err(JournalError::Invalid("invalid directory"));
+        }
+        let target = match self.target {
+            Target::Session(id) => {
+                identifier(&id)?;
+                DraftTarget::Session(SessionId::from(id))
+            }
+            Target::NewSession(id) => {
+                identifier(&id)?;
+                DraftTarget::NewSession(DraftId::from(id))
+            }
+        };
+        let key = DraftKey::new(RuntimeId::from(self.runtime), &self.directory, target)
+            .ok_or(JournalError::Invalid("invalid directory"))?;
+        if key.directory() != self.directory {
+            return Err(JournalError::Invalid("directory is not canonical"));
+        }
+        Ok(key)
+    }
+}
+
+impl StoredDraft {
+    fn capture(owner: &DraftKey, draft: &Draft) -> Self {
+        Self {
+            owner: Owner::capture(owner),
+            text: draft.text.clone(),
+            start: draft.selection.start,
+            end: draft.selection.end,
+        }
+    }
+
+    fn into_draft(self) -> Result<(DraftKey, Draft), JournalError> {
+        let owner = self.owner.into_key()?;
+        let draft = Draft {
+            text: self.text,
+            selection: self.start..self.end,
+        };
+        validate_draft(&draft)?;
+        Ok((owner, draft))
+    }
+}
+
+impl Store {
+    fn capture(snapshot: &JournalSnapshot) -> Result<Self, JournalError> {
+        validate_snapshot(snapshot)?;
+        let attempts = snapshot
+            .attempts
+            .iter()
+            .map(|(key, attempt)| StoredAttempt {
+                runtime: key.runtime.to_string(),
+                session: key.session.to_string(),
+                draft: StoredDraft::capture(&attempt.owner, &attempt.draft),
+                prompt: StoredPrompt {
+                    message_id: attempt.prompt.message_id.to_string(),
+                    text: attempt.prompt.text.clone(),
+                    model: attempt.prompt.model.as_ref().map(|model| StoredModel {
+                        provider: model.provider_id.clone(),
+                        model: model.model_id.clone(),
+                        variant: model.variant.clone(),
+                    }),
+                    agent: attempt.prompt.agent.clone(),
+                    delivery: attempt.prompt.delivery.map(|delivery| match delivery {
+                        Delivery::Steer => StoredDelivery::Steer,
+                        Delivery::Queue => StoredDelivery::Queue,
+                    }),
+                },
+                optimistic_part_id: attempt.optimistic.parts[0].id.to_string(),
+                created: attempt.optimistic.info.created,
+                admission: match attempt.admission {
+                    Admission::Preparing | Admission::Sending { .. } => StoredAdmission::Sending,
+                    Admission::Admitted => StoredAdmission::Admitted,
+                    Admission::Uncertain => StoredAdmission::Uncertain,
+                },
+            })
+            .collect();
+        Ok(Self {
+            version: VERSION,
+            drafts: snapshot
+                .drafts
+                .iter()
+                .map(|(owner, draft)| StoredDraft::capture(owner, draft))
+                .collect(),
+            attempts,
+        })
+    }
+
+    fn into_snapshot(self) -> Result<JournalSnapshot, JournalError> {
+        if self.drafts.len() > MAX_ENTRIES || self.attempts.len() > MAX_ENTRIES {
+            return Err(JournalError::Invalid("entry count limit exceeded"));
+        }
+        let drafts = self
+            .drafts
+            .into_iter()
+            .map(StoredDraft::into_draft)
+            .collect::<Result<_, _>>()?;
+        let mut attempts = Vec::with_capacity(self.attempts.len());
+        for stored in self.attempts {
+            let (owner, draft) = stored.draft.into_draft()?;
+            let prompt = TextPrompt {
+                message_id: MessageId::from(stored.prompt.message_id),
+                text: stored.prompt.text,
+                model: stored.prompt.model.map(|model| ModelChoice {
+                    provider_id: model.provider,
+                    model_id: model.model,
+                    variant: model.variant,
+                }),
+                agent: stored.prompt.agent,
+                delivery: stored.prompt.delivery.map(|delivery| match delivery {
+                    StoredDelivery::Steer => Delivery::Steer,
+                    StoredDelivery::Queue => Delivery::Queue,
+                }),
+            };
+            let optimistic = Message {
+                info: MessageInfo {
+                    id: prompt.message_id.clone(),
+                    role: Role::User,
+                    created: stored.created,
+                    completed: None,
+                    notice: None,
+                    assistant: None,
+                    compaction: None,
+                },
+                parts: vec![Part::text(
+                    PartId::from(stored.optimistic_part_id),
+                    prompt.text.clone(),
+                )],
+            };
+            attempts.push((
+                SessionKey {
+                    runtime: RuntimeId::from(stored.runtime),
+                    session: SessionId::from(stored.session),
+                },
+                SendAttempt {
+                    owner,
+                    draft,
+                    prompt,
+                    optimistic,
+                    admission: match stored.admission {
+                        StoredAdmission::Sending | StoredAdmission::Uncertain => {
+                            Admission::Uncertain
+                        }
+                        StoredAdmission::Admitted => Admission::Admitted,
+                    },
+                },
+            ));
+        }
+        let snapshot = JournalSnapshot { drafts, attempts };
+        validate_snapshot(&snapshot)?;
+        Ok(snapshot)
+    }
+}
+
+fn validate_snapshot(snapshot: &JournalSnapshot) -> Result<(), JournalError> {
+    if snapshot.drafts.len() > MAX_ENTRIES || snapshot.attempts.len() > MAX_ENTRIES {
+        return Err(JournalError::Invalid("entry count limit exceeded"));
+    }
+    let mut owners = HashSet::new();
+    let mut size = 0;
+    for (owner, draft) in &snapshot.drafts {
+        charge_owner(&mut size, owner)?;
+        charge(&mut size, draft.text.len())?;
+        Owner::capture(owner).into_key()?;
+        validate_draft(draft)?;
+        if !owners.insert(owner) {
+            return Err(JournalError::Invalid("duplicate draft owner"));
+        }
+    }
+    let mut sessions = HashSet::new();
+    let mut messages = HashSet::new();
+    let mut parts = HashSet::new();
+    for (key, attempt) in &snapshot.attempts {
+        charge_owner(&mut size, &attempt.owner)?;
+        charge(
+            &mut size,
+            key.runtime.as_str().len() + key.session.as_str().len(),
+        )?;
+        charge(&mut size, attempt.draft.text.len())?;
+        charge(&mut size, attempt.prompt.text.len())?;
+        charge(&mut size, attempt.prompt.message_id.as_str().len())?;
+        identifier(key.runtime.as_str())?;
+        identifier(key.session.as_str())?;
+        Owner::capture(&attempt.owner).into_key()?;
+        validate_draft(&attempt.draft)?;
+        identifier(attempt.prompt.message_id.as_str())?;
+        if attempt.owner.runtime() != &key.runtime
+            || attempt.owner.target() != &DraftTarget::Session(key.session.clone())
+            || !sessions.insert(key)
+            || !messages.insert((&key.runtime, &attempt.prompt.message_id))
+        {
+            return Err(JournalError::Invalid(
+                "invalid or duplicate attempt owner or identity",
+            ));
+        }
+        if attempt.prompt.text != attempt.draft.text || attempt.prompt.text.trim().is_empty() {
+            return Err(JournalError::Invalid(
+                "prompt must match the captured nonempty draft",
+            ));
+        }
+        if let Some(model) = &attempt.prompt.model {
+            charge(&mut size, model.provider_id.len() + model.model_id.len())?;
+            identifier(&model.provider_id)?;
+            identifier(&model.model_id)?;
+            if let Some(variant) = &model.variant {
+                charge(&mut size, variant.len())?;
+                identifier(variant)?;
+            }
+        }
+        if let Some(agent) = &attempt.prompt.agent {
+            charge(&mut size, agent.len())?;
+            identifier(agent)?;
+        }
+        let [part] = attempt.optimistic.parts.as_slice() else {
+            return Err(JournalError::Invalid("expected one optimistic text part"));
+        };
+        identifier(part.id.as_str())?;
+        charge(&mut size, part.id.as_str().len())?;
+        if !parts.insert((&key.runtime, &part.id)) {
+            return Err(JournalError::Invalid("duplicate optimistic part identity"));
+        }
+        let expected = Message {
+            info: MessageInfo {
+                id: attempt.prompt.message_id.clone(),
+                role: Role::User,
+                created: attempt.optimistic.info.created,
+                completed: None,
+                notice: None,
+                assistant: None,
+                compaction: None,
+            },
+            parts: vec![Part::text(part.id.clone(), attempt.prompt.text.clone())],
+        };
+        if attempt.optimistic != expected {
+            return Err(JournalError::Invalid(
+                "optimistic message differs from captured prompt",
+            ));
+        }
+        if attempt.optimistic.info.created < 0 {
+            return Err(JournalError::Invalid("negative optimistic creation time"));
+        }
+    }
+    Ok(())
+}
+
+fn charge(size: &mut usize, additional: usize) -> Result<(), JournalError> {
+    *size = size.saturating_add(additional);
+    if *size as u64 > MAX_FILE {
+        return Err(JournalError::Invalid(
+            "aggregate snapshot size limit exceeded",
+        ));
+    }
+    Ok(())
+}
+
+fn charge_owner(size: &mut usize, owner: &DraftKey) -> Result<(), JournalError> {
+    let target = match owner.target() {
+        DraftTarget::Session(id) => id.as_str(),
+        DraftTarget::NewSession(id) => id.as_str(),
+    };
+    charge(
+        size,
+        owner.runtime().as_str().len() + owner.directory().len() + target.len(),
+    )
+}
+
+#[cfg(test)]
+#[path = "mutation_journal_tests.rs"]
+mod tests;
