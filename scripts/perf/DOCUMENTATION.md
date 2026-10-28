@@ -81,6 +81,67 @@ Use the same explicit `--chrome` binary for both sides of a comparison.
 
 ## Running An Isolated Copy
 
+### Permission and question fixtures
+
+`isolated-server.mjs --interactions --root /tmp/opencode/<new-name>
+--dist <built-ui> --opencode-binary <bundled-opencode>` starts a fresh Linux
+interaction fixture. The root must not exist. It prints one JSON readiness
+record containing `url`, `root`, `state`, `project` and `fixturePort`.
+SIGINT or SIGTERM stops its owned processes; files remain for inspection.
+The exported `startInteractionServer` takes the same paths and returns these
+fields plus `stop()`, for an enclosing test's `finally` block. It accepts an
+optional abort signal during startup. Signal-owning commands and smoke tests
+use `withInteractionServer(options, async (server, signal) => ...)`: it installs
+SIGINT/SIGTERM handlers before startup, cancels pending startup on interruption,
+stops the owned processes, and removes its handlers on every exit. The callback
+uses its signal to cancel ongoing requests. The CLI requires the actual
+`--opencode-binary` flag even when `OPENCODE_BINARY` exists in its environment.
+
+The run uses a private HOME, XDG directories and working directory, an
+allowlisted environment, and no seed or Git initialization. It refuses
+ancestor OpenCode configuration/instructions and system OpenCode configuration.
+The provider binds port zero and acknowledges its listener through its owned
+child's IPC channel. It never attaches to an existing provider. The server
+uses an available port and the existing isolated server launcher.
+
+Only `perf` is an allowed provider. Its auxiliary agents also use local fixture
+models. `perf/interaction-shell` asks for exactly
+`printf 'native-permission-ok\n'`; every other action is denied except
+`question`. `perf/interaction-question` presents single-choice, multiselect
+and custom-text fields. Both models make one tool call per user turn and
+then finish. They reject missing requested tools and non-streaming requests.
+Ordinary fixture modes keep their existing configuration and behavior.
+
+Create sessions in the readiness record's `project`, with agent `build` and
+model `{providerID: "perf", id: "interaction-shell"}` or
+`{providerID: "perf", id: "interaction-question"}`. The native UI runner owns
+input and assertions. Before an HTTP smoke answers a permission, it verifies
+the owned session's directory, `action: "shell"`, and the exact resource above.
+Question forms use keys `q0`, `q1`, `q2`; answers contain a string, an array of
+strings, and a string respectively. Use a separate fresh root when saved
+project approvals must not carry into another case.
+
+Run the engine smoke explicitly with
+`OPENCODE_INTERACTION_BINARY=<absolute-binary> node scripts/perf/interaction-engine.test.mjs`.
+`OPENCODE_INTERACTION_DIST` optionally selects the built UI; otherwise it uses
+`packages/electron/resources/web-dist`. It verifies once/reject/always, actual
+question answers and cancellation, process isolation, and closed listeners.
+It does not launch a window. Window tests use `scripts/parity/virtual_display.py`.
+The smoke records `smoke-ready.json` under its private root. Its signal regression
+test, `interaction-signals.test.mjs`, starts the smoke directly so the PID receiving
+SIGINT or SIGTERM owns the cleanup handler, without a `node --test` supervisor.
+The regression uses `OPENCODE_INTERACTION_ROOT` to select each fresh private root
+and checks provider startup, server startup and ready-state interruption.
+
+### Why interaction fixtures use the real tool engine
+
+The provider emits deterministic tool calls while OpenCode creates permission
+requests, runs the command, and owns question form state. This qualifies the
+same protocol the native client consumes without a second implementation of
+the permission or form APIs.
+
+### Other isolated captures
+
 Any server, dev shell or Electron an agent starts for a check runs beside the
 maintainer's own app and dev shell, on the same machine.
 
@@ -1124,8 +1185,8 @@ The measurement rules are in `.agents/skills/performance-engineering/SKILL.md`, 
 
 ## Native desktop comparison
 
-`scripts/perf/native_bench.py` measures the native desktop in `native/` and,
-with `--electron-app`, the packaged Electron reference in the same session,
+`scripts/perf/native_bench.py` records native desktop diagnostics in `native/` and,
+with `--electron-app`, separate packaged Electron diagnostics in the same session,
 alternating clients A/B then B/A. It needs the native release build
 (`bun run native:build`); the switch scenario also needs PyGObject with
 AT-SPI and `busctl`.
@@ -1140,21 +1201,39 @@ python3 scripts/perf/native_bench.py --runs 5 --warmup 1 \
 | startup | process spawn to the native `composer-usable` marker line on stdout | `profile:startup`'s `usable`, from spawn |
 | memory | whole process-tree PSS, private and RSS bytes after the startup settle and after the switch sequence | whole process-tree bytes at `--electron-memory-delay`, split by process role (`openchamber:renderer`, `opencode`, …) |
 | idle | process-tree CPU over `--idle-seconds` | the same |
-| switch | AT-SPI activation of sidebar rows to the paint of the revealed transcript, forward and reverse | not measured; `profile:switch` needs a seeded server |
+| switch | AT-SPI dispatch to paint-marker receipt, including first-visit history, forward and reverse | not measured; `profile:switch` needs a seeded server |
 
 By default the native client runs offline: synthetic data, no server and no
 OpenCode. Its rows carry that scope in the printed table and in the receipt,
 and they never establish a full-application startup or memory gain.
 
 With `--server <url>` (an isolated server, such as `bun run profile:serve`)
-the native client runs connected. Each launch also waits for the
-`sessions-shown` and `history-shown` markers: the frames that first paint the
-complete session list and the selected session's history. `--server-pid`
-samples the server's process tree with each launch, so native plus server can
-be set against the Electron tree, which owns its server and OpenCode. The
+the native client runs connected. Startup waits for `composer-usable` and
+`sessions-shown` with no selected session. History belongs to the switch
+workload's explicit setup. `--server-pid` samples the server's process tree
+with each launch and reports the combined ownership separately. The
 native startup rows then measure a client joining a running server, while
 Electron's startup includes starting its server and OpenCode; the printed
 scopes say so.
+
+Connected switches require `--sessions <setup-id>,<target-id>,...` with
+exactly `--switches + 1` distinct IDs. Session rows are identified by their
+accessible keys; project headers and duplicate appearances do not add visits.
+The setup session is explicitly selected before the measured forward/reverse
+sequence. Each first connected visit waits for both `switch-completed` and
+`history-shown`; cached visits wait for `switch-completed`. Every visit checks
+the selected row, records its identity, and drains old marker lines before input.
+Receipts retain setup separately and include the ordered session IDs.
+
+These diagnostics do not establish a cross-client performance gain. The
+receipt sets `comparison.eligible` to false because Electron does not replay
+the same ordered sessions, ordered transcript content is unverified, and
+memory readiness boundaries differ. Native markers end at paint, before
+compositor presentation; stdout receipt adds observation overhead. A future
+comparison must verify identical session/content and visible end conditions
+in both clients in the same run. A failed sample or warmup suppresses its
+group's statistics while retaining every raw sample. A missing requested
+switch instrument fails the command.
 
 Both clients run on an authenticated, owned Xvfb display through the parity
 runner's `virtual_display.py`. The benchmark starts that display when needed

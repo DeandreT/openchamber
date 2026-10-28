@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""Measures the native desktop and compares it with the Electron reference.
+"""Records native desktop timings and separate Electron reference diagnostics.
 
-Scenarios, each over the same ordered synthetic workload:
+Scenarios:
 
 - ``startup``: process spawn to the native ``composer-usable`` marker, with the
   window, paint and sidebar markers alongside.
 - ``memory``: proportional and private bytes of the whole owned process tree
   after startup settles and after the switch sequence.
 - ``idle``: CPU time of the owned process tree over a quiet interval.
-- ``switch``: selection to revealed transcript through AT-SPI activation of
-  sidebar rows, in forward and reverse order. Needs PyGObject with AT-SPI; the
-  session accessibility flag is enabled for the run and restored afterwards.
+- ``switch``: AT-SPI dispatch to paint-marker receipt after explicit setup,
+  in forward and reverse order. First connected visits also wait for history.
+  Needs PyGObject with AT-SPI; the session accessibility flag is enabled for
+  the run and restored afterwards.
 
 With ``--electron-app`` the packaged Electron build runs through
 ``scripts/profile-startup.mjs`` and a separate memory launch, alternating with
@@ -66,9 +67,10 @@ class NativeRun:
         deadline = time.monotonic() + timeout_s
         while True:
             remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            ready = self.selector.select(max(0, remaining))
+            if not ready:
                 return
-            for key, _ in self.selector.select(remaining):
+            for key, _ in ready:
                 chunk = os.read(key.fd, 65536)
                 if not chunk:
                     return
@@ -254,24 +256,27 @@ def summarize(values: list[float]) -> dict | None:
     }
 
 
+def complete_samples(samples: list[dict]) -> list[dict]:
+    """A failed launch, including warmup, invalidates the group's statistics."""
+    if any("error" in sample for sample in samples):
+        return []
+    return [sample for sample in samples if not sample.get("warmup", False)]
+
+
 def native_startup_once(args: argparse.Namespace) -> dict:
     run = launch_native(args)
-    sample: dict = {"client": "native"}
+    sample: dict = {"client": "native", "selectionState": "unselected"}
     try:
         usable = run.wait_for("composer-usable", args.timeout)
         sample["composerUsableSinceSpawnMs"] = usable["arrivedMs"]
         sample["composerUsableSinceMainMs"] = usable["sinceStartMs"]
         if args.server:
-            # Connected readiness: the frames that first show the server's
-            # complete session list and the selected session's history.
+            # Fresh profiles start without a selected session. History belongs
+            # to the explicit selection setup in the switch scenario.
             sessions = run.wait_for("sessions-shown", args.timeout)
-            history = run.wait_for("history-shown", args.timeout)
             sample["sessionsShownSinceSpawnMs"] = sessions["arrivedMs"]
             sample["sessionCount"] = sessions.get("count")
-            sample["historyShownSinceSpawnMs"] = history["arrivedMs"]
-            sample["historyReadMs"] = history.get("durationMs")
         run.read_marks(args.settle)
-        sample["marks"] = run.marks
         sample["memoryAfterStartup"] = tree_memory(run.process.pid)
         if args.server_pid:
             sample["serverMemory"] = tree_memory(args.server_pid)
@@ -282,7 +287,10 @@ def native_startup_once(args: argparse.Namespace) -> dict:
     except (TimeoutError, RuntimeError) as error:
         sample["error"] = str(error)
     finally:
+        sample["marks"] = run.marks
         sample["cleanup"] = stop_tree(run.process)
+        run.selector.close()
+        run.process.stdout.close()
     return sample
 
 
@@ -314,6 +322,34 @@ def set_a11y(enabled: bool) -> None:
     )
 
 
+def session_rows(node: object, depth: int = 0) -> dict[str, object]:
+    """Session identities in tree order; project/worktree rows cannot be clicked."""
+    if node is None:
+        return {}
+    if depth > 24:
+        raise RuntimeError("session accessibility tree exceeds traversal limit")
+    rows = {}
+    key = node.get_accessible_id() or ""
+    if node.get_role_name() == "tree item" and ":session:" in key:
+        session_id = key.split(":session:", 1)[1]
+        if session_id:
+            rows[session_id] = node
+    for index in range(node.get_child_count()):
+        for session_id, row in session_rows(node.get_child_at_index(index), depth + 1).items():
+            rows.setdefault(session_id, row)
+    return rows
+
+
+def switch_plan(rows: dict, switches: int, requested: list[str] | None) -> list[str]:
+    """One explicit setup session followed by exactly the requested workload."""
+    plan = requested if requested is not None else list(rows)[:switches + 1]
+    if len(plan) != switches + 1 or len(set(plan)) != len(plan):
+        raise RuntimeError(f"need {switches + 1} distinct session IDs including setup")
+    if any(session_id not in rows for session_id in plan):
+        raise RuntimeError("a planned session is absent from the sidebar")
+    return plan
+
+
 def native_switch_once(args: argparse.Namespace) -> dict:
     """Clicks sidebar rows through AT-SPI and reads the switch markers."""
     import gi
@@ -333,49 +369,81 @@ def native_switch_once(args: argparse.Namespace) -> dict:
             time.sleep(0.1)
         raise TimeoutError("the native window never reached the AT-SPI bus")
 
-    def session_rows(node: object, depth: int = 0) -> list:
-        if node is None or depth > 12:
-            return []
-        rows = []
-        if node.get_role_name() == "tree item":
-            rows.append(node)
-        for index in range(node.get_child_count()):
-            rows.extend(session_rows(node.get_child_at_index(index), depth + 1))
-        return rows
-
-    def click(node: object) -> None:
-        action = node.get_action_iface()
-        names = [action.get_action_name(index) for index in range(action.get_n_actions())]
-        action.do_action(names.index("click") if "click" in names else 0)
-
-    sample: dict = {"client": "native", "forward": [], "reverse": []}
+    sample: dict = {"client": "native", "forward": [], "reverse": [],
+                    "contentVerified": False,
+                    "endCondition": "paint marker receipt; compositor presentation unverified"}
     run = launch_native(args)
     try:
         run.wait_for("composer-usable", args.timeout)
+        if args.server:
+            run.wait_for("sessions-shown", args.timeout)
         app = find_app(run.process.pid)
-        time.sleep(0.5)
-        # The first row starts selected; forward visits the next rows and
-        # reverse walks back to the first, so every click changes the selection.
-        rows = session_rows(app)[: args.switches + 1]
-        if len(rows) < 2:
-            raise RuntimeError(f"only {len(rows)} session rows are exposed")
-        forward = rows[1:]
-        reverse = list(reversed(rows[:-1]))
+        deadline = time.monotonic() + args.timeout
+        while True:
+            rows = session_rows(app)
+            try:
+                plan = switch_plan(rows, args.switches, args.sessions)
+                break
+            except RuntimeError:
+                if time.monotonic() >= deadline:
+                    raise
+                run.read_marks(min(0.05, max(0, deadline - time.monotonic())))
+        sample["sessionIds"] = plan
+        visited = set()
+
+        def select(session_id: str) -> dict:
+            # Drain previously emitted marks before opening this input boundary.
+            run.read_marks(0)
+            index = len(run.marks)
+            row = session_rows(app)[session_id]
+            row.clear_cache()
+            if row.get_state_set().contains(Atspi.StateType.SELECTED):
+                raise RuntimeError("planned session is already selected")
+            action = row.get_action_iface()
+            names = [action.get_action_name(index) for index in range(action.get_n_actions())]
+            if "click" not in names:
+                raise RuntimeError("session row did not expose a click action")
+            action_index = names.index("click")
+            deadline = time.monotonic() + args.timeout
+            clicked_ns = time.monotonic_ns()
+            if not action.do_action(action_index):
+                raise RuntimeError("session row did not accept its click action")
+            mark = run.wait_for("switch-completed", max(0, deadline - time.monotonic()), after=index)
+            history = None
+            if args.server and session_id not in visited:
+                history = run.wait_for("history-shown", max(0, deadline - time.monotonic()), after=index)
+            row = session_rows(app)[session_id]
+            row.clear_cache()
+            if not row.get_state_set().contains(Atspi.StateType.SELECTED):
+                raise RuntimeError("completed switch did not select the planned session")
+            visited.add(session_id)
+            end = max([mark, history] if history else [mark], key=lambda item: item["arrivedMs"])
+            elapsed_ms = end["arrivedMs"] - (clicked_ns - run.spawned_ns) / 1e6
+            if elapsed_ms < 0:
+                raise RuntimeError("switch endpoint predates its input")
+            if mark.get("durationMs") is None:
+                raise RuntimeError("switch marker has no selection duration")
+            return {"sessionId": session_id, "rowKey": row.get_accessible_id(),
+                    "selectionToPaintMs": mark.get("durationMs"),
+                    "clickToMarkMs": round(elapsed_ms, 3),
+                    "historyReadMs": history.get("durationMs") if history else None,
+                    "cold": history is not None}
+
+        sample["setup"] = select(plan[0])
+        sample["selectionState"] = "workload-selected"
+        forward = plan[1:]
+        reverse = list(reversed(plan[:-1]))
         for order, sequence in (("forward", forward), ("reverse", reverse)):
-            for row in sequence:
-                index = len(run.marks)
-                clicked_ns = time.monotonic_ns()
-                click(row)
-                mark = run.wait_for("switch-completed", args.timeout, after=index)
-                arrived_ms = (time.monotonic_ns() - clicked_ns) / 1e6
-                sample[order].append({"durationMs": mark.get("durationMs"), "clickToMarkMs": round(arrived_ms, 3)})
-                time.sleep(args.switch_pause)
+            for session_id in sequence:
+                sample[order].append(select(session_id))
         sample["memoryAfterSwitches"] = tree_memory(run.process.pid)
-    except (TimeoutError, RuntimeError, ValueError) as error:
+    except (TimeoutError, RuntimeError, ValueError, KeyError) as error:
         sample["error"] = str(error)
     finally:
         sample["marks"] = run.marks
         sample["cleanup"] = stop_tree(run.process)
+        run.selector.close()
+        run.process.stdout.close()
     return sample
 
 
@@ -479,17 +547,24 @@ def main() -> int:
     parser.add_argument("--theme", default="openchamber-dark")
     parser.add_argument("--backend", default="x11", choices=["x11"], help="owned Xvfb display for both clients")
     parser.add_argument("--switches", type=int, default=10, help="rows visited per switch order")
-    parser.add_argument("--switch-pause", type=float, default=0.25, help="seconds between switches")
+    parser.add_argument("--sessions", type=lambda value: value.split(","), help="ordered session IDs, setup first, then --switches targets")
     parser.add_argument("--settle", type=float, default=1.5, help="seconds after usable before sampling memory")
     parser.add_argument("--idle-seconds", type=float, default=5.0)
     parser.add_argument("--timeout", type=float, default=60.0)
-    parser.add_argument("--electron-app", type=Path, help="packaged Electron executable for the comparison")
+    parser.add_argument("--electron-app", type=Path, help="packaged Electron executable for separate reference diagnostics")
     parser.add_argument("--electron-opencode", default="cold", choices=["warm", "cold"], help="cold: Electron starts its own OpenCode, as a user launch does")
     parser.add_argument("--electron-memory-delay", type=float, default=20.0, help="seconds after spawn before sampling Electron memory")
     parser.add_argument("--server", help="OpenChamber server URL: the native client runs connected (an isolated server only)")
     parser.add_argument("--server-pid", type=int, help="the server's process, sampled for the full-application memory")
     parser.add_argument("--output", type=Path, help="receipt directory")
     args = parser.parse_args()
+    scenarios = {scenario.strip() for scenario in args.scenarios.split(",") if scenario.strip()}
+    if args.switches < 1:
+        parser.error("--switches must be positive")
+    if args.server and "switch" in scenarios and not args.sessions:
+        parser.error("connected switches require --sessions with setup and target identities")
+    if args.sessions and (len(args.sessions) != args.switches + 1 or len(set(args.sessions)) != len(args.sessions) or not all(args.sessions)):
+        parser.error("--sessions must contain exactly --switches + 1 distinct nonempty IDs")
 
     if not virtual_display.inside():
         problem = virtual_display.available()
@@ -501,7 +576,6 @@ def main() -> int:
     if not args.binary.exists():
         print(f"native binary not found: {args.binary}; run bun run native:build", file=sys.stderr)
         return 2
-    scenarios = {scenario.strip() for scenario in args.scenarios.split(",") if scenario.strip()}
     output = args.output or REPO_ROOT / "artifacts" / f"native-bench-{time.strftime('%Y%m%dT%H%M%S')}"
     output.mkdir(parents=True, exist_ok=True)
     scratch = "/tmp/opencode" if Path("/tmp/opencode").is_dir() else None
@@ -515,6 +589,11 @@ def main() -> int:
         "electron": {"app": str(args.electron_app) if args.electron_app else None},
         "configuration": {key: str(value) for key, value in vars(args).items()},
         "samples": {"nativeStartup": [], "electronMemory": [], "nativeSwitch": []},
+        "comparison": {"eligible": False, "reasons": [
+            "Electron reference does not replay the native ordered session workload",
+            "ordered transcript content and compositor presentation are unverified",
+            "Electron memory uses a fixed delay, native memory follows readiness",
+        ]},
     }
 
     electron_home = Path(tempfile.mkdtemp(prefix="openchamber-native-bench-electron-")) if args.electron_app else None
@@ -558,11 +637,13 @@ def main() -> int:
         if electron_home is not None:
             shutil.rmtree(electron_home, ignore_errors=True)
 
-    measured = [sample for sample in receipt["samples"]["nativeStartup"] if not sample["warmup"] and "error" not in sample]
-    electron_measured = [sample for sample in receipt["samples"]["electronMemory"] if not sample["warmup"] and "error" not in sample]
-    switches = [sample for sample in receipt["samples"]["nativeSwitch"] if "error" not in sample]
+    measured = complete_samples(receipt["samples"]["nativeStartup"])
+    electron_measured = complete_samples(receipt["samples"]["electronMemory"])
+    switches = complete_samples(receipt["samples"]["nativeSwitch"])
     electron_summary = (receipt["electron"].get("startup") or {}).get("summary", {})
-    electron_usable = ((electron_summary.get("summaries") or {}).get("A") or {}).get("usable")
+    electron_startup_result = receipt["electron"].get("startup") or {}
+    electron_usable = (((electron_summary.get("summaries") or {}).get("A") or {}).get("usable")
+                       if electron_startup_result.get("exitCode") == 0 else None)
     def pss_by_process(samples: list[dict]) -> dict:
         """Per-role PSS: same-named processes of one sample add up first."""
         per_sample: list[dict[str, int]] = []
@@ -577,22 +658,22 @@ def main() -> int:
     summary = {
         "nativeComposerUsableSinceSpawnMs": summarize([s["composerUsableSinceSpawnMs"] for s in measured]),
         "nativeSessionsShownSinceSpawnMs": summarize([s["sessionsShownSinceSpawnMs"] for s in measured if "sessionsShownSinceSpawnMs" in s]),
-        "nativeHistoryShownSinceSpawnMs": summarize([s["historyShownSinceSpawnMs"] for s in measured if "historyShownSinceSpawnMs" in s]),
-        "nativeHistoryReadMs": summarize([s["historyReadMs"] for s in measured if s.get("historyReadMs") is not None]),
         "serverPssBytes": summarize([s["serverMemory"]["pssBytes"] for s in measured if "serverMemory" in s]),
         "nativeWithServerPssBytes": summarize([s["memoryAfterStartup"]["pssBytes"] + s["serverMemory"]["pssBytes"] for s in measured if "serverMemory" in s]),
         "nativePssBytes": summarize([s["memoryAfterStartup"]["pssBytes"] for s in measured]),
         "nativePrivateBytes": summarize([s["memoryAfterStartup"]["privateBytes"] for s in measured]),
         "nativeIdleCpuPercent": summarize([s["idleCpuPercent"] for s in measured]),
-        "nativeSwitchForwardMs": summarize([e["durationMs"] for s in switches for e in s["forward"] if e["durationMs"] is not None]),
-        "nativeSwitchReverseMs": summarize([e["durationMs"] for s in switches for e in s["reverse"] if e["durationMs"] is not None]),
+        "nativeSwitchForwardMs": summarize([e["clickToMarkMs"] for s in switches for e in s["forward"]]),
+        "nativeSwitchReverseMs": summarize([e["clickToMarkMs"] for s in switches for e in s["reverse"]]),
         "nativePssAfterSwitchesBytes": summarize([s["memoryAfterSwitches"]["pssBytes"] for s in switches if "memoryAfterSwitches" in s]),
         "electronComposerUsableSinceSpawnMs": electron_usable,
         "electronPssBytes": summarize([s["memoryAfterStartup"]["pssBytes"] for s in electron_measured]),
         "electronPrivateBytes": summarize([s["memoryAfterStartup"]["privateBytes"] for s in electron_measured]),
         "electronIdleCpuPercent": summarize([s["idleCpuPercent"] for s in electron_measured]),
         "electronPssByProcess": pss_by_process(electron_measured),
-        "failures": sum(1 for group in receipt["samples"].values() for sample in group if "error" in sample),
+        "failures": (sum(1 for group in receipt["samples"].values() for sample in group if "error" in sample)
+                     + int(bool(receipt.get("switchSkipped")))
+                     + int(bool(electron_startup_result.get("exitCode")))),
         "leftoverProcesses": sum(len(sample["cleanup"]["leftAfterTerm"]) for group in receipt["samples"].values() for sample in group),
     }
     receipt["summary"] = summary
@@ -613,25 +694,24 @@ def main() -> int:
     print(stat_line("Electron composer usable since spawn", summary["electronComposerUsableSinceSpawnMs"], "ms", electron_scope + f", opencode {args.electron_opencode}"))
     if args.server:
         print(stat_line("Native sessions shown since spawn", summary["nativeSessionsShownSinceSpawnMs"], "ms", native_scope))
-        print(stat_line("Native history shown since spawn", summary["nativeHistoryShownSinceSpawnMs"], "ms", native_scope))
-        print(stat_line("Native history read to paint", summary["nativeHistoryReadMs"], "ms", "request to painted transcript, newest 100 messages"))
     print(stat_line("Native PSS after startup", mib_stats(summary["nativePssBytes"]), "MiB", native_scope))
     if summary["serverPssBytes"]:
         print(stat_line("Server PSS (server and OpenCode)", mib_stats(summary["serverPssBytes"]), "MiB", "the isolated server's process tree"))
-        print(stat_line("Native and server PSS", mib_stats(summary["nativeWithServerPssBytes"]), "MiB", "comparable to the Electron tree's ownership"))
+        print(stat_line("Native and server PSS", mib_stats(summary["nativeWithServerPssBytes"]), "MiB", "combined ownership; workloads are not matched"))
     print(stat_line("Electron PSS after startup", mib_stats(summary["electronPssBytes"]), "MiB", electron_scope))
     print(stat_line("Native private after startup", mib_stats(summary["nativePrivateBytes"]), "MiB", native_scope))
     print(stat_line("Electron private after startup", mib_stats(summary["electronPrivateBytes"]), "MiB", electron_scope))
     print(stat_line("Native idle CPU", summary["nativeIdleCpuPercent"], "%", native_scope))
     print(stat_line("Electron idle CPU", summary["electronIdleCpuPercent"], "%", electron_scope))
-    print(stat_line("Native switch, forward", summary["nativeSwitchForwardMs"], "ms", "selection to revealed frame, AT-SPI activation"))
-    print(stat_line("Native switch, reverse", summary["nativeSwitchReverseMs"], "ms", "selection to revealed frame, AT-SPI activation"))
+    print(stat_line("Native switch, forward", summary["nativeSwitchForwardMs"], "ms", "AT-SPI dispatch to paint marker receipt; cold visits include history"))
+    print(stat_line("Native switch, reverse", summary["nativeSwitchReverseMs"], "ms", "AT-SPI dispatch to paint marker receipt; cached visits"))
     print(stat_line("Native PSS after switches", mib_stats(summary["nativePssAfterSwitchesBytes"]), "MiB", native_scope))
     for name, stats in summary["electronPssByProcess"].items():
         print(stat_line(f"Electron PSS, {name}", mib_stats(stats), "MiB", "per-process share of the Electron tree"))
     if receipt.get("switchSkipped"):
         print(f"\nswitch scenario not run: {receipt['switchSkipped']}")
     print(f"\nfailures: {summary['failures']}, processes left after SIGTERM: {summary['leftoverProcesses']}")
+    print("Cross-client comparison unavailable: " + "; ".join(receipt["comparison"]["reasons"]))
     print(f"receipt: {output / 'receipt.json'}")
     return 1 if summary["failures"] else 0
 
