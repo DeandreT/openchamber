@@ -11,7 +11,7 @@ import type { ProjectSection } from '../projects/sessionProjectRender';
  */
 export type SidebarWorkRef =
   | { kind: 'group'; key: string; projectId: string; group: SessionGroup }
-  | { kind: 'session'; key: string; projectId: string; rootSessionId: string };
+  | { kind: 'session'; key: string; projectId: string | null; rootSessionId: string };
 
 type SidebarGroupWorkRef = Extract<SidebarWorkRef, { kind: 'group' }>;
 
@@ -96,18 +96,25 @@ export const buildSidebarWorkIndex = (sections: readonly ProjectSection[]): Side
  * first of their sessions in `orderedSessions` (the sidebar's lifecycle order,
  * so a work moves up when any of its sessions does). With `archiveAnchors`
  * (`buildWorktreeArchiveAnchors`) a worktree work also stands where its
- * archived sessions hold it, and is listed for them alone.
+ * archived sessions hold it, and is listed for them alone. With `rootOf` a
+ * session no project section holds (its directory belongs to no added project)
+ * belongs to the work of the top-level session it nests under, with no
+ * project, instead of being left out (`orderInWorkWorks`).
  */
 export const orderSidebarWorks = (
   orderedSessions: readonly Session[],
   index: SidebarWorkIndex,
   include: (session: Session) => boolean,
   archiveAnchors: ReadonlyMap<string, number> = EMPTY_ANCHORS,
+  rootOf?: ReadonlyMap<string, string>,
 ): SidebarWorkRef[] => {
   const rankByKey = new Map<string, { ref: SidebarWorkRef; rank: number }>();
   orderedSessions.forEach((session, position) => {
     if (!include(session)) return;
-    const ref = index.bySessionId.get(session.id);
+    const rootSessionId = rootOf?.get(session.id);
+    const ref = index.bySessionId.get(session.id) ?? (rootSessionId
+      ? { kind: 'session', key: sessionWorkKey(rootSessionId), projectId: null, rootSessionId } satisfies SidebarWorkRef
+      : undefined);
     if (ref && !rankByKey.has(ref.key)) rankByKey.set(ref.key, { ref, rank: position });
   });
   if (archiveAnchors.size === 0) return [...rankByKey.values()].map((entry) => entry.ref);
@@ -119,6 +126,46 @@ export const orderSidebarWorks = (
   }
   return [...rankByKey.values()].sort((left, right) => left.rank - right.rank).map((entry) => entry.ref);
 };
+
+/**
+ * The top-level session each session nests under, itself for a top-level
+ * one, by the sidebar's nesting (`childrenMap`): a subagent, a review or a
+ * promoted /btw belongs to the session it came from, not to a work of its own.
+ */
+export const buildSessionRootIndex = (
+  rootSessions: readonly Session[],
+  childrenMap: ReadonlyMap<string, readonly Session[]>,
+): ReadonlyMap<string, string> => {
+  const rootOf = new Map<string, string>();
+  for (const root of rootSessions) {
+    const stack: Session[] = [root];
+    while (stack.length > 0) {
+      const current = stack.pop();
+      if (!current || rootOf.has(current.id)) continue;
+      rootOf.set(current.id, root.id);
+      stack.push(...(childrenMap.get(current.id) ?? []));
+    }
+  }
+  return rootOf;
+};
+
+/**
+ * The works In work lists, before Pinned takes its own: a work is in work when
+ * its root or a session nested under it, past subagents, is. In work spans
+ * projects, so a session no added project holds is listed under the work of
+ * its top-level session (`rootOf`) rather than dropped: the sidebar shows it
+ * nowhere else, and the tray counts it (`lib/sidebarSessionRows.ts`).
+ */
+export const orderInWorkWorks = (
+  orderedSessions: readonly Session[],
+  index: SidebarWorkIndex,
+  rootOf: ReadonlyMap<string, string>,
+  isChatDirectory: (directory: string | null | undefined) => boolean,
+): SidebarWorkRef[] => orderSidebarWorks(orderedSessions, index, (session) => (
+  // A subagent's own work state never puts its run in work: the user works
+  // in the sessions they started, as the Done button on a row reads it.
+  !session.parentID && !session.time?.archived && !isChatDirectory(session.directory) && isSessionInWork(session)
+), EMPTY_ANCHORS, rootOf);
 
 /**
  * Where each worktree work's archived sessions hold it in `orderedSessions`,

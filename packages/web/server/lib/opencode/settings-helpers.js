@@ -379,6 +379,9 @@ export const createSettingsHelpers = (dependencies) => {
     if (candidate.sidebarDetailedZoneRows === true || candidate.sidebarDetailedZoneRows === false) {
       result.sidebarDetailedZoneRows = candidate.sidebarDetailedZoneRows;
     }
+    if (candidate.sidebarWorktreeNameByBranch === true || candidate.sidebarWorktreeNameByBranch === false) {
+      result.sidebarWorktreeNameByBranch = candidate.sidebarWorktreeNameByBranch;
+    }
 
     if (Array.isArray(candidate.securityScopedBookmarks)) {
       result.securityScopedBookmarks = normalizeStringArray(candidate.securityScopedBookmarks);
@@ -509,6 +512,9 @@ export const createSettingsHelpers = (dependencies) => {
     }
     if (candidate.sessionTabsPerWorkspace === true || candidate.sessionTabsPerWorkspace === false) {
       result.sessionTabsPerWorkspace = candidate.sessionTabsPerWorkspace;
+    }
+    if (candidate.terminalCloseOnExit === true || candidate.terminalCloseOnExit === false) {
+      result.terminalCloseOnExit = candidate.terminalCloseOnExit;
     }
     if (typeof candidate.largeTextPasteBehavior === 'string') {
       const mode = candidate.largeTextPasteBehavior.trim();
@@ -788,6 +794,14 @@ export const createSettingsHelpers = (dependencies) => {
     }
     if (candidate.agentRenderToolEnabled === true || candidate.agentRenderToolEnabled === false) {
       result.agentRenderToolEnabled = candidate.agentRenderToolEnabled;
+    }
+    if (candidate.agentImageToolEnabled === true || candidate.agentImageToolEnabled === false) {
+      result.agentImageToolEnabled = candidate.agentImageToolEnabled;
+    }
+    // `provider/model`; the model id may hold slashes of its own (OpenRouter's `openai/gpt-image-2`).
+    const agentImageModel = asNonEmptyString(candidate.agentImageModel);
+    if (agentImageModel && /^[^/\s]+\/\S+$/.test(agentImageModel)) {
+      result.agentImageModel = agentImageModel;
     }
     if (typeof candidate.agentToolsCodeMode === 'boolean') {
       result.agentToolsCodeMode = candidate.agentToolsCodeMode;
@@ -1153,6 +1167,9 @@ export const createSettingsHelpers = (dependencies) => {
       if (trimmed.length <= STT_LANGUAGE_MAX_LENGTH) {
         result.sttLanguage = trimmed;
       }
+    }
+    if (candidate.sttCorrectTranscript === true || candidate.sttCorrectTranscript === false) {
+      result.sttCorrectTranscript = candidate.sttCorrectTranscript;
     }
 
     // The registry is the last word on what a client may persist: a key the

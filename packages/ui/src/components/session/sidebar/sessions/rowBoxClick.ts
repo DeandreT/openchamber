@@ -10,11 +10,14 @@ const ROW_CONTROL_SELECTOR = 'button, a, input, textarea, [role="button"], [role
  * The highlight covers the whole box, so every point of it opens the row.
  * A click in a popup the row portals (its tooltip, which can hold a space's
  * state and actions) bubbles here through React, but lies outside the box.
+ * Only controls inside the box count: the row sits in wrappers that carry a
+ * button role themselves (the drag handle around a session row).
  */
 export const isRowBoxClick = (event: React.MouseEvent<HTMLElement>): boolean => {
   if (event.defaultPrevented) return false;
   // SAFETY: React click targets are DOM EventTargets; closest is valid only for Elements.
   const target = event.target instanceof Element ? event.target : null;
   if (!target || !event.currentTarget.contains(target)) return false;
-  return !target.closest(ROW_CONTROL_SELECTOR);
+  const control = target.closest(ROW_CONTROL_SELECTOR);
+  return !control || !event.currentTarget.contains(control);
 };

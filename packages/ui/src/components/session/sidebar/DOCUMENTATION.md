@@ -57,9 +57,11 @@ existing data; it is never treated as an authoritative empty list.
 Activity indicators use `SessionActivityIndicator` in project and timeline rows,
 header tabs, switchers and collapsed aggregates. Each state is a static icon:
 the session's own run is `circle`, a pause held open by a background subagent
-is `robot`, one held open by a background command is `terminal` (all info
-color; `useSessionTurnActivity` in `sync/global-session-status.ts` decides, the
-session's own run first, then the subagent), and a finished unseen turn is
+is `robot`, one held open by a background command is `terminal`, an agent that
+ended its turn to wait on its pull request (`sync/pr-watch.ts`) is
+`git-pull-request` (all info color; `useSessionTurnActivity` in
+`sync/global-session-status.ts` decides, the session's own run first, then the
+subagent, the command, the pull request), and a finished unseen turn is
 `checkbox-circle` (success color). Collapsed aggregates show only running or
 unread. The local Appearance preference `animatedActivityIndicators`
 is off by default. Enabling it swaps every running kind for a stepped spinner,
@@ -158,7 +160,8 @@ no Shift.
   dialogs a row opens (project edit, new worktree, worktree delete). The
   display menu holds Grouping (by project or by time, `sidebarGrouping`), the
   project sort while grouped by project, Show pinned section, Show In work,
-  "Also show in work under projects", Detailed rows and Reorder projects. Chats
+  "Also show in work under projects", Detailed rows, "Name worktrees by
+  branch" and Reorder projects. Chats
   shows while the per-surface show-chats setting is on, which Settings owns
   (#5354); the header's New chat starts a chat, so Chats has no "+" of its own.
   The footer has the connected instance on the left (the app) and on the
@@ -344,8 +347,7 @@ running turn's duration, or the last turn's until it is read. The title is
 the task title (the branch description,
 `WorktreeMetadata.title`; a worktree made for a pull request or an issue
 starts with that item's title, the agent's until replaced), until it has one
-the title of the session a click
-opens, and only for a worktree without sessions the branch; the tooltip
+the branch (see Task titles below for the branch-first option); the tooltip
 always names the branch. At the end sits the PR or the issue its sessions follow as a mark in its state's
 colour without its number (one line has no room for it; the mark's tooltip names it and a click
 opens it). It shows no date and no session
@@ -407,6 +409,21 @@ and records `metadata.openchamber.workTitle { title, by }`. A rename by the
 user (the row's Rename task, a session rename, AI rename) always wins: the
 agent's next call changes nothing and answers with the user's name.
 
+A worktree's row is named by its task, and by its branch until the task has a
+name; never by one of its sessions (maintainer decision 2026-10-27: a row
+named after its latest session read as a session and changed name with each
+one). "Name worktrees by branch" in the display menu
+(`worktreeNameByBranch`, `sidebarWorktreeNameByBranch`, off by default, one
+value for every surface) swaps them: the branch is the row's name, the task's
+under it. The name the row does not show goes on a detailed row's second line;
+the tooltip leads with the task's name. A space follows the same rule with its
+own name in the branch's place. A session moved into a new worktree takes its
+task's name along (the sidebar's Quick worktree move,
+`lib/worktrees/sessionWorktreeMove.ts`, and the agent's
+`session.moveToWorktree`, `carryToWorktree` in `work-naming.js`): the agent
+does not name a task twice, so the new worktree would otherwise show its bare
+branch. A move onto a branch that already exists keeps that branch's name.
+
 ### Spaces
 
 An isolated space is a work like a worktree (`isGroupWork`, maintainer
@@ -419,10 +436,9 @@ the draft rows of its folder. The row is the worktree's (`WorktreeWorkRow`,
   task's name, named as a main-checkout task is: the agent's `work.name` from
   inside the space names the root session it works in, and the user's rename
   of that session wins (`metadata.openchamber.workTitle`); the most recent
-  named session names the row. Until then the row reads as the session a
-  click opens, and with no session as the space's own name, which otherwise
-  stands where a worktree's branch does (the tooltip, a detailed row's second
-  line). Rename task renames that session. It has no branch, pin or archive.
+  named session names the row. Until then the row shows the space's own name,
+  which otherwise stands where a worktree's branch does (the tooltip, a
+  detailed row's second line). Rename task renames that session. It has no branch, pin or archive.
 - Its state is one mark at the row's end (`spaces/SpaceStatus.tsx`): a
   spinner while it is made, a setup command runs or an action is under way;
   the word "Stopped" where a row's time goes while it is stopped (a square
@@ -473,7 +489,8 @@ setting, and VS Code always groups by project. The display menu opens with Selec
 (grouped by project) the project sort and project display,
 then the section toggles (Chats, Pinned, In work), "Also show in work under
 projects" (`keepWorkInPlace`, `sidebarKeepWorkInPlace`, off by default, shown
-while In work is), Detailed rows, then Collapse all / Expand all.
+while In work is), Detailed rows, "Name worktrees by branch", then Collapse
+all / Expand all.
 
 - Chats rows are one line with the tree's slot (`'tree-chat'`). Chats open
   with a reveal of 3 and 7 more per Show more; pinned chats are always shown
@@ -491,7 +508,9 @@ while In work is), Detailed rows, then Collapse all / Expand all.
   2026-10-26). A hairline sits in the middle of the gap before every
   project header that has rows above it (`sectionWrapperClass`), so projects
   read apart from each other and from the zones; it is drawn inside the gap
-  and adds no height.
+  and adds no height. That gap is twice a zone's (16px against 8px), so the
+  space on each side of the line matches the space between two rows' titles
+  (maintainer, 2026-10-27).
 - Rows of zones that mix projects (Pinned, In work, the list by time) are
   `'mixed-compact'`: one line with no project icon (the room goes to the
   title; the whole-row tooltip names the project, branch and model), the PR
@@ -545,8 +564,15 @@ user just made it for a task, so it opens the block. A worktree this client
 is removing keeps its place in the block until git is done
 (`useRemovingWorktreePaths`), though its sessions are archived first. A subagent's own state
 never counts. `list/SessionProjectCollection.tsx` orders the works by the first of
-their sessions in the shared lifecycle order (`works/sidebarWorks.ts`) and
-passes `workEntries` to the row model. A work In work lists leaves its project
+their sessions in the shared lifecycle order (`orderInWorkWorks` in
+`works/sidebarWorks.ts`) and passes `workEntries` to the row model. In work
+spans projects: a session in work whose directory no added project holds (an
+agent moved it into another repository, say) is listed under the work of the
+top-level session it nests under (`buildSessionRootIndex`, over the
+collection's root sessions and `childrenMap`), with no project, as
+`lib/sidebarSessionRows.ts` describes for the tray. While the zone is shown it
+is the only place such a session appears: the list by time does not add these,
+so Done takes one out of the sidebar. A work In work lists leaves its project
 or folder (`movedSessionIds`, `movedGroupKeys`) unless "Also show in work
 under projects" is on; search lists every zone session once, in its zone,
 either way. VS Code always keeps them in place. Chats are never in work and
@@ -610,6 +636,16 @@ that folder kept under the old per-folder key
 (`readChatDraftClaimingFolderDraft`). Search leaves drafts out. The phone lists
 and opens the same drafts. VS Code has no shared drafts: it keeps the
 per-folder key, where a new draft finds the text left in that folder.
+
+Every way into a new session opens a fresh, empty draft, so several drafts can
+wait in one folder. The draft's project and branch row ends with a "N drafts"
+control while other drafts wait in its exact folder
+(`components/chat/composer/ui/DraftsHerePicker.tsx`): a menu on desktop, a
+bottom sheet on the phone, each entry opening the draft as its row does. It
+sits in a row that is already there, so it takes no height and the centred
+composer never moves for it; a list on the draft screen was tried and matched
+none of the widths around it. A new Chat has one draft kept in its composer
+and none stored, so it shows none.
 
 ## Folders with worktrees
 
@@ -894,7 +930,13 @@ matching and ordering. Search does not fetch sessions or broaden list membership
 - Folder drops carry occurrence drag keys and owner-scoped targets. A drop is
   accepted only when the current model marks every owner scope complete and
   the source and target owner match. Archived rows and archived targets never
-  accept drops.
+  accept drops. A session lands in the folder whose header is under the
+  pointer at release, and nowhere otherwise (`sessionFolderCollision`); the
+  nearest-target rule stays for the project header sort, where it picked a
+  folder the pointer never reached. A row drags only when its owner has a
+  folder that accepts drops (`SessionFolderOwnersProvider`): a drag with
+  nowhere to land swallowed the click that started it when the mouse moved
+  8 px during the press.
 - Session rows allow vertical touch panning before the long-press drag activates.
   The TouchSensor owns movement only after activation; disabling touch panning on
   the whole row prevents quick swipes from scrolling even when no drag starts.
@@ -903,9 +945,12 @@ matching and ordering. Search does not fetch sessions or broaden list membership
   those sessions; a subtask is never unread on its own. Expanded and archived
   folders do not derive hidden activity.
 - Single-project flat mode reveals 20 root sessions initially and 20 per Show
-  more; Show fewer resets to 20. Chats keeps its reveal of 3. Elsewhere a
+  more; Show less resets to 20. Chats keeps its reveal of 3. Elsewhere a
   Tree worktree group reveals 7 sessions, 7 more per Show more, and 10 in
-  VS Code. Reveal
+  VS Code. Show more and Show less share one row under the list, in the
+  micro size so it reads as a control rather than a row: Show more while
+  something is hidden, Show less once more than the first batch shows
+  (maintainer, 2026-10-27). Reveal
   controls change the logical list, not the viewport's bounded mounted window.
 - Archiving or deleting a session takes its whole active subtree with it on every surface, because the server does not cascade `time.archived`. In work and managed Chats build their rows with `buildActiveSessionNode` from `list/sessionCollection.ts`, so the descendants a row collects match the project tree at any depth; the phone's swipe actions resolve the same lineage with `getDescendantIds` over every active session when they run (`apps/mobileSidebar/mobileSessionActions.ts`). `sessions/sessionSubtreeActions.ts` owns the single-versus-batch store calls and the outcome toasts for all of them, and `collectSessionSubtreeIds` extends the surface's own descendant list at action time with the global session lineage (`stores/sessionLineage.ts`), so an active subagent below an archived intermediate is still archived (archive skips the archived intermediate; delete includes it). A projection that flattens a tree to one level silently leaves grandchildren active. The project menu's "Archive all" archives the subagents of each selected session in the same batch; its dialog and success toast count top-level sessions, the rows the user sees.
 - Subsessions belong to the agent run that spawned them, not to the user. They appear only nested under an active parent: the archive (sidebar bucket, auto folders and the Archive page) lists top-level sessions only, an archived subsession or one under an archived parent is hidden rather than promoted to a row of its own, and there is no restore for a subsession; it comes back when its parent is restored. A subsession whose parent is not loaded yet stays visible as a root.

@@ -249,10 +249,12 @@ describe('workflow runtime', () => {
     const agents = fakeAgentSessions();
     let release = () => {};
     const held = new Promise((resolve) => { release = resolve; });
-    const { runtime, act, store } = await setup(agents, { postSynthetic: () => held });
+    let reportSent = false;
+    const { runtime, act, store } = await setup(agents, { postSynthetic: () => { reportSent = true; return held; } });
     const { runId } = await act('workflow.run', { script: script("return agent('x')") });
     await runtime.approve({ runId });
-    await waitFor(async () => (await act('workflow.status', { runId })).state === 'completed');
+    // The run reads as completed while it is still settling; the report goes out after.
+    await waitFor(() => reportSent);
 
     await runtime.remove({ runId });
     release();

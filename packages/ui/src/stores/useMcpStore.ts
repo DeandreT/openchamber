@@ -252,7 +252,11 @@ export const useMcpStore = create<McpStore>()(
       const normalized = normalizeDirectory(directory ?? useDirectoryStore.getState().currentDirectory);
       const key = toKey(normalized);
       const previousStatus = get().getStatusForDirectory(normalized)[name];
-      const wasConnected = previousStatus?.status.status === 'connected';
+      // Only a server the user turned off goes back off after the test.
+      // Disconnecting leaves a server `disabled` in OpenCode, so doing it to a
+      // failed, unauthorized, pending or not yet read server would switch off
+      // the server the test just started.
+      const wasDisabled = previousStatus?.status.status === 'disabled';
       let errorMessage: string | undefined;
       let warningMessage: string | undefined;
 
@@ -275,7 +279,7 @@ export const useMcpStore = create<McpStore>()(
       const currentStatus = get().getStatusForDirectory(normalized)[name];
       const observedStatus = currentStatus;
 
-      if (!wasConnected && currentStatus?.status.status === 'connected') {
+      if (wasDisabled && currentStatus?.status.status === 'connected') {
         try {
           await opencodeClient.disconnectMcpServer(name, normalized);
         } catch (error) {

@@ -1229,9 +1229,10 @@ describe('sendMessage draft snapshot (issues #2222 / #2315)', () => {
       sendMessageCalls.push(params);
       return 'msg';
     };
-    opencodeClient.createSession = async (_params, directory) => {
+    opencodeClient.createSession = async (params, directory) => {
       createSessionCalls.push(directory);
-      return { id: 'session-materialized', directory: directory ?? '/projects/alpha', time: { created: 1, updated: 1 } };
+      // A draft's first send mints the id and OpenCode creates the session under it.
+      return { id: params?.id ?? 'session-materialized', directory: directory ?? '/projects/alpha', time: { created: 1, updated: 1 } };
     };
   });
 
@@ -1290,7 +1291,7 @@ describe('sendMessage draft snapshot (issues #2222 / #2315)', () => {
     expect(createSessionCalls).toHaveLength(1);
     expect(createSessionCalls[0]).toBe('/projects/alpha');
     expect(sendMessageCalls).toHaveLength(1);
-    expect(sendMessageCalls[0].id).toBe('session-materialized');
+    expect(sendMessageCalls[0].id.startsWith('ses_')).toBe(true);
     expect(sendMessageCalls[0].directory).toBe('/projects/alpha');
     expect(useSessionDisplayStore.getState().singleProjectId).toBe('project-alpha');
   });

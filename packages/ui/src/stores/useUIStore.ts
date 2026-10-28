@@ -1048,6 +1048,8 @@ interface UIStore {
   terminalFontSize: number;
   terminalShell: TerminalShell;
   terminalLoginShells: TerminalShell[];
+  /** A terminal or project action tab closes when its process exits; off keeps the exited output. */
+  terminalCloseOnExit: boolean;
   editorFontSize: number;
   uiFont: UiFontOption;
   monoFont: MonoFontOption;
@@ -1132,6 +1134,9 @@ interface UIStore {
   agentMemoryToolEnabled: boolean;
   agentKnowledgeToolEnabled: boolean;
   agentNotifyToolEnabled: boolean;
+  agentImageToolEnabled: boolean;
+  /** `provider/model` the image tool draws with; empty until the user picks one. */
+  agentImageModel: string;
   agentRenderToolEnabled: boolean;
   agentWorkflowToolEnabled: boolean;
   /** Whether OpenChamber's agent tools sit behind OpenCode's Code Mode instead of being direct tools. */
@@ -1351,6 +1356,7 @@ interface UIStore {
   setTerminalFontSize: (size: number) => void;
   setTerminalShell: (shell: TerminalShell) => void;
   setTerminalLoginShells: (shells: TerminalShell[]) => void;
+  setTerminalCloseOnExit: (value: boolean) => void;
   setEditorFontSize: (size: number) => void;
   setUiFont: (font: UiFontOption) => void;
   setMonoFont: (font: MonoFontOption) => void;
@@ -1428,6 +1434,8 @@ interface UIStore {
   setAgentMemoryToolEnabled: (value: boolean) => void;
   setAgentKnowledgeToolEnabled: (value: boolean) => void;
   setAgentNotifyToolEnabled: (value: boolean) => void;
+  setAgentImageToolEnabled: (value: boolean) => void;
+  setAgentImageModel: (value: string) => void;
   setAgentRenderToolEnabled: (value: boolean) => void;
   setAgentWorkflowToolEnabled: (value: boolean) => void;
   setAgentToolsCodeMode: (value: boolean) => void;
@@ -1601,6 +1609,7 @@ export const useUIStore = create<UIStore>()(
         terminalFontSize: 14,
         terminalShell: 'auto',
         terminalLoginShells: [],
+        terminalCloseOnExit: true,
         editorFontSize: 13,
         uiFont: DEFAULT_UI_FONT,
         monoFont: DEFAULT_MONO_FONT,
@@ -1669,6 +1678,8 @@ export const useUIStore = create<UIStore>()(
         agentMemoryToolEnabled: false,
         agentKnowledgeToolEnabled: true,
         agentNotifyToolEnabled: false,
+        agentImageToolEnabled: false,
+        agentImageModel: '',
         agentRenderToolEnabled: true,
         agentWorkflowToolEnabled: true,
         agentToolsCodeMode: false,
@@ -2788,6 +2799,10 @@ export const useUIStore = create<UIStore>()(
           set({ terminalLoginShells: [...new Set(shells)] });
         },
 
+        setTerminalCloseOnExit: (value) => {
+          set({ terminalCloseOnExit: value });
+        },
+
         setEditorFontSize: (size) => {
           const rounded = Math.round(size);
           const clamped = Math.max(9, Math.min(32, rounded));
@@ -3294,6 +3309,12 @@ export const useUIStore = create<UIStore>()(
         setAgentNotifyToolEnabled: (value) => {
           set({ agentNotifyToolEnabled: value });
         },
+        setAgentImageToolEnabled: (value) => {
+          set({ agentImageToolEnabled: value });
+        },
+        setAgentImageModel: (value) => {
+          set({ agentImageModel: value });
+        },
         setAgentRenderToolEnabled: (value) => {
           set({ agentRenderToolEnabled: value });
         },
@@ -3791,6 +3812,7 @@ export const useUIStore = create<UIStore>()(
           terminalFontSize: state.terminalFontSize,
           terminalShell: state.terminalShell,
           terminalLoginShells: state.terminalLoginShells,
+          terminalCloseOnExit: state.terminalCloseOnExit,
           editorFontSize: state.editorFontSize,
           uiFont: state.uiFont,
           monoFont: state.monoFont,
@@ -3843,6 +3865,8 @@ export const useUIStore = create<UIStore>()(
           agentMemoryToolEnabled: state.agentMemoryToolEnabled,
           agentKnowledgeToolEnabled: state.agentKnowledgeToolEnabled,
           agentNotifyToolEnabled: state.agentNotifyToolEnabled,
+          agentImageToolEnabled: state.agentImageToolEnabled,
+          agentImageModel: state.agentImageModel,
           agentRenderToolEnabled: state.agentRenderToolEnabled,
           agentWorkflowToolEnabled: state.agentWorkflowToolEnabled,
           agentToolsCodeMode: state.agentToolsCodeMode,

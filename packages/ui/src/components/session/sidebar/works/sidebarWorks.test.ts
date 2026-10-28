@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import type { Session } from '@/lib/opencode/model';
 import type { SessionGroup, SessionNode } from '../types';
 import type { ProjectSection } from '../projects/sessionProjectRender';
-import { buildSidebarWorkIndex, buildWorktreeArchiveAnchors, isGroupWork, orderSidebarWorks } from './sidebarWorks';
+import { buildSessionRootIndex, buildSidebarWorkIndex, buildWorktreeArchiveAnchors, isGroupWork, orderInWorkWorks, orderSidebarWorks } from './sidebarWorks';
 import { pickWorkSessionToOpen } from './workActions';
 
 // SAFETY: works read only ids, forks and metadata.
@@ -51,6 +51,51 @@ describe('sidebar works', () => {
     const order = ['w2', 'review', 'w1', 'lonely', 'root'].map((id) => session(id));
     expect(orderSidebarWorks(order, index, (entry) => entry.id !== 'lonely').map((ref) => ref.key))
       .toEqual(['p:wt', 'session:root']);
+  });
+
+  describe('in work outside every added project', () => {
+    const inWork = { metadata: { openchamber: { work: { state: 'open' } } } } as Partial<Session>;
+    const outside = { directory: '/not-a-project' };
+    // `promoted` has no parentID but nests under `outside-root` by lineage (a
+    // promoted /btw or a review), so its work is its root's.
+    const promoted = node('promoted', [], { ...outside, ...inWork });
+    const subagent = node('subagent', [], { ...outside, ...inWork, parentID: 'outside-root' });
+    const outsideRoot = node('outside-root', [promoted, subagent], outside);
+    const childrenMap = new Map([['outside-root', [promoted.session, subagent.session]]]);
+    const rootOf = buildSessionRootIndex([outsideRoot.session, session('root')], childrenMap);
+    const notChat = () => false;
+
+    test('every session maps to the top-level session it nests under', () => {
+      expect(Object.fromEntries(rootOf)).toEqual({
+        'outside-root': 'outside-root', promoted: 'outside-root', subagent: 'outside-root', root: 'root',
+      });
+    });
+
+    test('a root in work no project section holds is a work of its own, listed once', () => {
+      const index = buildSidebarWorkIndex([section]);
+      const tracked = session('tracked', { ...outside, ...inWork });
+      const order = [session('w1', inWork), tracked, session('root', inWork)];
+      const rootIndex = buildSessionRootIndex([tracked, session('root')], new Map());
+      expect(orderInWorkWorks(order, index, rootIndex, notChat).map((ref) => ref.key))
+        .toEqual(['p:wt', 'session:tracked', 'session:root']);
+    });
+
+    test('a nested session in work lists the work of its root, which is not in work itself', () => {
+      const index = buildSidebarWorkIndex([section]);
+      const order = [promoted.session, subagent.session, outsideRoot.session];
+      expect(orderInWorkWorks(order, index, rootOf, notChat).map((ref) => ({ key: ref.key, projectId: ref.projectId })))
+        .toEqual([{ key: 'session:outside-root', projectId: null }]);
+    });
+
+    test('archived sessions, chats and sessions not in work are left out', () => {
+      const index = buildSidebarWorkIndex([section]);
+      const archived = session('archived', { ...outside, ...inWork, time: { created: 1, updated: 1, archived: 2 } });
+      const idle = session('idle', outside);
+      const chat = session('chat', { ...inWork, directory: '/home/.config/openchamber/chats/2026-10-26/session-1' });
+      const rootIndex = buildSessionRootIndex([archived, idle, chat], new Map());
+      expect(orderInWorkWorks([archived, idle, chat], index, rootIndex, (directory) => directory?.includes('/chats/') ?? false))
+        .toEqual([]);
+    });
   });
 
   test('a worktree keeps the place its archived newest session gave it', () => {

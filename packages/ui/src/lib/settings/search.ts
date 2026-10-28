@@ -172,6 +172,14 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
+    id: 'appearance.terminal-close-on-exit',
+    page: 'general',
+    titleKey: 'settings.openchamber.visual.field.terminalCloseOnExit',
+    descriptionKey: 'settings.openchamber.visual.field.terminalCloseOnExitInfo',
+    keywords: ['terminal', 'exit', 'close', 'tab', 'shell'],
+    isAvailable: (ctx) => !ctx.isVSCode,
+  },
+  {
     id: 'appearance.editor-font-size',
     page: 'appearance',
     titleKey: 'settings.openchamber.visual.field.editorFontSize',
@@ -846,6 +854,22 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     isAvailable: (ctx) => !ctx.isVSCode,
   },
   {
+    id: 'sessions.agent-image-tool',
+    page: 'general',
+    titleKey: 'settings.openchamber.tools.field.agentImageTool',
+    descriptionKey: 'settings.openchamber.tools.field.agentImageToolInfo',
+    keywords: ['agent', 'tool', 'image', 'picture', 'generate', 'draw', 'openchamber'],
+    isAvailable: (ctx) => !ctx.isVSCode,
+  },
+  {
+    id: 'sessions.agent-image-model',
+    page: 'general',
+    titleKey: 'settings.openchamber.tools.imageModel.label',
+    descriptionKey: 'settings.openchamber.tools.imageModel.info',
+    keywords: ['agent', 'image', 'model', 'picture', 'generate', 'draw'],
+    isAvailable: (ctx) => !ctx.isVSCode,
+  },
+  {
     id: 'sessions.agent-render-tool',
     page: 'general',
     titleKey: 'settings.openchamber.tools.field.agentRenderTool',
@@ -1441,7 +1465,7 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     id: 'voice.speech-recognition',
     page: 'voice',
     titleKey: 'settings.voice.page.section.speechRecognition',
-    keywords: ['stt', 'dictation', 'voice input', 'transcribe', 'whisper', 'parakeet', 'microphone'],
+    keywords: ['stt', 'dictation', 'voice input', 'transcribe', 'whisper', 'parakeet', 'qwen', 'microphone', 'misheard', 'correct', 'fix', 'small model'],
   },
   {
     id: 'tunnel.provider',

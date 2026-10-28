@@ -275,7 +275,7 @@ const toCreatePayload = (args: {
   if (args.returnAfterDirectoryCreated) payload.returnAfterDirectoryCreated = true;
   if (args.taskTitle?.trim()) payload.taskTitle = args.taskTitle.trim();
   // Quick worktree's `agile-chipmunk`, or the dialog's suggestion kept as is
-  // (an issue's `issue-180-merry-salamander` keeps `issue-180-` on rename).
+  // (an issue's `issue-180-merry-salamander` keeps its number on rename).
   const generatedPrefix = mode === 'new' && branchName ? generatedBranchPrefix(branchName) : null;
   if (generatedPrefix !== null) {
     payload.generatedBranchName = branchName;
