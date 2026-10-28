@@ -32,6 +32,9 @@ use crate::workspace::{Source, Workspace};
 
 static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
+#[path = "creation_tests.rs"]
+mod creation_tests;
+
 struct Fixture(PathBuf);
 
 impl Fixture {
@@ -57,6 +60,7 @@ impl Fixture {
             .save(&JournalSnapshot {
                 drafts: Vec::new(),
                 attempts: vec![(key.clone(), attempt)],
+                creations: Vec::new(),
             })
             .expect("attempt saves");
         assert!(matches!(result, JournalCommit::Durable));
@@ -86,6 +90,14 @@ struct Server {
 
 impl Server {
     fn new(journal: PathBuf, hold_prompt: bool) -> Self {
+        Self::with_delivered(journal, hold_prompt, None)
+    }
+
+    fn with_delivered(
+        journal: PathBuf,
+        hold_prompt: bool,
+        delivered: Option<(String, String)>,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener binds");
         listener
             .set_nonblocking(true)
@@ -131,6 +143,10 @@ impl Server {
                     ("200 OK", "{}")
                 } else if request.path.ends_with("/inbox") {
                     ("200 OK", "{\"data\":[]}")
+                } else if let Some((path, body)) = &delivered
+                    && request.path == *path
+                {
+                    ("200 OK", body.as_str())
                 } else {
                     ("404 Not Found", "{}")
                 };
@@ -253,7 +269,7 @@ fn open(
                 connection.state = ConnectionState::Connected;
                 workspace.connection = Some(connection);
                 workspace.switch_runtime(key.runtime.clone(), window, cx);
-                workspace.open_persistence(fixture.journal(), false, window, cx);
+                workspace.open_persistence(fixture.journal(), window, cx);
                 workspace
             })
         })
@@ -418,7 +434,7 @@ fn initial_send_is_durable_before_any_mutation_and_preserves_newer_typing(cx: &m
 }
 
 #[gpui_kit::test]
-fn close_during_writer_recovery_drains_retained_memory(cx: &mut TestAppContext) {
+fn failed_close_keeps_second_writer_locked_and_retry_drains_memory(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     {
         let (mut journal, _) = MutationJournal::open(&fixture.journal()).expect("fixture opens");
@@ -457,25 +473,13 @@ fn close_during_writer_recovery_drains_retained_memory(cx: &mut TestAppContext) 
     });
     fs::remove_dir(fixture.journal()).expect("remove empty test obstacle");
     fs::rename(backup, fixture.journal()).expect("restore valid stored state");
-    let held = MutationJournal::open(&fixture.journal())
-        .expect("hold recovered journal lock")
-        .0;
-    cx.update_window(window, |_, window, cx| {
-        workspace.update(cx, |workspace, cx| {
-            workspace.retry_persistence(window, cx);
-            workspace.request_close(window, cx);
-        });
-    })
-    .expect("window remains open while another writer holds the lock");
-    wait(cx, |cx| {
-        cx.read(|cx| {
-            matches!(
-                workspace.read(cx).persistence_notice(),
-                Some(crate::recovery_view::StorageNotice::Locked)
-            )
-        })
-    });
-    drop(held);
+    assert!(
+        matches!(
+            MutationJournal::open(&fixture.journal()),
+            Err(crate::mutation_journal::JournalError::Locked)
+        ),
+        "a failed close retains exclusive ownership until its retry is durable"
+    );
     cx.update_window(window, |_, window, cx| {
         workspace.update(cx, |workspace, cx| {
             workspace.retry_persistence(window, cx);
@@ -499,6 +503,81 @@ fn close_during_writer_recovery_drains_retained_memory(cx: &mut TestAppContext) 
             .text,
         "retained after failed close"
     );
+}
+
+#[gpui_kit::test]
+fn exact_lookup_delivery_survives_failed_history_refresh(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let key = tests::key("delivered-runtime", "ses_delivered");
+    fixture.seed(&key);
+    let attempt = tests::attempt(&key);
+    let id = attempt.prompt.message_id.clone();
+    let response = serde_json::json!({
+        "data": {
+            "id": id.as_str(),
+            "type": "user",
+            "time": { "created": 1792691938000_u64 },
+            "text": "Prepared by the server"
+        }
+    });
+    let server = Server::with_delivered(
+        fixture.journal(),
+        false,
+        Some((
+            format!("/api/session/{}/message/{id}", key.session),
+            response.to_string(),
+        )),
+    );
+    let (window, workspace) = open(cx, &server, &fixture, &key);
+    ready(cx, &workspace);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            configure_send(workspace, &key, window, cx);
+            let open = workspace
+                .open_sessions
+                .get_mut(&key.session)
+                .expect("visited session");
+            let change = open.transcript.push(attempt.optimistic.clone());
+            crate::server_sync::apply_list_change(open, &change, cx);
+        });
+    })
+    .expect("window open");
+    wait(cx, |cx| {
+        cx.read(|cx| {
+            matches!(
+                workspace.read(cx).open_sessions[&key.session].history,
+                crate::workspace::History::Failed(_)
+            )
+        })
+    });
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.check_recovery(&key, window, cx)
+        });
+    })
+    .expect("window open");
+    wait(cx, |cx| {
+        cx.read(|cx| {
+            let workspace = workspace.read(cx);
+            workspace.send_attempts.attempt(&key).is_none()
+                && matches!(
+                    workspace.open_sessions[&key.session].history,
+                    crate::workspace::History::Failed(_)
+                )
+        })
+    });
+    cx.read(|cx| {
+        let workspace = workspace.read(cx);
+        let transcript = &workspace.open_sessions[&key.session].transcript;
+        let message = transcript
+            .message(transcript.row_of(&id).expect("delivered row remains"))
+            .expect("delivered message remains");
+        assert_eq!(message.plain_text(), "Prepared by the server");
+        assert_ne!(message, &attempt.optimistic);
+        assert!(workspace.recovery_items(cx).is_empty());
+    });
+    assert_eq!(server.prompt_count(), 0, "lookup never resends");
+    close(cx, window, &workspace);
 }
 
 #[gpui_kit::test]

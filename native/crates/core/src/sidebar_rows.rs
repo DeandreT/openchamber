@@ -1181,7 +1181,9 @@ fn group_descriptors<'s, 'a>(
 /// sets it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SectionSpacing {
-    /// Before a zone or project header (`pb-2`): sections of equal weight.
+    /// Before a project header (`pb-4`), with room for its divider.
+    Project,
+    /// Before a zone header (`pb-2`).
     Section,
     /// Before a worktree header inside its project (`pb-1.5`).
     Group,
@@ -1193,9 +1195,8 @@ pub fn section_spacing_after(
     next: Option<&SidebarRow<'_>>,
 ) -> Option<SectionSpacing> {
     match next? {
-        SidebarRow::ActivityHeader { .. } | SidebarRow::ProjectHeader { .. } => {
-            Some(SectionSpacing::Section)
-        }
+        SidebarRow::ProjectHeader { .. } => Some(SectionSpacing::Project),
+        SidebarRow::ActivityHeader { .. } => Some(SectionSpacing::Section),
         SidebarRow::GroupHeader { .. } if !matches!(row, SidebarRow::ProjectHeader { .. }) => {
             Some(SectionSpacing::Group)
         }
@@ -1666,7 +1667,7 @@ mod tests {
         };
         assert_eq!(
             section_spacing_after(&zone_header, Some(&project_header)),
-            Some(SectionSpacing::Section)
+            Some(SectionSpacing::Project)
         );
         assert_eq!(
             section_spacing_after(&status, Some(&zone_header)),

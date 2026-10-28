@@ -25,6 +25,9 @@ use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::protocol::frame::Frame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::{Data, OpCode};
 
+#[path = "session_creation/mod.rs"]
+mod session_creation;
+
 /// One request the server received.
 #[derive(Clone, Debug)]
 struct Recorded {

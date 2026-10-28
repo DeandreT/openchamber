@@ -161,6 +161,10 @@ pub struct Workspace {
     pub(crate) persistence: crate::state_persistence::StatePersistence,
     pub(crate) mutation_tasks: HashMap<crate::send_attempt::SessionKey, Task<()>>,
     pub(crate) message_ids: crate::message_id::MessageIds,
+    pub(crate) session_ids: crate::session_id::SessionIds,
+    pub(crate) creations: crate::create_attempt::CreateAttempts,
+    pub(crate) creation_tasks: HashMap<crate::send_attempt::SessionKey, Task<()>>,
+    pub(crate) navigation_revision: u64,
     pub(crate) code_wrap_state: CodeWrapState,
     pub(crate) code_wrap_save_task: Option<Task<()>>,
     pub(crate) provider_logos: ProviderLogos,
@@ -248,6 +252,10 @@ impl Workspace {
             persistence: crate::state_persistence::StatePersistence::default(),
             mutation_tasks: HashMap::new(),
             message_ids: crate::message_id::MessageIds::default(),
+            session_ids: crate::session_id::SessionIds::default(),
+            creations: crate::create_attempt::CreateAttempts::default(),
+            creation_tasks: HashMap::new(),
+            navigation_revision: 0,
             code_wrap_state: CodeWrapState::default(),
             code_wrap_save_task: None,
             provider_logos: ProviderLogos::default(),
@@ -385,6 +393,7 @@ impl Workspace {
         self.save_composer_draft(cx);
         self.draft_projects
             .insert(self.runtime.clone(), directory.to_owned());
+        self.navigation_revision = self.navigation_revision.wrapping_add(1);
         self.composer_key = self.new_session_draft_key();
         self.restore_composer_draft(window, cx);
         self.ensure_send_catalog(cx);
@@ -395,6 +404,7 @@ impl Workspace {
     /// Leaves the selected session for the new-session view, keeping both
     /// drafts and the session's reading position.
     pub fn show_new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.navigation_revision = self.navigation_revision.wrapping_add(1);
         if let Some(open) = self
             .selected
             .as_ref()
@@ -438,6 +448,7 @@ impl Workspace {
     /// Selects a session: saves the outgoing draft and position under their
     /// captured identities, then restores the incoming ones before paint.
     pub fn select_session(&mut self, id: SessionId, window: &mut Window, cx: &mut Context<Self>) {
+        self.navigation_revision = self.navigation_revision.wrapping_add(1);
         self.prompt_panel = None;
         self.prompt_hover_task = None;
         self.prompt_hover_suppressed = false;
@@ -566,7 +577,7 @@ impl Workspace {
         cx.notify();
     }
 
-    fn ensure_open(&mut self, id: &SessionId, cx: &mut Context<Self>) {
+    pub(crate) fn ensure_open(&mut self, id: &SessionId, cx: &mut Context<Self>) {
         if self.open_sessions.contains_key(id) {
             return;
         }
@@ -716,10 +727,14 @@ impl Workspace {
         }
     }
 
-    /// Sends to an existing selected session. New-session drafts stay local.
+    /// Sends to a selected session or durably creates the selected project draft.
     pub fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.is_synthetic() {
-            self.submit_connected(window, cx);
+            if self.selected.is_some() {
+                self.submit_connected(window, cx);
+            } else {
+                self.submit_new_session(window, cx);
+            }
             return;
         }
         let Some(session_id) = self.selected.clone() else {

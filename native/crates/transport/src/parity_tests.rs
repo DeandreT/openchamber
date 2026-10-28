@@ -364,6 +364,19 @@ fn sessions_project_as_the_ui_does() {
 }
 
 #[test]
+fn created_and_observed_sessions_project_as_the_2_2_sdk() {
+    let fixture: Value = serde_json::from_str(FIXTURE).expect("fixture");
+    let sample: Value =
+        serde_json::from_str(include_str!("../tests/fixtures/wire/session-created.json"))
+            .expect("sample");
+    let session: wire::Session =
+        serde_json::from_value(sample["data"].clone()).expect("session wire");
+    let projected = normalize_session(&projection::session(session));
+    assert_eq!(projected, fixture["creation"]["created"]);
+    assert_eq!(projected, fixture["creation"]["observed"]);
+}
+
+#[test]
 fn messages_project_as_the_ui_does() {
     let fixture = fixture();
     for (name, raw) in [

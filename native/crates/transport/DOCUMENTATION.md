@@ -18,6 +18,7 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `catalog.rs` | The composer's catalogs in one directory: agents, the flat model catalog with OpenCode's default model, folded config defaults, the skill count and the connected MCP count. |
 | `project.rs` | A directory's Git status (`GET /api/git/status`) and a project's configured actions (`GET /api/projects/:projectId/config`, the path-derived ID). |
 | `prompt.rs` | Typed text submission, ordered session model/agent selection, inbox admission receipts and interruption of one named session. |
+| `session_create.rs` | Immutable root-session requests, exact-ID observation and identity/location verification before exposing a session record. |
 | `public_asset.rs` | `PublicAssetClient`: public assets the web client loads from third-party hosts, such as models.dev's provider logos. |
 | `wire.rs` | Serde shapes of the fields the client reads. Private. |
 | `projection.rs` | Wire records to core records, mirroring `packages/ui/src/lib/opencode/projection.ts`. Private. |
@@ -30,6 +31,18 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 counts and identifiers only.
 
 ## Invariants
+
+- Session creation requires a caller-retained `ses_` identity and absolute remote
+  directory. `CreateSession` captures a normalized request, omits `parentID`, and
+  omits the synthetic Auto model. The caller retains Auto in its prompt configuration
+  and selects it through OpenChamber before sending. Creation never sends a prompt.
+- Creation and exact session observation accept only the requested identity and
+  matching normalized absolute location. Unexplained canonical aliases are blocked;
+  the native machine's filesystem cannot establish a remote path's identity.
+  Mismatches never cause deletion, binding or another mutation. A lost response or
+  cancellation requires exact-ID observation, and a successful 404 observation is
+  `NotObserved`, not proof that the preceding POST failed. The caller durably retains
+  the immutable request and decides whether an explicit same-request retry is safe.
 
 - The identity probe sends no credential. A server that does not answer an
   OpenChamber identity is `NotOpenChamber`, and a server whose API range

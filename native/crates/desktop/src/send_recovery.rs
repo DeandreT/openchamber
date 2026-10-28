@@ -4,13 +4,12 @@ use std::collections::HashMap;
 
 use gpui_kit::{Context, Task, Window};
 use openchamber_native_core::ids::MessageId;
-use openchamber_native_core::transcript::TranscriptEvent;
 use openchamber_native_transport::error::TransportError;
 use openchamber_native_transport::prompt::PromptObservation;
 
 use crate::connection::ConnectionState;
 use crate::recovery_view::{RecoveryPhase, RecoveryRow};
-use crate::send_attempt::{Admission, SessionKey};
+use crate::send_attempt::{Admission, SendOrigin, SessionKey};
 use crate::server_sync::apply_list_change;
 use crate::workspace::Workspace;
 
@@ -30,6 +29,7 @@ enum CheckAction {
 struct Check {
     id: MessageId,
     state: CheckState,
+    since: u64,
 }
 
 #[derive(Default)]
@@ -57,7 +57,17 @@ impl Workspace {
                     .checks
                     .get(key)
                     .filter(|check| check.id == attempt.prompt.message_id);
-                let phase = if matches!(
+                let phase = if attempt.origin == SendOrigin::Deleted {
+                    RecoveryPhase::CreateDeleted
+                } else if let Some(check) = self.creations.checks.get(key) {
+                    match check {
+                        crate::create_attempt::CreationCheck::Checking => RecoveryPhase::Checking,
+                        crate::create_attempt::CreationCheck::Mismatch => {
+                            RecoveryPhase::CreateMismatch
+                        }
+                        _ => RecoveryPhase::CreateCheckFailed,
+                    }
+                } else if matches!(
                     checking.map(|check| check.state),
                     Some(CheckState::Checking)
                 ) {
@@ -82,8 +92,10 @@ impl Workspace {
                 let connected = self.connection.as_ref().is_some_and(|connection| {
                     matches!(connection.state, ConnectionState::Connected)
                 });
-                let busy =
-                    self.send_attempts.is_active(key) || self.recovery.tasks.contains_key(key);
+                let busy = self.send_attempts.is_active(key)
+                    || self.recovery.tasks.contains_key(key)
+                    || self.creation_tasks.contains_key(key)
+                    || attempt.origin == SendOrigin::Deleted;
                 RecoveryRow {
                     key: key.clone(),
                     session_label: self
@@ -107,6 +119,7 @@ impl Workspace {
                         && !busy
                         && self.persistence_ready()
                         && attempt.admission == Admission::Uncertain
+                        && !self.creations.checks.contains_key(key)
                         && matches!(
                             checking.map(|check| check.state),
                             Some(CheckState::NotObserved)
@@ -114,6 +127,7 @@ impl Workspace {
                 }
             })
             .collect();
+        rows.extend(self.creation_recovery_items());
         rows.sort_by(|a, b| a.key.session.as_str().cmp(b.key.session.as_str()));
         rows
     }
@@ -124,6 +138,18 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.creations.get(key).is_some() {
+            self.check_creation(key, false, window, cx);
+            return;
+        }
+        if self
+            .send_attempts
+            .attempt(key)
+            .is_some_and(|attempt| attempt.origin == SendOrigin::Created)
+        {
+            self.check_created_send(key, false, window, cx);
+            return;
+        }
         self.start_recovery_check(key, CheckAction::Observe, window, cx);
     }
 
@@ -133,9 +159,40 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.creations.get(key).is_some() {
+            self.check_creation(key, true, window, cx);
+            return;
+        }
+        if self
+            .send_attempts
+            .attempt(key)
+            .is_some_and(|attempt| attempt.origin == SendOrigin::Created)
+        {
+            self.check_created_send(key, true, window, cx);
+            return;
+        }
         if self.persistence_ready() {
             self.start_recovery_check(key, CheckAction::RetryIfMissing, window, cx);
         }
+    }
+
+    pub(crate) fn continue_created_recovery(
+        &mut self,
+        key: &SessionKey,
+        retry: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_recovery_check(
+            key,
+            if retry {
+                CheckAction::RetryIfMissing
+            } else {
+                CheckAction::Observe
+            },
+            window,
+            cx,
+        );
     }
 
     fn start_recovery_check(
@@ -149,13 +206,14 @@ impl Workspace {
             || key.runtime != self.runtime
             || self.send_attempts.is_active(key)
             || self.recovery.tasks.contains_key(key)
+            || self.creation_tasks.contains_key(key)
         {
             return;
         }
         let Some(attempt) = self.send_attempts.attempt(key) else {
             return;
         };
-        if attempt.admission == Admission::Preparing {
+        if attempt.admission == Admission::Preparing || attempt.origin == SendOrigin::Deleted {
             return;
         }
         let id = attempt.prompt.message_id.clone();
@@ -171,6 +229,10 @@ impl Workspace {
         };
         let session = key.session.clone();
         let message = id.clone();
+        let since = self
+            .open_sessions
+            .get(&key.session)
+            .map_or(0, |open| open.transcript.revision());
         let request = connection
             .network
             .run(async move { client.lookup_prompt(&session, &message).await });
@@ -179,6 +241,7 @@ impl Workspace {
             Check {
                 id: id.clone(),
                 state: CheckState::Checking,
+                since,
             },
         );
         let key = key.clone();
@@ -203,6 +266,15 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let Some(check) = self
+            .recovery
+            .checks
+            .get(key)
+            .filter(|check| check.id == *id)
+        else {
+            return;
+        };
+        let since = check.since;
         if !self
             .send_attempts
             .attempt(key)
@@ -217,29 +289,16 @@ impl Workspace {
                 self.recovery.checks.remove(key);
                 self.queue_persistence(cx);
             }
-            Ok(PromptObservation::Delivered(_)) => {
-                let optimistic = self
-                    .send_attempts
-                    .attempt(key)
-                    .map(|attempt| attempt.optimistic.clone());
-                self.send_attempts.observe(key, id);
-                self.recovery.checks.remove(key);
+            Ok(PromptObservation::Delivered(message)) => {
                 if key.runtime == self.runtime {
-                    if let Some(open) = self.open_sessions.get_mut(&key.session)
-                        && let Some(optimistic) = optimistic
-                        && open
-                            .transcript
-                            .row_of(id)
-                            .and_then(|row| open.transcript.message(row))
-                            == Some(&optimistic)
-                    {
-                        let change = open.transcript.apply(TranscriptEvent::MessageRemoved {
-                            message_id: id.clone(),
-                        });
+                    if let Some(open) = self.open_sessions.get_mut(&key.session) {
+                        let change = open.transcript.apply_message_snapshot(*message, since);
                         apply_list_change(open, &change, cx);
                     }
                     self.load_history(&key.session, cx);
                 }
+                self.send_attempts.observe(key, id);
+                self.recovery.checks.remove(key);
                 self.queue_persistence(cx);
             }
             Ok(PromptObservation::NotObserved) => {
@@ -248,6 +307,7 @@ impl Workspace {
                     Check {
                         id: id.clone(),
                         state: CheckState::NotObserved,
+                        since,
                     },
                 );
                 if matches!(action, CheckAction::RetryIfMissing) && key.runtime == self.runtime {
@@ -260,6 +320,7 @@ impl Workspace {
                     Check {
                         id: id.clone(),
                         state: CheckState::Failed,
+                        since,
                     },
                 );
             }

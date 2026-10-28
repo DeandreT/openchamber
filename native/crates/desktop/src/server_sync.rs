@@ -147,6 +147,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.navigation_revision = self.navigation_revision.wrapping_add(1);
         self.save_composer_draft(cx);
         self.save_scroll_position();
         if let Some(open) = self
@@ -630,6 +631,7 @@ impl Workspace {
         }
         if had_attempt && self.send_attempts.attempt(&mutation_key).is_none() {
             self.recovery.clear_finished(&mutation_key);
+            self.creations.checks.remove(&mutation_key);
             self.queue_persistence(cx);
         }
         cx.notify();
@@ -720,6 +722,7 @@ impl Workspace {
                     }
                     if had_attempt && this.send_attempts.attempt(&mutation_key).is_none() {
                         this.recovery.clear_finished(&mutation_key);
+                        this.creations.checks.remove(&mutation_key);
                         this.queue_persistence(cx);
                     }
                     cx.notify();
@@ -757,6 +760,8 @@ impl Workspace {
                     ordering.push(OrderingMutation::Observe { session_id, phase });
                 }
                 ServerEvent::SessionDeleted { session_id } => {
+                    let key = self.mutation_key(&session_id);
+                    self.mark_creation_deleted(&key, cx);
                     self.live_status.remove(&session_id);
                     ordering.push(OrderingMutation::Remove { session_id });
                 }
@@ -851,6 +856,7 @@ impl Workspace {
             {
                 if self.send_attempts.attempt(key).is_none() {
                     self.recovery.clear_finished(key);
+                    self.creations.checks.remove(key);
                 }
                 self.queue_persistence(cx);
             }
@@ -874,6 +880,7 @@ impl Workspace {
             && self.send_attempts.attempt(&key).is_none()
         {
             self.recovery.clear_finished(&key);
+            self.creations.checks.remove(&key);
             self.queue_persistence(cx);
         }
         needs_read
@@ -881,7 +888,7 @@ impl Workspace {
 
     /// Rebuilds the sidebar after an index change and keeps the selection on
     /// a session that is still listed.
-    fn after_index_update(
+    pub(crate) fn after_index_update(
         &mut self,
         update: IndexUpdate,
         window: &mut Window,

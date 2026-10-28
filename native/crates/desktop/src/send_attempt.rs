@@ -23,8 +23,17 @@ pub(crate) enum Admission {
     Uncertain,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) enum SendOrigin {
+    #[default]
+    Existing,
+    Created,
+    Deleted,
+}
+
 #[derive(Clone)]
 pub(crate) struct SendAttempt {
+    pub origin: SendOrigin,
     pub owner: DraftKey,
     pub draft: Draft,
     pub prompt: TextPrompt,
@@ -116,7 +125,10 @@ impl SendAttempts {
         let Some(attempt) = self.attempts.get_mut(key) else {
             return false;
         };
-        if attempt.prompt.message_id != *id || attempt.admission != Admission::Preparing {
+        if attempt.origin == SendOrigin::Deleted
+            || attempt.prompt.message_id != *id
+            || attempt.admission != Admission::Preparing
+        {
             return false;
         }
         attempt.admission = Admission::Sending { observed: false };
@@ -124,11 +136,9 @@ impl SendAttempts {
     }
 
     pub(crate) fn begin_retry(&mut self, key: &SessionKey) -> bool {
-        if !self
-            .attempts
-            .get(key)
-            .is_some_and(|attempt| attempt.admission == Admission::Uncertain)
-            || self.active.contains_key(key)
+        if !self.attempts.get(key).is_some_and(|attempt| {
+            attempt.origin != SendOrigin::Deleted && attempt.admission == Admission::Uncertain
+        }) || self.active.contains_key(key)
         {
             return false;
         }
@@ -159,6 +169,17 @@ impl SendAttempts {
 
     pub(crate) fn attempt(&self, key: &SessionKey) -> Option<&SendAttempt> {
         self.attempts.get(key)
+    }
+
+    pub(crate) fn mark_created_deleted(&mut self, key: &SessionKey) -> bool {
+        let Some(attempt) = self.attempts.get_mut(key) else {
+            return false;
+        };
+        if attempt.origin != SendOrigin::Created {
+            return false;
+        }
+        attempt.origin = SendOrigin::Deleted;
+        true
     }
 
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&SessionKey, &SendAttempt)> {
@@ -271,7 +292,7 @@ impl SendAttempts {
         let Some(attempt) = self.attempts.get_mut(key) else {
             return false;
         };
-        if attempt.prompt.message_id != *id {
+        if attempt.origin == SendOrigin::Deleted || attempt.prompt.message_id != *id {
             return false;
         }
         match attempt.admission {
@@ -307,6 +328,9 @@ impl SendAttempts {
             self.active.remove(key);
         }
         let attempt = self.attempts.get_mut(key)?;
+        if attempt.origin == SendOrigin::Deleted {
+            return None;
+        }
         if attempt.admission == (Admission::Sending { observed: true }) {
             self.attempts.remove(key);
             return None;
@@ -346,6 +370,34 @@ pub(crate) mod tests {
     use openchamber_native_core::send_config::ModelChoice;
     use openchamber_native_core::transcript::{MessageInfo, Part};
 
+    #[test]
+    fn deleted_created_session_keeps_text_and_rejects_late_completion_and_retry() {
+        let key = key("runtime", "ses_deleted");
+        let mut attempt = attempt(&key);
+        attempt.origin = SendOrigin::Created;
+        let id = attempt.prompt.message_id.clone();
+        let mut attempts = SendAttempts::default();
+        assert!(attempts.begin(key.clone(), attempt));
+        assert!(attempts.mark_created_deleted(&key));
+        assert!(!attempts.observe(&key, &id));
+        assert!(attempts.finish(&key, Ok(())).is_none());
+        assert!(!attempts.begin_retry(&key));
+        assert!(!attempts.can_send(&key));
+        assert_eq!(
+            attempts.attempt(&key).expect("retained").origin,
+            SendOrigin::Deleted
+        );
+        let restored = SendAttempts::from_snapshot(attempts.snapshot()).expect("restore");
+        assert_eq!(
+            restored.attempt(&key).expect("retained").origin,
+            SendOrigin::Deleted
+        );
+        assert_eq!(
+            restored.attempt(&key).expect("saved text").draft.text,
+            "submitted text"
+        );
+    }
+
     pub(crate) fn key(runtime: &str, session: &str) -> SessionKey {
         SessionKey {
             runtime: RuntimeId::from(runtime),
@@ -360,6 +412,7 @@ pub(crate) mod tests {
         };
         let message_id = MessageId::from("msg_bcfe56800001AbCdEf01234567");
         SendAttempt {
+            origin: SendOrigin::Existing,
             owner: DraftKey::new(
                 key.runtime.clone(),
                 "/project",

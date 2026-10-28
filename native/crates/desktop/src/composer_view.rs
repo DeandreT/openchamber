@@ -215,8 +215,9 @@ impl Workspace {
             .as_ref()
             .is_some_and(|id| self.is_streaming(id));
         let empty = self.composer.read(cx).value().trim().is_empty();
-        let can_send =
-            !empty && self.selected.is_some() && (self.is_synthetic() || self.can_send_connected());
+        let can_send = !empty
+            && ((self.selected.is_some() && (self.is_synthetic() || self.can_send_connected()))
+                || (self.selected.is_none() && self.can_create_connected()));
         let strings = locale::strings(cx);
         let (label, icon) = if streaming {
             (

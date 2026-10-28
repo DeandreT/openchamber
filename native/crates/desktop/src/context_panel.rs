@@ -15,7 +15,7 @@ use openchamber_native_core::send_config::ModelChoice;
 
 use crate::activation::on_activate;
 use crate::baseline::CssTextExt;
-use crate::chrome::{ButtonTone, CONTROL_RADIUS, IconButton, glyph};
+use crate::chrome::{CONTROL_RADIUS, IconButton, glyph};
 use crate::elevation;
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
@@ -452,7 +452,6 @@ impl Workspace {
                     strings.get("contextRail.configure.open"),
                 )
                 .size(RAIL_BUTTON, RAIL_GLYPH)
-                .tone(ButtonTone::Dim)
                 .render(palette, cx, |_, _, _| {}),
             )
     }

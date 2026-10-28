@@ -424,6 +424,24 @@ impl Transcript {
         self.prepend(page)
     }
 
+    /// Applies one authoritative message read at `since`, preserving newer
+    /// changes or deletions of that message and leaving all other rows intact.
+    pub fn apply_message_snapshot(&mut self, message: Message, since: u64) -> TranscriptChange {
+        let id = &message.info.id;
+        if self
+            .changed_at
+            .get(id)
+            .is_some_and(|revision| *revision > since)
+            || self
+                .removed_at
+                .get(id)
+                .is_some_and(|revision| *revision > since)
+        {
+            return TranscriptChange::Unchanged;
+        }
+        self.push(message)
+    }
+
     /// Appends a message, or updates it in place when already held.
     pub fn push(&mut self, mut message: Message) -> TranscriptChange {
         self.removed_at.remove(&message.info.id);
@@ -973,6 +991,67 @@ fn keep_whole_results(held: &Message, next: &mut Message) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn late_exact_snapshot_preserves_target_deletion() {
+        for loaded in [false, true] {
+            let stale = message("target", Role::User, "old");
+            let mut transcript = Transcript::new();
+            if loaded {
+                let _ = transcript.push(stale.clone());
+            }
+            let since = transcript.revision();
+            let _ = transcript.apply(TranscriptEvent::MessageRemoved {
+                message_id: stale.info.id.clone(),
+            });
+            let before = transcript.clone();
+            assert_eq!(
+                transcript.apply_message_snapshot(stale, since),
+                TranscriptChange::Unchanged
+            );
+            assert_eq!(
+                transcript, before,
+                "late lookup preserves the deletion tombstone"
+            );
+        }
+    }
+
+    #[test]
+    fn late_exact_snapshot_preserves_target_change() {
+        let stale = message("target", Role::User, "old");
+        let mut transcript = Transcript::from_history(vec![stale.clone()]);
+        let since = transcript.revision();
+        let _ = transcript.apply(TranscriptEvent::PartsReplaced {
+            message_id: stale.info.id.clone(),
+            parts: vec![Part::text("target-p0", "newer live content")],
+        });
+        let before = transcript.clone();
+        assert_eq!(
+            transcript.apply_message_snapshot(stale, since),
+            TranscriptChange::Unchanged
+        );
+        assert_eq!(
+            transcript, before,
+            "late lookup preserves newer target content"
+        );
+    }
+
+    #[test]
+    fn exact_snapshot_accepts_unchanged_target_after_unrelated_change() {
+        let mut transcript = Transcript::from_history(vec![
+            message("target", Role::User, "optimistic"),
+            message("other", Role::Assistant, "old"),
+        ]);
+        let since = transcript.revision();
+        let other = message("other", Role::Assistant, "newer live content");
+        let _ = transcript.push(other.clone());
+        let authoritative = message("target", Role::User, "prepared by server");
+        assert_eq!(
+            transcript.apply_message_snapshot(authoritative.clone(), since),
+            TranscriptChange::Updated { row: 0 }
+        );
+        assert_eq!(transcript.messages(), &[authoritative, other]);
+    }
 
     #[test]
     fn delayed_history_cannot_restore_a_deleted_message() {

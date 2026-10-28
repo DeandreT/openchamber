@@ -1,4 +1,4 @@
-# Fractional logical layout
+# Fractional logical layout and shaped-text wrapping
 
 ## Ownership
 
@@ -8,9 +8,10 @@ The starting source is the exact local registry package
 resources and `LICENSE-APACHE` are retained. The package's upstream repository
 is recorded in `Cargo.toml`.
 
-The local patch owns an opt-in window layout policy and invalidation of GPUI's
-retained virtual-list measurements. Application startup owns selecting the
-policy. The accessibility bridge also supports explicit active-descendant
+The local patch owns an opt-in window layout policy, invalidation of GPUI's
+retained virtual-list measurements, and ASCII-space overflow handling in shaped
+text. Application startup owns selecting the layout policy. The accessibility
+bridge also supports explicit active-descendant
 relationships between a focused search editor and sibling options, documented
 in `src/window/a11y.rs`. Toolkit editing, transport and application row models
 remain outside this patch.
@@ -45,7 +46,21 @@ remain outside this patch.
   Ordinary scrolling adds only a constant-time mode/scale comparison and retains
   the existing visible-range and overdraw work.
 
+- Shaped-text wrapping does not break on overflow of an ASCII space. The next
+  non-space character establishes its candidate before overflow is resolved.
+  Spaces retain their advances and original byte indices; no text is rewritten.
+  Non-ASCII whitespace, tabs, candidate tracking and line-clamp limits retain
+  their existing rules. The editor's separate `LineWrapper` is unchanged.
+
 ## Decisions
+
+### Why ASCII-space overflow waits for the next character
+
+A word can fit while its following space exceeds the width. Breaking on that
+space uses the previous candidate and moves the fitting word to the next line.
+Waiting for the next character preserves the word and its following break
+opportunity. The guard tests only U+0020 so it does not redefine Unicode
+whitespace or non-breaking-space behavior.
 
 ### Why logical measurements must survive independently laid-out roots
 
@@ -84,6 +99,14 @@ and shadow exceptions. Font baseline correction and application-owned geometry
 caches are separate responsibilities. This patch does not certify platform or
 visual parity.
 
-Remove the patch when the pinned upstream toolkit supplies equivalent opt-in
-logical geometry, translation and list-invalidation behavior. Keep the focused
-regressions when evaluating that replacement.
+The `text_wrap` public-API tests use `WindowTextSystem::shape_text` with
+`NoopTextSystem` to cover fitting words, repeated, leading and trailing ASCII
+spaces, unchanged non-ASCII whitespace and tabs, byte indices and line clamps.
+They exercise the real wrap implementation with deterministic glyph advances.
+
+These are local fork patches. Remove the logical-layout changes when the pinned
+upstream toolkit supplies equivalent opt-in logical geometry, translation and
+list-invalidation behavior. Remove the ASCII-space guard when the pinned
+upstream shaped-text wrapper preserves fitting words across trailing-space
+overflow with the same text, index and line-clamp guarantees. Keep the focused
+regressions when evaluating either replacement.

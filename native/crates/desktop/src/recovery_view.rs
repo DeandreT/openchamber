@@ -23,6 +23,14 @@ pub(crate) enum RecoveryPhase {
     Checking,
     NotObserved,
     CheckFailed,
+    CreatePreparing,
+    Creating,
+    CreateUnknown,
+    CreateCheckFailed,
+    CreateNotObserved,
+    CreateMismatch,
+    CreateDeleted,
+    CreateReady,
 }
 
 pub(crate) struct RecoveryRow {
@@ -148,6 +156,14 @@ impl Workspace {
                 RecoveryPhase::Checking => "chat.nativeRecovery.checking",
                 RecoveryPhase::NotObserved => "chat.nativeRecovery.notObserved",
                 RecoveryPhase::CheckFailed => "chat.nativeRecovery.checkFailed",
+                RecoveryPhase::CreatePreparing => "chat.nativeCreation.preparing",
+                RecoveryPhase::Creating => "chat.nativeCreation.creating",
+                RecoveryPhase::CreateUnknown => "chat.nativeCreation.unknown",
+                RecoveryPhase::CreateCheckFailed => "chat.nativeCreation.checkFailed",
+                RecoveryPhase::CreateNotObserved => "chat.nativeCreation.notObserved",
+                RecoveryPhase::CreateMismatch => "chat.nativeCreation.mismatch",
+                RecoveryPhase::CreateDeleted => "chat.nativeCreation.deleted",
+                RecoveryPhase::CreateReady => "chat.nativeCreation.ready",
             });
             let check_label = strings.get("chat.nativeRecovery.check");
             let retry_label = strings.get("chat.nativeRecovery.retry");

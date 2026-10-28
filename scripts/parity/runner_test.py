@@ -15,6 +15,90 @@ from unittest.mock import Mock, patch
 import runner
 
 
+class ArtifactIdentityTest(unittest.TestCase):
+    def test_bytes_and_relative_names_define_the_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            source = root / "first.txt"
+            source.write_text("same")
+            initial = runner.artifact_identity(root)
+            self.assertEqual(initial, runner.artifact_identity(root))
+            source.write_text("changed")
+            self.assertNotEqual(initial, runner.artifact_identity(root))
+            source.write_text("same")
+            source.rename(root / "renamed.txt")
+            self.assertNotEqual(initial, runner.artifact_identity(root))
+
+    def test_missing_input_cannot_be_an_empty_success(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaises(FileNotFoundError):
+                runner.artifact_identity(Path(temporary) / "missing")
+
+    def test_existing_run_is_preserved(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "seed").mkdir()
+            output = root / "previous"
+            output.mkdir()
+            saved = output / "report.json"
+            saved.write_text("previous evidence")
+            args = argparse.Namespace(root=root, output=output, scenarios=None)
+            self.assertEqual(runner.run(args), 2)
+            self.assertEqual(saved.read_text(), "previous evidence")
+
+    def test_changed_inputs_block_an_otherwise_passing_run(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "seed").mkdir()
+            output = root / "new"
+            args = argparse.Namespace(root=root, output=output, scenarios=None)
+
+            def passing(_scenarios, _wanted, _output, report, _args):
+                report["scenarios"]["shell.startup"] = {"status": "passed"}
+                return 0
+
+            with patch.object(runner, "input_identities", side_effect=[{"input": "before"}, {"input": "after"}]):
+                with patch.object(runner, "run_scenarios", side_effect=passing):
+                    with patch.object(runner.native_adapter, "accessibility_enabled", return_value=False):
+                        with patch.object(runner.native_adapter, "set_accessibility"):
+                            self.assertEqual(runner.run(args), 1)
+            report = json.loads((output / "report.json").read_text())
+            self.assertFalse(report["inputsUnchanged"])
+            self.assertEqual(report["scenarios"]["shell.startup"]["status"], "blocked")
+            self.assertEqual(report["scenarios"]["shell.startup"]["observedStatus"], "passed")
+
+    def test_changes_to_the_launched_electron_package_block_results(self):
+        for changed in ("web-dist/index.html", "opencode-cli/opencode"):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                resources = root / "electron/resources"
+                files = ("electron/app", "electron/resources/app.asar",
+                         "electron/resources/web-dist/index.html", "electron/resources/opencode-cli/opencode",
+                         "native", "staged/index.html", "server-opencode", "seed/snapshot")
+                for name in files:
+                    path = root / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(name)
+                args = argparse.Namespace(
+                    root=root, output=root / "new", scenarios=None,
+                    electron_app=root / "electron/app", native_binary=root / "native",
+                    dist=root / "staged", opencode_binary=root / "server-opencode",
+                )
+
+                def passing(_scenarios, _wanted, _output, report, _args):
+                    report["scenarios"]["shell.startup"] = {"status": "passed"}
+                    (resources / changed).write_text("replacement reference")
+                    return 0
+
+                with patch.object(runner, "run_scenarios", side_effect=passing):
+                    with patch.object(runner.native_adapter, "accessibility_enabled", return_value=False):
+                        with patch.object(runner.native_adapter, "set_accessibility"):
+                            self.assertEqual(runner.run(args), 1)
+                report = json.loads((args.output / "report.json").read_text())
+                self.assertFalse(report["inputsUnchanged"])
+                self.assertEqual(report["scenarios"]["shell.startup"]["status"], "blocked")
+
+
 class Client:
     def __init__(self, *, busy=False, selects_target=True):
         self.inflight = busy

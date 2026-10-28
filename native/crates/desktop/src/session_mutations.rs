@@ -16,7 +16,7 @@ use openchamber_native_transport::prompt::{
 use crate::connection::ConnectionState;
 use crate::locale;
 use crate::network::NetworkTask;
-use crate::send_attempt::{self, Admission, SendAttempt, SessionKey};
+use crate::send_attempt::{self, Admission, SendAttempt, SendOrigin, SessionKey};
 use crate::server_sync::apply_list_change;
 use crate::workspace::Workspace;
 
@@ -24,6 +24,7 @@ use crate::workspace::Workspace;
 enum DispatchKind {
     New,
     Retry,
+    Created,
 }
 
 struct SendDispatch {
@@ -45,10 +46,10 @@ impl Workspace {
             && self
                 .send_selection()
                 .is_some_and(|(_, selection)| selection.model.is_some())
-            && self
-                .selected
-                .as_ref()
-                .is_some_and(|session| self.send_attempts.can_send(&self.mutation_key(session)))
+            && self.selected.as_ref().is_some_and(|session| {
+                self.send_attempts.can_send(&self.mutation_key(session))
+                    && self.creations.get(&self.mutation_key(session)).is_none()
+            })
             && self.connection.as_ref().is_some_and(|connection| {
                 matches!(connection.state, ConnectionState::Connected)
                     && connection.client.is_some()
@@ -63,7 +64,10 @@ impl Workspace {
             return;
         };
         let key = self.mutation_key(&session);
-        if !self.send_attempts.can_send(&key) || self.is_streaming(&session) {
+        if !self.send_attempts.can_send(&key)
+            || self.creations.get(&key).is_some()
+            || self.is_streaming(&session)
+        {
             return;
         }
         let Some(owner) = self.composer_key.clone().filter(|owner| {
@@ -124,6 +128,7 @@ impl Workspace {
             )],
         };
         let attempt = SendAttempt {
+            origin: SendOrigin::Existing,
             owner: owner.clone(),
             draft,
             prompt: prompt.clone(),
@@ -164,6 +169,10 @@ impl Workspace {
             return;
         };
         let prompt = attempt.prompt.clone();
+        if attempt.origin == SendOrigin::Created {
+            self.retry_created_prompt(key, window, cx);
+            return;
+        }
         let Some(connection) = self
             .connection
             .as_ref()
@@ -191,6 +200,52 @@ impl Workspace {
         );
     }
 
+    pub(crate) fn start_created_send(
+        &mut self,
+        key: SessionKey,
+        prompt: TextPrompt,
+        client: openchamber_native_transport::client::ServerClient,
+        executor: tokio::runtime::Handle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_durable_send(
+            key,
+            prompt,
+            SendDispatch {
+                client,
+                executor,
+                kind: DispatchKind::Created,
+            },
+            window,
+            cx,
+        );
+    }
+
+    pub(crate) fn dispatch_created_retry(
+        &mut self,
+        key: SessionKey,
+        prompt: TextPrompt,
+        client: openchamber_native_transport::client::ServerClient,
+        executor: tokio::runtime::Handle,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.persistence_ready() && self.send_attempts.begin_retry(&key) {
+            self.start_durable_send(
+                key,
+                prompt,
+                SendDispatch {
+                    client,
+                    executor,
+                    kind: DispatchKind::Retry,
+                },
+                window,
+                cx,
+            );
+        }
+    }
+
     fn start_durable_send(
         &mut self,
         key: SessionKey,
@@ -209,7 +264,7 @@ impl Workspace {
                 &key,
                 Err(match kind {
                     DispatchKind::New => PromptAdmission::NotAttempted,
-                    DispatchKind::Retry => PromptAdmission::Unknown,
+                    DispatchKind::Retry | DispatchKind::Created => PromptAdmission::Unknown,
                 }),
             );
             cx.notify();
@@ -228,13 +283,19 @@ impl Workspace {
                     .send_attempts
                     .attempt(&key)
                     .is_some_and(|attempt| attempt.prompt.message_id == id);
-                if !durable || !current {
+                let deleted = this
+                    .send_attempts
+                    .attempt(&key)
+                    .is_some_and(|attempt| attempt.origin == SendOrigin::Deleted);
+                if !durable || !current || deleted {
                     if current {
                         this.send_attempts.finish(
                             &key,
                             Err(match kind {
                                 DispatchKind::New => PromptAdmission::NotAttempted,
-                                DispatchKind::Retry => PromptAdmission::Unknown,
+                                DispatchKind::Retry | DispatchKind::Created => {
+                                    PromptAdmission::Unknown
+                                }
                             }),
                         );
                     }
@@ -242,7 +303,7 @@ impl Workspace {
                     cx.notify();
                     return false;
                 }
-                if matches!(kind, DispatchKind::New) {
+                if matches!(kind, DispatchKind::New | DispatchKind::Created) {
                     if !this.send_attempts.prepared(&key, &id) {
                         this.mutation_tasks.remove(&key);
                         return false;
@@ -254,14 +315,16 @@ impl Workspace {
                     let owner = attempt.owner.clone();
                     let text = attempt.draft.text.clone();
                     let optimistic = attempt.optimistic.clone();
-                    if this
-                        .drafts
-                        .get(&owner)
-                        .is_some_and(|draft| draft.text == text)
+                    if matches!(kind, DispatchKind::New)
+                        && this
+                            .drafts
+                            .get(&owner)
+                            .is_some_and(|draft| draft.text == text)
                     {
                         this.drafts.take(&owner);
                     }
-                    if this.composer_key.as_ref() == Some(&owner)
+                    if matches!(kind, DispatchKind::New)
+                        && this.composer_key.as_ref() == Some(&owner)
                         && this.composer.read(cx).value().as_ref() == text
                     {
                         this.composer

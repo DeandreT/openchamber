@@ -139,8 +139,6 @@ pub enum ButtonTone {
     QuietFilled,
     /// Foreground glyph: the control's panel is open.
     Active,
-    /// Dimmed glyph (`text-muted-foreground/70`), foreground on hover.
-    Dim,
 }
 
 /// A square button around one glyph.
@@ -188,7 +186,6 @@ impl IconButton {
         let rest = match self.tone {
             ButtonTone::Quiet | ButtonTone::QuietFilled => palette.muted_foreground,
             ButtonTone::Active => palette.foreground,
-            ButtonTone::Dim => palette.muted_foreground.opacity(0.7),
         };
         let hover_fill = palette.hover.opacity(0.5);
         let foreground = palette.foreground;
