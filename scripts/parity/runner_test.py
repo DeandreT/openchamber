@@ -4,6 +4,7 @@ Run from this directory with `python3 -m unittest runner_test`.
 """
 
 import argparse
+import hashlib
 import itertools
 import json
 import os
@@ -16,6 +17,23 @@ import runner
 
 
 class ArtifactIdentityTest(unittest.TestCase):
+    def test_binary_digest_is_the_standard_sha256_of_its_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            binary = Path(temporary) / "binary"
+            binary.write_bytes(b"synthetic executable")
+            self.assertEqual(runner.artifact_identity(binary)["sha256"], hashlib.sha256(binary.read_bytes()).hexdigest())
+
+    def test_tree_digest_uses_case_sensitive_posix_name_order(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            expected = hashlib.sha256()
+            for name in ("Z", "a"):
+                (root / name).write_bytes(name.encode())
+                expected.update(name.encode() + b"\0" + hashlib.sha256(name.encode()).digest())
+            identity = runner.artifact_identity(root)
+            self.assertEqual(identity["algorithm"], "sha256-tree-v1")
+            self.assertEqual(identity["sha256"], expected.hexdigest())
+
     def test_bytes_and_relative_names_define_the_identity(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -45,6 +63,15 @@ class ArtifactIdentityTest(unittest.TestCase):
             args = argparse.Namespace(root=root, output=output, scenarios=None)
             self.assertEqual(runner.run(args), 2)
             self.assertEqual(saved.read_text(), "previous evidence")
+
+    def test_unknown_scenario_cannot_succeed_without_running_checks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "seed").mkdir()
+            output = root / "new"
+            args = argparse.Namespace(root=root, output=output, scenarios="not-a-scenario")
+            self.assertEqual(runner.run(args), 2)
+            self.assertFalse(output.exists())
 
     def test_changed_inputs_block_an_otherwise_passing_run(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -188,6 +215,13 @@ class RunnerInputTest(unittest.TestCase):
 
 
 class ScenarioSettingsTest(unittest.TestCase):
+    def test_electron_uses_simple_gtk_without_changing_native_ime_setup(self):
+        with patch.dict(os.environ, {"GTK_IM_MODULE": "ibus"}, clear=True):
+            electron = runner.electron_env(Path("state"), "synthetic-config")
+            native = runner.native_env(Path("state"), "http://localhost:1", "openchamber-dark")
+        self.assertEqual(electron["GTK_IM_MODULE"], "gtk-im-context-simple")
+        self.assertNotIn("GTK_IM_MODULE", native)
+
     def test_both_clients_drop_inherited_credentials_and_configuration(self):
         inherited = {"PATH": "/test/bin", "DISPLAY": ":1001", "OPENAI_API_KEY": "private",
                      "OPENCODE_CONFIG_CONTENT": "private", "OPENCHAMBER_NATIVE_PASSWORD": "private"}
@@ -249,7 +283,8 @@ class ScenarioSettingsTest(unittest.TestCase):
 
     def test_unknown_click_targets_are_rejected_before_launch(self):
         scenarios = [{"id": "check", "feature": "feature", "steps": [{"clickTarget": "missing"}]}]
-        features = [{"id": "feature", "scenarios": ["check"]}]
+        features = [{"id": "feature", "scenarios": ["check"], "coverage": "automated",
+                     "requiredBehaviors": ["activation"], "states": ["open"]}]
         self.assertEqual(runner.check_contracts(scenarios, features, {}), ["scenario check references undefined target missing"])
 
     def test_only_client_generated_draft_ids_are_normalized(self):
@@ -274,6 +309,153 @@ class ScenarioSettingsTest(unittest.TestCase):
             self.assertEqual(json.loads((first / "oc-data" / "preferences.json").read_text())["fields"]["sidebarGrouping"]["value"], "time")
             self.assertEqual(json.loads((second / "oc-data" / "preferences.json").read_text())["fields"]["sidebarGrouping"]["value"], "project")
             self.assertEqual(json.loads(preferences.read_text()), original)
+
+
+class InventoryCoverageTest(unittest.TestCase):
+    def setUp(self):
+        self.feature = {
+            "id": "menu", "coverage": "automated", "scenarios": ["startup", "activate"],
+            "requiredBehaviors": ["appearance", "activation", "outcome"],
+            "states": ["closed", "open", "failed"],
+        }
+        self.scenarios = [
+            {"id": "startup", "feature": "menu", "steps": [{"capture": "startup"}],
+             "proofs": {"menu": {"behaviors": ["appearance"], "states": ["closed"]}}},
+            {"id": "activate", "feature": "menu", "steps": [],
+             "proofs": {"menu": {"behaviors": ["activation", "outcome"], "states": ["open", "failed"]}}},
+        ]
+
+    def coverage(self, results):
+        return runner.inventory_coverage([self.feature], results, self.scenarios)
+
+    def test_startup_only_cannot_complete_an_interaction_feature(self):
+        self.feature["scenarios"] = ["startup"]
+        report = self.coverage({"startup": {"status": "passed"}})
+        self.assertEqual(report["byFeature"]["menu"], "incomplete")
+        self.assertEqual(report["missingRequirements"]["menu"], {
+            "behaviors": ["activation", "outcome"], "states": ["open", "failed"],
+        })
+
+    def test_run_uses_executed_proofs_if_the_disk_contract_changes_after_fingerprinting(self):
+        self.feature["scenarios"] = ["startup"]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "seed").mkdir()
+            scenarios_file, inventory_file = root / "scenarios.json", root / "inventory.json"
+            scenarios_file.write_text(json.dumps({"scenarios": self.scenarios[:1], "targets": {}}))
+            inventory_file.write_text(json.dumps({"features": [self.feature]}))
+            args = argparse.Namespace(root=root, output=root / "result", scenarios=None)
+
+            def passing(_scenarios, _wanted, _output, report, _args):
+                report["scenarios"]["startup"] = {"status": "passed"}
+                return 0
+
+            def replace_after_read():
+                replacement = json.loads(scenarios_file.read_text())
+                replacement["scenarios"][0]["proofs"]["menu"] = {
+                    "behaviors": self.feature["requiredBehaviors"], "states": self.feature["states"],
+                }
+                scenarios_file.write_text(json.dumps(replacement))
+                return {"fingerprint": "same"}
+
+            reads = iter((False, True))
+
+            def read_inputs(_args):
+                return replace_after_read() if next(reads) else {"fingerprint": "same"}
+
+            with patch.object(runner, "SCENARIOS", scenarios_file), patch.object(runner, "INVENTORY", inventory_file):
+                with patch.object(runner, "input_identities", side_effect=read_inputs):
+                    with patch.object(runner, "run_scenarios", side_effect=passing):
+                        with patch.object(runner.native_adapter, "accessibility_enabled", return_value=False):
+                            with patch.object(runner.native_adapter, "set_accessibility"):
+                                self.assertEqual(runner.run(args), 0)
+            report = json.loads((args.output / "report.json").read_text())
+            self.assertTrue(report["inputsUnchanged"])
+            self.assertEqual(report["inventory"]["byFeature"]["menu"], "incomplete")
+            self.assertIn("activation", report["inventory"]["missingRequirements"]["menu"]["behaviors"])
+
+    def test_known_but_unproved_state_or_behavior_prevents_passing(self):
+        for field in ("states", "behaviors"):
+            with self.subTest(field=field):
+                proof = self.scenarios[1]["proofs"]["menu"]
+                value = proof[field].pop()
+                report = self.coverage({name: {"status": "passed"} for name in ("startup", "activate")})
+                self.assertEqual(report["byFeature"]["menu"], "incomplete")
+                self.assertEqual(report["missingRequirements"]["menu"][field], [value])
+                proof[field].append(value)
+
+    def test_completed_proof_union_qualifies(self):
+        report = self.coverage({name: {"status": "passed"} for name in ("startup", "activate")})
+        self.assertEqual(report["byFeature"]["menu"], "passed")
+        self.assertEqual(report["missingRequirements"]["menu"], {"behaviors": [], "states": []})
+        self.assertEqual(report["passed"], 1)
+
+    def test_incomplete_failed_blocked_and_skipped_runs_grant_no_proof(self):
+        for status, expected in (("incomplete", "incomplete"), ("failed", "failed"),
+                                 ("blocked", "failed"), ("not run", "incomplete")):
+            with self.subTest(status=status):
+                report = self.coverage({"startup": {"status": "passed"}, "activate": {"status": status}})
+                self.assertEqual(report["byFeature"]["menu"], expected)
+                self.assertIn("outcome", report["missingRequirements"]["menu"]["behaviors"])
+
+    def test_no_scenario_is_not_run_not_manual(self):
+        self.feature["scenarios"] = []
+        report = self.coverage({})
+        self.assertEqual(report["byFeature"]["menu"], "not run")
+        self.assertEqual(report["notRun"], 1)
+        self.assertEqual(report["manual"], 0)
+        self.assertEqual(report["missingRequirements"]["menu"]["states"], self.feature["states"])
+
+    def test_truly_manual_checks_remain_manual(self):
+        self.feature.update(coverage="manual", manualCheck="Observe the screen reader on the supported host.")
+        report = self.coverage({name: {"status": "passed"} for name in ("startup", "activate")})
+        self.assertEqual(report["byFeature"]["menu"], "manual")
+        self.assertEqual(report["passed"], 0)
+        self.feature["scenarios"] = []
+        report = self.coverage({})
+        self.assertEqual(report["byFeature"]["menu"], "manual")
+        self.assertEqual(report["missingRequirements"]["menu"]["behaviors"], self.feature["requiredBehaviors"])
+
+    def test_missing_proof_declarations_never_grant_implicit_credit(self):
+        self.scenarios[1].pop("proofs")
+        report = self.coverage({name: {"status": "passed"} for name in ("startup", "activate")})
+        self.assertEqual(report["byFeature"]["menu"], "incomplete")
+        self.assertIn("outcome", report["missingRequirements"]["menu"]["behaviors"])
+
+    def test_unknown_or_unlinked_result_cannot_prove_requirements(self):
+        self.feature["scenarios"] = ["startup"]
+        report = self.coverage({name: {"status": "passed"} for name in ("startup", "activate", "unknown")})
+        self.assertEqual(report["byFeature"]["menu"], "incomplete")
+        self.assertIn("outcome", report["missingRequirements"]["menu"]["behaviors"])
+
+    def test_contract_rejects_unknown_proof_and_missing_requirements(self):
+        self.scenarios[0]["proofs"]["menu"]["states"].append("typo")
+        self.scenarios[0]["proofs"]["menu"]["behaviors"].append("invented")
+        problems = runner.check_contracts(self.scenarios, [self.feature], {})
+        self.assertIn("scenario startup proves unknown states menu:typo", problems)
+        self.assertIn("scenario startup proves unknown behaviors menu:invented", problems)
+        self.feature.pop("requiredBehaviors")
+        self.assertIn("feature menu needs nonempty requiredBehaviors",
+                      runner.check_contracts(self.scenarios, [self.feature], {}))
+
+    def test_contract_rejects_unlinked_proof_and_unexplained_manual_classification(self):
+        self.feature.update(scenarios=[], coverage="manual")
+        problems = runner.check_contracts(self.scenarios, [self.feature], {})
+        self.assertIn("scenario startup proof is not linked by feature menu", problems)
+        self.assertIn("feature menu needs a manualCheck procedure", problems)
+
+    def test_repository_contract_is_valid_and_startup_leaves_workflows_uncovered(self):
+        features = json.loads(runner.INVENTORY.read_text())["features"]
+        definitions = json.loads(runner.SCENARIOS.read_text())
+        self.assertEqual(runner.check_contracts(definitions["scenarios"], features, definitions["targets"]), [])
+        report = runner.inventory_coverage(features, {"shell.startup": {"status": "passed"}}, definitions["scenarios"])
+        for feature in ("shell.header", "shell.sidebar-toolbar", "shell.sidebar-footer", "shell.right-rail", "sessions.ordering"):
+            self.assertEqual(report["byFeature"][feature], "incomplete")
+            self.assertTrue(report["missingRequirements"][feature]["behaviors"])
+        self.assertEqual(report["byFeature"]["runtime.connection-states"], "not run")
+        self.assertEqual(report["byFeature"]["browser-terminal.terminal"], "not run")
+        self.assertEqual(report["byFeature"]["runtime.platform-manual"], "manual")
+        self.assertEqual(report["passed"], 0)
 
 
 if __name__ == "__main__":

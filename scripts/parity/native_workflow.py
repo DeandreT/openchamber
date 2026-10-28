@@ -96,7 +96,25 @@ def qualify(args):
                 return found[0]
 
             def recovery_visible():
-                return any((node.get_accessible_id() or "").endswith("-check") for node in client._walk())
+                return any((node.get_accessible_id() or "").startswith("recovery-")
+                           and (node.get_accessible_id() or "").endswith("-check") for node in client._walk())
+
+            def click_recovery(suffix):
+                """Dispatch once after the post-check button state and position settle."""
+                previous, since = None, 0.0
+
+                def ready():
+                    nonlocal previous, since
+                    node = recovery_button(suffix)
+                    enabled = node.get_state_set().contains(_atspi().StateType.ENABLED)
+                    current = (node.get_name(), client._screen_point(node)) if enabled else None
+                    if current is None or current != previous:
+                        previous, since = current, time.monotonic()
+                        return False
+                    return time.monotonic() - since >= 0.15
+
+                wait_for("recovery control did not become enabled and stationary", ready)
+                client.click(recovery_button(suffix).get_accessible_id())
 
             client = start("first")
             if args.new_session:
@@ -143,19 +161,30 @@ def qualify(args):
                 client = start("reopened-creation")
                 wait_for("restart lost the uncertain creation", recovery_visible)
                 wait_for("creation status check did not enable", lambda: recovery_button("-check").get_state_set().contains(_atspi().StateType.ENABLED))
-                client.click(recovery_button("-check").get_accessible_id())
+                click_recovery("-check")
                 wait_for("failed creation lookup was not reported", lambda: any(
                     "Couldn't check session creation." in node.get_name() for node in client._walk()))
                 if len(proxy.create_ids) != 1 or proxy.prompt_ids:
                     raise RuntimeError("restart or failed lookup repeated creation or sent a prompt")
                 proxy.pause_reads.clear()
-                client.click(recovery_button("-check").get_accessible_id())
+                click_recovery("-check")
                 wait_for("creation retry did not enable", lambda: recovery_button("-retry").get_state_set().contains(_atspi().StateType.ENABLED))
                 if proxy.prompt_ids:
                     raise RuntimeError("checking creation sent the first prompt automatically")
                 proxy.pause_events.clear()
-                client.click(recovery_button("-retry").get_accessible_id())
-                wait_for("recovered creation did not send the saved prompt", first_prompt_present, timeout=30)
+                client.screenshot(args.output / "creation-retry-ready.png")
+                click_recovery("-retry")
+                try:
+                    wait_for("recovered creation did not send the saved prompt", first_prompt_present, timeout=30)
+                except TimeoutError:
+                    client.screenshot(args.output / "creation-retry-failed.png")
+                    controls = [{"id": node.get_accessible_id(), "name": node.get_name(),
+                                 "enabled": node.get_state_set().contains(_atspi().StateType.ENABLED)}
+                                for node in client._walk() if (node.get_accessible_id() or "").startswith("recovery-")]
+                    (args.output / "creation-retry-failed.json").write_text(json.dumps({
+                        "creates": proxy.create_ids, "prompts": proxy.prompt_ids, "controls": controls,
+                    }, indent=2))
+                    raise
                 wait_for("creation retry did not resolve recovery", lambda: not recovery_visible(), timeout=30)
                 expected = 2 if args.fault == "before" else 1
                 if proxy.create_ids != [session] * expected or len(proxy.prompt_ids) != 1:
@@ -194,19 +223,19 @@ def qualify(args):
                 proxy.pause_events.clear()
                 client = start("reopened-uncertain")
                 wait_for("restart lost the uncertain send", recovery_visible)
-                client.click(recovery_button("-check").get_accessible_id())
+                click_recovery("-check")
                 wait_for("failed observation was not reported", lambda: any("Couldn't check delivery." in node.get_name() for node in client._walk()))
                 if len(proxy.attempt_ids) != 1:
                     raise RuntimeError("a failed observation retried the mutation")
                 proxy.pause_reads.clear()
-                client.click(recovery_button("-check").get_accessible_id())
+                click_recovery("-check")
                 if args.fault == "after":
                     wait_for("admitted message did not resolve recovery", lambda: not recovery_visible(), timeout=30)
                     if len(proxy.attempt_ids) != 1 or len(posted()) != 1:
                         raise RuntimeError("an admitted prompt was duplicated")
                 else:
                     wait_for("unobserved prompt did not allow explicit retry", lambda: recovery_button("-retry").get_state_set().contains(_atspi().StateType.ENABLED))
-                    client.click(recovery_button("-retry").get_accessible_id())
+                    click_recovery("-retry")
                     wait_for("explicit retry did not admit the prompt", lambda: len(posted()) == 1, timeout=30)
                     wait_for("retry did not resolve recovery", lambda: not recovery_visible(), timeout=30)
                     if len(proxy.attempt_ids) != 2 or proxy.attempt_ids[0] != proxy.attempt_ids[1]:

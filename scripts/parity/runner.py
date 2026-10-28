@@ -228,6 +228,9 @@ def electron_env(state: Path, opencode_config: str) -> dict[str, str]:
     env.update(
         SHELL="/bin/zsh",
         LANG="en_US.UTF-8",
+        # GTK's automatic IBus module selection can deadlock a private launch.
+        # Native IME qualification supplies its own explicit IBus environment.
+        GTK_IM_MODULE="gtk-im-context-simple",
         OPENCHAMBER_DATA_DIR=str(state / "oc-data"),
         OPENCHAMBER_DESKTOP_USER_DATA_DIR=str(state / "electron-user-data"),
         OPENCODE_CONFIG_CONTENT=opencode_config,
@@ -347,6 +350,7 @@ def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], dire
                 "composerGradientProtectionComplete": paint.get("composerGradientProtectionComplete", False),
                 "image": str(image),
                 "settled": settled,
+                "pendingRoutes": [] if settled else getattr(client, "pending_requests", lambda: [])(),
                 "rows": client.rows(),
                 "targets": client.targets({target: targets[target][kind] for target in step.get("targets", [])}),
                 "waits": list(waits),
@@ -438,18 +442,26 @@ def compare_rows(reference: list[dict], candidate: list[dict], unobservable: fro
 def artifact_identity(path: Path) -> dict:
     """Identify exact bytes and relative names without retaining file contents."""
     path = path.resolve(strict=True)
-    files = sorted(item for item in path.rglob("*") if item.is_file()) if path.is_dir() else [path]
-    digest = hashlib.sha256()
-    for item in files:
-        name = item.relative_to(path).as_posix() if path.is_dir() else item.name
-        digest.update(name.encode())
-        digest.update(b"\0")
+
+    def file_digest(item):
         content = hashlib.sha256()
         with item.open("rb") as stream:
             for chunk in iter(lambda: stream.read(1024 * 1024), b""):
                 content.update(chunk)
-        digest.update(content.digest())
-    return {"path": str(path), "sha256": digest.hexdigest(), "files": len(files)}
+        return content.digest()
+
+    if path.is_file():
+        return {"path": str(path), "sha256": file_digest(path).hex(), "algorithm": "sha256", "files": 1}
+    if not path.is_dir():
+        raise OSError(f"comparison input is not a regular file or directory: {path}")
+    files = sorted((item for item in path.rglob("*") if item.is_file()),
+                   key=lambda item: item.relative_to(path).as_posix())
+    digest = hashlib.sha256()
+    for item in files:
+        digest.update(item.relative_to(path).as_posix().encode())
+        digest.update(b"\0")
+        digest.update(file_digest(item))
+    return {"path": str(path), "sha256": digest.hexdigest(), "algorithm": "sha256-tree-v1", "files": len(files)}
 
 
 def input_identities(args: argparse.Namespace) -> dict:
@@ -482,7 +494,11 @@ def run(args: argparse.Namespace) -> int:
         for problem in problems:
             print(problem, file=sys.stderr)
         return 2
-    wanted = set(args.scenarios.split(",")) if args.scenarios else None
+    wanted = {name.strip() for name in args.scenarios.split(",")} if args.scenarios else None
+    unknown = wanted - {scenario["id"] for scenario in scenarios} if wanted is not None else set()
+    if unknown:
+        print(f"unknown parity scenarios: {', '.join(sorted(unknown))}", file=sys.stderr)
+        return 2
     output = (args.output or REPO_ROOT / "artifacts" / f"parity-{time.strftime('%Y%m%dT%H%M%S')}").resolve()
     try:
         output.mkdir(parents=True)
@@ -514,7 +530,7 @@ def run(args: argparse.Namespace) -> int:
             scenario["observedStatus"] = scenario["status"]
             scenario["status"] = "blocked"
         print("comparison inputs changed during the run; results are blocked", file=sys.stderr)
-    report["inventory"] = inventory_coverage(features, report["scenarios"])
+    report["inventory"] = inventory_coverage(features, report["scenarios"], scenarios)
     (output / "report.json").write_text(json.dumps(report, indent=2))
     coverage = report["inventory"]
     print(f"inventory: {coverage['passed']} of {coverage['features']} features passed; "
@@ -525,11 +541,19 @@ def run(args: argparse.Namespace) -> int:
 
 
 def check_contracts(scenarios: list[dict], features: list[dict], targets: dict[str, dict]) -> list[str]:
-    """Every scenario names a known feature, every listed scenario exists and
-    every captured target is defined for both clients."""
+    """Validate targets and explicit proofs against the feature requirements.
+
+    Missing proof is a coverage gap, not an invalid contract. Unknown or
+    unlinked proof cannot silently satisfy a requirement.
+    """
     feature_ids = {feature["id"] for feature in features}
     scenario_ids = {scenario["id"] for scenario in scenarios}
     problems = [f"scenario {scenario['id']} names unknown feature {scenario['feature']}" for scenario in scenarios if scenario["feature"] not in feature_ids]
+    if len(feature_ids) != len(features):
+        problems.append("duplicate feature IDs")
+    if len(scenario_ids) != len(scenarios):
+        problems.append("duplicate scenario IDs")
+    by_feature = {feature["id"]: feature for feature in features}
     for scenario in scenarios:
         for step in scenario["steps"]:
             if "wait" in step and set(step["wait"]) - {"timeout"} != {"electron", "native"}:
@@ -542,24 +566,66 @@ def check_contracts(scenarios: list[dict], features: list[dict], targets: dict[s
                 for target in named_targets
                 if set(targets.get(target, {})) != {"electron", "native"}
             )
+        for feature_id, proof in scenario.get("proofs", {}).items():
+            feature = by_feature.get(feature_id)
+            if feature is None:
+                problems.append(f"scenario {scenario['id']} proves unknown feature {feature_id}")
+                continue
+            if scenario["id"] not in feature["scenarios"]:
+                problems.append(f"scenario {scenario['id']} proof is not linked by feature {feature_id}")
+            for field, requirement in (("behaviors", "requiredBehaviors"), ("states", "states")):
+                values = proof.get(field, [])
+                if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+                    problems.append(f"scenario {scenario['id']} proof {feature_id}.{field} must be a string list")
+                    continue
+                for value in values:
+                    if value not in feature.get(requirement, []):
+                        problems.append(f"scenario {scenario['id']} proves unknown {field} {feature_id}:{value}")
+            if set(proof) - {"behaviors", "states"}:
+                problems.append(f"scenario {scenario['id']} proof {feature_id} has unknown fields")
     for feature in features:
+        for field in ("requiredBehaviors", "states"):
+            values = feature.get(field)
+            if (not isinstance(values, list) or not values
+                    or any(not isinstance(value, str) or not value.strip() for value in values)):
+                problems.append(f"feature {feature['id']} needs nonempty {field}")
+            elif len(set(values)) != len(values):
+                problems.append(f"feature {feature['id']} has duplicate {field}")
+        if feature.get("coverage") not in ("automated", "manual"):
+            problems.append(f"feature {feature['id']} needs automated or manual coverage")
+        if feature.get("coverage") == "manual" and not feature.get("manualCheck"):
+            problems.append(f"feature {feature['id']} needs a manualCheck procedure")
         problems.extend(f"feature {feature['id']} lists unknown scenario {scenario}" for scenario in feature["scenarios"] if scenario not in scenario_ids)
     return problems
 
 
-def inventory_coverage(features: list[dict], results: dict[str, dict]) -> dict:
-    """Coverage against the whole inventory: a feature passes only when every
-    scenario it lists ran and passed; skipped or manual features never count."""
-    counts = {"features": len(features), "passed": 0, "failed": 0, "incomplete": 0, "notRun": 0, "manual": 0, "byFeature": {}}
+def inventory_coverage(features: list[dict], results: dict[str, dict], scenarios: list[dict]) -> dict:
+    """Union proofs from the executed contract snapshot, retaining every gap."""
+    by_scenario = {scenario["id"]: scenario for scenario in scenarios}
+    counts = {"features": len(features), "passed": 0, "failed": 0, "incomplete": 0, "notRun": 0, "manual": 0, "byFeature": {}, "missingRequirements": {}}
     for feature in features:
         statuses = [results.get(scenario, {}).get("status", "not run") for scenario in feature["scenarios"]]
-        if not feature["scenarios"]:
-            status = "manual"
-        elif any(status in ("failed", "blocked") for status in statuses):
+        proved = {"behaviors": set(), "states": set()}
+        for scenario_id in feature["scenarios"]:
+            if results.get(scenario_id, {}).get("status") != "passed":
+                continue
+            proof = by_scenario.get(scenario_id, {}).get("proofs", {}).get(feature["id"], {})
+            for field in proved:
+                proved[field].update(proof.get(field, []))
+        missing = {
+            "behaviors": [value for value in feature["requiredBehaviors"] if value not in proved["behaviors"]],
+            "states": [value for value in feature["states"] if value not in proved["states"]],
+        }
+        counts["missingRequirements"][feature["id"]] = missing
+        if any(status in ("failed", "blocked") for status in statuses):
             status = "failed"
-        elif statuses and all(status == "passed" for status in statuses):
+        elif feature["coverage"] == "manual":
+            status = "manual"
+        elif (statuses and all(status == "passed" for status in statuses)
+              and feature["requiredBehaviors"] and feature["states"]
+              and not any(missing.values())):
             status = "passed"
-        elif any(status == "incomplete" for status in statuses):
+        elif any(status in ("passed", "incomplete") for status in statuses):
             status = "incomplete"
         else:
             status = "not run"

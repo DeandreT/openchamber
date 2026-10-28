@@ -1,9 +1,15 @@
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 import { reservePort } from './cdp.mjs';
-import { isolatedServerEnv, startFixture } from './isolated-server.mjs';
+import { isolatedOpencodeConfig, isolatedServerEnv, startFixture, startInteractionServer, withInteractionServer } from './isolated-server.mjs';
+import { INTERACTION_SHELL_COMMAND } from './fixture-provider.mjs';
+
+const interactionHost = process.platform === 'linux' && existsSync('/tmp/opencode') && !existsSync('/etc/opencode')
+  && ['/', '/tmp', '/tmp/opencode'].every((directory) =>
+    ['opencode.json', 'opencode.jsonc', '.opencode', 'AGENTS.md', 'CLAUDE.md'].every((name) => !existsSync(join(directory, name))));
 
 test('isolated server replaces every home and data location without inheriting credentials', () => {
   const state = join('scratch', 'state');
@@ -64,4 +70,53 @@ test('fixture CLI starts and answers a deterministic completion', async () => {
     await fixture.stop();
   }
   await assert.rejects(fetch(`http://127.0.0.1:${port}/v1/models`, { signal: AbortSignal.timeout(1000) }));
+});
+
+test('interaction configuration uses only the local provider and exact shell permission', () => {
+  const original = isolatedOpencodeConfig(1234);
+  assert.equal(original.model, 'perf/stream-300cps');
+  assert.equal(original.permissions, undefined);
+  const config = isolatedOpencodeConfig(1234, { interactions: true });
+  assert.deepEqual(config.permissions, [
+    { action: '*', resource: '*', effect: 'deny' },
+    { action: 'question', resource: '*', effect: 'allow' },
+    { action: 'shell', resource: INTERACTION_SHELL_COMMAND, effect: 'ask' },
+  ]);
+  assert.equal(config.providers.perf.settings.baseURL, 'http://127.0.0.1:1234/v1');
+  assert.deepEqual(config.policies, [
+    { action: 'provider.use', resource: '*', effect: 'deny' },
+    { action: 'provider.use', resource: 'perf', effect: 'allow' },
+  ]);
+  assert.ok(Object.values(config.agents).every((agent) => agent.model === 'perf/stream-1200cps'));
+});
+
+test('interaction launcher refuses a checkout root or an unspecified binary before launching', { skip: !interactionHost }, async () => {
+  await assert.rejects(startInteractionServer({ root: join(process.cwd(), 'tmp/interaction'), dist: 'unused', opencodeBinary: process.execPath }), /directly under \/tmp\/opencode/);
+  await assert.rejects(startInteractionServer({ root: '/tmp/opencode/interaction-no-binary', dist: 'unused' }), /explicit OpenCode binary/);
+});
+
+test('interaction CLI requires the binary flag even when OPENCODE_BINARY is inherited', () => {
+  const result = spawnSync(process.execPath, ['scripts/perf/isolated-server.mjs', '--interactions'], {
+    env: { PATH: process.env.PATH, OPENCODE_BINARY: process.execPath }, encoding: 'utf8', timeout: 5000,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /requires an explicit --opencode-binary flag/);
+});
+
+test('interaction startup failure stops its owned provider and refuses root reuse', { skip: !interactionHost }, async (t) => {
+  const root = `/tmp/opencode/interaction-failure-${process.pid}-${Date.now()}`;
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  await assert.rejects(startInteractionServer({ root, dist: join(root, 'missing-dist'), opencodeBinary: process.execPath }), /no main chunk/);
+  const port = readFileSync(join(root, 'fixture.log'), 'utf8').match(/listening on http:\/\/127\.0\.0\.1:(\d+)/)?.[1];
+  assert.ok(port, 'owned provider logged its bound port before startup failed');
+  await assert.rejects(fetch(`http://127.0.0.1:${port}/health`, { signal: AbortSignal.timeout(1000) }));
+  await assert.rejects(startInteractionServer({ root, dist: 'unused', opencodeBinary: process.execPath }), /EEXIST/);
+});
+
+test('scoped interaction startup failure removes its process signal listeners', { skip: !interactionHost }, async () => {
+  const before = ['SIGINT', 'SIGTERM'].map((name) => process.listenerCount(name));
+  await assert.rejects(withInteractionServer({ root: '/not-an-interaction-root', dist: 'unused' }, () => {
+    assert.fail('invalid startup must not enter the callback');
+  }), /directly under/);
+  assert.deepEqual(['SIGINT', 'SIGTERM'].map((name) => process.listenerCount(name)), before);
 });
