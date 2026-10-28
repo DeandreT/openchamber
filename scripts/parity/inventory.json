@@ -1,26 +1,33 @@
 {
-  "$comment": "User-visible behavior the native desktop must match. Requirements only; results belong in private run reports. See docs/rust-desktop/PARITY.md.",
+  "$comment": "User-visible requirements, independent of implementation status. Every state and required behavior needs explicit passed scenario proof. Appearance does not prove activation or outcomes. Empty scenarios means no automated evidence, not manual coverage. See docs/rust-desktop/PARITY.md.",
   "groups": {
     "shell": "Shell and navigation",
     "sessions": "Sessions and projects",
     "transcript": "Transcript",
     "motion": "Transcript motion",
     "composer": "Composer",
+    "workflow": "Agent workflow",
+    "files": "Files and source control",
+    "browser-terminal": "Browser and terminal",
+    "settings": "Settings and presentation",
+    "panels": "Other panels",
     "runtime": "Runtime and host",
     "restricted": "Restricted states"
   },
   "features": [
     {
       "id": "shell.startup-view",
+      "requiredBehaviors": ["appearance", "project chooser activation", "starter activation and draft outcome"],
       "group": "shell",
       "title": "The window after startup: no session selected, the new-session view with its project chooser, composer and starters",
       "reference": ["packages/ui/src/components/chat/ChatContainer.tsx", "packages/ui/src/components/chat/composer"],
       "states": ["loading", "loaded", "server unreachable"],
-      "scenarios": ["shell.startup"],
+      "scenarios": ["shell.startup", "composer.project-choice"],
       "coverage": "automated"
     },
     {
       "id": "shell.header",
+      "requiredBehaviors": ["appearance", "menu activation and actions", "sidebar toggle outcome", "new session activation", "panel toggle outcome", "window control outcomes"],
       "group": "shell",
       "title": "Title bar row: menu, sidebar toggle, new session, panel toggles and window controls",
       "reference": ["packages/ui/src/components/layout/Header.tsx"],
@@ -30,6 +37,7 @@
     },
     {
       "id": "shell.sidebar-toolbar",
+      "requiredBehaviors": ["appearance", "view selection outcome", "schedule activation", "archive activation", "store activation", "search results", "add project outcome", "display preference persistence"],
       "group": "shell",
       "title": "Sidebar toolbar: view, schedule, archive and store icons; search, add project and display options",
       "reference": ["packages/ui/src/components/session/sidebar/shell/SidebarHeader.tsx"],
@@ -39,6 +47,7 @@
     },
     {
       "id": "shell.sidebar-footer",
+      "requiredBehaviors": ["appearance", "settings activation", "usage activation", "shortcuts activation", "about activation", "runtime selection outcome"],
       "group": "shell",
       "title": "Sidebar footer: settings, usage, shortcuts, about and the runtime chip",
       "reference": ["packages/ui/src/components/session/sidebar/shell"],
@@ -48,6 +57,7 @@
     },
     {
       "id": "shell.right-rail",
+      "requiredBehaviors": ["appearance", "panel activation and content", "panel close and restore", "panel configuration persistence"],
       "group": "shell",
       "title": "Right rail of panel toggles and the session context panel",
       "reference": ["packages/ui/src/components/layout"],
@@ -57,6 +67,7 @@
     },
     {
       "id": "sessions.zones",
+      "requiredBehaviors": ["appearance", "collapse and expand outcome", "collapse persistence", "correct membership"],
       "group": "sessions",
       "title": "Chats, Pinned and In work zones with headers, collapse state, loading and empty rows",
       "reference": ["packages/ui/src/components/session/sidebar/sessionSidebarRowModel.ts"],
@@ -66,6 +77,7 @@
     },
     {
       "id": "sessions.project-timeline",
+      "requiredBehaviors": ["appearance", "worktree activation", "expansion outcome", "reveal controls outcome"],
       "group": "sessions",
       "title": "Works grouped by project: header, session and worktree works, reveal controls",
       "reference": ["packages/ui/src/components/session/sidebar/SessionSidebarRows.tsx"],
@@ -75,6 +87,7 @@
     },
     {
       "id": "transcript.prompt-navigation",
+      "requiredBehaviors": ["appearance", "open by pointer", "open by keyboard", "prompt selection scroll outcome", "earlier prompt loading", "dismiss and restore focus"],
       "group": "transcript",
       "title": "Corner prompt indicator and prompt list navigation",
       "reference": ["packages/ui/src/components/chat/components/PromptNavigatorRail.tsx"],
@@ -84,6 +97,7 @@
     },
     {
       "id": "sessions.works-by-time",
+      "requiredBehaviors": ["appearance", "saved grouping and visibility applied", "grouping change persistence", "failed read preserves state"],
       "group": "sessions",
       "title": "Saved grouping and section visibility: one list by time, with In work and Pinned hidden",
       "reference": ["packages/ui/src/components/session/sidebar/sessionSidebarRowModel.ts"],
@@ -93,6 +107,7 @@
     },
     {
       "id": "sessions.row",
+      "requiredBehaviors": ["appearance", "full-width pointer activation", "live activity and unread transitions", "relative time presentation"],
       "group": "sessions",
       "title": "Session rows: full-width hit target, icon, title truncation, activity glyph and relative time, hover and selected treatment",
       "reference": ["packages/ui/src/components/session/sidebar/sessions/SessionNodeItem.tsx"],
@@ -102,6 +117,7 @@
     },
     {
       "id": "sessions.select",
+      "requiredBehaviors": ["appearance", "pointer selection reveals transcript", "keyboard selection reveals transcript", "accessibility selection reveals transcript", "draft preserved across switches", "load failure recovery"],
       "group": "sessions",
       "title": "Selecting a session by pointer, keyboard and accessibility action reveals its transcript and keeps drafts",
       "reference": ["packages/ui/src/sync/session-navigation.ts"],
@@ -111,6 +127,7 @@
     },
     {
       "id": "sessions.ordering",
+      "requiredBehaviors": ["appearance", "live move reorders correctly", "answer completion reorders correctly", "ordering survives reload"],
       "group": "sessions",
       "title": "Zone and project ordering follows activity: a session moved or answered most recently comes first",
       "reference": ["packages/ui/src/sync/session-ordering.ts"],
@@ -120,6 +137,7 @@
     },
     {
       "id": "composer.project-choice",
+      "requiredBehaviors": ["appearance", "search and keyboard selection", "reselection preserves draft and focus", "pointer selection", "accessibility selection"],
       "group": "composer",
       "title": "New-session project search, selection and reselection preserve the draft and composer focus",
       "reference": ["packages/ui/src/components/chat/composer/ui/DraftTargetSelectors.tsx"],
@@ -129,12 +147,294 @@
     },
     {
       "id": "runtime.connection-states",
+      "requiredBehaviors": ["appearance", "retain last valid state", "reconnect reconciliation", "authentication recovery", "compatibility failure explanation"],
       "group": "runtime",
       "title": "Connecting, reconnecting and failed connections keep the last valid state and explain the failure",
       "reference": ["packages/ui/src/sync/event-pipeline.ts"],
       "states": ["connecting", "reconnecting", "unreachable", "authentication required", "incompatible"],
       "scenarios": [],
-      "coverage": "manual"
+      "coverage": "automated"
+    },
+    {
+      "id": "shell.layout-navigation", "group": "shell",
+      "title": "Panel resizing and visibility, tabs, focus order, application menus and configurable shortcuts",
+      "reference": ["packages/ui/src/components/layout", "packages/ui/src/hooks/useKeyboardShortcuts.ts"],
+      "requiredBehaviors": ["appearance", "resize and restore widths", "tab navigation", "keyboard and accessibility activation", "shortcut configuration and dispatch", "menu action outcomes"],
+      "states": ["default", "narrow", "focused", "panels hidden", "restored"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "shell.multiple-windows-mini-chat", "group": "shell",
+      "title": "Multiple windows and Mini Chat preserve independent navigation and correct session ownership",
+      "reference": ["packages/ui/src/apps/ElectronMiniChatApp.tsx", "packages/electron/main.mjs"],
+      "requiredBehaviors": ["appearance", "create and activate windows", "Mini Chat send and expand", "global shortcut activation", "close preserves other windows"],
+      "states": ["open", "focused", "hidden", "restored", "closed"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "sessions.management", "group": "sessions",
+      "title": "Session menus rename, archive, restore, delete, pin and change work state with correct failure recovery",
+      "reference": ["packages/ui/src/components/session/sidebar/sessions/useSessionActions.ts", "packages/ui/src/components/views/ArchiveView.tsx"],
+      "requiredBehaviors": ["appearance", "menu activation", "rename persistence", "archive and restore", "delete outcome", "pin and work membership", "failed mutation recovery"],
+      "states": ["default", "menu open", "pending", "failed", "archived", "restored"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "sessions.projects-search-folders", "group": "sessions",
+      "title": "Project registration and settings, session search, folders and tree/timeline grouping",
+      "reference": ["packages/ui/src/components/session/sidebar", "packages/ui/src/components/sections/projects/ProjectSettingsPanel.tsx"],
+      "requiredBehaviors": ["appearance", "add edit remove project", "search and select results", "folder membership", "tree and timeline navigation", "drag reorder persistence"],
+      "states": ["loading", "empty", "filtered", "expanded", "dragging", "failed", "restored"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "sessions.worktrees-moves", "group": "sessions",
+      "title": "Create and remove worktrees, move sessions and retain moved-session visibility across reconnect",
+      "reference": ["packages/ui/src/components/chat/composer/ui/DraftTargetSelectors.tsx", "packages/ui/src/components/session/sidebar"],
+      "requiredBehaviors": ["appearance", "create worktree", "remove worktree", "move session with captured directory", "partial move cleanup", "external idle move remains reachable", "failed topology preserves fallback", "reconnect and reload reconciliation"],
+      "states": ["pending", "moved", "idle", "failed", "partial", "reconnected", "reloaded"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "transcript.rich-content", "group": "transcript",
+      "title": "Prose, Markdown, code and diffs, tables, math, diagrams, images and attachments retain their content and actions",
+      "reference": ["packages/ui/src/components/chat/MarkdownRendererImpl.tsx", "packages/ui/src/components/chat/FileAttachment.tsx", "packages/ui/src/components/chat/message/parts"],
+      "requiredBehaviors": ["appearance", "Markdown code tables math and diagrams", "image and attachment presentation", "code copy and wrap", "diff and file actions", "media loading and error recovery"],
+      "states": ["loading", "loaded", "streaming", "failed", "focused", "expanded"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "transcript.tools-reasoning", "group": "transcript",
+      "title": "Tool results, reasoning, compaction and background commands retain details, status and expandable output",
+      "reference": ["packages/ui/src/components/chat/message/MessageBody.tsx", "packages/ui/src/components/chat/message/parts", "packages/ui/src/lib/opencode/toolContentShells.ts"],
+      "requiredBehaviors": ["appearance", "tool status and structured content", "expand and hydrate elided output", "reasoning disclosure", "compaction outcome", "background command actions", "subagent drill-in"],
+      "states": ["pending", "running", "completed", "failed", "collapsed", "expanded", "elided"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "transcript.links-search-actions", "group": "transcript",
+      "title": "Safe links, transcript search and message copy, continue, pin and menu actions",
+      "reference": ["packages/ui/src/components/chat/markdown/MarkdownLink.tsx", "packages/ui/src/components/chat/appLinkConfirmation.ts", "packages/ui/src/components/chat/message/MessageBody.tsx"],
+      "requiredBehaviors": ["appearance", "scheme policy and app-link confirmation", "session file and fragment navigation", "search and reveal match", "copy exact message text", "continue and pin outcomes", "message menu actions"],
+      "states": ["default", "hover", "focused", "confirmation open", "blocked", "match selected", "no matches"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "motion.anchors-tail-selection", "group": "motion",
+      "title": "Initial reveal, prepend, resize, stream growth, tail following and exact within-row restore across short, mixed and tall rows",
+      "reference": ["packages/ui/src/components/chat/lib/scroll", "packages/ui/tests/chat-history-scroll.browser.mjs"],
+      "requiredBehaviors": ["first revealed frame", "nonzero anchor restore", "prepend preserves anchor", "resize preserves anchor", "stream follows only at tail", "last row reachable", "offscreen cross-message Unicode selection and copy"],
+      "states": ["initial", "at tail", "away from tail", "prepending", "streaming", "resized", "switched back", "selection offscreen"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "composer.editing-drafts", "group": "composer",
+      "title": "Draft ownership, undo, multiline paste, submit/newline shortcuts and IME-safe editing survive unrelated updates",
+      "reference": ["packages/ui/src/components/chat/composer", "packages/ui/src/components/chat/ChatInput.tsx"],
+      "requiredBehaviors": ["appearance", "draft and selection restored by owner", "undo and redo", "multiline paste", "submit and newline shortcuts", "IME commit does not send", "stream preserves focus and composition", "durable draft recovery"],
+      "states": ["empty", "typing", "composing", "streaming", "switched", "restarted", "storage failed"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "composer.attachments-references", "group": "composer",
+      "title": "Attachments, mentions, skills, commands, snippets and session/message references enter the captured prompt",
+      "reference": ["packages/ui/src/components/chat/composer/ui/ComposerAttachmentControls.tsx", "packages/ui/src/components/chat/composer/ui/ComposerAutocompletePopups.tsx", "packages/ui/src/components/chat/ChatInput.tsx"],
+      "requiredBehaviors": ["appearance", "pick paste and drop attachments", "remove attachment", "mention skill and command completion", "snippet expansion", "resolve session references", "send preserves captured attachments and references", "failure retains draft content"],
+      "states": ["empty", "autocomplete open", "selected", "uploading", "failed", "ready", "sent"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "composer.configuration", "group": "composer",
+      "title": "Model, provider, agent, variant and permission-mode selection controls resolve, persist and capture send configuration",
+      "reference": ["packages/ui/src/components/chat/ModelControls.tsx", "packages/ui/src/components/chat/ChatInput.tsx"],
+      "requiredBehaviors": ["appearance", "model and provider selection", "agent selection", "variant selection", "permission mode outcome", "persist and restore selection", "dispatch captures configuration"],
+      "states": ["loading", "unselected", "menu open", "selected", "unavailable", "restored"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "composer.queue-steer-starters", "group": "composer",
+      "title": "Queue and steer messages during a turn; activate and manage starter prompts",
+      "reference": ["packages/ui/src/components/chat/QueuedMessagesStrip.tsx", "packages/ui/src/stores/messageQueueStore.ts", "packages/ui/src/components/chat/useDraftStarters.ts"],
+      "requiredBehaviors": ["appearance", "queue while running", "edit reorder remove queued prompt", "steer outcome", "queued delivery and retry ownership", "starter fills draft", "starter management persistence"],
+      "states": ["idle", "running", "queued", "editing", "failed", "delivered", "restored"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "workflow.create-send-stop-recovery", "group": "workflow",
+      "title": "Create, send, stream, stop and revisit sessions with durable recovery of definite and ambiguous failures",
+      "reference": ["packages/ui/src/components/chat/ChatInput.tsx", "packages/ui/src/sync"],
+      "requiredBehaviors": ["appearance", "create and first send", "existing session send", "stream content and order", "abort outcome", "revisit preserves owner", "definite rejection recovery", "ambiguous outcome reconciliation", "restart retains pending send", "retry without duplicate submission"],
+      "states": ["draft", "creating", "sending", "running", "idle", "rejected", "uncertain", "restarted", "recovered"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "workflow.permissions-forms", "group": "workflow",
+      "title": "Permissions and forms discover pending requests, validate responses and recover without crossing session or runtime owners",
+      "reference": ["packages/ui/src/components/chat/PermissionCard.tsx", "packages/ui/src/components/chat/FormDock.tsx", "packages/ui/src/components/chat/FormFieldControl.tsx"],
+      "requiredBehaviors": ["appearance", "pending request discovery", "permission allow and deny", "conditional form validation", "form submit and cancel", "uncertain response reconciliation", "reconnect and runtime ownership", "keyboard and accessibility response"],
+      "states": ["pending", "focused", "invalid", "submitting", "settled", "failed", "reconnected"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "workflow.fork-revert-btw-subagents", "group": "workflow",
+      "title": "Fork, staged revert, BTW and subagent navigation preserve transcript and parent relationships",
+      "reference": ["packages/ui/src/components/chat/ChatContainer.tsx", "packages/ui/src/components/session/sidebar/sessions/useSessionActions.ts"],
+      "requiredBehaviors": ["appearance", "fork at selected message", "stage confirm and cancel revert", "BTW creation and return", "subagent navigation and return to parent", "failed mutation recovery"],
+      "states": ["default", "pending", "staged", "forked", "child selected", "failed", "restored"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "workflow.goals-review", "group": "workflow",
+      "title": "Goals and review loops arm, run, report progress, stop and recover with captured ownership",
+      "reference": ["packages/ui/src/components/chat/SessionGoalDialog.tsx", "packages/ui/src/components/chat/AutoReviewStrip.tsx", "packages/ui/src/components/session/ReviewFlowDialog.tsx"],
+      "requiredBehaviors": ["appearance", "arm and configure goal", "goal progress and completion", "review creation and loop progression", "stop goal and review", "failure and restart recovery"],
+      "states": ["unarmed", "armed", "running", "waiting", "completed", "failed", "stopped"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "files.navigation-editor", "group": "files",
+      "title": "File trees, search, editors and previews support selection, save and recoverable errors",
+      "reference": ["packages/ui/src/components/views/FilesView.tsx"],
+      "requiredBehaviors": ["appearance", "tree and file search navigation", "open preview and source", "edit and save", "dirty state and conflict recovery", "keyboard and accessibility navigation"],
+      "states": ["loading", "empty", "selected", "dirty", "saving", "failed", "read-only"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "files.diff-git", "group": "files",
+      "title": "Diffs, Git actions, branches, identities and project actions operate on the selected repository",
+      "reference": ["packages/ui/src/components/views/DiffView.tsx", "packages/ui/src/components/views/GitView.tsx", "packages/ui/src/lib/projectActionTerminal.ts"],
+      "requiredBehaviors": ["appearance", "diff and walkthrough navigation", "stage unstage and discard", "commit and sync outcome", "branch selection and management", "identity selection", "nested repository ownership", "project action execution and stop", "failure recovery"],
+      "states": ["loading", "clean", "changed", "staged", "conflicted", "running", "failed", "restored"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "files.issues-pull-requests", "group": "files",
+      "title": "Source board issues and pull requests load, navigate and perform supported provider actions",
+      "reference": ["packages/ui/src/components/sourceBoard", "packages/ui/src/components/views/git/PullRequestSection.tsx"],
+      "requiredBehaviors": ["appearance", "list filter and open issue or PR", "provider authentication and repository selection", "create and update outcomes", "review and checkout outcomes", "failed provider request recovery"],
+      "states": ["loading", "empty", "selected", "unauthenticated", "pending", "failed", "updated"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "browser-terminal.terminal", "group": "browser-terminal",
+      "title": "Server-backed terminal sessions support VT output, input, selection, clipboard, resize and reconnect",
+      "reference": ["packages/ui/src/components/views/TerminalView.tsx", "packages/ui/src/components/terminal/TerminalViewport.tsx"],
+      "requiredBehaviors": ["appearance", "create select and close terminal", "Unicode and keyboard input", "VT output and scrollback", "selection copy and bracketed paste", "resize", "reconnect and lifetime ownership"],
+      "states": ["connecting", "running", "scrolled", "selected", "resized", "disconnected", "closed"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "browser-terminal.browser-previews", "group": "browser-terminal",
+      "title": "Embedded browser tabs and previews preserve navigation, focus, profiles and authenticated assets",
+      "reference": ["packages/ui/src/components/layout/ContextSurfacePanes.tsx", "packages/electron/browser-panel-security.mjs", "packages/electron/browser-panel-cookies.mjs"],
+      "requiredBehaviors": ["appearance", "tab creation and navigation", "browser control actions", "preview and authenticated assets", "menu clipping and focus composition", "runtime profile isolation", "blocked navigation and cleanup"],
+      "states": ["loading", "loaded", "focused", "overlay open", "resized", "blocked", "closed"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "browser-terminal.html-sdk", "group": "browser-terminal",
+      "title": "Executable HTML answers and SDK panels preserve iframe, capability and runtime boundaries",
+      "reference": ["packages/ui/src/components/chat/message/parts/HtmlRenderFrame.tsx", "packages/sdk", "packages/extensions"],
+      "requiredBehaviors": ["appearance", "HTML execution and submitted answer", "SDK panel installation and activation", "capability grants", "origin and navigation enforcement", "credentials and native operations inaccessible", "runtime switch cancellation and cleanup"],
+      "states": ["loading", "interactive", "awaiting answer", "submitted", "denied", "failed", "closed"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "settings.pages-persistence", "group": "settings",
+      "title": "Every existing Settings page supports navigation, search, editing, save and error recovery",
+      "reference": ["packages/ui/src/components/views/SettingsView.tsx", "packages/ui/src/components/sections"],
+      "requiredBehaviors": ["appearance", "all settings pages reachable", "settings search", "edit validate and save", "reload persistence", "failed save retains edits", "provider agent skill command and MCP configuration"],
+      "states": ["loading", "empty", "focused", "dirty", "invalid", "saving", "failed", "restored", "disabled"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "settings.presentation-locales", "group": "settings",
+      "title": "Themes, text size, all locales, RTL, tooltips and menus update without losing editing state",
+      "reference": ["packages/ui/src/components/sections/openchamber/OpenChamberVisualSettings.tsx", "packages/ui/src/lib/i18n", "packages/ui/src/lib/theme"],
+      "requiredBehaviors": ["appearance", "light and dark theme selection", "text size change", "all locale labels and placeholders", "Arabic and Hebrew logical layout", "live changes preserve draft and focus", "tooltips and menu placement", "reduced motion"],
+      "states": ["light", "dark", "RTL", "large text", "hover", "focused", "menu open", "restored"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "panels.knowledge-plans-todos", "group": "panels",
+      "title": "Project knowledge, notes, plans and todos support search, editing, linking and session dispatch",
+      "reference": ["packages/ui/src/components/session/project-context/ProjectNotesTodoPanel.tsx", "packages/ui/src/lib/sessionKnowledgeApi.ts"],
+      "requiredBehaviors": ["appearance", "search and open entries", "create edit and delete notes plans todos", "todo completion and dependencies", "plan linking and dispatch", "failure retains edits and owner"],
+      "states": ["loading", "empty", "selected", "editing", "saving", "failed", "completed"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "panels.schedules", "group": "panels",
+      "title": "Scheduled tasks can be created, edited, enabled, disabled, run and deleted with correct timezone and target",
+      "reference": ["packages/ui/src/components/session/ScheduledTasksDialog.tsx"],
+      "requiredBehaviors": ["appearance", "schedule creation and editing", "timezone and target selection", "enable disable and delete", "run now and observe result", "failed operation recovery"],
+      "states": ["loading", "empty", "editing", "invalid", "enabled", "disabled", "running", "failed"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "panels.usage-integrations-context", "group": "panels",
+      "title": "Usage, integrations and work-status/context panels show authoritative data and perform their actions",
+      "reference": ["packages/ui/src/components/sections/integrations", "packages/ui/src/components/chat/work-status", "packages/ui/src/components/layout/ContextRailUsage.tsx"],
+      "requiredBehaviors": ["appearance", "usage filters and totals", "integration discovery and configuration", "context detail activation", "linked threads and pinned knowledge", "work-status section configuration persistence", "partial and failed data remain explicit"],
+      "states": ["loading", "empty", "loaded", "partial", "failed", "expanded", "restored"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "panels.voice-notifications", "group": "panels",
+      "title": "Voice and notifications respect permissions, settings and the owning session/runtime",
+      "reference": ["packages/ui/src/components/sections/openchamber/VoiceSettings.tsx", "packages/ui/src/components/sections/openchamber/NotificationSettings.tsx", "packages/electron/notification-host-routing.mjs"],
+      "requiredBehaviors": ["appearance", "voice capture transcription and cancel", "notification preferences", "notification delivery", "notification activation routes to owner", "permission denial recovery"],
+      "states": ["idle", "recording", "processing", "delivered", "permission denied", "failed", "disabled"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "runtime.hosts-auth-relay", "group": "runtime",
+      "title": "Authentication, host switching, SSH and relay preserve trust and isolate runtime data",
+      "reference": ["packages/ui/src/components/desktop/DesktopHostSwitcher.tsx", "packages/ui/src/components/onboarding/RemoteConnectionForm.tsx", "packages/ui/src/components/sections/remote-instances", "packages/web/server/lib/relay"],
+      "requiredBehaviors": ["appearance", "interactive authentication and credential lifecycle", "host selection persistence", "runtime switch cancels old reads", "SSH trust confirmation and connection", "relay authentication encryption and flow control", "runtime-scoped drafts and browser identity"],
+      "states": ["unconfigured", "authenticating", "connected", "trust pending", "switching", "disconnected", "rejected", "restored"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "runtime.managed-host", "group": "runtime",
+      "title": "Managed local services start, recover and quit with explicit process ownership; external servers survive client close",
+      "reference": ["packages/electron/main.mjs", "packages/electron/README.md"],
+      "requiredBehaviors": ["startup and usable window", "managed service launch", "service failure recovery", "owned-process shutdown", "external server preserved", "quit and relaunch"],
+      "states": ["starting", "ready", "failed", "recovering", "quitting", "relaunched"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "runtime.distribution-migration", "group": "runtime",
+      "title": "Installed application identity, deep links, tray, menus, updates, rollback and profile migration preserve user state",
+      "reference": ["packages/electron/main.mjs", "packages/electron/README.md", "docs/rust-desktop/IMPLEMENTATION.md"],
+      "requiredBehaviors": ["installed launch", "deep-link routing", "tray and native menu actions", "signed package verification", "update and rollback", "profile preference and draft migration", "installed shutdown cleanup"],
+      "states": ["fresh install", "existing profile", "running", "updating", "failed update", "rolled back", "migrated"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "restricted.read-only-capabilities", "group": "restricted",
+      "title": "Read-only sessions, unavailable capabilities and permission failures gate UI and mutation dispatch consistently",
+      "reference": ["packages/ui/src/components/chat/chatPromptReadOnly.ts", "packages/ui/src/components/chat/ChatContainer.tsx"],
+      "requiredBehaviors": ["appearance", "subagent read-only policy", "review-session exception", "deleted-space archive read-only", "capability gating", "dispatch enforcement", "permission failure explanation and recovery"],
+      "states": ["read-only", "editable", "unavailable", "permission denied", "disconnected", "partial", "recovered"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "restricted.enterprise", "group": "restricted",
+      "title": "Enterprise policy applies to native requests, external assets, providers, services and listeners with fail-closed precedence",
+      "reference": ["packages/docs/content/docs/security.mdx", "docs/rust-desktop/ARCHITECTURE.md"],
+      "requiredBehaviors": ["policy discovery and precedence", "external asset and conversation egress gating", "provider and credential gating", "listener and service gating", "server policy preserved", "denial explanation"],
+      "states": ["allowed", "denied", "policy unavailable", "conflicting policy"],
+      "scenarios": [], "coverage": "automated"
+    },
+    {
+      "id": "runtime.platform-manual", "group": "runtime",
+      "title": "Real supported-platform screen-reader, IME candidate and mixed-monitor checks complement automated coverage",
+      "reference": ["docs/rust-desktop/PARITY.md", "scripts/parity/DOCUMENTATION.md"],
+      "requiredBehaviors": ["screen-reader browsing and announcements", "IME candidate placement and composition", "mixed-DPI monitor transition", "platform install update and rollback exercise"],
+      "states": ["focused", "composing", "streaming", "monitor changed", "updated", "rolled back"],
+      "manualCheck": "For each release platform, run and retain the real-platform checks in docs/rust-desktop/PARITY.md sections 4-5 and IMPLEMENTATION.md stage 5, including its screen reader, IME candidate window and differently scaled monitors. Record each outcome in the private report; automation does not complete this entry.",
+      "scenarios": [], "coverage": "manual"
     }
   ]
 }

@@ -18,12 +18,13 @@ import { createInterface } from "node:readline"
 
 import { CdpClient, reservePort, wait } from "../perf/cdp.mjs"
 import { isComposerSheen } from "./composer_sheen.mjs"
+import { RequestTracker } from "./request_tracker.mjs"
 
 let child = null
 let client = null
 // Fetch and XHR requests the page started and that have not ended. Streams
 // that stay open by design (EventSource) are not counted.
-const inflight = new Map()
+const inflight = new RequestTracker()
 const TRACKED_REQUESTS = new Set(["Fetch", "XHR"])
 
 const evaluate = async (expression) => {
@@ -96,19 +97,26 @@ const handlers = {
     const page = await pageTarget(port, Date.now() + timeoutMs)
     client = new CdpClient(page.webSocketDebuggerUrl)
     await client.connect()
-    await client.send("Runtime.enable")
-    client.on("Network.requestWillBeSent", ({ requestId, type, request }) => {
+    client.on("Page.frameNavigated", ({ frame }) => inflight.navigate(frame))
+    client.on("Page.frameDetached", ({ frameId, reason }) => inflight.detach(frameId, reason))
+    client.on("Network.requestWillBeSent", (event) => {
+      const { type, request } = event
       if (TRACKED_REQUESTS.has(type)) {
         const url = new URL(request.url)
+        const routeDepth = url.pathname.startsWith("/api/openchamber/") || url.pathname.startsWith("/api/source-control/") ? 4 : 3
         const route = url.protocol === "http:" || url.protocol === "https:"
-          ? url.pathname.split("/").slice(0, 3).join("/")
+          ? url.pathname.split("/").slice(0, routeDepth).join("/")
           : url.protocol
-        inflight.set(requestId, route)
+        inflight.start(event, route)
       }
     })
-    client.on("Network.loadingFinished", ({ requestId }) => inflight.delete(requestId))
-    client.on("Network.loadingFailed", ({ requestId }) => inflight.delete(requestId))
+    client.on("Network.loadingFinished", ({ requestId }) => inflight.finish(requestId))
+    client.on("Network.loadingFailed", ({ requestId }) => inflight.finish(requestId))
+    await client.send("Page.enable")
     await client.send("Network.enable")
+    const { frameTree } = await client.send("Page.getFrameTree")
+    inflight.seed(frameTree)
+    await client.send("Runtime.enable")
     // Electron's DevTools endpoint cannot size the window. The default main
     // window has the standard client size; when it differs (a stored size, a
     // window manager constraint), emulate the viewport and say so.
@@ -140,7 +148,7 @@ const handlers = {
   },
   /** How many fetch and XHR requests are still in flight. */
   async inflight() {
-    return { count: inflight.size, routes: [...new Set(inflight.values())] }
+    return { count: inflight.size, routes: inflight.routes() }
   },
   async rects({ selectors }) {
     const rects = {}

@@ -25,6 +25,7 @@ PyGObject with AT-SPI, `busctl`, `dbus-run-session`, `xsettingsd` and fontconfig
 | `inventory.json` | The feature inventory: stable IDs, reference files, states, scenarios and coverage kind. Requirements only. |
 | `scenarios.json` | Scenario steps. Rows are addressed by key prefix and title, never by seeded IDs. |
 | `electron_adapter.py`, `electron_bridge.mjs` | Electron through CDP (`scripts/perf/cdp.mjs`): launch, input dispatch, rows, geometry, screenshots, and read-only `observe` of layout and computed styles and `fonts` of the faces a node is drawn with, for porting. |
+| `request_tracker.mjs` | Fetch/XHR ownership by frame and document loader, so a discarded document cannot keep a new one busy. |
 | `native_adapter.py` | The native window through AT-SPI: launch, activation, generated pointer and key input, accessibility actions, rows, geometry, and content capture. |
 | `clipboard_probe.py` | Asynchronous clipboard ownership and exact text after a real copy action on the private display. |
 | `native_platform.py` | Synthetic native window-manager and IBus checks with private profiles and service logs. |
@@ -80,6 +81,11 @@ attached to the private bus is stopped. The session's work directory lives in
 the 108-byte socket path limit whatever `TMPDIR` is. Xvfb has no window manager:
 OS-level minimize, maximize and window-decoration behavior requires separate
 isolated desktop checks.
+
+Isolated Electron launches set `GTK_IM_MODULE=gtk-im-context-simple`. GTK's
+automatic IBus selection can deadlock startup even after inherited input-method
+variables are removed. The native IME checks keep their own explicit private
+IBus configuration.
 
 Ad hoc probes that open windows use the same display:
 
@@ -137,14 +143,24 @@ is a pointer click the host dropped, which the native adapter replaces with the
 target's accessibility action; a scenario that is otherwise clean is then
 `incomplete`. The report records
 `passed`, `incomplete`, `failed` (the native client differs or failed) or
-`blocked` (the reference failed), and coverage against the whole inventory: a
-feature passes only when every scenario it lists passed. Reports,
+`blocked` (the reference failed), and coverage against the whole inventory. A
+feature passes only when every linked scenario passed and their explicit proofs
+cover every required behavior and state. Reports,
 screenshots and difference images go to `--output`, by default
 `artifacts/parity-<time>`; they are run evidence and never part of the source.
 An existing output directory is refused so another run cannot overwrite its
 evidence. The report fingerprints the native and Electron executables, Electron
 package, web assets, OpenCode binary, seed, scenarios and exceptions. If these
 inputs change before the run ends, every result is blocked.
+File digests are standard SHA-256. The `sha256-tree-v1` directory digest hashes
+each sorted relative POSIX path, a zero byte, then that file's raw SHA-256 digest.
+
+The Electron settle check tracks each fetch or XHR by its CDP frame and loader.
+A committed navigation retires only known requests from superseded documents;
+requests already started for the incoming loader and requests without a known
+owner stay pending. Frame removal clears that frame, while a process swap keeps
+incoming-document work. This handles same-URL reloads without excluding routes
+or relaxing the quiet period and deadline.
 
 The runner turns the session's accessibility flag on for the run and restores
 its previous value.
@@ -170,6 +186,60 @@ including reference text, caret, selections, borders and corners. Missing
 candidate coverage, light composers and unknown gradient shapes get no allowance.
 These pixels are reported separately as `composerGradientNoisePixels`; larger
 differences, content and geometry remain failures.
+
+## Feature requirements and scenario proofs
+
+`inventory.json` keeps stable feature IDs, reference owners, `states` and
+`requiredBehaviors`. These are requirements, independent of whether an
+implementation or test exists. Keep activation, resulting behavior and
+persistence separate from `appearance`. For example, the header's menu needs
+activation and action outcomes; its startup image proves only appearance.
+Do not remove states or behaviors to make an existing scenario complete a feature.
+
+Each scenario in `scenarios.json` has a `proofs` object keyed by feature ID:
+
+```json
+"proofs": {
+  "shell.header": {"behaviors": ["appearance"], "states": ["default"]}
+}
+```
+
+List only behavior and states that the scenario's actions and checked outcomes
+establish. A click alone does not establish its mutation's outcome. A captured
+closed menu does not establish opening it, and saved startup order does not
+establish ordering after a live move or reload. One scenario can prove parts of
+several features, but each feature must link that scenario in its `scenarios` list.
+The scenario's `feature` remains its primary owner; it grants no implicit proof.
+Contract validation rejects unknown requirements, unknown feature/scenario IDs
+and unlinked proofs before launching clients.
+Unknown names in `--scenarios` are rejected before a run can report success with
+no executed checks.
+
+`inventory_coverage` unions declarations only from scenarios whose final status
+is `passed`. Failed, blocked, skipped and incomplete scenarios grant no proof.
+It uses the validated scenario snapshot that the run executed, without rereading
+declarations from disk after the final input check.
+The private report retains its `byFeature` status map and adds
+`missingRequirements`, listing uncovered behaviors and states for every feature.
+With some passed evidence but uncovered requirements, a feature is `incomplete`.
+With no executed evidence it is `not run`, including a feature with no scenarios.
+A failed or blocked linked scenario keeps the feature failed even when other
+scenarios cover its requirements.
+
+`coverage: "automated"` describes the intended evidence method. It does not claim
+that scenarios exist. Use `coverage: "manual"` only for a real manual procedure,
+recorded in `manualCheck`; that feature remains `manual` in this automated report.
+Native-only platform and workflow receipts do not automatically complete a
+matched-client feature. Their relevant outcomes need explicit evidence in the
+feature's required comparisons. Manual platform results remain in private reports.
+
+The full inventory includes shell, sessions, transcript, motion, composer, agent
+workflow, files/source control, browser/terminal, settings, other panels, runtime
+and restricted states. Broad entries retain the full behavior of their reference
+owners and can be split into finer feature IDs as scenarios are added. Existing
+IDs and requirements remain stable. The supported configuration matrix in
+`docs/rust-desktop/PARITY.md` remains a separate replacement requirement; a
+feature passing in one run does not qualify other platforms, locales or scales.
 
 ## Native Linux platform checks
 
@@ -253,6 +323,48 @@ Unicode is supplied through a real clipboard paste. AT-SPI string key synthesis
 does not reliably preserve non-ASCII text on X11; it is not a valid Unicode input
 probe. `ClipboardProbe.paste` serves the private clipboard and waits for the exact
 visible result. These workflow checks qualify outcomes, not timing or visual parity.
+
+## Native permissions and question forms
+
+`native_interactions.py` runs independent `reject`, `once`, `always`, `question`,
+`dismiss` and `supersede` checks against the real local fixture provider and
+OpenCode engine:
+
+```sh
+python3 scripts/parity/native_interactions.py --scale 1.25
+python3 scripts/parity/native_interactions.py --checks reject,question --timeout 20
+```
+
+Every check gets a new fixture root directly under `/tmp/opencode`. The output
+directory also lives there and must be new. `--binary`, `--dist` and
+`--opencode-binary` default to the parity runner's build paths. The report records
+the binary fingerprints and rejects a binary change during the run.
+
+Session creation uses the owned API. The native composer submits every prompt;
+permission buttons and question controls supply every response. HTTP reads verify
+ownership, exact command resources, terminal states and tool output. Only a
+completed shell tool with exit zero and the exact output counts as success;
+the command argument containing the marker cannot pass. The always check repeats
+the command and restarts the native client against the same private server.
+The supersede check submits a new composer message while a question is pending,
+then verifies that the old form is cancelled and the new turn gets its own form.
+
+Targets are `permission-{requestID}-{once|always|reject}`,
+`form-{formID}-{next|back|submit|cancel}`, `form-input-{formID}-{fieldKey}` and
+`form-option-{formID}-{fieldKey}-{zeroBasedOrdinal}`. The question check selects
+Beta, selects One and Two, navigates back and forward, and pastes Unicode text.
+
+The command uses the owned Xvfb wrapper, private process environments and working
+directories. Signal handling covers partial startup and cleanup. Each case keeps
+its fixture identity, pending request/form, screenshots, native logs and process
+cleanup receipt; `report.json` records failures and input substitutions. No HTTP
+permission or form reply is sent. Focused tests run with
+`python3 -m unittest native_interactions_test` from `scripts/parity`.
+
+A check passes only after native and fixture cleanup succeed. Any pointer input
+replaced by an accessibility action makes an otherwise successful check
+`incomplete`, with a nonzero exit. `completed.png` captures the terminal UI before
+cleanup; the report carries the final outcome.
 
 ## Adding a scenario
 

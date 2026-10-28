@@ -1,5 +1,5 @@
 {
-  "$comment": "Parity scenarios. Rows are addressed by key prefix and title, never by seeded session IDs. Targets name controls: a CSS selector or a button's exact text in Electron, an accessible ID in the native client. See scripts/parity/DOCUMENTATION.md.",
+  "$comment": "Parity scenarios. proofs lists only required behaviors and states exercised by the steps and checked outcomes. A capture alone proves appearance, not control activation. Proofs count only when the whole scenario passes. Rows use key prefix and title, never seeded IDs. See scripts/parity/DOCUMENTATION.md.",
   "targets": {
     "prompt-indicator": {
       "electron": { "selector": "nav[aria-label='Prompt navigation'] button[aria-haspopup='listbox']" },
@@ -164,6 +164,17 @@
     {
       "id": "shell.startup",
       "feature": "shell.startup-view",
+      "proofs": {
+        "shell.startup-view": {"behaviors": ["appearance"], "states": ["loaded"]},
+        "shell.header": {"behaviors": ["appearance"], "states": ["default"]},
+        "shell.sidebar-toolbar": {"behaviors": ["appearance"], "states": ["default"]},
+        "shell.sidebar-footer": {"behaviors": ["appearance"], "states": ["local"]},
+        "shell.right-rail": {"behaviors": ["appearance"], "states": ["expanded"]},
+        "sessions.zones": {"behaviors": ["appearance"], "states": ["expanded"]},
+        "sessions.project-timeline": {"behaviors": ["appearance"], "states": ["collapsed"]},
+        "sessions.row": {"behaviors": ["appearance"], "states": ["default"]},
+        "sessions.ordering": {"behaviors": ["appearance"], "states": ["after startup"]}
+      },
       "description": "The window after startup on the seed, once the composer's model and agent and the work status card's context sources have loaded: sidebar, startup view, composer and rails.",
       "steps": [
         {
@@ -214,6 +225,9 @@
     {
       "id": "transcript.prompt-navigation",
       "feature": "transcript.prompt-navigation",
+      "proofs": {
+        "transcript.prompt-navigation": {"behaviors": ["appearance", "open by pointer"], "states": ["open"]}
+      },
       "description": "The corner indicator opens the prompt list over the transcript.",
       "steps": [
         { "click": { "zone": "activity:work:session:", "title": "parity: long" } },
@@ -232,6 +246,9 @@
     {
       "id": "sessions.works-by-time",
       "feature": "sessions.works-by-time",
+      "proofs": {
+        "sessions.works-by-time": {"behaviors": ["appearance", "saved grouping and visibility applied"], "states": ["loaded"]}
+      },
       "description": "Saved time grouping lists project works together while hidden In work and Pinned stay hidden.",
       "settings": {
         "sidebarGrouping": "time",
@@ -252,6 +269,10 @@
     {
       "id": "composer.project-choice",
       "feature": "composer.project-choice",
+      "proofs": {
+        "shell.startup-view": {"behaviors": ["project chooser activation"], "states": []},
+        "composer.project-choice": {"behaviors": ["appearance", "search and keyboard selection", "reselection preserves draft and focus"], "states": ["open", "filtered", "selected", "reselected"]}
+      },
       "description": "Choosing and reselecting a registered project returns focus to the same draft.",
       "steps": [
         { "clickTarget": "choose-project" },
@@ -285,6 +306,10 @@
     {
       "id": "sessions.select-pointer",
       "feature": "sessions.select",
+      "proofs": {
+        "sessions.select": {"behaviors": ["appearance", "pointer selection reveals transcript"], "states": ["unvisited"]},
+        "sessions.row": {"behaviors": ["appearance"], "states": ["selected"]}
+      },
       "description": "A pointer click on an In work row selects the session and reveals its transcript.",
       "steps": [
         {

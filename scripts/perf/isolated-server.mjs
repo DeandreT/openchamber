@@ -16,15 +16,15 @@
  */
 
 import { execFileSync, spawn } from "node:child_process"
-import { cpSync, createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { cpSync, createWriteStream, existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { connect } from "node:net"
 import { platform } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import process from "node:process"
 
-import { wait } from "./cdp.mjs"
-import { AGENT_READ_FILES, agentReadFileContent, fixtureProviderConfig } from "./fixture-provider.mjs"
+import { reservePort, wait } from "./cdp.mjs"
+import { AGENT_READ_FILES, agentReadFileContent, fixtureProviderConfig, INTERACTION_SHELL_COMMAND } from "./fixture-provider.mjs"
 import { stopProcessTree } from "./process-tree.mjs"
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..")
@@ -44,7 +44,10 @@ Options:
   --root <directory>       State, project and seed directories
                            (default: tmp/perf-serve)
   --fresh                  Restore state from <root>/seed before starting, or
-                           start empty when there is no seed
+                            start empty when there is no seed
+  --interactions           Fresh permission/question fixture; requires a new root
+                           directly under /tmp/opencode and an explicit binary.
+                           Uses owned free ports; cannot combine with --fresh.
   --port <port>            Server port (default: 4799)
   --fixture-port <port>    Fixture provider port (default: 4798); reused when
                            something already listens there
@@ -106,6 +109,49 @@ export const startFixture = async ({ port, logFile }) => {
   return { pid: child.pid, reused: false, stop: () => stopProcessTree(child) }
 }
 
+// Port zero is bound by the owned child itself. IPC acknowledges that exact
+// listener; a pre-existing process can never satisfy readiness.
+const startInteractionProvider = async ({ state, project, logFile, signal }) => {
+  signal?.throwIfAborted()
+  const log = createWriteStream(logFile)
+  const child = spawn(process.execPath, [FIXTURE_SCRIPT, "0", "--interactions"], {
+    cwd: project, detached: true,
+    env: isolatedServerEnv({ state, dist: "", config: {}, inherited: { PATH: process.env.PATH, LANG: "C.UTF-8", SHELL: "/bin/sh" } }),
+    stdio: ["ignore", "pipe", "pipe", "ipc"],
+  })
+  child.stdout.pipe(log, { end: false })
+  child.stderr.pipe(log, { end: false })
+  child.once("close", () => log.end())
+  try {
+    const port = await new Promise((resolvePort, reject) => {
+      const timer = setTimeout(() => finish(new Error("Interaction provider did not acknowledge its listener")), 15000)
+      const exited = () => finish(new Error("Interaction provider exited before readiness"))
+      const aborted = () => finish(signal.reason)
+      const received = (message) => {
+        if (Number.isInteger(message?.port) && message.port > 0) finish(null, message.port)
+        else finish(new Error("Invalid interaction provider readiness"))
+      }
+      const finish = (error, value) => {
+        clearTimeout(timer)
+        child.off("error", finish)
+        child.off("exit", exited)
+        child.off("message", received)
+        signal?.removeEventListener("abort", aborted)
+        if (error) reject(error)
+        else resolvePort(value)
+      }
+      child.once("error", finish)
+      child.once("exit", exited)
+      child.once("message", received)
+      signal?.addEventListener("abort", aborted, { once: true })
+    })
+    return { port, pid: child.pid, stop: () => stopProcessTree(child) }
+  } catch (error) {
+    await stopProcessTree(child)
+    throw error
+  }
+}
+
 /** The main chunk a build's index.html loads, or null. */
 const builtMainChunk = (dist) => {
   const file = join(dist, "index.html")
@@ -114,8 +160,8 @@ const builtMainChunk = (dist) => {
 }
 
 /** The main chunk the running server serves, bypassing every cache. */
-const servedMainChunk = async (url) => {
-  const response = await fetch(new URL("/", url), { headers: { "cache-control": "no-cache" } })
+const servedMainChunk = async (url, signal) => {
+  const response = await fetch(new URL("/", url), { headers: { "cache-control": "no-cache" }, signal })
   return (await response.text()).match(/src="(\/assets\/main-[^"]+)"/)?.[1] ?? null
 }
 
@@ -135,7 +181,34 @@ const writeSettings = (state, project) => {
 
 /** The OpenCode configuration an isolated server runs with: the fixture
  * provider on `fixturePort` as the default model, nothing that reaches out. */
-export const isolatedOpencodeConfig = (fixturePort) => ({
+export const isolatedOpencodeConfig = (fixturePort, { interactions = false } = {}) => interactions ? {
+  $schema: "https://opencode.ai/config.json",
+  providers: {
+    perf: {
+      name: "Interaction fixture",
+      package: "@opencode/ai/providers/openai-compatible",
+      settings: { baseURL: `http://127.0.0.1:${fixturePort}/v1`, apiKey: "unused" },
+      models: Object.fromEntries(["interaction-shell", "interaction-question", "stream-1200cps"].map((id) => [id, {
+        name: id, capabilities: { tools: true, input: ["text"], output: ["text"] },
+      }])),
+    },
+  },
+  model: "perf/interaction-shell",
+  default_agent: "build",
+  agents: Object.fromEntries(["title", "summary", "compaction"].map((id) => [id, { model: "perf/stream-1200cps" }])),
+  update: "disable",
+  snapshots: false,
+  shell: "/bin/sh",
+  policies: [
+    { action: "provider.use", resource: "*", effect: "deny" },
+    { action: "provider.use", resource: "perf", effect: "allow" },
+  ],
+  permissions: [
+    { action: "*", resource: "*", effect: "deny" },
+    { action: "question", resource: "*", effect: "allow" },
+    { action: "shell", resource: INTERACTION_SHELL_COMMAND, effect: "ask" },
+  ],
+} : ({
   ...fixtureProviderConfig(fixturePort),
   model: "perf/stream-300cps",
   small_model: "perf/stream-1200cps",
@@ -192,15 +265,26 @@ export const restoreState = (state, seed) => {
  * isolated home under `state`. Resolves once it answers HTTP, with the served
  * main chunk checked against the build's index.html.
  */
-export const startIsolatedServer = async ({ repo, dist, state, project, port, fixturePort, opencodeBinary = defaultOpencodeBinary(), logFile }) => {
+export const startIsolatedServer = async ({ repo, dist, state, project, port, fixturePort, opencodeBinary = defaultOpencodeBinary(), logFile, interactions = false, signal }) => {
+  signal?.throwIfAborted()
   if (await portInUse(port)) throw new Error(`Port ${port} is already in use; stop that server or pass another port.`)
+  signal?.throwIfAborted()
   const built = builtMainChunk(dist)
   if (!built) throw new Error(`${dist}/index.html has no main chunk; build it first.`)
   mkdirSync(join(state, "home"), { recursive: true })
   mkdirSync(join(state, "oc-data"), { recursive: true })
-  ensureProject(project)
+  if (!interactions) ensureProject(project)
   writeSettings(state, project)
-  const env = isolatedServerEnv({ state, dist, config: isolatedOpencodeConfig(fixturePort), opencodeBinary })
+  if (interactions) {
+    const settingsFile = join(state, "oc-data", "settings.json")
+    const settings = JSON.parse(readFileSync(settingsFile, "utf8"))
+    settings.defaultModel = "perf/interaction-shell"
+    writeFileSync(settingsFile, JSON.stringify(settings, null, 2))
+  }
+  const config = isolatedOpencodeConfig(fixturePort, { interactions })
+  const env = isolatedServerEnv({ state, dist, config, opencodeBinary,
+    ...(interactions ? { inherited: { PATH: process.env.PATH, LANG: "C.UTF-8", SHELL: "/bin/sh", TMPDIR: join(state, "tmp") } } : {}),
+  })
   const child = spawn(process.execPath, [join(repo, "packages/web/bin/cli.js"), "serve", "--port", String(port), "--foreground"], {
     cwd: project,
     env,
@@ -209,6 +293,8 @@ export const startIsolatedServer = async ({ repo, dist, state, project, port, fi
     windowsHide: true,
     stdio: ["ignore", logFile ? "pipe" : "ignore", logFile ? "pipe" : "ignore"],
   })
+  let spawnError
+  child.once("error", (error) => { spawnError = error })
   if (logFile) {
     const log = createWriteStream(logFile)
     child.stdout.pipe(log)
@@ -218,22 +304,98 @@ export const startIsolatedServer = async ({ repo, dist, state, project, port, fi
   const stop = () => stopProcessTree(child)
   const deadline = Date.now() + 120_000
   let ready = false
-  while (Date.now() < deadline && child.exitCode === null) {
-    ready = await fetch(`${url}/`).then((response) => response.ok, () => false)
+  while (Date.now() < deadline && child.exitCode === null && !spawnError && !signal?.aborted) {
+    ready = await fetch(`${url}/`, { signal }).then((response) => response.ok, () => false)
     if (ready) break
     await wait(1000)
   }
   if (!ready) {
     await stop()
+    signal?.throwIfAborted()
+    if (spawnError) throw spawnError
     throw new Error(`The server did not answer on ${url}${logFile ? `; see ${logFile}` : ""}.`)
   }
-  const served = await servedMainChunk(url)
+  let served
+  try {
+    served = await servedMainChunk(url, signal)
+  } catch (error) {
+    await stop()
+    throw error
+  }
   const bundle = { dist, built, served, matches: built === served }
   if (!bundle.matches) {
     await stop()
     throw new Error(`The server serves ${served} but ${dist} built ${built}; the page would not run this build.`)
   }
   return { url, pid: child.pid, bundle, stop }
+}
+
+/** Fresh interaction runs have no seed, repository discovery, or reusable listener. */
+export const startInteractionServer = async ({ root, dist, opencodeBinary, repo = REPO_ROOT, signal }) => {
+  signal?.throwIfAborted()
+  root = resolve(root)
+  if (platform() !== "linux" || dirname(root) !== "/tmp/opencode" || realpathSync(dirname(root)) !== "/tmp/opencode") {
+    throw new Error("Interaction root must be a new directory directly under /tmp/opencode on Linux")
+  }
+  if (!opencodeBinary || !existsSync(opencodeBinary)) throw new Error("Interaction fixture requires an explicit OpenCode binary")
+  // V2 reads ancestors even across repository boundaries. Refuse ambient
+  // configuration and instructions rather than merging them into this test.
+  for (const directory of ["/", "/tmp", "/tmp/opencode"]) {
+    for (const name of ["opencode.json", "opencode.jsonc", ".opencode", "AGENTS.md", "CLAUDE.md"]) {
+      if (existsSync(join(directory, name))) throw new Error(`Interaction ancestor contains ${join(directory, name)}`)
+    }
+  }
+  if (existsSync("/etc/opencode")) throw new Error("Interaction fixture refuses system OpenCode configuration")
+  mkdirSync(root, { mode: 0o700 })
+  const state = join(root, "state")
+  const project = join(root, "project")
+  for (const directory of [project, ...["home", "config", "data", "cache", "xdg-state", "tmp", "oc-data"].map((name) => join(state, name))]) {
+    mkdirSync(directory, { recursive: true, mode: 0o700 })
+  }
+  const fixture = await startInteractionProvider({ state, project, logFile: join(root, "fixture.log"), signal })
+  let server
+  try {
+    server = await startIsolatedServer({ repo, dist, state, project, port: await reservePort(), fixturePort: fixture.port,
+      opencodeBinary, logFile: join(root, "server.log"), interactions: true, signal })
+  } catch (error) {
+    await fixture.stop()
+    throw error
+  }
+  return { ...server, root, state, project, fixturePort: fixture.port, fixturePid: fixture.pid,
+    stop: async () => { try { return await server.stop() } finally { await fixture.stop() } },
+  }
+}
+
+/** Signal ownership is scoped to this callback, including pending startup.
+ * Callers stop their own ongoing work when the supplied signal aborts. */
+export const withInteractionServer = async (options, run) => {
+  const controller = new AbortController()
+  let interrupt
+  const interrupted = new Promise((resolveInterrupt) => { interrupt = resolveInterrupt })
+  const onSignal = (name) => {
+    const error = new Error(`Interaction fixture interrupted by ${name}`)
+    error.code = "INTERACTION_INTERRUPTED"
+    controller.abort(error)
+    interrupt(error)
+  }
+  const onInt = () => onSignal("SIGINT")
+  const onTerm = () => onSignal("SIGTERM")
+  process.on("SIGINT", onInt)
+  process.on("SIGTERM", onTerm)
+  let server
+  try {
+    server = await startInteractionServer({ ...options, signal: controller.signal })
+    controller.signal.throwIfAborted()
+    return await Promise.race([
+      run(server, controller.signal),
+      interrupted.then((error) => { throw error }),
+    ])
+  } finally {
+    try { await server?.stop() } finally {
+      process.off("SIGINT", onInt)
+      process.off("SIGTERM", onTerm)
+    }
+  }
 }
 
 const parseArgs = (argv) => {
@@ -245,9 +407,13 @@ const parseArgs = (argv) => {
     else if (value === "--dist") options.dist = resolve(argv[++index])
     else if (value === "--root") options.root = resolve(argv[++index])
     else if (value === "--fresh") options.fresh = true
+    else if (value === "--interactions") options.interactions = true
     else if (value === "--port") options.port = Number(argv[++index])
     else if (value === "--fixture-port") options.fixturePort = Number(argv[++index])
-    else if (value === "--opencode-binary") options.opencodeBinary = resolve(argv[++index])
+    else if (value === "--opencode-binary") {
+      options.opencodeBinary = resolve(argv[++index])
+      options.opencodeBinaryProvided = true
+    }
     else throw new Error(`Unknown option: ${value}`)
   }
   options.dist = options.dist ?? join(options.repo, "packages/web/dist")
@@ -256,6 +422,19 @@ const parseArgs = (argv) => {
 
 const main = async () => {
   const options = parseArgs(process.argv.slice(2))
+  if (options.interactions) {
+    if (!options.opencodeBinaryProvided) throw new Error("--interactions requires an explicit --opencode-binary flag")
+    if (options.fresh) throw new Error("--interactions cannot restore a seed")
+    try {
+      await withInteractionServer(options, async (server, signal) => {
+        console.log(JSON.stringify({ url: server.url, root: server.root, state: server.state, project: server.project, fixturePort: server.fixturePort, pid: server.pid, fixturePid: server.fixturePid }))
+        await new Promise((done) => signal.addEventListener("abort", done, { once: true }))
+      })
+    } catch (error) {
+      if (error.code !== "INTERACTION_INTERRUPTED") throw error
+    }
+    return
+  }
   const state = join(options.root, "state")
   // The fixture log is opened before startServer creates anything under the
   // root, so a first run on a new --root needs the directory made here.

@@ -59,6 +59,17 @@ const FIXTURE_AGENT_RATES = [300, FIXTURE_SEED_RATE]
 const THINK_ANSWER = "Done."
 const CHUNK_CHARACTERS = 4
 
+export const INTERACTION_SHELL_COMMAND = "printf 'native-permission-ok\\n'"
+export const INTERACTION_QUESTIONS = [
+  { header: "Choice", question: "Choose a fixture option.", options: [
+    { label: "Alpha", description: "First option" }, { label: "Beta", description: "Second option" },
+  ] },
+  { header: "Multiple", question: "Choose fixture checks.", multiple: true, options: [
+    { label: "One", description: "First check" }, { label: "Two", description: "Second check" },
+  ] },
+  { header: "Custom", question: "Enter fixture text.", options: [] },
+]
+
 // Read-only lookups over the session's directory: small results, no
 // permission prompt, and a different one on each step.
 const AGENT_GLOBS = ["packages/*/package.json", "scripts/perf/*.mjs", "*.md", ".agents/skills/*/SKILL.md"]
@@ -329,11 +340,30 @@ const parseModel = (model) => {
  * streams the document. Counting from the last prompt makes every turn of a
  * long session agentic, not only the first.
  */
-const planResponse = (model, body) => {
+const planResponse = (model, body, interactions = false) => {
   const { delayMs, charactersPerSecond, document, toolSteps, reads, parallel = 1 } = parseModel(model)
   const messages = Array.isArray(body.messages) ? body.messages : []
   const lastPrompt = messages.findLastIndex((message) => message?.role === "user")
   const toolResults = messages.slice(lastPrompt + 1).filter((message) => message?.role === "tool").length
+  if (String(model).startsWith("interaction-")) {
+    if (!interactions) throw new Error("Interaction fixtures require --interactions")
+    const name = { "interaction-shell": "shell", "interaction-question": "question" }[model]
+    if (!name) throw new Error(`Unknown interaction fixture: ${model}`)
+    if (!body.tools?.some((tool) => tool.type === "function" && tool.function?.name === name)) {
+      throw new Error(`Interaction fixture requires the ${name} tool in the request`)
+    }
+    if (lastPrompt < 0) throw new Error("Interaction fixture requires a user message")
+    return {
+      delayMs: 0, charactersPerSecond: 20000,
+      text: toolResults ? "Fixture interaction complete." : "",
+      toolCalls: toolResults ? [] : [{
+        id: `call_fixture_${name}_1`, name,
+        arguments: name === "shell"
+          ? { command: INTERACTION_SHELL_COMMAND, timeout: 5000, background: false }
+          : { questions: INTERACTION_QUESTIONS },
+      }],
+    }
+  }
   if (toolSteps > 0 && toolResults < toolSteps) {
     const calls = Array.from({ length: Math.min(parallel, toolSteps - toolResults) }, (_, offset) => {
       const call = toolResults + offset
@@ -396,8 +426,7 @@ const streamText = (response, model, text, { delayMs, charactersPerSecond }) => 
   })
 })
 
-const streamCompletion = async (response, model, body) => {
-  const plan = planResponse(model, body)
+const streamCompletion = async (response, model, plan) => {
   response.write(sseFrame(chunkFrame(model, { role: "assistant", content: "" })))
   try {
     await streamText(response, model, plan.text, plan)
@@ -419,13 +448,18 @@ const streamCompletion = async (response, model, body) => {
   response.end("data: [DONE]\n\n")
 }
 
-const startFixtureProvider = (port) => new Promise((resolveServer, reject) => {
+export const startFixtureProvider = (port, { interactions = false } = {}) => new Promise((resolveServer, reject) => {
   const server = createServer(async (request, response) => {
     if (request.method !== "POST" || !request.url?.endsWith("/chat/completions")) {
       response.writeHead(404).end()
       return
     }
     const body = await readBody(request)
+    if (String(body.model).startsWith("interaction-") && !body.stream) {
+      response.writeHead(400, { "content-type": "application/json" })
+      response.end(JSON.stringify({ error: { message: "Interaction fixtures require streaming", type: "invalid_request_error" } }))
+      return
+    }
     // Title generation and other auxiliary calls are not part of the stimulus.
     if (!body.stream) {
       response.writeHead(200, { "content-type": "application/json" })
@@ -439,21 +473,30 @@ const startFixtureProvider = (port) => new Promise((resolveServer, reject) => {
       }))
       return
     }
+    let plan
+    try {
+      plan = planResponse(body.model, body, interactions)
+    } catch (error) {
+      response.writeHead(400, { "content-type": "application/json" })
+      response.end(JSON.stringify({ error: { message: error.message, type: "invalid_request_error" } }))
+      return
+    }
     response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" })
-    void streamCompletion(response, body.model, body)
+    void streamCompletion(response, body.model, plan)
   })
   server.on("error", reject)
   server.listen(port, "127.0.0.1", () => resolveServer(server))
 })
 
 /** OpenCode configuration that registers this provider; pass it as `OPENCODE_CONFIG_CONTENT`. */
-export const fixtureProviderConfig = (port) => ({
+export const fixtureProviderConfig = (port, { interactions = false } = {}) => ({
   provider: {
     [FIXTURE_PROVIDER_ID]: {
       npm: "@ai-sdk/openai-compatible",
       name: "Performance fixture",
       options: { baseURL: `http://127.0.0.1:${port}/v1`, apiKey: "unused" },
       models: Object.fromEntries([
+        ...(interactions ? ["interaction-shell", "interaction-question"].map((id) => [id, { name: id, tool_call: true }]) : []),
         ...FIXTURE_RATES.map((rate) => [`stream-${rate}cps`, { name: `Fixture stream, ${rate} characters/s` }]),
         ...FIXTURE_CODE_RATES.map((rate) => [`code-${rate}cps`, { name: `Fixture code block, ${rate} characters/s` }]),
         ...FIXTURE_UNICODE_RATES.map((rate) => [`unicode-${rate}cps`, { name: `Fixture non-Latin prose and code, ${rate} characters/s` }]),
@@ -476,11 +519,13 @@ export const fixtureProviderConfig = (port) => ({
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const port = Number(process.argv[2] ?? 4601)
+  const interactions = process.argv.includes("--interactions")
   if (process.argv.includes("--print-config")) {
-    console.log(JSON.stringify(fixtureProviderConfig(port)))
+    console.log(JSON.stringify(fixtureProviderConfig(port, { interactions })))
   } else {
-    await startFixtureProvider(port)
-    console.log(`Fixture provider listening on http://127.0.0.1:${port}/v1 (${FIXTURE_DOCUMENT.length} characters per response)`)
-    console.log(`Models: ${Object.keys(fixtureProviderConfig(port).provider[FIXTURE_PROVIDER_ID].models).map((id) => `${FIXTURE_PROVIDER_ID}/${id}`).join(", ")}`)
+    const server = await startFixtureProvider(port, { interactions })
+    console.log(`Fixture provider listening on http://127.0.0.1:${server.address().port}/v1 (${FIXTURE_DOCUMENT.length} characters per response)`)
+    console.log(`Models: ${Object.keys(fixtureProviderConfig(port, { interactions }).provider[FIXTURE_PROVIDER_ID].models).map((id) => `${FIXTURE_PROVIDER_ID}/${id}`).join(", ")}`)
+    process.send?.({ port: server.address().port })
   }
 }
