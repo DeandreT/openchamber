@@ -49,6 +49,7 @@ import { useChangeRequestTerm } from '@/lib/source-control/providers/registry';
 import { ContextPanelHeaderSlotProvider } from './contextPanelHeaderSlot';
 import { CLOSED_ZONE_VIEW, CONTEXT_ZONE_DEFAULT_WIDTH, getZoneView, isZoneShown, resolveZoneActiveTab, sideZoneWidth, type ContextZone } from '@/lib/workspace/zones';
 import { closeZoneOnEscape } from './zoneEscape';
+import { registerCloseTabTarget } from '@/lib/closeTabTarget';
 import { ZoneMoveMenuItems } from './ZoneMoveMenuItems';
 import { beginZoneDrag, cancelZoneDrag, finishZoneDrag, startZoneDragGesture, updateZoneDrag } from './zoneDrag';
 import { setZoneBody, setZoneHeaderSlot } from './zoneHosts';
@@ -842,6 +843,19 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
         : null;
 
   const isFileTabActive = activeTab?.mode === 'file';
+
+  // Cmd/Ctrl+W in the desktop app closes the strip's active tab here, as its
+  // close button does. A file shown in the editor registers from the editor,
+  // which asks first about unsaved edits; terminal tabs from the terminal's
+  // own strip.
+  const editorClosesTab = isFileTabActive && Boolean(activeTab?.targetPath) && showsEditor;
+  const shortcutClosableTabId = isOpen && activeTab && isMultiInstanceMode && !editorClosesTab && !isTrackerBranchTab(activeTab)
+    ? activeTab.id
+    : null;
+  React.useEffect(() => {
+    if (!directoryKey || !shortcutClosableTabId) return;
+    return registerCloseTabTarget(() => closeContextPanelTab(directoryKey, shortcutClosableTabId), panelRef);
+  }, [closeContextPanelTab, directoryKey, shortcutClosableTabId]);
 
   const closeContextPanelTabs = useUIStore((state) => state.closeContextPanelTabs);
   const renderTabContextMenu = React.useCallback(

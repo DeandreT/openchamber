@@ -94,7 +94,8 @@ export type SessionSidebarRow =
   // gutterless timeline-style rows, otherwise with the tree level `depth`.
   | (RowBase & { kind: 'empty'; emptyKind: 'sidebar' | 'search' | 'archived'; depth?: number })
   | (RowBase & { kind: 'status'; status: SessionSidebarGroupStatus; group: SessionGroup; groupKey: string; depth?: number; flat?: boolean })
-  | (RowBase & { kind: 'show-control'; control: 'more' | 'fewer'; containerKey: string; currentCount: number; increment: number; depth?: number; flat?: boolean });
+  /** Show more while rows remain hidden, Show less once more than the first batch shows; one row holds both. */
+  | (RowBase & { kind: 'show-control'; more: boolean; fewer: boolean; containerKey: string; currentCount: number; increment: number; depth?: number; flat?: boolean });
 
 export type SessionSidebarStickyHeader = {
   rowIndex: number;
@@ -837,10 +838,10 @@ export const buildSessionSidebarRowModel = (args: SessionSidebarRowModelArgs): S
     if (!group.isMain) appendDrafts();
     const remaining = ungroupedEntries.length - visibleEntries.length;
     const limitedVisibleCount = requested - budget;
-    if (!search && !group.isArchivedBucket && remaining > 0) {
-      push({ kind: 'show-control', key: `${rowKeyBase}:more`, estimateSize: STATUS_ESTIMATE, control: 'more', containerKey: groupKey, currentCount: limitedVisibleCount, increment, depth: contentDepth, flat: false });
-    } else if (!search && !group.isArchivedBucket && limitedNodes.length > initialLimit && remaining === 0) {
-      push({ kind: 'show-control', key: `${rowKeyBase}:fewer`, estimateSize: STATUS_ESTIMATE, control: 'fewer', containerKey: groupKey, currentCount: limitedVisibleCount, increment, depth: contentDepth, flat: false });
+    const more = remaining > 0;
+    const fewer = requested > initialLimit && limitedNodes.length > initialLimit;
+    if (!search && !group.isArchivedBucket && (more || fewer)) {
+      push({ kind: 'show-control', key: `${rowKeyBase}:show`, estimateSize: STATUS_ESTIMATE, more, fewer, containerKey: groupKey, currentCount: limitedVisibleCount, increment, depth: contentDepth, flat: false });
     }
 
     // An empty group lists nothing: its header has no chevron, and new

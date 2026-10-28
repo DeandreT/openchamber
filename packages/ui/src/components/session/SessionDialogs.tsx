@@ -16,7 +16,7 @@ import { DirectoryExplorerDialog } from './DirectoryExplorerDialog';
 import { cn, formatPathForDisplay } from '@/lib/utils';
 import type { Session } from '@/lib/opencode/model';
 import type { WorktreeMetadata } from '@/types/worktree';
-import { canDeleteWorktreeWithoutConfirm, getWorktreeStatus } from '@/lib/worktrees/worktreeStatus';
+import { canDeleteWorktreeBranch, canDeleteWorktreeWithoutConfirm, getWorktreeStatus } from '@/lib/worktrees/worktreeStatus';
 import { getWorktreeDisplayName, removeProjectWorktree } from '@/lib/worktrees/worktreeManager';
 import { leaveFinishedSessions } from '@/lib/sessionTabs';
 import { checkoutHoldsDirectory } from '@/lib/worktrees/worktreePaths';
@@ -99,8 +99,34 @@ export const SessionDialogs: React.FC = () => {
     }, [projectDirectory, projects]);
 
     const hasDirtyWorktrees = hasCompletedDirtyCheck && dirtyWorktreePaths.size > 0;
+
+    // The branch toggles appear only once the check allows them, so a
+    // worktree on the default branch never offers deleting it.
+    const [canDeleteBranch, setCanDeleteBranch] = React.useState(false);
+    const branchCheckWorktree = deleteDialog?.mode === 'worktree'
+        ? deleteDialog.worktree ?? deleteDialogSummaries[0]?.metadata ?? null
+        : null;
+    const branchCheckPath = branchCheckWorktree?.path;
+    const branchCheckBranch = branchCheckWorktree?.branch;
+    const branchCheckProjectDirectory = branchCheckWorktree ? getProjectRefForWorktree(branchCheckWorktree).path : null;
+    React.useEffect(() => {
+        setCanDeleteBranch(false);
+        if (!branchCheckPath || !branchCheckProjectDirectory) return;
+        let cancelled = false;
+        void canDeleteWorktreeBranch(branchCheckProjectDirectory, { path: branchCheckPath, branch: branchCheckBranch ?? '' })
+            .then((allowed) => {
+                if (!cancelled) setCanDeleteBranch(allowed);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [branchCheckBranch, branchCheckPath, branchCheckProjectDirectory]);
+
     const canRemoveRemoteBranches = React.useMemo(
         () => {
+            if (!canDeleteBranch) {
+                return false;
+            }
             const targetWorktree = deleteDialog?.worktree;
             if (targetWorktree && typeof targetWorktree.branch === 'string' && targetWorktree.branch.trim().length > 0) {
                 return Boolean(targetWorktree.status?.upstream?.split('/')[0]?.trim());
@@ -114,7 +140,7 @@ export const SessionDialogs: React.FC = () => {
                 ))
             );
         },
-        [deleteDialog?.worktree, deleteDialogSummaries],
+        [canDeleteBranch, deleteDialog?.worktree, deleteDialogSummaries],
     );
     const isWorktreeDelete = deleteDialog?.mode === 'worktree';
     const removeRemoteOptionDisabled =
@@ -490,7 +516,7 @@ export const SessionDialogs: React.FC = () => {
                 void removeSelectedWorktreeInBackground(
                     selectedWorktree,
                     deleteDialog.sessions.map((session) => session.id),
-                    deleteDialogShouldDeleteLocalBranch,
+                    deleteDialogShouldDeleteLocalBranch && canDeleteBranch,
                 );
                 closeDeleteDialog();
                 return;
@@ -552,6 +578,7 @@ export const SessionDialogs: React.FC = () => {
             setIsProcessingDelete(false);
         }
     }, [
+        canDeleteBranch,
         deleteDialog,
         deleteDialogSummaries,
         deleteDialogShouldDeleteLocalBranch,
@@ -670,7 +697,7 @@ export const SessionDialogs: React.FC = () => {
         </div>
     ) : null;
 
-    const deleteRemoteBranchAction = isWorktreeDelete ? (
+    const deleteRemoteBranchAction = isWorktreeDelete && canDeleteBranch ? (
         canRemoveRemoteBranches ? (
             <button
                 type="button"
@@ -701,7 +728,7 @@ export const SessionDialogs: React.FC = () => {
         )
     ) : null;
 
-    const deleteLocalBranchAction = isWorktreeDelete ? (
+    const deleteLocalBranchAction = isWorktreeDelete && canDeleteBranch ? (
         <button
             type="button"
             onClick={() => {

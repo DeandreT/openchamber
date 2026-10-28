@@ -49,6 +49,7 @@ import { isSpaceDirectory } from '@/lib/spaces/space-route';
 import { normalizePath } from '../attachments/filePaths';
 import { getProjectDisplayLabel, type DraftTargetProject } from '../state/useDraftTarget';
 import { useProjectsInSidebarOrder } from '@/components/session/sidebar/list/useProjectsInSidebarOrder';
+import { DraftsHerePicker, MobileDraftsHerePicker } from './DraftsHerePicker';
 
 interface BranchOption {
     value: string;
@@ -527,6 +528,7 @@ function DraftTargetSelectorsView(props: DraftTargetProps) {
                     </SelectContent>
                 </Select>
             ) : null}
+            <DraftsHerePicker />
         </div>
     );
 }
@@ -561,6 +563,7 @@ export function MobileDraftTargetTriggers(
                     <Icon name="arrow-down-s" className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
                 </button>
             ) : null}
+            <MobileDraftsHerePicker />
         </div>
     );
 }

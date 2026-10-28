@@ -181,7 +181,6 @@ export const SortableProjectItem: React.FC<SortableProjectItemProps> = ({
     isDragging,
   } = useSortable({ id, disabled });
 
-  const suppressNextToggleRef = React.useRef(false);
   const menuInstanceKey = `project:${id}`;
   const isMenuOpen = openSidebarMenuKey === menuInstanceKey;
   const [isContextMenuOpen, setIsContextMenuOpen] = React.useState(false);
@@ -253,17 +252,11 @@ export const SortableProjectItem: React.FC<SortableProjectItemProps> = ({
     event.stopPropagation();
   }, []);
 
-  const handleToggleMouseDown = React.useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
-    if (event.button === 2 || (event.button === 0 && event.ctrlKey)) {
-      suppressNextToggleRef.current = true;
-    }
-  }, []);
-
-  const handleToggleClick = React.useCallback(() => {
-    if (suppressNextToggleRef.current) {
-      suppressNextToggleRef.current = false;
-      return;
-    }
+  // Ctrl+click opens the context menu on macOS. Decided from the click itself:
+  // a right button press fires no click, so a flag set on press stayed set
+  // and swallowed the next real click.
+  const handleToggleClick = React.useCallback((event: React.MouseEvent<HTMLButtonElement>) => {
+    if (event.ctrlKey) return;
     onToggle();
   }, [onToggle]);
 
@@ -360,7 +353,6 @@ export const SortableProjectItem: React.FC<SortableProjectItemProps> = ({
                 <TooltipTrigger asChild>
                     <button
                       type="button"
-                      onMouseDown={handleToggleMouseDown}
                       onClick={handleToggleClick}
                       {...listeners}
                       className={cn(

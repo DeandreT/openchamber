@@ -102,6 +102,7 @@ import {
 } from '@/sync/sync-context';
 import { useSync } from '@/sync/use-sync';
 import { useI18n } from '@/lib/i18n';
+import { useDraftHeading } from './useDraftHeading';
 import { isVSCodeRuntime } from '@/lib/desktop';
 import { eventMatchesShortcut, getEffectiveShortcutCombo } from '@/lib/shortcuts';
 import { ChatSearchBar } from './search/ChatSearchBar';
@@ -765,7 +766,6 @@ const renderDraftTitle = (title: string, projectLabel: string | null): React.Rea
 };
 
 const DraftWelcome: React.FC<{ exiting?: boolean }> = ({ exiting = false }) => {
-    const { t } = useI18n();
     const draftTarget = useSessionUIStore((state) => state.newSessionDraft.target);
     const selectedProjectId = useSessionUIStore((state) => state.newSessionDraft.selectedProjectId ?? null);
     const projectLabel = useProjectsStore(React.useCallback((state) => {
@@ -776,6 +776,7 @@ const DraftWelcome: React.FC<{ exiting?: boolean }> = ({ exiting = false }) => {
             : null) ?? state.projects[0] ?? null;
         return project ? getProjectDisplayLabel(project) : null;
     }, [draftTarget, selectedProjectId]));
+    const draftHeading = useDraftHeading(projectLabel);
 
     return (
         <div className={cn(
@@ -783,12 +784,7 @@ const DraftWelcome: React.FC<{ exiting?: boolean }> = ({ exiting = false }) => {
             exiting && 'pointer-events-none opacity-0',
         )}>
             <h1 className="text-balance text-3xl font-normal tracking-tight text-foreground">
-                {renderDraftTitle(
-                    projectLabel
-                        ? t('chat.emptyState.draftTitleWithProject', { project: projectLabel })
-                        : t('chat.emptyState.draftTitle'),
-                    projectLabel,
-                )}
+                {renderDraftTitle(draftHeading, projectLabel)}
             </h1>
             <DraftPresetChips
                 onSubmit={(starter) => useInputStore.getState().requestPresetSubmit(starter.submitText, starter.ref.type)}

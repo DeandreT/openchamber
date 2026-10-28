@@ -52,12 +52,13 @@ import type { DeleteSessionConfirmState } from '../sessions/useSessionActions';
 import { useExpandedParents } from '../sessions/useExpandedParents';
 import { buildSidebarChatGroup, projectSidebarChats } from '../sessions/sessionChatProjection';
 import { useChatsRoot } from '@/hooks/useChatsRoot';
+import { isChatDirectoryPath } from '@/lib/chatDirectories';
 import { isCapacitorApp } from '@/lib/platform';
 import { deriveTimelineActivityItems, matchZoneSessionsForSidebarQuery, pruneSessionTreeForSidebarQuery } from '../recent/activitySections';
 import { resolveSidebarSessionLocations } from '../recent/sessionLocation';
 import { buildSessionSidebarRowModel, type SessionSidebarWorkEntry } from '../sessionSidebarRowModel';
 import { useRemovingWorktreePaths } from '@/lib/worktrees/worktreeRemovalState';
-import { buildSidebarWorkIndex, buildWorktreeArchiveAnchors, isGroupWork, orderSidebarWorks, type SidebarWorkRef } from '../works/sidebarWorks';
+import { buildSessionRootIndex, buildSidebarWorkIndex, buildWorktreeArchiveAnchors, isGroupWork, orderInWorkWorks, orderSidebarWorks, type SidebarWorkRef } from '../works/sidebarWorks';
 import { getSessionLifecycleOrderValue } from '@/sync/session-ordering';
 import { useSessionDraftsStore, type SessionDraft } from '@/stores/useSessionDraftsStore';
 import { useSidebarGroupStatus } from './useSidebarGroupStatus';
@@ -408,6 +409,10 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     isPinned: (session) => isSessionPinned(collection.pinnedSessionIds, session.directory, session.id),
   }), [collection.archivedSessions, collection.orderedSessions, collection.pinnedSessionIds, collection.sessionOrderRanks, workIndex]);
   const rootSessionIds = React.useMemo(() => new Set(collection.rootSessions.map((session) => session.id)), [collection.rootSessions]);
+  const sessionRootIndex = React.useMemo(
+    () => buildSessionRootIndex(collection.rootSessions, collection.childrenMap),
+    [collection.childrenMap, collection.rootSessions],
+  );
   // Drafts of new sessions not sent yet, where their session would go: a
   // worktree's in its group, the project root's at the top of the project. The
   // open one stays listed (selected) until it is sent or thrown away; a draft
@@ -467,11 +472,9 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
       : [];
     const pinnedKeys = new Set(pinnedWorktrees.map((ref) => ref.key));
     const work = showWork
-      // A subagent's own work state never puts its run in work: the user works
-      // in the sessions they started, as the Done button on a row reads it.
-      ? orderSidebarWorks(collection.orderedSessions, workIndex, (session) => (
-        !session.parentID && !session.time?.archived && !chatSessionIds.has(session.id) && isSessionInWork(session)
-      )).filter((ref) => (ref.kind === 'session' ? !pinnedIds.has(ref.rootSessionId) : !pinnedKeys.has(ref.key)))
+      // This fork keeps fallback conversations exclusively in Chats.
+      ? orderInWorkWorks(collection.orderedSessions.filter((session) => !chatSessionIds.has(session.id)), workIndex, sessionRootIndex, isChatDirectoryPath)
+        .filter((ref) => (ref.kind === 'session' ? !pinnedIds.has(ref.rootSessionId) : !pinnedKeys.has(ref.key)))
       : [];
     // A worktree or a space with no session yet is in work while a draft is
     // begun there: the user just made it for a task. It opens the block, as
@@ -498,7 +501,7 @@ const VisibleSessionProjects: React.FC<SessionProjectCollectionProps> = ({ topol
     }
     if (pinned.length === 0 && pinnedWorktrees.length === 0 && listed.length === 0) return EMPTY_ZONE_WORKS;
     return { pinned, pinnedWorktrees, work: listed };
-  }, [chatSessionIds, collection.orderedSessions, collection.pinnedSessionIds, draftPlacement, openDraftDirectory, openDraftSpaceId, removingWorktreePaths, rootSessionIds, sessionWorkEnabled, showPinnedSection, showWorkSection, workIndex]);
+  }, [chatSessionIds, collection.orderedSessions, collection.pinnedSessionIds, draftPlacement, openDraftDirectory, openDraftSpaceId, removingWorktreePaths, rootSessionIds, sessionRootIndex, sessionWorkEnabled, showPinnedSection, showWorkSection, workIndex]);
   React.useEffect(() => {
     lastWorkKeysRef.current = zoneWorks.work.map((ref) => ref.key);
   }, [zoneWorks]);

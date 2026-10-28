@@ -2120,6 +2120,15 @@ const findBranchInUse = async (primaryWorktree, localBranchName) => {
   }) || null;
 };
 
+// Removing a worktree never deletes the repository's default branch or a
+// branch another checkout holds. A worktree can end up on `main` (an agent's
+// `git checkout -B main`), and deleting its branch would then delete main.
+const isBranchKeptOnWorktreeRemoval = async (primaryWorktree, branchName) => {
+  if (await findBranchInUse(primaryWorktree, branchName)) return true;
+  const { git } = await createRepositoryGitContext(primaryWorktree);
+  return Object.values(await getRemoteDefaultBranches(git)).includes(branchName);
+};
+
 const runWorktreeStartCommand = async (directory, command) => {
   const text = String(command || '').trim();
   if (!text) {
@@ -4540,8 +4549,9 @@ const withoutDetachedHeadEntry = (summary) => {
 
 /**
  * `remote: 'local'` answers from local refs alone, as `git branch -a` does: the
- * callers that only need the checked-out branch and its upstream (publishing,
- * worktree creation) must not wait on every remote's network round trip.
+ * callers that only need local facts (publishing and worktree creation read the
+ * checked-out branch and its upstream, the worktree delete dialog reads
+ * `defaultBranches`) must not wait on every remote's network round trip.
  */
 export async function getBranches(directory, { remote = 'live' } = {}) {
   const { git } = await createRepositoryGitContext(directory);
@@ -5161,7 +5171,7 @@ const applyBranchTaskTitle = async (directory, branch, by, title) => {
  * `agile-chipmunk`), not one the user chose: `branch.<name>.openchamberGeneratedName`
  * holds the generated name itself, so once the branch is renamed the record,
  * which `git branch -m` carries along, no longer matches and stops applying.
- * `prefix`, the start of the name an issue's branch keeps (`issue-180-`), is
+ * `prefix`, the item part of an issue's branch whose key the rename keeps (`issue-180-`), is
  * recorded beside it in `openchamberGeneratedPrefix`. Best effort.
  */
 export async function markGeneratedBranchName(directory, branch, prefix = null) {
@@ -5203,24 +5213,40 @@ export async function readRenameableGeneratedBranch(directory, checkedOutBranch 
   return branch;
 }
 
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/**
+ * The agent's branch name with the item key of a recorded prefix in front of
+ * its last segment, the way trackers name an issue's branch: prefix
+ * `issue-180-` and `fix/login-timeout` give `fix/180-login-timeout`, Linear's
+ * `issue-ENG-12-` gives `fix/eng-12-login-timeout`, and `discussion-12-` stays
+ * whole so the number is not taken for an issue's. A name that already
+ * carries the key, in any place, is the agent's choice and stays as it is.
+ */
+const withItemKey = (requested, prefix) => {
+  const key = prefix.replace(/^issue-/, '').replace(/-+$/, '').toLowerCase();
+  if (!key || !requested) return requested;
+  if (new RegExp(`(^|[/-])${escapeRegExp(key)}($|[/-])`, 'i').test(requested)) return requested;
+  const segments = requested.split('/');
+  const last = segments.pop();
+  return [...segments, `${key}-${last}`].join('/');
+};
+
 /**
  * Renames the worktree's branch to `newName` when OpenChamber generated its
  * name and it was never pushed (`readRenameableGeneratedBranch`), for
  * `work.name`. Answers `{ from, to }`, or null when the branch is not such a
  * placeholder, which then stays as it is. A name git does not accept, the
  * placeholder itself, or one already taken fails with a status. A placeholder
- * with a recorded prefix keeps it: `fix/login-timeout` for
- * `issue-180-merry-salamander` becomes `issue-180-login-timeout`.
+ * with a recorded prefix keeps its item key (`withItemKey`): `fix/login-timeout`
+ * for `issue-180-merry-salamander` becomes `fix/180-login-timeout`.
  */
 export async function renameGeneratedWorktreeBranch(directory, newName) {
   const directoryPath = normalizeDirectoryPath(directory);
   const current = directoryPath ? await readRenameableGeneratedBranch(directoryPath) : null;
   if (!current) return null;
   const prefix = (await readGitConfigValue(directoryPath, `branch.${current}.openchamberGeneratedPrefix`)).trim();
-  const requested = String(newName || '').trim();
-  const name = prefix && requested && !requested.startsWith(prefix)
-    ? `${prefix}${requested.split('/').pop() || requested}`
-    : requested;
+  const name = withItemKey(String(newName || '').trim(), prefix);
   const fail = (message, status) => Object.assign(new Error(message), { status });
   if (!name || name === current) throw fail(`Name the branch after the task, not \`${current}\``, 400);
   const valid = await runGitCommand(directoryPath, ['check-ref-format', '--branch', name]);
@@ -6608,7 +6634,7 @@ export async function removeWorktree(directory, input = {}, { bootstrapStore } =
 
   if (deleteLocalBranch) {
     const branchName = cleanBranchName(String(matchedEntry.branchRef || matchedEntry.branch || '').trim());
-    if (branchName) {
+    if (branchName && !(await isBranchKeptOnWorktreeRemoval(context.primaryWorktree, branchName))) {
       await runGitCommandOrThrow(
         context.primaryWorktree,
         ['branch', '-D', branchName],

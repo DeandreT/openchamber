@@ -1,4 +1,4 @@
-/** Sidebar works: the In work block, worktree task rows, task names and drafts, merged into each locale's main dictionary. */
+/** Sidebar works: the In work block, worktree task rows, task names, drafts and the drafts picker of a new session, merged into each locale's main dictionary. */
 export const sidebarWorkI18n = {
   en: {
     "sessions.sidebar.header.displayMode.keepWorkInPlace": "Also show in work under projects",
@@ -22,6 +22,9 @@ export const sidebarWorkI18n = {
     "sessions.sidebar.draft.discardFailed": "Couldn't discard the draft",
     "sessions.sidebar.draft.openAria": "Open draft: {label}",
     "sessions.sidebar.draft.tooLarge": "This draft's attachments are too large to keep for your other devices. It stays here until you send it.",
+    "chat.draftTarget.drafts.heading": "Drafts here",
+    "chat.draftTarget.drafts.triggerSingle": "{count} draft",
+    "chat.draftTarget.drafts.triggerPlural": "{count} drafts",
   },
   de: {
     "sessions.sidebar.header.displayMode.keepWorkInPlace": "In Arbeit auch unter Projekten zeigen",
@@ -45,6 +48,9 @@ export const sidebarWorkI18n = {
     "sessions.sidebar.draft.discardFailed": "Der Entwurf konnte nicht verworfen werden",
     "sessions.sidebar.draft.openAria": "Entwurf öffnen: {label}",
     "sessions.sidebar.draft.tooLarge": "Die Anhänge dieses Entwurfs sind zu groß für Ihre anderen Geräte. Er bleibt hier, bis Sie ihn senden.",
+    "chat.draftTarget.drafts.heading": "Entwürfe hier",
+    "chat.draftTarget.drafts.triggerSingle": "{count} Entwurf",
+    "chat.draftTarget.drafts.triggerPlural": "{count} Entwürfe",
   },
   fr: {
     "sessions.sidebar.header.displayMode.keepWorkInPlace": "Afficher aussi le travail en cours sous les projets",
@@ -68,6 +74,9 @@ export const sidebarWorkI18n = {
     "sessions.sidebar.draft.discardFailed": "Impossible de supprimer le brouillon",
     "sessions.sidebar.draft.openAria": "Ouvrir le brouillon : {label}",
     "sessions.sidebar.draft.tooLarge": "Les pièces jointes de ce brouillon sont trop lourdes pour vos autres appareils. Il reste ici jusqu’à son envoi.",
+    "chat.draftTarget.drafts.heading": "Brouillons ici",
+    "chat.draftTarget.drafts.triggerSingle": "{count} brouillon",
+    "chat.draftTarget.drafts.triggerPlural": "{count} brouillons",
   },
   nl: {
     "sessions.sidebar.header.displayMode.keepWorkInPlace": "Werk in uitvoering ook onder projecten tonen",
@@ -91,6 +100,9 @@ export const sidebarWorkI18n = {
     "sessions.sidebar.draft.discardFailed": "Het concept kon niet worden weggegooid",
     "sessions.sidebar.draft.openAria": "Concept openen: {label}",
     "sessions.sidebar.draft.tooLarge": "De bijlagen van dit concept zijn te groot voor uw andere apparaten. Het blijft hier tot u het verstuurt.",
+    "chat.draftTarget.drafts.heading": "Concepten hier",
+    "chat.draftTarget.drafts.triggerSingle": "{count} concept",
+    "chat.draftTarget.drafts.triggerPlural": "{count} concepten",
   },
   es: {
     "sessions.sidebar.header.displayMode.keepWorkInPlace": "Mostrar también lo que está en curso bajo los proyectos",
@@ -114,6 +126,9 @@ export const sidebarWorkI18n = {
     "sessions.sidebar.draft.discardFailed": "No se pudo descartar el borrador",
     "sessions.sidebar.draft.openAria": "Abrir borrador: {label}",
     "sessions.sidebar.draft.tooLarge": "Los adjuntos de este borrador son demasiado grandes para tus otros dispositivos. Se queda aquí hasta que lo envíes.",
+    "chat.draftTarget.drafts.heading": "Borradores aquí",
+    "chat.draftTarget.drafts.triggerSingle": "{count} borrador",
+    "chat.draftTarget.drafts.triggerPlural": "{count} borradores",
   },
   ja: {
     "sessions.sidebar.header.displayMode.keepWorkInPlace": "作業中の項目もプロジェクトの下に表示",
@@ -137,6 +152,9 @@ export const sidebarWorkI18n = {
     "sessions.sidebar.draft.discardFailed": "下書きを破棄できませんでした",
     "sessions.sidebar.draft.openAria": "下書きを開く: {label}",
     "sessions.sidebar.draft.tooLarge": "この下書きの添付は大きすぎるため、他のデバイスには保存されません。送信するまでこの端末に残ります。",
+    "chat.draftTarget.drafts.heading": "ここの下書き",
+    "chat.draftTarget.drafts.triggerSingle": "下書き {count} 件",
+    "chat.draftTarget.drafts.triggerPlural": "下書き {count} 件",
   },
   'pt-BR': {
     "sessions.sidebar.header.displayMode.keepWorkInPlace": "Mostrar também o que está em andamento nos projetos",
@@ -160,6 +178,9 @@ export const sidebarWorkI18n = {
     "sessions.sidebar.draft.discardFailed": "Não foi possível descartar o rascunho",
     "sessions.sidebar.draft.openAria": "Abrir rascunho: {label}",
     "sessions.sidebar.draft.tooLarge": "Os anexos deste rascunho são grandes demais para seus outros dispositivos. Ele fica aqui até você enviá-lo.",
+    "chat.draftTarget.drafts.heading": "Rascunhos aqui",
+    "chat.draftTarget.drafts.triggerSingle": "{count} rascunho",
+    "chat.draftTarget.drafts.triggerPlural": "{count} rascunhos",
   },
   uk: {
     "sessions.sidebar.header.displayMode.keepWorkInPlace": "Також показувати роботу в проєктах",
@@ -183,6 +204,9 @@ export const sidebarWorkI18n = {
     "sessions.sidebar.draft.discardFailed": "Не вдалося викинути чернетку",
     "sessions.sidebar.draft.openAria": "Відкрити чернетку: {label}",
     "sessions.sidebar.draft.tooLarge": "Вкладення цієї чернетки завеликі для інших ваших пристроїв. Вона лишається тут, доки ви її не надішлете.",
+    "chat.draftTarget.drafts.heading": "Чернетки тут",
+    "chat.draftTarget.drafts.triggerSingle": "{count} чернетка",
+    "chat.draftTarget.drafts.triggerPlural": "Чернетки: {count}",
   },
   ko: {
     "sessions.sidebar.header.displayMode.keepWorkInPlace": "진행 중인 작업을 프로젝트 아래에도 표시",
@@ -206,6 +230,9 @@ export const sidebarWorkI18n = {
     "sessions.sidebar.draft.discardFailed": "초안을 버릴 수 없습니다",
     "sessions.sidebar.draft.openAria": "초안 열기: {label}",
     "sessions.sidebar.draft.tooLarge": "이 초안의 첨부가 너무 커서 다른 기기에는 저장되지 않습니다. 보낼 때까지 이 기기에 남습니다.",
+    "chat.draftTarget.drafts.heading": "이곳의 초안",
+    "chat.draftTarget.drafts.triggerSingle": "초안 {count}개",
+    "chat.draftTarget.drafts.triggerPlural": "초안 {count}개",
   },
   pl: {
     "sessions.sidebar.header.displayMode.keepWorkInPlace": "Pokazuj też prace w toku pod projektami",
@@ -229,6 +256,9 @@ export const sidebarWorkI18n = {
     "sessions.sidebar.draft.discardFailed": "Nie udało się odrzucić szkicu",
     "sessions.sidebar.draft.openAria": "Otwórz szkic: {label}",
     "sessions.sidebar.draft.tooLarge": "Załączniki tego szkicu są za duże dla twoich innych urządzeń. Zostaje tutaj, dopóki go nie wyślesz.",
+    "chat.draftTarget.drafts.heading": "Szkice tutaj",
+    "chat.draftTarget.drafts.triggerSingle": "{count} szkic",
+    "chat.draftTarget.drafts.triggerPlural": "Szkice: {count}",
   },
   'zh-CN': {
     "sessions.sidebar.header.displayMode.keepWorkInPlace": "在项目下也显示进行中的工作",
@@ -252,6 +282,9 @@ export const sidebarWorkI18n = {
     "sessions.sidebar.draft.discardFailed": "无法丢弃草稿",
     "sessions.sidebar.draft.openAria": "打开草稿：{label}",
     "sessions.sidebar.draft.tooLarge": "此草稿的附件太大，无法同步到你的其他设备。它会留在这里，直到你发送。",
+    "chat.draftTarget.drafts.heading": "此处的草稿",
+    "chat.draftTarget.drafts.triggerSingle": "{count} 个草稿",
+    "chat.draftTarget.drafts.triggerPlural": "{count} 个草稿",
   },
   'zh-TW': {
     "sessions.sidebar.header.displayMode.keepWorkInPlace": "在專案下也顯示進行中的工作",
@@ -275,6 +308,9 @@ export const sidebarWorkI18n = {
     "sessions.sidebar.draft.discardFailed": "無法捨棄草稿",
     "sessions.sidebar.draft.openAria": "開啟草稿：{label}",
     "sessions.sidebar.draft.tooLarge": "此草稿的附件太大，無法同步到你的其他裝置。它會留在這裡，直到你送出。",
+    "chat.draftTarget.drafts.heading": "此處的草稿",
+    "chat.draftTarget.drafts.triggerSingle": "{count} 個草稿",
+    "chat.draftTarget.drafts.triggerPlural": "{count} 個草稿",
   },
   tr: {
     "sessions.sidebar.header.displayMode.keepWorkInPlace": "Devam eden işleri projelerin altında da göster",
@@ -298,6 +334,9 @@ export const sidebarWorkI18n = {
     "sessions.sidebar.draft.discardFailed": "Taslak atılamadı",
     "sessions.sidebar.draft.openAria": "Taslağı aç: {label}",
     "sessions.sidebar.draft.tooLarge": "Bu taslağın ekleri diğer cihazların için fazla büyük. Gönderene kadar burada kalır.",
+    "chat.draftTarget.drafts.heading": "Buradaki taslaklar",
+    "chat.draftTarget.drafts.triggerSingle": "{count} taslak",
+    "chat.draftTarget.drafts.triggerPlural": "{count} taslak",
   },
   ar: {
     "sessions.sidebar.header.displayMode.keepWorkInPlace": "إظهار العمل الجاري تحت المشاريع أيضًا",
@@ -321,6 +360,9 @@ export const sidebarWorkI18n = {
     "sessions.sidebar.draft.discardFailed": "تعذّر تجاهل المسودة",
     "sessions.sidebar.draft.openAria": "فتح المسودة: {label}",
     "sessions.sidebar.draft.tooLarge": "مرفقات هذه المسودة أكبر من أن تُحفظ لأجهزتك الأخرى. تبقى هنا حتى ترسلها.",
+    "chat.draftTarget.drafts.heading": "المسودات هنا",
+    "chat.draftTarget.drafts.triggerSingle": "{count} مسودة",
+    "chat.draftTarget.drafts.triggerPlural": "المسودات: {count}",
   },
   he: {
     "sessions.sidebar.header.displayMode.keepWorkInPlace": "להציג עבודה פעילה גם תחת הפרויקטים",
@@ -344,5 +386,8 @@ export const sidebarWorkI18n = {
     "sessions.sidebar.draft.discardFailed": "לא ניתן למחוק את הטיוטה",
     "sessions.sidebar.draft.openAria": "פתיחת הטיוטה: {label}",
     "sessions.sidebar.draft.tooLarge": "הקבצים המצורפים לטיוטה גדולים מדי בשביל המכשירים האחרים שלך. היא נשארת כאן עד שתשלח אותה.",
+    "chat.draftTarget.drafts.heading": "טיוטות כאן",
+    "chat.draftTarget.drafts.triggerSingle": "{count} טיוטה",
+    "chat.draftTarget.drafts.triggerPlural": "{count} טיוטות",
   },
 } as const;

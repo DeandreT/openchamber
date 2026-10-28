@@ -1,13 +1,12 @@
 import { toast } from '@/components/ui';
 import { getDescendantIds } from '@/components/session/sidebar/list/sessionCollection';
 import { collectSessionSubtreeIds, runSessionSubtreeAction, type SessionSubtreeAction } from '@/components/session/sidebar/sessions/sessionSubtreeActions';
-import { toastSessionWorkFailure } from '@/components/session/sidebar/sessions/sessionWorkFailure';
 import type { I18nKey, I18nParams } from '@/lib/i18n';
 import type { Session } from '@/lib/opencode/model';
 import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import { useProjectsStore } from '@/stores/useProjectsStore';
 import { useUIStore } from '@/stores/useUIStore';
-import { SessionDirectoryMissingError, setSessionWorkState } from '@/sync/session-actions';
+import { setSessionWorkState } from '@/sync/session-actions';
 import { toggleSessionPin } from '@/sync/session-pins';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { getSessionDirectory } from '../mobileSessionFields';
@@ -62,8 +61,8 @@ export const toggleMobileSessionWork = async (session: Session, sessionsInWork: 
     for (const entry of sessionsInWork) {
       await setSessionWorkState(entry.id, getSessionDirectory(entry) || getSessionDirectory(session) || null, 'done');
     }
-  } catch (error) {
-    toastSessionWorkFailure(error instanceof SessionDirectoryMissingError, () => { void runMobileSubtreeAction('archive', session, t); }, t);
+  } catch {
+    toast.error(t('sessions.sidebar.session.work.updateFailed'));
   }
 };
 

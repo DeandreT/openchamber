@@ -15,7 +15,7 @@ import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { useSessionUIStore } from '@/sync/session-ui-store';
 import { useDirectorySync, useSessionMessages } from '@/sync/sync-context';
 import { useRunningShell } from '@/sync/background-shells';
-import { findShellCancellation, findShellCompletion, readBackgroundShellID } from '@/lib/opencode/background-shell';
+import { findShellCancellation, findShellCompletion, readBackgroundShellID, readRunningShellID } from '@/lib/opencode/background-shell';
 import { opencodeClient } from '@/lib/opencode/client';
 import type { State } from '@/sync/types';
 import { useUIStore } from '@/stores/useUIStore';
@@ -109,7 +109,7 @@ import { toBackgroundShellPart, type BackgroundShellPhase } from './backgroundSh
 import { toBackgroundSubagentPart, toStoppedSubagentPart, type BackgroundSubagentPhase } from './backgroundSubagentPart';
 import { findSubagentCancellation, findSubagentRun, readBackgroundSubagentChildID } from '@/lib/opencode/subagent-run';
 import { useGlobalSessionStatusStore } from '@/sync/global-session-status';
-import { useBackgroundShellOutput } from './useBackgroundShellOutput';
+import { useShellOutput } from './useShellOutput';
 import { useToolContentCompletion } from './useToolContentCompletion';
 
 type ToolJsonViewMode = 'summary' | 'formatted' | 'raw';
@@ -1121,6 +1121,7 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
         || part.tool === 'openchamber_knowledge'
         || part.tool === 'openchamber_notify'
         || part.tool === 'openchamber_render'
+        || part.tool === 'openchamber_image'
         || part.tool === 'openchamber_workflow'
         || isPatchTool(part.tool)
         || isEditTool(part.tool)
@@ -1538,7 +1539,6 @@ const ToolExpandedContent: React.FC<ToolExpandedContentProps> = React.memo(({
                                     <DiffViewToggle
                                         mode={diffViewMode}
                                         onModeChange={setDiffViewMode}
-                                        className="h-5 w-5 p-0"
                                     />
                                 </div>
                             ) : null}
@@ -1913,7 +1913,8 @@ const ToolPartContent: React.FC<ToolPartProps & { header?: ToolRowHeader; subage
         shouldRenderExpandedContent || (presentation !== null && guestToolHeaderReadsOutput(presentation)),
     );
     // Shell and subagent rows carry their duration: live while they run, final once settled.
-    const showsDuration = isShellTool(normalizedPartTool) || isTaskTool;
+    // Image generation takes tens of seconds; the ticking time shows it is still at work.
+    const showsDuration = isShellTool(normalizedPartTool) || isTaskTool || part.tool === 'openchamber_image';
 
     if (!shouldTreatAsFinalized && !isActive && !isTaskTool) {
         return null;
@@ -2227,7 +2228,7 @@ const BackgroundShellToolPartContent: React.FC<ToolPartProps & { shellID: string
     const completion = React.useMemo(() => findShellCompletion(messages, shellID), [messages, shellID]);
     const cancellation = React.useMemo(() => findShellCancellation(messages, shellID), [messages, shellID]);
     const isRunning = !completion && running !== undefined;
-    const liveOutput = useBackgroundShellOutput(shellID, running?.directory, isRunning && props.isExpanded);
+    const liveOutput = useShellOutput(shellID, running?.directory, isRunning && props.isExpanded);
     const [stopping, setStopping] = React.useState(false);
 
     // A stop the user asked for wins over the error OpenCode reports for it,
@@ -2265,6 +2266,24 @@ const BackgroundShellToolPartContent: React.FC<ToolPartProps & { shellID: string
             }}
         />
     );
+};
+
+/**
+ * A shell call the turn waits for. OpenCode reports only the command's id
+ * while it runs, so the expanded row reads the output from the shell service,
+ * as a background row does, until the call settles with its final output.
+ */
+const ShellToolPartContent: React.FC<ToolPartProps> = (props) => {
+    const shellID = readRunningShellID(props.part);
+    const running = useRunningShell(shellID);
+    const liveOutput = useShellOutput(shellID ?? '', running?.directory, shellID !== undefined && props.isExpanded);
+    const part = React.useMemo((): ToolPartType => {
+        const { state } = props.part;
+        if (!liveOutput || state.status !== 'running') return props.part;
+        return { ...props.part, state: { ...state, metadata: { ...state.metadata, output: liveOutput } } };
+    }, [liveOutput, props.part]);
+
+    return <ToolPartContent {...props} part={part} />;
 };
 
 /**
@@ -2353,7 +2372,9 @@ const ToolPart: React.FC<ToolPartProps> = (props) => {
                 ? <BackgroundShellToolPartContent {...props} shellID={backgroundShellID} />
                 : isSubagentTool(toolName)
                     ? <SubagentToolPartContent {...props} />
-                    : <ToolPartContent {...props} />}
+                    : isShellTool(toolName)
+                        ? <ShellToolPartContent {...props} />
+                        : <ToolPartContent {...props} />}
         </ToolPartErrorBoundary>
     );
 };

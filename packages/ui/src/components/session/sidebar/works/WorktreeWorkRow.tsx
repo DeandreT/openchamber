@@ -136,7 +136,7 @@ export function WorktreeWorkRow(props: Props): React.ReactNode {
   });
   const {
     worktree, space, spaceName, directory, worktreeRemoving, sessions, project, projectLabel, refs, selected,
-    title, branch, label, finishing, canArchive, canRename, canNewChat, pinned, canPin, workAction, inWork, activityState,
+    title, branch, label, secondName, finishing, canArchive, canRename, canNewChat, pinned, canPin, workAction, inWork, activityState,
     runningSessionId, durationSessionId,
   } = work;
   // With the Pinned section shown a pinned work is listed there, whose header
@@ -506,20 +506,20 @@ export function WorktreeWorkRow(props: Props): React.ReactNode {
           </TooltipTrigger>
           <TooltipContent side="right" sideOffset={8} className="max-w-xs text-start">
             <div className="flex min-w-44 flex-col gap-1.5 text-start text-xs">
-              <span dir="auto" className="oc-ui-start-align min-w-0 truncate font-medium text-foreground">{label}</span>
+              <span dir="auto" className="oc-ui-start-align min-w-0 truncate font-medium text-foreground">{title ?? label}</span>
               {projectLabel ? (
                 <div className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
                   <Icon name="folder" className="h-3 w-3 flex-shrink-0" />
                   <span className="min-w-0 truncate">{projectLabel}</span>
                 </div>
               ) : null}
-              {branch ? (
+              {branch && branch !== (title ?? label) ? (
                 <div className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
                   <Icon name="git-branch" className="h-3 w-3 flex-shrink-0" />
                   <span className="min-w-0 truncate">{branch}</span>
                 </div>
               ) : null}
-              {spaceName ? (
+              {spaceName && spaceName !== (title ?? label) ? (
                 <div className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
                   <Icon name="instance" className="h-3 w-3 flex-shrink-0" />
                   <span className="min-w-0 truncate">{spaceName}</span>
@@ -533,19 +533,16 @@ export function WorktreeWorkRow(props: Props): React.ReactNode {
         </div>
         {detailed ? (
           // Fixed 16px, always rendered, like a detailed session row's second
-          // line: the lead icon (or the chevron), then the branch, left out
-          // where it already is the title.
+          // line: the lead icon (or the chevron), then the name the title is
+          // not (the branch or the space's name, or the task's by branch).
           <div className="flex h-4 w-full min-w-0 items-center gap-1">
             {lead}
             {mixed && project && space ? workMark('h-3 w-3') : null}
-            {mixed && project && branch && branch !== label ? (
+            {mixed && project && secondName && secondName === branch ? (
               <Icon name="git-branch" className="h-3 w-3 flex-shrink-0 text-muted-foreground" />
             ) : null}
-            {branch && branch !== label ? (
-              <span className="min-w-0 truncate typography-micro text-muted-foreground">{branch}</span>
-            ) : null}
-            {spaceName && spaceName !== label ? (
-              <span className="min-w-0 truncate typography-micro text-muted-foreground">{spaceName}</span>
+            {secondName ? (
+              <span dir="auto" className="min-w-0 truncate typography-micro text-muted-foreground">{secondName}</span>
             ) : null}
             <span className="ms-auto flex flex-shrink-0 items-center gap-1">{ref}</span>
           </div>
