@@ -104,6 +104,7 @@ pub struct OpenSession {
     pub(crate) selection: Entity<crate::transcript_selection::TranscriptSelection>,
     pub list: ListState,
     pub history: History,
+    pub(crate) history_generation: u64,
     /// The cursor of the next older page, when the server has one.
     pub older: Option<String>,
     pub earlier: EarlierHistory,
@@ -156,6 +157,8 @@ pub struct Workspace {
     /// The composer's catalogs and defaults; empty for synthetic data.
     pub(crate) send_catalog: SendCatalog,
     pub(crate) send_attempts: crate::send_attempt::SendAttempts,
+    pub(crate) recovery: crate::send_recovery::RecoveryState,
+    pub(crate) persistence: crate::state_persistence::StatePersistence,
     pub(crate) mutation_tasks: HashMap<crate::send_attempt::SessionKey, Task<()>>,
     pub(crate) message_ids: crate::message_id::MessageIds,
     pub(crate) code_wrap_state: CodeWrapState,
@@ -172,6 +175,7 @@ pub struct Workspace {
     /// Markers for the next painted frame.
     pending_markers: Vec<(Marker, Option<Instant>, Option<usize>)>,
     startup_recorded: bool,
+    composer_usable_recorded: bool,
     /// Whether a complete session list was painted yet.
     pub(crate) sessions_shown: bool,
     _subscriptions: Vec<Subscription>,
@@ -240,6 +244,8 @@ impl Workspace {
             connection,
             send_catalog: SendCatalog::default(),
             send_attempts: crate::send_attempt::SendAttempts::default(),
+            recovery: crate::send_recovery::RecoveryState::default(),
+            persistence: crate::state_persistence::StatePersistence::default(),
             mutation_tasks: HashMap::new(),
             message_ids: crate::message_id::MessageIds::default(),
             code_wrap_state: CodeWrapState::default(),
@@ -253,12 +259,30 @@ impl Workspace {
             pending_switch: None,
             pending_markers: Vec::new(),
             startup_recorded: false,
+            composer_usable_recorded: false,
             sessions_shown: false,
             _subscriptions: vec![subscription],
         };
         workspace.rebuild_sidebar();
         // The window opens on a new session, as the web client does.
         workspace.composer_key = workspace.new_session_draft_key();
+        workspace.start_persistence(window, cx);
+        workspace
+            ._subscriptions
+            .push(cx.on_app_quit(|workspace, cx| {
+                let flushed = workspace.flush_before_quit(cx);
+                async move {
+                    if let Some(flushed) = flushed {
+                        let _ = flushed.await;
+                    }
+                }
+            }));
+        let owner = cx.weak_entity();
+        window.on_window_should_close(cx, move |window, cx| {
+            owner
+                .update(cx, |workspace, cx| workspace.request_close(window, cx))
+                .is_err()
+        });
         workspace.focus_composer(window, cx);
         if workspace.connection.is_some() {
             workspace.connect(window, cx);
@@ -599,6 +623,7 @@ impl Workspace {
         self.open_sessions.insert(
             id.clone(),
             OpenSession {
+                history_generation: 0,
                 transcript,
                 selection,
                 list,
@@ -681,8 +706,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if matches!(event, InputEvent::Change) {
-            self.sync_draft_preview(cx);
+        if matches!(event, InputEvent::Change) && self.composer_editable() {
+            self.save_composer_draft(cx);
+            self.queue_persistence(cx);
+            cx.notify();
         }
         if let InputEvent::PressEnter { shift: false, .. } = event {
             self.submit(window, cx);
@@ -692,9 +719,7 @@ impl Workspace {
     /// Sends to an existing selected session. New-session drafts stay local.
     pub fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.is_synthetic() {
-            if crate::session_mutations::CONNECTED_MUTATIONS_ENABLED {
-                self.submit_connected(window, cx);
-            }
+            self.submit_connected(window, cx);
             return;
         }
         let Some(session_id) = self.selected.clone() else {
@@ -809,9 +834,7 @@ impl Workspace {
     /// Stops the selected session's stream, keeping the text received so far.
     pub fn stop(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.is_synthetic() {
-            if crate::session_mutations::CONNECTED_MUTATIONS_ENABLED {
-                self.abort_connected(window, cx);
-            }
+            self.abort_connected(window, cx);
             return;
         }
         let Some(id) = self.selected.clone() else {
@@ -892,6 +915,9 @@ impl Workspace {
         if !self.startup_recorded {
             self.startup_recorded = true;
             markers.push((Marker::ContentPainted, None, None));
+        }
+        if !self.composer_usable_recorded && self.composer_editable() {
+            self.composer_usable_recorded = true;
             markers.push((Marker::ComposerUsable, None, None));
         }
         if let Some(started) = self.pending_switch.take() {

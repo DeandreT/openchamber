@@ -49,6 +49,11 @@ impl Network {
         self.runtime().enter()
     }
 
+    /// Captures the original executor while a durable-send barrier is pending.
+    pub(crate) fn handle(&self) -> tokio::runtime::Handle {
+        self.runtime().handle().clone()
+    }
+
     fn runtime(&self) -> &Runtime {
         self.runtime
             .as_ref()
@@ -70,6 +75,17 @@ impl Drop for Network {
 #[must_use = "dropping a network task cancels it"]
 pub struct NetworkTask<T> {
     handle: JoinHandle<T>,
+}
+
+impl<T: Send + 'static> NetworkTask<T> {
+    pub(crate) fn spawn_on(
+        handle: &tokio::runtime::Handle,
+        future: impl Future<Output = T> + Send + 'static,
+    ) -> Self {
+        Self {
+            handle: handle.spawn(future),
+        }
+    }
 }
 
 impl<T> Future for NetworkTask<T> {

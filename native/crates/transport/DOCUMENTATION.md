@@ -65,6 +65,16 @@ counts and identifiers only.
   Selection and admission are separate requests, so concurrent clients can
   change session selection between them. The receipt does not attest which
   model will run; session and assistant-step events remain authoritative.
+- `lookup_prompt` reads `GET /api/session/:id/inbox` and, only when the exact
+  ID is absent, `GET /api/session/:id/message/:messageID`. It returns a typed
+  pending admission receipt or the projected user message from history.
+  Inbox identities must belong to the requested session; matching IDs must
+  be unique user items with valid admission time and delivery. Other pinned
+  inbox types use a validated identity subset. Malformed or conflicting
+  identities fail the read, including a history result with another ID or role.
+  A history 404 after a successful inbox read returns `NotObserved`, which
+  never proves rejection. All other failed reads remain errors. The method
+  performs no mutations and makes no resend decision.
 - `TextPrompt` accepts text only. Files, agent mentions, skills, metadata,
   synthetic context and slash-command execution require separate typed flows.
   A slash-prefixed string sent through this API is literal text. Admission
@@ -195,6 +205,18 @@ type, including an item already promoted into history. Its response can describe
 an earlier admission's content. Clients must retain IDs for reconciliation and
 must not reuse one for an edited draft. This transport performs no automatic
 retry.
+
+### Why observation reads the inbox before history
+
+The pinned 2.1.4 client's `session.inbox.list` reads the session inbox from
+`{ data: [...] }`. Admission can precede history insertion. A pending exact-ID
+user receipt is sufficient evidence of admission; when it is absent,
+`session.message.get` reads `{ data: message }` through the existing whole-message
+projection. These are separate snapshots, so absence from both cannot authorize
+a resend. History records carry no session ID in the pinned schema; their session
+is the requested route, while their ID and user role are checked explicitly.
+Differential fixtures pin both SDK calls and response wrappers without a live
+provider. Whole-message reads reject a mismatched ID or user content without text.
 
 ### Recording wire samples
 

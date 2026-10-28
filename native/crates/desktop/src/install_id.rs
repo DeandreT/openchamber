@@ -32,7 +32,7 @@ pub fn load_or_create() -> Option<String> {
 }
 
 /// The per-user configuration directory of the native desktop.
-fn config_directory() -> Option<PathBuf> {
+pub(crate) fn config_directory() -> Option<PathBuf> {
     let directory = if cfg!(windows) {
         PathBuf::from(std::env::var_os("APPDATA")?).join("OpenChamber Native")
     } else if cfg!(target_os = "macos") {

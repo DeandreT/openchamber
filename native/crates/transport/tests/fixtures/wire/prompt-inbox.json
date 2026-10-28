@@ -1,0 +1,12 @@
+{
+  "data": [
+    {
+      "id": "msg_native_fixture_exact",
+      "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+      "type": "user",
+      "time": { "created": 1792691938000 },
+      "delivery": "queue",
+      "payload": { "text": "Prepared by the server" }
+    }
+  ]
+}

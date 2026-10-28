@@ -19,6 +19,15 @@ fn is_project_draft(key: &DraftKey) -> bool {
 }
 
 impl Workspace {
+    pub(crate) fn restore_draft_previews(&mut self) {
+        self.draft_previews = self
+            .drafts
+            .iter()
+            .filter(|(key, _)| is_project_draft(key))
+            .filter_map(|(key, draft)| preview(&draft.text).map(|label| (key.clone(), label)))
+            .collect();
+        self.rebuild_sidebar();
+    }
     pub(crate) fn save_draft_preview(&mut self, key: &DraftKey, text: &str) {
         if !is_project_draft(key) {
             return;

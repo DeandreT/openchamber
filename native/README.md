@@ -53,6 +53,18 @@ During development, connect only to an isolated server, such as
 `bun run profile:serve -- --root <dir> --port <port>`; see
 `scripts/perf/DOCUMENTATION.md`.
 
+## Local recovery state
+
+Connected clients keep drafts and pending text sends in
+`$XDG_CONFIG_HOME/openchamber-native/drafts-and-sends.json`, or the corresponding
+`~/.config` path. The directory is private and the file is mode 0600 on Linux.
+One process owns the profile's journal lock. A second process can read server
+state but cannot edit or send until it can load the local state safely.
+
+The pending-send row checks the original message ID before retrying. Retries
+reuse that ID and never run automatically. Normal window close drains pending
+saves; a dispatched prompt is recorded durably before network I/O begins.
+
 `native:fixtures` runs the TypeScript sidebar projection and rewrites
 `crates/core/tests/fixtures/sidebar-projection.json`. `native:resources`
 resolves the built-in themes, exports the keys in

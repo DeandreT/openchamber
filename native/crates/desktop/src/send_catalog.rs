@@ -88,6 +88,11 @@ pub(crate) struct SendCatalog {
 }
 
 impl SendCatalog {
+    #[cfg(test)]
+    pub(crate) fn insert_test_directory(&mut self, directory: String, catalog: DirectoryCatalog) {
+        self.directories.insert(directory, catalog);
+    }
+
     pub(crate) fn directory(&self, directory: &str) -> Option<&DirectoryCatalog> {
         self.directories.get(directory)
     }

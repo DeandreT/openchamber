@@ -335,10 +335,10 @@ pub fn window_controls(
                     glyph(icon, icon_size, palette.muted_foreground)
                         .group_hover(BUTTON_GROUP, move |style| style.text_color(hover_glyph)),
                 );
-            on_activate(button, cx, move |_, window, _| match action {
+            on_activate(button, cx, move |this, window, cx| match action {
                 WindowAction::Minimize => window.minimize_window(),
                 WindowAction::Maximize => window.zoom_window(),
-                WindowAction::Close => window.remove_window(),
+                WindowAction::Close => this.request_close(window, cx),
             })
             .test_support()
         }))

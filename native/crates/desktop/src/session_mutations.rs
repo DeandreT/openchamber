@@ -15,13 +15,22 @@ use openchamber_native_transport::prompt::{
 
 use crate::connection::ConnectionState;
 use crate::locale;
+use crate::network::NetworkTask;
 use crate::send_attempt::{self, Admission, SendAttempt, SessionKey};
 use crate::server_sync::apply_list_change;
 use crate::workspace::Workspace;
 
-/// Public activation waits for admission-unknown recovery copy and runtime
-/// qualification. Tests call the connected methods directly.
-pub(crate) const CONNECTED_MUTATIONS_ENABLED: bool = false;
+#[derive(Clone, Copy)]
+enum DispatchKind {
+    New,
+    Retry,
+}
+
+struct SendDispatch {
+    client: openchamber_native_transport::client::ServerClient,
+    executor: tokio::runtime::Handle,
+    kind: DispatchKind,
+}
 
 impl Workspace {
     pub(crate) fn mutation_key(&self, session: &SessionId) -> SessionKey {
@@ -32,7 +41,10 @@ impl Workspace {
     }
 
     pub(crate) fn can_send_connected(&self) -> bool {
-        CONNECTED_MUTATIONS_ENABLED
+        self.persistence_ready()
+            && self
+                .send_selection()
+                .is_some_and(|(_, selection)| selection.model.is_some())
             && self
                 .selected
                 .as_ref()
@@ -44,6 +56,9 @@ impl Workspace {
     }
 
     pub(crate) fn submit_connected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.persistence_ready() {
+            return;
+        }
         let Some(session) = self.selected.clone() else {
             return;
         };
@@ -73,9 +88,10 @@ impl Workspace {
         let Some(client) = connection.client.clone() else {
             return;
         };
-        let Some(open) = self.open_sessions.get_mut(&session) else {
+        let executor = connection.network.handle();
+        if !self.open_sessions.contains_key(&session) {
             return;
-        };
+        }
         let composer = self.composer.read(cx);
         let draft = Draft {
             text: composer.value().to_string(),
@@ -111,27 +127,174 @@ impl Workspace {
             owner: owner.clone(),
             draft,
             prompt: prompt.clone(),
-            optimistic: optimistic.clone(),
-            admission: Admission::Sending { observed: false },
+            optimistic,
+            admission: Admission::Preparing,
         };
         if !self.send_attempts.begin(key.clone(), attempt) {
             return;
         }
-        let change = open.transcript.push(optimistic);
-        apply_list_change(open, &change, cx);
-        open.list.scroll_to_end();
-        let request_session = session.clone();
-        let request = connection
-            .network
-            .run(async move { client.send_text(&request_session, &prompt).await });
-        self.drafts.take(&owner);
-        self.composer
-            .update(cx, |composer, cx| composer.set_value("", window, cx));
+        self.start_durable_send(
+            key,
+            prompt,
+            SendDispatch {
+                client,
+                executor,
+                kind: DispatchKind::New,
+            },
+            window,
+            cx,
+        );
+    }
+
+    pub(crate) fn retry_persisted_prompt(
+        &mut self,
+        key: &SessionKey,
+        id: &openchamber_native_core::ids::MessageId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.persistence_ready() || key.runtime != self.runtime {
+            return;
+        }
+        let Some(attempt) = self
+            .send_attempts
+            .attempt(key)
+            .filter(|attempt| attempt.prompt.message_id == *id)
+        else {
+            return;
+        };
+        let prompt = attempt.prompt.clone();
+        let Some(connection) = self
+            .connection
+            .as_ref()
+            .filter(|connection| matches!(connection.state, ConnectionState::Connected))
+        else {
+            return;
+        };
+        let Some(client) = connection.client.clone() else {
+            return;
+        };
+        let executor = connection.network.handle();
+        if !self.send_attempts.begin_retry(key) {
+            return;
+        }
+        self.start_durable_send(
+            key.clone(),
+            prompt,
+            SendDispatch {
+                client,
+                executor,
+                kind: DispatchKind::Retry,
+            },
+            window,
+            cx,
+        );
+    }
+
+    fn start_durable_send(
+        &mut self,
+        key: SessionKey,
+        prompt: TextPrompt,
+        dispatch: SendDispatch,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let SendDispatch {
+            client,
+            executor,
+            kind,
+        } = dispatch;
+        let Some((revision, saved)) = self.persistence_barrier(cx) else {
+            self.send_attempts.finish(
+                &key,
+                Err(match kind {
+                    DispatchKind::New => PromptAdmission::NotAttempted,
+                    DispatchKind::Retry => PromptAdmission::Unknown,
+                }),
+            );
+            cx.notify();
+            return;
+        };
+        let id = prompt.message_id.clone();
         let task_key = key.clone();
         let task = cx.spawn_in(window, async move |this, cx| {
+            let saved = saved
+                .await
+                .unwrap_or(Err(crate::journal_worker::JournalFailure::WorkerStopped));
+            let dispatch = this.update_in(cx, |this, window, cx| {
+                let durable =
+                    this.record_persistence(revision, &saved, cx) && this.persistence_ready();
+                let current = this
+                    .send_attempts
+                    .attempt(&key)
+                    .is_some_and(|attempt| attempt.prompt.message_id == id);
+                if !durable || !current {
+                    if current {
+                        this.send_attempts.finish(
+                            &key,
+                            Err(match kind {
+                                DispatchKind::New => PromptAdmission::NotAttempted,
+                                DispatchKind::Retry => PromptAdmission::Unknown,
+                            }),
+                        );
+                    }
+                    this.mutation_tasks.remove(&key);
+                    cx.notify();
+                    return false;
+                }
+                if matches!(kind, DispatchKind::New) {
+                    if !this.send_attempts.prepared(&key, &id) {
+                        this.mutation_tasks.remove(&key);
+                        return false;
+                    }
+                    let attempt = this
+                        .send_attempts
+                        .attempt(&key)
+                        .expect("prepared attempt remains");
+                    let owner = attempt.owner.clone();
+                    let text = attempt.draft.text.clone();
+                    let optimistic = attempt.optimistic.clone();
+                    if this
+                        .drafts
+                        .get(&owner)
+                        .is_some_and(|draft| draft.text == text)
+                    {
+                        this.drafts.take(&owner);
+                    }
+                    if this.composer_key.as_ref() == Some(&owner)
+                        && this.composer.read(cx).value().as_ref() == text
+                    {
+                        this.composer
+                            .update(cx, |composer, cx| composer.set_value("", window, cx));
+                    }
+                    if key.runtime == this.runtime
+                        && let Some(open) = this.open_sessions.get_mut(&key.session)
+                    {
+                        let change = open.transcript.push(optimistic);
+                        apply_list_change(open, &change, cx);
+                        open.list.scroll_to_end();
+                    }
+                    this.queue_persistence(cx);
+                }
+                cx.notify();
+                true
+            });
+            if !matches!(dispatch, Ok(true)) {
+                return;
+            }
+            let session = key.session.clone();
+            let request = NetworkTask::spawn_on(&executor, async move {
+                client.send_text(&session, &prompt).await
+            });
             let result = request.await;
             let _ = this.update_in(cx, |this, window, cx| {
-                this.finish_send(&key, result, window, cx);
+                if this
+                    .send_attempts
+                    .attempt(&key)
+                    .is_some_and(|attempt| attempt.prompt.message_id == id)
+                {
+                    this.finish_send(&key, result, window, cx);
+                }
                 this.mutation_tasks.remove(&key);
             });
         });
@@ -169,17 +332,19 @@ impl Workspace {
             if self.composer_key.as_ref() == Some(&attempt.owner) {
                 self.restore_composer_draft(window, cx);
             }
-            self.notify_mutation_failure(window, cx);
+            self.notify_mutation_failure("chat.nativeRecovery.sendFailed", window, cx);
         } else if self.runtime == key.runtime {
-            if admission == Err(PromptAdmission::Unknown)
-                && self.send_attempts.attempt(key).is_some()
-            {
-                self.notify_mutation_failure(window, cx);
+            if admission.is_err() && self.send_attempts.attempt(key).is_some() {
+                self.notify_mutation_failure("chat.nativeRecovery.unknown", window, cx);
             }
             // The existing read path merges exact IDs. An absent ID leaves the
             // attempt locked and preserved; history never infers rejection.
             self.load_history(&key.session, cx);
+            if admission.is_err() {
+                self.check_recovery(key, window, cx);
+            }
         }
+        self.queue_persistence(cx);
         cx.notify();
     }
 
@@ -223,15 +388,17 @@ impl Workspace {
         // Both successful admission and abort leave live status to the
         // server's status stream. Failure cannot manufacture idle.
         if !matches!(result, Some(Ok(_))) {
-            self.notify_mutation_failure(window, cx);
+            self.notify_mutation_failure("chat.nativeRecovery.abortFailed", window, cx);
         }
         cx.notify();
     }
 
-    fn notify_mutation_failure(&self, window: &mut Window, cx: &mut Context<Self>) {
-        window.push_notification(
-            Notification::error(locale::strings(cx).get("chat.errorBoundary.title")),
-            cx,
-        );
+    fn notify_mutation_failure(
+        &self,
+        key: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.push_notification(Notification::error(locale::strings(cx).get(key)), cx);
     }
 }

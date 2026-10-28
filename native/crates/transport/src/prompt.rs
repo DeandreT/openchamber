@@ -4,6 +4,7 @@ use std::fmt;
 
 use openchamber_native_core::ids::{MessageId, SessionId};
 use openchamber_native_core::send_config::ModelChoice;
+use openchamber_native_core::transcript::{Message, Role};
 use reqwest::{Method, RequestBuilder, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +62,17 @@ pub struct PromptReceipt {
     pub created: u64,
     /// Effective delivery after server-side preparation.
     pub delivery: Delivery,
+}
+
+/// Read-only evidence for one retained prompt ID. No outcome permits an automatic resend.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PromptObservation {
+    /// The exact user item is admitted and still in the session inbox.
+    Pending(PromptReceipt),
+    /// The exact user message is in authoritative history, including prepared content.
+    Delivered(Box<Message>),
+    /// Neither read observed the ID. This does not establish rejection.
+    NotObserved,
 }
 
 /// Which part of submission failed. Earlier selection changes can persist.
@@ -162,11 +174,99 @@ struct Created {
 }
 
 #[derive(Deserialize)]
+struct InboxResponse {
+    data: Vec<InboxIdentity>,
+}
+
+// Other items need only a valid identity. A matching user also requires its
+// admission time and delivery; malformed matching items cannot become absence.
+#[derive(Deserialize)]
+struct InboxIdentity {
+    id: String,
+    #[serde(rename = "sessionID")]
+    session_id: String,
+    #[serde(rename = "type")]
+    kind: InboxKind,
+    time: Option<Created>,
+    delivery: Option<Delivery>,
+}
+
+#[derive(Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum InboxKind {
+    User,
+    Synthetic,
+    Compaction,
+    Move,
+}
+
+#[derive(Deserialize)]
 struct InterruptResponse {
     interrupted: bool,
 }
 
 impl ServerClient {
+    pub(crate) fn inbox_request(&self, session: &SessionId) -> RequestBuilder {
+        let mut url = self.endpoint().url("api/session/");
+        url.path_segments_mut()
+            .expect("HTTP URLs have path segments")
+            .pop_if_empty()
+            .extend([session.as_str(), "inbox"]);
+        self.authorized(Method::GET, url)
+    }
+
+    /// Observes inbox admission first, then exact-ID history. A missing message
+    /// can be between server states; this method never retries a submission.
+    pub async fn lookup_prompt(
+        &self,
+        session: &SessionId,
+        message_id: &MessageId,
+    ) -> Result<PromptObservation, TransportError> {
+        if session.as_str().is_empty() || !message_id.as_str().starts_with("msg_") {
+            return Err(malformed("invalid prompt observation identity"));
+        }
+        let response = send_checked(self.inbox_request(session), StatusCode::OK).await?;
+        let inbox: InboxResponse = crate::client::read_json(response)
+            .await
+            .map_err(observation_error)?;
+        let mut pending = None;
+        for item in inbox.data {
+            if !item.id.starts_with("msg_") || item.session_id != session.as_str() {
+                return Err(malformed("invalid session inbox identity"));
+            }
+            if item.id != message_id.as_str() {
+                continue;
+            }
+            if pending.is_some() || item.kind != InboxKind::User {
+                return Err(malformed("conflicting prompt inbox identity"));
+            }
+            pending = Some(PromptReceipt {
+                session_id: session.clone(),
+                message_id: message_id.clone(),
+                created: item
+                    .time
+                    .ok_or_else(|| malformed("missing prompt admission time"))?
+                    .created,
+                delivery: item
+                    .delivery
+                    .ok_or_else(|| malformed("missing prompt delivery"))?,
+            });
+        }
+        if let Some(receipt) = pending {
+            return Ok(PromptObservation::Pending(receipt));
+        }
+        match self.session_message(session, message_id).await {
+            Ok(message) => {
+                if message.info.id != *message_id || message.info.role != Role::User {
+                    return Err(malformed("conflicting prompt history identity"));
+                }
+                Ok(PromptObservation::Delivered(Box::new(message)))
+            }
+            Err(TransportError::Http { status: 404 }) => Ok(PromptObservation::NotObserved),
+            Err(error) => Err(observation_error(error)),
+        }
+    }
+
     pub(crate) fn mutation_request(
         &self,
         session_id: &SessionId,
@@ -311,6 +411,13 @@ fn malformed(message: &str) -> TransportError {
     TransportError::Malformed(message.to_owned())
 }
 
+fn observation_error(error: TransportError) -> TransportError {
+    match error {
+        TransportError::Malformed(_) => malformed("unrecognized prompt observation response"),
+        other => other,
+    }
+}
+
 fn receipt_error(error: TransportError) -> TransportError {
     match error {
         // Serde errors can quote rejected payload fields. Keep content out of diagnostics.
@@ -395,6 +502,14 @@ mod tests {
             delivery: Some(Delivery::Queue),
         };
         let requests = [
+            ("observe prompt inbox", client.inbox_request(&session)),
+            (
+                "observe exact prompt history",
+                client.authorized(
+                    Method::GET,
+                    client.session_message_url(&session, &prompt.message_id),
+                ),
+            ),
             (
                 "select prompt model",
                 client.model_request(&session, &model),
@@ -470,6 +585,37 @@ mod tests {
                 .map(|body| serde_json::from_str(body).expect("JSON fixture body"));
             assert_eq!(actual_body, expected_body, "{name}");
         }
+    }
+
+    #[test]
+    fn observation_responses_match_sdk_unwrapping() {
+        let fixture: Value = serde_json::from_str(include_str!("../tests/fixtures/transport.json"))
+            .expect("generated fixture");
+        let inbox: InboxResponse =
+            serde_json::from_str(include_str!("../tests/fixtures/wire/prompt-inbox.json"))
+                .expect("inbox response");
+        let item = &inbox.data[0];
+        let sdk = &fixture["observations"]["pending"][0];
+        assert_eq!(item.id, sdk["id"]);
+        assert_eq!(item.session_id, sdk["sessionID"]);
+        assert_eq!(
+            item.time.as_ref().expect("time").created,
+            sdk["time"]["created"]
+        );
+        assert_eq!(
+            serde_json::to_value(item.delivery.expect("delivery")).expect("delivery"),
+            sdk["delivery"]
+        );
+        let history: crate::wire::Single<crate::wire::MessageEnvelope> =
+            serde_json::from_str(include_str!("../tests/fixtures/wire/prompt-history.json"))
+                .expect("history response");
+        let message = crate::projection::message(history.data)
+            .expect("projection")
+            .expect("user");
+        let sdk = &fixture["observations"]["delivered"];
+        assert_eq!(message.info.id.as_str(), sdk["id"]);
+        assert_eq!(message.plain_text(), sdk["text"]);
+        assert_eq!(message.info.created, sdk["time"]["created"]);
     }
 
     #[test]

@@ -8,9 +8,9 @@
 use gpui_kit::component::input::Textarea;
 use gpui_kit::component::{Sizable, Size};
 use gpui_kit::{
-    Context, InteractiveElement, IntoElement, ParentElement, Role, StatefulInteractiveElement,
-    Styled, TestSupportExt, Window, canvas, div, linear_color_stop, linear_gradient,
-    prelude::FluentBuilder, px, rems,
+    AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Role,
+    StatefulInteractiveElement, Styled, TestSupportExt, Window, canvas, div, linear_color_stop,
+    linear_gradient, prelude::FluentBuilder, px, rems,
 };
 
 use crate::activation::on_activate;
@@ -142,9 +142,9 @@ impl Workspace {
         &self,
         palette: &Palette,
         direction: Direction,
-        window: &Window,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let slot = self.composer_slot.clone();
         let list = self
             .selected
@@ -190,6 +190,7 @@ impl Workspace {
                     ))
                     .child(self.render_composer_box(palette, direction, window, cx)),
             )
+            .into_any_element()
     }
 
     /// The composer box itself.
@@ -197,9 +198,10 @@ impl Workspace {
         &self,
         palette: &Palette,
         direction: Direction,
-        window: &Window,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let recovery = self.render_send_recovery(palette, direction, window, cx);
         // The width the effort, model and agent controls get: the web's
         // `@container/model-controls` hides their labels by it.
         let controls_width = self.composer_width(window)
@@ -239,6 +241,9 @@ impl Workspace {
                 .role(Role::Button)
                 .accessibility_id("composer-submit")
                 .aria_label(label)
+                .when(!streaming && !can_send, |button| {
+                    button.a11y_synthetic_children(|builder| builder.parent_node().set_disabled())
+                })
                 .size(px(ACTION_SIZE))
                 .flex_shrink_0()
                 .flex()
@@ -282,6 +287,7 @@ impl Workspace {
                         )),
                 )
             })
+            .child(recovery)
             .child(div().h(px(4.0)))
             .child(
                 // The editor insets its text by the size's padding; the
@@ -295,6 +301,7 @@ impl Workspace {
                     .pb(px(8.0 - EDITOR_INSET_Y))
                     .child(
                         Textarea::new(&self.composer)
+                            .readonly(!self.composer_editable())
                             .appearance(false)
                             .bordered(false)
                             .with_size(Size::Size(px(EDITOR_SIZE)))
@@ -355,6 +362,7 @@ impl Workspace {
                             .child(send),
                     ),
             )
+            .into_any_element()
     }
 }
 

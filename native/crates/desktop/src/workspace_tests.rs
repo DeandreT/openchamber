@@ -22,7 +22,7 @@ use crate::theme::{self, Appearance, Palette};
 use crate::workspace::{Source, Workspace};
 use crate::workspace_view;
 
-fn open(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<Workspace>) {
+pub(crate) fn open(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<Workspace>) {
     cx.update(|cx| {
         gpui_kit::init(cx);
         cx.set_global(Strings::load("en"));

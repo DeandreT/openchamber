@@ -5,9 +5,9 @@ diagnostics, assets, locale and theme, opens the window and hands application
 lifetime to the `Workspace` entity. Without a configured server the window
 runs on deterministic synthetic data from the core and makes no network or
 provider calls. With `OPENCHAMBER_NATIVE_SERVER` it reads one OpenChamber
-server through `openchamber-native-transport`; the connected client is
-read-only while selected-session mutation activation is gated in
-`session_mutations::CONNECTED_MUTATIONS_ENABLED`.
+server through `openchamber-native-transport`. Existing selected sessions accept
+text prompts and interruption through that server. New-session creation and
+attachment submission remain separate workflows.
 
 ## Ownership
 
@@ -26,6 +26,15 @@ read-only while selected-session mutation activation is gated in
   authoritative identity or definite rejection settles the attempt.
   `message_id.rs` produces the pinned OpenCode `msg_` identity layout. Its
   randomized suffix is a uniqueness aid and carries no authentication authority.
+- `mutation_journal.rs` owns the private versioned snapshot of drafts and pending
+  sends. `journal_worker.rs` holds its exclusive file lock and serializes disk I/O
+  on one thread, coalescing queued snapshots while preserving save barriers.
+  `state_persistence.rs` hydrates before editing, schedules draft saves, waits for
+  durable preparation before a POST, and drains the last snapshot on normal close.
+- `send_recovery.rs` observes retained IDs through inbox and history reads.
+  `recovery_view.rs` shows pending text separately from current typing, with
+  Check status and Retry same message. A retry performs a fresh observation and
+  reuses the captured request identity and configuration.
 - `connection.rs` holds the configured server, the connection state the views
   explain and the tasks of the current connection attempt.
 - `network.rs` owns the Tokio runtime. GPUI tasks await `NetworkTask`s, and
@@ -206,7 +215,8 @@ read-only while selected-session mutation activation is gated in
   project selection never moves text between drafts.
 - Connected mutation tasks belong to the window, independently of the selected
   runtime. A completion restores only its captured draft owner. Closing the
-  window cancels local requests without stopping the server or its turn.
+  window cancels local requests without stopping the server or its turn. Before
+  contacting the server, a preparation barrier durably records the attempt.
 - A runtime/session permits one in-flight send or abort chain. Other sessions
   proceed independently. A send clears its draft and appends one optimistic user
   message with its exact client ID. It never creates an assistant or changes
@@ -219,11 +229,22 @@ read-only while selected-session mutation activation is gated in
   An omitted history item cannot establish rejection or discard attempted text.
   Authoritative content replaces optimistic parts, including plugin-prepared
   content. Admission observed before an HTTP failure prevents false rollback.
-- Pending attempts survive runtime switches in memory. They are not persisted
-  across window closure. Public connected mutation activation remains disabled
-  until unknown-admission recovery, restart durability and runtime qualification
-  are resolved. Existing localized chat-error notifications cover definite
-  failures; they do not provide a complete uncertain-admission recovery flow.
+- Drafts and attempts retain their runtime/directory/session identities on disk.
+  Startup converts interrupted preparations and sends into uncertain attempts;
+  it never submits them automatically. The prepared snapshot holds the submitted
+  text in the attempt rather than duplicating it as an unsent draft. Newer typing
+  remains a separate draft, even when its text equals the previous prompt.
+- A failed lookup never establishes absence. NotObserved permits only an explicit
+  same-ID retry; failed retries retain uncertainty about the original request.
+  An authoritative user event resolves a retained send even when its transcript
+  has not been opened. Send and abort ownership remain distinct.
+- Missing storage differs from malformed, unreadable or locked storage. A failed
+  load grants no writer and leaves the file intact. Save errors and unconfirmed
+  directory synchronization pause sending and leave current memory available.
+  Retrying an open preserves that memory; normal close waits for its final save
+  and lock release. Application-quit hooks also request a flush within GPUI's
+  bounded shutdown window. Forced termination can lose the latest debounced
+  draft edits, but every dispatched prompt already has a durable attempt.
 - Retained Markdown uses the same parser extensions before and after painting.
   Copy includes unpainted intermediate messages exactly once, preserves selected
   whitespace and uses fixed UTF-8 endpoints across compatible appends and reflow.
@@ -269,11 +290,18 @@ read-only while selected-session mutation activation is gated in
 ### Why an admission gate remains after acknowledgement
 
 The client retains one attempt per runtime/session until authoritative message
-content replaces its optimistic item. This bounds retained state and prevents
-an uncertain admission from being submitted twice. Abort can run after the send
+content replaces its optimistic item. It blocks a new identity while delivery is
+uncertain; an explicit retry uses the same saved ID. Abort can run after the send
 request finishes and leaves running status to the live channel. New-session
 creation, attachments, queue controls and selection controls are outside this
 module's text-only contract.
+
+### Why disk writes have a separate worker
+
+File creation, synchronization and rename can block. One worker owns the journal
+and keeps only one in-flight and one pending snapshot. A newer full snapshot can
+satisfy older barriers, but each send rechecks its identity and writer epoch
+before dispatch. This preserves mutation order without making typing wait on disk.
 
 ### Why mutation completion survives a runtime switch
 

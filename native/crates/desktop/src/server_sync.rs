@@ -42,6 +42,15 @@ const RETRY_DELAY: Duration = Duration::from_secs(5);
 /// Global session pages a read may hold before the desktop takes them.
 const PAGE_QUEUE: usize = 4;
 
+struct HistoryRead {
+    session: SessionId,
+    runtime: RuntimeId,
+    connection_generation: u64,
+    generation: u64,
+    since: u64,
+    requested: Instant,
+}
+
 impl Workspace {
     /// Starts a connection attempt, cancelling the previous one's work.
     pub(crate) fn connect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -543,18 +552,24 @@ impl Workspace {
             return;
         };
         open.earlier = EarlierHistory::Idle;
-        let since = open.transcript.revision();
-        let requested = Instant::now();
+        open.history_generation = open.history_generation.wrapping_add(1);
+        let read = HistoryRead {
+            session: id.clone(),
+            runtime: self.runtime.clone(),
+            connection_generation: connection.generation,
+            generation: open.history_generation,
+            since: open.transcript.revision(),
+            requested: Instant::now(),
+        };
         let request_id = id.clone();
         let task = connection
             .network
             .run(async move { client.latest_messages(&request_id, HISTORY_PAGE_SIZE).await });
-        let id = id.clone();
         open.history = History::Loading {
             _read: cx.spawn(async move |this, cx| {
                 let outcome = task.await.unwrap_or(Err(TransportError::Cancelled));
                 let _ = this.update(cx, |this, cx| {
-                    this.finish_history(&id, since, requested, outcome, cx);
+                    this.finish_history(read, outcome, cx);
                 });
             }),
         };
@@ -562,13 +577,25 @@ impl Workspace {
 
     fn finish_history(
         &mut self,
-        id: &SessionId,
-        since: u64,
-        requested: Instant,
+        read: HistoryRead,
         outcome: Result<MessagePage, TransportError>,
         cx: &mut Context<Self>,
     ) {
+        if self.runtime != read.runtime
+            || !self
+                .connection
+                .as_ref()
+                .is_some_and(|connection| connection.generation == read.connection_generation)
+            || !self
+                .open_sessions
+                .get(&read.session)
+                .is_some_and(|open| open.history_generation == read.generation)
+        {
+            return;
+        }
+        let id = &read.session;
         let mutation_key = self.mutation_key(id);
+        let had_attempt = self.send_attempts.attempt(&mutation_key).is_some();
         let position = self.scroll_memory.position(&ScrollKey {
             runtime: self.runtime.clone(),
             session: id.clone(),
@@ -584,7 +611,7 @@ impl Workspace {
                     &mutation_key,
                     &mut open.transcript,
                     page.messages,
-                    since,
+                    read.since,
                     HistoryMerge::Latest,
                 );
                 open.older = page.older;
@@ -593,13 +620,17 @@ impl Workspace {
                 if was_empty {
                     restore_position(open, &position);
                     let count = open.transcript.len();
-                    self.mark_on_paint(Marker::HistoryShown, Some(requested), Some(count));
+                    self.mark_on_paint(Marker::HistoryShown, Some(read.requested), Some(count));
                 }
             }
             Err(error) => {
                 tracing::warn!(%error, "a session's history could not be read");
                 open.history = History::Failed(ConnectionFailure::from_error(&error));
             }
+        }
+        if had_attempt && self.send_attempts.attempt(&mutation_key).is_none() {
+            self.recovery.clear_finished(&mutation_key);
+            self.queue_persistence(cx);
         }
         cx.notify();
     }
@@ -654,6 +685,7 @@ impl Workspace {
                         return;
                     }
                     let mutation_key = this.mutation_key(&id);
+                    let had_attempt = this.send_attempts.attempt(&mutation_key).is_some();
                     let Some(open) = this.open_sessions.get_mut(&id) else {
                         return;
                     };
@@ -685,6 +717,10 @@ impl Workspace {
                             open.earlier =
                                 EarlierHistory::Failed(ConnectionFailure::from_error(&error));
                         }
+                    }
+                    if had_attempt && this.send_attempts.attempt(&mutation_key).is_none() {
+                        this.recovery.clear_finished(&mutation_key);
+                        this.queue_persistence(cx);
                     }
                     cx.notify();
                 });
@@ -806,21 +842,41 @@ impl Workspace {
                 if info.role == openchamber_native_core::transcript::Role::User
         )
         .then(|| self.mutation_key(id));
+        let had_attempt = mutation_key
+            .as_ref()
+            .is_some_and(|key| self.send_attempts.attempt(key).is_some());
         let Some(open) = self.open_sessions.get_mut(id) else {
+            if let (Some(key), TranscriptEvent::MessageUpdated(info)) = (&mutation_key, &event)
+                && self.send_attempts.observe(key, &info.id)
+            {
+                if self.send_attempts.attempt(key).is_none() {
+                    self.recovery.clear_finished(key);
+                }
+                self.queue_persistence(cx);
+            }
             return false;
         };
-        let change = match mutation_key {
+        let change = match &mutation_key {
             Some(key) => self
                 .send_attempts
-                .apply_event(&key, &mut open.transcript, event),
+                .apply_event(key, &mut open.transcript, event),
             None => open.transcript.apply(event),
         };
-        if change == TranscriptChange::NeedsReconcile {
+        let needs_read = if change == TranscriptChange::NeedsReconcile {
             // A read in flight covers what the event referred to.
-            return !matches!(open.history, History::Loading { .. });
+            !matches!(open.history, History::Loading { .. })
+        } else {
+            apply_list_change(open, &change, cx);
+            false
+        };
+        if let Some(key) = mutation_key
+            && had_attempt
+            && self.send_attempts.attempt(&key).is_none()
+        {
+            self.recovery.clear_finished(&key);
+            self.queue_persistence(cx);
         }
-        apply_list_change(open, &change, cx);
-        false
+        needs_read
     }
 
     /// Rebuilds the sidebar after an index change and keeps the selection on
@@ -917,4 +973,41 @@ fn now_ms() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|elapsed| i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX))
         .unwrap_or_default()
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::TestAppContext;
+    use openchamber_native_core::ids::SessionId;
+    use openchamber_native_core::transcript::TranscriptEvent;
+    use openchamber_native_transport::prompt::PromptAdmission;
+
+    #[gpui_kit::test]
+    fn authoritative_admission_releases_an_unvisited_session(cx: &mut TestAppContext) {
+        let (_, workspace) = crate::workspace_tests::open(cx);
+        cx.update(|cx| {
+            workspace.update(cx, |workspace, cx| {
+                let session = SessionId::from("ses_unvisited_recovery");
+                let key = workspace.mutation_key(&session);
+                let attempt = crate::send_attempt::tests::attempt(&key);
+                let info = attempt.optimistic.info.clone();
+                assert!(!workspace.open_sessions.contains_key(&session));
+                workspace.send_attempts.begin(key.clone(), attempt);
+                workspace
+                    .send_attempts
+                    .finish(&key, Err(PromptAdmission::Unknown));
+                workspace.apply_transcript_event(
+                    &session,
+                    TranscriptEvent::MessageUpdated(info),
+                    cx,
+                );
+                assert!(workspace.send_attempts.can_send(&key));
+                assert!(workspace.send_attempts.attempt(&key).is_none());
+                assert!(
+                    !workspace.open_sessions.contains_key(&session),
+                    "admission must not open an unseen transcript"
+                );
+            })
+        });
+    }
 }
