@@ -54,7 +54,8 @@ class ElectronClient:
             stdout=subprocess.PIPE,
             text=True,
         )
-        return self._call("launch", app=str(self.app), env=env, scale=self.scale, width=self.width, height=self.height)
+        log_path = Path(env["OPENCHAMBER_DATA_DIR"]).parent / "electron.log"
+        return self._call("launch", app=str(self.app), env=env, scale=self.scale, width=self.width, height=self.height, logPath=str(log_path))
 
     def wait_ready(self, timeout_s: float, connected: bool) -> None:
         """Rows and composer are present and the row list held still for 750 ms."""

@@ -47,7 +47,99 @@ fn sample() -> JournalSnapshot {
     JournalSnapshot {
         drafts: vec![(owner, Draft::new("unsent λ"))],
         attempts: vec![(key, attempt)],
+        creations: Vec::new(),
     }
+}
+
+#[test]
+fn journal_v1_migrates_to_v2_without_losing_existing_sends() {
+    let fixture = Scratch::new();
+    let path = fixture.path();
+    let (mut journal, _) = MutationJournal::open(&path).expect("open");
+    journal.save(&sample()).expect("v2 save");
+    drop(journal);
+    let mut stored: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read")).expect("JSON");
+    stored["version"] = 1.into();
+    stored.as_object_mut().expect("object").remove("creations");
+    for attempt in stored["attempts"].as_array_mut().expect("attempts") {
+        attempt.as_object_mut().expect("attempt").remove("origin");
+    }
+    fs::write(&path, serde_json::to_vec(&stored).expect("JSON")).expect("legacy write");
+    let (mut journal, value) = MutationJournal::open(&path).expect("legacy loads");
+    let snapshot = loaded(value);
+    assert!(snapshot.creations.is_empty());
+    assert_eq!(snapshot.attempts[0].1.origin, SendOrigin::Existing);
+    assert_eq!(
+        snapshot.attempts[0].1.prompt.text,
+        sample().attempts[0].1.prompt.text
+    );
+    journal.save(&snapshot).expect("migrated save");
+    let stored: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read")).expect("JSON");
+    assert_eq!(stored["version"], 2);
+}
+
+#[test]
+fn creation_journal_round_trips_all_phases_and_newer_identical_typing() {
+    for phase in [
+        CreationPhase::Preparing,
+        CreationPhase::Creating,
+        CreationPhase::Uncertain,
+        CreationPhase::Confirming,
+        CreationPhase::Confirmed,
+        CreationPhase::Mismatch,
+        CreationPhase::Deleted,
+    ] {
+        let (key, mut attempt) = crate::create_attempt::tests::sample();
+        attempt.phase = phase;
+        let request = attempt.request.clone();
+        let snapshot = JournalSnapshot {
+            drafts: vec![(attempt.source.clone(), attempt.draft.clone())],
+            attempts: vec![],
+            creations: vec![(key, attempt)],
+        };
+        let stored = Store::capture(&snapshot).expect("capture");
+        let restored = stored.into_snapshot().expect("restore");
+        let held = &restored.creations[0].1;
+        assert_eq!(held.request, request);
+        assert_eq!(
+            held.draft, restored.drafts[0].1,
+            "identical newer typing remains distinct"
+        );
+        assert_eq!(
+            held.phase,
+            if matches!(phase, CreationPhase::Preparing | CreationPhase::Creating) {
+                CreationPhase::Uncertain
+            } else if phase == CreationPhase::Confirming {
+                CreationPhase::Confirmed
+            } else {
+                phase
+            }
+        );
+        assert!(held.navigation.is_none());
+        assert_eq!(held.prompt.model.as_ref().expect("Auto").model_id, "auto");
+    }
+}
+
+#[test]
+fn creation_journal_rejects_conflicting_owners_configuration_and_identities() {
+    let (key, attempt) = crate::create_attempt::tests::sample();
+    let mut snapshot = JournalSnapshot {
+        drafts: vec![],
+        attempts: vec![],
+        creations: vec![(key.clone(), attempt.clone())],
+    };
+    snapshot.creations.push((key.clone(), attempt));
+    assert!(Store::capture(&snapshot).is_err());
+    snapshot.creations.pop();
+    snapshot.creations[0].1.prompt.agent = Some("different".into());
+    assert!(Store::capture(&snapshot).is_err());
+    snapshot.creations[0].1.prompt.agent = Some("build".into());
+    snapshot
+        .attempts
+        .push((key.clone(), attempt_tests::attempt(&key)));
+    assert!(Store::capture(&snapshot).is_err());
 }
 
 fn loaded(value: LoadedJournal) -> JournalSnapshot {

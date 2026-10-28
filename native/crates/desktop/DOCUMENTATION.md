@@ -6,8 +6,9 @@ lifetime to the `Workspace` entity. Without a configured server the window
 runs on deterministic synthetic data from the core and makes no network or
 provider calls. With `OPENCHAMBER_NATIVE_SERVER` it reads one OpenChamber
 server through `openchamber-native-transport`. Existing selected sessions accept
-text prompts and interruption through that server. New-session creation and
-attachment submission remain separate workflows.
+text prompts and interruption through that server. A new-session draft creates
+a root session in its selected registered project before sending its first text
+prompt. Attachments and worktree creation remain separate workflows.
 
 ## Ownership
 
@@ -26,8 +27,15 @@ attachment submission remain separate workflows.
   authoritative identity or definite rejection settles the attempt.
   `message_id.rs` produces the pinned OpenCode `msg_` identity layout. Its
   randomized suffix is a uniqueness aid and carries no authentication authority.
+- `session_creation.rs` owns selected-project root-session creation, exact-ID
+  observation and the durable handoff to a session-owned first send.
+  `create_attempt.rs` retains the original draft, immutable create request and
+  original prompt configuration. `session_id.rs` generates OpenCode's descending
+  `ses_` identities using Unix milliseconds and the pinned 48-bit prefix layout.
 - `mutation_journal.rs` owns the private versioned snapshot of drafts and pending
-  sends. `journal_worker.rs` holds its exclusive file lock and serializes disk I/O
+  sends and creations. Version 2 reads version 1 without losing its drafts or
+  sends; unsupported or malformed snapshots grant no writer.
+  `journal_worker.rs` holds its exclusive file lock and serializes disk I/O
   on one thread, coalescing queued snapshots while preserving save barriers.
   `state_persistence.rs` hydrates before editing, schedules draft saves, waits for
   durable preparation before a POST, and drains the last snapshot on normal close.
@@ -109,7 +117,8 @@ attachment submission remain separate workflows.
   the web client. Missing preference fields retain the previous value.
   Compact sessions use a shared leading kind/chevron slot and trailing pin
   and running-state marks. Resting rows show no recency date. The project
-  separator paints inside the existing preceding gap without changing row size.
+  separator paints inside a 16 px preceding gap; zone headers use 8 px gaps.
+  The divider sits 8 px above the gap's end and mixes 10% foreground into border.
 - `workspace_view.rs` lays out the frameless window: the sidebar column, the
   header with the window controls, the chat, the work status panel and the
   rail. `sidebar_view.rs`, `startup_view.rs`, `transcript_view.rs`,
@@ -213,6 +222,27 @@ attachment submission remain separate workflows.
   replacing runtime state, then restore the incoming draft in that same
   transition. No input event can snapshot the previous text under the new key;
   project selection never moves text between drafts.
+- Creation captures its root directory, registered project, runtime, session ID,
+  first-message ID, text and configuration once. Its first POST waits for a durable
+  journal barrier. Creation consumes only the submitted text synchronously; later
+  identical typing remains an independent draft. Completion selects the new session
+  only while the original view is unchanged and has no newer text.
+- Creation accepts only the exact saved identity and normalized absolute directory.
+  An unexplained canonical alias remains blocked. Unknown outcomes retain their
+  immutable request across restart. Check status reads without submitting; Retry
+  same message performs a fresh observation before continuing or repeating the
+  identical create request. No creation or prompt retries run automatically.
+  A successful Check status durably records confirmed existence before offering
+  continuation, so a later 404 cannot reopen creation after restart.
+- The handoff removes the creation and inserts its session-owned send in one
+  journal snapshot before any selection or prompt POST. The first send compares
+  returned model/agent selection and omits unchanged selections; its retained
+  prompt keeps the original configuration for retries. Auto is omitted at creation
+  and always restored through OpenChamber's model-switch route before prompting.
+- Explicit session deletion dominates delayed creation completions. A 404 after
+  confirmed existence is terminal, including after restart and during first-send
+  recovery. Neither case recreates that identity. The retained recovery row keeps
+  the saved text; an independent new draft can create a different identity.
 - Connected mutation tasks belong to the window, independently of the selected
   runtime. A completion restores only its captured draft owner. Closing the
   window cancels local requests without stopping the server or its turn. Before
@@ -236,13 +266,20 @@ attachment submission remain separate workflows.
   remains a separate draft, even when its text equals the previous prompt.
 - A failed lookup never establishes absence. NotObserved permits only an explicit
   same-ID retry; failed retries retain uncertainty about the original request.
+  An exact-ID history lookup applies its authoritative message to the matching
+  visited transcript before clearing recovery. A failed full-history refresh
+  preserves that message. Lookup results preserve target-message changes and
+  deletions newer than the lookup's captured transcript revision; changes to
+  unrelated messages do not prevent applying the result.
   An authoritative user event resolves a retained send even when its transcript
   has not been opened. Send and abort ownership remain distinct.
 - Missing storage differs from malformed, unreadable or locked storage. A failed
   load grants no writer and leaves the file intact. Save errors and unconfirmed
   directory synchronization pause sending and leave current memory available.
-  Retrying an open preserves that memory; normal close waits for its final save
-  and lock release. Application-quit hooks also request a flush within GPUI's
+  A failed close retains the worker and exclusive lock for an explicit retry.
+  Normal close releases the lock only after its final save is durable. A stopped
+  worker cannot reopen over another process's writes using retained memory.
+  Application-quit hooks also request a flush within GPUI's
   bounded shutdown window. Forced termination can lose the latest debounced
   draft edits, but every dispatched prompt already has a durable attempt.
 - Retained Markdown uses the same parser extensions before and after painting.
@@ -293,8 +330,17 @@ The client retains one attempt per runtime/session until authoritative message
 content replaces its optimistic item. It blocks a new identity while delivery is
 uncertain; an explicit retry uses the same saved ID. Abort can run after the send
 request finishes and leaves running status to the live channel. New-session
-creation, attachments, queue controls and selection controls are outside this
-module's text-only contract.
+creation is owned by `session_creation.rs`; attachments, queue controls and
+selection controls are outside this module's text-only contract.
+
+### Why creation has a durable handoff to ordinary sends
+
+Before creation, the draft belongs to a local project and has no verified server
+session. After verification, one atomic snapshot gives the captured message a
+session owner. Existing send recovery can then reconcile its exact message ID
+without ever returning to session creation. The original configuration remains
+separate from the reduced selection requests, because OpenCode emits an agent
+switch notice even when the selected agent is unchanged.
 
 ### Why disk writes have a separate worker
 
@@ -302,6 +348,10 @@ File creation, synchronization and rename can block. One worker owns the journal
 and keeps only one in-flight and one pending snapshot. A newer full snapshot can
 satisfy older barriers, but each send rechecks its identity and writer epoch
 before dispatch. This preserves mutation order without making typing wait on disk.
+
+Close waits for the save receipt before sealing the worker. Releasing its lock
+after a failed save would let another process write newer data that a retry from
+retained memory could overwrite.
 
 ### Why mutation completion survives a runtime switch
 

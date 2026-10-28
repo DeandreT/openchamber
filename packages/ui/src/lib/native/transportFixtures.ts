@@ -57,6 +57,7 @@ type RecordedRequest = {
 };
 
 const responseFor = (path: string, shelled: boolean): string => {
+  if (path === `/api/session/${RECORDED_SESSION}`) return readWire('session-created');
   if (path === '/api/session') return readWire('sessions');
   if (path === '/api/agent') return readWire('agents');
   if (path === '/api/model') return readWire('models');
@@ -93,6 +94,7 @@ const createRecordingClient = (requests: RecordedRequest[], headers?: Record<str
       });
       const shelled = request.headers.get(PART_SHELLS_HEADER) === PART_SHELLS_VERSION;
       if (request.method === 'POST') {
+        if (url.pathname === '/api/session') return new Response(readWire('session-created'), { headers: { 'content-type': 'application/json' } });
         if (url.pathname.endsWith('/model') || url.pathname.endsWith('/agent')) return new Response(null, { status: 204 });
         if (url.pathname.endsWith('/prompt')) return new Response(readWire('prompt-admitted'), { headers: { 'content-type': 'application/json' } });
         if (url.pathname.endsWith('/interrupt')) return Response.json({ interrupted: pendingName !== 'interrupt idle session' });
@@ -274,6 +276,14 @@ export const renderTransportFixtures = async (): Promise<string> => {
   const mcp = await scoped.named('mcp servers', () => scoped.client.mcp.list());
 
   // Synthetic protocol samples, decoded by the pinned SDK. No live mutation.
+  const created = await global.named('create root session', () => global.client.session.create({
+    id: RECORDED_SESSION, location: { directory: SCOPED_DIRECTORY },
+    model: { providerID: 'fixture', id: 'text-model', variant: 'high' }, agent: 'build',
+  }));
+  await global.named('create root session with defaults', () => global.client.session.create({
+    id: RECORDED_SESSION, location: { directory: SCOPED_DIRECTORY },
+  }));
+  const exactSession = await global.named('observe exact session', () => global.client.session.get({ sessionID: RECORDED_SESSION }));
   await global.named('select prompt model', () => global.client.session.switchModel({
     sessionID: RECORDED_SESSION, model: { providerID: 'fixture', id: 'text-model', variant: 'high' },
   }));
@@ -337,6 +347,7 @@ export const renderTransportFixtures = async (): Promise<string> => {
     requests,
     mutations: { admitted, interrupted, idle },
     observations: { pending, delivered },
+    creation: { created: normalizeSession(projectSession(created)), observed: normalizeSession(projectSession(exactSession)) },
     sessions: sessions.data.map(projectSession).map(normalizeSession),
     nextCursor: sessions.cursor.next ?? null,
     messages: {

@@ -155,6 +155,7 @@ impl Workspace {
         if key.runtime() != &self.runtime || !is_project_draft(key) {
             return;
         }
+        self.navigation_revision = self.navigation_revision.wrapping_add(1);
         let _ = self.drafts.take(key);
         self.draft_previews.remove(key);
         if self.composer_key.as_ref() == Some(key) {

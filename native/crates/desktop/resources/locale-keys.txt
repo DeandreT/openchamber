@@ -21,6 +21,14 @@ chat.nativeRecovery.retryStorage
 chat.nativeRecovery.sendFailed
 chat.nativeRecovery.abortFailed
 chat.nativeRecovery.saveRejected
+chat.nativeCreation.preparing
+chat.nativeCreation.creating
+chat.nativeCreation.unknown
+chat.nativeCreation.checkFailed
+chat.nativeCreation.notObserved
+chat.nativeCreation.mismatch
+chat.nativeCreation.deleted
+chat.nativeCreation.ready
 chat.chatInput.actions.addAttachment
 chat.chatInput.actions.sendMessageAria
 chat.chatInput.actions.stopGeneratingAria

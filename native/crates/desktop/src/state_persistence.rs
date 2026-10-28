@@ -28,9 +28,7 @@ pub(crate) enum StorageIssue {
 enum Status {
     #[default]
     Disabled,
-    Loading {
-        loaded: bool,
-    },
+    Loading,
     Ready,
     Fault {
         loaded: bool,
@@ -51,7 +49,6 @@ pub(crate) struct StatePersistence {
     debounce: Option<Task<()>>,
     saving: Option<Task<()>>,
     closing: Option<Task<()>>,
-    close_after_open: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -64,10 +61,7 @@ impl StatePersistence {
     fn loaded(&self) -> bool {
         matches!(
             self.status,
-            Status::Ready
-                | Status::Closing
-                | Status::Loading { loaded: true }
-                | Status::Fault { loaded: true, .. }
+            Status::Ready | Status::Closing | Status::Fault { loaded: true, .. }
         )
     }
 }
@@ -83,10 +77,7 @@ impl Workspace {
 
     pub(crate) fn composer_editable(&self) -> bool {
         (self.is_synthetic() || self.persistence.loaded())
-            && !matches!(
-                self.persistence.status,
-                Status::Closing | Status::Loading { .. }
-            )
+            && !matches!(self.persistence.status, Status::Closing | Status::Loading)
             && !self.selected.as_ref().is_some_and(|session| {
                 self.send_attempts
                     .attempt(&self.mutation_key(session))
@@ -100,7 +91,7 @@ impl Workspace {
         match &self.persistence.status {
             Status::Disabled | Status::Ready => None,
             Status::Closing => Some(StorageNotice::Closing),
-            Status::Loading { .. } => Some(StorageNotice::Loading),
+            Status::Loading => Some(StorageNotice::Loading),
             Status::Fault {
                 issue: StorageIssue::WriteRejected,
                 ..
@@ -137,21 +128,28 @@ impl Workspace {
             };
             return;
         };
-        self.open_persistence(path, false, window, cx);
+        self.open_persistence(path, window, cx);
     }
 
     pub(crate) fn open_persistence(
         &mut self,
         path: PathBuf,
-        keep_memory: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Once hydrated, memory may be newer than disk. Reopening cannot prove
+        // that another process did not write while our lock was released.
+        if self.persistence.loaded() {
+            self.persistence.status = Status::Fault {
+                loaded: true,
+                issue: StorageIssue::Failure(JournalFailure::WorkerStopped),
+            };
+            cx.notify();
+            return;
+        }
         self.persistence.worker = None;
         self.persistence.path = Some(path.clone());
-        self.persistence.status = Status::Loading {
-            loaded: keep_memory,
-        };
+        self.persistence.status = Status::Loading;
         self.persistence.epoch = self.persistence.epoch.wrapping_add(1);
         let epoch = self.persistence.epoch;
         let (worker, ready) = JournalWorker::start(path);
@@ -164,47 +162,38 @@ impl Workspace {
                 }
                 match loaded {
                     Ok(loaded) => {
-                        if !keep_memory {
-                            let snapshot = match loaded {
-                                LoadedJournal::Missing => JournalSnapshot::default(),
-                                LoadedJournal::Present(snapshot) => snapshot,
-                            };
-                            let attempts = match SendAttempts::from_snapshot(snapshot.attempts) {
-                                Ok(attempts) => attempts,
-                                Err(reason) => {
-                                    this.persistence.worker = None;
-                                    this.persistence.status = Status::Fault {
-                                        loaded: false,
-                                        issue: StorageIssue::Failure(JournalFailure::Invalid(
-                                            reason,
-                                        )),
-                                    };
-                                    cx.notify();
-                                    return;
-                                }
-                            };
-                            let mut drafts = DraftStore::new();
-                            for (key, draft) in snapshot.drafts {
-                                drafts.save(key, draft);
+                        let snapshot = match loaded {
+                            LoadedJournal::Missing => JournalSnapshot::default(),
+                            LoadedJournal::Present(snapshot) => snapshot,
+                        };
+                        let attempts = match SendAttempts::from_snapshot(snapshot.attempts) {
+                            Ok(attempts) => attempts,
+                            Err(reason) => {
+                                this.persistence.worker = None;
+                                this.persistence.status = Status::Fault {
+                                    loaded: false,
+                                    issue: StorageIssue::Failure(JournalFailure::Invalid(reason)),
+                                };
+                                cx.notify();
+                                return;
                             }
-                            this.drafts = drafts;
-                            this.send_attempts = attempts;
-                            this.restore_draft_previews();
-                            this.restore_composer_draft(window, cx);
+                        };
+                        let mut drafts = DraftStore::new();
+                        for (key, draft) in snapshot.drafts {
+                            drafts.save(key, draft);
                         }
+                        this.drafts = drafts;
+                        this.send_attempts = attempts;
+                        this.creations =
+                            crate::create_attempt::CreateAttempts::restore(snapshot.creations);
+                        this.restore_draft_previews();
+                        this.restore_composer_draft(window, cx);
                         this.persistence.status = Status::Ready;
-                        if this.persistence.close_after_open {
-                            this.persistence.close_after_open = false;
-                            this.request_close(window, cx);
-                        } else if keep_memory {
-                            this.start_background_save(cx);
-                        }
                     }
                     Err(error) => {
                         this.persistence.worker = None;
-                        this.persistence.close_after_open = false;
                         this.persistence.status = Status::Fault {
-                            loaded: keep_memory,
+                            loaded: false,
                             issue: StorageIssue::Failure(error),
                         }
                     }
@@ -220,10 +209,7 @@ impl Workspace {
         cx: &gpui_kit::App,
     ) -> Option<(WriteStamp, JournalReceipt)> {
         if !self.persistence.loaded()
-            || matches!(
-                self.persistence.status,
-                Status::Closing | Status::Loading { .. }
-            )
+            || matches!(self.persistence.status, Status::Closing | Status::Loading)
         {
             return None;
         }
@@ -234,7 +220,10 @@ impl Workspace {
         let preparing: HashMap<_, _> = self
             .send_attempts
             .iter()
-            .filter(|(_, attempt)| attempt.admission == crate::send_attempt::Admission::Preparing)
+            .filter(|(_, attempt)| {
+                attempt.admission == crate::send_attempt::Admission::Preparing
+                    && attempt.origin == crate::send_attempt::SendOrigin::Existing
+            })
             .map(|(_, attempt)| (&attempt.owner, attempt.draft.text.as_str()))
             .collect();
         let snapshot = JournalSnapshot {
@@ -245,6 +234,7 @@ impl Workspace {
                 .map(|(key, draft)| (key.clone(), draft.clone()))
                 .collect(),
             attempts: self.send_attempts.snapshot(),
+            creations: self.creations.snapshot(),
         };
         let worker = self.persistence.worker.as_ref()?;
         self.persistence.revision += 1;
@@ -293,10 +283,7 @@ impl Workspace {
 
     pub(crate) fn queue_persistence(&mut self, cx: &mut Context<Self>) {
         if !self.persistence.loaded()
-            || matches!(
-                self.persistence.status,
-                Status::Closing | Status::Loading { .. }
-            )
+            || matches!(self.persistence.status, Status::Closing | Status::Loading)
         {
             return;
         }
@@ -306,7 +293,7 @@ impl Workspace {
         }));
     }
 
-    fn start_background_save(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn start_background_save(&mut self, cx: &mut Context<Self>) {
         let Some((revision, saved)) = self.persistence_barrier(cx) else {
             return;
         };
@@ -322,7 +309,7 @@ impl Workspace {
         if self.persistence.loaded() && self.persistence.worker.is_some() {
             self.start_background_save(cx);
         } else if let Some(path) = self.persistence.path.clone() {
-            self.open_persistence(path, self.persistence.loaded(), window, cx);
+            self.open_persistence(path, window, cx);
         } else {
             self.start_persistence(window, cx);
         }
@@ -338,10 +325,6 @@ impl Workspace {
 
     /// Close controls wait for the last full snapshot and release the file lock.
     pub(crate) fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if matches!(self.persistence.status, Status::Loading { loaded: true }) {
-            self.persistence.close_after_open = true;
-            return;
-        }
         if self.is_synthetic() || !self.persistence.loaded() {
             window.remove_window();
             return;
@@ -350,25 +333,41 @@ impl Workspace {
             return;
         }
         self.persistence.debounce = None;
-        let Some((_, saved)) = self.persistence_barrier(cx) else {
+        let Some((stamp, saved)) = self.persistence_barrier(cx) else {
             return;
         };
-        let Some(worker) = self.persistence.worker.as_ref() else {
-            return;
-        };
-        let finished = worker.finish();
         self.persistence.status = Status::Closing;
         self.persistence.closing = Some(cx.spawn_in(window, async move |this, cx| {
             let saved = saved.await.unwrap_or(Err(JournalFailure::WorkerStopped));
+            let finished = this.update_in(cx, |this, _, cx| {
+                if this.persistence.epoch != stamp.epoch {
+                    return None;
+                }
+                // Older background receipts must not clear a failed close.
+                this.persistence.last_result = stamp.revision;
+                if matches!(saved, Ok(CommitOutcome::Durable)) {
+                    return this.persistence.worker.as_ref().map(JournalWorker::finish);
+                }
+                // Keep the worker and its exclusive lock for an explicit retry.
+                // A stopped worker keeps rejecting writes; it is never reopened
+                // over possibly newer data from another process.
+                this.persistence.status = Status::Ready;
+                this.record_persistence(stamp, &saved, cx);
+                None
+            });
+            let Ok(Some(finished)) = finished else {
+                return;
+            };
             let finished = finished.await.unwrap_or(Err(JournalFailure::WorkerStopped));
             let _ = this.update_in(cx, |this, window, cx| {
-                this.persistence.worker = None;
-                if matches!(saved, Ok(CommitOutcome::Durable))
-                    && matches!(finished, Ok(CommitOutcome::Durable))
-                {
+                if this.persistence.epoch != stamp.epoch {
+                    return;
+                }
+                if matches!(finished, Ok(CommitOutcome::Durable)) {
+                    this.persistence.worker = None;
                     window.remove_window();
                 } else {
-                    let issue = match saved.and(finished) {
+                    let issue = match finished {
                         Err(JournalFailure::Invalid(_)) => StorageIssue::WriteRejected,
                         Err(error) => StorageIssue::Failure(error),
                         _ => StorageIssue::Uncertain,
@@ -388,7 +387,7 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gpui_kit::TestAppContext;
+    use gpui_kit::{AppContext, TestAppContext};
 
     #[gpui_kit::test]
     fn obsolete_writer_receipts_cannot_clear_current_failure(cx: &mut TestAppContext) {
@@ -411,6 +410,67 @@ mod tests {
                 assert_eq!(workspace.persistence_notice(), Some(StorageNotice::Locked));
             })
         });
+    }
+
+    #[gpui_kit::test]
+    fn older_receipts_cannot_clear_failed_close(cx: &mut TestAppContext) {
+        let (_, workspace) = crate::workspace_tests::open(cx);
+        cx.update(|cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.persistence.status = Status::Closing;
+                workspace.record_persistence(
+                    WriteStamp {
+                        epoch: 0,
+                        revision: 1,
+                    },
+                    &Ok(CommitOutcome::Durable),
+                    cx,
+                );
+                assert!(workspace.persistence_closing());
+                workspace.persistence.status = Status::Ready;
+                workspace.record_persistence(
+                    WriteStamp {
+                        epoch: 0,
+                        revision: 2,
+                    },
+                    &Err(JournalFailure::Io(std::io::ErrorKind::Other)),
+                    cx,
+                );
+                workspace.record_persistence(
+                    WriteStamp {
+                        epoch: 0,
+                        revision: 1,
+                    },
+                    &Ok(CommitOutcome::Durable),
+                    cx,
+                );
+                assert_eq!(workspace.persistence_notice(), Some(StorageNotice::Io));
+            });
+        });
+    }
+
+    #[gpui_kit::test]
+    fn hydrated_memory_cannot_reopen_a_released_writer(cx: &mut TestAppContext) {
+        let (window, workspace) = crate::workspace_tests::open(cx);
+        cx.update_window(window, |_, window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.persistence.status = Status::Fault {
+                    loaded: true,
+                    issue: StorageIssue::Failure(JournalFailure::WorkerStopped),
+                };
+                workspace.persistence.path = Some(PathBuf::from("unused-journal.json"));
+                workspace.retry_persistence(window, cx);
+                assert!(workspace.persistence.worker.is_none());
+                assert!(matches!(
+                    workspace.persistence.status,
+                    Status::Fault {
+                        loaded: true,
+                        issue: StorageIssue::Failure(JournalFailure::WorkerStopped),
+                    }
+                ));
+            });
+        })
+        .expect("window open");
     }
 
     #[gpui_kit::test]

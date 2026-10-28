@@ -55,7 +55,7 @@ During development, connect only to an isolated server, such as
 
 ## Local recovery state
 
-Connected clients keep drafts and pending text sends in
+Connected clients keep drafts, pending root-session creations and text sends in
 `$XDG_CONFIG_HOME/openchamber-native/drafts-and-sends.json`, or the corresponding
 `~/.config` path. The directory is private and the file is mode 0600 on Linux.
 One process owns the profile's journal lock. A second process can read server
@@ -64,6 +64,13 @@ state but cannot edit or send until it can load the local state safely.
 The pending-send row checks the original message ID before retrying. Retries
 reuse that ID and never run automatically. Normal window close drains pending
 saves; a dispatched prompt is recorded durably before network I/O begins.
+
+New-session text submission uses the selected registered project's root directory.
+The client saves one session ID before creation, verifies its returned location,
+then durably binds the first message before sending. Check status never submits
+the saved message. Retry same message uses the original identities and captured
+configuration. An observed deletion never triggers recreation. Journal version 2
+reads version 1; malformed or future formats remain untouched.
 
 `native:fixtures` runs the TypeScript sidebar projection and rewrites
 `crates/core/tests/fixtures/sidebar-projection.json`. `native:resources`

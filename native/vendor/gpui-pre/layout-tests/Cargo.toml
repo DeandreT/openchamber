@@ -15,3 +15,7 @@ gpui-pre = { path = ".." }
 [[test]]
 name = "logical_layout"
 path = "logical_layout.rs"
+
+[[test]]
+name = "text_wrap"
+path = "text_wrap.rs"

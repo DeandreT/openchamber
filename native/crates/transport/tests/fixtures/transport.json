@@ -206,6 +206,36 @@
       "body": null
     },
     {
+      "name": "create root session",
+      "method": "POST",
+      "path": "/api/session",
+      "query": [],
+      "directoryHeader": null,
+      "partShellsHeader": null,
+      "contentType": "application/json",
+      "body": "{\"id\":\"ses_e9b49c443ffefXcWWPhCOga6nH\",\"agent\":\"build\",\"model\":{\"providerID\":\"fixture\",\"id\":\"text-model\",\"variant\":\"high\"},\"location\":{\"directory\":\"/home/synthetic/my project/ünï\"}}"
+    },
+    {
+      "name": "create root session with defaults",
+      "method": "POST",
+      "path": "/api/session",
+      "query": [],
+      "directoryHeader": null,
+      "partShellsHeader": null,
+      "contentType": "application/json",
+      "body": "{\"id\":\"ses_e9b49c443ffefXcWWPhCOga6nH\",\"location\":{\"directory\":\"/home/synthetic/my project/ünï\"}}"
+    },
+    {
+      "name": "observe exact session",
+      "method": "GET",
+      "path": "/api/session/ses_e9b49c443ffefXcWWPhCOga6nH",
+      "query": [],
+      "directoryHeader": null,
+      "partShellsHeader": null,
+      "contentType": null,
+      "body": null
+    },
+    {
       "name": "select prompt model",
       "method": "POST",
       "path": "/api/session/ses_e9b49c443ffefXcWWPhCOga6nH/model",
@@ -338,6 +368,46 @@
         "created": 1792691938000
       },
       "text": "Prepared by the server"
+    }
+  },
+  "creation": {
+    "created": {
+      "id": "ses_e9b49c443ffefXcWWPhCOga6nH",
+      "parentId": null,
+      "directory": "/home/synthetic/my project/ünï",
+      "title": "Synthetic creation fixture",
+      "created": 1793209852000,
+      "updated": 1793209852000,
+      "idle": null,
+      "archived": null,
+      "pinned": false,
+      "inWork": false,
+      "btw": false,
+      "model": {
+        "providerId": "fixture",
+        "modelId": "text-model",
+        "variant": "high"
+      },
+      "agent": "build"
+    },
+    "observed": {
+      "id": "ses_e9b49c443ffefXcWWPhCOga6nH",
+      "parentId": null,
+      "directory": "/home/synthetic/my project/ünï",
+      "title": "Synthetic creation fixture",
+      "created": 1793209852000,
+      "updated": 1793209852000,
+      "idle": null,
+      "archived": null,
+      "pinned": false,
+      "inWork": false,
+      "btw": false,
+      "model": {
+        "providerId": "fixture",
+        "modelId": "text-model",
+        "variant": "high"
+      },
+      "agent": "build"
     }
   },
   "sessions": [

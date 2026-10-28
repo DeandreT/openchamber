@@ -358,6 +358,7 @@ mod tests {
                 Draft::new(text),
             )],
             attempts: Vec::new(),
+            creations: Vec::new(),
         }
     }
 
@@ -647,6 +648,45 @@ mod tests {
         drop_notice
             .try_recv()
             .expect("writer dropped before finish receipt");
+    }
+
+    #[test]
+    fn panicked_writer_rejects_retry_after_another_writer_updates_disk() {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let directory = std::env::temp_dir().join(format!(
+            "journal-panic-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let path = directory.join("journal.json");
+        let worker_path = path.clone();
+        let (worker, hydration) = JournalWorker::start_with(
+            move || MutationJournal::open(&worker_path),
+            |_, _| panic!("injected worker failure"),
+        );
+        assert!(matches!(hydration.blocking_recv(), Ok(Ok(_))));
+        assert_eq!(
+            receive(worker.submit(snapshot("unsaved first writer"))),
+            Err(JournalFailure::WorkerStopped)
+        );
+        let (mut second, _) = MutationJournal::open(&path).expect("panic releases the lock");
+        assert!(matches!(
+            second.save(&snapshot("second writer")),
+            Ok(JournalCommit::Durable)
+        ));
+        assert_eq!(
+            receive(worker.submit(snapshot("stale retry"))),
+            Err(JournalFailure::WorkerStopped)
+        );
+        drop(second);
+        let (journal, loaded) = MutationJournal::open(&path).expect("read second writer's data");
+        let LoadedJournal::Present(snapshot) = loaded else {
+            panic!("second writer saved a snapshot");
+        };
+        assert_eq!(snapshot.drafts[0].1.text, "second writer");
+        drop(journal);
+        std::fs::remove_dir_all(directory).expect("remove test journal");
     }
 
     #[test]

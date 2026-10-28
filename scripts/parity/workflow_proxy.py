@@ -10,18 +10,23 @@ import urllib.parse
 
 
 class FaultProxy:
-    def __init__(self, upstream, drop_at):
+    def __init__(self, upstream, drop_at, operation="prompt"):
         target = urllib.parse.urlsplit(upstream)
         if target.scheme != "http" or target.hostname != "127.0.0.1" or not target.port or target.path:
             raise ValueError("workflow proxy requires a loopback HTTP origin")
         if drop_at not in ("before", "after"):
             raise ValueError("unknown response-loss mode")
+        if operation not in ("prompt", "create"):
+            raise ValueError("unknown mutation target")
         self.host, self.port = target.hostname, target.port
         self.drop_at = drop_at
+        self.operation = operation
         self.pause_reads = threading.Event()
         self.pause_events = threading.Event()
         self.stopped = threading.Event()
         self.attempt_ids = []
+        self.create_ids = []
+        self.prompt_ids = []
         self.lock = threading.Lock()
         self.sockets = set()
         owner = self
@@ -64,7 +69,10 @@ class FaultProxy:
             self.tunnel(handler)
             return
         path = urllib.parse.urlsplit(handler.path).path
-        if self.pause_reads.is_set() and path.startswith("/api/session/") and ("/message" in path or path.endswith("/inbox")):
+        session_read = path.startswith("/api/session/") and (
+            "/message" in path or path.endswith("/inbox")
+            or self.operation == "create" and path.count("/") == 3)
+        if handler.command == "GET" and self.pause_reads.is_set() and session_read:
             handler.send_response(503)
             handler.send_header("Content-Length", "0")
             handler.end_headers()
@@ -75,11 +83,14 @@ class FaultProxy:
             return
         body = handler.rfile.read(length)
         lose = False
-        if handler.command == "POST" and path.endswith("/prompt"):
+        mutation = "create" if path == "/api/session" else "prompt" if path.endswith("/prompt") else None
+        if handler.command == "POST" and mutation:
             identifier = json.loads(body).get("id")
             with self.lock:
-                lose = not self.attempt_ids
-                self.attempt_ids.append(identifier)
+                (self.create_ids if mutation == "create" else self.prompt_ids).append(identifier)
+                if mutation == self.operation:
+                    lose = not self.attempt_ids
+                    self.attempt_ids.append(identifier)
             if lose:
                 self.pause_reads.set()
                 self.pause_events.set()

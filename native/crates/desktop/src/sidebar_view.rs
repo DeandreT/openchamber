@@ -403,6 +403,7 @@ impl Workspace {
             return div().into_any_element();
         };
         let spacing = match self.sidebar_spacing.get(index).copied().flatten() {
+            Some(SectionSpacing::Project) => 16.0,
             Some(SectionSpacing::Section) => 8.0,
             Some(SectionSpacing::Group) => 6.0,
             None => 0.0,
@@ -836,9 +837,9 @@ impl Workspace {
                         .absolute()
                         .inset_start(direction, px(8.0))
                         .inset_end(direction, px(8.0))
-                        .bottom(px(4.0))
+                        .bottom(px(8.0))
                         .h(px(1.0))
-                        .bg(palette.border.mix_oklab(palette.foreground, 0.78)),
+                        .bg(palette.border.mix_oklab(palette.foreground, 0.90)),
                 )
                 .into_any_element()
         } else {

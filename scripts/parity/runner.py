@@ -17,6 +17,7 @@ passes only when there is none. See scripts/parity/DOCUMENTATION.md.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -434,6 +435,40 @@ def compare_rows(reference: list[dict], candidate: list[dict], unobservable: fro
     return differences
 
 
+def artifact_identity(path: Path) -> dict:
+    """Identify exact bytes and relative names without retaining file contents."""
+    path = path.resolve(strict=True)
+    files = sorted(item for item in path.rglob("*") if item.is_file()) if path.is_dir() else [path]
+    digest = hashlib.sha256()
+    for item in files:
+        name = item.relative_to(path).as_posix() if path.is_dir() else item.name
+        digest.update(name.encode())
+        digest.update(b"\0")
+        content = hashlib.sha256()
+        with item.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                content.update(chunk)
+        digest.update(content.digest())
+    return {"path": str(path), "sha256": digest.hexdigest(), "files": len(files)}
+
+
+def input_identities(args: argparse.Namespace) -> dict:
+    electron_resources = args.electron_app.parent / "resources"
+    electron_cli = "opencode.exe" if args.electron_app.suffix.lower() == ".exe" else "opencode"
+    return {name: artifact_identity(path) for name, path in {
+        "native": args.native_binary,
+        "electron": args.electron_app,
+        "electronPackage": electron_resources / "app.asar",
+        "electronWebAssets": electron_resources / "web-dist",
+        "electronOpencode": electron_resources / "opencode-cli" / electron_cli,
+        "webAssets": args.dist,
+        "opencode": args.opencode_binary,
+        "seed": args.root / "seed",
+        "scenarios": SCENARIOS,
+        "exceptions": EXCEPTIONS,
+    }.items()}
+
+
 def run(args: argparse.Namespace) -> int:
     if not (args.root / "seed").exists():
         print(f"no seed under {args.root}; run the seed command first", file=sys.stderr)
@@ -449,8 +484,17 @@ def run(args: argparse.Namespace) -> int:
         return 2
     wanted = set(args.scenarios.split(",")) if args.scenarios else None
     output = (args.output or REPO_ROOT / "artifacts" / f"parity-{time.strftime('%Y%m%dT%H%M%S')}").resolve()
-    output.mkdir(parents=True, exist_ok=True)
-    report = {"generatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "configuration": {key: str(value) for key, value in vars(args).items()}, "scenarios": {}}
+    try:
+        output.mkdir(parents=True)
+    except FileExistsError:
+        print(f"choose a new output directory; preserving {output}", file=sys.stderr)
+        return 2
+    try:
+        inputs = input_identities(args)
+    except OSError as error:
+        print(f"cannot identify comparison inputs: {error}", file=sys.stderr)
+        return 2
+    report = {"generatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "configuration": {key: str(value) for key, value in vars(args).items()}, "inputs": inputs, "scenarios": {}}
     failed = 0
     previous_accessibility = native_adapter.accessibility_enabled()
     native_adapter.set_accessibility(True)
@@ -459,6 +503,17 @@ def run(args: argparse.Namespace) -> int:
     finally:
         native_adapter.set_accessibility(previous_accessibility)
         report["accessibilityRestoredTo"] = previous_accessibility
+    try:
+        unchanged = input_identities(args) == inputs
+    except OSError:
+        unchanged = False
+    report["inputsUnchanged"] = unchanged
+    if not unchanged:
+        failed += 1
+        for scenario in report["scenarios"].values():
+            scenario["observedStatus"] = scenario["status"]
+            scenario["status"] = "blocked"
+        print("comparison inputs changed during the run; results are blocked", file=sys.stderr)
     report["inventory"] = inventory_coverage(features, report["scenarios"])
     (output / "report.json").write_text(json.dumps(report, indent=2))
     coverage = report["inventory"]
@@ -555,7 +610,6 @@ def run_scenarios(scenarios: list[dict], wanted: set[str] | None, output: Path, 
         if wanted and scenario["id"] not in wanted:
             continue
         work = output / scenario["id"]
-        shutil.rmtree(work, ignore_errors=True)
         result = {"feature": scenario["feature"], "electron": run_client("electron", scenario, work, args), "native": run_client("native", scenario, work, args)}
         if "error" in result["electron"] or "error" in result["native"]:
             result["status"] = "blocked" if "error" in result["electron"] else "failed"

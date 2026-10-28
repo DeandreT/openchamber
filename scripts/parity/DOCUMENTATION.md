@@ -94,7 +94,9 @@ activates escape to the user's desktop.
 
 Each checkpoint records a screenshot of the application's content and the
 sidebar rows (key, label, selected, expanded and logical rectangle). Electron
-rows come from `[data-sidebar-row-key]` elements; a row whose list slot is the
+process output stays in its private `state/electron.log`, including when startup
+fails before the first screenshot. Its rows come from `[data-sidebar-row-key]`
+elements; a row whose list slot is the
 placeholder of a sticky header reads the header painted over it, and its
 disclosure state comes from its own toggle, never from a menu trigger inside
 it. Native rows are the accessible elements of the sidebar, whose accessible
@@ -139,6 +141,10 @@ target's accessibility action; a scenario that is otherwise clean is then
 feature passes only when every scenario it lists passed. Reports,
 screenshots and difference images go to `--output`, by default
 `artifacts/parity-<time>`; they are run evidence and never part of the source.
+An existing output directory is refused so another run cannot overwrite its
+evidence. The report fingerprints the native and Electron executables, Electron
+package, web assets, OpenCode binary, seed, scenarios and exceptions. If these
+inputs change before the run ends, every result is blocked.
 
 The runner turns the session's accessibility flag on for the run and restores
 its previous value.
@@ -223,7 +229,18 @@ after normal close, and that reopening does not resubmit the message.
 python3 scripts/parity/native_workflow.py --scale 1.25
 python3 scripts/parity/native_workflow.py --scale 1.25 --fault before
 python3 scripts/parity/native_workflow.py --scale 1.25 --fault after
+python3 scripts/parity/native_workflow.py --scale 1.25 --new-session
+python3 scripts/parity/native_workflow.py --new-session --fault before --fault-operation create
+python3 scripts/parity/native_workflow.py --new-session --fault after --fault-operation create
 ```
+
+`--new-session` selects a registered project through the native picker and
+checks that the first prompt creates exactly one session in that directory.
+Creation response-loss checks restart with the pending operation, reject
+automatic creation or prompt retries after failed observation, and require an
+explicit retry to reuse the saved session identity. The proxy records creation
+and prompt requests separately so a duplicate session cannot hide behind one
+successful prompt.
 
 The fault proxy accepts only a loopback upstream. It loses one prompt response
 before forwarding or after the server answered, and temporarily blocks observation

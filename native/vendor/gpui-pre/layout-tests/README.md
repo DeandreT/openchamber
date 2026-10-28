@@ -1,8 +1,9 @@
-# Logical layout public-API tests
+# Layout and text wrapping public-API tests
 
 This standalone package tests the local `gpui-pre` patch as a dependency with
 `test-support`. It does not compile GPUI's upstream library unit-test module.
-The tests use GPUI's test platform, empty views and painted rectangles. They
+The tests use GPUI's test platform, empty views, painted rectangles and its
+deterministic `NoopTextSystem` through `WindowTextSystem::shape_text`. They
 require no display server, font assets, GUI launch or extra test dependencies.
 
 Run from `native/`, so Cargo uses its pinned toolchain, after other native builds
@@ -13,6 +14,18 @@ CARGO_TARGET_DIR="$PWD/target" cargo test --offline \
   --manifest-path vendor/gpui-pre/layout-tests/Cargo.toml \
   --test logical_layout
 ```
+
+The shaped-text regressions run separately:
+
+```sh
+CARGO_TARGET_DIR="$PWD/target" cargo test --offline --locked \
+  --manifest-path vendor/gpui-pre/layout-tests/Cargo.toml \
+  --test text_wrap
+```
+
+They cover ASCII-space overflow, repeated, leading and trailing spaces,
+unchanged NBSP, narrow NBSP and tab handling, UTF-8 byte indices and line clamps.
+They require no platform fonts and do not substitute a copied wrap algorithm.
 
 The first run resolves the standalone package's lockfile from the local cache.
 Retain that generated `Cargo.lock` and add `--locked` on subsequent runs.

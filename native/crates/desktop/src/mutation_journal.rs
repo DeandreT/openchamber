@@ -24,9 +24,11 @@ use openchamber_native_core::transcript::{Message, MessageInfo, Part, Role};
 use openchamber_native_transport::prompt::{Delivery, TextPrompt};
 use serde::{Deserialize, Serialize};
 
-use crate::send_attempt::{Admission, SendAttempt, SessionKey};
+use crate::create_attempt::{CreateAttempt, CreationPhase};
+use crate::send_attempt::{Admission, SendAttempt, SendOrigin, SessionKey};
+use openchamber_native_transport::session_create::CreateSession;
 
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const MAX_FILE: u64 = 16 * 1024 * 1024;
 const MAX_TEXT: usize = 1024 * 1024;
 const MAX_ENTRIES: usize = 4096;
@@ -39,6 +41,7 @@ static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 pub(crate) struct JournalSnapshot {
     pub drafts: Vec<(DraftKey, Draft)>,
     pub attempts: Vec<(SessionKey, SendAttempt)>,
+    pub creations: Vec<(SessionKey, CreateAttempt)>,
 }
 
 pub(crate) enum LoadedJournal {
@@ -150,11 +153,21 @@ impl MutationJournal {
         }
         let version: Version = serde_json::from_slice(&bytes)
             .map_err(|_| JournalError::Invalid("malformed JSON or version"))?;
-        if version.version != VERSION {
+        if !matches!(version.version, 1 | VERSION) {
             return Err(JournalError::UnsupportedVersion(version.version));
         }
-        let store: Store = serde_json::from_slice(&bytes)
-            .map_err(|_| JournalError::Invalid("malformed schema"))?;
+        let store: Store = if version.version == 1 {
+            let legacy: LegacyStore = serde_json::from_slice(&bytes)
+                .map_err(|_| JournalError::Invalid("malformed legacy schema"))?;
+            Store {
+                version: legacy.version,
+                drafts: legacy.drafts,
+                attempts: legacy.attempts,
+                creations: Vec::new(),
+            }
+        } else {
+            serde_json::from_slice(&bytes).map_err(|_| JournalError::Invalid("malformed schema"))?
+        };
         Ok(LoadedJournal::Present(store.into_snapshot()?))
     }
 
@@ -296,6 +309,37 @@ struct Store {
     version: u32,
     drafts: Vec<StoredDraft>,
     attempts: Vec<StoredAttempt>,
+    creations: Vec<StoredCreation>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct LegacyStore {
+    version: u32,
+    drafts: Vec<StoredDraft>,
+    attempts: Vec<StoredAttempt>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredCreation {
+    session: String,
+    project: String,
+    draft: StoredDraft,
+    prompt: StoredPrompt,
+    request_model: Option<StoredModel>,
+    request_agent: Option<String>,
+    created: i64,
+    phase: StoredCreationPhase,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredCreationPhase {
+    Uncertain,
+    Confirmed,
+    Mismatch,
+    Deleted,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -325,6 +369,8 @@ struct StoredDraft {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StoredAttempt {
+    #[serde(default)]
+    origin: StoredOrigin,
     runtime: String,
     session: String,
     draft: StoredDraft,
@@ -332,6 +378,15 @@ struct StoredAttempt {
     optimistic_part_id: String,
     created: i64,
     admission: StoredAdmission,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StoredOrigin {
+    #[default]
+    Existing,
+    Created,
+    Deleted,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -350,6 +405,52 @@ struct StoredModel {
     provider: String,
     model: String,
     variant: Option<String>,
+}
+
+impl StoredModel {
+    fn capture(model: &ModelChoice) -> Self {
+        Self {
+            provider: model.provider_id.clone(),
+            model: model.model_id.clone(),
+            variant: model.variant.clone(),
+        }
+    }
+
+    fn into_choice(self) -> ModelChoice {
+        ModelChoice {
+            provider_id: self.provider,
+            model_id: self.model,
+            variant: self.variant,
+        }
+    }
+}
+
+impl StoredPrompt {
+    fn capture(prompt: &TextPrompt) -> Self {
+        Self {
+            message_id: prompt.message_id.to_string(),
+            text: prompt.text.clone(),
+            model: prompt.model.as_ref().map(StoredModel::capture),
+            agent: prompt.agent.clone(),
+            delivery: prompt.delivery.map(|delivery| match delivery {
+                Delivery::Steer => StoredDelivery::Steer,
+                Delivery::Queue => StoredDelivery::Queue,
+            }),
+        }
+    }
+
+    fn into_prompt(self) -> TextPrompt {
+        TextPrompt {
+            message_id: MessageId::from(self.message_id),
+            text: self.text,
+            model: self.model.map(StoredModel::into_choice),
+            agent: self.agent,
+            delivery: self.delivery.map(|delivery| match delivery {
+                StoredDelivery::Steer => Delivery::Steer,
+                StoredDelivery::Queue => Delivery::Queue,
+            }),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -453,23 +554,15 @@ impl Store {
             .attempts
             .iter()
             .map(|(key, attempt)| StoredAttempt {
+                origin: match attempt.origin {
+                    SendOrigin::Existing => StoredOrigin::Existing,
+                    SendOrigin::Created => StoredOrigin::Created,
+                    SendOrigin::Deleted => StoredOrigin::Deleted,
+                },
                 runtime: key.runtime.to_string(),
                 session: key.session.to_string(),
                 draft: StoredDraft::capture(&attempt.owner, &attempt.draft),
-                prompt: StoredPrompt {
-                    message_id: attempt.prompt.message_id.to_string(),
-                    text: attempt.prompt.text.clone(),
-                    model: attempt.prompt.model.as_ref().map(|model| StoredModel {
-                        provider: model.provider_id.clone(),
-                        model: model.model_id.clone(),
-                        variant: model.variant.clone(),
-                    }),
-                    agent: attempt.prompt.agent.clone(),
-                    delivery: attempt.prompt.delivery.map(|delivery| match delivery {
-                        Delivery::Steer => StoredDelivery::Steer,
-                        Delivery::Queue => StoredDelivery::Queue,
-                    }),
-                },
+                prompt: StoredPrompt::capture(&attempt.prompt),
                 optimistic_part_id: attempt.optimistic.parts[0].id.to_string(),
                 created: attempt.optimistic.info.created,
                 admission: match attempt.admission {
@@ -487,11 +580,37 @@ impl Store {
                 .map(|(owner, draft)| StoredDraft::capture(owner, draft))
                 .collect(),
             attempts,
+            creations: snapshot
+                .creations
+                .iter()
+                .map(|(key, attempt)| StoredCreation {
+                    session: key.session.to_string(),
+                    project: attempt.project.clone(),
+                    draft: StoredDraft::capture(&attempt.source, &attempt.draft),
+                    prompt: StoredPrompt::capture(&attempt.prompt),
+                    request_model: attempt.request.model().map(StoredModel::capture),
+                    request_agent: attempt.request.agent().map(str::to_owned),
+                    created: attempt.created,
+                    phase: match attempt.phase {
+                        CreationPhase::Preparing
+                        | CreationPhase::Creating
+                        | CreationPhase::Uncertain => StoredCreationPhase::Uncertain,
+                        CreationPhase::Confirming | CreationPhase::Confirmed => {
+                            StoredCreationPhase::Confirmed
+                        }
+                        CreationPhase::Mismatch => StoredCreationPhase::Mismatch,
+                        CreationPhase::Deleted => StoredCreationPhase::Deleted,
+                    },
+                })
+                .collect(),
         })
     }
 
     fn into_snapshot(self) -> Result<JournalSnapshot, JournalError> {
-        if self.drafts.len() > MAX_ENTRIES || self.attempts.len() > MAX_ENTRIES {
+        if self.drafts.len() > MAX_ENTRIES
+            || self.attempts.len() > MAX_ENTRIES
+            || self.creations.len() > MAX_ENTRIES
+        {
             return Err(JournalError::Invalid("entry count limit exceeded"));
         }
         let drafts = self
@@ -502,20 +621,7 @@ impl Store {
         let mut attempts = Vec::with_capacity(self.attempts.len());
         for stored in self.attempts {
             let (owner, draft) = stored.draft.into_draft()?;
-            let prompt = TextPrompt {
-                message_id: MessageId::from(stored.prompt.message_id),
-                text: stored.prompt.text,
-                model: stored.prompt.model.map(|model| ModelChoice {
-                    provider_id: model.provider,
-                    model_id: model.model,
-                    variant: model.variant,
-                }),
-                agent: stored.prompt.agent,
-                delivery: stored.prompt.delivery.map(|delivery| match delivery {
-                    StoredDelivery::Steer => Delivery::Steer,
-                    StoredDelivery::Queue => Delivery::Queue,
-                }),
-            };
+            let prompt = stored.prompt.into_prompt();
             let optimistic = Message {
                 info: MessageInfo {
                     id: prompt.message_id.clone(),
@@ -537,6 +643,11 @@ impl Store {
                     session: SessionId::from(stored.session),
                 },
                 SendAttempt {
+                    origin: match stored.origin {
+                        StoredOrigin::Existing => SendOrigin::Existing,
+                        StoredOrigin::Created => SendOrigin::Created,
+                        StoredOrigin::Deleted => SendOrigin::Deleted,
+                    },
                     owner,
                     draft,
                     prompt,
@@ -550,14 +661,54 @@ impl Store {
                 },
             ));
         }
-        let snapshot = JournalSnapshot { drafts, attempts };
+        let mut creations = Vec::with_capacity(self.creations.len());
+        for stored in self.creations {
+            let (source, draft) = stored.draft.into_draft()?;
+            let key = SessionKey {
+                runtime: source.runtime().clone(),
+                session: SessionId::from(stored.session),
+            };
+            let request = CreateSession::new(
+                key.session.clone(),
+                source.directory(),
+                stored.request_model.map(StoredModel::into_choice),
+                stored.request_agent,
+            )
+            .map_err(|_| JournalError::Invalid("invalid captured creation request"))?;
+            creations.push((
+                key,
+                CreateAttempt {
+                    source,
+                    draft,
+                    request,
+                    prompt: stored.prompt.into_prompt(),
+                    created: stored.created,
+                    project: stored.project,
+                    navigation: None,
+                    phase: match stored.phase {
+                        StoredCreationPhase::Uncertain => CreationPhase::Uncertain,
+                        StoredCreationPhase::Confirmed => CreationPhase::Confirmed,
+                        StoredCreationPhase::Mismatch => CreationPhase::Mismatch,
+                        StoredCreationPhase::Deleted => CreationPhase::Deleted,
+                    },
+                },
+            ));
+        }
+        let snapshot = JournalSnapshot {
+            drafts,
+            attempts,
+            creations,
+        };
         validate_snapshot(&snapshot)?;
         Ok(snapshot)
     }
 }
 
 fn validate_snapshot(snapshot: &JournalSnapshot) -> Result<(), JournalError> {
-    if snapshot.drafts.len() > MAX_ENTRIES || snapshot.attempts.len() > MAX_ENTRIES {
+    if snapshot.drafts.len() > MAX_ENTRIES
+        || snapshot.attempts.len() > MAX_ENTRIES
+        || snapshot.creations.len() > MAX_ENTRIES
+    {
         return Err(JournalError::Invalid("entry count limit exceeded"));
     }
     let mut owners = HashSet::new();
@@ -602,6 +753,15 @@ fn validate_snapshot(snapshot: &JournalSnapshot) -> Result<(), JournalError> {
                 "prompt must match the captured nonempty draft",
             ));
         }
+        if attempt.origin != SendOrigin::Existing {
+            CreateSession::new(
+                key.session.clone(),
+                attempt.owner.directory(),
+                attempt.prompt.model.clone(),
+                attempt.prompt.agent.clone(),
+            )
+            .map_err(|_| JournalError::Invalid("invalid created-session send owner"))?;
+        }
         if let Some(model) = &attempt.prompt.model {
             charge(&mut size, model.provider_id.len() + model.model_id.len())?;
             identifier(&model.provider_id)?;
@@ -642,6 +802,61 @@ fn validate_snapshot(snapshot: &JournalSnapshot) -> Result<(), JournalError> {
         }
         if attempt.optimistic.info.created < 0 {
             return Err(JournalError::Invalid("negative optimistic creation time"));
+        }
+    }
+    let mut sources = HashSet::new();
+    for (key, attempt) in &snapshot.creations {
+        charge_owner(&mut size, &attempt.source)?;
+        charge(
+            &mut size,
+            attempt.draft.text.len() + attempt.prompt.text.len() + attempt.project.len(),
+        )?;
+        Owner::capture(&attempt.source).into_key()?;
+        validate_draft(&attempt.draft)?;
+        identifier(&attempt.project)?;
+        identifier(attempt.prompt.message_id.as_str())?;
+        if let Some(model) = &attempt.prompt.model {
+            identifier(&model.provider_id)?;
+            identifier(&model.model_id)?;
+            charge(&mut size, model.provider_id.len() + model.model_id.len())?;
+            if let Some(variant) = &model.variant {
+                identifier(variant)?;
+                charge(&mut size, variant.len())?;
+            }
+        }
+        if let Some(agent) = &attempt.prompt.agent {
+            identifier(agent)?;
+            charge(&mut size, agent.len())?;
+        }
+        if attempt.source.runtime() != &key.runtime
+            || !matches!(attempt.source.target(), DraftTarget::NewSession(_))
+            || attempt.request.id() != &key.session
+            || attempt.request.directory() != attempt.source.directory()
+            || !sessions.insert(key)
+            || (attempt.phase != CreationPhase::Deleted && !sources.insert(&attempt.source))
+            || !messages.insert((&key.runtime, &attempt.prompt.message_id))
+            || !attempt.prompt.message_id.as_str().starts_with("msg_")
+            || attempt.prompt.text != attempt.draft.text
+            || attempt.prompt.text.trim().is_empty()
+            || attempt.created < 0
+            || attempt.prompt.delivery.is_some()
+            || attempt.prompt.model.is_none()
+        {
+            return Err(JournalError::Invalid(
+                "invalid or duplicate creation identity",
+            ));
+        }
+        let expected = CreateSession::new(
+            key.session.clone(),
+            attempt.source.directory(),
+            attempt.prompt.model.clone(),
+            attempt.prompt.agent.clone(),
+        )
+        .map_err(|_| JournalError::Invalid("invalid captured creation configuration"))?;
+        if expected != attempt.request {
+            return Err(JournalError::Invalid(
+                "creation request differs from captured configuration",
+            ));
         }
     }
     Ok(())
