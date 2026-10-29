@@ -1,0 +1,24 @@
+{
+  "directory": "/home/synthetic/my project/ünï",
+  "permission": {
+    "id": "per_native_fixture", "sessionID": "ses_native_fixture", "action": "shell",
+    "resources": ["echo synthetic"], "save": ["echo *"],
+    "source": {"type":"tool","messageID":"msg_native_fixture","id":"call_fixture"},
+    "metadata": {"command":"echo synthetic"}, "message":"Run this command?"
+  },
+  "form": {
+    "id": "frm_native_fixture", "sessionID": "ses_native_fixture", "title": "Questions",
+    "metadata": {"kind":"question","tool":{"messageID":"msg_native_fixture","id":"call_question"}},
+    "fields": [
+      {"key":"q0","type":"string","title":"Choice","description":"Choose an option","options":[{"value":"A (Recommended)","label":"A (Recommended)","description":"First option"},{"value":"B","label":"B"}],"custom":true,"default":"B","required":true},
+      {"key":"q1","type":"multiselect","options":[{"value":"one","label":"One"}],"custom":true,"minItems":1,"maxItems":3,"default":["one"]},
+      {"key":"count","type":"integer","minimum":0,"maximum":10,"default":2},
+      {"key":"ratio","type":"number","minimum":"-Infinity","maximum":"Infinity","default":"NaN"},
+      {"key":"enabled","type":"boolean","default":false},
+      {"key":"details","type":"string","when":[{"key":"enabled","op":"eq","value":true}],"minLength":1,"maxLength":100,"pattern":"^[a-z]+$","placeholder":"Details","hidden":false},
+      {"key":"email","type":"string","format":"email"},
+      {"key":"link","type":"external","url":"https://example.com/synthetic-step","title":"Review step"}
+    ]
+  },
+  "answer": {"q0":"A (Recommended)","q1":["one","custom"],"count":2,"enabled":false,"link":true}
+}

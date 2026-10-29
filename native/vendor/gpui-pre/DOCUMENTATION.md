@@ -24,6 +24,9 @@ remain outside this patch.
 - `window.set_layout_mode(LayoutMode::Logical)` keeps non-stroke authored
   lengths, measured sizes and layout bounds fractional in logical pixels.
   Taffy still computes in device-space units, with its own rounding disabled.
+- Intrinsic text widths retain their shaped fractional advance in logical mode.
+  Device-pixel mode keeps the original whole-logical-pixel ceiling. Text layout
+  caches include the mode so a policy change cannot reuse the other width.
 - Independent virtual-list roots return logical heights. The list's existing
   sum tree and visible-row placement accumulate these heights without rounding.
   Row indices, ordering and logical scroll offsets retain their existing meaning.

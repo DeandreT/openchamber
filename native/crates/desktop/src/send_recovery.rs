@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use gpui_kit::{Context, Task, Window};
 use openchamber_native_core::ids::MessageId;
+use openchamber_native_core::pending_requests::RequestKey;
 use openchamber_native_transport::error::TransportError;
 use openchamber_native_transport::prompt::PromptObservation;
 
@@ -20,10 +21,9 @@ enum CheckState {
     Failed,
 }
 
-#[derive(Clone, Copy)]
 enum CheckAction {
     Observe,
-    RetryIfMissing,
+    RetryIfMissing(Vec<RequestKey>),
 }
 
 struct Check {
@@ -116,6 +116,7 @@ impl Workspace {
                         && !self.persistence_closing()
                         && attempt.admission != Admission::Preparing,
                     can_retry: connected
+                        && self.prompt_allowed(key)
                         && !busy
                         && self.persistence_ready()
                         && attempt.admission == Admission::Uncertain
@@ -172,24 +173,21 @@ impl Workspace {
             return;
         }
         if self.persistence_ready() {
-            self.start_recovery_check(key, CheckAction::RetryIfMissing, window, cx);
+            let requests = self.requests_for_send(key);
+            self.start_recovery_check(key, CheckAction::RetryIfMissing(requests), window, cx);
         }
     }
 
     pub(crate) fn continue_created_recovery(
         &mut self,
         key: &SessionKey,
-        retry: bool,
+        requests: Option<Vec<RequestKey>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         self.start_recovery_check(
             key,
-            if retry {
-                CheckAction::RetryIfMissing
-            } else {
-                CheckAction::Observe
-            },
+            requests.map_or(CheckAction::Observe, CheckAction::RetryIfMissing),
             window,
             cx,
         );
@@ -310,8 +308,10 @@ impl Workspace {
                         since,
                     },
                 );
-                if matches!(action, CheckAction::RetryIfMissing) && key.runtime == self.runtime {
-                    self.retry_persisted_prompt(key, id, window, cx);
+                if let CheckAction::RetryIfMissing(requests) = action
+                    && key.runtime == self.runtime
+                {
+                    self.retry_persisted_prompt(key, id, requests, window, cx);
                 }
             }
             Err(_) => {

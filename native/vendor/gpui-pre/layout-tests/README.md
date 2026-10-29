@@ -5,6 +5,8 @@ This standalone package tests the local `gpui-pre` patch as a dependency with
 The tests use GPUI's test platform, empty views, painted rectangles and its
 deterministic `NoopTextSystem` through `WindowTextSystem::shape_text`. They
 require no display server, font assets, GUI launch or extra test dependencies.
+Intrinsic text measurement checks fractional logical widths against the default
+rounded policy using the test platform's deterministic glyph advances.
 
 Run from `native/`, so Cargo uses its pinned toolchain, after other native builds
 have finished:

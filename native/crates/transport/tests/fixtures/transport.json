@@ -326,6 +326,1571 @@
       "body": null
     }
   ],
+  "blockingRequests": {
+    "requests": [
+      {
+        "name": "location permissions",
+        "method": "GET",
+        "path": "/api/permission/request",
+        "query": [],
+        "directoryHeader": "%2Fhome%2Fsynthetic%2Fmy%20project%2F%C3%BCn%C3%AF",
+        "contentType": null,
+        "body": null
+      },
+      {
+        "name": "location forms",
+        "method": "GET",
+        "path": "/api/form",
+        "query": [],
+        "directoryHeader": "%2Fhome%2Fsynthetic%2Fmy%20project%2F%C3%BCn%C3%AF",
+        "contentType": null,
+        "body": null
+      },
+      {
+        "name": "session permissions",
+        "method": "GET",
+        "path": "/api/session/ses_native_fixture/permission",
+        "query": [],
+        "directoryHeader": null,
+        "contentType": null,
+        "body": null
+      },
+      {
+        "name": "session forms",
+        "method": "GET",
+        "path": "/api/session/ses_native_fixture/form",
+        "query": [],
+        "directoryHeader": null,
+        "contentType": null,
+        "body": null
+      },
+      {
+        "name": "permission get",
+        "method": "GET",
+        "path": "/api/session/ses_native_fixture/permission/per_native_fixture",
+        "query": [],
+        "directoryHeader": null,
+        "contentType": null,
+        "body": null
+      },
+      {
+        "name": "form get",
+        "method": "GET",
+        "path": "/api/session/ses_native_fixture/form/frm_native_fixture",
+        "query": [],
+        "directoryHeader": null,
+        "contentType": null,
+        "body": null
+      },
+      {
+        "name": "global form get",
+        "method": "GET",
+        "path": "/api/session/global/form/frm_native_fixture",
+        "query": [],
+        "directoryHeader": "%2Fhome%2Fsynthetic%2Fmy%20project%2F%C3%BCn%C3%AF",
+        "contentType": null,
+        "body": null
+      },
+      {
+        "name": "permission once",
+        "method": "POST",
+        "path": "/api/session/ses_native_fixture/permission/per_native_fixture/reply",
+        "query": [],
+        "directoryHeader": null,
+        "contentType": "application/json",
+        "body": {
+          "decision": "once"
+        }
+      },
+      {
+        "name": "permission always",
+        "method": "POST",
+        "path": "/api/session/ses_native_fixture/permission/per_native_fixture/reply",
+        "query": [],
+        "directoryHeader": null,
+        "contentType": "application/json",
+        "body": {
+          "decision": "always"
+        }
+      },
+      {
+        "name": "permission reject",
+        "method": "POST",
+        "path": "/api/session/ses_native_fixture/permission/per_native_fixture/reply",
+        "query": [],
+        "directoryHeader": null,
+        "contentType": "application/json",
+        "body": {
+          "decision": "reject"
+        }
+      },
+      {
+        "name": "permission feedback",
+        "method": "POST",
+        "path": "/api/session/ses_native_fixture/permission/per_native_fixture/reply",
+        "query": [],
+        "directoryHeader": null,
+        "contentType": "application/json",
+        "body": {
+          "decision": "reject",
+          "message": "Use another command"
+        }
+      },
+      {
+        "name": "form answer",
+        "method": "POST",
+        "path": "/api/session/ses_native_fixture/form/frm_native_fixture/reply",
+        "query": [],
+        "directoryHeader": null,
+        "contentType": "application/json",
+        "body": {
+          "answer": {
+            "q0": "A (Recommended)",
+            "q1": [
+              "one",
+              "custom"
+            ],
+            "count": 2,
+            "enabled": false,
+            "link": true
+          }
+        }
+      },
+      {
+        "name": "global form answer",
+        "method": "POST",
+        "path": "/api/session/global/form/frm_native_fixture/reply",
+        "query": [],
+        "directoryHeader": "%2Fhome%2Fsynthetic%2Fmy%20project%2F%C3%BCn%C3%AF",
+        "contentType": "application/json",
+        "body": {
+          "answer": {
+            "q0": "A (Recommended)",
+            "q1": [
+              "one",
+              "custom"
+            ],
+            "count": 2,
+            "enabled": false,
+            "link": true
+          }
+        }
+      },
+      {
+        "name": "form cancel",
+        "method": "DELETE",
+        "path": "/api/session/ses_native_fixture/form/frm_native_fixture",
+        "query": [],
+        "directoryHeader": null,
+        "contentType": null,
+        "body": null
+      },
+      {
+        "name": "global form cancel",
+        "method": "DELETE",
+        "path": "/api/session/global/form/frm_native_fixture",
+        "query": [],
+        "directoryHeader": "%2Fhome%2Fsynthetic%2Fmy%20project%2F%C3%BCn%C3%AF",
+        "contentType": null,
+        "body": null
+      },
+      {
+        "name": "form cancel feedback",
+        "method": "DELETE",
+        "path": "/api/session/ses_native_fixture/form/frm_native_fixture",
+        "query": [
+          [
+            "message",
+            "No answer available"
+          ]
+        ],
+        "directoryHeader": null,
+        "contentType": null,
+        "body": null
+      }
+    ],
+    "permissions": {
+      "location": {
+        "directory": "/home/synthetic/my project/ünï"
+      },
+      "data": [
+        {
+          "id": "per_native_fixture",
+          "sessionID": "ses_native_fixture",
+          "action": "shell",
+          "resources": [
+            "echo synthetic"
+          ],
+          "save": [
+            "echo *"
+          ],
+          "source": {
+            "type": "tool",
+            "messageID": "msg_native_fixture",
+            "id": "call_fixture"
+          },
+          "metadata": {
+            "command": "echo synthetic"
+          },
+          "message": "Run this command?"
+        }
+      ]
+    },
+    "forms": {
+      "location": {
+        "directory": "/home/synthetic/my project/ünï"
+      },
+      "data": [
+        {
+          "id": "frm_native_fixture",
+          "sessionID": "ses_native_fixture",
+          "title": "Questions",
+          "metadata": {
+            "kind": "question",
+            "tool": {
+              "messageID": "msg_native_fixture",
+              "id": "call_question"
+            }
+          },
+          "fields": [
+            {
+              "key": "q0",
+              "type": "string",
+              "title": "Choice",
+              "description": "Choose an option",
+              "options": [
+                {
+                  "value": "A (Recommended)",
+                  "label": "A (Recommended)",
+                  "description": "First option"
+                },
+                {
+                  "value": "B",
+                  "label": "B"
+                }
+              ],
+              "custom": true,
+              "default": "B",
+              "required": true
+            },
+            {
+              "key": "q1",
+              "type": "multiselect",
+              "options": [
+                {
+                  "value": "one",
+                  "label": "One"
+                }
+              ],
+              "custom": true,
+              "minItems": 1,
+              "maxItems": 3,
+              "default": [
+                "one"
+              ]
+            },
+            {
+              "key": "count",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10,
+              "default": 2
+            },
+            {
+              "key": "ratio",
+              "type": "number",
+              "minimum": "-Infinity",
+              "maximum": "Infinity",
+              "default": "NaN"
+            },
+            {
+              "key": "enabled",
+              "type": "boolean",
+              "default": false
+            },
+            {
+              "key": "details",
+              "type": "string",
+              "when": [
+                {
+                  "key": "enabled",
+                  "op": "eq",
+                  "value": true
+                }
+              ],
+              "minLength": 1,
+              "maxLength": 100,
+              "pattern": "^[a-z]+$",
+              "placeholder": "Details",
+              "hidden": false
+            },
+            {
+              "key": "email",
+              "type": "string",
+              "format": "email"
+            },
+            {
+              "key": "link",
+              "type": "external",
+              "url": "https://example.com/synthetic-step",
+              "title": "Review step"
+            }
+          ]
+        },
+        {
+          "id": "frm_global_fixture",
+          "sessionID": "global",
+          "title": "Questions",
+          "metadata": {
+            "kind": "question",
+            "tool": {
+              "messageID": "msg_native_fixture",
+              "id": "call_question"
+            }
+          },
+          "fields": [
+            {
+              "key": "q0",
+              "type": "string",
+              "title": "Choice",
+              "description": "Choose an option",
+              "options": [
+                {
+                  "value": "A (Recommended)",
+                  "label": "A (Recommended)",
+                  "description": "First option"
+                },
+                {
+                  "value": "B",
+                  "label": "B"
+                }
+              ],
+              "custom": true,
+              "default": "B",
+              "required": true
+            },
+            {
+              "key": "q1",
+              "type": "multiselect",
+              "options": [
+                {
+                  "value": "one",
+                  "label": "One"
+                }
+              ],
+              "custom": true,
+              "minItems": 1,
+              "maxItems": 3,
+              "default": [
+                "one"
+              ]
+            },
+            {
+              "key": "count",
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 10,
+              "default": 2
+            },
+            {
+              "key": "ratio",
+              "type": "number",
+              "minimum": "-Infinity",
+              "maximum": "Infinity",
+              "default": "NaN"
+            },
+            {
+              "key": "enabled",
+              "type": "boolean",
+              "default": false
+            },
+            {
+              "key": "details",
+              "type": "string",
+              "when": [
+                {
+                  "key": "enabled",
+                  "op": "eq",
+                  "value": true
+                }
+              ],
+              "minLength": 1,
+              "maxLength": 100,
+              "pattern": "^[a-z]+$",
+              "placeholder": "Details",
+              "hidden": false
+            },
+            {
+              "key": "email",
+              "type": "string",
+              "format": "email"
+            },
+            {
+              "key": "link",
+              "type": "external",
+              "url": "https://example.com/synthetic-step",
+              "title": "Review step"
+            }
+          ]
+        }
+      ]
+    },
+    "permission": {
+      "id": "per_native_fixture",
+      "sessionID": "ses_native_fixture",
+      "action": "shell",
+      "resources": [
+        "echo synthetic"
+      ],
+      "save": [
+        "echo *"
+      ],
+      "source": {
+        "type": "tool",
+        "messageID": "msg_native_fixture",
+        "id": "call_fixture"
+      },
+      "metadata": {
+        "command": "echo synthetic"
+      },
+      "message": "Run this command?"
+    },
+    "form": {
+      "id": "frm_native_fixture",
+      "sessionID": "ses_native_fixture",
+      "title": "Questions",
+      "metadata": {
+        "kind": "question",
+        "tool": {
+          "messageID": "msg_native_fixture",
+          "id": "call_question"
+        }
+      },
+      "fields": [
+        {
+          "key": "q0",
+          "type": "string",
+          "title": "Choice",
+          "description": "Choose an option",
+          "options": [
+            {
+              "value": "A (Recommended)",
+              "label": "A (Recommended)",
+              "description": "First option"
+            },
+            {
+              "value": "B",
+              "label": "B"
+            }
+          ],
+          "custom": true,
+          "default": "B",
+          "required": true
+        },
+        {
+          "key": "q1",
+          "type": "multiselect",
+          "options": [
+            {
+              "value": "one",
+              "label": "One"
+            }
+          ],
+          "custom": true,
+          "minItems": 1,
+          "maxItems": 3,
+          "default": [
+            "one"
+          ]
+        },
+        {
+          "key": "count",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 10,
+          "default": 2
+        },
+        {
+          "key": "ratio",
+          "type": "number",
+          "minimum": "-Infinity",
+          "maximum": "Infinity",
+          "default": "NaN"
+        },
+        {
+          "key": "enabled",
+          "type": "boolean",
+          "default": false
+        },
+        {
+          "key": "details",
+          "type": "string",
+          "when": [
+            {
+              "key": "enabled",
+              "op": "eq",
+              "value": true
+            }
+          ],
+          "minLength": 1,
+          "maxLength": 100,
+          "pattern": "^[a-z]+$",
+          "placeholder": "Details",
+          "hidden": false
+        },
+        {
+          "key": "email",
+          "type": "string",
+          "format": "email"
+        },
+        {
+          "key": "link",
+          "type": "external",
+          "url": "https://example.com/synthetic-step",
+          "title": "Review step"
+        }
+      ],
+      "state": {
+        "status": "pending"
+      }
+    },
+    "formDefaults": {
+      "answer": {
+        "q0": "B",
+        "q1": [
+          "one"
+        ],
+        "count": 2,
+        "enabled": false
+      },
+      "visible": [
+        "q0",
+        "q1",
+        "count",
+        "ratio",
+        "enabled",
+        "email",
+        "link"
+      ],
+      "missing": [
+        "link"
+      ]
+    },
+    "defaultParity": [
+      {
+        "name": "empty",
+        "form": {
+          "id": "frm_defaults_0",
+          "sessionID": "ses_native_fixture",
+          "title": "Default parity",
+          "fields": [
+            {
+              "key": "first",
+              "type": "string",
+              "default": "",
+              "custom": true
+            },
+            {
+              "key": "dependent",
+              "type": "string",
+              "default": "shown",
+              "when": [
+                {
+                  "key": "first",
+                  "op": "neq",
+                  "value": "never"
+                }
+              ]
+            }
+          ]
+        },
+        "answer": {},
+        "visible": [
+          "first"
+        ]
+      },
+      {
+        "name": "ascii whitespace",
+        "form": {
+          "id": "frm_defaults_1",
+          "sessionID": "ses_native_fixture",
+          "title": "Default parity",
+          "fields": [
+            {
+              "key": "first",
+              "type": "string",
+              "default": " \t\r\n",
+              "custom": true
+            },
+            {
+              "key": "dependent",
+              "type": "string",
+              "default": "shown",
+              "when": [
+                {
+                  "key": "first",
+                  "op": "neq",
+                  "value": "never"
+                }
+              ]
+            }
+          ]
+        },
+        "answer": {},
+        "visible": [
+          "first"
+        ]
+      },
+      {
+        "name": "BOM and NBSP",
+        "form": {
+          "id": "frm_defaults_2",
+          "sessionID": "ses_native_fixture",
+          "title": "Default parity",
+          "fields": [
+            {
+              "key": "first",
+              "type": "string",
+              "default": "﻿ ",
+              "custom": true
+            },
+            {
+              "key": "dependent",
+              "type": "string",
+              "default": "shown",
+              "when": [
+                {
+                  "key": "first",
+                  "op": "neq",
+                  "value": "never"
+                }
+              ]
+            }
+          ]
+        },
+        "answer": {},
+        "visible": [
+          "first"
+        ]
+      },
+      {
+        "name": "Unicode trimmed",
+        "form": {
+          "id": "frm_defaults_3",
+          "sessionID": "ses_native_fixture",
+          "title": "Default parity",
+          "fields": [
+            {
+              "key": "first",
+              "type": "string",
+              "default": "　value ",
+              "custom": true
+            },
+            {
+              "key": "dependent",
+              "type": "string",
+              "default": "shown",
+              "when": [
+                {
+                  "key": "first",
+                  "op": "neq",
+                  "value": "never"
+                }
+              ]
+            }
+          ]
+        },
+        "answer": {
+          "first": "value",
+          "dependent": "shown"
+        },
+        "visible": [
+          "first",
+          "dependent"
+        ]
+      },
+      {
+        "name": "BOM trimmed",
+        "form": {
+          "id": "frm_defaults_4",
+          "sessionID": "ses_native_fixture",
+          "title": "Default parity",
+          "fields": [
+            {
+              "key": "first",
+              "type": "string",
+              "default": "﻿value﻿",
+              "custom": true
+            },
+            {
+              "key": "dependent",
+              "type": "string",
+              "default": "shown",
+              "when": [
+                {
+                  "key": "first",
+                  "op": "neq",
+                  "value": "never"
+                }
+              ]
+            }
+          ]
+        },
+        "answer": {
+          "first": "value",
+          "dependent": "shown"
+        },
+        "visible": [
+          "first",
+          "dependent"
+        ]
+      },
+      {
+        "name": "NEL retained",
+        "form": {
+          "id": "frm_defaults_5",
+          "sessionID": "ses_native_fixture",
+          "title": "Default parity",
+          "fields": [
+            {
+              "key": "first",
+              "type": "string",
+              "default": "",
+              "custom": true
+            },
+            {
+              "key": "dependent",
+              "type": "string",
+              "default": "shown",
+              "when": [
+                {
+                  "key": "first",
+                  "op": "neq",
+                  "value": "never"
+                }
+              ]
+            }
+          ]
+        },
+        "answer": {
+          "first": "",
+          "dependent": "shown"
+        },
+        "visible": [
+          "first",
+          "dependent"
+        ]
+      },
+      {
+        "name": "Mongolian separator retained",
+        "form": {
+          "id": "frm_defaults_6",
+          "sessionID": "ses_native_fixture",
+          "title": "Default parity",
+          "fields": [
+            {
+              "key": "first",
+              "type": "string",
+              "default": "᠎",
+              "custom": true
+            },
+            {
+              "key": "dependent",
+              "type": "string",
+              "default": "shown",
+              "when": [
+                {
+                  "key": "first",
+                  "op": "neq",
+                  "value": "never"
+                }
+              ]
+            }
+          ]
+        },
+        "answer": {
+          "first": "᠎",
+          "dependent": "shown"
+        },
+        "visible": [
+          "first",
+          "dependent"
+        ]
+      },
+      {
+        "name": "zero-width space retained",
+        "form": {
+          "id": "frm_defaults_7",
+          "sessionID": "ses_native_fixture",
+          "title": "Default parity",
+          "fields": [
+            {
+              "key": "first",
+              "type": "string",
+              "default": "​",
+              "custom": true
+            },
+            {
+              "key": "dependent",
+              "type": "string",
+              "default": "shown",
+              "when": [
+                {
+                  "key": "first",
+                  "op": "neq",
+                  "value": "never"
+                }
+              ]
+            }
+          ]
+        },
+        "answer": {
+          "first": "​",
+          "dependent": "shown"
+        },
+        "visible": [
+          "first",
+          "dependent"
+        ]
+      },
+      {
+        "name": "exact whitespace option retained",
+        "form": {
+          "id": "frm_defaults_8",
+          "sessionID": "ses_native_fixture",
+          "title": "Default parity",
+          "fields": [
+            {
+              "key": "first",
+              "type": "string",
+              "default": " ﻿",
+              "options": [
+                {
+                  "value": " ﻿",
+                  "label": "Exact option"
+                }
+              ],
+              "custom": true
+            },
+            {
+              "key": "dependent",
+              "type": "string",
+              "default": "shown",
+              "when": [
+                {
+                  "key": "first",
+                  "op": "neq",
+                  "value": "never"
+                }
+              ]
+            }
+          ]
+        },
+        "answer": {
+          "first": " ﻿",
+          "dependent": "shown"
+        },
+        "visible": [
+          "first",
+          "dependent"
+        ]
+      },
+      {
+        "name": "exact empty option retained",
+        "form": {
+          "id": "frm_defaults_9",
+          "sessionID": "ses_native_fixture",
+          "title": "Default parity",
+          "fields": [
+            {
+              "key": "first",
+              "type": "string",
+              "default": "",
+              "options": [
+                {
+                  "value": "",
+                  "label": "Empty option"
+                }
+              ],
+              "custom": true
+            },
+            {
+              "key": "dependent",
+              "type": "string",
+              "default": "shown",
+              "when": [
+                {
+                  "key": "first",
+                  "op": "neq",
+                  "value": "never"
+                }
+              ]
+            }
+          ]
+        },
+        "answer": {
+          "first": "",
+          "dependent": "shown"
+        },
+        "visible": [
+          "first",
+          "dependent"
+        ]
+      },
+      {
+        "name": "empty multiselect omitted",
+        "form": {
+          "id": "frm_defaults_10",
+          "sessionID": "ses_native_fixture",
+          "title": "Default parity",
+          "fields": [
+            {
+              "key": "first",
+              "type": "multiselect",
+              "default": [],
+              "options": [],
+              "custom": true
+            },
+            {
+              "key": "dependent",
+              "type": "string",
+              "default": "shown",
+              "when": [
+                {
+                  "key": "first",
+                  "op": "neq",
+                  "value": "never"
+                }
+              ]
+            }
+          ]
+        },
+        "answer": {},
+        "visible": [
+          "first"
+        ]
+      },
+      {
+        "name": "multiselect values retained",
+        "form": {
+          "id": "frm_defaults_11",
+          "sessionID": "ses_native_fixture",
+          "title": "Default parity",
+          "fields": [
+            {
+              "key": "first",
+              "type": "multiselect",
+              "default": [
+                "",
+                " ﻿"
+              ],
+              "options": [],
+              "custom": true
+            },
+            {
+              "key": "dependent",
+              "type": "string",
+              "default": "shown",
+              "when": [
+                {
+                  "key": "first",
+                  "op": "neq",
+                  "value": "never"
+                }
+              ]
+            }
+          ]
+        },
+        "answer": {
+          "first": [
+            "",
+            " ﻿"
+          ],
+          "dependent": "shown"
+        },
+        "visible": [
+          "first",
+          "dependent"
+        ]
+      }
+    ],
+    "events": [
+      {
+        "payload": {
+          "id": "evt_fixture_0",
+          "created": 1,
+          "location": {
+            "directory": "/home/synthetic/my project/ünï"
+          },
+          "type": "permission.asked",
+          "data": {
+            "id": "per_native_fixture",
+            "sessionID": "ses_native_fixture",
+            "action": "shell",
+            "resources": [
+              "echo synthetic"
+            ],
+            "save": [
+              "echo *"
+            ],
+            "source": {
+              "type": "tool",
+              "messageID": "msg_native_fixture",
+              "id": "call_fixture"
+            },
+            "metadata": {
+              "command": "echo synthetic"
+            },
+            "message": "Run this command?"
+          }
+        },
+        "projected": [
+          {
+            "type": "permission.asked",
+            "properties": {
+              "id": "per_native_fixture",
+              "sessionID": "ses_native_fixture",
+              "action": "shell",
+              "resources": [
+                "echo synthetic"
+              ],
+              "save": [
+                "echo *"
+              ],
+              "source": {
+                "type": "tool",
+                "messageID": "msg_native_fixture",
+                "id": "call_fixture"
+              },
+              "metadata": {
+                "command": "echo synthetic"
+              },
+              "message": "Run this command?"
+            }
+          }
+        ]
+      },
+      {
+        "payload": {
+          "id": "evt_fixture_1",
+          "created": 1,
+          "location": {
+            "directory": "/home/synthetic/my project/ünï"
+          },
+          "type": "permission.replied",
+          "data": {
+            "sessionID": "ses_native_fixture",
+            "requestID": "per_native_fixture",
+            "reply": "once"
+          }
+        },
+        "projected": [
+          {
+            "type": "permission.replied",
+            "properties": {
+              "sessionID": "ses_native_fixture",
+              "requestID": "per_native_fixture"
+            }
+          }
+        ]
+      },
+      {
+        "payload": {
+          "id": "evt_fixture_2",
+          "created": 1,
+          "location": {
+            "directory": "/home/synthetic/my project/ünï"
+          },
+          "type": "form.created",
+          "data": {
+            "form": {
+              "id": "frm_native_fixture",
+              "sessionID": "ses_native_fixture",
+              "title": "Questions",
+              "metadata": {
+                "kind": "question",
+                "tool": {
+                  "messageID": "msg_native_fixture",
+                  "id": "call_question"
+                }
+              },
+              "fields": [
+                {
+                  "key": "q0",
+                  "type": "string",
+                  "title": "Choice",
+                  "description": "Choose an option",
+                  "options": [
+                    {
+                      "value": "A (Recommended)",
+                      "label": "A (Recommended)",
+                      "description": "First option"
+                    },
+                    {
+                      "value": "B",
+                      "label": "B"
+                    }
+                  ],
+                  "custom": true,
+                  "default": "B",
+                  "required": true
+                },
+                {
+                  "key": "q1",
+                  "type": "multiselect",
+                  "options": [
+                    {
+                      "value": "one",
+                      "label": "One"
+                    }
+                  ],
+                  "custom": true,
+                  "minItems": 1,
+                  "maxItems": 3,
+                  "default": [
+                    "one"
+                  ]
+                },
+                {
+                  "key": "count",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "default": 2
+                },
+                {
+                  "key": "ratio",
+                  "type": "number",
+                  "minimum": "-Infinity",
+                  "maximum": "Infinity",
+                  "default": "NaN"
+                },
+                {
+                  "key": "enabled",
+                  "type": "boolean",
+                  "default": false
+                },
+                {
+                  "key": "details",
+                  "type": "string",
+                  "when": [
+                    {
+                      "key": "enabled",
+                      "op": "eq",
+                      "value": true
+                    }
+                  ],
+                  "minLength": 1,
+                  "maxLength": 100,
+                  "pattern": "^[a-z]+$",
+                  "placeholder": "Details",
+                  "hidden": false
+                },
+                {
+                  "key": "email",
+                  "type": "string",
+                  "format": "email"
+                },
+                {
+                  "key": "link",
+                  "type": "external",
+                  "url": "https://example.com/synthetic-step",
+                  "title": "Review step"
+                }
+              ]
+            }
+          }
+        },
+        "projected": [
+          {
+            "type": "form.created",
+            "properties": {
+              "form": {
+                "id": "frm_native_fixture",
+                "sessionID": "ses_native_fixture",
+                "title": "Questions",
+                "metadata": {
+                  "kind": "question",
+                  "tool": {
+                    "messageID": "msg_native_fixture",
+                    "id": "call_question"
+                  }
+                },
+                "fields": [
+                  {
+                    "key": "q0",
+                    "type": "string",
+                    "title": "Choice",
+                    "description": "Choose an option",
+                    "options": [
+                      {
+                        "value": "A (Recommended)",
+                        "label": "A (Recommended)",
+                        "description": "First option"
+                      },
+                      {
+                        "value": "B",
+                        "label": "B"
+                      }
+                    ],
+                    "custom": true,
+                    "default": "B",
+                    "required": true
+                  },
+                  {
+                    "key": "q1",
+                    "type": "multiselect",
+                    "options": [
+                      {
+                        "value": "one",
+                        "label": "One"
+                      }
+                    ],
+                    "custom": true,
+                    "minItems": 1,
+                    "maxItems": 3,
+                    "default": [
+                      "one"
+                    ]
+                  },
+                  {
+                    "key": "count",
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10,
+                    "default": 2
+                  },
+                  {
+                    "key": "ratio",
+                    "type": "number",
+                    "minimum": "-Infinity",
+                    "maximum": "Infinity",
+                    "default": "NaN"
+                  },
+                  {
+                    "key": "enabled",
+                    "type": "boolean",
+                    "default": false
+                  },
+                  {
+                    "key": "details",
+                    "type": "string",
+                    "when": [
+                      {
+                        "key": "enabled",
+                        "op": "eq",
+                        "value": true
+                      }
+                    ],
+                    "minLength": 1,
+                    "maxLength": 100,
+                    "pattern": "^[a-z]+$",
+                    "placeholder": "Details",
+                    "hidden": false
+                  },
+                  {
+                    "key": "email",
+                    "type": "string",
+                    "format": "email"
+                  },
+                  {
+                    "key": "link",
+                    "type": "external",
+                    "url": "https://example.com/synthetic-step",
+                    "title": "Review step"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      {
+        "payload": {
+          "id": "evt_fixture_3",
+          "created": 1,
+          "location": {
+            "directory": "/home/synthetic/my project/ünï"
+          },
+          "type": "form.created",
+          "data": {
+            "form": {
+              "id": "frm_native_fixture",
+              "sessionID": "global",
+              "title": "Questions",
+              "metadata": {
+                "kind": "question",
+                "tool": {
+                  "messageID": "msg_native_fixture",
+                  "id": "call_question"
+                }
+              },
+              "fields": [
+                {
+                  "key": "q0",
+                  "type": "string",
+                  "title": "Choice",
+                  "description": "Choose an option",
+                  "options": [
+                    {
+                      "value": "A (Recommended)",
+                      "label": "A (Recommended)",
+                      "description": "First option"
+                    },
+                    {
+                      "value": "B",
+                      "label": "B"
+                    }
+                  ],
+                  "custom": true,
+                  "default": "B",
+                  "required": true
+                },
+                {
+                  "key": "q1",
+                  "type": "multiselect",
+                  "options": [
+                    {
+                      "value": "one",
+                      "label": "One"
+                    }
+                  ],
+                  "custom": true,
+                  "minItems": 1,
+                  "maxItems": 3,
+                  "default": [
+                    "one"
+                  ]
+                },
+                {
+                  "key": "count",
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 10,
+                  "default": 2
+                },
+                {
+                  "key": "ratio",
+                  "type": "number",
+                  "minimum": "-Infinity",
+                  "maximum": "Infinity",
+                  "default": "NaN"
+                },
+                {
+                  "key": "enabled",
+                  "type": "boolean",
+                  "default": false
+                },
+                {
+                  "key": "details",
+                  "type": "string",
+                  "when": [
+                    {
+                      "key": "enabled",
+                      "op": "eq",
+                      "value": true
+                    }
+                  ],
+                  "minLength": 1,
+                  "maxLength": 100,
+                  "pattern": "^[a-z]+$",
+                  "placeholder": "Details",
+                  "hidden": false
+                },
+                {
+                  "key": "email",
+                  "type": "string",
+                  "format": "email"
+                },
+                {
+                  "key": "link",
+                  "type": "external",
+                  "url": "https://example.com/synthetic-step",
+                  "title": "Review step"
+                }
+              ]
+            }
+          }
+        },
+        "projected": [
+          {
+            "type": "form.created",
+            "properties": {
+              "form": {
+                "id": "frm_native_fixture",
+                "sessionID": "global",
+                "title": "Questions",
+                "metadata": {
+                  "kind": "question",
+                  "tool": {
+                    "messageID": "msg_native_fixture",
+                    "id": "call_question"
+                  }
+                },
+                "fields": [
+                  {
+                    "key": "q0",
+                    "type": "string",
+                    "title": "Choice",
+                    "description": "Choose an option",
+                    "options": [
+                      {
+                        "value": "A (Recommended)",
+                        "label": "A (Recommended)",
+                        "description": "First option"
+                      },
+                      {
+                        "value": "B",
+                        "label": "B"
+                      }
+                    ],
+                    "custom": true,
+                    "default": "B",
+                    "required": true
+                  },
+                  {
+                    "key": "q1",
+                    "type": "multiselect",
+                    "options": [
+                      {
+                        "value": "one",
+                        "label": "One"
+                      }
+                    ],
+                    "custom": true,
+                    "minItems": 1,
+                    "maxItems": 3,
+                    "default": [
+                      "one"
+                    ]
+                  },
+                  {
+                    "key": "count",
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 10,
+                    "default": 2
+                  },
+                  {
+                    "key": "ratio",
+                    "type": "number",
+                    "minimum": "-Infinity",
+                    "maximum": "Infinity",
+                    "default": "NaN"
+                  },
+                  {
+                    "key": "enabled",
+                    "type": "boolean",
+                    "default": false
+                  },
+                  {
+                    "key": "details",
+                    "type": "string",
+                    "when": [
+                      {
+                        "key": "enabled",
+                        "op": "eq",
+                        "value": true
+                      }
+                    ],
+                    "minLength": 1,
+                    "maxLength": 100,
+                    "pattern": "^[a-z]+$",
+                    "placeholder": "Details",
+                    "hidden": false
+                  },
+                  {
+                    "key": "email",
+                    "type": "string",
+                    "format": "email"
+                  },
+                  {
+                    "key": "link",
+                    "type": "external",
+                    "url": "https://example.com/synthetic-step",
+                    "title": "Review step"
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      },
+      {
+        "payload": {
+          "id": "evt_fixture_4",
+          "created": 1,
+          "location": {
+            "directory": "/home/synthetic/my project/ünï"
+          },
+          "type": "form.replied",
+          "data": {
+            "sessionID": "ses_native_fixture",
+            "id": "frm_native_fixture",
+            "answer": {
+              "q0": "A (Recommended)",
+              "q1": [
+                "one",
+                "custom"
+              ],
+              "count": 2,
+              "enabled": false,
+              "link": true
+            }
+          }
+        },
+        "projected": [
+          {
+            "type": "form.settled",
+            "properties": {
+              "sessionID": "ses_native_fixture",
+              "formID": "frm_native_fixture"
+            }
+          }
+        ]
+      },
+      {
+        "payload": {
+          "id": "evt_fixture_5",
+          "created": 1,
+          "location": {
+            "directory": "/home/synthetic/my project/ünï"
+          },
+          "type": "form.cancelled",
+          "data": {
+            "sessionID": "global",
+            "id": "frm_native_fixture"
+          }
+        },
+        "projected": [
+          {
+            "type": "form.settled",
+            "properties": {
+              "sessionID": "global",
+              "formID": "frm_native_fixture"
+            }
+          }
+        ]
+      },
+      {
+        "payload": {
+          "id": "evt_fixture_6",
+          "created": 1,
+          "location": {
+            "directory": "/home/synthetic/my project/ünï"
+          },
+          "type": "location.shutdown",
+          "data": {}
+        },
+        "projected": [
+          {
+            "type": "location.shutdown",
+            "properties": {}
+          }
+        ]
+      }
+    ]
+  },
   "mutations": {
     "admitted": {
       "id": "msg_native_fixture_exact",

@@ -8,6 +8,7 @@ use gpui_kit::component::notification::Notification;
 use gpui_kit::{Context, Window};
 use openchamber_native_core::draft::{Draft, DraftTarget};
 use openchamber_native_core::ids::{PartId, SessionId};
+use openchamber_native_core::pending_requests::RequestKey;
 use openchamber_native_core::transcript::{Message, MessageInfo, Part, Role, TranscriptEvent};
 use openchamber_native_transport::prompt::{
     AbortError, PromptAdmission, PromptReceipt, SendError, TextPrompt,
@@ -28,12 +29,29 @@ enum DispatchKind {
 }
 
 struct SendDispatch {
+    prompt_allowed: bool,
     client: openchamber_native_transport::client::ServerClient,
     executor: tokio::runtime::Handle,
     kind: DispatchKind,
 }
 
+/// One explicit activation's prompt and cancellation scope. Never journaled.
+pub(crate) struct CapturedPrompt {
+    pub prompt: TextPrompt,
+    pub requests: Vec<RequestKey>,
+}
+
 impl Workspace {
+    /// Native has no browser-local allowPromptingSubagentSessions preference.
+    /// Unknown records cannot authorize a dispatch to an existing session.
+    pub(crate) fn prompt_allowed(&self, key: &SessionKey) -> bool {
+        key.runtime == self.runtime
+            && self
+                .sessions
+                .get(&key.session)
+                .is_some_and(|session| !session.prompt_read_only(false, false))
+    }
+
     pub(crate) fn mutation_key(&self, session: &SessionId) -> SessionKey {
         SessionKey {
             runtime: self.runtime.clone(),
@@ -47,7 +65,8 @@ impl Workspace {
                 .send_selection()
                 .is_some_and(|(_, selection)| selection.model.is_some())
             && self.selected.as_ref().is_some_and(|session| {
-                self.send_attempts.can_send(&self.mutation_key(session))
+                self.prompt_allowed(&self.mutation_key(session))
+                    && self.send_attempts.can_send(&self.mutation_key(session))
                     && self.creations.get(&self.mutation_key(session)).is_none()
             })
             && self.connection.as_ref().is_some_and(|connection| {
@@ -64,9 +83,10 @@ impl Workspace {
             return;
         };
         let key = self.mutation_key(&session);
-        if !self.send_attempts.can_send(&key)
+        if !self.prompt_allowed(&key)
+            || !self.send_attempts.can_send(&key)
             || self.creations.get(&key).is_some()
-            || self.is_streaming(&session)
+            || (self.is_streaming(&session) && self.requests_for_send(&key).is_empty())
         {
             return;
         }
@@ -138,10 +158,16 @@ impl Workspace {
         if !self.send_attempts.begin(key.clone(), attempt) {
             return;
         }
+        let prompt_allowed = self.prompt_allowed(&key);
+        let captured = CapturedPrompt {
+            prompt,
+            requests: self.requests_for_send(&key),
+        };
         self.start_durable_send(
             key,
-            prompt,
+            captured,
             SendDispatch {
+                prompt_allowed,
                 client,
                 executor,
                 kind: DispatchKind::New,
@@ -155,10 +181,11 @@ impl Workspace {
         &mut self,
         key: &SessionKey,
         id: &openchamber_native_core::ids::MessageId,
+        requests: Vec<RequestKey>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.persistence_ready() || key.runtime != self.runtime {
+        if !self.persistence_ready() || !self.prompt_allowed(key) {
             return;
         }
         let Some(attempt) = self
@@ -170,7 +197,7 @@ impl Workspace {
         };
         let prompt = attempt.prompt.clone();
         if attempt.origin == SendOrigin::Created {
-            self.retry_created_prompt(key, window, cx);
+            self.retry_created_prompt(key, requests, window, cx);
             return;
         }
         let Some(connection) = self
@@ -189,8 +216,9 @@ impl Workspace {
         }
         self.start_durable_send(
             key.clone(),
-            prompt,
+            CapturedPrompt { prompt, requests },
             SendDispatch {
+                prompt_allowed: self.prompt_allowed(key),
                 client,
                 executor,
                 kind: DispatchKind::Retry,
@@ -203,16 +231,18 @@ impl Workspace {
     pub(crate) fn start_created_send(
         &mut self,
         key: SessionKey,
-        prompt: TextPrompt,
+        prompt: CapturedPrompt,
+        session: &openchamber_native_core::session::SessionRecord,
         client: openchamber_native_transport::client::ServerClient,
         executor: tokio::runtime::Handle,
-        window: &mut Window,
-        cx: &mut Context<Self>,
+        context: (&mut Window, &mut Context<Self>),
     ) {
+        let (window, cx) = context;
         self.start_durable_send(
             key,
             prompt,
             SendDispatch {
+                prompt_allowed: !session.prompt_read_only(false, false),
                 client,
                 executor,
                 kind: DispatchKind::Created,
@@ -225,17 +255,19 @@ impl Workspace {
     pub(crate) fn dispatch_created_retry(
         &mut self,
         key: SessionKey,
-        prompt: TextPrompt,
+        prompt: CapturedPrompt,
+        session: &openchamber_native_core::session::SessionRecord,
         client: openchamber_native_transport::client::ServerClient,
         executor: tokio::runtime::Handle,
-        window: &mut Window,
-        cx: &mut Context<Self>,
+        context: (&mut Window, &mut Context<Self>),
     ) {
+        let (window, cx) = context;
         if self.persistence_ready() && self.send_attempts.begin_retry(&key) {
             self.start_durable_send(
                 key,
                 prompt,
                 SendDispatch {
+                    prompt_allowed: !session.prompt_read_only(false, false),
                     client,
                     executor,
                     kind: DispatchKind::Retry,
@@ -249,16 +281,21 @@ impl Workspace {
     fn start_durable_send(
         &mut self,
         key: SessionKey,
-        prompt: TextPrompt,
+        captured: CapturedPrompt,
         dispatch: SendDispatch,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let SendDispatch {
+            prompt_allowed: allowed,
             client,
             executor,
             kind,
         } = dispatch;
+        let CapturedPrompt {
+            prompt,
+            requests: superseded,
+        } = captured;
         let Some((revision, saved)) = self.persistence_barrier(cx) else {
             self.send_attempts.finish(
                 &key,
@@ -276,6 +313,39 @@ impl Workspace {
             let saved = saved
                 .await
                 .unwrap_or(Err(crate::journal_worker::JournalFailure::WorkerStopped));
+            let preparation = this.update_in(cx, |this, _, cx| {
+                if !this.record_persistence(revision, &saved, cx) || !this.persistence_ready()
+                    || !allowed || (key.runtime == this.runtime && !this.prompt_allowed(&key))
+                    || !this.send_attempts.attempt(&key).is_some_and(|attempt| attempt.prompt.message_id == id && attempt.origin != SendOrigin::Deleted) {
+                    return Err(());
+                }
+                this.prepare_supersession(&superseded)
+            });
+            let mut cancelled = true;
+            if let Ok(Ok(attempts)) = preparation {
+                for attempt in attempts {
+                    let request_key = attempt.key().clone();
+                    let captured = request_key.clone();
+                    let client = client.clone();
+                    let request = NetworkTask::spawn_on(&executor, async move {
+                        let reply = match captured.id {
+                            openchamber_native_core::pending_requests::RequestId::Permission(_) => crate::blocking_requests::RequestReply::Permission(openchamber_native_core::permission::PermissionReply::Reject),
+                            openchamber_native_core::pending_requests::RequestId::Form(_) => crate::blocking_requests::RequestReply::Dismiss,
+                        };
+                        crate::blocking_requests::respond(&client, &captured, &reply).await
+                    });
+                    let result = request.await;
+                    let success = matches!(result, Some(Ok(())) | Some(Err(openchamber_native_transport::requests::RequestError::PermissionNotFound | openchamber_native_transport::requests::RequestError::FormNotFound | openchamber_native_transport::requests::RequestError::FormAlreadySettled)));
+                    cancelled &= success;
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        if let Some(store) = this.blocking.stores.get_mut(&request_key.scope) {
+                            if success { let _ = store.settle(&request_key); }
+                            else { let _ = store.reply_failed(attempt, openchamber_native_core::pending_requests::ReplyFailure::Unknown); this.blocking.errors.insert(request_key); }
+                        }
+                        this.sync_request_drafts(window, cx); cx.notify();
+                    });
+                }
+            } else { cancelled = false; }
             let dispatch = this.update_in(cx, |this, window, cx| {
                 let durable =
                     this.record_persistence(revision, &saved, cx) && this.persistence_ready();
@@ -287,9 +357,15 @@ impl Workspace {
                     .send_attempts
                     .attempt(&key)
                     .is_some_and(|attempt| attempt.origin == SendOrigin::Deleted);
-                if !durable || !current || deleted {
+                // Retain the captured runtime's policy across a switch. While it is
+                // still current, metadata updates can revoke permission during the save.
+                let allowed = allowed && (key.runtime != this.runtime || this.prompt_allowed(&key));
+                // Switching runtimes invalidates the live authority needed to
+                // finish a supersession chain, even if its captured cards settled.
+                let supersession_current = superseded.is_empty() || key.runtime == this.runtime;
+                if !durable || !current || deleted || !allowed || !cancelled || !supersession_current || !this.requests_for_send(&key).is_empty() {
                     if current {
-                        this.send_attempts.finish(
+                        let rejected = this.send_attempts.finish(
                             &key,
                             Err(match kind {
                                 DispatchKind::New => PromptAdmission::NotAttempted,
@@ -298,8 +374,19 @@ impl Workspace {
                                 }
                             }),
                         );
+                        if let Some(attempt) = rejected {
+                            this.save_composer_draft(cx);
+                            let draft = send_attempt::restore_failed(this.drafts.get(&attempt.owner), attempt.draft);
+                            this.drafts.save(attempt.owner.clone(), draft);
+                            if this.composer_key.as_ref() == Some(&attempt.owner) { this.restore_composer_draft(window, cx); }
+                        }
                     }
                     this.mutation_tasks.remove(&key);
+                    if durable && current {
+                        // The prepared journal excluded this text from drafts. The
+                        // refusal leaves the editor intact, so persist that owner again.
+                        this.queue_persistence(cx);
+                    }
                     cx.notify();
                     return false;
                 }

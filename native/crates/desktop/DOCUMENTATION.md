@@ -12,6 +12,11 @@ prompt. Attachments and worktree creation remain separate workflows.
 
 ## Ownership
 
+- `blocking_requests.rs` owns location-scoped permission/form stores, selected
+  subtree routing, host bootstrap hints, exact reconciliation and independent
+  mutation tasks. `request_dock.rs` draws one nonmodal permission-priority panel
+  above the composer. `form_input.rs` owns retained typed drafts and field widgets;
+  `form_copy.rs` exports the form's content through explicit clipboard actions.
 - `workspace.rs` owns the application state: the global `SessionIndex`, the
   topology (projects, worktrees, Chats roots), lifecycle ordering, live
   status, sidebar presentation state, the selected session, one retained
@@ -136,6 +141,14 @@ prompt. Attachments and worktree creation remain separate workflows.
   `server_sync.rs`. Code-card actions retain focus handles, participate in
   Tab navigation, and use GPUI's keyboard-generated clicks for Enter and
   Space. Pointer, keyboard and accessibility clicks use the same callback.
+- `markdown_links.rs` owns link activation for ordinary and retained Markdown.
+  HTTP(S) links open through the platform; application protocols require an
+  explicit one-time confirmation bound to the current workspace, runtime and
+  selected session. Session links and loaded-message targets stay in the native
+  workspace. Unavailable file, fragment and message targets show an explanation
+  without falling through to an external application.
+  Left/middle clicks, keyboard activation and ordinary taps activate links;
+  secondary clicks and touch long presses never open or navigate them.
 - `transcript_selection.rs` owns one retained selection document per open
   session, with stable message/part identities and retained custom-block views.
   Text deltas update only their message; structural changes reconcile membership
@@ -174,6 +187,57 @@ prompt. Attachments and worktree creation remain separate workflows.
 
 ## Invariants
 
+- Blocking-request actions retain the runtime, directory, actual owner and ID.
+  A child shown under its parent still replies to the child. Location-owned forms
+  keep the `global` sentinel and their captured directory. New-session drafts
+  never show the request dock. Session moves hide stale old-directory cards.
+- The host status snapshot supplies optional identity hints only. Full lists are
+  read for the selected session's directory and descendant directories with known
+  pending requests; hints in unopened unrelated projects start no location. Global
+  hints have no directory and grant no route: the selected location's full list
+  recovers its own global forms. Invalid hints cannot clear
+  requests. Independently decoded list siblings publish, and only complete
+  whole-location lists can remove absent requests.
+  Exact lookups consume host hints only after the store accepts their result.
+  Invalidation leaves rejected hints available to the next scoped refresh.
+- Replies are explicit and locked independently per request. Always is available
+  only with server-supplied save patterns. Unknown outcomes keep the request
+  locked through list refreshes. Check status performs an exact read and never
+  resends a decision; only a subsequent user activation can retry. Terminal
+  tombstones prevent delayed lists, events and exact reads from resurrecting cards.
+- Reconnect gaps, malformed request events and location shutdown invalidate
+  retained action authority. Runtime changes preserve captured in-flight work and
+  in-memory drafts under their original keys. Window close drops local tasks;
+  there is no permission journal or automatic approval, rejection or cancellation.
+- A text-send activation captures the open requests it supersedes. After durable
+  preparation it rejects permissions and dismisses forms before posting text.
+  That capture precedes creation and retry observation; their asynchronous
+  completions cannot add newly arrived requests to the cancellation scope.
+  A failed or uncertain cancellation prevents the text POST and preserves the
+  failed request and original prompt, appending it after newer owner text when
+  needed. Successful siblings remain settled. Requests arriving during that chain
+  block dispatch rather than being silently cancelled in the background.
+  A runtime switch during cancellation retains the prompt because the original
+  session index and live request authority are unavailable. Pending requests in
+  that runtime remain blockers without consulting the newly selected index.
+- Form drafts retain typed defaults, exact option values, custom multiselect
+  answers and step position in memory. Conditional visibility removes inactive
+  answers from submission. An external field is acknowledged when its active
+  step is shown, and opens a URL only on explicit activation through the existing
+  native link policy. Regex and format validation remain server-owned.
+- The dock grows upward with a 12 px composer gap. Its measured height contributes
+  to transcript-tail clearance without moving the input. Steps, choices and
+  mutations use stable request-based accessibility IDs; keyboard and pointer
+  actions share command handlers. Enter advances a text field; Ctrl/Cmd+Enter
+  submits, with an active IME preedit suppressing both paths.
+  The nonmodal dialog exposes its label, expanded state, selected step and checked
+  choices. Only its body scrolls. Next and Submit share focus through the final
+  step, and Other remains an edit action for the custom answer.
+- Native automation can call `reply_request`, `check_request`, `set_form_step`,
+  `choose_form_option`, `advance_form` and `submit_form` with
+  captured request keys. These handlers enforce the same locks and ownership as
+  the dock. Text widgets expose `form-input-{id}-{field}` accessibility identities
+  for ordinary native editing. Form values and approval state never enter the mutation journal.
 - Pointer, keyboard and accessibility activation reach the same `Workspace`
   method: every control registers its action through
   `activation::on_activate`, which installs both the pointer click and the
@@ -253,6 +317,14 @@ prompt. Attachments and worktree creation remain separate workflows.
   live status. A definite failure removes only that optimistic message and
   restores its text and selection. Newer owner text remains first, followed by
   two newlines and the failed text.
+- Existing-session prompts use the explicit session metadata policy from
+  `chatPromptReadOnly.ts`. Children default to read-only because native does not
+  read the browser-local `allowPromptingSubagentSessions` preference. A review
+  requires `metadata.openchamber.kind == "review"` and a nonblank
+  `originalSessionID`; titles and agent names grant no exception. Fresh sends,
+  explicit retries and editor presentation share the policy. Dispatch rechecks
+  current metadata after its durable preparation and preserves unsent text when
+  permission was revoked. A runtime switch retains the captured runtime's policy.
 - Acknowledgement establishes inbox admission. The conservative send gate stays
   held until an exact-ID user message arrives through events or history. A lost
   response retains an explicit uncertain attempt and cannot trigger a resend.
@@ -323,6 +395,20 @@ prompt. Attachments and worktree creation remain separate workflows.
   broken image. A fetch cut short by a closing connection is tried again.
 
 ## Decisions
+
+### Why uncertain replies need exact reads
+
+A location list describes current pending coverage but does not identify the
+outcome of a particular response attempt. The store keeps uncertainty through
+list refreshes and releases it only after an exact owner/ID read. A failed exact
+read keeps the card locked and leaves unrelated requests actionable.
+
+### Why Markdown links use an application handler
+
+Kit's default handler sends every link directly to the platform. The application
+handler keeps session navigation inside its owning runtime and applies the web
+client's scheme exclusions and explicit application-link confirmation. A missing
+native route cannot become an external launch.
 
 ### Why an admission gate remains after acknowledgement
 

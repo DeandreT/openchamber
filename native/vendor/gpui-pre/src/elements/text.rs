@@ -628,6 +628,7 @@ struct TextLayoutInner {
     truncate_width: Option<Pixels>,
     size: Option<Size<Pixels>>,
     bounds: Option<Bounds<Pixels>>,
+    layout_mode: crate::LayoutMode,
 }
 
 impl TextLayout {
@@ -655,6 +656,7 @@ impl TextLayout {
             let element_state = self.clone();
 
             move |known_dimensions, available_space, window, cx| {
+                let layout_mode = window.layout_mode();
                 let wrap_width = if text_style.white_space == WhiteSpace::Normal {
                     known_dimensions.width.or(match available_space.width {
                         crate::AvailableSpace::Definite(x) => Some(x),
@@ -696,6 +698,7 @@ impl TextLayout {
                     && (wrap_width.is_none() || wrap_width == text_layout.wrap_width)
                     && truncate_width.is_none()
                     && text_layout.truncate_width.is_none()
+                    && text_layout.layout_mode == layout_mode
                 {
                     return size;
                 }
@@ -761,6 +764,7 @@ impl TextLayout {
                         truncate_width,
                         size: Some(Size::default()),
                         bounds: None,
+                        layout_mode,
                     });
                     return Size::default();
                 };
@@ -769,7 +773,11 @@ impl TextLayout {
                 for line in &lines {
                     let line_size = line.size(line_height);
                     size.height += line_size.height;
-                    size.width = size.width.max(line_size.width).ceil();
+                    let width = size.width.max(line_size.width);
+                    size.width = match layout_mode {
+                        crate::LayoutMode::DevicePixels => width.ceil(),
+                        crate::LayoutMode::Logical => width,
+                    };
                 }
 
                 element_state.0.borrow_mut().replace(TextLayoutInner {
@@ -780,6 +788,7 @@ impl TextLayout {
                     truncate_width,
                     size: Some(size),
                     bounds: None,
+                    layout_mode,
                 });
 
                 size

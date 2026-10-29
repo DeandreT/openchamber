@@ -159,6 +159,71 @@ fn create_count(server: &Server) -> usize {
 }
 
 #[gpui_kit::test]
+fn creation_handoff_does_not_cancel_global_form_arriving_after_activation(cx: &mut TestAppContext) {
+    use openchamber_native_core::request_owner::RequestOwner;
+    let fixture = Fixture::new();
+    let key = tests::key("create-activation", "ses_existing");
+    let (server, _) = creation_server(fixture.journal(), Outcome::Success, true);
+    let (window, workspace) = open(cx, &server, &fixture, &key);
+    ready(cx, &workspace);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |this, cx| {
+            prepare(this, &key, window, cx);
+            this.submit(window, cx);
+        })
+    })
+    .expect("window");
+    wait(cx, |_| create_count(&server) == 1);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |this, cx| {
+            super::request_tests::ask(
+                this,
+                super::request_tests::form(RequestOwner::Location),
+                window,
+                cx,
+            );
+        })
+    })
+    .expect("window");
+    server.release_prompt.store(true, Ordering::Release);
+    wait(cx, |cx| {
+        cx.read(|cx| {
+            let this = workspace.read(cx);
+            this.creations.iter().next().is_none()
+                && this.creation_tasks.is_empty()
+                && this.mutation_tasks.is_empty()
+        })
+    });
+    assert!(
+        server
+            .requests
+            .lock()
+            .expect("requests")
+            .iter()
+            .all(|request| !request.path.contains("/form/")),
+        "handoff cannot dismiss a later form"
+    );
+    assert_eq!(
+        server.prompt_count(),
+        0,
+        "late global form blocks the bound prompt"
+    );
+    cx.read(|cx| {
+        let this = workspace.read(cx);
+        let (_, attempt) = this
+            .send_attempts
+            .iter()
+            .next()
+            .expect("atomic handoff retains prompt");
+        assert_eq!(attempt.origin, SendOrigin::Created);
+        assert_eq!(attempt.prompt.text, "first creation prompt");
+        assert_eq!(attempt.admission, Admission::Uncertain);
+        assert_eq!(this.visible_requests().len(), 1);
+    });
+    close(cx, window, &workspace);
+}
+
+#[gpui_kit::test]
 fn creation_and_binding_save_failures_never_dispatch_without_durable_state(
     cx: &mut TestAppContext,
 ) {

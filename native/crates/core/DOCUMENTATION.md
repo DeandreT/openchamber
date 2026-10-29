@@ -9,6 +9,12 @@ rendering asks for a projection and dispatches an action.
 
 ## Ownership
 
+- `request_owner.rs`, `permission.rs` and `form.rs` define blocking requests,
+  captured runtime/location ownership, explicit decisions and typed form values.
+  `request_list.rs` carries validated siblings, scope/owner coverage and explicit
+  entry issues. `pending_requests.rs` owns one location's pending lists and response lifecycle.
+  It performs no I/O, automatic replies, retries or persistence.
+
 - `send_config.rs` ports default agent/model selection, an existing session's selection from its record, catalog grouping, composer labels and agent color allocation from the web client.
 - `repository.rs` holds what the card reports about a repository,
   `project_actions.rs` which project action its row shows and with which
@@ -43,6 +49,10 @@ rendering asks for a projection and dispatches an action.
   archived records, page merges, complete loads and live session changes.
   A record carries the session's current model and agent as the server last
   reported them.
+- `session.rs` retains an explicit review kind and the reference prompt-readonly
+  policy. Review metadata overrides a stale parent ID; an ordinary child's
+  prompting preference overrides the surface readonly flag. Root and review
+  sessions retain the surface flag.
 - `sidebar_work.rs` assigns sessions to Works entries from the project
    sections. A linked worktree or isolated space is one group work, even empty;
   elsewhere each root and its descendants form one work. Archives are
@@ -69,6 +79,42 @@ crate owns wire parsing and authority checks, and hands the core records and
 `TranscriptEvent`s.
 
 ## Invariants
+
+- Blocking-request keys include runtime, remote directory, actual session or
+  location owner, and a typed permission/form ID. A location-owned form is never
+  assigned to the selected session. Permission requests always have a real session.
+- Each permission/form list has its own complete baseline and load sequence.
+  A failed envelope preserves retained entries. `RequestList` retains explicit
+  completeness through record mapping; an incomplete response publishes validated
+  siblings without removing any held record. Owner-subset lists are also merge-only.
+  Only a complete whole-location list grants removal authority. Events and
+  mutations newer than a read survive its completion.
+  A terminal tombstone prevents delayed snapshots and replayed asks from restoring
+  that identity for the lifetime of the location owner.
+- Each explicit reply has an independent attempt. Definite refusal releases only
+  that request; an unknown outcome requires an exact owner/ID pending read before
+  another reply. A terminal event wins over late failures. Invalidation makes held
+  entries non-actionable until fresh data arrives and invalidates old read/attempt tokens.
+- Form conditions reference earlier editable fields. Inactive answers never
+  activate dependent fields and must not be submitted. External fields have no
+  default acknowledgement. Numeric answers are finite; wire numeric sentinels
+  are normalized to absent bounds/defaults by transport.
+- Form defaults follow Electron's `initialFormValues` and `fieldAnswer`: free
+  strings use ECMAScript whitespace trimming and empty strings/empty multiselects
+  supply no answer. Exact selected option values remain unchanged, including
+  empty strings and whitespace. `evaluate(defaults())` removes inactive defaults
+  before submission. ECMAScript trims BOM and does not trim U+0085.
+- `FormAnswer` is a map newtype whose Debug hides keys and values. Form values,
+  fields, defaults, metadata, titles, cancellation feedback and permission resources
+  use redacted Debug implementations. Enclosing stores retain useful IDs and kinds
+  without printing request content.
+- Form validation checks value types, choices, required fields, bounds and UTF-16
+  string lengths. Regexp patterns and string formats return
+  `RequiresServerValidation` after the supported checks pass. This is neither a
+  valid-answer verdict nor a reason to invent a replacement pattern engine; the
+  transport can submit the explicit answer for authoritative server validation.
+  These optional local checks exceed Electron's required-presence checks; the
+  desktop must not present them as existing Electron pattern/format validation.
 
 - Display ownership never rewrites a session's real directory. Routing, pin
   identity and drafts use `SessionRecord::directory`.
@@ -120,6 +166,19 @@ crate owns wire parsing and authority checks, and hands the core records and
   and text.
 
 ## Decisions
+
+### Why blocking requests are kept outside the send journal
+
+Pending permissions and forms belong to live server state. Replaying a retained
+approval after restart would perform a new mutation without a current user action.
+The core retains only in-memory request state; reconnects re-read the captured
+location and terminal IDs remain tombstoned until that owner is dropped.
+
+### Why form validation can require the server
+
+The core uses the standard library alone. JavaScript regexp and date/URI format
+semantics cannot be reproduced by a small Rust substitute. The validation result
+names the affected field keys explicitly, and the HTTP API remains authoritative.
 
 ### Why differential fixtures and not hand-written expectations
 

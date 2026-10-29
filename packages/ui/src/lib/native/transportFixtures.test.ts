@@ -43,4 +43,22 @@ describe('native transport fixtures', () => {
     expect(lookup.query).toEqual([]);
     expect(fixture.creation.observed).toEqual(fixture.creation.created);
   });
+
+  test('blocking requests preserve global ownership and explicit mutation shapes', async () => {
+    const fixture = z.object({
+      client: z.literal('@opencode/client@2.2.0'),
+      scopedDirectory: z.string(),
+      blockingRequests: z.object({ requests: z.array(z.object({
+        name: z.string(), method: z.string(), path: z.string(), directoryHeader: z.string().nullable(),
+        body: z.unknown(), query: z.array(z.tuple([z.string(),z.string()])),
+      })) }),
+    }).parse(JSON.parse(await renderTransportFixtures()));
+    const requests = fixture.blockingRequests.requests;
+    const cancel = requests.find((request) => request.name === 'global form cancel');
+    expect(cancel).toMatchObject({ method: 'DELETE', path: '/api/session/global/form/frm_native_fixture',
+      directoryHeader: encodeURIComponent(fixture.scopedDirectory), body: null, query: [] });
+    expect(requests.find((request) => request.name === 'permission always')?.body).toEqual({ decision: 'always' });
+    expect(requests.find((request) => request.name === 'form cancel feedback')?.query).toEqual([['message','No answer available']]);
+    expect(requests.filter((request) => request.method === 'POST')).toHaveLength(6);
+  });
 });

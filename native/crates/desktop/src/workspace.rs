@@ -157,6 +157,7 @@ pub struct Workspace {
     /// The composer's catalogs and defaults; empty for synthetic data.
     pub(crate) send_catalog: SendCatalog,
     pub(crate) send_attempts: crate::send_attempt::SendAttempts,
+    pub(crate) blocking: crate::blocking_requests::BlockingRequests,
     pub(crate) recovery: crate::send_recovery::RecoveryState,
     pub(crate) persistence: crate::state_persistence::StatePersistence,
     pub(crate) mutation_tasks: HashMap<crate::send_attempt::SessionKey, Task<()>>,
@@ -248,6 +249,7 @@ impl Workspace {
             connection,
             send_catalog: SendCatalog::default(),
             send_attempts: crate::send_attempt::SendAttempts::default(),
+            blocking: crate::blocking_requests::BlockingRequests::default(),
             recovery: crate::send_recovery::RecoveryState::default(),
             persistence: crate::state_persistence::StatePersistence::default(),
             mutation_tasks: HashMap::new(),
@@ -423,6 +425,7 @@ impl Workspace {
             self.save_composer_draft(cx);
             self.save_scroll_position();
             self.selected = None;
+            self.blocking.presented = None;
             self.composer_key = self.new_session_draft_key();
             self.restore_composer_draft(window, cx);
         }
@@ -486,6 +489,8 @@ impl Workspace {
         self.restore_composer_draft(window, cx);
         self.focus_composer(window, cx);
         self.pending_switch = Some(started);
+        self.refresh_blocking_requests(window, cx);
+        self.acknowledge_visible_form(cx);
         cx.notify();
     }
 

@@ -28,6 +28,7 @@ import { isBtwSession } from '@/lib/sessionBtwMetadata';
 import { isSessionPinnedInMetadata } from '@/lib/sessionPins';
 import { isSessionInWork } from '@/lib/sessionWorkMetadata';
 import { classifyStreamPayload } from '@/sync/event-pipeline';
+import { blockingRequestFixtures } from './transportFixturesRequests';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..', '..', '..', '..');
@@ -345,6 +346,7 @@ export const renderTransportFixtures = async (): Promise<string> => {
     baseUrl: BASE_URL,
     scopedDirectory: SCOPED_DIRECTORY,
     requests,
+    blockingRequests: await blockingRequestFixtures(readWire('blocking-requests')),
     mutations: { admitted, interrupted, idle },
     observations: { pending, delivered },
     creation: { created: normalizeSession(projectSession(created)), observed: normalizeSession(projectSession(exactSession)) },

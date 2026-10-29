@@ -81,7 +81,9 @@ impl RetainedText {
     }
 
     fn element(&self) -> TextView {
-        TextView::new(&self.text).markdown_extensions(self.extensions.as_ref().clone())
+        TextView::new(&self.text)
+            .markdown_extensions(self.extensions.as_ref().clone())
+            .on_link_click(crate::markdown_links::on_markdown_link_click)
     }
 
     fn update_text(&mut self, source: &str, cx: &mut App) {
@@ -326,6 +328,90 @@ impl TranscriptSelection {
 mod tests {
     use super::*;
     use gpui_kit::base::text::TextViewSelectionPosition;
+
+    #[gpui_kit::test]
+    fn rendered_markdown_links_keep_kits_mouse_button_filter(cx: &mut gpui_kit::TestAppContext) {
+        use crate::theme::{self, Appearance, Palette};
+        use gpui_kit::{
+            Context, IntoElement, Modifiers, MouseButton, ParentElement, Render, Styled, Window,
+            div, point, px,
+        };
+
+        struct Links {
+            source: String,
+            retained: Option<Entity<RetainedText>>,
+        }
+        impl Render for Links {
+            fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+                let text = if let Some(retained) = &self.retained {
+                    retained.read(cx).element()
+                } else {
+                    markdown_view::markdown(
+                        "link-test",
+                        &self.source,
+                        cx.global::<Palette>(),
+                        Author::Assistant,
+                    )
+                };
+                div().w(px(400.0)).child(text)
+            }
+        }
+
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            theme::apply(Palette::default_for(Appearance::Dark), cx);
+        });
+        for retained in [false, true] {
+            for nested in [false, true] {
+                for button in [MouseButton::Right, MouseButton::Left, MouseButton::Middle] {
+                    let url = format!("https://example.org/{retained}/{nested}/{button:?}");
+                    let source = format!("{}[example]({url})", if nested { "# " } else { "" });
+                    let before = cx.opened_url();
+                    let (_, window) = cx.add_window_view(|_, cx| {
+                        let retained = retained.then(|| {
+                            let document = TextViewSelectionDocument::new();
+                            let text = RetainedText::new(
+                                document.clone(),
+                                Rc::new(Cell::new(1)),
+                                &source,
+                                Some(Nesting::default()),
+                                cx,
+                            );
+                            document
+                                .attach(text.read(cx).key, 0, &text.read(cx).text.clone(), cx)
+                                .expect("retained member attaches");
+                            text
+                        });
+                        Links { source, retained }
+                    });
+                    window.simulate_mouse_down(
+                        point(px(10.0), px(10.0)),
+                        button,
+                        Modifiers::default(),
+                    );
+                    window.simulate_mouse_up(
+                        point(px(10.0), px(10.0)),
+                        button,
+                        Modifiers::default(),
+                    );
+                    if button == MouseButton::Right {
+                        assert_eq!(
+                            window.opened_url(),
+                            before,
+                            "retained={retained}, nested={nested}"
+                        );
+                        assert!(!window.has_pending_prompt());
+                    } else {
+                        assert_eq!(
+                            window.opened_url().as_deref(),
+                            Some(url.as_str()),
+                            "retained={retained}, nested={nested}, button={button:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 
     #[gpui_kit::test]
     fn spoken_text_uses_rendered_markdown_before_the_row_is_painted(

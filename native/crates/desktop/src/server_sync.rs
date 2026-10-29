@@ -166,6 +166,8 @@ impl Workspace {
         self.prompt_hover_suppressed = false;
         self.code_wrap_save_task = None;
         self.code_wrap_state = CodeWrapState::default();
+        self.invalidate_blocking(None);
+        self.blocking.selected = None;
         cx.set_global(CodeWrap::default());
         self.runtime = runtime;
         self.sessions = SessionIndex::new();
@@ -253,6 +255,8 @@ impl Workspace {
     /// Rereads everything live state may have missed: sessions, topology,
     /// running state and every visited transcript.
     fn reconcile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.invalidate_blocking(None);
+        self.refresh_blocking_requests(window, cx);
         tracing::info!(
             open_sessions = self.open_sessions.len(),
             "reading sessions, topology and visited transcripts"
@@ -291,7 +295,7 @@ impl Workspace {
         });
         let statuses = connection
             .network
-            .run(async move { statuses_client.session_statuses().await });
+            .run(async move { statuses_client.host_session_status().await });
         connection.sessions_task = Some(cx.spawn_in(window, async move |this, cx| {
             let mut sessions: Vec<SessionRecord> = Vec::new();
             let mut first = true;
@@ -333,7 +337,11 @@ impl Workspace {
                 }
                 this.ordering.raise_baselines(this.sessions.active());
                 if let Some(statuses) = statuses {
-                    this.apply_status_snapshot(statuses);
+                    if let Some(pending) = statuses.pending {
+                        this.blocking.seeds.insert(this.runtime.clone(), pending);
+                    }
+                    this.apply_status_snapshot(statuses.statuses);
+                    this.refresh_blocking_requests(window, cx);
                 }
                 this.after_index_update(update, window, cx);
                 this.rebuild_sidebar();
@@ -747,6 +755,16 @@ impl Workspace {
                 changes.push(change);
             }
             match event {
+                ServerEvent::BlockingRequest { directory, event } => {
+                    self.blocking_event(directory, event, window, cx)
+                }
+                ServerEvent::BlockingRequestInvalid { directory, .. } => {
+                    self.invalidate_blocking(directory.as_deref());
+                    self.refresh_blocking_requests(window, cx);
+                }
+                ServerEvent::LocationShutdown { directory } => {
+                    self.invalidate_blocking(Some(&directory))
+                }
                 ServerEvent::SessionStatus { session_id, status } => {
                     let phase = match status {
                         LiveStatus::Busy | LiveStatus::Retry => ActivityPhase::Active,
@@ -760,6 +778,7 @@ impl Workspace {
                     ordering.push(OrderingMutation::Observe { session_id, phase });
                 }
                 ServerEvent::SessionDeleted { session_id } => {
+                    self.remove_session_requests(&session_id);
                     let key = self.mutation_key(&session_id);
                     self.mark_creation_deleted(&key, cx);
                     self.live_status.remove(&session_id);
@@ -895,6 +914,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         if !update.moves.is_empty() {
+            self.invalidate_blocking(None);
+            self.refresh_blocking_requests(window, cx);
             // A move can land in a worktree this client has not discovered.
             self.load_topology(cx);
         }

@@ -18,6 +18,8 @@ pub mod project;
 mod projection;
 pub mod prompt;
 pub mod public_asset;
+mod request_wire;
+pub mod requests;
 pub mod session_create;
 pub mod stream;
 mod wire;

@@ -53,6 +53,14 @@ macro_rules! string_id {
 }
 
 string_id!(
+    /// A pending OpenCode permission request.
+    PermissionId
+);
+string_id!(
+    /// An OpenCode form, distinct from a session or permission.
+    FormId
+);
+string_id!(
     /// An OpenCode session identifier.
     SessionId
 );
