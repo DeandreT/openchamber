@@ -41,7 +41,7 @@
     "native:transport-fixtures": "bun run --cwd packages/ui src/lib/native/transportFixtures.ts",
     "parity": "python3 scripts/parity/runner.py",
     "native:check": "cd native && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings",
-    "native:test": "cd native && cargo test --workspace",
+    "native:test": "cd native && cargo nextest run --workspace",
     "native:build": "cd native && cargo build --release -p openchamber-native-desktop",
     "native:dev": "cd native && cargo run -p openchamber-native-desktop",
     "type-check:electron": "bun run --cwd packages/electron type-check",

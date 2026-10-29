@@ -20,6 +20,12 @@ it inside `native/`. Windows builds use the MSVC target. Linux builds need the
 GPUI system libraries: Wayland or X11 client libraries, `libxkbcommon`,
 `fontconfig`/`freetype` and a Vulkan driver.
 
+Linux builds link with [mold](https://github.com/rui314/mold) through clang
+(`.cargo/config.toml`), so both must be installed. Tests run under
+[cargo-nextest](https://nexte.st), which runs each test in its own process.
+Nextest does not run doctests; if a crate gains one, add `cargo test --doc` to
+`native:test`.
+
 Cargo writes to `native/target`. Set `CARGO_TARGET_DIR` to keep a native
 Windows build apart from a Linux or WSL build of the same checkout.
 
