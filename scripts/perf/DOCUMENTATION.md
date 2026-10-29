@@ -5,6 +5,52 @@ DevTools Protocol plumbing. Read this before measuring OpenChamber performance
 or extending these scripts. The methodology rules they enforce come from
 `.agents/skills/performance-engineering/SKILL.md`.
 
+## Native selection qualification
+
+`python3 scripts/parity/native_selections.py --scale 1.25` opens the native client
+on an owned private Xvfb display. `--binary`, `--opencode-binary` and `--dist`
+select existing build inputs. No build or dependency install runs. `--output`
+must name a new directory directly under `/tmp/opencode`.
+
+The runner starts this module with `--selections`, which uses the fresh-root
+interaction server owner with an opt-in configuration. It exposes only the local
+`perf` provider, `stream-1200cps` and `stream-20000cps`, their `high` variants,
+and 2 primary agents, `fixture-alpha` and `fixture-beta`. Both agents have a
+named default effort so an explicit Default selection must clear that choice.
+Tools are denied. The provider's existing stream responses make no tool calls.
+The default performance and `--interactions` configurations retain their behavior.
+
+Every model, agent, effort and prompt input goes through the real window.
+HTTP creates the fresh session and observes records. The runner checks the exact
+Unicode user message and the subsequent completed assistant step's model,
+agent and variant. It selects `fixture-beta` first, then explicitly chooses
+`stream-1200cps`, which differs from that agent's configured `stream-20000cps`
+default. The completed step must retain the explicit model after reopening.
+Pinned OpenCode 2.2 returns history newest-first and records the default effort
+as `variant: "default"`, including when the selection request omits the variant.
+The oracle reverses history for turn boundaries and requires that exact canonical
+variant. A retained `high` agent pin cannot satisfy the Default check.
+It also checks unsent choices and explicit Default after
+close/reopen, plus Escape cancellation and restored composer focus in each picker.
+Missing controls fail the run. A diagnostic marker alone cannot pass.
+
+The report records input identities, outcomes, native process exits and input
+substitutions. Evidence includes failure screenshots, messages on success and
+the fixture process cleanup receipt. Cleanup failures and accessibility action
+substitutions fail qualification. This is a Linux native outcome check; it
+does not establish matched-client visual parity.
+
+Focused checks:
+
+```sh
+python3 -m unittest discover -s scripts/parity -p native_selections_test.py
+node --test scripts/perf/isolated-server.test.mjs
+```
+
+The shared fresh-root server owner keeps process and credential isolation in
+one place. The selection configuration is a fixed opt-in branch, so the runner
+cannot inject arbitrary project settings into an interaction run.
+
 ## Commands
 
 | Command | Answers |

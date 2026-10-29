@@ -125,6 +125,8 @@ def verify_readiness(value, root):
 class Fixture:
     """Own the existing --interactions CLI, including failed startup."""
 
+    MODE = "--interactions"
+
     def __init__(self, root, evidence, args, interrupts):
         self.root, self.evidence, self.args, self.interrupts = root, evidence, args, interrupts
         self.process = None
@@ -143,7 +145,7 @@ class Fixture:
         try:
             with self.interrupts.defer():
                 self.process = subprocess.Popen([
-                    "node", str(runner.ISOLATED_SERVER), "--interactions", "--root", str(self.root),
+                    "node", str(runner.ISOLATED_SERVER), self.MODE, "--root", str(self.root),
                     "--dist", str(self.args.dist), "--opencode-binary", str(self.args.opencode_binary),
                 ], cwd=self.evidence, env=env, stdout=subprocess.PIPE, stderr=self.log, start_new_session=True)
                 record_descendants(self.process.pid, self.owned)
