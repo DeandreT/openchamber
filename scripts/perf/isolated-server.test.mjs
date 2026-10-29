@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
+import { createRequire } from 'node:module';
+import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { reservePort } from './cdp.mjs';
 import { isolatedOpencodeConfig, isolatedServerEnv, startFixture, startInteractionServer, withInteractionServer } from './isolated-server.mjs';
@@ -88,6 +90,41 @@ test('interaction configuration uses only the local provider and exact shell per
     { action: 'provider.use', resource: 'perf', effect: 'allow' },
   ]);
   assert.ok(Object.values(config.agents).every((agent) => agent.model === 'perf/stream-1200cps'));
+});
+
+test('selection config is opt-in, local-only, with two primary agents and high variants', async () => {
+  const baseline = isolatedOpencodeConfig(1234, { interactions: true });
+  const config = isolatedOpencodeConfig(1234, { selections: true });
+  assert.equal(config.model, 'perf/stream-1200cps');
+  assert.equal(config.providers.perf.settings.baseURL, 'http://127.0.0.1:1234/v1');
+  assert.deepEqual(Object.keys(config.providers), ['perf']);
+  assert.deepEqual(config.policies, baseline.policies);
+  assert.deepEqual(config.permissions, [{ action: '*', resource: '*', effect: 'deny' }]);
+  assert.deepEqual(Object.keys(config.providers.perf.models), ['stream-1200cps', 'stream-20000cps']);
+  for (const model of Object.values(config.providers.perf.models)) {
+    assert.equal(model.capabilities.tools, false);
+    assert.deepEqual(model.variants, [{ id: 'high', body: { reasoning_effort: 'high' } }]);
+  }
+  assert.equal(config.agents['fixture-alpha'].mode, 'primary');
+  assert.equal(config.agents['fixture-beta'].mode, 'primary');
+  assert.equal(config.agents['fixture-beta'].model, 'perf/stream-20000cps#high');
+  assert.deepEqual(isolatedOpencodeConfig(1234, { interactions: true }), baseline);
+  assert.equal(isolatedOpencodeConfig(1234).providers, undefined);
+  // Decode the actual pinned 2.2 schema, including arrays of variant overlays.
+  const { Config } = await import('@opencode/schema/config');
+  const schemaRequire = createRequire(import.meta.resolve('@opencode/schema/config'));
+  const { Schema } = await import(pathToFileURL(schemaRequire.resolve('effect')).href);
+  assert.doesNotThrow(() => Schema.decodeUnknownSync(Config.Info)(config));
+});
+
+test('selection CLI retains the fresh-root and explicit-binary boundary', () => {
+  for (const args of [['--selections'], ['--selections', '--interactions']]) {
+    const result = spawnSync(process.execPath, ['scripts/perf/isolated-server.mjs', ...args], {
+      env: { PATH: process.env.PATH, OPENCODE_BINARY: process.execPath }, encoding: 'utf8', timeout: 5000,
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /explicit --opencode-binary|either --interactions or --selections/);
+  }
 });
 
 test('interaction launcher refuses a checkout root or an unspecified binary before launching', { skip: !interactionHost }, async () => {

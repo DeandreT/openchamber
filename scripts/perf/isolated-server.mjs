@@ -47,7 +47,8 @@ Options:
                             start empty when there is no seed
   --interactions           Fresh permission/question fixture; requires a new root
                            directly under /tmp/opencode and an explicit binary.
-                           Uses owned free ports; cannot combine with --fresh.
+                            Uses owned free ports; cannot combine with --fresh.
+  --selections             Fresh model/agent/effort fixture with the same isolation.
   --port <port>            Server port (default: 4799)
   --fixture-port <port>    Fixture provider port (default: 4798); reused when
                            something already listens there
@@ -181,7 +182,27 @@ const writeSettings = (state, project) => {
 
 /** The OpenCode configuration an isolated server runs with: the fixture
  * provider on `fixturePort` as the default model, nothing that reaches out. */
-export const isolatedOpencodeConfig = (fixturePort, { interactions = false } = {}) => interactions ? {
+export const isolatedOpencodeConfig = (fixturePort, { interactions = false, selections = false } = {}) => selections ? {
+  ...isolatedOpencodeConfig(fixturePort, { interactions: true }),
+  providers: {
+    perf: {
+      name: "Selection fixture",
+      package: "@opencode/ai/providers/openai-compatible",
+      settings: { baseURL: `http://127.0.0.1:${fixturePort}/v1`, apiKey: "unused" },
+      models: Object.fromEntries(["stream-1200cps", "stream-20000cps"].map((id) => [id, {
+        name: id, capabilities: { tools: false, input: ["text"], output: ["text"] },
+        variants: [{ id: "high", body: { reasoning_effort: "high" } }],
+      }])),
+    },
+  },
+  model: "perf/stream-1200cps",
+  agents: {
+    ...Object.fromEntries(["title", "summary", "compaction"].map((id) => [id, { model: "perf/stream-20000cps" }])),
+    "fixture-alpha": { mode: "primary", model: "perf/stream-1200cps#high", description: "First local selection agent" },
+    "fixture-beta": { mode: "primary", model: "perf/stream-20000cps#high", description: "Second local selection agent" },
+  },
+  permissions: [{ action: "*", resource: "*", effect: "deny" }],
+} : interactions ? {
   $schema: "https://opencode.ai/config.json",
   providers: {
     perf: {
@@ -265,7 +286,7 @@ export const restoreState = (state, seed) => {
  * isolated home under `state`. Resolves once it answers HTTP, with the served
  * main chunk checked against the build's index.html.
  */
-export const startIsolatedServer = async ({ repo, dist, state, project, port, fixturePort, opencodeBinary = defaultOpencodeBinary(), logFile, interactions = false, signal }) => {
+export const startIsolatedServer = async ({ repo, dist, state, project, port, fixturePort, opencodeBinary = defaultOpencodeBinary(), logFile, interactions = false, selections = false, signal }) => {
   signal?.throwIfAborted()
   if (await portInUse(port)) throw new Error(`Port ${port} is already in use; stop that server or pass another port.`)
   signal?.throwIfAborted()
@@ -278,10 +299,10 @@ export const startIsolatedServer = async ({ repo, dist, state, project, port, fi
   if (interactions) {
     const settingsFile = join(state, "oc-data", "settings.json")
     const settings = JSON.parse(readFileSync(settingsFile, "utf8"))
-    settings.defaultModel = "perf/interaction-shell"
+    settings.defaultModel = selections ? "perf/stream-1200cps" : "perf/interaction-shell"
     writeFileSync(settingsFile, JSON.stringify(settings, null, 2))
   }
-  const config = isolatedOpencodeConfig(fixturePort, { interactions })
+  const config = isolatedOpencodeConfig(fixturePort, { interactions, selections })
   const env = isolatedServerEnv({ state, dist, config, opencodeBinary,
     ...(interactions ? { inherited: { PATH: process.env.PATH, LANG: "C.UTF-8", SHELL: "/bin/sh", TMPDIR: join(state, "tmp") } } : {}),
   })
@@ -331,7 +352,7 @@ export const startIsolatedServer = async ({ repo, dist, state, project, port, fi
 }
 
 /** Fresh interaction runs have no seed, repository discovery, or reusable listener. */
-export const startInteractionServer = async ({ root, dist, opencodeBinary, repo = REPO_ROOT, signal }) => {
+export const startInteractionServer = async ({ root, dist, opencodeBinary, repo = REPO_ROOT, selections = false, signal }) => {
   signal?.throwIfAborted()
   root = resolve(root)
   if (platform() !== "linux" || dirname(root) !== "/tmp/opencode" || realpathSync(dirname(root)) !== "/tmp/opencode") {
@@ -356,7 +377,7 @@ export const startInteractionServer = async ({ root, dist, opencodeBinary, repo 
   let server
   try {
     server = await startIsolatedServer({ repo, dist, state, project, port: await reservePort(), fixturePort: fixture.port,
-      opencodeBinary, logFile: join(root, "server.log"), interactions: true, signal })
+      opencodeBinary, logFile: join(root, "server.log"), interactions: true, selections, signal })
   } catch (error) {
     await fixture.stop()
     throw error
@@ -408,6 +429,7 @@ const parseArgs = (argv) => {
     else if (value === "--root") options.root = resolve(argv[++index])
     else if (value === "--fresh") options.fresh = true
     else if (value === "--interactions") options.interactions = true
+    else if (value === "--selections") options.selections = true
     else if (value === "--port") options.port = Number(argv[++index])
     else if (value === "--fixture-port") options.fixturePort = Number(argv[++index])
     else if (value === "--opencode-binary") {
@@ -422,9 +444,11 @@ const parseArgs = (argv) => {
 
 const main = async () => {
   const options = parseArgs(process.argv.slice(2))
-  if (options.interactions) {
-    if (!options.opencodeBinaryProvided) throw new Error("--interactions requires an explicit --opencode-binary flag")
-    if (options.fresh) throw new Error("--interactions cannot restore a seed")
+  if (options.interactions || options.selections) {
+    if (options.interactions && options.selections) throw new Error("Choose either --interactions or --selections")
+    const mode = options.selections ? "--selections" : "--interactions"
+    if (!options.opencodeBinaryProvided) throw new Error(`${mode} requires an explicit --opencode-binary flag`)
+    if (options.fresh) throw new Error(`${mode} cannot restore a seed`)
     try {
       await withInteractionServer(options, async (server, signal) => {
         console.log(JSON.stringify({ url: server.url, root: server.root, state: server.state, project: server.project, fixturePort: server.fixturePort, pid: server.pid, fixturePid: server.fixturePid }))
