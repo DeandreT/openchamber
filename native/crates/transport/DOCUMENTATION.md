@@ -19,6 +19,7 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `project.rs` | A directory's Git status (`GET /api/git/status`) and a project's configured actions (`GET /api/projects/:projectId/config`, the path-derived ID). |
 | `prompt.rs` | Typed text submission, ordered session model/agent selection, inbox admission receipts and interruption of one named session. |
 | `session_create.rs` | Immutable root-session requests, exact-ID observation and identity/location verification before exposing a session record. |
+| `requests.rs`, `request_wire.rs` | Explicit blocking-request lists, exact reads, permission replies, form answers/cancellation and private pinned-2.2 wire decoding. |
 | `public_asset.rs` | `PublicAssetClient`: public assets the web client loads from third-party hosts, such as models.dev's provider logos. |
 | `wire.rs` | Serde shapes of the fields the client reads. Private. |
 | `projection.rs` | Wire records to core records, mirroring `packages/ui/src/lib/opencode/projection.ts`. Private. |
@@ -31,6 +32,50 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 counts and identifiers only.
 
 ## Invariants
+
+- `host_session_status` retains optional pending permission/form identity hints
+  from `/api/sessions/status`. Invalid entries are omitted independently; omission
+  of the whole pending field means unsupported. Hints grant neither action nor
+  removal authority. Desktop resolves relevant directories and reads full requests
+  before exposing actions. The existing `session_statuses` convenience method
+  continues to return only live statuses.
+- Session projection recognizes reviews only through the explicit OpenChamber
+  metadata marker and an original session identity nonblank under ECMAScript
+  trimming. Full metadata updates replace that classification, including when
+  a review marker is removed.
+- Blocking-request calls use the captured `ServerClient` and `RequestScope`.
+  The desktop must bind that client to the scope's verified runtime before dispatch;
+  the transport never substitutes the currently selected runtime or directory.
+  Location lists carry the encoded directory. Real-session routes resolve their
+  location on the server; `global` form routes always carry the captured directory.
+- Pending lists return the core's `RequestList<T>`. The response envelope and
+  returned location must be valid; otherwise the call fails. Entries decode
+  independently, retaining valid siblings and reporting indexed `Malformed`,
+  `WrongOwner` or `DuplicateIdentity` issues. Every fully decoded duplicate is
+  withheld, so the client never chooses one conflicting owner. Invalid entries
+  contribute no guessed IDs. Any issue makes the list incomplete and denies all
+  removal authority for that response. Exact gets still fail on malformed or
+  mismatched records; a decoding error never becomes not-found.
+- Permission and form replies expect an empty 204. Form cancellation is DELETE,
+  with an optional `message` query and no body. Plain cancellation omits feedback.
+  No blocking-request mutation is automatically retried, including after a lost
+  response. Callers retain the exact request key and reconcile uncertain outcomes.
+- `RequestError` distinguishes declared permission/form not-found, form already
+  settled, invalid answer, missing session and missing location. Request-specific
+  errors require matching status, tag, kind and ID. A bare HTTP 404 never proves
+  settlement. Error messages omit response bodies, metadata and user answers.
+- Decoded form/permission content has redacted Debug implementations in core,
+  including raw answer values, defaults and cancellation feedback. Blocking event
+  and list Debug output inherits that redaction while retaining IDs and kinds.
+- Metadata is display-only JSON text, limited to 8192 bytes plus a truncation marker.
+  It carries no routing or permission authority. Lists and details have a 4 MiB
+  response bound; exceeding it is a failed read, never a partial list.
+- Blocking events preserve their directory and actual owner. Nested `form.created`
+  is decoded before session event extraction. A location-owned event without a
+  directory yields `BlockingRequestInvalid`, as do malformed request records.
+  This carries no mutation authority and leaves the stream consuming unrelated
+  events; callers reconcile the known scope. `location.shutdown` names the scope to invalidate;
+  the consumer chooses selected-scope reconciliation without project fan-out.
 
 - Session creation requires a caller-retained `ses_` identity and absolute remote
   directory. `CreateSession` captures a normalized request, omits `parentID`, and
@@ -153,6 +198,13 @@ counts and identifiers only.
   only HTTPS redirects and refuses bodies over 256 KiB.
 
 ## Decisions
+
+### Why blocking-request errors have their own decoder
+
+Permission/form disappearance is actionable while missing location/session errors
+are different failures with the same HTTP status. The narrow decoder checks the
+pinned protocol's declared tag and request identity before granting settlement
+authority. Existing transport error handling for other capabilities stays unchanged.
 
 ### Why the WebSocket bridge and not OpenCode's event stream
 

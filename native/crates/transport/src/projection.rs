@@ -90,12 +90,62 @@ pub(crate) fn metadata_facts(metadata: Option<&Value>) -> MetadataFacts {
     });
     let kind = if is_btw {
         SessionKind::Btw
+    } else if openchamber.is_some_and(|value| {
+        value.get("kind").and_then(Value::as_str) == Some("review")
+            && value
+                .get("originalSessionID")
+                .and_then(Value::as_str)
+                .is_some_and(|original| {
+                    // String.trim() in sessionReviewMetadata.ts uses ECMAScript whitespace.
+                    !original
+                        .trim_matches(|c| {
+                            matches!(c,
+                    '\u{0009}'..='\u{000d}' | '\u{0020}' | '\u{00a0}' | '\u{1680}' |
+                    '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' |
+                    '\u{205f}' | '\u{3000}' | '\u{feff}')
+                        })
+                        .is_empty()
+                })
+    }) {
+        SessionKind::Review
     } else {
         SessionKind::Conversation
     };
     MetadataFacts {
         overlay: SessionOverlay { pinned_at, in_work },
         kind,
+    }
+}
+
+#[cfg(test)]
+mod prompt_policy_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn review_requires_exact_kind_and_nonempty_original_identity() {
+        for original in ["", " \t\n", "\u{feff}\u{00a0}"] {
+            let metadata = json!({"openchamber":{"kind":"review","originalSessionID":original}});
+            assert_eq!(
+                metadata_facts(Some(&metadata)).kind,
+                SessionKind::Conversation
+            );
+        }
+        for original in ["ses_original", "\u{0085}"] {
+            let metadata = json!({"openchamber":{"kind":"review","originalSessionID":original}});
+            assert_eq!(metadata_facts(Some(&metadata)).kind, SessionKind::Review);
+        }
+        for metadata in [
+            json!({"openchamber":{"kind":"review"}}),
+            json!({"openchamber":{"kind":"Review","originalSessionID":"ses_original"}}),
+            json!({"openchamber":{"kind":"review","originalSessionID":7}}),
+            json!({"openchamber":[]}),
+        ] {
+            assert_eq!(
+                metadata_facts(Some(&metadata)).kind,
+                SessionKind::Conversation
+            );
+        }
     }
 }
 

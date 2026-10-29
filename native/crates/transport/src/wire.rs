@@ -363,6 +363,8 @@ pub(crate) struct Skills {
 #[derive(Debug, Deserialize)]
 pub(crate) struct StatusSnapshot {
     pub sessions: std::collections::HashMap<String, StatusEntry>,
+    #[serde(default)]
+    pub pending: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]

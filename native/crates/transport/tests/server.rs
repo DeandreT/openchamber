@@ -25,6 +25,8 @@ use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::protocol::frame::Frame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::{Data, OpCode};
 
+#[path = "blocking_requests/mod.rs"]
+mod blocking_requests;
 #[path = "session_creation/mod.rs"]
 mod session_creation;
 

@@ -3,6 +3,7 @@
 use gpui_kit::{Context, Window};
 use openchamber_native_core::draft::{Draft, DraftKey, DraftTarget};
 use openchamber_native_core::ids::PartId;
+use openchamber_native_core::pending_requests::RequestKey;
 use openchamber_native_core::session::SessionRecord;
 use openchamber_native_core::session_index::SessionChange;
 use openchamber_native_core::transcript::{Message, MessageInfo, Part, Role};
@@ -17,13 +18,13 @@ use crate::create_attempt::{CreateAttempt, CreationCheck, CreationPhase};
 use crate::network::NetworkTask;
 use crate::recovery_view::{RecoveryPhase, RecoveryRow};
 use crate::send_attempt::{Admission, SendAttempt, SendOrigin, SessionKey};
+use crate::session_mutations::CapturedPrompt;
 use crate::workspace::Workspace;
 
-#[derive(Clone, Copy)]
 enum CreatedAction {
     ObservePrompt,
-    RetryPrompt,
-    Dispatch,
+    RetryPrompt(Vec<RequestKey>),
+    Dispatch(Vec<RequestKey>),
 }
 
 /// Auto always goes through OpenChamber's intercepted selection route. Ordinary
@@ -136,12 +137,14 @@ impl Workspace {
         self.composer
             .update(cx, |composer, cx| composer.set_value("", window, cx));
         self.save_draft_preview(&source, "");
-        self.start_creation_post(key, window, cx);
+        let requests = self.requests_for_creation(&key, source.directory());
+        self.start_creation_post(key, requests, window, cx);
     }
 
     fn start_creation_post(
         &mut self,
         key: SessionKey,
+        requests: Vec<RequestKey>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -225,7 +228,14 @@ impl Workspace {
                     match result {
                         Some(Ok(session)) => {
                             this.creations.phase(&key, CreationPhase::Confirmed);
-                            this.bind_created_session(&key, session, client, executor, window, cx);
+                            this.bind_created_session(
+                                &key,
+                                session,
+                                client,
+                                executor,
+                                requests,
+                                (window, cx),
+                            );
                         }
                         Some(Err(error))
                             if matches!(
@@ -286,6 +296,11 @@ impl Workspace {
             return;
         }
         let request = attempt.request.clone();
+        let requests = if retry {
+            self.requests_for_creation(key, request.directory())
+        } else {
+            Vec::new()
+        };
         let Some(connection) = self
             .connection
             .as_ref()
@@ -327,7 +342,14 @@ impl Workspace {
                     Some(Ok(SessionObservation::Found(session))) => {
                         this.creations.phase(&key, CreationPhase::Confirmed);
                         if retry {
-                            this.bind_created_session(&key, *session, client, executor, window, cx);
+                            this.bind_created_session(
+                                &key,
+                                *session,
+                                client,
+                                executor,
+                                requests,
+                                (window, cx),
+                            );
                         } else if key.runtime == this.runtime {
                             let update = this.sessions.apply([SessionChange::Created(*session)]);
                             this.after_index_update(update, window, cx);
@@ -349,7 +371,7 @@ impl Workspace {
                                 .get(&key)
                                 .is_some_and(|attempt| attempt.phase == CreationPhase::Uncertain)
                         {
-                            this.start_creation_post(key.clone(), window, cx);
+                            this.start_creation_post(key.clone(), requests, window, cx);
                         }
                     }
                     Some(Err(SessionError::IdentityMismatch | SessionError::LocationMismatch)) => {
@@ -415,9 +437,10 @@ impl Workspace {
         session: SessionRecord,
         client: ServerClient,
         executor: tokio::runtime::Handle,
-        window: &mut Window,
-        cx: &mut Context<Self>,
+        requests: Vec<RequestKey>,
+        context: (&mut Window, &mut Context<Self>),
     ) {
+        let (window, cx) = context;
         let Some(attempt) = self
             .creations
             .get(key)
@@ -466,7 +489,9 @@ impl Workspace {
         self.creations.remove(key);
         if key.runtime == self.runtime {
             self.save_composer_draft(cx);
-            let update = self.sessions.apply([SessionChange::Created(session)]);
+            let update = self
+                .sessions
+                .apply([SessionChange::Created(session.clone())]);
             self.after_index_update(update, window, cx);
             self.ensure_open(&key.session, cx);
             if attempt.navigation == Some(self.navigation_revision)
@@ -478,7 +503,17 @@ impl Workspace {
         }
         // This barrier snapshots creation removal and the session-owned attempt
         // together. A failed write retains the message without issuing a prompt.
-        self.start_created_send(key.clone(), dispatched, client, executor, window, cx);
+        self.start_created_send(
+            key.clone(),
+            CapturedPrompt {
+                prompt: dispatched,
+                requests,
+            },
+            &session,
+            client,
+            executor,
+            (window, cx),
+        );
     }
 
     pub(crate) fn mark_creation_deleted(&mut self, key: &SessionKey, cx: &mut Context<Self>) {
@@ -493,10 +528,11 @@ impl Workspace {
     pub(crate) fn retry_created_prompt(
         &mut self,
         key: &SessionKey,
+        requests: Vec<RequestKey>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.lookup_created_session(key, CreatedAction::Dispatch, window, cx);
+        self.lookup_created_session(key, CreatedAction::Dispatch(requests), window, cx);
     }
 
     pub(crate) fn check_created_send(
@@ -506,10 +542,16 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let requests = self
+            .send_attempts
+            .attempt(key)
+            .map_or_else(Vec::new, |attempt| {
+                self.requests_for_creation(key, attempt.owner.directory())
+            });
         self.lookup_created_session(
             key,
             if retry {
-                CreatedAction::RetryPrompt
+                CreatedAction::RetryPrompt(requests)
             } else {
                 CreatedAction::ObservePrompt
             },
@@ -574,22 +616,33 @@ impl Workspace {
                     return;
                 }
                 match result {
-                    Some(Ok(SessionObservation::Found(session))) => match action {
-                        CreatedAction::Dispatch => this.dispatch_created_retry(
-                            key.clone(),
-                            first_prompt_selection(&prompt, &session),
-                            client,
-                            executor,
-                            window,
-                            cx,
-                        ),
-                        CreatedAction::ObservePrompt => {
-                            this.continue_created_recovery(&key, false, window, cx)
+                    Some(Ok(SessionObservation::Found(session))) => {
+                        if key.runtime == this.runtime {
+                            let update = this
+                                .sessions
+                                .apply([SessionChange::Created((*session).clone())]);
+                            this.after_index_update(update, window, cx);
                         }
-                        CreatedAction::RetryPrompt => {
-                            this.continue_created_recovery(&key, true, window, cx)
+                        match action {
+                            CreatedAction::Dispatch(requests) => this.dispatch_created_retry(
+                                key.clone(),
+                                CapturedPrompt {
+                                    prompt: first_prompt_selection(&prompt, &session),
+                                    requests,
+                                },
+                                &session,
+                                client,
+                                executor,
+                                (window, cx),
+                            ),
+                            CreatedAction::ObservePrompt => {
+                                this.continue_created_recovery(&key, None, window, cx)
+                            }
+                            CreatedAction::RetryPrompt(requests) => {
+                                this.continue_created_recovery(&key, Some(requests), window, cx)
+                            }
                         }
-                    },
+                    }
                     Some(Ok(SessionObservation::NotObserved)) => {
                         this.mark_creation_deleted(&key, cx)
                     }

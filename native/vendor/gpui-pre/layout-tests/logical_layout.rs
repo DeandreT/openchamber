@@ -11,6 +11,41 @@ use gpui::{
 };
 
 #[gpui::test]
+fn intrinsic_text_width_obeys_the_layout_policy(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    for scale in [1.0, 1.25, 1.5] {
+        for mode in [LayoutMode::DevicePixels, LayoutMode::Logical] {
+            cx.update(|window, _| {
+                window.set_layout_mode(mode);
+                window.set_scale_factor(scale);
+            });
+            cx.draw(
+                point(px(0.), px(0.)),
+                size(px(100.), px(100.)),
+                |window, cx| {
+                    let mut text = div().text_size(px(10.1)).child("Local").into_any();
+                    let measured = text.layout_as_root(
+                        size(AvailableSpace::MinContent, AvailableSpace::MinContent),
+                        window,
+                        cx,
+                    );
+                    // NoopTextSystem advances five BMP characters by 5 * 10.1 * 0.6.
+                    let expected = match mode {
+                        LayoutMode::Logical => 30.3,
+                        LayoutMode::DevicePixels => (31.0_f32 * scale).ceil() / scale,
+                    };
+                    assert!(
+                        (f32::from(measured.width) - expected).abs() < 0.0001,
+                        "intrinsic text width at scale {scale} in {mode:?}: {measured:?}"
+                    );
+                    div()
+                },
+            );
+        }
+    }
+}
+
+#[gpui::test]
 fn independent_rows_preserve_500_logical_strides(cx: &mut TestAppContext) {
     let cx = cx.add_empty_window();
     cx.update(|window, _| assert_eq!(window.layout_mode(), LayoutMode::DevicePixels));

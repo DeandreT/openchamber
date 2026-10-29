@@ -34,6 +34,8 @@ static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
 #[path = "creation_tests.rs"]
 mod creation_tests;
+#[path = "request_tests.rs"]
+mod request_tests;
 
 struct Fixture(PathBuf);
 
@@ -354,6 +356,151 @@ fn configure_send(
 }
 
 #[gpui_kit::test]
+fn child_prompt_policy_blocks_send_and_retry_without_consuming_text(cx: &mut TestAppContext) {
+    use openchamber_native_core::session::{MetadataFacts, SessionKind, SessionPatch};
+    use openchamber_native_core::session_index::SessionChange;
+
+    let fixture = Fixture::new();
+    let key = tests::key("child-policy-runtime", "ses_child_policy");
+    let server = Server::new(fixture.journal(), false);
+    let (window, workspace) = open(cx, &server, &fixture, &key);
+    ready(cx, &workspace);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            configure_send(workspace, &key, window, cx);
+            let mut child = workspace
+                .sessions
+                .get(&key.session)
+                .expect("session")
+                .clone();
+            child.parent_id = Some("ses_missing_parent".into());
+            child.title = "Review".into();
+            child.agent = Some("review".into());
+            let load = workspace.sessions.begin_load();
+            let _ = workspace.sessions.complete_load(load, vec![child]);
+            workspace.composer.update(cx, |composer, cx| {
+                composer.set_value("keep this draft", window, cx)
+            });
+            assert!(!workspace.composer_editable());
+            assert!(!workspace.can_send_connected());
+            workspace.submit_connected(window, cx);
+            assert!(workspace.send_attempts.attempt(&key).is_none());
+            assert_eq!(
+                workspace.composer.read(cx).value().as_ref(),
+                "keep this draft"
+            );
+            let mut attempt = tests::attempt(&key);
+            attempt.admission = Admission::Uncertain;
+            let id = attempt.prompt.message_id.clone();
+            workspace.send_attempts =
+                crate::send_attempt::SendAttempts::from_snapshot(vec![(key.clone(), attempt)])
+                    .expect("valid retained attempt");
+            workspace.retry_persisted_prompt(&key, &id, Vec::new(), window, cx);
+            assert!(!workspace.send_attempts.is_active(&key));
+            assert_eq!(
+                workspace
+                    .send_attempts
+                    .attempt(&key)
+                    .expect("retained")
+                    .prompt
+                    .message_id,
+                id
+            );
+            assert_eq!(
+                workspace.composer.read(cx).value().as_ref(),
+                "keep this draft"
+            );
+            let _ = workspace.sessions.apply(vec![SessionChange::Patched {
+                session_id: key.session.clone(),
+                patch: SessionPatch {
+                    metadata: Some(MetadataFacts {
+                        kind: SessionKind::Review,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            }]);
+            assert!(
+                workspace.prompt_allowed(&key),
+                "explicit review metadata enables prompting"
+            );
+            assert!(workspace.composer_editable());
+        });
+    })
+    .expect("window open");
+    assert_eq!(
+        server.prompt_count(),
+        0,
+        "blocked calls must not reach the server"
+    );
+    close(cx, window, &workspace);
+}
+
+#[gpui_kit::test]
+fn child_prompt_policy_rechecks_metadata_after_durable_preparation(cx: &mut TestAppContext) {
+    use openchamber_native_core::session::{MetadataFacts, SessionKind, SessionPatch};
+    use openchamber_native_core::session_index::SessionChange;
+
+    let fixture = Fixture::new();
+    let key = tests::key("policy-recheck-runtime", "ses_policy_recheck");
+    let server = Server::new(fixture.journal(), false);
+    let (window, workspace) = open(cx, &server, &fixture, &key);
+    ready(cx, &workspace);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            configure_send(workspace, &key, window, cx);
+            let mut review = workspace
+                .sessions
+                .get(&key.session)
+                .expect("session")
+                .clone();
+            review.parent_id = Some("ses_parent".into());
+            review.kind = SessionKind::Review;
+            let load = workspace.sessions.begin_load();
+            let _ = workspace.sessions.complete_load(load, vec![review]);
+            workspace.composer.update(cx, |composer, cx| {
+                composer.set_value("preserve after revocation", window, cx)
+            });
+            workspace.submit_connected(window, cx);
+            assert!(
+                workspace.send_attempts.is_active(&key),
+                "send waits for durable preparation"
+            );
+            let _ = workspace.sessions.apply(vec![SessionChange::Patched {
+                session_id: key.session.clone(),
+                patch: SessionPatch {
+                    metadata: Some(MetadataFacts::default()),
+                    ..Default::default()
+                },
+            }]);
+        });
+    })
+    .expect("window open");
+    wait(cx, |cx| {
+        cx.read(|cx| !workspace.read(cx).send_attempts.is_active(&key))
+    });
+    cx.read(|cx| {
+        assert_eq!(
+            workspace.read(cx).composer.read(cx).value().as_ref(),
+            "preserve after revocation"
+        );
+        assert!(workspace.read(cx).send_attempts.attempt(&key).is_none());
+    });
+    assert_eq!(
+        server.prompt_count(),
+        0,
+        "revoked review must not dispatch after its save"
+    );
+    close(cx, window, &workspace);
+    let (_, loaded) = MutationJournal::open(&fixture.journal()).expect("closed lock released");
+    let LoadedJournal::Present(snapshot) = loaded else {
+        panic!("saved draft exists")
+    };
+    assert_eq!(snapshot.drafts[0].1.text, "preserve after revocation");
+    assert!(snapshot.attempts.is_empty());
+}
+
+#[gpui_kit::test]
 fn initial_send_is_durable_before_any_mutation_and_preserves_newer_typing(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let key = tests::key("first-send-runtime", "ses_first_send");
@@ -592,6 +739,13 @@ fn explicit_retry_checks_identity_and_persists_before_post_then_survives_reopen(
     ready(cx, &workspace);
     cx.update_window(window, |_, window, cx| {
         workspace.update(cx, |workspace, cx| {
+            // Retained prompt identity does not establish the session's prompt policy.
+            let _ = workspace.sessions.apply([
+                openchamber_native_core::session_index::SessionChange::Created(SessionRecord::new(
+                    key.session.clone(),
+                    "/project",
+                )),
+            ]);
             workspace.check_recovery(&key, window, cx)
         });
     })
@@ -792,6 +946,12 @@ fn late_retry_response_preserves_new_runtime_composer(cx: &mut TestAppContext) {
     ready(cx, &workspace);
     cx.update_window(window, |_, window, cx| {
         workspace.update(cx, |workspace, cx| {
+            let _ = workspace.sessions.apply([
+                openchamber_native_core::session_index::SessionChange::Created(SessionRecord::new(
+                    key.session.clone(),
+                    "/project",
+                )),
+            ]);
             workspace.retry_recovery(&key, window, cx)
         });
     })
@@ -872,8 +1032,18 @@ fn pending_send_check_is_reachable_by_keyboard(cx: &mut TestAppContext) {
                 .read(cx)
                 .recovery_items(cx)
                 .iter()
-                .any(|row| row.can_retry)
+                .any(|row| row.phase == crate::recovery_view::RecoveryPhase::NotObserved)
         })
+    });
+    cx.read(|cx| {
+        assert!(
+            workspace
+                .read(cx)
+                .recovery_items(cx)
+                .iter()
+                .all(|row| !row.can_retry),
+            "an unknown session stays write-blocked until its prompt policy is known"
+        );
     });
     assert_eq!(
         server.prompt_count(),

@@ -15,6 +15,8 @@ pub enum SessionKind {
     /// These never appear in any sidebar projection and never promote their
     /// children into Chats.
     Btw,
+    /// An independent review identified by explicit OpenChamber metadata.
+    Review,
 }
 
 /// OpenCode's project metadata attached to a session record.
@@ -109,6 +111,25 @@ pub enum LiveStatus {
 }
 
 impl SessionRecord {
+    /// Electron's prompt policy. Review metadata takes precedence over a stale parent ID.
+    pub fn prompt_read_only(
+        &self,
+        allow_prompting_subagents: bool,
+        surface_read_only: bool,
+    ) -> bool {
+        if self.kind == SessionKind::Review {
+            surface_read_only
+        } else if self
+            .parent_id
+            .as_ref()
+            .is_some_and(|parent| !parent.as_str().is_empty())
+        {
+            !allow_prompting_subagents
+        } else {
+            surface_read_only
+        }
+    }
+
     /// Creates an active top-level conversation record.
     pub fn new(id: impl Into<SessionId>, directory: impl Into<String>) -> Self {
         Self {

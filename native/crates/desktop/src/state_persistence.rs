@@ -77,6 +77,10 @@ impl Workspace {
 
     pub(crate) fn composer_editable(&self) -> bool {
         (self.is_synthetic() || self.persistence.loaded())
+            && self
+                .selected
+                .as_ref()
+                .is_none_or(|session| self.prompt_allowed(&self.mutation_key(session)))
             && !matches!(self.persistence.status, Status::Closing | Status::Loading)
             && !self.selected.as_ref().is_some_and(|session| {
                 self.send_attempts

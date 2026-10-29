@@ -60,6 +60,7 @@ pub(crate) struct ComposerSlot {
     /// The smallest height measured: the composer at rest.
     resting: Option<f32>,
     height: Option<f32>,
+    dock_visible: bool,
 }
 
 impl ComposerSlot {
@@ -76,6 +77,7 @@ impl ComposerSlot {
         Self {
             resting: Some(self.resting.map_or(height, |resting| resting.min(height))),
             height: Some(height),
+            dock_visible: self.dock_visible,
         }
     }
 
@@ -84,7 +86,12 @@ impl ComposerSlot {
     pub(crate) fn tail_inset(self) -> f32 {
         let resting = self.resting.unwrap_or(DEFAULT_SLOT_HEIGHT);
         let height = self.height.unwrap_or(resting);
-        (resting + TAIL_GAP).max(height + TAIL_GAP - GROWTH_ALLOWANCE)
+        let inset = (resting + TAIL_GAP).max(height + TAIL_GAP - GROWTH_ALLOWANCE);
+        if self.dock_visible {
+            inset.max(height + 12.0)
+        } else {
+            inset
+        }
     }
 }
 
@@ -146,6 +153,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let slot = self.composer_slot.clone();
+        let dock_visible = self.active_request().is_some();
         let list = self
             .selected
             .as_ref()
@@ -154,7 +162,8 @@ impl Workspace {
         let measure = canvas(
             move |bounds, window, _| {
                 let previous = slot.get();
-                let next = previous.measured(f32::from(bounds.size.height));
+                let mut next = previous.measured(f32::from(bounds.size.height));
+                next.dock_visible = dock_visible;
                 slot.set(next);
                 if next.tail_inset() != previous.tail_inset()
                     && let Some(list) = &list
@@ -188,6 +197,7 @@ impl Workspace {
                         window,
                         self.chat_area_width(window),
                     ))
+                    .children(self.render_request_dock(palette, window, cx))
                     .child(self.render_composer_box(palette, direction, window, cx)),
             )
             .into_any_element()
@@ -210,10 +220,9 @@ impl Workspace {
             - (START_ACTIONS - 1.0) * START_GAP
             - START_GAP
             - 2.0 * (END_GAP + ACTION_SIZE);
-        let streaming = self
-            .selected
-            .as_ref()
-            .is_some_and(|id| self.is_streaming(id));
+        let streaming = self.selected.as_ref().is_some_and(|id| {
+            self.is_streaming(id) && self.requests_for_send(&self.mutation_key(id)).is_empty()
+        });
         let empty = self.composer.read(cx).value().trim().is_empty();
         let can_send = !empty
             && ((self.selected.is_some() && (self.is_synthetic() || self.can_send_connected()))

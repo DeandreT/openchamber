@@ -18,11 +18,37 @@ use serde_json::Value;
 
 use crate::error::TransportError;
 use crate::projection::{self, metadata_facts, part_ids};
+use crate::request_wire;
 use crate::wire;
+use openchamber_native_core::pending_requests::{PendingRequest, RequestId};
+use openchamber_native_core::request_owner::RequestOwner;
+
+/// Live blocking-request transitions. Terminal events settle only their exact owner and ID.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BlockingRequestEvent {
+    Asked(PendingRequest),
+    Settled { owner: RequestOwner, id: RequestId },
+}
 
 /// One domain change announced by the server.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServerEvent {
+    /// A permission or form transition. Real-session events can omit location;
+    /// location-owned forms always retain an explicit directory.
+    BlockingRequest {
+        directory: Option<String>,
+        event: BlockingRequestEvent,
+    },
+    /// A malformed blocking event grants no state authority. Reconcile its known scope;
+    /// keep consuming the stream so one bad request cannot strand unrelated sessions.
+    BlockingRequestInvalid {
+        kind: String,
+        directory: Option<String>,
+    },
+    /// The location's live services stopped. Reconcile selected scopes without project fan-out.
+    LocationShutdown {
+        directory: String,
+    },
     /// The bridge is ready; `replay_reset` means replay could not resume.
     Ready {
         replay_reset: bool,
@@ -144,7 +170,21 @@ pub fn decode_frame(text: &str) -> Result<DecodedFrame, TransportError> {
             })));
         }
         "event" => match frame.payload {
-            Some(payload) => translate(&payload),
+            Some(payload) => match blocking_event(&payload) {
+                Ok(Some(event)) => vec![event],
+                Ok(None) => translate(&payload),
+                Err(_) => vec![ServerEvent::BlockingRequestInvalid {
+                    kind: payload
+                        .get("type")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    directory: payload
+                        .pointer("/location/directory")
+                        .and_then(Value::as_str)
+                        .and_then(openchamber_native_core::request_owner::normalize_directory),
+                }],
+            },
             None => Vec::new(),
         },
         other => vec![ServerEvent::Unsupported {
@@ -155,6 +195,114 @@ pub fn decode_frame(text: &str) -> Result<DecodedFrame, TransportError> {
         event_id: frame.event_id,
         events,
     })
+}
+
+fn blocking_event(payload: &Value) -> Result<Option<ServerEvent>, TransportError> {
+    use openchamber_native_core::ids::{FormId, PermissionId};
+    let kind = payload
+        .get("type")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if !matches!(
+        kind,
+        "permission.asked"
+            | "permission.replied"
+            | "form.created"
+            | "form.replied"
+            | "form.cancelled"
+            | "location.shutdown"
+    ) {
+        return Ok(None);
+    }
+    let malformed = || TransportError::Malformed("invalid blocking request event".to_owned());
+    let directory = match payload.get("location") {
+        None => None,
+        Some(location) => {
+            let value = location
+                .get("directory")
+                .and_then(Value::as_str)
+                .ok_or_else(malformed)?;
+            Some(
+                openchamber_native_core::request_owner::normalize_directory(value)
+                    .ok_or_else(malformed)?,
+            )
+        }
+    };
+    if kind == "location.shutdown" {
+        return Ok(Some(ServerEvent::LocationShutdown {
+            directory: directory.ok_or_else(malformed)?,
+        }));
+    }
+    let data = payload.get("data").ok_or_else(malformed)?;
+    let event = match kind {
+        "permission.asked" => {
+            let value: request_wire::Permission =
+                serde_json::from_value(data.clone()).map_err(|_| malformed())?;
+            BlockingRequestEvent::Asked(PendingRequest::Permission(
+                value.project().map_err(|_| malformed())?,
+            ))
+        }
+        "form.created" => {
+            let value: request_wire::Form =
+                serde_json::from_value(data.get("form").ok_or_else(malformed)?.clone())
+                    .map_err(|_| malformed())?;
+            BlockingRequestEvent::Asked(PendingRequest::Form(
+                value.project().map_err(|_| malformed())?,
+            ))
+        }
+        _ => {
+            let owner = RequestOwner::from_wire(
+                data.get("sessionID")
+                    .and_then(Value::as_str)
+                    .ok_or_else(malformed)?,
+            )
+            .ok_or_else(malformed)?;
+            let id = if kind == "permission.replied" {
+                if !matches!(owner, RequestOwner::Session(_))
+                    || !matches!(
+                        data.get("reply").and_then(Value::as_str),
+                        Some("once" | "always" | "reject")
+                    )
+                {
+                    return Err(malformed());
+                }
+                let id = data
+                    .get("requestID")
+                    .and_then(Value::as_str)
+                    .ok_or_else(malformed)?;
+                if !request_wire::valid_id(id, "per") {
+                    return Err(malformed());
+                }
+                RequestId::Permission(PermissionId::from(id))
+            } else {
+                let id = data
+                    .get("id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(malformed)?;
+                if !request_wire::valid_id(id, "frm_") {
+                    return Err(malformed());
+                }
+                if kind == "form.replied" {
+                    let _: std::collections::BTreeMap<String, request_wire::AnswerValue> =
+                        serde_json::from_value(data.get("answer").ok_or_else(malformed)?.clone())
+                            .map_err(|_| malformed())?;
+                }
+                RequestId::Form(FormId::from(id))
+            };
+            BlockingRequestEvent::Settled { owner, id }
+        }
+    };
+    let global = match &event {
+        BlockingRequestEvent::Asked(PendingRequest::Form(form)) => {
+            matches!(form.owner, RequestOwner::Location)
+        }
+        BlockingRequestEvent::Settled { owner, .. } => matches!(owner, RequestOwner::Location),
+        _ => false,
+    };
+    if global && directory.is_none() {
+        return Err(malformed());
+    }
+    Ok(Some(ServerEvent::BlockingRequest { directory, event }))
 }
 
 /// Server events and the messages they create share one id space.

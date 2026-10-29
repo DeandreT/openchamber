@@ -76,7 +76,8 @@ pub(crate) fn view(id: ElementId, text: String, palette: &Palette, nesting: Nest
 }
 
 pub(crate) fn styled(view: TextView, palette: &Palette, author: Author) -> TextView {
-    view.style(body_style(palette, body_color(palette, author)))
+    view.on_link_click(crate::markdown_links::on_markdown_link_click)
+        .style(body_style(palette, body_color(palette, author)))
         .selectable(true)
         .text_size(rems(BODY_SIZE))
 }

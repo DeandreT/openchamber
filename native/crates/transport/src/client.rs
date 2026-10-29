@@ -353,6 +353,20 @@ pub struct ServerClient {
     part_shells: bool,
 }
 
+/// Pending identity advertised by the host, without an actionable request body.
+#[derive(Clone, Debug)]
+pub struct PendingRequestStub {
+    pub owner: openchamber_native_core::request_owner::RequestOwner,
+    pub id: openchamber_native_core::pending_requests::RequestId,
+}
+
+/// Global status read that starts no directory. Missing pending support is explicit.
+#[derive(Debug)]
+pub struct HostSessionStatus {
+    pub statuses: HashMap<SessionId, LiveStatus>,
+    pub pending: Option<Vec<PendingRequestStub>>,
+}
+
 impl ServerClient {
     pub fn new(endpoint: Endpoint, credential: Credential) -> Result<Self, TransportError> {
         let http = reqwest::Client::builder()
@@ -702,10 +716,78 @@ impl ServerClient {
     /// event stream. The read starts no OpenCode location. Sessions it does
     /// not list are idle; unknown states are left out.
     pub async fn session_statuses(&self) -> Result<HashMap<SessionId, LiveStatus>, TransportError> {
+        Ok(self.host_session_status().await?.statuses)
+    }
+
+    /// Host-only bootstrap hints. Stubs never grant reply or removal authority.
+    pub async fn host_session_status(&self) -> Result<HostSessionStatus, TransportError> {
         let snapshot: wire::StatusSnapshot = self
             .get_json(self.endpoint.url("api/sessions/status"), None)
             .await?;
-        Ok(snapshot
+        let pending = snapshot
+            .pending
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .map(|owners| {
+                let mut stubs = Vec::new();
+                for (owner, entries) in owners {
+                    let Some(owner) =
+                        openchamber_native_core::request_owner::RequestOwner::from_wire(owner)
+                    else {
+                        continue;
+                    };
+                    for (field, permission) in [("permissions", true), ("forms", false)] {
+                        let Some(entries) =
+                            entries.get(field).and_then(serde_json::Value::as_array)
+                        else {
+                            continue;
+                        };
+                        for entry in entries {
+                            let Some(id) = entry
+                                .get("id")
+                                .and_then(serde_json::Value::as_str)
+                                .filter(|id| !id.is_empty())
+                            else {
+                                continue;
+                            };
+                            if !crate::request_wire::valid_id(
+                                id,
+                                if permission { "per" } else { "frm_" },
+                            ) {
+                                continue;
+                            }
+                            if entry.get("sessionID").and_then(serde_json::Value::as_str)
+                                != Some(owner.as_str())
+                            {
+                                continue;
+                            }
+                            if permission
+                                && matches!(
+                                    owner,
+                                    openchamber_native_core::request_owner::RequestOwner::Location
+                                )
+                            {
+                                continue;
+                            }
+                            let id = if permission {
+                                openchamber_native_core::pending_requests::RequestId::Permission(
+                                    id.into(),
+                                )
+                            } else {
+                                openchamber_native_core::pending_requests::RequestId::Form(
+                                    id.into(),
+                                )
+                            };
+                            stubs.push(PendingRequestStub {
+                                owner: owner.clone(),
+                                id,
+                            });
+                        }
+                    }
+                }
+                stubs
+            });
+        let statuses = snapshot
             .sessions
             .into_iter()
             .filter_map(|(id, entry)| {
@@ -717,7 +799,8 @@ impl ServerClient {
                 };
                 Some((SessionId::new(id), status))
             })
-            .collect())
+            .collect();
+        Ok(HostSessionStatus { statuses, pending })
     }
 
     /// The server's home directory and managed Chats roots.
