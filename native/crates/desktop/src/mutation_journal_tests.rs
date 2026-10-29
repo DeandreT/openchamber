@@ -48,11 +48,107 @@ fn sample() -> JournalSnapshot {
         drafts: vec![(owner, Draft::new("unsent λ"))],
         attempts: vec![(key, attempt)],
         creations: Vec::new(),
+        selections: Vec::new(),
     }
 }
 
 #[test]
-fn journal_v1_migrates_to_v2_without_losing_existing_sends() {
+fn staged_selection_opened_before_handoff_round_trips_without_duplicate_owners() {
+    use openchamber_native_core::composer_selection::{
+        ComposerSelections, CreationSource, Effort, SelectionContext, SelectionOwner,
+    };
+    use openchamber_native_core::ids::ProjectId;
+    use openchamber_native_core::send_config::{ModelChoice, Selection, SelectionDefaults};
+    let (key, attempt) = crate::create_attempt::tests::sample();
+    let source = SelectionOwner {
+        draft: attempt.source.clone(),
+        project: Some(ProjectId::from(attempt.project.clone())),
+    };
+    let target = SelectionOwner {
+        draft: DraftKey::new(
+            key.runtime.clone(),
+            source.draft.directory(),
+            DraftTarget::Session(key.session.clone()),
+        )
+        .expect("target"),
+        project: source.project.clone(),
+    };
+    let defaults = SelectionDefaults::default();
+    let context = SelectionContext {
+        agents: &[],
+        providers: &[],
+        defaults: &defaults,
+        catalog_authoritative: false,
+    };
+    let mut choices = ComposerSelections::default();
+    choices.open(source.clone(), &context);
+    let captured = ModelChoice {
+        provider_id: "p".into(),
+        model_id: "captured".into(),
+        variant: None,
+    };
+    choices.pick_model(&source, captured.clone(), Some(Effort::Default), &context);
+    assert!(choices.stage_creation(&source, target.clone()));
+    choices.open(target.clone(), &context);
+    assert_eq!(
+        choices
+            .get(&target)
+            .expect("opened destination")
+            .selection()
+            .model,
+        Some(captured),
+        "opening a pending creation starts with its captured choices"
+    );
+    let newer = ModelChoice {
+        provider_id: "p".into(),
+        model_id: "newer".into(),
+        variant: None,
+    };
+    choices.pick_model(&target, newer.clone(), Some(Effort::Default), &context);
+    let mut snapshot = JournalSnapshot {
+        drafts: vec![],
+        attempts: vec![],
+        creations: vec![(key, attempt)],
+        selections: choices.snapshot(),
+    };
+    let round_trip = |snapshot: &JournalSnapshot| {
+        let bytes =
+            serde_json::to_vec(&Store::capture(snapshot).expect("valid journal during handoff"))
+                .expect("encode");
+        serde_json::from_slice::<Store>(&bytes)
+            .expect("decode")
+            .into_snapshot()
+            .expect("valid persisted journal")
+    };
+    snapshot = round_trip(&snapshot);
+    choices = ComposerSelections::restore(snapshot.selections);
+    choices.open(target.clone(), &context);
+    choices.commit_creation(
+        target.clone(),
+        Selection::default(),
+        CreationSource::Continued,
+    );
+    snapshot.creations.clear();
+    snapshot.selections = choices.snapshot();
+    let saved = round_trip(&snapshot);
+    assert!(
+        saved
+            .selections
+            .iter()
+            .all(|(_, state)| state.staged_from.is_none())
+    );
+    assert_eq!(
+        choices
+            .get(&target)
+            .expect("session choice")
+            .selection()
+            .model,
+        Some(newer)
+    );
+}
+
+#[test]
+fn journal_v1_migrates_without_losing_existing_sends() {
     let fixture = Scratch::new();
     let path = fixture.path();
     let (mut journal, _) = MutationJournal::open(&path).expect("open");
@@ -62,6 +158,7 @@ fn journal_v1_migrates_to_v2_without_losing_existing_sends() {
         serde_json::from_slice(&fs::read(&path).expect("read")).expect("JSON");
     stored["version"] = 1.into();
     stored.as_object_mut().expect("object").remove("creations");
+    stored.as_object_mut().expect("object").remove("selections");
     for attempt in stored["attempts"].as_array_mut().expect("attempts") {
         attempt.as_object_mut().expect("attempt").remove("origin");
     }
@@ -77,7 +174,7 @@ fn journal_v1_migrates_to_v2_without_losing_existing_sends() {
     journal.save(&snapshot).expect("migrated save");
     let stored: serde_json::Value =
         serde_json::from_slice(&fs::read(&path).expect("read")).expect("JSON");
-    assert_eq!(stored["version"], 2);
+    assert_eq!(stored["version"], 3);
 }
 
 #[test]
@@ -98,6 +195,7 @@ fn creation_journal_round_trips_all_phases_and_newer_identical_typing() {
             drafts: vec![(attempt.source.clone(), attempt.draft.clone())],
             attempts: vec![],
             creations: vec![(key, attempt)],
+            selections: Vec::new(),
         };
         let stored = Store::capture(&snapshot).expect("capture");
         let restored = stored.into_snapshot().expect("restore");
@@ -129,6 +227,7 @@ fn creation_journal_rejects_conflicting_owners_configuration_and_identities() {
         drafts: vec![],
         attempts: vec![],
         creations: vec![(key.clone(), attempt.clone())],
+        selections: Vec::new(),
     };
     snapshot.creations.push((key.clone(), attempt));
     assert!(Store::capture(&snapshot).is_err());
@@ -147,6 +246,97 @@ fn loaded(value: LoadedJournal) -> JournalSnapshot {
         LoadedJournal::Present(snapshot) => snapshot,
         LoadedJournal::Missing => panic!("expected persisted snapshot"),
     }
+}
+
+#[test]
+fn journal_selection_default_and_memory_round_trip_and_malformed_rejection() {
+    use openchamber_native_core::composer_selection::{
+        Effort, ManualSelection, SelectionOwner, SelectionSnapshot,
+    };
+    use openchamber_native_core::send_config::{ModelChoice, Selection};
+    let mut snapshot = sample();
+    let owner = SelectionOwner {
+        draft: snapshot.drafts[0].0.clone(),
+        project: None,
+    };
+    let model = ModelChoice {
+        provider_id: "p".into(),
+        model_id: "m".into(),
+        variant: Some("high".into()),
+    };
+    let state = SelectionSnapshot {
+        inherited: Selection {
+            agent_name: Some("build".into()),
+            model: Some(model.clone()),
+        },
+        effort: Effort::Default,
+        manual: ManualSelection {
+            agent: false,
+            model: true,
+        },
+        agent_models: vec![("build".into(), model)],
+        efforts: vec![(
+            Some("build".into()),
+            "p".into(),
+            "m".into(),
+            Effort::Default,
+        )],
+        ..SelectionSnapshot::default()
+    };
+    snapshot.selections.push((owner, state));
+    let bytes =
+        serde_json::to_vec(&Store::capture(&snapshot).expect("valid capture")).expect("serialize");
+    let stored: Store = serde_json::from_slice(&bytes).expect("decode");
+    let restored = stored.into_snapshot().expect("restore");
+    assert_eq!(
+        snapshot.selections, restored.selections,
+        "Default remains separate from Inherit"
+    );
+    let mut invalid = restored;
+    invalid.selections.push(invalid.selections[0].clone());
+    assert!(
+        Store::capture(&invalid).is_err(),
+        "duplicate owners never get a writer"
+    );
+    invalid.selections.pop();
+    let duplicate = invalid.selections[0].1.efforts[0].clone();
+    invalid.selections[0].1.efforts.push(duplicate);
+    assert!(
+        Store::capture(&invalid).is_err(),
+        "duplicate memory keys are rejected"
+    );
+    let mut malformed: serde_json::Value = serde_json::from_slice(&bytes).expect("JSON");
+    malformed["selections"][0]["effort"] = serde_json::json!({"named": ""});
+    assert!(
+        serde_json::from_value::<Store>(malformed)
+            .expect("shape")
+            .into_snapshot()
+            .is_err()
+    );
+}
+
+#[test]
+fn journal_v2_loads_and_v3_requires_selection_field() {
+    let fixture = Scratch::new();
+    let path = fixture.path();
+    let (mut journal, _) = MutationJournal::open(&path).expect("open");
+    journal.save(&sample()).expect("save");
+    drop(journal);
+    let mut value: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read")).expect("JSON");
+    value.as_object_mut().expect("object").remove("selections");
+    fs::write(&path, serde_json::to_vec(&value).expect("JSON")).expect("write");
+    assert!(
+        MutationJournal::open(&path).is_err(),
+        "missing v3 selection field is malformed"
+    );
+    value["version"] = 2.into();
+    fs::write(&path, serde_json::to_vec(&value).expect("JSON")).expect("write");
+    let (mut journal, restored) = MutationJournal::open(&path).expect("v2 loads");
+    let restored = loaded(restored);
+    assert!(restored.selections.is_empty());
+    assert_eq!(restored.attempts.len(), 1);
+    journal.save(&restored).expect("resave");
 }
 
 fn write_raw(path: &Path, bytes: &[u8]) {

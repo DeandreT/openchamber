@@ -37,10 +37,10 @@ mod creation_tests;
 #[path = "request_tests.rs"]
 mod request_tests;
 
-struct Fixture(PathBuf);
+pub(crate) struct Fixture(PathBuf);
 
 impl Fixture {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let sequence = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
         let path = PathBuf::from(format!(
             "/tmp/opencode/native-recovery-{}-{sequence}",
@@ -50,7 +50,7 @@ impl Fixture {
         Self(path)
     }
 
-    fn journal(&self) -> PathBuf {
+    pub(crate) fn journal(&self) -> PathBuf {
         self.0.join("profile").join("drafts-and-sends.json")
     }
 
@@ -63,6 +63,7 @@ impl Fixture {
                 drafts: Vec::new(),
                 attempts: vec![(key.clone(), attempt)],
                 creations: Vec::new(),
+                selections: Vec::new(),
             })
             .expect("attempt saves");
         assert!(matches!(result, JournalCommit::Durable));
@@ -99,6 +100,20 @@ impl Server {
         journal: PathBuf,
         hold_prompt: bool,
         delivered: Option<(String, String)>,
+    ) -> Self {
+        Self::with_routing(
+            journal,
+            hold_prompt,
+            delivered,
+            Arc::new(AtomicBool::new(false)),
+        )
+    }
+
+    fn with_routing(
+        journal: PathBuf,
+        hold_prompt: bool,
+        delivered: Option<(String, String)>,
+        routing: Arc<AtomicBool>,
     ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener binds");
         listener
@@ -138,7 +153,13 @@ impl Server {
                         .and_then(|bytes| serde_json::from_slice(&bytes).ok());
                 }
                 let prompt = request.path.ends_with("/prompt");
-                let (status, body) = if request.method == "POST" && !prompt {
+                let (status, body) = if request.path == "/api/routing" {
+                    if routing.load(Ordering::Acquire) {
+                        ("200 OK", r#"{"available":true,"autoReady":true}"#)
+                    } else {
+                        ("503 Service Unavailable", "{}")
+                    }
+                } else if request.method == "POST" && !prompt {
                     ("204 No Content", "")
                 } else if prompt {
                     // A malformed success response leaves admission unknown.
@@ -294,13 +315,17 @@ fn wait(cx: &mut TestAppContext, mut done: impl FnMut(&mut TestAppContext) -> bo
     }
 }
 
-fn ready(cx: &mut TestAppContext, workspace: &Entity<Workspace>) {
+pub(crate) fn ready(cx: &mut TestAppContext, workspace: &Entity<Workspace>) {
     wait(cx, |cx| {
         cx.read(|cx| workspace.read(cx).persistence_ready())
     });
 }
 
-fn close(cx: &mut TestAppContext, window: AnyWindowHandle, workspace: &Entity<Workspace>) {
+pub(crate) fn close(
+    cx: &mut TestAppContext,
+    window: AnyWindowHandle,
+    workspace: &Entity<Workspace>,
+) {
     cx.update_window(window, |_, window, cx| {
         workspace.update(cx, |workspace, cx| workspace.request_close(window, cx));
     })
@@ -353,6 +378,218 @@ fn configure_send(
         .send_catalog
         .insert_test_directory("/project".to_owned(), catalog);
     workspace.select_session(key.session.clone(), window, cx);
+}
+
+#[gpui_kit::test]
+fn routing_failure_recovers_on_stream_reconnect_and_retains_last_known_readiness(
+    cx: &mut TestAppContext,
+) {
+    use openchamber_native_core::send_config::AutoRouting;
+    use openchamber_native_transport::stream::StreamItem;
+    let fixture = Fixture::new();
+    let key = tests::key("routing-runtime", "session");
+    let routing = Arc::new(AtomicBool::new(false));
+    let server = Server::with_routing(fixture.journal(), false, None, routing.clone());
+    let (window, workspace) = open(cx, &server, &fixture, &key);
+    ready(cx, &workspace);
+    wait(cx, |cx| {
+        cx.read(|cx| workspace.read(cx).send_catalog.routing_read.is_none())
+    });
+    assert_eq!(
+        cx.read(|cx| workspace.read(cx).send_catalog.routing),
+        AutoRouting::Unknown
+    );
+    let reconnect = |cx: &mut TestAppContext, generation_offset| {
+        cx.update_window(window, |_, window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                let connection = workspace.connection.as_mut().expect("connection");
+                connection.loaded = true;
+                let generation = connection.generation + generation_offset;
+                workspace.apply_stream_item(
+                    generation,
+                    StreamItem::Connected { resumed: true },
+                    window,
+                    cx,
+                );
+            })
+        })
+        .expect("window");
+    };
+    let count = || {
+        server
+            .requests
+            .lock()
+            .expect("requests")
+            .iter()
+            .filter(|request| request.path == "/api/routing")
+            .count()
+    };
+    let initial = count();
+    routing.store(true, Ordering::Release);
+    reconnect(cx, 1);
+    cx.run_until_parked();
+    assert_eq!(count(), initial, "stale connections cannot refresh routing");
+    reconnect(cx, 0);
+    wait(cx, |cx| {
+        cx.read(|cx| workspace.read(cx).send_catalog.routing == AutoRouting::Ready)
+    });
+    assert_eq!(count(), initial + 1);
+    routing.store(false, Ordering::Release);
+    reconnect(cx, 0);
+    wait(cx, |cx| {
+        cx.read(|cx| workspace.read(cx).send_catalog.routing_read.is_none())
+    });
+    assert_eq!(
+        cx.read(|cx| workspace.read(cx).send_catalog.routing),
+        AutoRouting::Ready,
+        "failed same-runtime refresh preserves known readiness"
+    );
+    assert_eq!(count(), initial + 2);
+    close(cx, window, &workspace);
+}
+
+#[gpui_kit::test]
+fn composer_choices_drive_wire_send_and_restart_without_changing_pending_attempt(
+    cx: &mut TestAppContext,
+) {
+    use openchamber_native_core::composer_selection::Effort;
+    let fixture = Fixture::new();
+    let key = tests::key("selection-runtime", "ses_selection");
+    let server = Server::new(fixture.journal(), false);
+    let (window, workspace) = open(cx, &server, &fixture, &key);
+    ready(cx, &workspace);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            configure_send(workspace, &key, window, cx);
+            let entry = workspace
+                .send_catalog
+                .directory("/project")
+                .expect("catalog");
+            let mut providers = entry.providers.ready().expect("providers").clone();
+            let mut other = providers[0].models[0].clone();
+            other.id = "other".into();
+            providers[0].models.push(other);
+            let mut catalog = DirectoryCatalog::default();
+            catalog.providers = Load::Ready(providers);
+            catalog.agents = Load::Ready(entry.agents.ready().expect("agents").clone());
+            catalog.opencode = Load::Ready(Default::default());
+            workspace
+                .send_catalog
+                .insert_test_directory("/project".into(), catalog);
+            workspace.refresh_composer_choices(cx);
+            let owner = workspace.selection_owner().expect("owner");
+            workspace.choose_composer_model(
+                &owner,
+                ModelChoice {
+                    provider_id: "provider".into(),
+                    model_id: "other".into(),
+                    variant: None,
+                },
+                cx,
+            );
+            workspace.choose_composer_effort(&owner, Effort::Default, cx);
+            workspace.composer.update(cx, |composer, cx| {
+                composer.set_value("chosen model and default", window, cx)
+            });
+            workspace.submit_connected(window, cx);
+        });
+    })
+    .expect("window");
+    wait(cx, |cx| {
+        cx.read(|cx| {
+            server.prompt_count() == 1 && !workspace.read(cx).send_attempts.is_active(&key)
+        })
+    });
+    {
+        let requests = server.requests.lock().expect("requests");
+        let request = requests
+            .iter()
+            .find(|request| request.method == "POST" && request.path.ends_with("/model"))
+            .expect("model mutation");
+        let body: Value = serde_json::from_slice(&request.body).expect("model body");
+        assert_eq!(body["model"]["id"], "other");
+        assert!(
+            body["model"].get("variant").is_none(),
+            "explicit Default omits variant on the wire"
+        );
+    }
+    cx.update_window(window, |_, _, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let owner = workspace.selection_owner().expect("owner");
+            let captured = workspace
+                .send_attempts
+                .attempt(&key)
+                .expect("uncertain send")
+                .prompt
+                .clone();
+            workspace.choose_composer_effort(&owner, Effort::Named("effort".into()), cx);
+            assert_eq!(
+                workspace
+                    .send_attempts
+                    .attempt(&key)
+                    .expect("pending")
+                    .prompt
+                    .model,
+                captured.model,
+                "new effort cannot mutate a pending retry"
+            );
+            workspace.choose_composer_effort(&owner, Effort::Default, cx);
+        });
+    })
+    .expect("window");
+    close(cx, window, &workspace);
+    let (window, restored) = open(cx, &server, &fixture, &key);
+    ready(cx, &restored);
+    cx.update_window(window, |_, window, cx| {
+        restored.update(cx, |workspace, cx| {
+            let session = SessionRecord::new(key.session.clone(), "/project");
+            let load = workspace.sessions.begin_load();
+            let _ = workspace.sessions.complete_load(load, vec![session]);
+            workspace.select_session(key.session.clone(), window, cx);
+        });
+    })
+    .expect("reopened session");
+    cx.read(|cx| {
+        let state = restored.read(cx);
+        let owner = state.selection_owner().expect("owner");
+        assert_eq!(
+            state
+                .composer_selections
+                .get(&owner)
+                .expect("restored selection")
+                .effort(),
+            &Effort::Default
+        );
+        assert_eq!(
+            state
+                .composer_selections
+                .get(&owner)
+                .expect("restored selection")
+                .selection()
+                .model
+                .expect("model")
+                .model_id,
+            "other"
+        );
+        assert_eq!(
+            state
+                .send_attempts
+                .attempt(&key)
+                .expect("retained pending")
+                .prompt
+                .model
+                .as_ref()
+                .expect("model")
+                .variant,
+            None
+        );
+    });
+    assert_eq!(
+        server.prompt_count(),
+        1,
+        "restart never replays a pending prompt"
+    );
+    close(cx, window, &restored);
 }
 
 #[gpui_kit::test]
@@ -883,7 +1120,15 @@ fn corrupt_and_locked_journals_gate_mutations(cx: &mut TestAppContext) {
         })
         .expect("blocked window is open");
         cx.run_until_parked();
-        assert!(server.requests.lock().expect("request lock").is_empty());
+        assert!(
+            server
+                .requests
+                .lock()
+                .expect("request lock")
+                .iter()
+                .all(|request| request.method == "GET" && request.path == "/api/routing"),
+            "blocked storage permits only routing readiness reads"
+        );
         if corrupt {
             assert_eq!(
                 fs::read(fixture.journal()).expect("corrupt journal remains"),
@@ -933,7 +1178,15 @@ fn normal_close_flushes_latest_dirty_draft_and_releases_lock(cx: &mut TestAppCon
             .text,
         "latest unsaved draft"
     );
-    assert!(server.requests.lock().expect("request lock").is_empty());
+    assert!(
+        server
+            .requests
+            .lock()
+            .expect("request lock")
+            .iter()
+            .all(|request| request.method == "GET" && request.path == "/api/routing"),
+        "closing a draft sends no mutations or recovery requests"
+    );
 }
 
 #[gpui_kit::test]

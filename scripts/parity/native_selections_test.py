@@ -161,8 +161,8 @@ class SelectionWorkflowProof(unittest.TestCase):
             probe.run()
 
         self.assertEqual(MODEL, "stream-1200cps")
-        self.assertLess(choices.index(("agent", "Fixture-beta")), choices.index(("model", MODEL)))
-        self.assertEqual(labels, {"model": MODEL, "agent": "Fixture-beta", "variant": "high"})
+        self.assertLess(choices.index(("agent", "fixture-beta")), choices.index(("model", MODEL)))
+        self.assertEqual(labels, {"model": MODEL, "agent": "fixture-beta", "variant": "high"})
         probe.reopen.assert_called_once_with("unsent")
         self.assertEqual(messages[1]["agent"], AGENT)
         self.assertEqual(messages[1]["model"]["variant"], "high")

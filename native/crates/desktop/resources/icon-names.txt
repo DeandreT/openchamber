@@ -21,6 +21,7 @@ check
 checkbox-blank
 checkbox-circle
 circle
+cloudflare
 close
 code
 command
@@ -46,6 +47,7 @@ information
 layout-column
 layout-left
 list-indefinite
+linear
 loader-4
 menu-2
 mic
@@ -78,5 +80,6 @@ target
 terminal
 terminal-box
 text-wrap
+time
 tools
 question

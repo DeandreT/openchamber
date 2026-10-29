@@ -126,15 +126,15 @@ class Selections(Interaction):
         session = self.fixture.create_session("stream-20000cps")
         self.session_id = urllib.parse.quote(session["id"], safe="")
         self.start("first")
-        self.choose("agent", "Fixture-alpha", "Search agents...")
-        self.choose("agent", "Fixture-beta", "Search agents...")
+        self.choose("agent", "fixture-alpha", "Search agents")
+        self.choose("agent", "fixture-beta", "Search agents")
         # Override beta's stream-20000cps default after choosing the agent.
         # A label-only model picker must fail the completed-step verification.
-        self.choose("model", MODEL, "Search models...")
+        self.choose("model", MODEL, "Search models")
         self.choose("variant", "Default")
         self.choose("variant", "high")
         expected = self.labels()
-        if expected != {"model": MODEL, "agent": "Fixture-beta", "variant": "high"}:
+        if expected != {"model": MODEL, "agent": "fixture-beta", "variant": "high"}:
             raise RuntimeError("toolbar did not retain the selected model, agent and high effort")
         self.paste(self.composer(), PROMPT)
         self.reopen("unsent")
@@ -144,8 +144,8 @@ class Selections(Interaction):
             raise RuntimeError("reopening submitted an unsent draft")
         self.client.screenshot(self.fixture.evidence / "unsent.png")
         # Test cancellation in each picker and focus without clicking the composer.
-        for kind, search, alternate in (("model", "Search models...", "stream-20000cps"),
-                                        ("agent", "Search agents...", "Fixture-alpha"),
+        for kind, search, alternate in (("model", "Search models", "stream-20000cps"),
+                                        ("agent", "Search agents", "fixture-alpha"),
                                         ("variant", None, "Default")):
             self.click(f"composer-{kind}")
             if search:
@@ -159,6 +159,7 @@ class Selections(Interaction):
         # Clear through native keys before pasting the send probe.
         self.pointer(self.composer())
         command(self.env, "xdotool", "key", "ctrl+a", "BackSpace")
+        until("native clear did not empty the draft", lambda: editable_text(self.composer()) == "", self.args.timeout)
         high = self.send_selection(PROMPT, "high")
         self.choose("variant", "Default")
         default_labels = self.labels()

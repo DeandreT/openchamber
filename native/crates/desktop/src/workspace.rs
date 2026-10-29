@@ -156,6 +156,10 @@ pub struct Workspace {
     pub(crate) connection: Option<Connection>,
     /// The composer's catalogs and defaults; empty for synthetic data.
     pub(crate) send_catalog: SendCatalog,
+    pub(crate) composer_selections: openchamber_native_core::composer_selection::ComposerSelections,
+    pub(crate) model_picker: crate::composer_picker::Picker,
+    pub(crate) agent_picker: crate::composer_picker::Picker,
+    pub(crate) effort_picker: crate::composer_picker::Picker,
     pub(crate) send_attempts: crate::send_attempt::SendAttempts,
     pub(crate) blocking: crate::blocking_requests::BlockingRequests,
     pub(crate) recovery: crate::send_recovery::RecoveryState,
@@ -248,6 +252,23 @@ impl Workspace {
             live_status: HashMap::new(),
             connection,
             send_catalog: SendCatalog::default(),
+            composer_selections:
+                openchamber_native_core::composer_selection::ComposerSelections::default(),
+            model_picker: crate::composer_picker::Picker::new(
+                crate::composer_picker::PickerKind::Model,
+                window,
+                cx,
+            ),
+            agent_picker: crate::composer_picker::Picker::new(
+                crate::composer_picker::PickerKind::Agent,
+                window,
+                cx,
+            ),
+            effort_picker: crate::composer_picker::Picker::new(
+                crate::composer_picker::PickerKind::Effort,
+                window,
+                cx,
+            ),
             send_attempts: crate::send_attempt::SendAttempts::default(),
             blocking: crate::blocking_requests::BlockingRequests::default(),
             recovery: crate::send_recovery::RecoveryState::default(),

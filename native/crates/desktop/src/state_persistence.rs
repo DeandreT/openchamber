@@ -187,6 +187,7 @@ impl Workspace {
                             drafts.save(key, draft);
                         }
                         this.drafts = drafts;
+                        this.composer_selections = openchamber_native_core::composer_selection::ComposerSelections::restore(snapshot.selections);
                         this.send_attempts = attempts;
                         this.creations =
                             crate::create_attempt::CreateAttempts::restore(snapshot.creations);
@@ -239,6 +240,7 @@ impl Workspace {
                 .collect(),
             attempts: self.send_attempts.snapshot(),
             creations: self.creations.snapshot(),
+            selections: self.composer_selections.snapshot(),
         };
         let worker = self.persistence.worker.as_ref()?;
         self.persistence.revision += 1;

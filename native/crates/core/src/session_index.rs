@@ -373,8 +373,12 @@ impl SessionIndex {
 
 /// `isGlobalSessionRecencyOnlyUpdate`: only the update time moved.
 fn is_recency_only(current: &SessionRecord, next: &SessionRecord) -> bool {
-    let merged = keep_directory_metadata(next.clone(), current);
-    current.time.updated != merged.time.updated && current.same_structure(&merged)
+    if current.time.updated == next.time.updated {
+        return false;
+    }
+    let mut merged = keep_directory_metadata(next.clone(), current);
+    merged.time.updated = current.time.updated;
+    current == &merged
 }
 
 /// `mergeSessionDirectoryMetadata`: a record without a directory or project
@@ -468,6 +472,73 @@ mod tests {
 
     fn ids(sessions: &[SessionRecord]) -> Vec<&str> {
         sessions.iter().map(|session| session.id.as_str()).collect()
+    }
+
+    #[test]
+    fn model_and_agent_events_apply_before_settling_even_with_the_same_provider() {
+        use crate::send_config::ModelChoice;
+        let mut index = SessionIndex::new();
+        let mut record = session("a", "/p", 1);
+        let old = ModelChoice {
+            provider_id: "p".into(),
+            model_id: "old".into(),
+            variant: None,
+        };
+        record.model = Some(old.clone());
+        record.agent = Some("build".into());
+        let load = index.begin_load();
+        let _ = index.complete_load(load, vec![record]);
+        let model = ModelChoice {
+            model_id: "new".into(),
+            variant: Some("high".into()),
+            ..old
+        };
+        let id = SessionId::from("a");
+        assert!(
+            index
+                .apply([SessionChange::Patched {
+                    session_id: id.clone(),
+                    patch: SessionPatch {
+                        model: Some(model.clone()),
+                        updated: Some(2),
+                        ..SessionPatch::default()
+                    }
+                }])
+                .changed,
+            "model changes are live metadata, not deferred recency"
+        );
+        assert!(
+            index
+                .apply([SessionChange::Patched {
+                    session_id: id.clone(),
+                    patch: SessionPatch {
+                        agent: Some("plan".into()),
+                        updated: Some(3),
+                        ..SessionPatch::default()
+                    }
+                }])
+                .changed
+        );
+        let current = index.get(&id).expect("session");
+        assert_eq!(current.model.as_ref(), Some(&model));
+        assert_eq!(current.agent.as_deref(), Some("plan"));
+        assert!(
+            !index
+                .apply([SessionChange::Patched {
+                    session_id: id.clone(),
+                    patch: SessionPatch {
+                        updated: Some(4),
+                        ..SessionPatch::default()
+                    }
+                }])
+                .changed,
+            "pure recency still waits for settling"
+        );
+        let _ = index.apply([SessionChange::Settled(id.clone())]);
+        assert_eq!(
+            index.get(&id).expect("session").model.as_ref(),
+            Some(&model)
+        );
     }
 
     #[test]

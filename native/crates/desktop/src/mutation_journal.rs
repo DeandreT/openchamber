@@ -17,6 +17,7 @@ use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use openchamber_native_core::composer_selection::{SelectionOwner, SelectionSnapshot};
 use openchamber_native_core::draft::{Draft, DraftKey, DraftTarget};
 use openchamber_native_core::ids::{DraftId, MessageId, PartId, RuntimeId, SessionId};
 use openchamber_native_core::send_config::ModelChoice;
@@ -28,7 +29,7 @@ use crate::create_attempt::{CreateAttempt, CreationPhase};
 use crate::send_attempt::{Admission, SendAttempt, SendOrigin, SessionKey};
 use openchamber_native_transport::session_create::CreateSession;
 
-const VERSION: u32 = 2;
+const VERSION: u32 = 3;
 const MAX_FILE: u64 = 16 * 1024 * 1024;
 const MAX_TEXT: usize = 1024 * 1024;
 const MAX_ENTRIES: usize = 4096;
@@ -42,6 +43,7 @@ pub(crate) struct JournalSnapshot {
     pub drafts: Vec<(DraftKey, Draft)>,
     pub attempts: Vec<(SessionKey, SendAttempt)>,
     pub creations: Vec<(SessionKey, CreateAttempt)>,
+    pub selections: Vec<(SelectionOwner, SelectionSnapshot)>,
 }
 
 pub(crate) enum LoadedJournal {
@@ -153,7 +155,7 @@ impl MutationJournal {
         }
         let version: Version = serde_json::from_slice(&bytes)
             .map_err(|_| JournalError::Invalid("malformed JSON or version"))?;
-        if !matches!(version.version, 1 | VERSION) {
+        if !matches!(version.version, 1 | 2 | VERSION) {
             return Err(JournalError::UnsupportedVersion(version.version));
         }
         let store: Store = if version.version == 1 {
@@ -164,6 +166,17 @@ impl MutationJournal {
                 drafts: legacy.drafts,
                 attempts: legacy.attempts,
                 creations: Vec::new(),
+                selections: Vec::new(),
+            }
+        } else if version.version == 2 {
+            let legacy: PreviousStore = serde_json::from_slice(&bytes)
+                .map_err(|_| JournalError::Invalid("malformed previous schema"))?;
+            Store {
+                version: legacy.version,
+                drafts: legacy.drafts,
+                attempts: legacy.attempts,
+                creations: legacy.creations,
+                selections: Vec::new(),
             }
         } else {
             serde_json::from_slice(&bytes).map_err(|_| JournalError::Invalid("malformed schema"))?
@@ -310,6 +323,16 @@ struct Store {
     drafts: Vec<StoredDraft>,
     attempts: Vec<StoredAttempt>,
     creations: Vec<StoredCreation>,
+    selections: Vec<crate::selection_storage::StoredSelection>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PreviousStore {
+    version: u32,
+    drafts: Vec<StoredDraft>,
+    attempts: Vec<StoredAttempt>,
+    creations: Vec<StoredCreation>,
 }
 
 #[derive(Deserialize)]
@@ -344,7 +367,7 @@ enum StoredCreationPhase {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct Owner {
+pub(crate) struct Owner {
     runtime: String,
     directory: String,
     target: Target,
@@ -401,14 +424,14 @@ struct StoredPrompt {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct StoredModel {
+pub(crate) struct StoredModel {
     provider: String,
     model: String,
     variant: Option<String>,
 }
 
 impl StoredModel {
-    fn capture(model: &ModelChoice) -> Self {
+    pub(crate) fn capture(model: &ModelChoice) -> Self {
         Self {
             provider: model.provider_id.clone(),
             model: model.model_id.clone(),
@@ -416,7 +439,7 @@ impl StoredModel {
         }
     }
 
-    fn into_choice(self) -> ModelChoice {
+    pub(crate) fn into_choice(self) -> ModelChoice {
         ModelChoice {
             provider_id: self.provider,
             model_id: self.model,
@@ -468,7 +491,7 @@ enum StoredAdmission {
     Uncertain,
 }
 
-fn identifier(value: &str) -> Result<(), JournalError> {
+pub(crate) fn identifier(value: &str) -> Result<(), JournalError> {
     if value.is_empty() || value.len() > MAX_ID || value.chars().any(char::is_control) {
         return Err(JournalError::Invalid("invalid identifier"));
     }
@@ -491,7 +514,7 @@ fn validate_draft(draft: &Draft) -> Result<(), JournalError> {
 }
 
 impl Owner {
-    fn capture(key: &DraftKey) -> Self {
+    pub(crate) fn capture(key: &DraftKey) -> Self {
         Self {
             runtime: key.runtime().to_string(),
             directory: key.directory().to_owned(),
@@ -502,7 +525,7 @@ impl Owner {
         }
     }
 
-    fn into_key(self) -> Result<DraftKey, JournalError> {
+    pub(crate) fn into_key(self) -> Result<DraftKey, JournalError> {
         identifier(&self.runtime)?;
         if self.directory.len() > MAX_DIRECTORY || self.directory.chars().any(char::is_control) {
             return Err(JournalError::Invalid("invalid directory"));
@@ -574,6 +597,13 @@ impl Store {
             .collect();
         Ok(Self {
             version: VERSION,
+            selections: snapshot
+                .selections
+                .iter()
+                .map(|(owner, state)| {
+                    crate::selection_storage::StoredSelection::capture(owner, state)
+                })
+                .collect(),
             drafts: snapshot
                 .drafts
                 .iter()
@@ -698,6 +728,11 @@ impl Store {
             drafts,
             attempts,
             creations,
+            selections: self
+                .selections
+                .into_iter()
+                .map(crate::selection_storage::StoredSelection::restore)
+                .collect::<Result<_, _>>()?,
         };
         validate_snapshot(&snapshot)?;
         Ok(snapshot)
@@ -705,6 +740,23 @@ impl Store {
 }
 
 fn validate_snapshot(snapshot: &JournalSnapshot) -> Result<(), JournalError> {
+    crate::selection_storage::validate(&snapshot.selections)?;
+    for (owner, state) in &snapshot.selections {
+        if let Some(source) = &state.staged_from {
+            let valid = snapshot.creations.iter().any(|(key, creation)| {
+                creation.source == source.draft
+                    && owner.draft.runtime() == &key.runtime
+                    && owner.draft.target() == &DraftTarget::Session(key.session.clone())
+                    && owner
+                        .project
+                        .as_ref()
+                        .is_some_and(|project| project.as_str() == creation.project)
+            });
+            if !valid {
+                return Err(JournalError::Invalid("staged selection lacks its creation"));
+            }
+        }
+    }
     if snapshot.drafts.len() > MAX_ENTRIES
         || snapshot.attempts.len() > MAX_ENTRIES
         || snapshot.creations.len() > MAX_ENTRIES
