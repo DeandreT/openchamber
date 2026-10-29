@@ -75,6 +75,7 @@ pub(crate) struct DirectoryCatalog {
     pub skills: Load<usize>,
     pub mcp_connected: Load<usize>,
     reads: Vec<Task<()>>,
+    revisions: [u64; 5],
 }
 
 /// OpenChamber's settings and each visited directory's catalogs.
@@ -85,6 +86,9 @@ pub(crate) struct SendCatalog {
     pub settings_load: Load<()>,
     directories: HashMap<String, DirectoryCatalog>,
     recheck: Option<Task<()>>,
+    pub(crate) routing: AutoRouting,
+    pub(crate) routing_read: Option<Task<()>>,
+    routing_generation: Option<u64>,
 }
 
 impl SendCatalog {
@@ -198,6 +202,41 @@ pub(crate) enum AgentControl {
 }
 
 impl Workspace {
+    pub(crate) fn load_auto_routing(&mut self, cx: &mut Context<Self>) {
+        let Some(connection) = self.connection.as_ref() else {
+            return;
+        };
+        let Some(client) = connection.client.clone() else {
+            return;
+        };
+        let runtime = self.runtime.clone();
+        let generation = connection.generation;
+        self.send_catalog.routing_generation = Some(generation);
+        let task = connection
+            .network
+            .run(async move { client.auto_routing().await });
+        self.send_catalog.routing_read = Some(cx.spawn(async move |this, cx| {
+            let Some(result) = task.await else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                if this.runtime != runtime
+                    || this
+                        .connection
+                        .as_ref()
+                        .is_none_or(|connection| connection.generation != generation)
+                {
+                    return;
+                }
+                this.send_catalog.routing_read = None;
+                if let Ok(routing) = result {
+                    this.send_catalog.routing = routing;
+                }
+                cx.notify();
+            });
+        }));
+    }
+
     /// The directory whose catalogs the composer uses.
     pub(crate) fn config_directory(&self) -> Option<String> {
         if let Some(session) = self.selected_session() {
@@ -235,7 +274,7 @@ impl Workspace {
 
     /// The project a directory belongs to: itself when registered, else the
     /// project of the worktree it is.
-    fn owning_project(&self, directory: &str) -> Option<&str> {
+    pub(crate) fn owning_project(&self, directory: &str) -> Option<&str> {
         if let Some(project) = self
             .topology
             .projects
@@ -259,6 +298,12 @@ impl Workspace {
     /// Starts loading the config directory's catalogs if nothing holds them.
     /// Called while rendering, so every way the directory changes is covered.
     pub(crate) fn ensure_send_catalog(&mut self, cx: &mut Context<Self>) {
+        self.refresh_composer_choices(cx);
+        if self.connection.as_ref().is_some_and(|connection| {
+            self.send_catalog.routing_generation != Some(connection.generation)
+        }) {
+            self.load_auto_routing(cx);
+        }
         if self.send_catalog.settings.is_none() {
             return;
         }
@@ -291,6 +336,9 @@ impl Workspace {
         directory: Option<&str>,
         cx: &mut Context<Self>,
     ) {
+        if matches!(kind, CatalogKind::Config | CatalogKind::Credential) {
+            self.load_auto_routing(cx);
+        }
         let directories: Vec<String> = match directory.and_then(path::normalize) {
             Some(directory) if self.send_catalog.directories.contains_key(&directory) => {
                 vec![directory]
@@ -313,6 +361,24 @@ impl Workspace {
             return;
         };
         let Some(client) = connection.client.clone() else {
+            return;
+        };
+        let runtime = self.runtime.clone();
+        let generation = connection.generation;
+        let revisions = if let Some(entry) = self.send_catalog.directories.get_mut(directory) {
+            for (revision, wanted) in entry.revisions.iter_mut().zip([
+                reads.agents,
+                reads.models,
+                reads.config,
+                reads.skills,
+                reads.mcp,
+            ]) {
+                if wanted {
+                    *revision += 1;
+                }
+            }
+            entry.revisions
+        } else {
             return;
         };
         let skills_directory = self
@@ -344,7 +410,15 @@ impl Workspace {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
-                this.apply_catalog(&directory, outcome);
+                if this.runtime != runtime
+                    || this
+                        .connection
+                        .as_ref()
+                        .is_none_or(|connection| connection.generation != generation)
+                {
+                    return;
+                }
+                this.apply_catalog(&directory, revisions, outcome);
                 cx.notify();
             });
         });
@@ -354,10 +428,25 @@ impl Workspace {
         }
     }
 
-    fn apply_catalog(&mut self, directory: &str, outcome: Outcome) {
+    fn apply_catalog(&mut self, directory: &str, revisions: [u64; 5], mut outcome: Outcome) {
         let Some(entry) = self.send_catalog.directories.get_mut(directory) else {
             return;
         };
+        if entry.revisions[0] != revisions[0] {
+            outcome.agents = None;
+        }
+        if entry.revisions[1] != revisions[1] {
+            outcome.models = None;
+        }
+        if entry.revisions[2] != revisions[2] {
+            outcome.config = None;
+        }
+        if entry.revisions[3] != revisions[3] {
+            outcome.skills = None;
+        }
+        if entry.revisions[4] != revisions[4] {
+            outcome.mcp = None;
+        }
         fn settle<T>(load: &mut Load<T>, result: Option<Result<T, TransportError>>, what: &str) {
             match result {
                 None => {}
@@ -379,7 +468,7 @@ impl Workspace {
     }
 
     /// The defaults the selection resolves from, for `directory`.
-    fn selection_defaults(
+    pub(crate) fn selection_defaults(
         &self,
         directory: &str,
         opencode: &OpenCodeDefaults,
@@ -405,12 +494,7 @@ impl Workspace {
             last_selected_model: settings.last_selected_model.clone(),
             hidden_models: settings.hidden_models.clone(),
             allow_fallback: true,
-            // Routing readiness is not read yet: an available feature keeps
-            // an Auto choice, as unknown readiness does in the web client.
-            auto_routing: match settings.routing_feature_available {
-                Some(true) => AutoRouting::Unknown,
-                _ => AutoRouting::Unavailable,
-            },
+            auto_routing: self.send_catalog.routing,
         }
     }
 
@@ -429,6 +513,19 @@ impl Workspace {
             Load::Loading => return None,
         };
         let defaults = self.selection_defaults(&directory, opencode);
+        if let Some(state) = self
+            .selection_owner()
+            .as_ref()
+            .and_then(|owner| self.composer_selections.get(owner))
+        {
+            let selection = state.selection();
+            if selection.model.as_ref().is_some_and(is_auto)
+                && self.send_catalog.routing != AutoRouting::Ready
+            {
+                return None;
+            }
+            return Some((directory, selection));
+        }
         let selection = send_config::resolve_default_selection(agents, providers, &defaults);
         let selection = match self.selected_session() {
             Some(session) => send_config::resolve_session_selection(
@@ -443,6 +540,11 @@ impl Workspace {
             ),
             None => selection,
         };
+        if selection.model.as_ref().is_some_and(is_auto)
+            && self.send_catalog.routing != AutoRouting::Ready
+        {
+            return None;
+        }
         Some((directory, selection))
     }
 
@@ -460,7 +562,16 @@ impl Workspace {
 
     pub(crate) fn model_control(&self) -> ModelControl {
         let unavailable = self.catalog_unavailable();
-        let Some((directory, selection)) = self.send_selection() else {
+        let held = self
+            .selection_owner()
+            .as_ref()
+            .and_then(|owner| self.composer_selections.get(owner))
+            .map(|state| state.selection());
+        let selection = self
+            .config_directory()
+            .zip(held)
+            .or_else(|| self.send_selection());
+        let Some((directory, selection)) = selection else {
             return ModelControl::Pending { unavailable };
         };
         let Some(choice) = selection.model else {
@@ -491,15 +602,20 @@ impl Workspace {
     }
 
     pub(crate) fn agent_control(&self, palette: &Palette) -> AgentControl {
-        let unavailable = self.catalog_unavailable();
-        let Some((directory, selection)) = self.send_selection() else {
-            return AgentControl::Pending { unavailable };
+        let entry = self
+            .config_directory()
+            .as_deref()
+            .and_then(|directory| self.send_catalog.directory(directory));
+        let Some(agents) = entry.and_then(|entry| entry.agents.ready()) else {
+            return AgentControl::Pending {
+                unavailable: entry.is_some_and(|entry| matches!(entry.agents, Load::Failed)),
+            };
         };
-        let agents = self
-            .send_catalog
-            .directory(&directory)
-            .and_then(|entry| entry.agents.ready())
-            .map(Vec::as_slice)
+        let selection = self
+            .selection_owner()
+            .as_ref()
+            .and_then(|owner| self.composer_selections.get(owner))
+            .map(|state| state.selection())
             .unwrap_or_default();
         let Some(name) = selection.agent_name else {
             // `getAgentDisplayName` without a choice: Build, else the first

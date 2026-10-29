@@ -131,6 +131,18 @@ impl Workspace {
         if !self.creations.insert(key.clone(), attempt) {
             return;
         }
+        if let Some(from) = self.selection_owner() {
+            let to = openchamber_native_core::composer_selection::SelectionOwner {
+                draft: DraftKey::new(
+                    key.runtime.clone(),
+                    source.directory(),
+                    DraftTarget::Session(key.session.clone()),
+                )
+                .expect("creation has a valid directory"),
+                project: from.project.clone(),
+            };
+            self.composer_selections.stage_creation(&from, to);
+        }
         // Consume synchronously before yielding. Any subsequent typing, even
         // identical text, is a separate draft and is never filtered from disk.
         self.drafts.take(&source);
@@ -460,6 +472,16 @@ impl Workspace {
             return;
         };
         let dispatched = first_prompt_selection(&attempt.prompt, &session);
+        let selection_owner = openchamber_native_core::composer_selection::SelectionOwner {
+            draft: owner.clone(),
+            project: Some(openchamber_native_core::ids::ProjectId::from(
+                attempt.project.clone(),
+            )),
+        };
+        let selection = openchamber_native_core::send_config::Selection {
+            model: attempt.prompt.model.clone(),
+            agent_name: attempt.prompt.agent.clone(),
+        };
         let optimistic = Message {
             info: MessageInfo {
                 id: attempt.prompt.message_id.clone(),
@@ -486,6 +508,13 @@ impl Workspace {
         if !self.send_attempts.begin(key.clone(), send) {
             return;
         }
+        let source = if self.drafts.get(&attempt.source).is_some() {
+            openchamber_native_core::composer_selection::CreationSource::Continued
+        } else {
+            openchamber_native_core::composer_selection::CreationSource::Consumed
+        };
+        self.composer_selections
+            .commit_creation(selection_owner, selection, source);
         self.creations.remove(key);
         if key.runtime == self.runtime {
             self.save_composer_draft(cx);

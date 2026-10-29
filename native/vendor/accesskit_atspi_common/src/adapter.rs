@@ -213,7 +213,8 @@ impl<'a> AdapterChangeHandler<'a> {
             }
             return;
         };
-        if !old_node.is_focused() || new_node.raw_text_selection() == old_node.raw_text_selection()
+        if !NodeWrapper(old_node).is_focused()
+            || new_node.raw_text_selection() == old_node.raw_text_selection()
         {
             return;
         }
@@ -322,6 +323,12 @@ impl TreeChangeHandler for AdapterChangeHandler<'_> {
     }
 
     fn focus_moved(&mut self, old_node: Option<&Node>, new_node: Option<&Node>) {
+        let old_owner =
+            old_node.and_then(|node| crate::node::editable_focus_owner(node.tree_state));
+        let new_owner =
+            new_node.and_then(|node| crate::node::editable_focus_owner(node.tree_state));
+        let old_focus = old_owner.as_ref().or(old_node);
+        let new_focus = new_owner.as_ref().or(new_node);
         if let (None, Some(new_node)) = (old_node, new_node) {
             if let Some(root_window) = root_window(new_node.tree_state) {
                 self.adapter.window_activated(&NodeWrapper(&root_window));
@@ -331,14 +338,25 @@ impl TreeChangeHandler for AdapterChangeHandler<'_> {
                 self.adapter.window_deactivated(&NodeWrapper(&root_window));
             }
         }
-        if let Some(node) = new_node {
-            self.adapter
-                .emit_object_event(node.id(), ObjectEvent::StateChanged(State::Focused, true));
+        if self
+            .adapter
+            .emit_focus_transition(old_focus.map(Node::id), new_focus.map(Node::id))
+            && let Some(node) = new_focus
+        {
             self.emit_text_selection_change(None, node);
         }
-        if let Some(node) = old_node {
-            self.adapter
-                .emit_object_event(node.id(), ObjectEvent::StateChanged(State::Focused, false));
+        if let Some(owner) = new_owner
+            && let Some(active) = owner.active_descendant()
+            && (old_owner.as_ref().map(Node::id) != Some(owner.id())
+                || old_owner
+                    .and_then(|node| node.active_descendant())
+                    .map(|node| node.id())
+                    != Some(active.id()))
+        {
+            self.adapter.emit_object_event(
+                owner.id(),
+                ObjectEvent::ActiveDescendantChanged(active.id()),
+            );
         }
     }
 
@@ -426,7 +444,9 @@ impl Adapter {
         action_handler: Arc<dyn ActionHandlerNoMut + Send + Sync>,
     ) -> Self {
         let tree = Tree::new(initial_state, is_window_focused);
-        let focus_id = tree.state().focus().map(|node| node.id());
+        let focus_id = crate::node::editable_focus_owner(tree.state())
+            .or_else(|| tree.state().focus())
+            .map(|node| node.id());
         let context = Context::new(app_context, tree, action_handler, root_window_bounds);
         context.write_app_context().push_adapter(id, &context);
         let adapter = Self {
@@ -504,6 +524,19 @@ impl Adapter {
             .emit_event(self, Event::Object { target, event });
     }
 
+    fn emit_focus_transition(&self, old: Option<NodeId>, new: Option<NodeId>) -> bool {
+        if old == new {
+            return false;
+        }
+        if let Some(id) = new {
+            self.emit_object_event(id, ObjectEvent::StateChanged(State::Focused, true));
+        }
+        if let Some(id) = old {
+            self.emit_object_event(id, ObjectEvent::StateChanged(State::Focused, false));
+        }
+        true
+    }
+
     fn emit_root_object_event(&self, event: ObjectEvent) {
         let target = NodeIdOrRoot::Root;
         self.callback
@@ -528,7 +561,31 @@ impl Adapter {
     pub fn update(&mut self, update: TreeUpdate) {
         let mut handler = AdapterChangeHandler::new(self);
         let mut tree = self.context.tree.write().unwrap();
+        let old_owner = tree.state().focus_id();
+        let old_resolved = tree.state().focus().map(|node| node.id());
+        let old_focus = crate::node::editable_focus_owner(tree.state())
+            .map(|node| node.id())
+            .or(old_resolved);
         tree.update_and_process_changes(update, &mut handler);
+        // The consumer calls focus_moved only when resolved focus changes. Moving
+        // between an editor and its own active descendant leaves that id unchanged.
+        if old_owner != tree.state().focus_id()
+            && old_resolved == tree.state().focus().map(|node| node.id())
+        {
+            let new_focus =
+                crate::node::editable_focus_owner(tree.state()).or_else(|| tree.state().focus());
+            if self.emit_focus_transition(old_focus, new_focus.as_ref().map(Node::id))
+                && let Some(node) = new_focus
+            {
+                handler.emit_text_selection_change(None, &node);
+                if let Some(active) = node.active_descendant() {
+                    self.emit_object_event(
+                        node.id(),
+                        ObjectEvent::ActiveDescendantChanged(active.id()),
+                    );
+                }
+            }
+        }
         drop(tree);
         handler.emit_selection_changed();
     }

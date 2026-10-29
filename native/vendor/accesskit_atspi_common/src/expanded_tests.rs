@@ -27,6 +27,286 @@ impl AdapterCallback for EventCollector {
 
 struct NoOpActionHandler;
 
+#[test]
+fn keyboard_focus_transitions_between_entry_and_its_active_descendant() {
+    let mut window = Node::new(Role::Window);
+    window.set_children(vec![NodeId(1), NodeId(2)]);
+    let mut entry = Node::new(Role::TextInput);
+    entry.add_action(Action::Focus);
+    entry.set_active_descendant(NodeId(2));
+    let mut option = Node::new(Role::ListBoxOption);
+    option.add_action(Action::Focus);
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut adapter = Adapter::new(
+        &AppContext::new(None),
+        EventCollector(events.clone()),
+        TreeUpdate {
+            nodes: vec![(NodeId(0), window), (NodeId(1), entry), (NodeId(2), option)],
+            tree: Some(Tree::new(NodeId(0))),
+            tree_id: TreeId::ROOT,
+            focus: NodeId(1),
+        },
+        true,
+        WindowBounds::default(),
+        NoOpActionHandler,
+    );
+    let root = adapter.platform_node(adapter.root_id());
+    let entry = adapter.platform_node(root.child_at_index(0).expect("root").expect("entry"));
+    let option = adapter.platform_node(root.child_at_index(1).expect("root").expect("option"));
+    for (focus, gained, lost) in [(NodeId(2), &option, &entry), (NodeId(1), &entry, &option)] {
+        events.lock().expect("events").clear();
+        adapter.update(TreeUpdate {
+            nodes: vec![],
+            tree: None,
+            tree_id: TreeId::ROOT,
+            focus,
+        });
+        assert!(gained.state().contains(State::Focused));
+        assert!(!lost.state().contains(State::Focused));
+        let transitions: Vec<_> = events
+            .lock()
+            .expect("events")
+            .iter()
+            .filter_map(|event| match event {
+                Event::Object {
+                    target: NodeIdOrRoot::Node(id),
+                    event: ObjectEvent::StateChanged(State::Focused, focused),
+                } => Some((*id, *focused)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            transitions,
+            [(gained.id(), true), (lost.id(), false)],
+            "actual keyboard owner changes emit both transitions despite unchanged resolved focus"
+        );
+        events.lock().expect("events").clear();
+        adapter.update(TreeUpdate {
+            nodes: vec![],
+            tree: None,
+            tree_id: TreeId::ROOT,
+            focus,
+        });
+        assert!(
+            !events.lock().expect("events").iter().any(|event| matches!(
+                event,
+                Event::Object {
+                    event: ObjectEvent::StateChanged(State::Focused, _),
+                    ..
+                }
+            )),
+            "unchanged owner emits no duplicate focus transitions"
+        );
+    }
+}
+
+#[test]
+fn editable_active_descendant_keeps_keyboard_focus_on_entry() {
+    let mut window = Node::new(Role::Window);
+    window.set_children(vec![NodeId(1), NodeId(2), NodeId(3)]);
+    let mut input = Node::new(Role::TextInput);
+    input.set_label("Search agents");
+    input.add_action(Action::Focus);
+    input.set_active_descendant(NodeId(2));
+    let mut option = Node::new(Role::ListBoxOption);
+    option.set_label("build");
+    let events = Arc::new(Mutex::new(Vec::new()));
+    let mut adapter = Adapter::new(
+        &AppContext::new(None),
+        EventCollector(events.clone()),
+        TreeUpdate {
+            nodes: vec![
+                (NodeId(0), window),
+                (NodeId(1), input.clone()),
+                (NodeId(2), option.clone()),
+                (NodeId(3), option),
+            ],
+            tree: Some(Tree::new(NodeId(0))),
+            tree_id: TreeId::ROOT,
+            focus: NodeId(1),
+        },
+        true,
+        WindowBounds::default(),
+        NoOpActionHandler,
+    );
+    let root = adapter.platform_node(adapter.root_id());
+    let entry = adapter.platform_node(root.child_at_index(0).expect("root").expect("entry"));
+    let first = adapter.platform_node(root.child_at_index(1).expect("root").expect("first option"));
+    let second = adapter.platform_node(
+        root.child_at_index(2)
+            .expect("root")
+            .expect("second option"),
+    );
+    assert!(
+        !first.state().contains(State::Focused),
+        "the active option is not a second focus target"
+    );
+    assert!(
+        !first
+            .cache_node()
+            .expect("option cache")
+            .states
+            .contains(State::Focused)
+    );
+    assert!(!second.state().contains(State::Focused));
+    assert!(
+        events
+            .lock()
+            .expect("events")
+            .iter()
+            .filter_map(|event| match event {
+                Event::Object {
+                    target: NodeIdOrRoot::Node(id),
+                    event: ObjectEvent::StateChanged(State::Focused, true),
+                } => Some(*id),
+                _ => None,
+            })
+            .eq([entry.id()]),
+        "initial focus notification names only the entry"
+    );
+    assert!(
+        entry.state().contains(State::Focused),
+        "active descendant does not remove keyboard focus from the editable entry"
+    );
+    assert!(
+        entry
+            .cache_node()
+            .expect("cache")
+            .states
+            .contains(State::Focused)
+    );
+    events.lock().expect("events").clear();
+    input.set_active_descendant(NodeId(3));
+    adapter.update(TreeUpdate {
+        nodes: vec![(NodeId(1), input.clone())],
+        tree: None,
+        tree_id: TreeId::ROOT,
+        focus: NodeId(1),
+    });
+    {
+        let recorded = events.lock().expect("events");
+        assert!(recorded.iter().any(|event| matches!(event,
+            Event::Object { target: NodeIdOrRoot::Node(id), event: ObjectEvent::ActiveDescendantChanged(child) }
+                if *id == entry.id() && *child == second.id()
+        )), "arrow navigation announces the active descendant on the entry");
+        assert!(
+            !recorded.iter().any(|event| matches!(
+                event,
+                Event::Object {
+                    event: ObjectEvent::StateChanged(State::Focused, _),
+                    ..
+                }
+            )),
+            "highlight changes do not move focus"
+        );
+    }
+    assert!(entry.state().contains(State::Focused));
+    assert!(!first.state().contains(State::Focused));
+    assert!(!second.state().contains(State::Focused));
+    input.clear_active_descendant();
+    events.lock().expect("events").clear();
+    adapter.update(TreeUpdate {
+        nodes: vec![(NodeId(1), input)],
+        tree: None,
+        tree_id: TreeId::ROOT,
+        focus: NodeId(1),
+    });
+    assert!(
+        entry.state().contains(State::Focused),
+        "empty results retain entry focus"
+    );
+    assert!(
+        !events.lock().expect("events").iter().any(|event| matches!(
+            event,
+            Event::Object {
+                event: ObjectEvent::StateChanged(State::Focused, _),
+                ..
+            }
+        )),
+        "clearing the highlight does not blur the entry"
+    );
+    adapter.update_window_focus_state(false);
+    assert!(
+        !entry.state().contains(State::Focused),
+        "inactive windows expose no focused entry"
+    );
+    adapter.update_window_focus_state(true);
+    for focused in [false, true] {
+        assert!(events.lock().expect("events").iter().any(|event| matches!(event,
+            Event::Object { target: NodeIdOrRoot::Node(id), event: ObjectEvent::StateChanged(State::Focused, value) }
+                if *id == entry.id() && *value == focused
+        )), "entry receives host focus transitions");
+    }
+}
+
+#[test]
+fn ordinary_editors_and_noneditable_active_descendants_keep_existing_focus_behavior() {
+    for (role, active_descendant) in [
+        (Role::TextInput, false),
+        (Role::MultilineTextInput, false),
+        (Role::ListBox, true),
+    ] {
+        let mut window = Node::new(Role::Window);
+        window.set_children(vec![NodeId(1), NodeId(2)]);
+        let mut owner = Node::new(role);
+        owner.add_action(Action::Focus);
+        if active_descendant {
+            owner.set_active_descendant(NodeId(2));
+        }
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let adapter = Adapter::new(
+            &AppContext::new(None),
+            EventCollector(events.clone()),
+            TreeUpdate {
+                nodes: vec![
+                    (NodeId(0), window),
+                    (NodeId(1), owner),
+                    (NodeId(2), Node::new(Role::ListBoxOption)),
+                ],
+                tree: Some(Tree::new(NodeId(0))),
+                tree_id: TreeId::ROOT,
+                focus: NodeId(1),
+            },
+            true,
+            WindowBounds::default(),
+            NoOpActionHandler,
+        );
+        let root = adapter.platform_node(adapter.root_id());
+        let owner = adapter.platform_node(root.child_at_index(0).expect("root").expect("owner"));
+        let option = adapter.platform_node(root.child_at_index(1).expect("root").expect("option"));
+        assert_eq!(
+            owner.state().contains(State::Focused),
+            !active_descendant,
+            "{role:?}"
+        );
+        assert_eq!(
+            option.state().contains(State::Focused),
+            active_descendant,
+            "{role:?}"
+        );
+        let expected = if active_descendant {
+            option.id()
+        } else {
+            owner.id()
+        };
+        assert!(
+            events
+                .lock()
+                .expect("events")
+                .iter()
+                .filter_map(|event| match event {
+                    Event::Object {
+                        target: NodeIdOrRoot::Node(id),
+                        event: ObjectEvent::StateChanged(State::Focused, true),
+                    } => Some(*id),
+                    _ => None,
+                })
+                .eq([expected]),
+            "{role:?} retains its original focus notification"
+        );
+    }
+}
+
 impl ActionHandler for NoOpActionHandler {
     fn do_action(&mut self, _: ActionRequest) {}
 }

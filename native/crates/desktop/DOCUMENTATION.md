@@ -187,6 +187,15 @@ prompt. Attachments and worktree creation remain separate workflows.
 
 ## Invariants
 
+- Routing readiness retains its last successful value on a failed same-runtime
+  read. Initial connection generations and event-stream reconnections trigger
+  reads; ordinary renders do not retry completed failures. OpenCode event replay
+  does not replay routing readiness, so resumed connections also refresh it.
+- A pending creation's selection is journaled once per destination, including
+  choices made after opening that session from the sidebar. Handoff always retires
+  the staging marker and preserves the destination's newer choices. The captured
+  first-send request remains independent of these later edits.
+
 - Blocking-request actions retain the runtime, directory, actual owner and ID.
   A child shown under its parent still replies to the child. Location-owned forms
   keep the `global` sentinel and their captured directory. New-session drafts

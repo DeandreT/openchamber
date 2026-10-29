@@ -206,7 +206,7 @@ impl Workspace {
         }));
     }
 
-    fn apply_stream_item(
+    pub(crate) fn apply_stream_item(
         &mut self,
         generation: u64,
         item: StreamItem,
@@ -232,6 +232,9 @@ impl Workspace {
                     // Events were missed and not replayed: reread what they changed.
                     self.reconcile(window, cx);
                 }
+                // Routing is a server read, outside the OpenCode event replay.
+                // Refresh on stream connection even when that replay resumed.
+                self.load_auto_routing(cx);
             }
             StreamItem::Disconnected(error) => {
                 tracing::warn!(%error, "the event stream dropped");

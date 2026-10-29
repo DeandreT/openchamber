@@ -20,10 +20,13 @@ use crate::logical::LogicalStyledExt;
 use crate::theme::Palette;
 use crate::workspace::Workspace;
 
+mod permission;
+
 #[derive(Clone, Copy)]
 enum Control {
     Raised,
-    Primary,
+    Permission(PermissionReply),
+    Details(bool),
     Advance(bool),
     Ghost,
     Custom(bool),
@@ -184,11 +187,57 @@ fn button(
                         crate::theme::Appearance::Dark => palette.elevated,
                     })
                     .shadow(raised(palette)),
-                Control::Primary | Control::Advance(true) => element
+                Control::Advance(true) => element
                     .bg(palette.primary.opacity(0.1))
                     .text_color(palette.primary)
                     .shadow(raised(palette)),
+                Control::Permission(decision) => element
+                    .gap(px(4.))
+                    .px(px(6.))
+                    .flex_shrink_0()
+                    .when(decision == PermissionReply::Always, |element| {
+                        element
+                            .bg(match palette.appearance {
+                                crate::theme::Appearance::Light => palette.background,
+                                crate::theme::Appearance::Dark => palette.elevated,
+                            })
+                            .shadow(raised(palette))
+                    })
+                    .when(decision == PermissionReply::Once, |element| {
+                        element
+                            .bg(palette.primary.opacity(0.1))
+                            .text_color(palette.primary)
+                            .shadow(raised(palette))
+                    })
+                    .when(decision == PermissionReply::Reject, |element| {
+                        element.text_color(palette.error)
+                    })
+                    .child(crate::chrome::glyph(
+                        match decision {
+                            PermissionReply::Reject => "close",
+                            PermissionReply::Always => "time",
+                            PermissionReply::Once => "check",
+                        },
+                        14.,
+                        match decision {
+                            PermissionReply::Reject => palette.error,
+                            PermissionReply::Once => palette.primary,
+                            PermissionReply::Always => palette.elevated_foreground,
+                        },
+                    )),
                 Control::Ghost => element,
+                Control::Details(expanded) => element
+                    .aria_expanded(expanded)
+                    .text_color(palette.muted_foreground)
+                    .child(crate::chrome::glyph(
+                        if expanded {
+                            "arrow-down-s"
+                        } else {
+                            "arrow-right-s"
+                        },
+                        14.,
+                        palette.muted_foreground,
+                    )),
                 Control::Icon(icon) => element
                     .size(px(24.))
                     .p_0()
@@ -216,6 +265,10 @@ fn button(
                 |element| {
                     element.child(
                         div()
+                            .when(
+                                matches!(control, Control::Permission(PermissionReply::Always)),
+                                |element| element.max_w(px(180.)).truncate(),
+                            )
                             .css_text(
                                 if matches!(
                                     control,
@@ -293,6 +346,11 @@ impl Workspace {
         let id = identity(&key).to_owned();
         let enabled = self.request_actionable(&key);
         let strings = locale::strings(cx).clone();
+        let relevant: Vec<_> = self
+            .visible_requests()
+            .into_iter()
+            .filter(|candidate| candidate.id.kind() == key.id.kind())
+            .collect();
         let mut header = div()
             .flex()
             .flex_row_from(strings.direction())
@@ -335,6 +393,30 @@ impl Workspace {
                                         .to_string(),
                                 ),
                                 ("total", &shown.len().to_string()),
+                            ],
+                        ),
+                    ),
+            );
+        }
+        if matches!(key.id, RequestId::Permission(_)) && relevant.len() > 1 {
+            header = header.child(
+                div()
+                    .css_text(0.75, 1.0625, cx)
+                    .text_color(palette.muted_foreground)
+                    .child(
+                        strings.format(
+                            "chat.formDock.progress",
+                            &[
+                                (
+                                    "current",
+                                    &(relevant
+                                        .iter()
+                                        .position(|candidate| candidate == &key)
+                                        .unwrap_or(0)
+                                        + 1)
+                                    .to_string(),
+                                ),
+                                ("total", &relevant.len().to_string()),
                             ],
                         ),
                     ),
@@ -443,13 +525,11 @@ impl Workspace {
             .flex_col()
             .gap(px(0.));
         if self.blocking.collapsed {
+            if let PendingRequest::Permission(request) = &entry.request {
+                header = header.child(permission::tool_header(request, palette, cx));
+            }
             return Some(panel.child(header).into_any_element());
         }
-        let relevant: Vec<_> = self
-            .visible_requests()
-            .into_iter()
-            .filter(|candidate| candidate.id.kind() == key.id.kind())
-            .collect();
         if relevant.len() > 1 {
             header = header.child(
                 div()
@@ -470,7 +550,7 @@ impl Workspace {
                                     "chat.permissionDock.stepAria",
                                     &[
                                         ("index", &(index + 1).to_string()),
-                                        ("tool", &request.action),
+                                        ("tool", permission::tool(&request.action).1),
                                     ],
                                 ),
                                 PendingRequest::Form(form) => strings.format(
@@ -509,18 +589,12 @@ impl Workspace {
         let footer;
         match &entry.request {
             PendingRequest::Permission(request) => {
-                body = body.child(request.action.clone());
-                if let Some(message) = &request.message {
-                    body = body.child(message.clone());
-                }
-                for resource in &request.resources {
-                    body = body.child(resource.clone());
-                }
-                if !request.save.is_empty() {
-                    body = body
-                        .child(strings.get("chat.permissionCard.patterns"))
-                        .child(request.save.join("\n"));
-                }
+                header = header.child(permission::tool_header(request, palette, cx));
+                body = body
+                    .px(px(14.))
+                    .py(px(8.))
+                    .gap_0()
+                    .child(permission::content(request, palette, window, cx));
                 let mut actions = div()
                     .flex()
                     .flex_row_from(strings.direction())
@@ -552,15 +626,13 @@ impl Workspace {
                     let captured = key.clone();
                     actions = actions.child(button(
                         format!("permission-{id}-{suffix}"),
-                        strings.get(label),
-                        enabled,
-                        if decision == PermissionReply::Once {
-                            Control::Primary
-                        } else if decision == PermissionReply::Reject {
-                            Control::Ghost
+                        if decision == PermissionReply::Always {
+                            permission::always_label(request, &strings)
                         } else {
-                            Control::Raised
+                            strings.get(label)
                         },
+                        enabled,
+                        Control::Permission(decision),
                         palette,
                         (window, cx),
                         move |this, window, cx| {
@@ -1069,6 +1141,230 @@ mod tests {
         })
         .expect("open form");
         (window, workspace)
+    }
+
+    #[gpui_kit::test]
+    fn webfetch_targets_survive_missing_or_unreliable_display_metadata(cx: &mut TestAppContext) {
+        let (handle, workspace) = open_form(cx);
+        let target = "https://requested.example/private";
+        for (case, metadata, displayed_url) in [
+            ("absent", None, None),
+            ("malformed", Some("not JSON"), None),
+            (
+                "truncated",
+                Some(r#"{"url":"https://requested.example/pri"#),
+                None,
+            ),
+            (
+                "invalid_type",
+                Some(r#"{"url":{"host":"requested.example"}}"#),
+                None,
+            ),
+            (
+                "mismatched",
+                Some(r#"{"url":"https://different.example/"}"#),
+                Some("https://different.example/"),
+            ),
+            (
+                "shortened_url",
+                Some(r#"{"url":"https://requested.example/pri"}"#),
+                Some("https://requested.example/pri"),
+            ),
+            (
+                "matching",
+                Some(r#"{"url":"https://requested.example/private"}"#),
+                Some(target),
+            ),
+            (
+                "uri",
+                Some(r#"{"uri":"https://requested.example/private"}"#),
+                Some(target),
+            ),
+        ] {
+            cx.update_window(handle, |_, window, cx| {
+                let id = format!("per_webfetch_{case}");
+                workspace.update(cx, |this, cx| {
+                    let key = this.active_request().expect("fixture request");
+                    let RequestOwner::Session(session) = key.owner else {
+                        panic!("session fixture")
+                    };
+                    let request = PendingRequest::Permission(
+                        openchamber_native_core::permission::PermissionRequest {
+                            id: id.clone().into(),
+                            session_id: session,
+                            action: "webfetch".into(),
+                            resources: vec![
+                                target.into(),
+                                "https://second.example/".into(),
+                                "*".into(),
+                            ],
+                            save: Vec::new(),
+                            source: None,
+                            message: None,
+                            metadata_display: metadata.map(str::to_owned),
+                        },
+                    );
+                    let selected = request.key(&key.scope);
+                    this.blocking_event(
+                        Some(key.scope.directory().to_owned()),
+                        BlockingRequestEvent::Asked(request),
+                        window,
+                        cx,
+                    );
+                    this.blocking.selected = Some(selected);
+                    cx.notify();
+                });
+                window.render_frame(cx);
+                let first =
+                    window.try_find(ElementId::Name(format!("permission-{id}-target-0").into()));
+                if displayed_url == Some(target) {
+                    assert!(
+                        first.is_none(),
+                        "{case}: exact URL is already shown in request details"
+                    );
+                } else {
+                    assert_eq!(
+                        first.expect("unexplained target remains visible").label(),
+                        Some(target),
+                        "{case}"
+                    );
+                }
+                for (index, expected) in [(1, "https://second.example/"), (2, "*")] {
+                    assert_eq!(
+                        window
+                            .find(ElementId::Name(
+                                format!("permission-{id}-target-{index}").into()
+                            ))
+                            .label(),
+                        Some(expected),
+                        "{case}: other authoritative resources remain visible"
+                    );
+                }
+                let url = window.try_find(ElementId::Name(format!("permission-{id}-url").into()));
+                assert_eq!(
+                    url.as_ref().and_then(|node| node.label()),
+                    displayed_url,
+                    "{case}: deduplication uses the URL actually rendered"
+                );
+                assert_eq!(
+                    window
+                        .find(ElementId::Name(format!("permission-{id}-once").into()))
+                        .role(),
+                    Some(Role::Button)
+                );
+            })
+            .expect("permission fixture window");
+        }
+    }
+
+    #[gpui_kit::test]
+    fn permission_presentation_keeps_commands_and_saved_scope_separate(cx: &mut TestAppContext) {
+        let (handle, workspace) = open_form(cx);
+        cx.update_window(handle, |_, window, cx| {
+            workspace.update(cx, |this, cx| {
+                let key = this.active_request().expect("fixture form");
+                let RequestOwner::Session(session) = key.owner else {
+                    panic!("session fixture")
+                };
+                for (id, action, resources, save) in [
+                    (
+                        "per_shell",
+                        "shell",
+                        vec!["printf 'native-permission-ok\\n'"],
+                        vec!["printf *"],
+                    ),
+                    (
+                        "per_directory",
+                        "external_directory",
+                        vec!["/tmp/example/*"],
+                        vec!["/tmp/example/*"],
+                    ),
+                ] {
+                    this.blocking_event(
+                        Some(key.scope.directory().to_owned()),
+                        BlockingRequestEvent::Asked(PendingRequest::Permission(
+                            openchamber_native_core::permission::PermissionRequest {
+                                id: id.into(),
+                                session_id: session.clone(),
+                                action: action.into(),
+                                resources: resources.into_iter().map(str::to_owned).collect(),
+                                save: save.into_iter().map(str::to_owned).collect(),
+                                source: None,
+                                message: None,
+                                metadata_display: None,
+                            },
+                        )),
+                        window,
+                        cx,
+                    );
+                }
+                cx.notify();
+            });
+            window.render_frame(cx);
+            window.click(ElementId::Name("request-per_shell-tab".into()), cx);
+            window.render_frame(cx);
+            assert_eq!(
+                window
+                    .find(ElementId::Name("permission-per_shell-summary".into()))
+                    .label(),
+                Some("Run a command")
+            );
+            assert_eq!(
+                window
+                    .find(ElementId::Name("permission-per_shell-always".into()))
+                    .label(),
+                Some("Always: printf *")
+            );
+            assert!(
+                window
+                    .find(ElementId::Name("permission-per_shell-code-block".into()))
+                    .visible()
+            );
+            let height = f32::from(
+                window
+                    .find(ElementId::Name("request-dock".into()))
+                    .bounds()
+                    .size
+                    .height,
+            );
+            assert!(
+                (height - 146.).abs() < 1.,
+                "reference one-line permission dock is 146px, got {height}"
+            );
+            window.click(ElementId::Name("request-per_directory-tab".into()), cx);
+            window.render_frame(cx);
+            assert_eq!(
+                window
+                    .find(ElementId::Name("permission-per_directory-always".into()))
+                    .label(),
+                Some("Always: /tmp/example")
+            );
+            assert!(
+                window
+                    .try_find(ElementId::Name("permission-per_shell-code-block".into()))
+                    .is_none()
+            );
+            assert_eq!(
+                window
+                    .find(ElementId::Name("request-per_directory-tab".into()))
+                    .selected(),
+                Some(true)
+            );
+            window.click(ElementId::Name("request-per_directory-collapse".into()), cx);
+            window.render_frame(cx);
+            assert_eq!(
+                window
+                    .find(ElementId::Name("request-per_directory-collapse".into()))
+                    .expanded(),
+                Some(false)
+            );
+            assert!(
+                window
+                    .try_find(ElementId::Name("permission-per_directory-always".into()))
+                    .is_none()
+            );
+        })
+        .expect("permission fixture window");
     }
 
     #[gpui_kit::test]

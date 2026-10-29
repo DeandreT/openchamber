@@ -225,6 +225,7 @@ impl Workspace {
         });
         let empty = self.composer.read(cx).value().trim().is_empty();
         let can_send = !empty
+            && self.composer_editable()
             && ((self.selected.is_some() && (self.is_synthetic() || self.can_send_connected()))
                 || (self.selected.is_none() && self.can_create_connected()));
         let strings = locale::strings(cx);

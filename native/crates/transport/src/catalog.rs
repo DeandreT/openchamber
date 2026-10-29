@@ -15,6 +15,64 @@ use crate::error::TransportError;
 use crate::projection;
 use crate::wire;
 
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RoutingReadiness {
+    available: bool,
+    auto_ready: bool,
+}
+
+impl RoutingReadiness {
+    fn state(self) -> openchamber_native_core::send_config::AutoRouting {
+        use openchamber_native_core::send_config::AutoRouting;
+        if !self.available {
+            AutoRouting::Unavailable
+        } else if self.auto_ready {
+            AutoRouting::Ready
+        } else {
+            AutoRouting::NotReady
+        }
+    }
+}
+
+#[cfg(test)]
+mod routing_tests {
+    use super::*;
+    use openchamber_native_core::send_config::AutoRouting;
+
+    #[test]
+    fn readiness_requires_both_authoritative_flags() {
+        for (json, expected) in [
+            (
+                r#"{"available":false,"autoReady":true}"#,
+                AutoRouting::Unavailable,
+            ),
+            (
+                r#"{"available":true,"autoReady":false}"#,
+                AutoRouting::NotReady,
+            ),
+            (r#"{"available":true,"autoReady":true}"#, AutoRouting::Ready),
+        ] {
+            assert_eq!(
+                serde_json::from_str::<RoutingReadiness>(json)
+                    .expect("valid flags")
+                    .state(),
+                expected
+            );
+        }
+        for json in [
+            "{}",
+            r#"{"available":true}"#,
+            r#"{"available":true,"autoReady":"true"}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<RoutingReadiness>(json).is_err(),
+                "an incomplete answer cannot establish readiness"
+            );
+        }
+    }
+}
+
 /// The flat model catalog of one directory and OpenCode's own default.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ModelCatalog {
@@ -34,6 +92,22 @@ pub struct OpenCodeDefaults {
 }
 
 impl ServerClient {
+    /// OpenChamber's current Auto readiness. A failed read leaves readiness unknown
+    /// at the caller; only a declared missing route means unavailable.
+    pub async fn auto_routing(
+        &self,
+    ) -> Result<openchamber_native_core::send_config::AutoRouting, TransportError> {
+        use openchamber_native_core::send_config::AutoRouting;
+        match self
+            .get_json::<RoutingReadiness>(self.endpoint().url("api/routing"), None)
+            .await
+        {
+            Ok(state) => Ok(state.state()),
+            Err(TransportError::Http { status: 404 }) => Ok(AutoRouting::Unavailable),
+            Err(error) => Err(error),
+        }
+    }
+
     /// The URL of an OpenCode route under `api/`.
     pub fn opencode_url(&self, route: &str) -> Url {
         self.endpoint().url(&format!("api/{route}"))

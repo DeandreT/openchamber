@@ -16,6 +16,12 @@ rendering asks for a projection and dispatches an action.
   It performs no I/O, automatic replies, retries or persistence.
 
 - `send_config.rs` ports default agent/model selection, an existing session's selection from its record, catalog grouping, composer labels and agent color allocation from the web client.
+- `composer_selection.rs` retains owner-scoped choices and their creation handoff.
+  Sessions opened before catalogs arrive fill only missing choices from later
+  defaults. Catalog gaps leave restoration pending and preserve explicit picks.
+- Session-index recency deferral compares all non-recency fields. Model, effort
+  and agent changes apply immediately even when sidebar appearance is unchanged;
+  later patches must build on those values before the session settles.
 - `repository.rs` holds what the card reports about a repository,
   `project_actions.rs` which project action its row shows and with which
   glyph, and `tool_names.rs` OpenCode's tool name comparison, including

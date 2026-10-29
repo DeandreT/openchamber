@@ -34,6 +34,13 @@ use crate::{
 
 pub(crate) struct NodeWrapper<'a>(pub(crate) &'a Node<'a>);
 
+/// Editable active-descendant controls keep platform focus on the keyboard editor.
+pub(crate) fn editable_focus_owner(tree: &TreeState) -> Option<Node<'_>> {
+    let owner = tree.node_by_id(tree.focus_id()?)?;
+    (NodeWrapper(&owner).role() == AtspiRole::Entry && owner.active_descendant().is_some())
+        .then_some(owner)
+}
+
 impl NodeWrapper<'_> {
     pub(crate) fn name(&self) -> Option<String> {
         if self.0.label_comes_from_value() {
@@ -294,8 +301,11 @@ impl NodeWrapper<'_> {
         }
     }
 
-    fn is_focused(&self) -> bool {
-        self.0.is_focused()
+    pub(crate) fn is_focused(&self) -> bool {
+        match editable_focus_owner(self.0.tree_state) {
+            Some(owner) => owner.id() == self.0.id(),
+            None => self.0.is_focused(),
+        }
     }
 
     pub(crate) fn state(&self, is_window_focused: bool) -> StateSet {

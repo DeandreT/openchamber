@@ -7,6 +7,7 @@
 
 pub mod chat_projection;
 pub mod chat_roots;
+pub mod composer_selection;
 pub mod context_usage;
 pub mod draft;
 pub mod form;

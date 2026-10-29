@@ -359,6 +359,7 @@ mod tests {
             )],
             attempts: Vec::new(),
             creations: Vec::new(),
+            selections: Vec::new(),
         }
     }
 
