@@ -98,8 +98,11 @@ const createRecordingClient = (requests: RecordedRequest[], headers?: Record<str
         if (url.pathname === '/api/session') return new Response(readWire('session-created'), { headers: { 'content-type': 'application/json' } });
         if (url.pathname.endsWith('/model') || url.pathname.endsWith('/agent')) return new Response(null, { status: 204 });
         if (url.pathname.endsWith('/prompt')) return new Response(readWire('prompt-admitted'), { headers: { 'content-type': 'application/json' } });
+        if (url.pathname.endsWith('/synthetic')) return new Response(readWire('synthetic-admitted'), { headers: { 'content-type': 'application/json' } });
+        if (url.pathname.endsWith('/command')) return new Response(null, { status: 204 });
         if (url.pathname.endsWith('/interrupt')) return Response.json({ interrupted: pendingName !== 'interrupt idle session' });
       }
+      if (request.method === 'PATCH' || request.method === 'DELETE') return new Response(null, { status: 204 });
       return new Response(responseFor(url.pathname, shelled), { headers: { 'content-type': 'application/json' } });
     },
   });
@@ -298,8 +301,34 @@ export const renderTransportFixtures = async (): Promise<string> => {
   await global.named('submit default delivery', () => global.client.session.prompt({
     sessionID: RECORDED_SESSION, id: 'msg_native_fixture_exact', text: 'Hello\n世界 ',
   }));
+  // The part shapes `sendMessage` and `sendCommand` build after their own
+  // preparation (file URIs, mention ranges, resolved skill IDs).
+  await global.named('submit prompt with parts', () => global.client.session.prompt({
+    sessionID: RECORDED_SESSION, id: 'msg_native_fixture_exact', text: '@plan review this',
+    files: [{ uri: 'file:///home/synthetic/project/notes.md', name: 'notes.md' }, { uri: 'data:text/plain;base64,aGk=' }],
+    agents: [{ name: 'plan', mention: { start: 0, end: 5, text: '@plan' } }, { name: 'build' }],
+    skills: [{ id: 'skill_fixture' }],
+    metadata: { openchamber: { source: 'native' } },
+    delivery: 'steer',
+  }));
+  const synthetic = await global.named('admit synthetic context', () => global.client.session.synthetic({
+    sessionID: RECORDED_SESSION, id: 'msg_native_fixture_context', text: 'Quoted context ✓', description: 'Selection',
+    metadata: { openchamber: { kind: 'quote' } }, delivery: 'steer', resume: false,
+  }));
+  await global.named('admit synthetic default delivery', () => global.client.session.synthetic({
+    sessionID: RECORDED_SESSION, id: 'msg_native_fixture_context', text: 'Quoted context ✓', resume: false,
+  }));
+  await global.named('run command', () => global.client.session.command({
+    sessionID: RECORDED_SESSION, name: 'review', text: 'src/lib.rs',
+    files: [{ uri: 'file:///home/synthetic/project/src/lib.rs', name: 'lib.rs' }], delivery: 'queue',
+  }));
+  await global.named('run command without arguments', () => global.client.session.command({
+    sessionID: RECORDED_SESSION, name: 'init', text: '',
+  }));
   const interrupted = await global.named('interrupt named session', () => global.client.session.interrupt({ sessionID: RECORDED_SESSION }));
   const idle = await global.named('interrupt idle session', () => global.client.session.interrupt({ sessionID: RECORDED_SESSION }));
+  await global.named('rename session', () => global.client.session.update({ sessionID: RECORDED_SESSION, title: 'Renamed ✓' }));
+  await global.named('delete session', () => global.client.session.remove({ sessionID: RECORDED_SESSION }));
   const pending = await global.named('observe prompt inbox', () => global.client.session.inbox.list({ sessionID: RECORDED_SESSION }));
   const delivered = await global.named('observe exact prompt history', () => global.client.session.message.get({
     sessionID: RECORDED_SESSION, messageID: 'msg_native_fixture_exact',
@@ -347,7 +376,7 @@ export const renderTransportFixtures = async (): Promise<string> => {
     scopedDirectory: SCOPED_DIRECTORY,
     requests,
     blockingRequests: await blockingRequestFixtures(readWire('blocking-requests')),
-    mutations: { admitted, interrupted, idle },
+    mutations: { admitted, synthetic, interrupted, idle },
     observations: { pending, delivered },
     creation: { created: normalizeSession(projectSession(created)), observed: normalizeSession(projectSession(exactSession)) },
     sessions: sessions.data.map(projectSession).map(normalizeSession),

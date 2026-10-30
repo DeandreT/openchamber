@@ -41,6 +41,7 @@ const TITLE_LINE: f32 = 1.093_75;
 
 /// Registers the workspace's keyboard shortcuts.
 pub fn bind_keys(cx: &mut gpui_kit::App) {
+    let menu = Some(crate::session_menu::MENU_CONTEXT);
     cx.bind_keys([
         KeyBinding::new("alt-down", SelectNextSession, Some(KEY_CONTEXT)),
         KeyBinding::new("alt-up", SelectPreviousSession, Some(KEY_CONTEXT)),
@@ -52,6 +53,25 @@ pub fn bind_keys(cx: &mut gpui_kit::App) {
             gpui_kit::base::actions::SelectDown,
             Some("ProjectChooser > List"),
         ),
+        KeyBinding::new("down", gpui_kit::base::actions::SelectDown, menu),
+        KeyBinding::new("ctrl-n", gpui_kit::base::actions::SelectDown, menu),
+        KeyBinding::new("up", gpui_kit::base::actions::SelectUp, menu),
+        KeyBinding::new("ctrl-p", gpui_kit::base::actions::SelectUp, menu),
+        KeyBinding::new("home", gpui_kit::base::actions::SelectFirst, menu),
+        KeyBinding::new("end", gpui_kit::base::actions::SelectLast, menu),
+        KeyBinding::new(
+            "enter",
+            gpui_kit::base::actions::Confirm { secondary: false },
+            menu,
+        ),
+        KeyBinding::new(
+            "space",
+            gpui_kit::base::actions::Confirm { secondary: false },
+            menu,
+        ),
+        KeyBinding::new("escape", gpui_kit::base::actions::Cancel, menu),
+        KeyBinding::new("tab", gpui_kit::base::actions::Cancel, menu),
+        KeyBinding::new("shift-tab", gpui_kit::base::actions::Cancel, menu),
         KeyBinding::new(
             "ctrl-p",
             gpui_kit::base::actions::SelectUp,
@@ -93,7 +113,9 @@ impl Render for Workspace {
         self.ensure_project_readouts(cx);
         let palette = cx.global::<Palette>().clone();
         let direction = locale::strings(cx).direction();
-        let chat = if self.selected.is_some() {
+        let chat = if self.archive_open {
+            self.render_archive_page(&palette, direction, window, cx)
+        } else if self.selected.is_some() {
             div()
                 .id("conversation")
                 .relative()
@@ -192,6 +214,7 @@ impl Render for Workspace {
                             .child(self.render_rail(&palette, direction, cx)),
                     ),
             )
+            .child(self.render_session_notice())
             .when(!markers.is_empty(), |this| {
                 // A zero-size canvas paints after the views above it in the same frame.
                 this.child(

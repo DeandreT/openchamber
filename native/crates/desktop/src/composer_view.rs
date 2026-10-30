@@ -6,12 +6,15 @@
 //! and a toolbar of composer actions with send at the end.
 
 use gpui_kit::component::input::Textarea;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Sizable, Size};
 use gpui_kit::{
     AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Role,
     StatefulInteractiveElement, Styled, TestSupportExt, Window, canvas, div, linear_color_stop,
     linear_gradient, prelude::FluentBuilder, px, rems,
 };
+
+use openchamber_native_core::permission_mode::PermissionMode;
 
 use crate::activation::on_activate;
 use crate::chrome::{self, ButtonTone, IconButton, glyph};
@@ -341,11 +344,7 @@ impl Workspace {
                                 "add-circle",
                                 "chat.chatInput.actions.addAttachment",
                             ))
-                            .child(action(
-                                "composer-permissions",
-                                "shield-user",
-                                "chat.chatInput.permissionMode.ask",
-                            ))
+                            .child(self.render_permission_mode(palette, cx))
                             .child(action(
                                 "composer-goal",
                                 "target",
@@ -374,6 +373,76 @@ impl Workspace {
                     ),
             )
             .into_any_element()
+    }
+
+    /// The shield that cycles how the session answers tool permissions
+    /// (`PermissionAutoAcceptButton`): its glyph, color and label follow the
+    /// mode it shows.
+    fn render_permission_mode(&self, palette: &Palette, cx: &Context<Self>) -> AnyElement {
+        let mode = self.shown_permission_mode();
+        let (icon, color, key) = match mode {
+            PermissionMode::Ask => (
+                "shield-user",
+                palette.foreground,
+                "chat.chatInput.permissionMode.ask",
+            ),
+            PermissionMode::Safety => (
+                "shield-star",
+                palette.status_success,
+                "chat.chatInput.permissionMode.safety",
+            ),
+            PermissionMode::Auto => (
+                "shield-check",
+                palette.status_info,
+                "chat.chatInput.permissionMode.auto",
+            ),
+        };
+        let label = locale::strings(cx).get(key);
+        // The tooltip reads the mode when it paints, so it follows a press
+        // made while it is open, as the web's tooltip re-renders its label.
+        let workspace = cx.weak_entity();
+        let tooltip = move |_: &mut Window, cx: &mut gpui_kit::App| {
+            let key = match workspace
+                .read_with(cx, |workspace, _| workspace.shown_permission_mode())
+                .unwrap_or_default()
+            {
+                PermissionMode::Ask => "chat.chatInput.permissionMode.ask",
+                PermissionMode::Safety => "chat.chatInput.permissionMode.safety",
+                PermissionMode::Auto => "chat.chatInput.permissionMode.auto",
+            };
+            locale::strings(cx).get(key)
+        };
+        let tooltip = std::rc::Rc::new(tooltip);
+        let interactive = self.permission_mode_interactive();
+        on_activate(
+            div()
+                .id("composer-permissions")
+                .role(Role::Button)
+                .accessibility_id("composer-permissions")
+                .aria_label(label)
+                .size(px(ACTION_SIZE))
+                .flex_shrink_0()
+                .rounded(px(chrome::CONTROL_RADIUS))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .when(!interactive, |this| this.opacity(0.3))
+                // A press here never moves focus out of the editor.
+                .on_mouse_down(gpui_kit::MouseButton::Left, |_, window, cx| {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                })
+                .tooltip(move |window, cx| {
+                    let tooltip = tooltip.clone();
+                    Tooltip::element(move |window, cx| tooltip(window, cx)).build(window, cx)
+                })
+                .child(glyph(icon, ACTION_GLYPH, color)),
+            cx,
+            |this, window, cx| this.cycle_permission_mode(window, cx),
+        )
+        .test_support()
+        .into_any_element()
     }
 }
 

@@ -37,9 +37,10 @@ pub(crate) fn sample() -> (SessionKey, CreateAttempt) {
             project: "registered-project".into(),
             request,
             draft: draft.clone(),
-            prompt: TextPrompt {
+            prompt: Prompt {
                 message_id: MessageId::from("msg_creation123"),
                 text: draft.text,
+                parts: Default::default(),
                 model,
                 agent: Some("build".into()),
                 delivery: None,

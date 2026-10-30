@@ -2483,6 +2483,10 @@ export const dict: Record<I18nKey, string> = {
   'chat.nativeRecovery.retryStorage': '저장 다시 시도',
   'chat.nativeRecovery.sendFailed': '메시지가 전송되지 않았습니다. 텍스트가 입력란으로 돌아왔습니다.',
   'chat.nativeRecovery.abortFailed': '세션을 중지할 수 없습니다. 다시 시도하기 전에 현재 활동을 확인하세요.',
+  'chat.nativeRecovery.restore': '입력란으로 옮기기',
+  'chat.nativeRecovery.refused': '서버가 이 메시지를 다시 거부했습니다. 입력란으로 옮겨 수정하거나 다시 보내세요.',
+  'chat.nativeRecovery.outOfOrder': '이 메시지의 컨텍스트 일부가 없어 순서대로 다시 보낼 수 없습니다. 입력란으로 옮겨 다시 보내세요.',
+  'chat.nativeRecovery.stopWaits': '메시지를 보내는 중에는 중지할 수 없습니다. 전송이 끝난 뒤 다시 시도하세요.',
 
   'chat.queuedMessage.attachments': '+{count} 파일(s)',
   'chat.queuedMessage.empty': '(비어 있음)',

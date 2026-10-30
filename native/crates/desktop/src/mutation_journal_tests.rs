@@ -156,6 +156,7 @@ fn journal_v1_migrates_without_losing_existing_sends() {
     drop(journal);
     let mut stored: serde_json::Value =
         serde_json::from_slice(&fs::read(&path).expect("read")).expect("JSON");
+    as_text_only(&mut stored);
     stored["version"] = 1.into();
     stored.as_object_mut().expect("object").remove("creations");
     stored.as_object_mut().expect("object").remove("selections");
@@ -174,7 +175,7 @@ fn journal_v1_migrates_without_losing_existing_sends() {
     journal.save(&snapshot).expect("migrated save");
     let stored: serde_json::Value =
         serde_json::from_slice(&fs::read(&path).expect("read")).expect("JSON");
-    assert_eq!(stored["version"], 3);
+    assert_eq!(stored["version"], 4);
 }
 
 #[test]
@@ -324,6 +325,8 @@ fn journal_v2_loads_and_v3_requires_selection_field() {
     drop(journal);
     let mut value: serde_json::Value =
         serde_json::from_slice(&fs::read(&path).expect("read")).expect("JSON");
+    as_text_only(&mut value);
+    value["version"] = 3.into();
     value.as_object_mut().expect("object").remove("selections");
     fs::write(&path, serde_json::to_vec(&value).expect("JSON")).expect("write");
     assert!(
@@ -337,6 +340,255 @@ fn journal_v2_loads_and_v3_requires_selection_field() {
     assert!(restored.selections.is_empty());
     assert_eq!(restored.attempts.len(), 1);
     journal.save(&restored).expect("resave");
+}
+
+/// Rewrites a version 4 store's prompts in the text-only layout versions 1 to
+/// 3 wrote, so legacy files come from the same helpers as current ones.
+fn as_text_only(stored: &mut serde_json::Value) {
+    for list in ["attempts", "creations"] {
+        let Some(entries) = stored
+            .get_mut(list)
+            .and_then(serde_json::Value::as_array_mut)
+        else {
+            continue;
+        };
+        for entry in entries {
+            let prompt = entry["prompt"].as_object_mut().expect("prompt object");
+            for field in ["files", "agents", "skills", "metadata", "context"] {
+                prompt.remove(field);
+            }
+        }
+    }
+}
+
+fn context(id: &str) -> SyntheticContext {
+    SyntheticContext {
+        id: MessageId::from(id),
+        text: format!("quoted {id} ✓"),
+        description: Some("Selection".to_owned()),
+        metadata: Some(Metadata(serde_json::Map::from_iter([(
+            "openchamber".to_owned(),
+            serde_json::json!({"kind": "quote"}),
+        )]))),
+    }
+}
+
+/// A steer with every part kind, after an acknowledged send in the same session.
+fn multi_part() -> JournalSnapshot {
+    let mut snapshot = sample();
+    let (key, earlier) = &mut snapshot.attempts[0];
+    earlier.admission = Admission::Admitted;
+    let mut steer = attempt_tests::attempt(key);
+    let id = MessageId::from("msg_bcfe56800002SteerSteer0001");
+    steer.prompt.message_id = id.clone();
+    steer.optimistic.info.id = id.clone();
+    steer.optimistic.parts[0] = Part::text(PartId::new(format!("{id}-local-text")), "steer");
+    steer.draft = Draft::new("steer");
+    steer.prompt.text = "steer".to_owned();
+    steer.prompt.delivery = Some(Delivery::Steer);
+    steer.prompt.parts = PromptParts {
+        files: vec![
+            PromptFile {
+                uri: "file:///home/synthetic/project/notes.md".to_owned(),
+                name: Some("notes.md".to_owned()),
+            },
+            PromptFile {
+                uri: "data:text/plain;base64,aGk=".to_owned(),
+                name: None,
+            },
+        ],
+        agents: vec![AgentMention {
+            name: "plan".to_owned(),
+            mention: Some(Mention {
+                start: 0,
+                end: 5,
+                text: "@plan".to_owned(),
+            }),
+        }],
+        skills: vec![SkillRef {
+            id: "skill_fixture".to_owned(),
+        }],
+        metadata: Some(Metadata(serde_json::Map::from_iter([(
+            "source".to_owned(),
+            serde_json::json!("native"),
+        )]))),
+        context: vec![
+            context("msg_bcfe56800001Context00001"),
+            context("msg_bcfe56800001Context00002"),
+        ],
+    };
+    let key = key.clone();
+    snapshot.attempts.push((key, steer));
+    snapshot
+}
+
+#[test]
+fn journal_v4_round_trips_multi_part_prompts_beside_acknowledged_sends() {
+    let scratch = Scratch::new();
+    let snapshot = multi_part();
+    let (mut journal, _) = MutationJournal::open(&scratch.path()).expect("open");
+    journal.save(&snapshot).expect("save");
+    drop(journal);
+    let (_journal, value) = MutationJournal::open(&scratch.path()).expect("reopen");
+    let restored = loaded(value);
+    assert_eq!(restored.attempts.len(), 2);
+    for ((key, expected), (restored_key, restored)) in
+        snapshot.attempts.iter().zip(&restored.attempts)
+    {
+        assert_eq!(key, restored_key);
+        assert_eq!(restored.prompt.message_id, expected.prompt.message_id);
+        assert_eq!(restored.prompt.text, expected.prompt.text);
+        assert_eq!(restored.prompt.parts, expected.prompt.parts);
+        assert_eq!(restored.prompt.delivery, expected.prompt.delivery);
+    }
+    assert_eq!(restored.attempts[0].1.admission, Admission::Admitted);
+    assert_eq!(
+        restored.attempts[1].1.admission,
+        Admission::Uncertain,
+        "an interrupted steer is uncertain after restart"
+    );
+    let ids: Vec<_> = restored.attempts[1]
+        .1
+        .prompt
+        .parts
+        .context
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect();
+    assert_eq!(
+        ids,
+        [
+            "msg_bcfe56800001Context00001",
+            "msg_bcfe56800001Context00002"
+        ],
+        "context keeps its admission order"
+    );
+    let attempts = SendAttempts::from_snapshot(restored.attempts).expect("one unresolved");
+    assert_eq!(attempts.session(&snapshot.attempts[0].0).count(), 2);
+}
+
+#[test]
+fn journal_v3_text_snapshot_migrates_to_v4() {
+    let scratch = Scratch::new();
+    let path = scratch.path();
+    let (key, creation) = crate::create_attempt::tests::sample();
+    let mut snapshot = sample();
+    snapshot.creations.push((key, creation));
+    let (mut journal, _) = MutationJournal::open(&path).expect("open");
+    journal.save(&snapshot).expect("save");
+    drop(journal);
+    let mut stored: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read")).expect("JSON");
+    as_text_only(&mut stored);
+    stored["version"] = 3.into();
+    let v3 = serde_json::to_vec(&stored).expect("JSON");
+    write_raw(&path, &v3);
+    let (mut journal, value) = MutationJournal::open(&path).expect("v3 loads");
+    let migrated = loaded(value);
+    assert_eq!(migrated.attempts.len(), 1);
+    assert_eq!(migrated.creations.len(), 1);
+    assert_eq!(migrated.drafts, snapshot.drafts);
+    let attempt = &migrated.attempts[0].1;
+    assert_eq!(attempt.prompt.text, snapshot.attempts[0].1.prompt.text);
+    assert_eq!(
+        attempt.prompt.message_id,
+        snapshot.attempts[0].1.prompt.message_id
+    );
+    assert_eq!(attempt.prompt.delivery, Some(Delivery::Queue));
+    assert!(
+        attempt.prompt.parts.is_empty(),
+        "a text prompt has no parts"
+    );
+    assert!(migrated.creations[0].1.prompt.parts.is_empty());
+    journal.save(&migrated).expect("migrated save");
+    let stored: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read")).expect("JSON");
+    assert_eq!(stored["version"], 4);
+    assert_eq!(
+        stored["attempts"][0]["prompt"]["context"],
+        serde_json::json!([])
+    );
+    drop(journal);
+
+    // A v3 file never carries v4 fields, and a v4 file never omits them.
+    let mut mixed: serde_json::Value = serde_json::from_slice(&v3).expect("JSON");
+    mixed["attempts"][0]["prompt"]["files"] = serde_json::json!([]);
+    let mut partial = stored.clone();
+    partial["attempts"][0]["prompt"]
+        .as_object_mut()
+        .expect("prompt")
+        .remove("context");
+    for malformed in [mixed, partial] {
+        let bytes = serde_json::to_vec(&malformed).expect("JSON");
+        write_raw(&path, &bytes);
+        assert!(matches!(
+            MutationJournal::open(&path),
+            Err(JournalError::Invalid(_))
+        ));
+        assert_eq!(
+            fs::read(&path).expect("kept"),
+            bytes,
+            "a failed load writes nothing"
+        );
+    }
+}
+
+#[test]
+fn malformed_multi_part_snapshots_are_rejected_whole() {
+    let mut cases: Vec<(&str, JournalSnapshot)> = Vec::new();
+    let mut two_unresolved = multi_part();
+    two_unresolved.attempts[0].1.admission = Admission::Uncertain;
+    cases.push(("two unresolved attempts in one session", two_unresolved));
+    let mut reused = multi_part();
+    reused.attempts[1].1.prompt.parts.context[0].id =
+        reused.attempts[0].1.prompt.message_id.clone();
+    cases.push(("context reusing another prompt's ID", reused));
+    let mut self_reference = multi_part();
+    self_reference.attempts[1].1.prompt.parts.context[1].id =
+        self_reference.attempts[1].1.prompt.message_id.clone();
+    cases.push(("context reusing its own prompt ID", self_reference));
+    let mut unprefixed = multi_part();
+    unprefixed.attempts[1].1.prompt.parts.context[0].id = MessageId::from("ctx_1");
+    cases.push(("context without the msg_ prefix", unprefixed));
+    let mut inline = multi_part();
+    inline.attempts[1].1.prompt.parts.files[1].uri =
+        format!("data:image/png;base64,{}", "A".repeat(MAX_URI));
+    cases.push(("an inline blob over the reference cap", inline));
+    let mut metadata = multi_part();
+    metadata.attempts[1].1.prompt.parts.metadata = Some(Metadata(serde_json::Map::from_iter([(
+        "blob".to_owned(),
+        serde_json::json!("x".repeat(MAX_METADATA)),
+    )])));
+    cases.push(("metadata over its cap", metadata));
+    let mut blank_skill = multi_part();
+    blank_skill.attempts[1].1.prompt.parts.skills[0].id = " ".to_owned();
+    cases.push(("a blank skill", blank_skill));
+    let (key, creation) = crate::create_attempt::tests::sample();
+    let with_creation = JournalSnapshot {
+        drafts: Vec::new(),
+        attempts: vec![(key.clone(), attempt_tests::attempt(&key))],
+        creations: vec![(key, creation)],
+        selections: Vec::new(),
+    };
+    cases.push(("a creation and an attempt for one session", with_creation));
+    for (case, snapshot) in cases {
+        assert!(
+            matches!(Store::capture(&snapshot), Err(JournalError::Invalid(_))),
+            "{case}"
+        );
+    }
+
+    // The same rules hold on load, and a rejected file stays as it was.
+    let scratch = Scratch::new();
+    let mut store = Store::capture(&multi_part()).expect("capture");
+    store.attempts[1].prompt.context[0].id = "ctx_1".to_owned();
+    let bytes = serde_json::to_vec(&store).expect("encode");
+    write_raw(&scratch.path(), &bytes);
+    assert!(matches!(
+        MutationJournal::open(&scratch.path()),
+        Err(JournalError::Invalid(_))
+    ));
+    assert_eq!(fs::read(scratch.path()).expect("kept"), bytes);
 }
 
 fn write_raw(path: &Path, bytes: &[u8]) {

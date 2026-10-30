@@ -2338,6 +2338,10 @@ export const dict = {
   'chat.nativeRecovery.retryStorage': 'Kaydetmeyi yeniden dene',
   'chat.nativeRecovery.sendFailed': 'Mesaj gönderilmedi. Metni yazma alanına geri kondu.',
   'chat.nativeRecovery.abortFailed': 'Oturum durdurulamadı. Tekrar denemeden önce mevcut etkinliğini kontrol edin.',
+  'chat.nativeRecovery.restore': 'Yazma alanına taşı',
+  'chat.nativeRecovery.refused': 'Sunucu bu mesajı yeniden reddetti. Düzenlemek ya da yeniden göndermek için yazma alanına taşıyın.',
+  'chat.nativeRecovery.outOfOrder': 'Bu mesajın bağlamının bir kısmı eksik, bu yüzden sırasıyla yeniden gönderilemiyor. Yeniden göndermek için yazma alanına taşıyın.',
+  'chat.nativeRecovery.stopWaits': 'Bir mesaj gönderilirken durdurulamaz. Gönderildikten sonra tekrar deneyin.',
 
   'chat.queuedMessage.attachments': '+{count} dosya',
   'chat.queuedMessage.empty': '(boş)',

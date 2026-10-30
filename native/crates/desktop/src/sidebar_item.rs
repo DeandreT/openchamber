@@ -53,6 +53,10 @@ pub enum SidebarItem {
         expanded: bool,
         expansion_key: String,
         pinned: bool,
+        /// The row is a work of its own, so it may offer Track and Done.
+        owns_work: bool,
+        /// The row lists an archived session.
+        archived: bool,
     },
     Show {
         key: SharedString,
@@ -148,6 +152,8 @@ impl SidebarItem {
                 has_children,
                 expanded,
                 expansion_key,
+                owns_work,
+                archived,
                 ..
             } => Self::Session {
                 key: key.clone().into(),
@@ -158,6 +164,8 @@ impl SidebarItem {
                 expanded: *expanded,
                 expansion_key: expansion_key.clone(),
                 pinned: session.overlay.pinned_at.is_some(),
+                owns_work: *owns_work,
+                archived: *archived,
             },
             SidebarRow::ShowControl {
                 key,

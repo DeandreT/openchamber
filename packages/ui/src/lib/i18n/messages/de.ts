@@ -2211,6 +2211,10 @@ export const dict = {
   'chat.nativeRecovery.retryStorage': 'Speichern erneut versuchen',
   'chat.nativeRecovery.sendFailed': 'Die Nachricht wurde nicht gesendet. Ihr Text ist wieder im Eingabefeld.',
   'chat.nativeRecovery.abortFailed': 'Die Sitzung konnte nicht gestoppt werden. Vor einem erneuten Versuch ihre aktuelle Aktivität prüfen.',
+  'chat.nativeRecovery.restore': 'In das Eingabefeld verschieben',
+  'chat.nativeRecovery.refused': 'Der Server hat diese Nachricht erneut abgelehnt. Verschiebe sie in das Eingabefeld, um sie zu bearbeiten oder erneut zu senden.',
+  'chat.nativeRecovery.outOfOrder': 'Ein Teil des Kontexts dieser Nachricht fehlt, daher kann sie nicht in der richtigen Reihenfolge erneut gesendet werden. Verschiebe sie in das Eingabefeld, um sie neu zu senden.',
+  'chat.nativeRecovery.stopWaits': 'Während eine Nachricht gesendet wird, kann nicht gestoppt werden. Versuche es erneut, sobald sie gesendet ist.',
 
   'chat.queuedMessage.attachments': '+{count} Datei(en)',
   'chat.queuedMessage.empty': '(leer)',

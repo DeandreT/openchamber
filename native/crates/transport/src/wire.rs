@@ -261,6 +261,8 @@ pub(crate) struct Settings {
     pub sidebar_keep_work_in_place: Option<Value>,
     pub session_work_enabled: Option<Value>,
     pub prompt_navigator_enabled: Option<Value>,
+    pub show_deletion_dialog: Option<Value>,
+    pub permission_default_mode: Option<Value>,
 }
 
 /// OpenCode v2 list routes: `{ location, data }`.

@@ -6,6 +6,7 @@
 //! provider calls.
 
 mod activation;
+mod archive_view;
 mod assets;
 mod baseline;
 mod blocking_requests;
@@ -36,6 +37,7 @@ mod model_controls;
 mod mutation_journal;
 mod network;
 mod open_in_app;
+mod permission_modes;
 mod project_chooser;
 mod project_section;
 mod prompt_rail;
@@ -51,6 +53,10 @@ mod send_recovery;
 mod server_sync;
 mod session_creation;
 mod session_id;
+mod session_management;
+mod session_menu;
+#[cfg(test)]
+mod session_menu_tests;
 mod session_mutations;
 mod sidebar_item;
 mod sidebar_view;

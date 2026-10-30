@@ -2452,6 +2452,10 @@ export const dict: Record<I18nKey, string> = {
   "chat.nativeRecovery.retryStorage": "Повторити збереження",
   "chat.nativeRecovery.sendFailed": "Повідомлення не надіслано. Його текст повернуто в поле введення.",
   "chat.nativeRecovery.abortFailed": "Не вдалося зупинити сесію. Перевірте її поточну активність перед повторною спробою.",
+  "chat.nativeRecovery.restore": "Перемістити в поле введення",
+  "chat.nativeRecovery.refused": "Сервер знову відхилив це повідомлення. Перемістіть його в поле введення, щоб змінити або надіслати повторно.",
+  "chat.nativeRecovery.outOfOrder": "Частина контексту цього повідомлення відсутня, тому його не можна повторно надіслати в правильному порядку. Перемістіть його в поле введення, щоб надіслати знову.",
+  "chat.nativeRecovery.stopWaits": "Не можна зупинити, поки надсилається повідомлення. Спробуйте ще раз, коли його буде надіслано.",
 
   "chat.queuedMessage.attachments": "+{count} файл(и)",
   "chat.queuedMessage.empty": "(порожній)",

@@ -2,13 +2,13 @@
 
 use gpui_kit::{Context, Window};
 use openchamber_native_core::draft::{Draft, DraftKey, DraftTarget};
-use openchamber_native_core::ids::PartId;
+use openchamber_native_core::ids::{MessageId, PartId};
 use openchamber_native_core::pending_requests::RequestKey;
 use openchamber_native_core::session::SessionRecord;
 use openchamber_native_core::session_index::SessionChange;
 use openchamber_native_core::transcript::{Message, MessageInfo, Part, Role};
 use openchamber_native_transport::client::ServerClient;
-use openchamber_native_transport::prompt::TextPrompt;
+use openchamber_native_transport::prompt::Prompt;
 use openchamber_native_transport::session_create::{
     CreateSession, SessionError, SessionObservation,
 };
@@ -24,12 +24,13 @@ use crate::workspace::Workspace;
 enum CreatedAction {
     ObservePrompt,
     RetryPrompt(Vec<RequestKey>),
-    Dispatch(Vec<RequestKey>),
+    /// The requests a retry supersedes and the context it found admitted.
+    Dispatch(Vec<RequestKey>, Vec<MessageId>),
 }
 
 /// Auto always goes through OpenChamber's intercepted selection route. Ordinary
 /// unchanged agent selections are omitted because OpenCode adds a notice for each.
-pub(crate) fn first_prompt_selection(prompt: &TextPrompt, session: &SessionRecord) -> TextPrompt {
+pub(crate) fn first_prompt_selection(prompt: &Prompt, session: &SessionRecord) -> Prompt {
     let mut selected = prompt.clone();
     if selected.model.as_ref().is_some_and(|model| {
         !(model.provider_id == "openchamber" && model.model_id == "auto")
@@ -117,9 +118,10 @@ impl Workspace {
             project,
             request,
             draft: draft.clone(),
-            prompt: TextPrompt {
+            prompt: Prompt {
                 message_id,
                 text: draft.text,
+                parts: Default::default(),
                 model: selection.model,
                 agent: selection.agent_name,
                 delivery: None,
@@ -130,6 +132,11 @@ impl Workspace {
         };
         if !self.creations.insert(key.clone(), attempt) {
             return;
+        }
+        // The draft's own permission choice goes with its session; the next
+        // draft starts from the Settings default again.
+        if let Some(mode) = self.permission_modes.drafts.remove(&key.runtime) {
+            self.permission_modes.creating.insert(key.clone(), mode);
         }
         if let Some(from) = self.selection_owner() {
             let to = openchamber_native_core::composer_selection::SelectionOwner {
@@ -530,6 +537,15 @@ impl Workspace {
                 self.select_session(key.session.clone(), window, cx);
             }
         }
+        // Like the web's `finishDraftSession`, the mode write runs beside the
+        // first send and never waits for or reorders it.
+        self.write_created_permission_mode(
+            key,
+            attempt.request.directory(),
+            client.clone(),
+            &executor,
+            (window, cx),
+        );
         // This barrier snapshots creation removal and the session-owned attempt
         // together. A failed write retains the message without issuing a prompt.
         self.start_created_send(
@@ -537,6 +553,7 @@ impl Workspace {
             CapturedPrompt {
                 prompt: dispatched,
                 requests,
+                admitted: Vec::new(),
             },
             &session,
             client,
@@ -546,6 +563,7 @@ impl Workspace {
     }
 
     pub(crate) fn mark_creation_deleted(&mut self, key: &SessionKey, cx: &mut Context<Self>) {
+        self.permission_modes.creating.remove(key);
         let changed = self.creations.phase(key, CreationPhase::Deleted);
         let bound = self.send_attempts.mark_created_deleted(key);
         if changed || bound {
@@ -558,10 +576,11 @@ impl Workspace {
         &mut self,
         key: &SessionKey,
         requests: Vec<RequestKey>,
+        admitted: Vec<MessageId>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.lookup_created_session(key, CreatedAction::Dispatch(requests), window, cx);
+        self.lookup_created_session(key, CreatedAction::Dispatch(requests, admitted), window, cx);
     }
 
     pub(crate) fn check_created_send(
@@ -573,7 +592,7 @@ impl Workspace {
     ) {
         let requests = self
             .send_attempts
-            .attempt(key)
+            .created_attempt(key)
             .map_or_else(Vec::new, |attempt| {
                 self.requests_for_creation(key, attempt.owner.directory())
             });
@@ -602,7 +621,7 @@ impl Workspace {
         {
             return;
         }
-        let Some(attempt) = self.send_attempts.attempt(key).filter(|attempt| {
+        let Some(attempt) = self.send_attempts.created_attempt(key).filter(|attempt| {
             attempt.origin == SendOrigin::Created && attempt.admission != Admission::Preparing
         }) else {
             return;
@@ -638,10 +657,14 @@ impl Workspace {
             let _ = this.update_in(cx, |this, window, cx| {
                 this.creation_tasks.remove(&key);
                 this.creations.checks.remove(&key);
-                if !this.send_attempts.attempt(&key).is_some_and(|attempt| {
-                    attempt.origin == SendOrigin::Created
-                        && attempt.prompt.message_id == prompt.message_id
-                }) {
+                if !this
+                    .send_attempts
+                    .created_attempt(&key)
+                    .is_some_and(|attempt| {
+                        attempt.origin == SendOrigin::Created
+                            && attempt.prompt.message_id == prompt.message_id
+                    })
+                {
                     return;
                 }
                 match result {
@@ -653,17 +676,19 @@ impl Workspace {
                             this.after_index_update(update, window, cx);
                         }
                         match action {
-                            CreatedAction::Dispatch(requests) => this.dispatch_created_retry(
-                                key.clone(),
-                                CapturedPrompt {
-                                    prompt: first_prompt_selection(&prompt, &session),
-                                    requests,
-                                },
-                                &session,
-                                client,
-                                executor,
-                                (window, cx),
-                            ),
+                            CreatedAction::Dispatch(requests, admitted) => this
+                                .dispatch_created_retry(
+                                    key.clone(),
+                                    CapturedPrompt {
+                                        prompt: first_prompt_selection(&prompt, &session),
+                                        requests,
+                                        admitted,
+                                    },
+                                    &session,
+                                    client,
+                                    executor,
+                                    (window, cx),
+                                ),
                             CreatedAction::ObservePrompt => {
                                 this.continue_created_recovery(&key, None, window, cx)
                             }
@@ -728,6 +753,7 @@ impl Workspace {
                     connected && !self.creation_tasks.contains_key(key) && self.persistence_ready();
                 RecoveryRow {
                     key: key.clone(),
+                    message: attempt.prompt.message_id.clone(),
                     session_label: attempt.source.directory().to_owned().into(),
                     text: attempt
                         .prompt
@@ -744,6 +770,7 @@ impl Workspace {
                                 | CreationPhase::Creating
                                 | CreationPhase::Deleted
                         ),
+                    can_restore: false,
                     can_retry: available
                         && self.persistence_ready()
                         && (attempt.phase == CreationPhase::Confirmed

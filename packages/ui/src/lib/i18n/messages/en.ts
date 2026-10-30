@@ -2483,6 +2483,10 @@ export const dict = {
   'chat.nativeRecovery.retryStorage': 'Retry saving',
   'chat.nativeRecovery.sendFailed': 'The message wasn\'t sent. Its text is back in the composer.',
   'chat.nativeRecovery.abortFailed': 'Couldn\'t stop the session. Check its current activity before trying again.',
+  'chat.nativeRecovery.restore': 'Move to composer',
+  'chat.nativeRecovery.refused': 'The server refused this message again. Move it to the composer to edit or resend it.',
+  'chat.nativeRecovery.outOfOrder': 'Part of this message\'s context is missing, so it can\'t be resent in order. Move it to the composer to send it again.',
+  'chat.nativeRecovery.stopWaits': 'Can\'t stop while a message is being sent. Try again once it\'s sent.',
 
   'chat.queuedMessage.attachments': '+{count} file(s)',
   'chat.queuedMessage.empty': '(empty)',

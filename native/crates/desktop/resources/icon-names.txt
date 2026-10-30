@@ -70,6 +70,8 @@ search-eye
 send-plane-2
 server
 settings-3
+shield-check
+shield-star
 shield-user
 stack
 stop
@@ -83,3 +85,8 @@ text-wrap
 time
 tools
 question
+unpin
+inbox-archive
+inbox-unarchive
+delete-bin
+checkbox

@@ -164,6 +164,11 @@ impl Workspace {
         self.prompt_panel = None;
         self.prompt_hover_task = None;
         self.prompt_hover_suppressed = false;
+        self.session_menu = None;
+        self.session_rename = None;
+        if self.session_management.switch_runtime() {
+            gpui_kit::component::WindowExt::close_dialog(window, cx);
+        }
         self.code_wrap_save_task = None;
         self.code_wrap_state = CodeWrapState::default();
         self.invalidate_blocking(None);
@@ -173,6 +178,7 @@ impl Workspace {
         self.sessions = SessionIndex::new();
         self.topology = Topology::default();
         self.reset_send_catalog();
+        self.permission_modes.reset();
         self.reset_project_readouts();
         self.open_sessions.clear();
         self.live_status.clear();
@@ -221,10 +227,21 @@ impl Workspace {
             return;
         };
         match item {
-            StreamItem::Connected { resumed } => {
+            StreamItem::Connected {
+                resumed,
+                replay_through,
+            } => {
                 tracing::debug!(resumed, "the event stream is live");
                 let stale = std::mem::take(&mut connection.stale);
                 connection.state = ConnectionState::Connected;
+                if stale {
+                    // `left-for-user` is never replayed: the UI broadcaster
+                    // bypasses the hub's replay buffer, so a gap may have
+                    // lost the report even when the replay resumed. The
+                    // window closes once the policy read below settled and
+                    // the replay's last event was applied.
+                    self.permission_modes.begin_replay(replay_through);
+                }
                 if !connection.loaded {
                     connection.loaded = true;
                     self.reconcile(window, cx);
@@ -232,9 +249,12 @@ impl Workspace {
                     // Events were missed and not replayed: reread what they changed.
                     self.reconcile(window, cx);
                 }
-                // Routing is a server read, outside the OpenCode event replay.
-                // Refresh on stream connection even when that replay resumed.
+                // Routing and permission modes are server reads outside the
+                // OpenCode event replay, and their broadcasts are not
+                // replayed. Refresh on stream connection even when that
+                // replay resumed.
                 self.load_auto_routing(cx);
+                self.load_permission_policy(cx);
             }
             StreamItem::Disconnected(error) => {
                 tracing::warn!(%error, "the event stream dropped");
@@ -250,7 +270,12 @@ impl Workspace {
                     self.reconcile(window, cx);
                 }
             }
-            StreamItem::Events(events) => self.apply_server_events(events, window, cx),
+            StreamItem::Events { events, event_id } => {
+                self.apply_server_events(events, window, cx);
+                if let Some(id) = event_id {
+                    self.permission_modes.event_applied(&id);
+                }
+            }
         }
         cx.notify();
     }
@@ -258,6 +283,8 @@ impl Workspace {
     /// Rereads everything live state may have missed: sessions, topology,
     /// running state and every visited transcript.
     fn reconcile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // A gap may have lost the report that would reveal a held request.
+        self.permission_modes.holds.release_all();
         self.invalidate_blocking(None);
         self.refresh_blocking_requests(window, cx);
         tracing::info!(
@@ -392,6 +419,7 @@ impl Workspace {
         let generation = connection.generation;
         let changes = SettingsChanges {
             code_block_line_wrap: Some(save.value),
+            ..SettingsChanges::default()
         };
         let first_client = client.clone();
         let task = connection
@@ -428,6 +456,7 @@ impl Workspace {
                     let client = client.clone();
                     let changes = SettingsChanges {
                         code_block_line_wrap: Some(save.value),
+                        ..SettingsChanges::default()
                     };
                     let task = this.connection.as_ref()?.network.run(async move {
                         client.save_settings(&changes).await
@@ -607,7 +636,7 @@ impl Workspace {
         }
         let id = &read.session;
         let mutation_key = self.mutation_key(id);
-        let had_attempt = self.send_attempts.attempt(&mutation_key).is_some();
+        let before = self.send_attempts.ids(&mutation_key);
         let position = self.scroll_memory.position(&ScrollKey {
             runtime: self.runtime.clone(),
             session: id.clone(),
@@ -640,11 +669,7 @@ impl Workspace {
                 open.history = History::Failed(ConnectionFailure::from_error(&error));
             }
         }
-        if had_attempt && self.send_attempts.attempt(&mutation_key).is_none() {
-            self.recovery.clear_finished(&mutation_key);
-            self.creations.checks.remove(&mutation_key);
-            self.queue_persistence(cx);
-        }
+        self.forget_resolved(&mutation_key, &before, cx);
         cx.notify();
     }
 
@@ -698,7 +723,7 @@ impl Workspace {
                         return;
                     }
                     let mutation_key = this.mutation_key(&id);
-                    let had_attempt = this.send_attempts.attempt(&mutation_key).is_some();
+                    let before = this.send_attempts.ids(&mutation_key);
                     let Some(open) = this.open_sessions.get_mut(&id) else {
                         return;
                     };
@@ -731,11 +756,7 @@ impl Workspace {
                                 EarlierHistory::Failed(ConnectionFailure::from_error(&error));
                         }
                     }
-                    if had_attempt && this.send_attempts.attempt(&mutation_key).is_none() {
-                        this.recovery.clear_finished(&mutation_key);
-                        this.creations.checks.remove(&mutation_key);
-                        this.queue_persistence(cx);
-                    }
+                    this.forget_resolved(&mutation_key, &before, cx);
                     cx.notify();
                 });
             }),
@@ -743,13 +764,14 @@ impl Workspace {
         cx.notify();
     }
 
-    fn apply_server_events(
+    pub(crate) fn apply_server_events(
         &mut self,
         events: Vec<ServerEvent>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
         let mut changes = Vec::new();
+        let mut update = IndexUpdate::default();
         let mut ordering = Vec::new();
         let mut reread: Vec<SessionId> = Vec::new();
         let mut git_changed: Vec<SessionId> = Vec::new();
@@ -759,6 +781,10 @@ impl Workspace {
             }
             match event {
                 ServerEvent::BlockingRequest { directory, event } => {
+                    // In order: a request sees the sessions created before it.
+                    let earlier = self.sessions.apply(changes.drain(..));
+                    update.changed |= earlier.changed;
+                    update.moves.extend(earlier.moves);
                     self.blocking_event(directory, event, window, cx)
                 }
                 ServerEvent::BlockingRequestInvalid { directory, .. } => {
@@ -782,14 +808,20 @@ impl Workspace {
                 }
                 ServerEvent::SessionDeleted { session_id } => {
                     self.remove_session_requests(&session_id);
-                    let key = self.mutation_key(&session_id);
-                    self.mark_creation_deleted(&key, cx);
+                    self.forget_deleted_session(&session_id, cx);
                     self.live_status.remove(&session_id);
                     ordering.push(OrderingMutation::Remove { session_id });
                 }
                 ServerEvent::CatalogUpdated { kind, directory } => {
                     self.refresh_send_catalog(kind, directory.as_deref(), cx);
                 }
+                ServerEvent::PermissionPolicy(snapshot) => self.apply_permission_policy(snapshot),
+                ServerEvent::PermissionLeftForUser {
+                    session_id,
+                    permission_id,
+                    ..
+                } => self.permission_left_for_user(session_id, permission_id),
+                ServerEvent::RoutingUpdated => self.load_auto_routing(cx),
                 ServerEvent::Transcript { session_id, event } => {
                     if self.finishes_git_changing_call(&session_id, &event)
                         && !git_changed.contains(&session_id)
@@ -805,7 +837,9 @@ impl Workspace {
                 _ => {}
             }
         }
-        let update = self.sessions.apply(changes);
+        let rest = self.sessions.apply(changes);
+        update.changed |= rest.changed;
+        update.moves.extend(rest.moves);
         let reordered = !ordering.is_empty() && self.ordering.apply(&ordering, now_ms());
         if reordered && !update.changed {
             self.rebuild_sidebar();
@@ -869,17 +903,15 @@ impl Workspace {
                 if info.role == openchamber_native_core::transcript::Role::User
         )
         .then(|| self.mutation_key(id));
-        let had_attempt = mutation_key
+        let before = mutation_key
             .as_ref()
-            .is_some_and(|key| self.send_attempts.attempt(key).is_some());
+            .map(|key| self.send_attempts.ids(key))
+            .unwrap_or_default();
         let Some(open) = self.open_sessions.get_mut(id) else {
             if let (Some(key), TranscriptEvent::MessageUpdated(info)) = (&mutation_key, &event)
                 && self.send_attempts.observe(key, &info.id)
             {
-                if self.send_attempts.attempt(key).is_none() {
-                    self.recovery.clear_finished(key);
-                    self.creations.checks.remove(key);
-                }
+                self.forget_resolved(key, &before, cx);
                 self.queue_persistence(cx);
             }
             return false;
@@ -897,13 +929,8 @@ impl Workspace {
             apply_list_change(open, &change, cx);
             false
         };
-        if let Some(key) = mutation_key
-            && had_attempt
-            && self.send_attempts.attempt(&key).is_none()
-        {
-            self.recovery.clear_finished(&key);
-            self.creations.checks.remove(&key);
-            self.queue_persistence(cx);
+        if let Some(key) = mutation_key {
+            self.forget_resolved(&key, &before, cx);
         }
         needs_read
     }
@@ -932,7 +959,10 @@ impl Workspace {
             .selected
             .as_ref()
             .is_some_and(|id| self.session(id).is_none());
-        if selection_gone {
+        if selection_gone && self.archive_open {
+            // Only the session closes; the archive page keeps the focus.
+            self.close_selected_session(window, cx);
+        } else if selection_gone {
             self.show_new_session(window, cx);
         }
         cx.notify();
@@ -1021,19 +1051,20 @@ mod tests {
                 let session = SessionId::from("ses_unvisited_recovery");
                 let key = workspace.mutation_key(&session);
                 let attempt = crate::send_attempt::tests::attempt(&key);
+                let attempt_id = attempt.prompt.message_id.clone();
                 let info = attempt.optimistic.info.clone();
                 assert!(!workspace.open_sessions.contains_key(&session));
                 workspace.send_attempts.begin(key.clone(), attempt);
                 workspace
                     .send_attempts
-                    .finish(&key, Err(PromptAdmission::Unknown));
+                    .finish(&key, &attempt_id, Err(PromptAdmission::Unknown));
                 workspace.apply_transcript_event(
                     &session,
                     TranscriptEvent::MessageUpdated(info),
                     cx,
                 );
                 assert!(workspace.send_attempts.can_send(&key));
-                assert!(workspace.send_attempts.attempt(&key).is_none());
+                assert!(workspace.send_attempts.attempt(&key, &attempt_id).is_none());
                 assert!(
                     !workspace.open_sessions.contains_key(&session),
                     "admission must not open an unseen transcript"

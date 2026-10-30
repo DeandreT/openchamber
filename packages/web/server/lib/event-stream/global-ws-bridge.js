@@ -50,6 +50,9 @@ export function createGlobalMessageStreamWsBridge({
     const replay = globalHub.replayAfter(requestedLastEventId);
     const ready = { type: 'ready', scope: 'global' };
     if (replay === null) ready.replayReset = true;
+    // The replay's last event id, so a client knows when the replayed
+    // backlog ends and live events begin.
+    else if (replay.length > 0) ready.replayThrough = replay[replay.length - 1].eventId;
     const sent = sendMessageStreamWsFrame(socket, ready);
     if (!sent) {
       removeClient(socket);

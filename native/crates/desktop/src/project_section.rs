@@ -87,6 +87,16 @@ pub(crate) struct ProjectReadouts {
     in_view: Option<String>,
 }
 
+impl ProjectReadouts {
+    /// Settles the file-manager icon as absent. A headless test against a
+    /// loopback server would otherwise scan this machine's icon themes on the
+    /// test thread, where background tasks run inline.
+    #[cfg(test)]
+    pub(crate) fn without_app_icon(&mut self) {
+        self.app_icon = AppIcon::Found(None);
+    }
+}
+
 /// What the section is about: the session's directory and the project whose
 /// actions run there.
 struct Subject {

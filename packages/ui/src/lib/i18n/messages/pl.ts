@@ -1070,6 +1070,10 @@ export const dict: Record<I18nKey, string> = {
   'chat.nativeRecovery.retryStorage': 'Ponów zapisywanie',
   'chat.nativeRecovery.sendFailed': 'Wiadomość nie została wysłana. Jej tekst wrócił do pola wpisywania.',
   'chat.nativeRecovery.abortFailed': 'Nie udało się zatrzymać sesji. Sprawdź jej bieżącą aktywność przed ponowną próbą.',
+  'chat.nativeRecovery.restore': 'Przenieś do pola wpisywania',
+  'chat.nativeRecovery.refused': 'Serwer ponownie odrzucił tę wiadomość. Przenieś ją do pola wpisywania, aby ją edytować lub wysłać ponownie.',
+  'chat.nativeRecovery.outOfOrder': 'Brakuje części kontekstu tej wiadomości, więc nie można jej ponownie wysłać we właściwej kolejności. Przenieś ją do pola wpisywania, aby wysłać ją od nowa.',
+  'chat.nativeRecovery.stopWaits': 'Nie można zatrzymać podczas wysyłania wiadomości. Spróbuj ponownie, gdy zostanie wysłana.',
 
   'chat.queuedMessage.attachments': '+{count} plik(i)',
   'chat.queuedMessage.empty': '(puste)',

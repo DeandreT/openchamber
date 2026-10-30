@@ -377,6 +377,78 @@ fn creation_binds_durably_before_prompt_and_skips_redundant_agent_switch(cx: &mu
 }
 
 #[gpui_kit::test]
+fn a_drafts_permission_choice_is_written_onto_its_session_beside_the_first_send(
+    cx: &mut TestAppContext,
+) {
+    use openchamber_native_core::permission_mode::PermissionMode;
+    let fixture = Fixture::new();
+    let key = tests::key("create-runtime", "ses_existing");
+    // The fixture answers the mode write with 404: its failure must not hold
+    // back the prompt.
+    let (server, _) = creation_server(fixture.journal(), Outcome::Success, false);
+    let (window, workspace) = open(cx, &server, &fixture, &key);
+    ready(cx, &workspace);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            prepare(workspace, &key, window, cx);
+            workspace.cycle_permission_mode(window, cx);
+            assert_eq!(
+                workspace.composer_permission_mode(),
+                PermissionMode::Auto,
+                "without a safety net the draft goes straight to Auto"
+            );
+            workspace.submit(window, cx);
+            assert_eq!(
+                workspace.composer_permission_mode(),
+                PermissionMode::Ask,
+                "the next draft starts from the default again"
+            );
+        })
+    })
+    .expect("window");
+    // The prompt's own outcome is not this test's subject: the fixture's
+    // malformed answer leaves it uncertain and starts recovery reads.
+    wait(cx, |cx| {
+        server.prompt_count() == 1
+            && cx.read(|cx| workspace.read(cx).permission_modes.writes_in_flight() == 0)
+    });
+    let requests = server.requests.lock().expect("requests");
+    let create = requests
+        .iter()
+        .find(|request| request.path == "/api/session")
+        .expect("create");
+    let id = serde_json::from_slice::<Value>(&create.body).expect("body")["id"]
+        .as_str()
+        .expect("id")
+        .to_owned();
+    let writes: Vec<_> = requests
+        .iter()
+        .filter(|request| request.method == "PUT")
+        .collect();
+    assert_eq!(writes.len(), 1);
+    assert_eq!(
+        writes[0].path,
+        format!("/api/permission-auto-accept/sessions/{id}")
+    );
+    assert_eq!(
+        serde_json::from_slice::<Value>(&writes[0].body).expect("write body"),
+        json!({"mode": "auto", "enabled": true, "directory": "/project"})
+    );
+    let position = |path: &str| {
+        requests
+            .iter()
+            .position(|request| request.path == path)
+            .expect("request")
+    };
+    assert!(
+        position("/api/session") < position(&writes[0].path),
+        "the mode is written once the session exists"
+    );
+    drop(requests);
+    close(cx, window, &workspace);
+}
+
+#[gpui_kit::test]
 fn lost_creation_restarts_and_check_never_sends_before_explicit_retry(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let key = tests::key("create-runtime", "ses_existing");
@@ -415,7 +487,12 @@ fn lost_creation_restarts_and_check_never_sends_before_explicit_retry(cx: &mut T
     ready(cx, &workspace);
     cx.update_window(window, |_, window, cx| {
         workspace.update(cx, |workspace, cx| {
-            workspace.check_recovery(&captured, window, cx)
+            workspace.check_recovery(
+                &captured,
+                &workspace.recovery_message(&captured, cx),
+                window,
+                cx,
+            )
         })
     })
     .expect("window");
@@ -425,7 +502,12 @@ fn lost_creation_restarts_and_check_never_sends_before_explicit_retry(cx: &mut T
     assert_eq!(server.prompt_count(), 0);
     cx.update_window(window, |_, window, cx| {
         workspace.update(cx, |workspace, cx| {
-            workspace.retry_recovery(&captured, window, cx)
+            workspace.retry_recovery(
+                &captured,
+                &workspace.recovery_message(&captured, cx),
+                window,
+                cx,
+            )
         })
     })
     .expect("window");
@@ -480,7 +562,12 @@ fn closing_during_creation_restores_unknown_identity_without_resubmitting(cx: &m
     assert_eq!(server.prompt_count(), 0);
     cx.update_window(window, |_, window, cx| {
         workspace.update(cx, |workspace, cx| {
-            workspace.check_recovery(&captured, window, cx)
+            workspace.check_recovery(
+                &captured,
+                &workspace.recovery_message(&captured, cx),
+                window,
+                cx,
+            )
         })
     })
     .expect("window");
@@ -670,7 +757,12 @@ fn confirmed_creation_404_is_terminal_and_rejected_creation_retries_same_identit
         missing.store(true, Ordering::Release);
         cx.update_window(window, |_, window, cx| {
             workspace.update(cx, |workspace, cx| {
-                workspace.retry_recovery(&captured, window, cx)
+                workspace.retry_recovery(
+                    &captured,
+                    &workspace.recovery_message(&captured, cx),
+                    window,
+                    cx,
+                )
             })
         })
         .expect("window");

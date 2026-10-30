@@ -2414,6 +2414,10 @@ export const dict = {
   'chat.nativeRecovery.retryStorage': 'ניסיון שמירה חוזר',
   'chat.nativeRecovery.sendFailed': 'ההודעה לא נשלחה. הטקסט שלה הוחזר לשדה הכתיבה.',
   'chat.nativeRecovery.abortFailed': 'לא ניתן לעצור את הסשן. יש לבדוק את הפעילות הנוכחית שלו לפני ניסיון נוסף.',
+  'chat.nativeRecovery.restore': 'העברה לשדה הכתיבה',
+  'chat.nativeRecovery.refused': 'השרת דחה שוב את ההודעה הזו. יש להעביר אותה לשדה הכתיבה כדי לערוך אותה או לשלוח אותה מחדש.',
+  'chat.nativeRecovery.outOfOrder': 'חלק מההקשר של ההודעה הזו חסר, ולכן אי אפשר לשלוח אותה מחדש בסדר הנכון. יש להעביר אותה לשדה הכתיבה כדי לשלוח אותה שוב.',
+  'chat.nativeRecovery.stopWaits': 'אי אפשר לעצור בזמן שליחת הודעה. יש לנסות שוב אחרי שהיא תישלח.',
 
   'chat.queuedMessage.attachments': '+{count} קבצים',
   'chat.queuedMessage.empty': '(ריק)',

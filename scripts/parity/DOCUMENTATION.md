@@ -31,6 +31,7 @@ PyGObject with AT-SPI, `busctl`, `dbus-run-session`, `xsettingsd` and fontconfig
 | `native_platform.py` | Synthetic native window-manager and IBus checks with private profiles and service logs. |
 | `native_accessibility.py` | Orca-generated control announcements and AT-SPI transcript exposure, with silent private speech services. |
 | `native_workflow.py`, `workflow_proxy.py` | Connected native send/stop/restart checks and loopback-only loss injection before or after admission. |
+| `native_session_management.py` | Connected rename, pin, archive, restore and delete through the native session menu, with one injected write failure. |
 | `compare.py` | Pixel, row and geometry comparison. |
 | `png.py` | PNG reading and writing with the standard library. |
 
@@ -323,6 +324,28 @@ Unicode is supplied through a real clipboard paste. AT-SPI string key synthesis
 does not reliably preserve non-ASCII text on X11; it is not a valid Unicode input
 probe. `ClipboardProbe.paste` serves the private clipboard and waits for the exact
 visible result. These workflow checks qualify outcomes, not timing or visual parity.
+
+## Native session management
+
+`native_session_management.py` renames, pins, archives, undoes an archive,
+restores and deletes real sessions of a parity-seed copy through the native
+sidebar menu, the archive page and the archive notification's Undo, and reads
+each outcome back from the isolated server's API:
+
+```sh
+python3 scripts/parity/native_session_management.py --binary <release binary>
+```
+
+The pin, its menu item and Undo are driven through accessibility actions, the
+rest through pointer clicks and typed keys. The `ActionFaults` proxy fails one
+unpin write with HTTP 500; the check requires the failure text in the
+`session-notice` status node (toolkit notifications are not on the
+accessibility bus), an unchanged server pin and a pinned row before the
+retried unpin succeeds. The last step puts a session on the fixture's
+`think-30s` model, sends two prompts, deletes the session while a send is
+retained and requires that no recovery row or journal attempt remains;
+`--skip-pending-send` leaves it out. Output goes to a new directory under
+`/tmp/opencode`.
 
 ## Native permissions and question forms
 

@@ -6,7 +6,8 @@
 //! becomes `ServerEvent::Unsupported` with its name only, never a fabricated
 //! state change.
 
-use openchamber_native_core::ids::{MessageId, OpenCodeProjectId, PartId, SessionId};
+use openchamber_native_core::ids::{MessageId, OpenCodeProjectId, PartId, PermissionId, SessionId};
+use openchamber_native_core::permission_mode::PolicySnapshot;
 use openchamber_native_core::session::{LiveStatus, SessionPatch, SessionRecord, SessionTime};
 use openchamber_native_core::session_index::SessionChange;
 use openchamber_native_core::transcript::{
@@ -50,8 +51,11 @@ pub enum ServerEvent {
         directory: String,
     },
     /// The bridge is ready; `replay_reset` means replay could not resume.
+    /// `replay_through` names the last replayed event, absent when nothing
+    /// was replayed.
     Ready {
         replay_reset: bool,
+        replay_through: Option<String>,
     },
     SessionCreated(SessionRecord),
     SessionPatched {
@@ -75,6 +79,17 @@ pub enum ServerEvent {
         kind: CatalogKind,
         directory: Option<String>,
     },
+    /// The host's whole permission policy after a change.
+    PermissionPolicy(PolicySnapshot),
+    /// The server's auto-answer held a permission request back or failed:
+    /// the request is the user's after all.
+    PermissionLeftForUser {
+        session_id: SessionId,
+        permission_id: PermissionId,
+        directory: Option<String>,
+    },
+    /// Routing availability changed; reread it rather than trust the frame.
+    RoutingUpdated,
     Heartbeat,
     /// The server is shedding load; reconcile after it recovers.
     Backpressure,
@@ -150,6 +165,7 @@ struct Frame {
     kind: String,
     #[serde(default)]
     replay_reset: bool,
+    replay_through: Option<String>,
     payload: Option<Value>,
     event_id: Option<String>,
     message: Option<String>,
@@ -162,6 +178,7 @@ pub fn decode_frame(text: &str) -> Result<DecodedFrame, TransportError> {
     let events = match frame.kind.as_str() {
         "ready" => vec![ServerEvent::Ready {
             replay_reset: frame.replay_reset,
+            replay_through: frame.replay_through.filter(|id| !id.is_empty()),
         }],
         "backpressure" => vec![ServerEvent::Backpressure],
         "error" => {
@@ -750,6 +767,9 @@ fn translate_openchamber(kind: &str, payload: &Value) -> Option<Vec<ServerEvent>
         return None;
     }
     let properties = payload.get("properties").unwrap_or(&Value::Null);
+    if let Some(event) = permission_policy_event(kind, properties) {
+        return Some(vec![event]);
+    }
     let session_id = properties
         .get("sessionID")
         .or_else(|| properties.get("sessionId"))
@@ -758,6 +778,7 @@ fn translate_openchamber(kind: &str, payload: &Value) -> Option<Vec<ServerEvent>
         .map(SessionId::from);
     let events = match (kind, session_id) {
         ("openchamber:heartbeat", _) => vec![ServerEvent::Heartbeat],
+        ("openchamber:routing.updated", _) => vec![ServerEvent::RoutingUpdated],
         ("openchamber:session-status", Some(session_id)) => {
             let status = match properties.get("status").and_then(Value::as_str) {
                 Some("busy") => LiveStatus::Busy,
@@ -802,6 +823,51 @@ fn translate_openchamber(kind: &str, payload: &Value) -> Option<Vec<ServerEvent>
     Some(events)
 }
 
+/// The permission-mode broadcasts, as `event-pipeline.ts` validates them. A
+/// policy or report the host forwarded from an isolated space (`spaceId`)
+/// belongs to that space's own server, which this client does not read, so
+/// it changes nothing here.
+fn permission_policy_event(kind: &str, properties: &Value) -> Option<ServerEvent> {
+    let unsupported = || ServerEvent::Unsupported {
+        kind: kind.to_owned(),
+    };
+    match kind {
+        "openchamber:permission-auto-accept.updated" => {
+            if properties.get("spaceId").is_some() {
+                return Some(unsupported());
+            }
+            Some(
+                crate::permission_policy::decode(properties.clone())
+                    .map_or_else(|_| unsupported(), ServerEvent::PermissionPolicy),
+            )
+        }
+        "openchamber:permission-auto-accept.left-for-user" => {
+            let text = |field: &str| {
+                properties
+                    .get(field)
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty())
+            };
+            let directory = match properties.get("directory") {
+                Some(Value::String(directory)) => Some(directory.clone()),
+                Some(Value::Null) => None,
+                _ => return Some(unsupported()),
+            };
+            match (text("sessionId"), text("permissionId")) {
+                (Some(session), Some(permission)) if properties.get("spaceId").is_none() => {
+                    Some(ServerEvent::PermissionLeftForUser {
+                        session_id: SessionId::from(session),
+                        permission_id: PermissionId::from(permission),
+                        directory,
+                    })
+                }
+                _ => Some(unsupported()),
+            }
+        }
+        _ => None,
+    }
+}
+
 fn tool_text(content: Option<&Value>) -> String {
     let texts: Vec<&str> = content
         .and_then(Value::as_array)
@@ -824,7 +890,22 @@ mod tests {
     fn decodes_ready_heartbeat_and_unknown_types() {
         let ready =
             decode_frame(r#"{"type":"ready","scope":"global","replayReset":true}"#).expect("valid");
-        assert_eq!(ready.events, [ServerEvent::Ready { replay_reset: true }]);
+        assert_eq!(
+            ready.events,
+            [ServerEvent::Ready {
+                replay_reset: true,
+                replay_through: None
+            }]
+        );
+        let through = decode_frame(r#"{"type":"ready","scope":"global","replayThrough":"e9"}"#)
+            .expect("valid");
+        assert_eq!(
+            through.events,
+            [ServerEvent::Ready {
+                replay_reset: false,
+                replay_through: Some("e9".to_owned())
+            }]
+        );
         let heartbeat = decode_frame(
             r#"{"type":"event","payload":{"type":"openchamber:heartbeat","timestamp":1},"directory":"global"}"#,
         )
@@ -916,6 +997,63 @@ mod tests {
                 directory: None,
             }]
         );
+    }
+
+    #[test]
+    fn permission_policy_broadcasts_decode_and_space_policies_are_left_out() {
+        use openchamber_native_core::permission_mode::PermissionMode;
+        let frame = |properties: &str, kind: &str| {
+            decode_frame(&format!(
+                r#"{{"type":"event","payload":{{"type":"openchamber:permission-auto-accept.{kind}","properties":{properties}}}}}"#
+            ))
+            .expect("valid frame")
+            .events
+        };
+        assert_eq!(
+            frame(
+                r#"{"sessions":{"s":true},"modes":{"s":"safety"},"revision":3}"#,
+                "updated"
+            ),
+            [ServerEvent::PermissionPolicy(PolicySnapshot {
+                modes: [(SessionId::from("s"), PermissionMode::Safety)].into(),
+                revision: Some(3),
+            })]
+        );
+        assert_eq!(
+            frame(
+                r#"{"permissionId":"per_1","sessionId":"s","directory":"/repo"}"#,
+                "left-for-user"
+            ),
+            [ServerEvent::PermissionLeftForUser {
+                session_id: SessionId::from("s"),
+                permission_id: PermissionId::from("per_1"),
+                directory: Some("/repo".to_owned()),
+            }]
+        );
+        for (properties, kind) in [
+            (
+                r#"{"sessions":{"s":true},"spaceId":"0123456789ab"}"#,
+                "updated",
+            ),
+            (r#"{"sessions":{"s":"on"}}"#, "updated"),
+            (r#"{"sessionId":"s","directory":"/repo"}"#, "left-for-user"),
+            (
+                r#"{"permissionId":"per_1","sessionId":"s"}"#,
+                "left-for-user",
+            ),
+            (
+                r#"{"permissionId":"per_1","sessionId":"s","directory":null,"spaceId":"0123456789ab"}"#,
+                "left-for-user",
+            ),
+        ] {
+            assert!(
+                matches!(
+                    &frame(properties, kind)[..],
+                    [ServerEvent::Unsupported { .. }]
+                ),
+                "{properties} changes nothing"
+            );
+        }
     }
 
     #[test]

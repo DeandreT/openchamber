@@ -153,10 +153,14 @@ class SelectionWorkflowProof(unittest.TestCase):
 
         probe.choose = choose
         probe.client.key.side_effect = key
+        def command(_env, *argv):
+            if argv == ("xdotool", "key", "ctrl+a", "BackSpace"):
+                draft[0] = ""
+
         api = SimpleNamespace(StateType=SimpleNamespace(FOCUSED="focused", ENABLED="enabled"))
         with patch("native_selections.editable_text", side_effect=lambda _node: draft[0]), \
                 patch("native_selections._atspi", return_value=api), \
-                patch("native_selections.command"), \
+                patch("native_selections.command", side_effect=command), \
                 self.assertRaisesRegex(ValueError, "assistant used a different model"):
             probe.run()
 

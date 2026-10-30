@@ -84,10 +84,8 @@ impl Workspace {
             && !matches!(self.persistence.status, Status::Closing | Status::Loading)
             && !self.selected.as_ref().is_some_and(|session| {
                 self.send_attempts
-                    .attempt(&self.mutation_key(session))
-                    .is_some_and(|attempt| {
-                        attempt.admission == crate::send_attempt::Admission::Preparing
-                    })
+                    .session(&self.mutation_key(session))
+                    .any(|attempt| attempt.admission == crate::send_attempt::Admission::Preparing)
             })
     }
 

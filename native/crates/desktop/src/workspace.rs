@@ -146,6 +146,11 @@ pub struct Workspace {
     pub(crate) draft_rows: HashMap<DraftKey, usize>,
     pub(crate) draft_projects: HashMap<RuntimeId, String>,
     pub(crate) project_chooser: Option<crate::project_chooser::ProjectChooser>,
+    pub(crate) session_menu: Option<crate::session_menu::SessionMenu>,
+    pub(crate) session_rename: Option<crate::session_menu::SessionRename>,
+    pub(crate) session_management: crate::session_management::SessionManagement,
+    /// The archive page replaces the chat area while open.
+    pub(crate) archive_open: bool,
     /// Whether the composer shows the short placeholder; unknown until the
     /// first frame measures it.
     pub(crate) composer_placeholder_compact: Option<bool>,
@@ -162,9 +167,13 @@ pub struct Workspace {
     pub(crate) effort_picker: crate::composer_picker::Picker,
     pub(crate) send_attempts: crate::send_attempt::SendAttempts,
     pub(crate) blocking: crate::blocking_requests::BlockingRequests,
+    pub(crate) permission_modes: crate::permission_modes::PermissionModes,
     pub(crate) recovery: crate::send_recovery::RecoveryState,
     pub(crate) persistence: crate::state_persistence::StatePersistence,
     pub(crate) mutation_tasks: HashMap<crate::send_attempt::SessionKey, Task<()>>,
+    /// Interrupts, apart from send chains: Stop can start while a send of the
+    /// same session is still rejecting the requests it supersedes.
+    pub(crate) abort_tasks: HashMap<crate::send_attempt::SessionKey, Task<()>>,
     pub(crate) message_ids: crate::message_id::MessageIds,
     pub(crate) session_ids: crate::session_id::SessionIds,
     pub(crate) creations: crate::create_attempt::CreateAttempts,
@@ -247,6 +256,10 @@ impl Workspace {
             draft_rows: HashMap::new(),
             draft_projects: HashMap::new(),
             project_chooser: None,
+            session_menu: None,
+            session_rename: None,
+            session_management: Default::default(),
+            archive_open: false,
             composer_placeholder_compact: None,
             playback: HashMap::new(),
             live_status: HashMap::new(),
@@ -271,9 +284,11 @@ impl Workspace {
             ),
             send_attempts: crate::send_attempt::SendAttempts::default(),
             blocking: crate::blocking_requests::BlockingRequests::default(),
+            permission_modes: crate::permission_modes::PermissionModes::default(),
             recovery: crate::send_recovery::RecoveryState::default(),
             persistence: crate::state_persistence::StatePersistence::default(),
             mutation_tasks: HashMap::new(),
+            abort_tasks: HashMap::new(),
             message_ids: crate::message_id::MessageIds::default(),
             session_ids: crate::session_id::SessionIds::default(),
             creations: crate::create_attempt::CreateAttempts::default(),
@@ -354,9 +369,11 @@ impl Workspace {
     /// inserted or removed elsewhere.
     pub fn rebuild_sidebar(&mut self) {
         let started = Instant::now();
+        // Pins the server has not answered for yet show at once.
+        let pinned = self.session_management.pins.overlay(self.sessions.active());
         let (mut items, mut spacing) = build_sidebar_items(
             &self.topology,
-            self.sessions.active(),
+            pinned.as_deref().unwrap_or(self.sessions.active()),
             self.sessions.archived(),
             &self.sidebar_state,
             &mut self.ordering,
@@ -428,6 +445,15 @@ impl Workspace {
     /// drafts and the session's reading position.
     pub fn show_new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.navigation_revision = self.navigation_revision.wrapping_add(1);
+        self.archive_open = false;
+        self.close_selected_session(window, cx);
+        self.focus_composer(window, cx);
+        cx.notify();
+    }
+
+    /// Closes the selected session, keeping its draft and reading position,
+    /// without navigating or moving focus.
+    pub(crate) fn close_selected_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(open) = self
             .selected
             .as_ref()
@@ -450,8 +476,6 @@ impl Workspace {
             self.composer_key = self.new_session_draft_key();
             self.restore_composer_draft(window, cx);
         }
-        self.focus_composer(window, cx);
-        cx.notify();
     }
 
     pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
@@ -473,6 +497,8 @@ impl Workspace {
     /// captured identities, then restores the incoming ones before paint.
     pub fn select_session(&mut self, id: SessionId, window: &mut Window, cx: &mut Context<Self>) {
         self.navigation_revision = self.navigation_revision.wrapping_add(1);
+        // Selecting a session always leaves a full-page surface.
+        self.archive_open = false;
         self.prompt_panel = None;
         self.prompt_hover_task = None;
         self.prompt_hover_suppressed = false;

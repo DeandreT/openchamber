@@ -13,6 +13,7 @@ use crate::logical::LogicalStyledExt;
 use crate::send_attempt::SessionKey;
 use crate::theme::Palette;
 use crate::workspace::Workspace;
+use openchamber_native_core::ids::MessageId;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum RecoveryPhase {
@@ -23,6 +24,8 @@ pub(crate) enum RecoveryPhase {
     Checking,
     NotObserved,
     CheckFailed,
+    OutOfOrder,
+    Refused,
     CreatePreparing,
     Creating,
     CreateUnknown,
@@ -35,11 +38,16 @@ pub(crate) enum RecoveryPhase {
 
 pub(crate) struct RecoveryRow {
     pub key: SessionKey,
+    /// The retained prompt's ID; a session can show several rows.
+    pub message: MessageId,
     pub session_label: SharedString,
     pub text: SharedString,
     pub phase: RecoveryPhase,
     pub can_check: bool,
     pub can_retry: bool,
+    /// Only for an attempt nothing can settle: it moves the prompt back to
+    /// the composer and drops the attempt.
+    pub can_restore: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -142,10 +150,11 @@ impl Workspace {
         for row in rows {
             // Length-prefix the runtime so opaque IDs cannot collide at a separator.
             let id = format!(
-                "recovery-{}:{}:{}",
+                "recovery-{}:{}:{}:{}",
                 row.key.runtime.as_str().len(),
                 row.key.runtime,
                 row.key.session,
+                row.message,
             );
             let strings = locale::strings(cx);
             let status = strings.get(match row.phase {
@@ -156,6 +165,8 @@ impl Workspace {
                 RecoveryPhase::Checking => "chat.nativeRecovery.checking",
                 RecoveryPhase::NotObserved => "chat.nativeRecovery.notObserved",
                 RecoveryPhase::CheckFailed => "chat.nativeRecovery.checkFailed",
+                RecoveryPhase::OutOfOrder => "chat.nativeRecovery.outOfOrder",
+                RecoveryPhase::Refused => "chat.nativeRecovery.refused",
                 RecoveryPhase::CreatePreparing => "chat.nativeCreation.preparing",
                 RecoveryPhase::Creating => "chat.nativeCreation.creating",
                 RecoveryPhase::CreateUnknown => "chat.nativeCreation.unknown",
@@ -167,6 +178,7 @@ impl Workspace {
             });
             let check_label = strings.get("chat.nativeRecovery.check");
             let retry_label = strings.get("chat.nativeRecovery.retry");
+            let restore_label = strings.get("chat.nativeRecovery.restore");
             let preview: SharedString = row
                 .text
                 .chars()
@@ -183,6 +195,7 @@ impl Workspace {
             let description: SharedString =
                 format!("{}: {preview}. {status}", row.session_label).into();
             let check_key = row.key.clone();
+            let check_message = row.message.clone();
             let check = recovery_action(
                 RecoveryAction {
                     id: format!("{id}-check").into(),
@@ -193,7 +206,27 @@ impl Workspace {
                 palette,
                 window,
                 cx,
-                move |this, window, cx| this.check_recovery(&check_key, window, cx),
+                move |this, window, cx| this.check_recovery(&check_key, &check_message, window, cx),
+            );
+            let restore = row.can_restore.then(|| {
+                let key = row.key.clone();
+                let message = row.message.clone();
+                recovery_action(
+                    RecoveryAction {
+                        id: format!("{id}-restore").into(),
+                        label: restore_label.clone(),
+                        accessible_label: format!("{restore_label}: {description}").into(),
+                        enabled: true,
+                    },
+                    palette,
+                    window,
+                    cx,
+                    move |this, window, cx| this.restore_recovery(&key, &message, window, cx),
+                )
+            });
+            let unresolved = matches!(
+                row.phase,
+                RecoveryPhase::CheckFailed | RecoveryPhase::OutOfOrder | RecoveryPhase::Refused
             );
             let retry = recovery_action(
                 RecoveryAction {
@@ -205,7 +238,7 @@ impl Workspace {
                 palette,
                 window,
                 cx,
-                move |this, window, cx| this.retry_recovery(&row.key, window, cx),
+                move |this, window, cx| this.retry_recovery(&row.key, &row.message, window, cx),
             );
             let id: SharedString = id.into();
             region = region.child(
@@ -242,7 +275,7 @@ impl Workspace {
                                 div()
                                     .truncate()
                                     .css_text(0.75, 1.0, cx)
-                                    .text_color(if row.phase == RecoveryPhase::CheckFailed {
+                                    .text_color(if unresolved {
                                         palette.error
                                     } else {
                                         palette.muted_foreground
@@ -258,7 +291,8 @@ impl Workspace {
                             .items_center()
                             .gap(px(2.0))
                             .child(check)
-                            .child(retry),
+                            .child(retry)
+                            .children(restore),
                     ),
             );
         }
@@ -273,7 +307,7 @@ struct RecoveryAction {
     enabled: bool,
 }
 
-/// Retained focus uses the action's runtime/session identity, never its row position.
+/// Retained focus uses the action's runtime/session/message identity, never its row position.
 fn recovery_action(
     action: RecoveryAction,
     palette: &Palette,

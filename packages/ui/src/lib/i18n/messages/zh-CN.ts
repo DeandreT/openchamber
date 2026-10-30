@@ -2449,6 +2449,10 @@ export const dict: Record<I18nKey, string> = {
   'chat.nativeRecovery.retryStorage': '重试保存',
   'chat.nativeRecovery.sendFailed': '消息未发送。文本已恢复到输入框中。',
   'chat.nativeRecovery.abortFailed': '无法停止会话。请检查其当前活动后再重试。',
+  'chat.nativeRecovery.restore': '移回输入框',
+  'chat.nativeRecovery.refused': '服务器再次拒绝了这条消息。请将其移回输入框进行编辑或重新发送。',
+  'chat.nativeRecovery.outOfOrder': '这条消息的部分上下文缺失，无法按顺序重新发送。请将其移回输入框后重新发送。',
+  'chat.nativeRecovery.stopWaits': '消息发送期间无法停止。请在发送完成后重试。',
 
   'chat.queuedMessage.attachments': '+{count} 个文件',
   'chat.queuedMessage.empty': '（空）',

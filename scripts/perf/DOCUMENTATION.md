@@ -51,6 +51,27 @@ The shared fresh-root server owner keeps process and credential isolation in
 one place. The selection configuration is a fixed opt-in branch, so the runner
 cannot inject arbitrary project settings into an interaction run.
 
+## Native permission mode qualification
+
+`python3 scripts/parity/native_permission_modes.py --scale 1.25` takes the same
+inputs, display and `--output` rules as the selection qualification and uses the
+default `--interactions` fixture. It reads `/api/routing` with a 60-second
+timeout, because the engine computes routing on first read. Safety is expected
+in the cycle only when routing reports `available: true` and `jevAvailable` is
+not `false`.
+
+Every shield press goes through the real window. Each press must reach the
+server's `/api/permission-auto-accept` policy with a newer revision and the
+matching shield label; a label that changes without the server fails. The run
+then closes and reopens the window, which must show Auto again, and sends a
+shell prompt in Auto. The shell must complete with no permission card shown and
+no permission left pending. The report has the same input identities, process
+exits and substitution checks as the selection run.
+
+```sh
+python3 -m unittest discover -s scripts/parity -p native_permission_modes_test.py
+```
+
 ## Commands
 
 | Command | Answers |
