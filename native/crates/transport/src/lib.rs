@@ -14,12 +14,15 @@ pub mod event;
 pub mod identity;
 #[cfg(test)]
 mod parity_tests;
+pub mod permission_policy;
 pub mod project;
 mod projection;
 pub mod prompt;
+pub mod prompt_parts;
 pub mod public_asset;
 mod request_wire;
 pub mod requests;
+pub mod session_actions;
 pub mod session_create;
 pub mod stream;
 mod wire;

@@ -87,6 +87,8 @@ pub(crate) struct SendCatalog {
     directories: HashMap<String, DirectoryCatalog>,
     recheck: Option<Task<()>>,
     pub(crate) routing: AutoRouting,
+    /// Whether the permission safety net can run; false until read.
+    pub(crate) safety_net: bool,
     pub(crate) routing_read: Option<Task<()>>,
     routing_generation: Option<u64>,
 }
@@ -214,7 +216,7 @@ impl Workspace {
         self.send_catalog.routing_generation = Some(generation);
         let task = connection
             .network
-            .run(async move { client.auto_routing().await });
+            .run(async move { client.routing().await });
         self.send_catalog.routing_read = Some(cx.spawn(async move |this, cx| {
             let Some(result) = task.await else {
                 return;
@@ -230,7 +232,13 @@ impl Workspace {
                 }
                 this.send_catalog.routing_read = None;
                 if let Ok(routing) = result {
-                    this.send_catalog.routing = routing;
+                    this.send_catalog.routing = routing.auto;
+                    let lost = this.send_catalog.safety_net && !routing.safety_net;
+                    this.send_catalog.safety_net = routing.safety_net;
+                    if lost {
+                        // Safety sessions now wait for the user.
+                        this.release_unanswered_holds();
+                    }
                 }
                 cx.notify();
             });
@@ -304,6 +312,7 @@ impl Workspace {
         }) {
             self.load_auto_routing(cx);
         }
+        self.ensure_permission_policy(cx);
         if self.send_catalog.settings.is_none() {
             return;
         }

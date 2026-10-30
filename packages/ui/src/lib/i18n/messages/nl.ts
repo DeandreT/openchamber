@@ -2483,6 +2483,10 @@ export const dict = {
   'chat.nativeRecovery.retryStorage': 'Opslaan opnieuw proberen',
   'chat.nativeRecovery.sendFailed': 'Het bericht is niet verzonden. De tekst staat weer in het invoerveld.',
   'chat.nativeRecovery.abortFailed': 'Kan de sessie niet stoppen. Controleer de huidige activiteit voordat je het opnieuw probeert.',
+  'chat.nativeRecovery.restore': 'Naar het invoerveld verplaatsen',
+  'chat.nativeRecovery.refused': 'De server heeft dit bericht opnieuw geweigerd. Verplaats het naar het invoerveld om het te bewerken of opnieuw te verzenden.',
+  'chat.nativeRecovery.outOfOrder': 'Een deel van de context van dit bericht ontbreekt, dus het kan niet in de juiste volgorde opnieuw worden verzonden. Verplaats het naar het invoerveld om het opnieuw te verzenden.',
+  'chat.nativeRecovery.stopWaits': 'Stoppen kan niet terwijl een bericht wordt verzonden. Probeer het opnieuw zodra het is verzonden.',
 
   'chat.queuedMessage.attachments': '+{count} bestand(en)',
   'chat.queuedMessage.empty': '(leeg)',

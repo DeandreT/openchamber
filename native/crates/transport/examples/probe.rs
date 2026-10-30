@@ -97,9 +97,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(seconds);
     while let Ok(Some(item)) = tokio::time::timeout_at(deadline, stream.next()).await {
         let key = match item {
-            StreamItem::Connected { resumed } => format!("connected (resumed {resumed})"),
+            StreamItem::Connected { resumed, .. } => format!("connected (resumed {resumed})"),
             StreamItem::Disconnected(error) => format!("disconnected: {error}"),
-            StreamItem::Events(events) => {
+            StreamItem::Events { events, .. } => {
                 for event in events {
                     let name = match event {
                         ServerEvent::Transcript { event, .. } => {

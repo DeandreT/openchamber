@@ -255,7 +255,7 @@
       "id": "composer.queue-steer-starters", "group": "composer",
       "title": "Queue and steer messages during a turn; activate and manage starter prompts",
       "reference": ["packages/ui/src/components/chat/QueuedMessagesStrip.tsx", "packages/ui/src/stores/messageQueueStore.ts", "packages/ui/src/components/chat/useDraftStarters.ts"],
-      "requiredBehaviors": ["appearance", "queue while running", "edit reorder remove queued prompt", "steer outcome", "queued delivery and retry ownership", "starter fills draft", "starter management persistence"],
+      "requiredBehaviors": ["appearance", "queue while running", "edit reorder remove queued prompt", "steer outcome", "queued delivery and retry ownership", "starter submits with draft appended", "starter management persistence"],
       "states": ["idle", "running", "queued", "editing", "failed", "delivered", "restored"],
       "scenarios": [], "coverage": "automated"
     },

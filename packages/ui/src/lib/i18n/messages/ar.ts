@@ -2414,6 +2414,10 @@ export const dict = {
   'chat.nativeRecovery.retryStorage': 'إعادة محاولة الحفظ',
   'chat.nativeRecovery.sendFailed': 'لم تُرسل الرسالة. عاد نصها إلى حقل الكتابة.',
   'chat.nativeRecovery.abortFailed': 'تعذر إيقاف الجلسة. تحقق من نشاطها الحالي قبل المحاولة مجددًا.',
+  'chat.nativeRecovery.restore': 'نقل إلى حقل الكتابة',
+  'chat.nativeRecovery.refused': 'رفض الخادم هذه الرسالة مرة أخرى. انقلها إلى حقل الكتابة لتعديلها أو إعادة إرسالها.',
+  'chat.nativeRecovery.outOfOrder': 'جزء من سياق هذه الرسالة مفقود، لذا لا يمكن إعادة إرسالها بالترتيب. انقلها إلى حقل الكتابة لإرسالها من جديد.',
+  'chat.nativeRecovery.stopWaits': 'لا يمكن الإيقاف أثناء إرسال رسالة. حاول مجددًا بعد إرسالها.',
 
   'chat.queuedMessage.attachments': '+{count} ملف',
   'chat.queuedMessage.empty': '(فارغة)',

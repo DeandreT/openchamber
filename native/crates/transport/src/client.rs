@@ -7,6 +7,7 @@ use openchamber_native_core::chat_roots::ChatRoots;
 use openchamber_native_core::ids::{MessageId, SessionId};
 use openchamber_native_core::message_time::ClockPreference;
 use openchamber_native_core::ownership::{self, ConfiguredProject, WorktreeInfo};
+use openchamber_native_core::permission_mode::PermissionMode;
 use openchamber_native_core::session::{LiveStatus, SessionRecord};
 use openchamber_native_core::sidebar_rows::SidebarViewMode;
 use openchamber_native_core::transcript::Message;
@@ -39,6 +40,8 @@ const PART_SHELLS_VERSION: &str = "v1";
 pub struct SettingsChanges {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub code_block_line_wrap: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_deletion_dialog: Option<bool>,
 }
 
 /// The settings surface this client reads and writes.
@@ -147,6 +150,11 @@ pub struct ServerSettings {
     pub keep_work_in_place: Option<bool>,
     pub work_enabled: Option<bool>,
     pub prompt_navigator_enabled: Option<bool>,
+    /// `showDeletionDialog`: archive and delete ask first; absent means yes.
+    pub show_deletion_dialog: Option<bool>,
+    /// `permissionDefaultMode`: the mode the server writes onto each new
+    /// top-level session.
+    pub permission_default_mode: Option<PermissionMode>,
     /// The model defaults of registered projects that set any.
     pub project_defaults: Vec<ProjectDefaults>,
     /// The display labels of registered projects that set one.
@@ -293,6 +301,20 @@ impl ServerSettings {
                 .prompt_navigator_enabled
                 .as_ref()
                 .and_then(Value::as_bool),
+            show_deletion_dialog: settings
+                .show_deletion_dialog
+                .as_ref()
+                .and_then(Value::as_bool),
+            permission_default_mode: match settings
+                .permission_default_mode
+                .as_ref()
+                .and_then(Value::as_str)
+            {
+                Some("ask") => Some(PermissionMode::Ask),
+                Some("safety") => Some(PermissionMode::Safety),
+                Some("auto") => Some(PermissionMode::Auto),
+                _ => None,
+            },
         }
     }
 
@@ -993,6 +1015,7 @@ mod tests {
     fn settings_changes_carry_only_what_changed() {
         let changes = SettingsChanges {
             code_block_line_wrap: Some(false),
+            ..SettingsChanges::default()
         };
         assert_eq!(
             serde_json::to_value(&changes).expect("serializes"),

@@ -39,11 +39,20 @@ const ROUTE: &str = "api/global/event/ws";
 pub enum StreamItem {
     /// A connection is open. `resumed` means the server replayed every event
     /// since the last one delivered; otherwise anything missed while
-    /// disconnected needs authoritative reads.
+    /// disconnected needs authoritative reads. `replay_through` names the
+    /// last replayed event when a resumed replay is not empty: once an
+    /// `Events` item with that id is applied, the replay is over.
     Connected {
         resumed: bool,
+        replay_through: Option<String>,
     },
-    Events(Vec<ServerEvent>),
+    /// One frame's events, with the frame's event id. A frame with an id is
+    /// delivered even when none of its events decode, so a consumer can
+    /// tell when that id was applied.
+    Events {
+        events: Vec<ServerEvent>,
+        event_id: Option<String>,
+    },
     /// The connection failed; live state is stale until the next `Connected`.
     Disconnected(TransportError),
 }
@@ -167,13 +176,16 @@ async fn connect_and_read(
             _ => continue,
         };
         let frame = event::decode_frame(text.as_str())?;
-        if let Some(id) = frame.event_id {
-            *last_event_id = Some(id);
+        if let Some(id) = &frame.event_id {
+            *last_event_id = Some(id.clone());
         }
         let mut events = Vec::with_capacity(frame.events.len());
         for item in frame.events {
             match item {
-                ServerEvent::Ready { replay_reset } => {
+                ServerEvent::Ready {
+                    replay_reset,
+                    replay_through,
+                } => {
                     ready = true;
                     *failures = 0;
                     if replay_reset {
@@ -182,8 +194,12 @@ async fn connect_and_read(
                         *last_event_id = None;
                     }
                     let resumed = cursor_sent && !replay_reset;
+                    let replay_through = replay_through.filter(|_| resumed);
                     if sender
-                        .send(StreamItem::Connected { resumed })
+                        .send(StreamItem::Connected {
+                            resumed,
+                            replay_through,
+                        })
                         .await
                         .is_err()
                     {
@@ -193,7 +209,13 @@ async fn connect_and_read(
                 other => events.push(other),
             }
         }
-        if !events.is_empty() && sender.send(StreamItem::Events(events)).await.is_err() {
+        let event_id = frame.event_id;
+        if (!events.is_empty() || event_id.is_some())
+            && sender
+                .send(StreamItem::Events { events, event_id })
+                .await
+                .is_err()
+        {
             return Ok(());
         }
     }

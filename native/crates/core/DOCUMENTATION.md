@@ -15,6 +15,11 @@ rendering asks for a projection and dispatches an action.
   entry issues. `pending_requests.rs` owns one location's pending lists and response lifecycle.
   It performs no I/O, automatic replies, retries or persistence.
 
+- `permission_mode.rs` ports the permission modes of `permissionAutoAccept.ts`:
+  the shield's cycle and the Safety gate, lineage resolution, snapshot ordering
+  by revision (`PermissionPolicy`) and the hold-back bookkeeping of fresh
+  requests the server may answer itself (`AutoAnswerHolds`). It answers nothing.
+
 - `send_config.rs` ports default agent/model selection, an existing session's selection from its record, catalog grouping, composer labels and agent color allocation from the web client.
 - `composer_selection.rs` retains owner-scoped choices and their creation handoff.
   Sessions opened before catalogs arrive fill only missing choices from later
@@ -29,6 +34,12 @@ rendering asks for a projection and dispatches an action.
 - `provider_logo.rs` ports the provider logo lookup of `useProviderLogo.ts`
   (bundled candidates, then models.dev) and inverts an SVG's paint colors for
   dark themes, as the web's `dark:invert` does.
+- `session_actions.rs` decides a session row's menu (the ported items, their
+  order and when each is enabled), which sessions archive, delete and
+  restore reach (`sessionLineage.ts` policies), `isRestorableOnItsOwn`, the
+  archive page's list and the pending pin overlay. Track and Done belong to
+  root work rows outside archives and Chats; `SidebarRow::Session::owns_work`
+  is false inside worktree and space works.
 - `ownership.rs` and `chat_projection.rs` port `sessionOwnership.ts` and
   `sessionChatProjection.ts`. `sidebar_rows.rs` builds the normal Works view
    of `sessionSidebarRowModel.ts`, grouping worktree, space and session works under
@@ -121,6 +132,16 @@ crate owns wire parsing and authority checks, and hands the core records and
   transport can submit the explicit answer for authoritative server validation.
   These optional local checks exceed Electron's required-presence checks; the
   desktop must not present them as existing Electron pattern/format validation.
+
+- A session's mode is the nearest explicit mode up its parent chain; an unknown
+  parent or a cycle ends at Ask. A stored Safety displays and cycles as Ask while
+  the safety net is unavailable.
+- A policy snapshot older than the held revision never applies, and one without
+  a revision applies only while no revisioned snapshot was held. Equal revisions
+  apply again, so a broadcast echo of a write is harmless.
+- A held request is keyed by session and permission ID, so a report reveals only
+  its own session's request. Reports that precede their request are kept in a
+  bounded queue of 100 and consumed once.
 
 - Display ownership never rewrites a session's real directory. Routing, pin
   identity and drafts use `SessionRecord::directory`.

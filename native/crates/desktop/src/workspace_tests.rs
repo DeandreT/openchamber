@@ -139,6 +139,7 @@ fn rejected_send_restores_its_owner_across_selection_and_runtime_switches(cx: &m
                     .save(owner.clone(), Draft::new("newer origin text"));
                 workspace.finish_send(
                     &key,
+                    &message_id,
                     Some(Err(SendError {
                         session_id: origin.clone(),
                         message_id: message_id.clone(),

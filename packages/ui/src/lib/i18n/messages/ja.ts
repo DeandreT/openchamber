@@ -2479,6 +2479,10 @@ export const dict: Record<I18nKey, string> = {
   'chat.nativeRecovery.retryStorage': '保存を再試行',
   'chat.nativeRecovery.sendFailed': 'メッセージは送信されませんでした。テキストは入力欄に戻っています。',
   'chat.nativeRecovery.abortFailed': 'セッションを停止できませんでした。再試行する前に現在の動作状況を確認してください。',
+  'chat.nativeRecovery.restore': '入力欄に戻す',
+  'chat.nativeRecovery.refused': 'サーバーがこのメッセージを再び拒否しました。入力欄に戻して編集するか、もう一度送信してください。',
+  'chat.nativeRecovery.outOfOrder': 'このメッセージのコンテキストの一部が見つからないため、順序どおりに再送信できません。入力欄に戻して、もう一度送信してください。',
+  'chat.nativeRecovery.stopWaits': 'メッセージの送信中は停止できません。送信が終わってからもう一度お試しください。',
 
   'chat.queuedMessage.attachments': '+{count}ファイル',
   'chat.queuedMessage.empty': '（空）',

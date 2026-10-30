@@ -182,9 +182,9 @@ class Fixture:
                 self.close()
             raise
 
-    def get(self, path):
+    def get(self, path, timeout=5):
         request = urllib.request.Request(self.url + path, headers={"x-opencode-directory": urllib.parse.quote(str(self.project), safe="")})
-        with urllib.request.urlopen(request, timeout=5) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.load(response)
 
     def data(self, path, kind):

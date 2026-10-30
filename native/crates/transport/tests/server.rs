@@ -14,8 +14,9 @@ use openchamber_native_transport::endpoint::Endpoint;
 use openchamber_native_transport::error::TransportError;
 use openchamber_native_transport::event::ServerEvent;
 use openchamber_native_transport::prompt::{
-    Delivery, PromptAdmission, PromptObservation, SendStage, TextPrompt,
+    Delivery, Prompt, PromptAdmission, PromptObservation, SendStage,
 };
+use openchamber_native_transport::prompt_parts::PromptParts;
 use openchamber_native_transport::stream::{EventStream, StreamItem};
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -27,6 +28,10 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::{Data, OpCode};
 
 #[path = "blocking_requests/mod.rs"]
 mod blocking_requests;
+#[path = "prompt_parts/mod.rs"]
+mod prompt_parts;
+#[path = "session_actions/mod.rs"]
+mod session_actions;
 #[path = "session_creation/mod.rs"]
 mod session_creation;
 
@@ -91,12 +96,13 @@ enum WsStep {
 
 type HttpHandler = dyn Fn(&Recorded) -> Reply + Send + Sync;
 
-fn text_prompt() -> TextPrompt {
+fn text_prompt() -> Prompt {
     use openchamber_native_core::ids::MessageId;
     use openchamber_native_core::send_config::ModelChoice;
-    TextPrompt {
+    Prompt {
         message_id: MessageId::new("msg_native_fixture_exact"),
         text: "Hello\n世界 ".to_owned(),
+        parts: PromptParts::default(),
         model: Some(ModelChoice {
             provider_id: "fixture".to_owned(),
             model_id: "text-model".to_owned(),
@@ -405,23 +411,23 @@ async fn invalid_text_prompt_never_changes_session_selection() {
     use openchamber_native_core::ids::SessionId;
     let server = Server::start(|_| Reply::json(json!({})), vec![]).await;
     let client = ServerClient::new(server.endpoint(), Credential::None).expect("client");
-    let prompt = TextPrompt {
+    let prompt = Prompt {
         text: " \n ".to_owned(),
         ..text_prompt()
     };
     let error = client
-        .send_text(&SessionId::new("ses_named"), &prompt)
+        .send_prompt(&SessionId::new("ses_named"), &prompt)
         .await
         .expect_err("blank prompt");
     assert_eq!(error.admission, PromptAdmission::NotAttempted);
     assert_eq!(error.stage, SendStage::Validation);
     assert_eq!(error.message_id, prompt.message_id);
-    let invalid_id = TextPrompt {
+    let invalid_id = Prompt {
         message_id: openchamber_native_core::ids::MessageId::new("invalid"),
         ..text_prompt()
     };
     let error = client
-        .send_text(&SessionId::new("ses_named"), &invalid_id)
+        .send_prompt(&SessionId::new("ses_named"), &invalid_id)
         .await
         .expect_err("invalid ID");
     assert_eq!(error.admission, PromptAdmission::NotAttempted);
@@ -456,7 +462,10 @@ async fn prompt_admission_selects_in_order_and_abort_names_only_that_session() {
     .expect("client");
     let session = SessionId::new("ses_e9b49c443ffefXcWWPhCOga6nH");
     let prompt = text_prompt();
-    let receipt = client.send_text(&session, &prompt).await.expect("admitted");
+    let receipt = client
+        .send_prompt(&session, &prompt)
+        .await
+        .expect("admitted");
     assert_eq!(
         receipt.message_id, prompt.message_id,
         "client ID is preserved exactly"
@@ -519,13 +528,13 @@ async fn prompt_admission_accepts_prepared_content_and_metadata() {
         .await;
         let client = ServerClient::new(server.endpoint(), Credential::None).expect("client");
         let session = SessionId::new("ses_named");
-        let prompt = TextPrompt {
+        let prompt = Prompt {
             model: None,
             agent: None,
             ..text_prompt()
         };
         let receipt = client
-            .send_text(&session, &prompt)
+            .send_prompt(&session, &prompt)
             .await
             .expect("prepared user item is admitted");
         assert_eq!(receipt.session_id, session);
@@ -582,14 +591,14 @@ async fn prompt_failures_preserve_correlation_and_never_retry() {
         )
         .await;
         let client = ServerClient::new(server.endpoint(), Credential::None).expect("client");
-        let prompt = TextPrompt {
+        let prompt = Prompt {
             model: None,
             agent: None,
             ..text_prompt()
         };
         let session = SessionId::new("s");
         let error = client
-            .send_text(&session, &prompt)
+            .send_prompt(&session, &prompt)
             .await
             .expect_err("failed receipt");
         assert_eq!(error.stage, SendStage::Prompt);
@@ -620,7 +629,7 @@ async fn selection_failure_stops_before_prompt_and_keeps_prior_selection() {
         .await;
         let client = ServerClient::new(server.endpoint(), Credential::None).expect("client");
         let error = client
-            .send_text(&SessionId::new("s"), &text_prompt())
+            .send_prompt(&SessionId::new("s"), &text_prompt())
             .await
             .expect_err("selection failed");
         assert_eq!(error.stage, stage);
@@ -655,13 +664,13 @@ async fn prompt_redirect_is_not_followed_and_abort_idle_is_authoritative() {
         Credential::ClientToken("oc_client_test".to_owned()),
     )
     .expect("client");
-    let prompt = TextPrompt {
+    let prompt = Prompt {
         model: None,
         agent: None,
         ..text_prompt()
     };
     let error = client
-        .send_text(&SessionId::new("s"), &prompt)
+        .send_prompt(&SessionId::new("s"), &prompt)
         .await
         .expect_err("redirect refused");
     assert!(matches!(error.source, TransportError::Redirected));
@@ -702,13 +711,13 @@ async fn lost_prompt_response_is_ambiguous_and_is_not_retried() {
         Credential::None,
     )
     .expect("client");
-    let prompt = TextPrompt {
+    let prompt = Prompt {
         model: None,
         agent: None,
         ..text_prompt()
     };
     let error = client
-        .send_text(&SessionId::new("s"), &prompt)
+        .send_prompt(&SessionId::new("s"), &prompt)
         .await
         .expect_err("lost response");
     assert_eq!(error.admission, PromptAdmission::Unknown);
@@ -732,7 +741,7 @@ async fn cancelling_prompt_io_does_not_interrupt_or_retry_server_work() {
     )
     .await;
     let client = ServerClient::new(server.endpoint(), Credential::None).expect("client");
-    let prompt = TextPrompt {
+    let prompt = Prompt {
         model: None,
         agent: None,
         ..text_prompt()
@@ -741,7 +750,7 @@ async fn cancelling_prompt_io_does_not_interrupt_or_retry_server_work() {
     assert!(
         tokio::time::timeout(
             Duration::from_millis(100),
-            client.send_text(&session, &prompt)
+            client.send_prompt(&session, &prompt)
         )
         .await
         .is_err()
@@ -1059,6 +1068,7 @@ async fn settings_writes_preserve_the_prefix_surface_and_unrelated_fields() {
     let settings = client
         .save_settings(&SettingsChanges {
             code_block_line_wrap: Some(false),
+            ..SettingsChanges::default()
         })
         .await
         .expect("settings are saved");
@@ -1087,6 +1097,7 @@ async fn settings_write_failures_and_missing_values_remain_distinct() {
         client
             .save_settings(&SettingsChanges {
                 code_block_line_wrap: Some(false),
+                ..SettingsChanges::default()
             })
             .await
             .is_err(),
@@ -1095,10 +1106,97 @@ async fn settings_write_failures_and_missing_values_remain_distinct() {
     let settings = client
         .save_settings(&SettingsChanges {
             code_block_line_wrap: Some(true),
+            ..SettingsChanges::default()
         })
         .await
         .expect("an older server may omit the field");
     assert_eq!(settings.code_block_line_wrap, None);
+}
+
+#[tokio::test]
+async fn permission_modes_read_and_write_the_whole_policy_without_retry() {
+    use openchamber_native_core::ids::SessionId;
+    use openchamber_native_core::permission_mode::PermissionMode;
+    let server = Server::start(
+        |request| match (request.method.as_str(), request.target.as_str()) {
+            ("GET", "/prefix/api/permission-auto-accept") => Reply::json(json!({
+                "sessions": {"ses_a": true},
+                "modes": {"ses_a": "safety"},
+                "revision": 7,
+            })),
+            ("PUT", "/prefix/api/permission-auto-accept/sessions/ses_a") => {
+                match request.json()["mode"].as_str() {
+                    Some("auto") => Reply::json(json!({
+                        "sessions": {"ses_a": true},
+                        "modes": {"ses_a": "auto"},
+                        "revision": 8,
+                    })),
+                    _ => Reply::with_status(500, "application/json", r#"{"error":"x"}"#),
+                }
+            }
+            _ => Reply::with_status(404, "application/json", "{}"),
+        },
+        vec![],
+    )
+    .await;
+    let client = ServerClient::new(
+        server.endpoint(),
+        Credential::ClientToken("fixture-policy-token".to_owned()),
+    )
+    .expect("a client");
+    let session = SessionId::from("ses_a");
+    let read = client.permission_policy().await.expect("policy reads");
+    assert_eq!(read.revision, Some(7));
+    assert_eq!(read.modes.get(&session), Some(&PermissionMode::Safety));
+    let written = client
+        .set_permission_mode(&session, PermissionMode::Auto, Some("/work/app"))
+        .await
+        .expect("the write answers the policy");
+    assert_eq!(written.revision, Some(8));
+    assert_eq!(written.modes.get(&session), Some(&PermissionMode::Auto));
+    assert!(
+        client
+            .set_permission_mode(&session, PermissionMode::Ask, None)
+            .await
+            .is_err(),
+        "a failed write is an error, never an empty policy"
+    );
+    // A space's session has its mode in that space: the header routes the
+    // write there, as the web's `runtimeFetch` does. A look-alike host path
+    // stays on the host.
+    for directory in ["/spaces/0123456789ab/my repo", "/home/spaces/0123456789ab"] {
+        client
+            .set_permission_mode(&session, PermissionMode::Auto, Some(directory))
+            .await
+            .expect("the write answers the policy");
+    }
+    let requests = server.requests();
+    assert_eq!(requests.len(), 5, "no write is retried");
+    assert_eq!(
+        requests[3].header("x-opencode-directory"),
+        Some("%2Fspaces%2F0123456789ab%2Fmy%20repo")
+    );
+    assert_eq!(
+        requests[3].header("x-opencode-directory-encoding"),
+        Some("uri")
+    );
+    assert_eq!(
+        requests[3].json()["directory"],
+        "/spaces/0123456789ab/my repo"
+    );
+    assert_eq!(requests[4].header("x-opencode-directory"), None);
+    assert_eq!(requests[4].header("x-opencode-directory-encoding"), None);
+    assert_eq!(
+        requests[1].json(),
+        json!({"mode": "auto", "enabled": true, "directory": "/work/app"})
+    );
+    assert_eq!(requests[2].json(), json!({"mode": "ask", "enabled": false}));
+    assert_eq!(requests[1].header("x-opencode-directory"), None);
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.header("authorization") == Some("Bearer fixture-policy-token"))
+    );
 }
 
 #[tokio::test]
@@ -1380,7 +1478,7 @@ async fn the_stream_resumes_from_the_last_event_and_retires_a_reset_cursor() {
     let mut stream = EventStream::subscribe(client);
     let mut connected = Vec::new();
     while connected.len() < 4 {
-        if let StreamItem::Connected { resumed } = next_item(&mut stream).await {
+        if let StreamItem::Connected { resumed, .. } = next_item(&mut stream).await {
             connected.push(resumed);
         }
     }
@@ -1409,6 +1507,55 @@ async fn the_stream_resumes_from_the_last_event_and_retires_a_reset_cursor() {
 }
 
 #[tokio::test]
+async fn a_resumed_stream_names_where_its_replay_ends_and_each_frames_event() {
+    let ready_through = |through: &str| {
+        WsStep::Text(
+            json!({"type": "ready", "scope": "global", "replayThrough": through}).to_string(),
+        )
+    };
+    let server = Server::start(
+        |_| Reply::with_status(404, "text/plain", ""),
+        vec![
+            // Without a cursor nothing was replayed, whatever the frame says.
+            vec![ready_through("e0"), WsStep::Text(renamed("e1", "one")), WsStep::Close],
+            vec![
+                ready_through("e3"),
+                WsStep::Text(renamed("e2", "two")),
+                // An event this client does not decode still names its id.
+                WsStep::Text(
+                    json!({"type": "event", "eventId": "e3", "payload": {"id": "e3", "type": "pty.created", "data": {}}})
+                        .to_string(),
+                ),
+            ],
+        ],
+    )
+    .await;
+    let client = ServerClient::new(server.endpoint(), Credential::None).expect("a client");
+    let mut stream = EventStream::subscribe(client);
+    let mut seen = Vec::new();
+    while seen.len() < 5 {
+        match next_item(&mut stream).await {
+            StreamItem::Connected {
+                resumed,
+                replay_through,
+            } => seen.push(format!("connected {resumed} {replay_through:?}")),
+            StreamItem::Events { event_id, .. } => seen.push(format!("events {event_id:?}")),
+            StreamItem::Disconnected(_) => {}
+        }
+    }
+    assert_eq!(
+        seen,
+        [
+            "connected false None",
+            r#"events Some("e1")"#,
+            r#"connected true Some("e3")"#,
+            r#"events Some("e2")"#,
+            r#"events Some("e3")"#,
+        ]
+    );
+}
+
+#[tokio::test]
 async fn fragmented_frames_decode_across_a_split_character() {
     let message = renamed("e1", "Grüße 🎉");
     let split = message.find('ü').expect("the title is in the frame") + 1;
@@ -1420,7 +1567,7 @@ async fn fragmented_frames_decode_across_a_split_character() {
     let client = ServerClient::new(server.endpoint(), Credential::None).expect("a client");
     let mut stream = EventStream::subscribe(client);
     loop {
-        if let StreamItem::Events(events) = next_item(&mut stream).await {
+        if let StreamItem::Events { events, .. } = next_item(&mut stream).await {
             let title = events.iter().find_map(|event| match event {
                 ServerEvent::SessionPatched { patch, .. } => patch.title.clone(),
                 _ => None,
@@ -1450,7 +1597,7 @@ async fn a_socket_that_never_says_ready_is_replaced() {
     );
     let second = next_item(&mut stream).await;
     assert!(
-        matches!(second, StreamItem::Connected { resumed: false }),
+        matches!(second, StreamItem::Connected { resumed: false, .. }),
         "{second:?}"
     );
 }

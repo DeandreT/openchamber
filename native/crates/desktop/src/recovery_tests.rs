@@ -34,8 +34,12 @@ static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 
 #[path = "creation_tests.rs"]
 mod creation_tests;
+#[path = "permission_mode_tests.rs"]
+mod permission_mode_tests;
 #[path = "request_tests.rs"]
 mod request_tests;
+#[path = "send_path_tests.rs"]
+mod send_path_tests;
 
 pub(crate) struct Fixture(PathBuf);
 
@@ -292,6 +296,7 @@ fn open(
                 connection.state = ConnectionState::Connected;
                 workspace.connection = Some(connection);
                 workspace.switch_runtime(key.runtime.clone(), window, cx);
+                workspace.project_readouts.without_app_icon();
                 workspace.open_persistence(fixture.journal(), window, cx);
                 workspace
             })
@@ -300,18 +305,24 @@ fn open(
     })
 }
 
+/// Runs the app until `done`, failing after five seconds spent waiting on
+/// the network and journal threads. Time inside `run_until_parked` is the
+/// app's own work on this thread (layout and paint, slow in debug builds and
+/// under a loaded machine); it never parks, so it cannot hide a hang.
 fn wait(cx: &mut TestAppContext, mut done: impl FnMut(&mut TestAppContext) -> bool) {
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut waited = Duration::ZERO;
     loop {
         cx.run_until_parked();
         if done(cx) {
             return;
         }
         assert!(
-            Instant::now() < deadline,
-            "background work completes within five seconds"
+            waited < Duration::from_secs(5),
+            "background work completes within five seconds of waiting"
         );
+        let started = Instant::now();
         thread::sleep(Duration::from_millis(1));
+        waited += started.elapsed();
     }
 }
 
@@ -407,7 +418,10 @@ fn routing_failure_recovers_on_stream_reconnect_and_retains_last_known_readiness
                 let generation = connection.generation + generation_offset;
                 workspace.apply_stream_item(
                     generation,
-                    StreamItem::Connected { resumed: true },
+                    StreamItem::Connected {
+                        resumed: true,
+                        replay_through: None,
+                    },
                     window,
                     cx,
                 );
@@ -518,7 +532,8 @@ fn composer_choices_drive_wire_send_and_restart_without_changing_pending_attempt
             let owner = workspace.selection_owner().expect("owner");
             let captured = workspace
                 .send_attempts
-                .attempt(&key)
+                .session(&key)
+                .next()
                 .expect("uncertain send")
                 .prompt
                 .clone();
@@ -526,7 +541,8 @@ fn composer_choices_drive_wire_send_and_restart_without_changing_pending_attempt
             assert_eq!(
                 workspace
                     .send_attempts
-                    .attempt(&key)
+                    .session(&key)
+                    .next()
                     .expect("pending")
                     .prompt
                     .model,
@@ -574,7 +590,8 @@ fn composer_choices_drive_wire_send_and_restart_without_changing_pending_attempt
         assert_eq!(
             state
                 .send_attempts
-                .attempt(&key)
+                .session(&key)
+                .next()
                 .expect("retained pending")
                 .prompt
                 .model
@@ -621,7 +638,7 @@ fn child_prompt_policy_blocks_send_and_retry_without_consuming_text(cx: &mut Tes
             assert!(!workspace.composer_editable());
             assert!(!workspace.can_send_connected());
             workspace.submit_connected(window, cx);
-            assert!(workspace.send_attempts.attempt(&key).is_none());
+            assert!(workspace.send_attempts.session(&key).next().is_none());
             assert_eq!(
                 workspace.composer.read(cx).value().as_ref(),
                 "keep this draft"
@@ -632,12 +649,13 @@ fn child_prompt_policy_blocks_send_and_retry_without_consuming_text(cx: &mut Tes
             workspace.send_attempts =
                 crate::send_attempt::SendAttempts::from_snapshot(vec![(key.clone(), attempt)])
                     .expect("valid retained attempt");
-            workspace.retry_persisted_prompt(&key, &id, Vec::new(), window, cx);
+            workspace.retry_persisted_prompt(&key, &id, Vec::new(), Vec::new(), window, cx);
             assert!(!workspace.send_attempts.is_active(&key));
             assert_eq!(
                 workspace
                     .send_attempts
-                    .attempt(&key)
+                    .session(&key)
+                    .next()
                     .expect("retained")
                     .prompt
                     .message_id,
@@ -721,7 +739,14 @@ fn child_prompt_policy_rechecks_metadata_after_durable_preparation(cx: &mut Test
             workspace.read(cx).composer.read(cx).value().as_ref(),
             "preserve after revocation"
         );
-        assert!(workspace.read(cx).send_attempts.attempt(&key).is_none());
+        assert!(
+            workspace
+                .read(cx)
+                .send_attempts
+                .session(&key)
+                .next()
+                .is_none()
+        );
     });
     assert_eq!(
         server.prompt_count(),
@@ -768,7 +793,8 @@ fn initial_send_is_durable_before_any_mutation_and_preserves_newer_typing(cx: &m
         workspace
             .read(cx)
             .send_attempts
-            .attempt(&key)
+            .session(&key)
+            .next()
             .expect("uncertain retained")
             .prompt
             .message_id
@@ -936,14 +962,14 @@ fn exact_lookup_delivery_survives_failed_history_refresh(cx: &mut TestAppContext
     });
     cx.update_window(window, |_, window, cx| {
         workspace.update(cx, |workspace, cx| {
-            workspace.check_recovery(&key, window, cx)
+            workspace.check_recovery(&key, &workspace.recovery_message(&key, cx), window, cx)
         });
     })
     .expect("window open");
     wait(cx, |cx| {
         cx.read(|cx| {
             let workspace = workspace.read(cx);
-            workspace.send_attempts.attempt(&key).is_none()
+            workspace.send_attempts.session(&key).next().is_none()
                 && matches!(
                     workspace.open_sessions[&key.session].history,
                     crate::workspace::History::Failed(_)
@@ -983,7 +1009,7 @@ fn explicit_retry_checks_identity_and_persists_before_post_then_survives_reopen(
                     "/project",
                 )),
             ]);
-            workspace.check_recovery(&key, window, cx)
+            workspace.check_recovery(&key, &workspace.recovery_message(&key, cx), window, cx)
         });
     })
     .expect("recovery window is open");
@@ -1007,7 +1033,7 @@ fn explicit_retry_checks_identity_and_persists_before_post_then_survives_reopen(
     fs::remove_file(fixture.journal()).expect("only the fixture journal is removed");
     cx.update_window(window, |_, window, cx| {
         workspace.update(cx, |workspace, cx| {
-            workspace.retry_recovery(&key, window, cx)
+            workspace.retry_recovery(&key, &workspace.recovery_message(&key, cx), window, cx)
         });
     })
     .expect("recovery window is open");
@@ -1064,7 +1090,8 @@ fn explicit_retry_checks_identity_and_persists_before_post_then_survives_reopen(
         let retained = reopened
             .read(cx)
             .send_attempts
-            .attempt(&key)
+            .session(&key)
+            .next()
             .expect("failed response retains the attempt");
         let expected = tests::attempt(&key);
         assert_eq!(retained.prompt.message_id, expected.prompt.message_id);
@@ -1114,7 +1141,7 @@ fn corrupt_and_locked_journals_gate_mutations(cx: &mut TestAppContext) {
                     crate::send_attempt::SendAttempts::from_snapshot(vec![(key.clone(), attempt)])
                         .expect("retained attempt is valid even when storage is blocked");
                 workspace.submit_connected(window, cx);
-                workspace.retry_recovery(&key, window, cx);
+                workspace.retry_recovery(&key, &workspace.recovery_message(&key, cx), window, cx);
                 assert!(workspace.persistence_barrier(cx).is_none());
             });
         })
@@ -1126,8 +1153,12 @@ fn corrupt_and_locked_journals_gate_mutations(cx: &mut TestAppContext) {
                 .lock()
                 .expect("request lock")
                 .iter()
-                .all(|request| request.method == "GET" && request.path == "/api/routing"),
-            "blocked storage permits only routing readiness reads"
+                .all(|request| request.method == "GET"
+                    && matches!(
+                        request.path.as_str(),
+                        "/api/routing" | "/api/permission-auto-accept"
+                    )),
+            "blocked storage permits only routing readiness and permission policy reads"
         );
         if corrupt {
             assert_eq!(
@@ -1184,7 +1215,11 @@ fn normal_close_flushes_latest_dirty_draft_and_releases_lock(cx: &mut TestAppCon
             .lock()
             .expect("request lock")
             .iter()
-            .all(|request| request.method == "GET" && request.path == "/api/routing"),
+            .all(|request| request.method == "GET"
+                && matches!(
+                    request.path.as_str(),
+                    "/api/routing" | "/api/permission-auto-accept"
+                )),
         "closing a draft sends no mutations or recovery requests"
     );
 }
@@ -1205,7 +1240,7 @@ fn late_retry_response_preserves_new_runtime_composer(cx: &mut TestAppContext) {
                     "/project",
                 )),
             ]);
-            workspace.retry_recovery(&key, window, cx)
+            workspace.retry_recovery(&key, &workspace.recovery_message(&key, cx), window, cx)
         });
     })
     .expect("old runtime window is open");
@@ -1231,7 +1266,8 @@ fn late_retry_response_preserves_new_runtime_composer(cx: &mut TestAppContext) {
         let retained = workspace
             .read(cx)
             .send_attempts
-            .attempt(&key)
+            .session(&key)
+            .next()
             .expect("old runtime keeps uncertain attempt");
         assert_eq!(retained.admission, Admission::Uncertain);
         assert_eq!(
@@ -1252,10 +1288,11 @@ fn pending_send_check_is_reachable_by_keyboard(cx: &mut TestAppContext) {
     let (window, workspace) = open(cx, &server, &fixture, &key);
     ready(cx, &workspace);
     let control = format!(
-        "recovery-{}:{}:{}-check",
+        "recovery-{}:{}:{}:{}-check",
         key.runtime.as_str().len(),
         key.runtime,
-        key.session
+        key.session,
+        tests::sent_id()
     );
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);

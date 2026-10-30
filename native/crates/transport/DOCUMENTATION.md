@@ -15,11 +15,14 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `identity.rs` | `/health` parsing, API compatibility and capabilities. |
 | `credential.rs` | The credential a client sends; its `Debug` output is redacted. |
 | `client.rs` | `ServerClient`: identity probe, password login, session pages, message pages, whole messages, running status, settings reads and writes, Chats roots, projects and worktrees. |
-| `catalog.rs` | The composer's catalogs in one directory: agents, the flat model catalog with OpenCode's default model, folded config defaults, the skill count and the connected MCP count. |
+| `catalog.rs` | Routing readiness (Auto and the safety net) and the composer's catalogs in one directory: agents, the flat model catalog with OpenCode's default model, folded config defaults, the skill count and the connected MCP count. |
 | `project.rs` | A directory's Git status (`GET /api/git/status`) and a project's configured actions (`GET /api/projects/:projectId/config`, the path-derived ID). |
-| `prompt.rs` | Typed text submission, ordered session model/agent selection, inbox admission receipts and interruption of one named session. |
+| `prompt.rs` | Prompt submission with its synthetic context, resumption of an uncertain send, slash commands, ordered session model/agent selection, inbox admission receipts, observation and interruption of one named session. |
+| `prompt_parts.rs` | What a prompt carries besides text (file references, agent and skill references, metadata, synthetic context), the command request, and their private request bodies. |
+| `session_actions.rs` | Rename (`PATCH /api/session/:id`, then a read back and a best-effort user-title note), delete (`DELETE`, 404 is already gone), archive and restore (`POST /api/openchamber/sessions/archive` and `/unarchive`), and pin and work state as merge patches to `/api/openchamber/sessions/:id/metadata` computed from a fresh read. |
 | `session_create.rs` | Immutable root-session requests, exact-ID observation and identity/location verification before exposing a session record. |
 | `requests.rs`, `request_wire.rs` | Explicit blocking-request lists, exact reads, permission replies, form answers/cancellation and private pinned-2.2 wire decoding. |
+| `permission_policy.rs` | Per-session permission modes: `GET /api/permission-auto-accept` and `PUT /api/permission-auto-accept/sessions/:id`, both answering the whole policy. |
 | `public_asset.rs` | `PublicAssetClient`: public assets the web client loads from third-party hosts, such as models.dev's provider logos. |
 | `wire.rs` | Serde shapes of the fields the client reads. Private. |
 | `projection.rs` | Wire records to core records, mirroring `packages/ui/src/lib/opencode/projection.ts`. Private. |
@@ -96,17 +99,34 @@ counts and identifiers only.
   never moves to another origin.
 - A credential appears only in the `Authorization` header, marked sensitive.
   It is never part of a URL, an error, a log line or `Debug` output.
-- `send_text` posts a model selection to `/api/session/:id/model`, then an
-  agent selection to `/api/session/:id/agent` when supplied, and finally the
-  text and exact client-generated message ID to `/api/session/:id/prompt`.
+- `send_prompt` posts a model selection to `/api/session/:id/model`, then an
+  agent selection to `/api/session/:id/agent` when supplied, then each context
+  item to `/api/session/:id/synthetic` in order, and finally the prompt with its
+  exact client-generated message ID to `/api/session/:id/prompt`, as the web
+  client's `sendMessage` does. Context uses the prompt's delivery and
+  `resume: false`. A text-only prompt's body is byte for byte `{ id, text,
+  delivery? }`: empty files, agents, skills and absent metadata are omitted.
   Selection responses are 204. The prompt's 200 response contains an inbox
   user item under `data`; it acknowledges admission, not turn completion.
   Model references use `providerID`, `id` and optional `variant`. Omitting a
   variant clears the previous effort selection, matching `toModelRef`.
-- Prompt IDs must carry the pinned protocol's `msg_` prefix. Validation runs
-  before any selection mutation, and `TextPrompt` debug output redacts its text.
-- Prompt failures retain the session and message IDs and the failed stage.
-  `NotAttempted` means selection or local validation failed before the prompt.
+- Prompt and context IDs must carry the pinned protocol's `msg_` prefix and be
+  unique within the prompt. A prompt needs text, a file or context. Validation
+  (`Prompt::is_well_formed`) runs before any selection mutation. `Prompt` and
+  its parts redact text, file references, descriptions and metadata in Debug.
+- `resume_prompt` resends an uncertain prompt after `observe_send`: it skips
+  the leading context items the observation found and sends the rest, then the
+  prompt, under their saved IDs. `admitted` must be a leading run of the
+  context in order; anything else fails validation before any request.
+- Prompt failures retain the session and message IDs and the failed stage,
+  including the index of a failed context item. `NotAttempted` means
+  selection, local validation or a definite rejection of the first context
+  item stopped before anything was admitted. A lost context, prompt or command
+  response is `Unknown`, since that item may be admitted. Once any context item
+  of the prompt or command is admitted (an earlier item, all of them before the
+  prompt, or the `admitted` run of a resume), every other failure, including a
+  refusal or an authentication expiry, is `Partial`: the caller keeps the
+  attempt for recovery and never rolls it back to a draft.
   `Rejected` identifies a declared rejection or authentication refusal.
   `Unknown` covers lost responses, conflicts, refused redirects, server failures,
   unexpected status and malformed or mismatched receipts. A conflict can refer
@@ -123,6 +143,11 @@ counts and identifiers only.
   Selection and admission are separate requests, so concurrent clients can
   change session selection between them. The receipt does not attest which
   model will run; session and assistant-step events remain authoritative.
+- `observe_send` reads the inbox once, then history for the prompt and for each
+  context item the inbox lacks. A pending or delivered prompt settles every
+  step. Otherwise it reports the observed leading context, or `OutOfOrder`
+  when a context item follows a missing one, since no resend can restore that
+  order. Context matches only `synthetic` inbox items and history records.
 - `lookup_prompt` reads `GET /api/session/:id/inbox` and, only when the exact
   ID is absent, `GET /api/session/:id/message/:messageID`. It returns a typed
   pending admission receipt or the projected user message from history.
@@ -133,9 +158,12 @@ counts and identifiers only.
   A history 404 after a successful inbox read returns `NotObserved`, which
   never proves rejection. All other failed reads remain errors. The method
   performs no mutations and makes no resend decision.
-- `TextPrompt` accepts text only. Files, agent mentions, skills, metadata,
-  synthetic context and slash-command execution require separate typed flows.
-  A slash-prefixed string sent through this API is literal text. Admission
+- `run_command` posts selection and context the same way, then
+  `{ name, text, files?, delivery? }` to `/api/session/:id/command`, which
+  answers 204 without a body. OpenCode assigns the command's message ID, so an
+  `Unknown` command outcome has no identity to look up and is never resent
+  automatically. Its declared 500 is `Unknown`, because the command may have
+  started. A slash-prefixed string sent as a prompt is literal text. Admission
   receipts validate the message ID, session and user type, and parse the server's
   timestamp and delivery. They intentionally leave prepared payloads to history
   and events. OpenCode's `session.prompt` hook can transform text, add metadata
@@ -145,6 +173,11 @@ counts and identifiers only.
   body or resume query. Its boolean is the server's `interrupted` value; false
   is a successful no-op. A lost or malformed response leaves the interruption
   outcome unknown. It never interrupts other sessions or stops the server.
+- Session management never retries. Archive and restore answers report
+  stamped and failed IDs separately; a malformed answer fails the call
+  rather than reading as nothing archived. Metadata patches carry only the
+  keys the change touches, so other features' keys stay; an empty patch
+  sends nothing. Rename and delete expect 204, as the pinned client does.
 - Every failure is a distinct `TransportError`. None is an empty success; a
   caller keeps its last valid state.
 - `all_sessions` walks every page or fails as a whole. A partial list has no
@@ -170,8 +203,12 @@ counts and identifiers only.
 - The event stream delivers through a bounded channel and waits for the
   consumer instead of dropping events. A socket that does not send `ready`
   within 2 s or falls silent for 30 s is replaced, as the web client does.
-  `Connected { resumed }` says whether the server replayed everything since
-  the last delivered event; a reset retires the cursor. Dropping `EventStream` stops the
+  `Connected { resumed, replay_through }` says whether the server replayed
+  everything since the last delivered event, and on a resumed, non-empty
+  replay names its last event (the `ready` frame's `replayThrough`); a reset
+  retires the cursor. Each `Events { events, event_id }` item is one frame
+  with its event id, delivered even when none of its events decode, so the
+  consumer can tell when the replay's last event was applied. Dropping `EventStream` stops the
   subscription only; it never stops the server or a running turn.
 - Unmodelled event types become `ServerEvent::Unsupported` with their name
   only, never a guessed state change.
@@ -193,6 +230,22 @@ counts and identifiers only.
   reasoning part from its start, a tool from its call to its result), so the
   replay comparison leaves them out as it leaves out message times. Steps
   carry their cost from history and from the step ended and failed events.
+- Permission policies parse `{ sessions, modes?, revision? }` as the web's schema
+  does: `modes` is the policy, and without it each legacy `sessions` boolean is
+  Auto or Ask. Any malformed entry fails the whole read; a failure is never an
+  empty policy. A mode write sends `{ mode, enabled, directory? }` and is never
+  retried. For a space directory it also sends `x-opencode-directory` (URI
+  encoded, with `x-opencode-directory-encoding: uri`), as the web's
+  `runtimeFetch` does, so the write reaches that space's server; a host
+  directory travels in the body only.
+- `openchamber:permission-auto-accept.updated` and `.left-for-user` arrive on the
+  bridge as `PermissionPolicy` and `PermissionLeftForUser`. Frames a host
+  forwarded from an isolated space (`spaceId`) are `Unsupported`, because this
+  client does not read a space's own policy. `openchamber:routing.updated`
+  becomes `RoutingUpdated`, carrying nothing: the consumer rereads `/api/routing`.
+- `routing()` reports Auto readiness and the safety net together. A missing
+  `jevAvailable` means available, as servers from before the classifier pick
+  always ran it.
 - `PublicAssetClient` shares nothing with `ServerClient`: it sends no
   credential, cookie or OpenChamber header, requests only HTTPS URLs, follows
   only HTTPS redirects and refuses bodies over 256 KiB.
@@ -244,9 +297,10 @@ returns for the same session. The fixture's own UI test fails when it is
 stale, so a client upgrade or projection change surfaces in both languages.
 
 The mutation samples are synthetic contract fixtures, not live provider calls.
-The generator records the pinned SDK's model, agent, prompt and interrupt
-requests including JSON bodies and content type, and its decoded admission and
-interrupt responses. Scripted loopback tests cover rejection, disconnect after
+The generator records the pinned SDK's model, agent, prompt (text-only and with
+every part), synthetic, command and interrupt requests including JSON bodies
+and content type, and its decoded admission, synthetic and interrupt
+responses. Admission bodies are compared byte for byte. Scripted loopback tests cover rejection, disconnect after
 receiving a prompt, local cancellation and the no-redirect credential policy.
 
 ### Why submission errors identify the admission stage
@@ -256,13 +310,28 @@ admission. A later failure cannot undo an earlier selection. Stage and admission
 certainty let the caller preserve its draft and reconcile by message ID without
 automatically repeating a mutation that may already be running.
 
+### Why context is resumed by prefix and not item by item
+
+The web client admits context and prompt as separate requests, so a lost
+response can leave some steps admitted. Resending only a missing step keeps
+the transcript free of duplicates, but only a leading run can be completed in
+order: a gap with a later item present would put the resent item after it. The
+observation reports that case as `OutOfOrder` instead of guessing.
+
+### Why commands have no identity-based recovery
+
+`session.command` returns 204 and the server mints the message ID, unlike
+prompts and synthetic items whose IDs the client chooses. Inbox and history
+reads therefore cannot attest a command's admission, and a resend could run it
+twice. The error stays `Unknown` and the caller shows it without retrying.
+
 ### Why admission does not compare prompt content
 
 OpenCode 2.1.4's [`SessionPrompt.prepare`](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/core/src/session/prompt.ts)
 invokes plugin hooks before admission. The prepared text, attachments, metadata
 and delivery can differ from the request. The receipt projects only admission
 identity, creation time and delivery; history and events supply prepared content.
-This leaves the outbound text-only contract unchanged.
+Outbound parts are sent as given; the receipt never echoes them.
 
 [`SessionInbox.reconcile`](https://github.com/anomalyco/opencode/blob/v2.1.4/packages/core/src/session/inbox.ts)
 uses first-admission-wins for an existing message ID with the same session and

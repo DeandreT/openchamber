@@ -142,7 +142,8 @@ impl Workspace {
                         // a switch, retain all captured-runtime blockers rather
                         // than resolving owners against another runtime's index.
                         key.runtime != self.runtime
-                            || self.request_owner_belongs(&request.owner, scope, &key.session)
+                            || (self.request_owner_belongs(&request.owner, scope, &key.session)
+                                && !self.request_held(&request.owner, &request.id))
                     })
                     .map(|(key, _)| key.clone())
             })
@@ -206,7 +207,9 @@ impl Workspace {
                 continue;
             }
             for (key, _) in store.entries() {
-                if self.request_owner_visible(&key.owner, scope) {
+                if self.request_owner_visible(&key.owner, scope)
+                    && !self.request_held(&key.owner, &key.id)
+                {
                     keys.push(key.clone());
                 }
             }
@@ -430,6 +433,27 @@ impl Workspace {
         else {
             return;
         };
+        // Presentation only: a request the server may answer on its own is
+        // held out of sight; the store still owns it and nothing answers it here.
+        match &event {
+            BlockingRequestEvent::Asked(PendingRequest::Permission(request)) => {
+                let shown = self.blocking.stores.get(&scope).is_some_and(|store| {
+                    store
+                        .get(&RequestKey {
+                            scope: scope.clone(),
+                            owner: owner.clone(),
+                            id: RequestId::Permission(request.id.clone()),
+                        })
+                        .is_some()
+                });
+                self.hold_permission_request(&request.session_id, &request.id, shown);
+            }
+            BlockingRequestEvent::Settled {
+                owner: RequestOwner::Session(session),
+                id: RequestId::Permission(permission),
+            } => self.permission_modes.holds.settled(session, permission),
+            _ => {}
+        }
         let store = self
             .blocking
             .stores

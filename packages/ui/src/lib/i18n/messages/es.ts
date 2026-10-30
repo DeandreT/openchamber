@@ -2452,6 +2452,10 @@ export const dict: Record<I18nKey, string> = {
   "chat.nativeRecovery.retryStorage": "Reintentar guardado",
   "chat.nativeRecovery.sendFailed": "El mensaje no se envió. Su texto vuelve a estar en el campo de escritura.",
   "chat.nativeRecovery.abortFailed": "No se pudo detener la sesión. Comprueba su actividad actual antes de volver a intentarlo.",
+  "chat.nativeRecovery.restore": "Mover al campo de escritura",
+  "chat.nativeRecovery.refused": "El servidor volvió a rechazar este mensaje. Muévelo al campo de escritura para editarlo o reenviarlo.",
+  "chat.nativeRecovery.outOfOrder": "Falta parte del contexto de este mensaje, así que no se puede reenviar en orden. Muévelo al campo de escritura para enviarlo de nuevo.",
+  "chat.nativeRecovery.stopWaits": "No se puede detener mientras se envía un mensaje. Vuelve a intentarlo cuando se haya enviado.",
 
   "chat.queuedMessage.attachments": "+{count} archivo(s)",
   "chat.queuedMessage.empty": "(vacío)",

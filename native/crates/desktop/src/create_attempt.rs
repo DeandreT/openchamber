@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use openchamber_native_core::draft::{Draft, DraftKey};
-use openchamber_native_transport::prompt::TextPrompt;
+use openchamber_native_transport::prompt::Prompt;
 use openchamber_native_transport::session_create::CreateSession;
 
 use crate::send_attempt::SessionKey;
@@ -26,7 +26,7 @@ pub(crate) struct CreateAttempt {
     pub request: CreateSession,
     pub draft: Draft,
     /// Original configuration, including Auto, independent of creation defaults.
-    pub prompt: TextPrompt,
+    pub prompt: Prompt,
     pub created: i64,
     pub phase: CreationPhase,
     /// Local navigation generation. Restored attempts never select a view.

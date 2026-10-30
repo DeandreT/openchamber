@@ -168,6 +168,9 @@ pub enum SidebarRow<'a> {
         project_id: Option<ProjectId>,
         archived: bool,
         context: RenderContext,
+        /// `ownsWork`: the row is a work of its own, so it offers Track and
+        /// Done; sessions listed inside a worktree or space work do not.
+        owns_work: bool,
     },
     ShowControl {
         key: String,
@@ -373,6 +376,8 @@ struct AppendOptions<'k> {
     archived: bool,
     context: RenderContext,
     base_depth: usize,
+    /// The rows sit inside a worktree or space work.
+    inside_work: bool,
 }
 
 struct RowBuilder<'i, 'v, 'a, 'o> {
@@ -464,6 +469,7 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
                     archived: false,
                     context,
                     base_depth: 0,
+                    inside_work: false,
                 },
             );
         }
@@ -688,6 +694,7 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
                                     RenderContext::MixedCompact
                                 },
                                 base_depth: 0,
+                                inside_work: false,
                             },
                         );
                         return;
@@ -745,6 +752,7 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
                                 archived: false,
                                 context: RenderContext::Project,
                                 base_depth: 1,
+                                inside_work: true,
                             },
                         );
                     }
@@ -875,6 +883,7 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
                     archived: false,
                     context,
                     base_depth: 0,
+                    inside_work: false,
                 },
             );
         }
@@ -1038,6 +1047,7 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
                 archived: group.is_archived_bucket,
                 context,
                 base_depth: content_depth,
+                inside_work: crate::sidebar_work::is_group_work(group),
             },
         );
         let remaining = source.len() - visible.len();
@@ -1129,6 +1139,7 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
                 project_id: options.project_id.cloned(),
                 archived: options.archived,
                 context: options.context,
+                owns_work: !options.inside_work && depth == options.base_depth,
             });
             if !expanded {
                 continue;

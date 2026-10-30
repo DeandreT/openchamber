@@ -248,7 +248,21 @@ impl Workspace {
                         "calendar-schedule",
                         "sessions.sidebar.header.actions.scheduledTasks",
                     ))
-                    .child(button("archive", "archive", "sessions.sidebar.nav.archive"))
+                    .child(
+                        IconButton::new(
+                            "archive",
+                            "archive",
+                            strings.get("sessions.sidebar.nav.archive"),
+                        )
+                        .tone(if self.archive_open {
+                            ButtonTone::Active
+                        } else {
+                            ButtonTone::Quiet
+                        })
+                        .render(palette, cx, |this, window, cx| {
+                            this.toggle_archive_page(window, cx)
+                        }),
+                    )
                     .child(button(
                         "integrations",
                         "store-2",
@@ -710,6 +724,29 @@ impl Workspace {
                 let target_key = SharedString::from(format!("{key}:target"));
                 let row = tree_row(&target_key, &palette, direction, *depth, slot, selected)
                     .h(px(SESSION_HEIGHT))
+                    .relative();
+                // Renaming keeps the row in place: the title line becomes
+                // the field, and the row takes no clicks meanwhile.
+                if let Some(rename) = self.render_rename(key, &palette, direction, cx) {
+                    return node
+                        .child(row.child(rename).test_support())
+                        .test_support()
+                        .into_any_element();
+                }
+                let menu_open = self
+                    .session_menu
+                    .as_ref()
+                    .is_some_and(|menu| menu.row_key == *key);
+                let row_group = SharedString::from(format!("{key}:hover"));
+                let trigger = self.render_session_menu_trigger(
+                    key, session_id, menu_open, &row_group, &palette, direction, window, cx,
+                );
+                let context_key = key.clone();
+                let context_id = session_id.clone();
+                let rename_key = key.clone();
+                let rename_id = session_id.clone();
+                let row = row
+                    .group(row_group)
                     .child(
                         div()
                             .flex_1()
@@ -724,10 +761,36 @@ impl Workspace {
                             .when(streaming, |this| {
                                 this.child(glyph("circle", 12.0, palette.info))
                             }),
+                    )
+                    .child(trigger)
+                    .on_mouse_down(
+                        gpui_kit::MouseButton::Right,
+                        cx.listener(move |this, event: &gpui_kit::MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.open_session_menu(
+                                context_key.clone(),
+                                context_id.clone(),
+                                Some(event.position),
+                                false,
+                                window,
+                                cx,
+                            );
+                        }),
                     );
                 let (node, row) = on_activate_split(node, row, cx, move |this, window, cx| {
                     this.select_session(id.clone(), window, cx);
                 });
+                let row = row.on_click(cx.listener(
+                    move |_, event: &gpui_kit::ClickEvent, window, cx| {
+                        if event.click_count() >= 2 {
+                            // After the click's selection has moved focus.
+                            let (key, id) = (rename_key.clone(), rename_id.clone());
+                            cx.defer_in(window, move |this, window, cx| {
+                                this.start_rename(key, id, window, cx)
+                            });
+                        }
+                    },
+                ));
                 node.child(row.test_support())
                     .test_support()
                     .into_any_element()

@@ -2200,6 +2200,10 @@ export const dict = {
   'chat.nativeRecovery.retryStorage': 'Réessayer l\'enregistrement',
   'chat.nativeRecovery.sendFailed': 'Le message n\'a pas été envoyé. Son texte est de nouveau dans le champ de saisie.',
   'chat.nativeRecovery.abortFailed': 'Impossible d\'arrêter la session. Vérifiez son activité actuelle avant de réessayer.',
+  'chat.nativeRecovery.restore': 'Déplacer dans le champ de saisie',
+  'chat.nativeRecovery.refused': 'Le serveur a de nouveau refusé ce message. Déplacez-le dans le champ de saisie pour le modifier ou le renvoyer.',
+  'chat.nativeRecovery.outOfOrder': 'Une partie du contexte de ce message manque, il ne peut donc pas être renvoyé dans l\'ordre. Déplacez-le dans le champ de saisie pour l\'envoyer à nouveau.',
+  'chat.nativeRecovery.stopWaits': 'Impossible d\'arrêter pendant l\'envoi d\'un message. Réessayez une fois qu\'il est envoyé.',
 
   'chat.queuedMessage.attachments': '+ {count} fichier(s)',
   'chat.queuedMessage.empty': '(vide)',

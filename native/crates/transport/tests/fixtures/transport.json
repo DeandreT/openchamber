@@ -286,6 +286,56 @@
       "body": "{\"id\":\"msg_native_fixture_exact\",\"text\":\"Hello\\n世界 \"}"
     },
     {
+      "name": "submit prompt with parts",
+      "method": "POST",
+      "path": "/api/session/ses_e9b49c443ffefXcWWPhCOga6nH/prompt",
+      "query": [],
+      "directoryHeader": null,
+      "partShellsHeader": null,
+      "contentType": "application/json",
+      "body": "{\"id\":\"msg_native_fixture_exact\",\"text\":\"@plan review this\",\"files\":[{\"uri\":\"file:///home/synthetic/project/notes.md\",\"name\":\"notes.md\"},{\"uri\":\"data:text/plain;base64,aGk=\"}],\"agents\":[{\"name\":\"plan\",\"mention\":{\"start\":0,\"end\":5,\"text\":\"@plan\"}},{\"name\":\"build\"}],\"skills\":[{\"id\":\"skill_fixture\"}],\"metadata\":{\"openchamber\":{\"source\":\"native\"}},\"delivery\":\"steer\"}"
+    },
+    {
+      "name": "admit synthetic context",
+      "method": "POST",
+      "path": "/api/session/ses_e9b49c443ffefXcWWPhCOga6nH/synthetic",
+      "query": [],
+      "directoryHeader": null,
+      "partShellsHeader": null,
+      "contentType": "application/json",
+      "body": "{\"id\":\"msg_native_fixture_context\",\"text\":\"Quoted context ✓\",\"description\":\"Selection\",\"metadata\":{\"openchamber\":{\"kind\":\"quote\"}},\"delivery\":\"steer\",\"resume\":false}"
+    },
+    {
+      "name": "admit synthetic default delivery",
+      "method": "POST",
+      "path": "/api/session/ses_e9b49c443ffefXcWWPhCOga6nH/synthetic",
+      "query": [],
+      "directoryHeader": null,
+      "partShellsHeader": null,
+      "contentType": "application/json",
+      "body": "{\"id\":\"msg_native_fixture_context\",\"text\":\"Quoted context ✓\",\"resume\":false}"
+    },
+    {
+      "name": "run command",
+      "method": "POST",
+      "path": "/api/session/ses_e9b49c443ffefXcWWPhCOga6nH/command",
+      "query": [],
+      "directoryHeader": null,
+      "partShellsHeader": null,
+      "contentType": "application/json",
+      "body": "{\"name\":\"review\",\"text\":\"src/lib.rs\",\"files\":[{\"uri\":\"file:///home/synthetic/project/src/lib.rs\",\"name\":\"lib.rs\"}],\"delivery\":\"queue\"}"
+    },
+    {
+      "name": "run command without arguments",
+      "method": "POST",
+      "path": "/api/session/ses_e9b49c443ffefXcWWPhCOga6nH/command",
+      "query": [],
+      "directoryHeader": null,
+      "partShellsHeader": null,
+      "contentType": "application/json",
+      "body": "{\"name\":\"init\",\"text\":\"\"}"
+    },
+    {
       "name": "interrupt named session",
       "method": "POST",
       "path": "/api/session/ses_e9b49c443ffefXcWWPhCOga6nH/interrupt",
@@ -299,6 +349,26 @@
       "name": "interrupt idle session",
       "method": "POST",
       "path": "/api/session/ses_e9b49c443ffefXcWWPhCOga6nH/interrupt",
+      "query": [],
+      "directoryHeader": null,
+      "partShellsHeader": null,
+      "contentType": null,
+      "body": null
+    },
+    {
+      "name": "rename session",
+      "method": "PATCH",
+      "path": "/api/session/ses_e9b49c443ffefXcWWPhCOga6nH",
+      "query": [],
+      "directoryHeader": null,
+      "partShellsHeader": null,
+      "contentType": "application/json",
+      "body": "{\"title\":\"Renamed ✓\"}"
+    },
+    {
+      "name": "delete session",
+      "method": "DELETE",
+      "path": "/api/session/ses_e9b49c443ffefXcWWPhCOga6nH",
       "query": [],
       "directoryHeader": null,
       "partShellsHeader": null,
@@ -1903,6 +1973,24 @@
         "text": "Hello\n世界 "
       },
       "delivery": "queue"
+    },
+    "synthetic": {
+      "id": "msg_native_fixture_context",
+      "sessionID": "ses_e9b49c443ffefXcWWPhCOga6nH",
+      "type": "synthetic",
+      "time": {
+        "created": 1799999999000
+      },
+      "payload": {
+        "text": "Quoted context ✓",
+        "description": "Selection",
+        "metadata": {
+          "openchamber": {
+            "kind": "quote"
+          }
+        }
+      },
+      "delivery": "steer"
     },
     "interrupted": {
       "interrupted": true

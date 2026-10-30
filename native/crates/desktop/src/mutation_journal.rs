@@ -1,4 +1,4 @@
-//! Private, versioned local drafts and unresolved text submissions.
+//! Private, versioned local drafts and unresolved prompt submissions.
 //!
 //! The caller supplies a path inside the existing native configuration directory.
 //! Hold one journal for the application's lifetime. Run open/save on a serialized
@@ -9,6 +9,12 @@
 //! The lock is a separate stable inode and must never be removed while in use.
 //! Writes replace the whole snapshot, so callers must enqueue snapshots in mutation
 //! order. A failed open grants no write handle: malformed stores are left intact.
+//!
+//! Version 4 stores whole prompts: text, attachment references, agent and skill
+//! references, metadata, the ordered synthetic context items with their IDs,
+//! the prompt ID and delivery. Versions 1 to 3 held text prompts and load as
+//! prompts without parts. Attachments are references (a server path or URI);
+//! content larger than `MAX_URI` must be uploaded before an attempt captures it.
 
 use std::collections::HashSet;
 use std::fmt;
@@ -22,19 +28,25 @@ use openchamber_native_core::draft::{Draft, DraftKey, DraftTarget};
 use openchamber_native_core::ids::{DraftId, MessageId, PartId, RuntimeId, SessionId};
 use openchamber_native_core::send_config::ModelChoice;
 use openchamber_native_core::transcript::{Message, MessageInfo, Part, Role};
-use openchamber_native_transport::prompt::{Delivery, TextPrompt};
+use openchamber_native_transport::prompt::{Delivery, Prompt};
+use openchamber_native_transport::prompt_parts::{
+    AgentMention, Mention, Metadata, PromptFile, PromptParts, SkillRef, SyntheticContext,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::create_attempt::{CreateAttempt, CreationPhase};
 use crate::send_attempt::{Admission, SendAttempt, SendOrigin, SessionKey};
 use openchamber_native_transport::session_create::CreateSession;
 
-const VERSION: u32 = 3;
+const VERSION: u32 = 4;
 const MAX_FILE: u64 = 16 * 1024 * 1024;
 const MAX_TEXT: usize = 1024 * 1024;
 const MAX_ENTRIES: usize = 4096;
 const MAX_ID: usize = 4096;
 const MAX_DIRECTORY: usize = 16 * 1024;
+/// An attachment URI, including a small inline `data:` URI.
+const MAX_URI: usize = 64 * 1024;
+const MAX_METADATA: usize = 64 * 1024;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 /// Contains no tasks, endpoints, authorization headers or credentials.
@@ -155,31 +167,65 @@ impl MutationJournal {
         }
         let version: Version = serde_json::from_slice(&bytes)
             .map_err(|_| JournalError::Invalid("malformed JSON or version"))?;
-        if !matches!(version.version, 1 | 2 | VERSION) {
+        if !matches!(version.version, 1..=VERSION) {
             return Err(JournalError::UnsupportedVersion(version.version));
         }
-        let store: Store = if version.version == 1 {
-            let legacy: LegacyStore = serde_json::from_slice(&bytes)
-                .map_err(|_| JournalError::Invalid("malformed legacy schema"))?;
-            Store {
-                version: legacy.version,
-                drafts: legacy.drafts,
-                attempts: legacy.attempts,
-                creations: Vec::new(),
-                selections: Vec::new(),
+        let store: Store = match version.version {
+            1 => {
+                let legacy: LegacyStore = serde_json::from_slice(&bytes)
+                    .map_err(|_| JournalError::Invalid("malformed legacy schema"))?;
+                Store {
+                    version: legacy.version,
+                    drafts: legacy.drafts,
+                    attempts: legacy
+                        .attempts
+                        .into_iter()
+                        .map(StoredAttempt::upgrade)
+                        .collect(),
+                    creations: Vec::new(),
+                    selections: Vec::new(),
+                }
             }
-        } else if version.version == 2 {
-            let legacy: PreviousStore = serde_json::from_slice(&bytes)
-                .map_err(|_| JournalError::Invalid("malformed previous schema"))?;
-            Store {
-                version: legacy.version,
-                drafts: legacy.drafts,
-                attempts: legacy.attempts,
-                creations: legacy.creations,
-                selections: Vec::new(),
+            2 => {
+                let legacy: PreviousStore = serde_json::from_slice(&bytes)
+                    .map_err(|_| JournalError::Invalid("malformed previous schema"))?;
+                Store {
+                    version: legacy.version,
+                    drafts: legacy.drafts,
+                    attempts: legacy
+                        .attempts
+                        .into_iter()
+                        .map(StoredAttempt::upgrade)
+                        .collect(),
+                    creations: legacy
+                        .creations
+                        .into_iter()
+                        .map(StoredCreation::upgrade)
+                        .collect(),
+                    selections: Vec::new(),
+                }
             }
-        } else {
-            serde_json::from_slice(&bytes).map_err(|_| JournalError::Invalid("malformed schema"))?
+            3 => {
+                let legacy: TextStore = serde_json::from_slice(&bytes)
+                    .map_err(|_| JournalError::Invalid("malformed text-prompt schema"))?;
+                Store {
+                    version: legacy.version,
+                    drafts: legacy.drafts,
+                    attempts: legacy
+                        .attempts
+                        .into_iter()
+                        .map(StoredAttempt::upgrade)
+                        .collect(),
+                    creations: legacy
+                        .creations
+                        .into_iter()
+                        .map(StoredCreation::upgrade)
+                        .collect(),
+                    selections: legacy.selections,
+                }
+            }
+            _ => serde_json::from_slice(&bytes)
+                .map_err(|_| JournalError::Invalid("malformed schema"))?,
         };
         Ok(LoadedJournal::Present(store.into_snapshot()?))
     }
@@ -326,13 +372,24 @@ struct Store {
     selections: Vec<crate::selection_storage::StoredSelection>,
 }
 
+/// Version 3: version 4's layout with text-only prompts.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TextStore {
+    version: u32,
+    drafts: Vec<StoredDraft>,
+    attempts: Vec<StoredAttempt<TextOnlyPrompt>>,
+    creations: Vec<StoredCreation<TextOnlyPrompt>>,
+    selections: Vec<crate::selection_storage::StoredSelection>,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PreviousStore {
     version: u32,
     drafts: Vec<StoredDraft>,
-    attempts: Vec<StoredAttempt>,
-    creations: Vec<StoredCreation>,
+    attempts: Vec<StoredAttempt<TextOnlyPrompt>>,
+    creations: Vec<StoredCreation<TextOnlyPrompt>>,
 }
 
 #[derive(Deserialize)]
@@ -340,16 +397,16 @@ struct PreviousStore {
 struct LegacyStore {
     version: u32,
     drafts: Vec<StoredDraft>,
-    attempts: Vec<StoredAttempt>,
+    attempts: Vec<StoredAttempt<TextOnlyPrompt>>,
 }
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct StoredCreation {
+struct StoredCreation<P = StoredPrompt> {
     session: String,
     project: String,
     draft: StoredDraft,
-    prompt: StoredPrompt,
+    prompt: P,
     request_model: Option<StoredModel>,
     request_agent: Option<String>,
     created: i64,
@@ -391,16 +448,46 @@ struct StoredDraft {
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct StoredAttempt {
+struct StoredAttempt<P = StoredPrompt> {
     #[serde(default)]
     origin: StoredOrigin,
     runtime: String,
     session: String,
     draft: StoredDraft,
-    prompt: StoredPrompt,
+    prompt: P,
     optimistic_part_id: String,
     created: i64,
     admission: StoredAdmission,
+}
+
+impl StoredAttempt<TextOnlyPrompt> {
+    fn upgrade(self) -> StoredAttempt {
+        StoredAttempt {
+            origin: self.origin,
+            runtime: self.runtime,
+            session: self.session,
+            draft: self.draft,
+            prompt: self.prompt.upgrade(),
+            optimistic_part_id: self.optimistic_part_id,
+            created: self.created,
+            admission: self.admission,
+        }
+    }
+}
+
+impl StoredCreation<TextOnlyPrompt> {
+    fn upgrade(self) -> StoredCreation {
+        StoredCreation {
+            session: self.session,
+            project: self.project,
+            draft: self.draft,
+            prompt: self.prompt.upgrade(),
+            request_model: self.request_model,
+            request_agent: self.request_agent,
+            created: self.created,
+            phase: self.phase,
+        }
+    }
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -412,14 +499,80 @@ enum StoredOrigin {
     Deleted,
 }
 
-#[derive(Serialize, Deserialize)]
+/// A prompt of versions 1 to 3.
+#[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct StoredPrompt {
+struct TextOnlyPrompt {
     message_id: String,
     text: String,
     model: Option<StoredModel>,
     agent: Option<String>,
     delivery: Option<StoredDelivery>,
+}
+
+impl TextOnlyPrompt {
+    fn upgrade(self) -> StoredPrompt {
+        StoredPrompt {
+            message_id: self.message_id,
+            text: self.text,
+            files: Vec::new(),
+            agents: Vec::new(),
+            skills: Vec::new(),
+            metadata: None,
+            context: Vec::new(),
+            model: self.model,
+            agent: self.agent,
+            delivery: self.delivery,
+        }
+    }
+}
+
+/// Every field is required, so a version 4 file never loses a part silently.
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredPrompt {
+    message_id: String,
+    text: String,
+    files: Vec<StoredFile>,
+    agents: Vec<StoredAgent>,
+    skills: Vec<String>,
+    metadata: Option<serde_json::Map<String, serde_json::Value>>,
+    /// Admitted in this order before the prompt.
+    context: Vec<StoredContext>,
+    model: Option<StoredModel>,
+    agent: Option<String>,
+    delivery: Option<StoredDelivery>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredFile {
+    uri: String,
+    name: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredAgent {
+    name: String,
+    mention: Option<StoredMention>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredMention {
+    start: u32,
+    end: u32,
+    text: String,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredContext {
+    id: String,
+    text: String,
+    description: Option<String>,
+    metadata: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -449,10 +602,43 @@ impl StoredModel {
 }
 
 impl StoredPrompt {
-    fn capture(prompt: &TextPrompt) -> Self {
+    fn capture(prompt: &Prompt) -> Self {
+        let parts = &prompt.parts;
         Self {
             message_id: prompt.message_id.to_string(),
             text: prompt.text.clone(),
+            files: parts
+                .files
+                .iter()
+                .map(|file| StoredFile {
+                    uri: file.uri.clone(),
+                    name: file.name.clone(),
+                })
+                .collect(),
+            agents: parts
+                .agents
+                .iter()
+                .map(|agent| StoredAgent {
+                    name: agent.name.clone(),
+                    mention: agent.mention.as_ref().map(|mention| StoredMention {
+                        start: mention.start,
+                        end: mention.end,
+                        text: mention.text.clone(),
+                    }),
+                })
+                .collect(),
+            skills: parts.skills.iter().map(|skill| skill.id.clone()).collect(),
+            metadata: parts.metadata.as_ref().map(|metadata| metadata.0.clone()),
+            context: parts
+                .context
+                .iter()
+                .map(|item| StoredContext {
+                    id: item.id.to_string(),
+                    text: item.text.clone(),
+                    description: item.description.clone(),
+                    metadata: item.metadata.as_ref().map(|metadata| metadata.0.clone()),
+                })
+                .collect(),
             model: prompt.model.as_ref().map(StoredModel::capture),
             agent: prompt.agent.clone(),
             delivery: prompt.delivery.map(|delivery| match delivery {
@@ -462,10 +648,44 @@ impl StoredPrompt {
         }
     }
 
-    fn into_prompt(self) -> TextPrompt {
-        TextPrompt {
+    fn into_prompt(self) -> Prompt {
+        Prompt {
             message_id: MessageId::from(self.message_id),
             text: self.text,
+            parts: PromptParts {
+                files: self
+                    .files
+                    .into_iter()
+                    .map(|file| PromptFile {
+                        uri: file.uri,
+                        name: file.name,
+                    })
+                    .collect(),
+                agents: self
+                    .agents
+                    .into_iter()
+                    .map(|agent| AgentMention {
+                        name: agent.name,
+                        mention: agent.mention.map(|mention| Mention {
+                            start: mention.start,
+                            end: mention.end,
+                            text: mention.text,
+                        }),
+                    })
+                    .collect(),
+                skills: self.skills.into_iter().map(|id| SkillRef { id }).collect(),
+                metadata: self.metadata.map(Metadata),
+                context: self
+                    .context
+                    .into_iter()
+                    .map(|item| SyntheticContext {
+                        id: MessageId::from(item.id),
+                        text: item.text,
+                        description: item.description,
+                        metadata: item.metadata.map(Metadata),
+                    })
+                    .collect(),
+            },
             model: self.model.map(StoredModel::into_choice),
             agent: self.agent,
             delivery: self.delivery.map(|delivery| match delivery {
@@ -774,7 +994,9 @@ fn validate_snapshot(snapshot: &JournalSnapshot) -> Result<(), JournalError> {
             return Err(JournalError::Invalid("duplicate draft owner"));
         }
     }
-    let mut sessions = HashSet::new();
+    // A session holds several acknowledged attempts but at most one that is
+    // not yet acknowledged, and never both a creation and an attempt.
+    let mut sessions = std::collections::HashMap::new();
     let mut messages = HashSet::new();
     let mut parts = HashSet::new();
     for (key, attempt) in &snapshot.attempts {
@@ -784,25 +1006,26 @@ fn validate_snapshot(snapshot: &JournalSnapshot) -> Result<(), JournalError> {
             key.runtime.as_str().len() + key.session.as_str().len(),
         )?;
         charge(&mut size, attempt.draft.text.len())?;
-        charge(&mut size, attempt.prompt.text.len())?;
-        charge(&mut size, attempt.prompt.message_id.as_str().len())?;
         identifier(key.runtime.as_str())?;
         identifier(key.session.as_str())?;
         Owner::capture(&attempt.owner).into_key()?;
         validate_draft(&attempt.draft)?;
-        identifier(attempt.prompt.message_id.as_str())?;
+        validate_prompt(&mut size, &key.runtime, &attempt.prompt, &mut messages)?;
+        let unacknowledged = sessions.entry(key).or_insert(0usize);
+        if attempt.admission != Admission::Admitted {
+            *unacknowledged += 1;
+        }
         if attempt.owner.runtime() != &key.runtime
             || attempt.owner.target() != &DraftTarget::Session(key.session.clone())
-            || !sessions.insert(key)
-            || !messages.insert((&key.runtime, &attempt.prompt.message_id))
+            || *unacknowledged > 1
         {
             return Err(JournalError::Invalid(
                 "invalid or duplicate attempt owner or identity",
             ));
         }
-        if attempt.prompt.text != attempt.draft.text || attempt.prompt.text.trim().is_empty() {
+        if attempt.prompt.text != attempt.draft.text {
             return Err(JournalError::Invalid(
-                "prompt must match the captured nonempty draft",
+                "prompt must match the captured draft",
             ));
         }
         if attempt.origin != SendOrigin::Existing {
@@ -813,19 +1036,6 @@ fn validate_snapshot(snapshot: &JournalSnapshot) -> Result<(), JournalError> {
                 attempt.prompt.agent.clone(),
             )
             .map_err(|_| JournalError::Invalid("invalid created-session send owner"))?;
-        }
-        if let Some(model) = &attempt.prompt.model {
-            charge(&mut size, model.provider_id.len() + model.model_id.len())?;
-            identifier(&model.provider_id)?;
-            identifier(&model.model_id)?;
-            if let Some(variant) = &model.variant {
-                charge(&mut size, variant.len())?;
-                identifier(variant)?;
-            }
-        }
-        if let Some(agent) = &attempt.prompt.agent {
-            charge(&mut size, agent.len())?;
-            identifier(agent)?;
         }
         let [part] = attempt.optimistic.parts.as_slice() else {
             return Err(JournalError::Invalid("expected one optimistic text part"));
@@ -857,39 +1067,22 @@ fn validate_snapshot(snapshot: &JournalSnapshot) -> Result<(), JournalError> {
         }
     }
     let mut sources = HashSet::new();
+    let mut created = HashSet::new();
     for (key, attempt) in &snapshot.creations {
         charge_owner(&mut size, &attempt.source)?;
-        charge(
-            &mut size,
-            attempt.draft.text.len() + attempt.prompt.text.len() + attempt.project.len(),
-        )?;
+        charge(&mut size, attempt.draft.text.len() + attempt.project.len())?;
         Owner::capture(&attempt.source).into_key()?;
         validate_draft(&attempt.draft)?;
         identifier(&attempt.project)?;
-        identifier(attempt.prompt.message_id.as_str())?;
-        if let Some(model) = &attempt.prompt.model {
-            identifier(&model.provider_id)?;
-            identifier(&model.model_id)?;
-            charge(&mut size, model.provider_id.len() + model.model_id.len())?;
-            if let Some(variant) = &model.variant {
-                identifier(variant)?;
-                charge(&mut size, variant.len())?;
-            }
-        }
-        if let Some(agent) = &attempt.prompt.agent {
-            identifier(agent)?;
-            charge(&mut size, agent.len())?;
-        }
+        validate_prompt(&mut size, &key.runtime, &attempt.prompt, &mut messages)?;
         if attempt.source.runtime() != &key.runtime
             || !matches!(attempt.source.target(), DraftTarget::NewSession(_))
             || attempt.request.id() != &key.session
             || attempt.request.directory() != attempt.source.directory()
-            || !sessions.insert(key)
+            || sessions.contains_key(key)
+            || !created.insert(key)
             || (attempt.phase != CreationPhase::Deleted && !sources.insert(&attempt.source))
-            || !messages.insert((&key.runtime, &attempt.prompt.message_id))
-            || !attempt.prompt.message_id.as_str().starts_with("msg_")
             || attempt.prompt.text != attempt.draft.text
-            || attempt.prompt.text.trim().is_empty()
             || attempt.created < 0
             || attempt.prompt.delivery.is_some()
             || attempt.prompt.model.is_none()
@@ -912,6 +1105,102 @@ fn validate_snapshot(snapshot: &JournalSnapshot) -> Result<(), JournalError> {
         }
     }
     Ok(())
+}
+
+/// Bounds and identity checks of one stored prompt. Every prompt and context
+/// ID is unique within its runtime across all attempts and creations.
+fn validate_prompt<'a>(
+    size: &mut usize,
+    runtime: &'a RuntimeId,
+    prompt: &'a Prompt,
+    messages: &mut HashSet<(&'a RuntimeId, &'a MessageId)>,
+) -> Result<(), JournalError> {
+    if !prompt.is_well_formed() {
+        return Err(JournalError::Invalid("malformed prompt"));
+    }
+    charge(size, prompt.text.len() + prompt.message_id.as_str().len())?;
+    if prompt.text.len() > MAX_TEXT {
+        return Err(JournalError::Invalid("text size limit exceeded"));
+    }
+    identifier(prompt.message_id.as_str())?;
+    if !messages.insert((runtime, &prompt.message_id)) {
+        return Err(JournalError::Invalid("duplicate prompt identity"));
+    }
+    if let Some(model) = &prompt.model {
+        charge(size, model.provider_id.len() + model.model_id.len())?;
+        identifier(&model.provider_id)?;
+        identifier(&model.model_id)?;
+        if let Some(variant) = &model.variant {
+            charge(size, variant.len())?;
+            identifier(variant)?;
+        }
+    }
+    if let Some(agent) = &prompt.agent {
+        charge(size, agent.len())?;
+        identifier(agent)?;
+    }
+    let parts = &prompt.parts;
+    if parts.files.len() + parts.agents.len() + parts.skills.len() + parts.context.len()
+        > MAX_ENTRIES
+    {
+        return Err(JournalError::Invalid("entry count limit exceeded"));
+    }
+    for file in &parts.files {
+        charge(size, file.uri.len())?;
+        if file.uri.len() > MAX_URI || file.uri.chars().any(char::is_control) {
+            return Err(JournalError::Invalid("attachment reference limit exceeded"));
+        }
+        if let Some(name) = &file.name {
+            charge(size, name.len())?;
+            identifier(name)?;
+        }
+    }
+    for agent in &parts.agents {
+        charge(size, agent.name.len())?;
+        identifier(&agent.name)?;
+        if let Some(mention) = &agent.mention {
+            charge(size, mention.text.len())?;
+            if mention.text.len() > MAX_ID {
+                return Err(JournalError::Invalid("mention size limit exceeded"));
+            }
+        }
+    }
+    for skill in &parts.skills {
+        charge(size, skill.id.len())?;
+        identifier(&skill.id)?;
+    }
+    validate_metadata(size, parts.metadata.as_ref())?;
+    for item in &parts.context {
+        charge(size, item.id.as_str().len() + item.text.len())?;
+        identifier(item.id.as_str())?;
+        if item.text.len() > MAX_TEXT {
+            return Err(JournalError::Invalid("text size limit exceeded"));
+        }
+        if let Some(description) = &item.description {
+            charge(size, description.len())?;
+            if description.len() > MAX_TEXT {
+                return Err(JournalError::Invalid("text size limit exceeded"));
+            }
+        }
+        validate_metadata(size, item.metadata.as_ref())?;
+        if !messages.insert((runtime, &item.id)) {
+            return Err(JournalError::Invalid("duplicate context identity"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_metadata(size: &mut usize, metadata: Option<&Metadata>) -> Result<(), JournalError> {
+    let Some(metadata) = metadata else {
+        return Ok(());
+    };
+    let mut bytes = BoundedBytes(Vec::new());
+    serde_json::to_writer(&mut bytes, metadata)
+        .map_err(|_| JournalError::Invalid("metadata size limit exceeded"))?;
+    if bytes.0.len() > MAX_METADATA {
+        return Err(JournalError::Invalid("metadata size limit exceeded"));
+    }
+    charge(size, bytes.0.len())
 }
 
 fn charge(size: &mut usize, additional: usize) -> Result<(), JournalError> {

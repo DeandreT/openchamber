@@ -6,7 +6,7 @@ lifetime to the `Workspace` entity. Without a configured server the window
 runs on deterministic synthetic data from the core and makes no network or
 provider calls. With `OPENCHAMBER_NATIVE_SERVER` it reads one OpenChamber
 server through `openchamber-native-transport`. Existing selected sessions accept
-text prompts and interruption through that server. A new-session draft creates
+prompts, steering while busy and interruption through that server. A new-session draft creates
 a root session in its selected registered project before sending its first text
 prompt. Attachments and worktree creation remain separate workflows.
 
@@ -17,6 +17,10 @@ prompt. Attachments and worktree creation remain separate workflows.
   mutation tasks. `request_dock.rs` draws one nonmodal permission-priority panel
   above the composer. `form_input.rs` owns retained typed drafts and field widgets;
   `form_copy.rs` exports the form's content through explicit clipboard actions.
+- `permission_modes.rs` owns the composer's permission shield: the server's
+  policy projection, a new-session draft's own choice, mode writes and the
+  presentation holds around `BlockingRequests`. The server's
+  `permission-auto-accept` runtime is the only responder.
 - `workspace.rs` owns the application state: the global `SessionIndex`, the
   topology (projects, worktrees, Chats roots), lifecycle ordering, live
   status, sidebar presentation state, the selected session, one retained
@@ -26,10 +30,11 @@ prompt. Attachments and worktree creation remain separate workflows.
 - `server_sync.rs` is the workspace's connected behavior: the connection
   sequence, global session, status and topology reads, history reads and live
   event delivery.
-- `session_mutations.rs` owns selected-session text submission and named-session
-  abort orchestration. `send_attempt.rs` retains the captured runtime, session,
-  draft owner, text, selection, resolved model/variant and agent until an
-  authoritative identity or definite rejection settles the attempt.
+- `session_mutations.rs` owns selected-session prompt submission, steering and
+  named-session abort orchestration. `send_attempt.rs` retains, per attempt,
+  the captured runtime, session, draft owner, prompt with its parts and context,
+  selection, resolved model/variant, agent and delivery until an authoritative
+  identity or definite rejection settles it. A session can hold several.
   `message_id.rs` produces the pinned OpenCode `msg_` identity layout. Its
   randomized suffix is a uniqueness aid and carries no authentication authority.
 - `session_creation.rs` owns selected-project root-session creation, exact-ID
@@ -38,16 +43,29 @@ prompt. Attachments and worktree creation remain separate workflows.
   original prompt configuration. `session_id.rs` generates OpenCode's descending
   `ses_` identities using Unix milliseconds and the pinned 48-bit prefix layout.
 - `mutation_journal.rs` owns the private versioned snapshot of drafts and pending
-  sends and creations. Version 2 reads version 1 without losing its drafts or
-  sends; unsupported or malformed snapshots grant no writer.
+  sends and creations. Version 4 stores whole prompts: text, attachment
+  references, agent and skill references, metadata, the ordered context items
+  with their IDs, the prompt ID and delivery. Versions 1 to 3 load as prompts
+  without parts. Unsupported or malformed snapshots grant no writer.
   `journal_worker.rs` holds its exclusive file lock and serializes disk I/O
   on one thread, coalescing queued snapshots while preserving save barriers.
   `state_persistence.rs` hydrates before editing, schedules draft saves, waits for
   durable preparation before a POST, and drains the last snapshot on normal close.
-- `send_recovery.rs` observes retained IDs through inbox and history reads.
+- `send_recovery.rs` observes every step of one retained attempt (its context
+  items and its prompt) through inbox and history reads.
   `recovery_view.rs` shows pending text separately from current typing, with
   Check status and Retry same message. A retry performs a fresh observation and
   reuses the captured request identity and configuration.
+- `session_menu.rs` draws a session row's menu (the More button and a
+  secondary click open the same items), the inline rename field and the
+  archive/delete confirmation. `session_management.rs` runs rename, pin,
+  work state, archive, restore and delete against the captured runtime and
+  reports outcomes as notifications, with Undo after an archive.
+  `archive_view.rs` is the archive page the toolbar's Archive button opens in
+  place of the chat; it lists archived sessions with Restore and Delete.
+  Copy ID, AI rename, export, worktree moves, folders, keep-warm, side panel
+  and run overview are not ported, nor the archive page's project buckets,
+  search, dates and archived worktrees.
 - `connection.rs` holds the configured server, the connection state the views
   explain and the tasks of the current connection attempt.
 - `network.rs` owns the Tokio runtime. GPUI tasks await `NetworkTask`s, and
@@ -191,6 +209,55 @@ prompt. Attachments and worktree creation remain separate workflows.
   read. Initial connection generations and event-stream reconnections trigger
   reads; ordinary renders do not retry completed failures. OpenCode event replay
   does not replay routing readiness, so resumed connections also refresh it.
+- The permission shield shows the selected session's resolved mode, or the
+  new-session draft's own choice, else the server's `permissionDefaultMode`. It
+  cycles Ask, Safety, Auto, skipping Safety unless `/api/routing` reports the
+  safety net (`available && jevAvailable`). A draft's choice changes only the
+  client. A session's choice is a PUT whose answered snapshot is applied; nothing
+  changes optimistically and a failure keeps the last policy and shows the
+  web's toggle-failed notification. Synthetic data leaves the shield inert.
+- A session in an isolated space (`/spaces/<id>`, as `spaceIdOfDirectory`
+  decides) has its mode in that space's own policy. The web reads it with
+  `refreshSpaceModes` when the space's permission stream connects; native has
+  no space streams, so it treats the mode as unknown: the shield shows Ask and
+  stays inert, and the host's policy never holds the session's requests. A
+  draft created in a space still writes its choice, routed to the space by the
+  PUT's directory header; that answer is the space's policy and is not applied.
+- The policy is read once per connection generation and on every event-stream
+  connection, resumed or not, because policy broadcasts are not replayed. A
+  failed read keeps the last valid policy. Reads and writes carry an operation
+  generation; a runtime switch bumps it, so completions from the previous runtime
+  are dropped while writes already sent still finish. A snapshot without a
+  revision applies only from the newest operation.
+- A draft's explicit choice moves to its creation at submit. After the session is
+  verified, the handoff starts the mode PUT with the creation's captured client,
+  beside the first send: the PUT neither waits for nor delays the prompt. Its
+  failure is logged, as the web's `finishDraftSession` does, and the session then
+  shows the server's policy, normally the Settings default the server wrote. The
+  choice is in memory only: an app restart before the handoff leaves the server's
+  default in place.
+- A fresh `permission.asked` for a session whose mode the server answers without
+  the user (Auto, or Safety with the safety net) is held: it stays in the
+  request store but leaves `visible_requests` and `requests_for_send`, so no card
+  shows and a text send does not reject it. `left-for-user` reveals it, a
+  terminal event forgets it, and an early report shows its request on arrival.
+  A request already in the store is never hidden again. Every stale reconnect,
+  resumed or not, a reconcile and a runtime reset release every hold:
+  `left-for-user` bypasses the hub's replay buffer, so a resumed replay may
+  still have lost it. Because the server sends `ready` before its replay, a
+  stale reconnect also opens a replay window. It closes, showing every
+  request held inside it, once both the reconnect's policy read has settled
+  (success or failure) and the event named by `ready`'s `replayThrough` has
+  been applied. The read is a separate request and can settle mid-replay, so
+  it does not mark the end alone. With no `replayThrough` (empty replay or
+  `replayReset`) the read alone closes it; a second gap or a runtime reset
+  supersedes an open window. A session move is no gap and keeps every hold. Within one
+  event batch, session changes apply before each request event, so a new
+  subagent's first request is decided on its parent's mode. After any applied snapshot (broadcast, read or write)
+  and when a routing read loses the safety net, holds of sessions the server no
+  longer answers without the user are released, because the server answers
+  those requests `ignored` and never reports them left for the user. Native
+  never answers a request because of the shield.
 - A pending creation's selection is journaled once per destination, including
   choices made after opening that session from the sidebar. Handoff always retires
   the staging marker and preserves the destination's newer choices. The captured
@@ -253,6 +320,33 @@ prompt. Attachments and worktree creation remain separate workflows.
   AccessKit Click handler. Controls inside a Markdown custom block render
   without the workspace's context; they install both handlers themselves and
   reach the workspace through an action.
+- Session management keys every in-flight change by runtime and session.
+  Rename, work state, archive, restore and delete change nothing until the
+  server confirms; their results go through `apply_server_events` as the
+  matching live event would, so the index's mutation revisions keep a
+  delayed list read from undoing them and a deletion runs the same cleanup
+  as `session.deleted`. A completion for another runtime edits nothing.
+  Pins change at once through `PendingPins`; each menu item names its
+  target state, so a stale menu asking for what the row already shows writes
+  nothing. Writes for one session run in click order and the overlay stays
+  until the last settles, so a failure shows the server's state again.
+  Every session notification's text is mirrored into the `session-notice`
+  status node, because the toolkit's notifications are not exposed to
+  accessibility clients. A rename cannot start on a session whose previous
+  rename is in flight. The deletion dialog's Never ask follows the newest
+  click at once, as the web's settings store does; saves run one at a time
+  with the newest choice, and a failed save returns it to the stored choice.
+  An Undo from another runtime reports a restore error and closes its toast.
+  A vanished selection under the open archive page closes without navigating
+  or moving focus. Archive takes the active subtree and
+  delete the whole subtree, resolved when the dialog opens; each session
+  succeeds or fails alone and the notification counts both. An archived or
+  deleted selection closes without closing an open archive page; Undo
+  restores exactly what the archive moved, reports only failures, reopens
+  that session only while nothing else is selected, and keeps its toast with
+  an error when the restore cannot start. A rename commits a trimmed, changed, nonempty title on
+  Enter, the Save button or a press outside the field; Escape cancels, and
+  neither key acts while an IME composition is active.
 - Timing markers end when the frame that shows the result paints. A zero-size
   canvas at the end of the workspace tree emits them, so they measure the
   client's own work and do not wait for compositor presentation.
@@ -320,8 +414,23 @@ prompt. Attachments and worktree creation remain separate workflows.
   runtime. A completion restores only its captured draft owner. Closing the
   window cancels local requests without stopping the server or its turn. Before
   contacting the server, a preparation barrier durably records the attempt.
-- A runtime/session permits one in-flight send or abort chain. Other sessions
-  proceed independently. A send clears its draft and appends one optimistic user
+- A runtime/session runs one send chain at a time, so selection, context and
+  prompt requests of two sends never interleave, and at most one interrupt.
+  Stop may start while a send is still saving or rejecting the requests it
+  supersedes, as the web client's Stop is never gated; that send then posts
+  nothing, returns to its draft (a retry stays uncertain) and says so, even
+  when the interrupt answers before that send finishes saving. After
+  a send's first selection or admission request leaves, Stop waits for it and
+  says so with the same error notice as a failed stop. Other sessions proceed
+  independently.
+- A session holds any number of acknowledged attempts and at most one that is
+  not (preparing, sending or uncertain). A new identity begins only when every
+  retained attempt is acknowledged, so admission order is send order and an
+  uncertain delivery still blocks new text. While the session is busy a plain
+  send goes through only to supersede open requests (queueing is a separate
+  path); a steer (`Delivery::Steer`) goes through and only while busy, as in
+  the web composer. Abort can run beside acknowledged attempts.
+- A send clears its draft and appends one optimistic user
   message with its exact client ID. It never creates an assistant or changes
   live status. A definite failure removes only that optimistic message and
   restores its text and selection. Newer owner text remains first, followed by
@@ -347,6 +456,31 @@ prompt. Attachments and worktree creation remain separate workflows.
   remains a separate draft, even when its text equals the previous prompt.
 - A failed lookup never establishes absence. NotObserved permits only an explicit
   same-ID retry; failed retries retain uncertainty about the original request.
+  A retry observes again and resends only the missing steps in order: the
+  context after the observed leading run, then the prompt. Context observed
+  after a missing item marks the attempt out of order, with no retry. Recovery
+  checks, tasks and rows are keyed by runtime, session and message ID.
+- A deleted session, from this client or a `session.deleted` event, takes its
+  descendants' and its own send state with it: every attempt and its checks,
+  any creation entry and its checks, and its drafts, in one journal save, as
+  the web client's confirmed-deletion cleanup does. The composer stops saving
+  under that session. A chain still running finds its attempt gone, releases
+  its slot and changes nothing else.
+- An attempt nothing can settle offers Move to composer on its row: one whose
+  context is out of order, or whose retry the server definitely refused again
+  (a 400, 401, 403 or 404, or expired authentication; for example a saved
+  model that no longer exists). A lost answer on a retry shows the unknown
+  notice and checks again instead. Never while a check, retry,
+  interrupt or creation lookup runs, and never for an acknowledged attempt,
+  which resolves by its echo. The action appends the prompt's text after any
+  newer text in its original draft, drops the optimistic message and removes
+  the attempt in one journal snapshot, so a restart shows either the attempt
+  or the restored draft. It sends nothing.
+- Journal validation rejects a whole snapshot that breaks a rule: two
+  unacknowledged attempts in one session, a creation and an attempt for one
+  session, a prompt or context ID reused within a runtime, a malformed prompt,
+  or an attachment reference over 64 KiB (inline data must be uploaded first)
+  or metadata over 64 KiB. A rejected file is left as it was.
   An exact-ID history lookup applies its authoritative message to the matching
   visited transcript before clearing recovery. A failed full-history refresh
   preserves that message. Lookup results preserve target-message changes and
@@ -412,6 +546,22 @@ outcome of a particular response attempt. The store keeps uncertainty through
 list refreshes and releases it only after an exact owner/ID read. A failed exact
 read keeps the card locked and leaves unrelated requests actionable.
 
+### Why held requests stay in the request store
+
+The web keeps a held `permission.asked` out of its directory store and replays
+the event later. Native holds it as presentation metadata over the existing
+`PendingRequests` owner instead: list reads, settlement and tombstones keep one
+source of truth, and revealing a request needs no replay path. A second pending
+map would let the two disagree about whether a request exists.
+
+### Why a draft's mode is not journaled
+
+The journal holds what must be replayed to finish a user's send. A permission
+mode is server policy with a server-side default; losing an explicit draft choice
+to a restart leaves a valid, visible mode, while adding it would change the
+journal format for every creation. The choice lives beside the creation in memory
+and is written at the handoff.
+
 ### Why Markdown links use an application handler
 
 Kit's default handler sends every link directly to the platform. The application
@@ -419,14 +569,23 @@ handler keeps session navigation inside its owning runtime and applies the web
 client's scheme exclusions and explicit application-link confirmation. A missing
 native route cannot become an external launch.
 
-### Why an admission gate remains after acknowledgement
+### Why an unresolvable attempt goes back to the composer and not away
 
-The client retains one attempt per runtime/session until authoritative message
-content replaces its optimistic item. It blocks a new identity while delivery is
-uncertain; an explicit retry uses the same saved ID. Abort can run after the send
-request finishes and leaves running status to the live channel. New-session
-creation is owned by `session_creation.rs`; attachments, queue controls and
-selection controls are outside this module's text-only contract.
+An uncertain attempt blocks new text in its session and survives restarts.
+When no observation or retry can ever settle it, the user needs a way out, but
+deleting it would lose text the server may never have seen. Returning it to
+its draft keeps the text and lets the user decide whether to send it again.
+
+### Why acknowledged attempts no longer block the next send
+
+Each attempt stays until authoritative content replaces its optimistic item,
+because an echo can lag its admission. Blocking every send on that echo, as one
+slot per session did, would make steering impossible while the first prompt's
+turn runs. An acknowledged attempt is already ordered on the server, so only an
+uncertain or in-flight one still blocks a new identity; an explicit retry uses
+the same saved ID. Abort can run after the send request finishes and leaves
+running status to the live channel. New-session creation is owned by
+`session_creation.rs`; queue controls are outside this module.
 
 ### Why creation has a durable handoff to ordinary sends
 
@@ -564,6 +723,16 @@ already manages the window then, it grows the window by the band; otherwise it
 takes the requested size as the window with the band and shrinks the content
 by 40 pixels. No single request is right in both orders, so the window
 corrects itself from the measured content size until the compositor settles.
+
+### Why only pins are optimistic
+
+The web client flips a pin before the server answers and waits for every
+other session change. A pin is a reversible display preference, while an
+archive or delete removes the row and closes the open session; showing those
+before confirmation would need a rollback that restores selection and
+scroll. The pending pin is an overlay outside the index, so a live event
+carrying older metadata cannot flip the row back while the write is in
+flight, and settling the overlay can never leave a stale value behind.
 
 ### Why `.test_support()` on rows and controls
 

@@ -208,7 +208,7 @@ fn retry_observation_does_not_cancel_permission_arriving_after_activation(cx: &m
     cx.update_window(window, |_, window, cx| {
         workspace.update(cx, |this, cx| {
             configure_send(this, &key, window, cx);
-            this.retry_recovery(&key, window, cx);
+            this.retry_recovery(&key, &this.recovery_message(&key, cx), window, cx);
         })
     })
     .expect("window");
@@ -249,7 +249,8 @@ fn retry_observation_does_not_cancel_permission_arriving_after_activation(cx: &m
         assert_eq!(this.visible_requests().len(), 1);
         assert_eq!(
             this.send_attempts
-                .attempt(&key)
+                .session(&key)
+                .next()
                 .expect("retained prompt")
                 .prompt
                 .text,
@@ -259,7 +260,7 @@ fn retry_observation_does_not_cancel_permission_arriving_after_activation(cx: &m
     // A new explicit retry captures the now-visible permission independently.
     cx.update_window(window, |_, window, cx| {
         workspace.update(cx, |this, cx| {
-            this.retry_recovery(&key, window, cx);
+            this.retry_recovery(&key, &this.recovery_message(&key, cx), window, cx);
         })
     })
     .expect("window");
