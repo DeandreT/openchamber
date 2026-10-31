@@ -26,7 +26,7 @@ use openchamber_native_transport::error::TransportError;
 use openchamber_native_transport::event::ServerEvent;
 use openchamber_native_transport::stream::{EventStream, StreamItem};
 
-use crate::authentication::{ConnectOutcome, connect_server};
+use crate::authentication::{ConnectOutcome, RememberedCredential, connect_server};
 use crate::code_card::CodeWrap;
 use crate::code_wrap_state::CodeWrapState;
 use crate::connection::{ConnectionFailure, ConnectionState};
@@ -63,10 +63,12 @@ impl Workspace {
         let generation = connection.restart();
         let config = connection.take_attempt_config();
         let target_endpoint = config.endpoint.clone();
+        let lease = self.authentication.store.capture(config.endpoint.as_str());
         let task = connection.network.run(connect_server(
             config,
             self.authentication.remembered.clone(),
             self.authentication.store.clone(),
+            lease,
         ));
         connection.connect_task = Some(cx.spawn_in(window, async move |this, cx| {
             let outcome = task.await;
@@ -115,9 +117,19 @@ impl Workspace {
                     connection.config.endpoint.as_str(),
                     identity.server_id.as_deref().unwrap_or_default()
                 ));
-                self.authentication.remembered =
-                    CredentialOwner::new(&connection.config.endpoint, &identity)
-                        .map(|owner| (owner, verified.credential));
+                if let Some(owner) = CredentialOwner::new(&connection.config.endpoint, &identity)
+                    && let Some(lease) = verified.lease
+                    && self.authentication.store.is_current(&lease)
+                {
+                    self.authentication.remembered.insert(
+                        connection.config.endpoint.as_str().to_owned(),
+                        RememberedCredential {
+                            owner,
+                            credential: verified.credential,
+                            lease,
+                        },
+                    );
+                }
                 self.authentication.visible = false;
                 self.authentication.submitting = false;
                 self.authentication.failure = None;

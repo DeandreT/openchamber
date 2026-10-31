@@ -54,6 +54,11 @@ impl Network {
         self.runtime().handle().clone()
     }
 
+    /// Whether any captured network work still needs this executor.
+    pub(crate) fn is_idle(&self) -> bool {
+        self.runtime().metrics().num_alive_tasks() == 0
+    }
+
     fn runtime(&self) -> &Runtime {
         self.runtime
             .as_ref()

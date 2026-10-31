@@ -108,6 +108,17 @@ def qualify(args):
                     raw = response.read()
                     return json.loads(raw) if raw else None
 
+            def turn_gate(held=None):
+                body = None if held is None else json.dumps({"held": held}).encode()
+                control = urllib.request.Request(
+                    f"http://127.0.0.1:{server.fixture_port}/__fixture/turn-gate", data=body,
+                    method="GET" if held is None else "PUT", headers={"Content-Type": "application/json"})
+                with urllib.request.urlopen(control, timeout=5) as response:
+                    result = json.load(response)
+                if not isinstance(result, dict) or not isinstance(result.get("held"), bool) or type(result.get("waiting")) is not int or result["waiting"] < 0:
+                    raise RuntimeError("the fixture returned a malformed turn gate")
+                return result
+
             def launch(label):
                 log = cleanup.enter_context((args.output / f"native-{label}.log").open("w"))
                 client = NativeClient(args.binary, env, args.scale, 1280, 800, stderr=log)
@@ -186,18 +197,20 @@ def qualify(args):
 
             def start_turn(text):
                 wait_for("the previous turn did not end", lambda: not active(), timeout=90)
+                turn_gate(True)
                 type_text(text)
                 clients[-1].key("Return")
                 wait_for("the turn did not start", active, timeout=30)
                 wait_for("the prompt was not admitted", lambda: text in texts(), timeout=30)
+                wait_for("the fixture did not hold the busy turn", lambda: turn_gate()["waiting"] > 0, timeout=30)
 
             def enter(text):
                 type_text(text)
                 clients[-1].key("Return")
 
             def ids_of(label):
-                order = queued_ids(snapshot(), session)
-                return dict(zip(queued(), order)).get(label)
+                current = snapshot()
+                return dict(zip(queued_contents(current, session), queued_ids(current, session))).get(label)
 
             def drag(source, target):
                 clients[-1]._activate()
@@ -258,12 +271,26 @@ def qualify(args):
             def steer():
                 if not active():
                     raise RuntimeError("the base turn ended before the steer")
+                previous_inbox = {item['id'] for item in request(f'/api/session/{quoted}/inbox')['data']}
                 beta = ids_of("Queued beta")
                 clients[-1].click(f"queued-send-{beta}")
-                wait_for("the steer was not admitted", lambda: "Queued beta" in texts(), timeout=30)
+                admitted = []
+                def observed_admission():
+                    admitted[:] = [item for item in request(f'/api/session/{quoted}/inbox')['data']
+                                   if item.get('id') not in previous_inbox and item.get('type') == 'user'
+                                   and item.get('sessionID') == session and item.get('delivery') == 'steer']
+                    return len(admitted) == 1
+                wait_for("the steer was not admitted to the inbox", observed_admission, timeout=30)
                 if queued():
                     raise RuntimeError("the sent message stayed queued")
-                return {"activeAtAdmission": active()}
+                active_at_admission = active()
+                if not active_at_admission:
+                    raise RuntimeError('the base turn ended before steer admission')
+                turn_gate(False)
+                wait_for('the admitted steer did not reach history', lambda: any(
+                    item.get('id') == admitted[0]['id'] and item.get('text') == 'Queued beta'
+                    for item in request(f'/api/session/{quoted}/message?limit=200')['data']), timeout=60)
+                return {"activeAtAdmission": active_at_admission, "messageID": admitted[0]['id']}
 
             def queue_restart():
                 start_turn("Restart base turn")
@@ -275,6 +302,7 @@ def qualify(args):
                 select()
                 wait_for("the strip did not return after restart", lambda: "queued-strip" in ids(), timeout=20)
                 clients[-1].screenshot(args.output / "queue-after-restart.png")
+                turn_gate(False)
                 # Delivery: the server sends it when the turn ends.
                 wait_for("the server did not deliver the queue", lambda: "Queued across restart" in texts(), timeout=120)
                 wait_for("the delivered message stayed queued", lambda: queued() == [], timeout=20)

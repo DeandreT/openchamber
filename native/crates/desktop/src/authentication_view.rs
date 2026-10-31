@@ -250,7 +250,22 @@ impl Workspace {
                                     .text_center()
                                     .text_color(palette.error)
                                     .child(message),
-                            ),
+                            )
+                            .child(on_activate(
+                                gpui_kit::base::Button::new("authentication-switch-instance")
+                                    .accessibility_id("authentication-switch-instance")
+                                    .accessibility_label(
+                                        strings.get("desktopHostSwitcher.actions.switchInstance"),
+                                    )
+                                    .h(px(28.0))
+                                    .px(px(8.0))
+                                    .text_color(palette.muted_foreground)
+                                    .child(
+                                        strings.get("desktopHostSwitcher.actions.switchInstance"),
+                                    ),
+                                cx,
+                                |this, window, cx| this.open_host_picker(window, cx),
+                            )),
                     ),
             )
     }

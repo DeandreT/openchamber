@@ -44,6 +44,13 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  'desktopHostSwitcher.error.invalidFile': 'Los datos de las instancias guardadas no son válidos. Restaura hosts.json y actualiza.',
+  'desktopHostSwitcher.error.invalidLabel': 'Usa una etiqueta de hasta 256 caracteres en una sola línea.',
+  'desktopHostSwitcher.error.duplicateUrl': 'Esta dirección de servidor ya está guardada.',
+  'desktopHostSwitcher.error.profileLimit': 'Hay demasiadas instancias guardadas. Elimina una e inténtalo de nuevo.',
+  'desktopHostSwitcher.error.profilesChanged': 'Las instancias guardadas cambiaron en otro lugar. Actualiza e inténtalo de nuevo.',
+  'desktopHostSwitcher.error.profilesBusy': 'Otra ventana está guardando instancias. Inténtalo de nuevo.',
+  'desktopHostSwitcher.error.failedToForget': 'No se pudo eliminar el inicio de sesión guardado. Desbloquea el almacén de credenciales e inténtalo de nuevo.',
   'sessionAuth.error.savedSignInUnavailable': 'El inicio de sesión guardado no está disponible. Introduce tu contraseña.',
   'sessionAuth.error.credentialUpdateFailed': 'Sesión iniciada. No se pudieron actualizar las credenciales guardadas en este dispositivo.',
   "opencodeCompatibility.bundled": "OpenCode viene incluido en OpenChamber. Actualiza OpenChamber para obtener OpenCode v2.",

@@ -43,6 +43,13 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  'desktopHostSwitcher.error.invalidFile': 'بيانات النسخ المحفوظة غير صالحة. استعد ملف hosts.json ثم حدّث.',
+  'desktopHostSwitcher.error.invalidLabel': 'استخدم تسمية من سطر واحد لا تزيد على 256 حرفًا.',
+  'desktopHostSwitcher.error.duplicateUrl': 'عنوان هذا الخادم محفوظ بالفعل.',
+  'desktopHostSwitcher.error.profileLimit': 'عدد النسخ المحفوظة كبير جدًا. احذف واحدة وحاول مجددًا.',
+  'desktopHostSwitcher.error.profilesChanged': 'تغيّرت النسخ المحفوظة في مكان آخر. حدّث وحاول مجددًا.',
+  'desktopHostSwitcher.error.profilesBusy': 'تقوم نافذة أخرى بحفظ النسخ. حاول مجددًا.',
+  'desktopHostSwitcher.error.failedToForget': 'تعذّر حذف تسجيل الدخول المحفوظ. افتح مخزن بيانات الاعتماد وحاول مرة أخرى.',
   'sessionAuth.error.savedSignInUnavailable': 'تسجيل الدخول المحفوظ غير متاح. أدخل كلمة المرور.',
   'sessionAuth.error.credentialUpdateFailed': 'تم تسجيل الدخول. تعذّر تحديث بيانات الاعتماد المحفوظة على هذا الجهاز.',
   'opencodeCompatibility.bundled': 'يأتي OpenCode مضمّنًا مع OpenChamber. حدّث OpenChamber للحصول على OpenCode v2.',

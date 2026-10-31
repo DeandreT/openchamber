@@ -35,6 +35,7 @@ PyGObject with AT-SPI, `busctl`, `dbus-run-session`, `xsettingsd` and fontconfig
 | `native_git.py`, `git_http_remote.py` | Connected Git and Diff checks: staged and unstaged scopes, stage, unstage, confirmed discard, a stage failing on `index.lock`, commit, branches, push, fetch and pull as planned operations and a cancelled push. The fixture's bare remote is served through `git http-backend` on loopback, because the server plans network operations only for http, https and ssh remotes. |
 | `native_session_management.py` | Connected rename, pin, archive, restore and delete through the native session menu, with one injected write failure. |
 | `native_authentication.py`, `secret_service_fixture.py` | Password sign-in, secret accessibility, session-only and trusted restart, HTTP token revocation and retained drafts, against a protected real server and a private encrypted KDE Secret Service. |
+| `native_hosts.py` | Two isolated direct servers, saved profiles, default-host startup, runtime switching and per-server draft restoration. |
 | `native_terminal.py` | Connected terminal checks behind a proxy that records terminal commands and severs the terminal socket: create and close, Unicode and IBus input, keys, resize, bracketed and large paste, scrollback, reconnect pacing, exit, lifetime and cleanup. Capture programs in the terminal record the exact bytes the PTY received. |
 | `compare.py` | Pixel, row and geometry comparison. |
 | `png.py` | PNG reading and writing with the standard library. |
@@ -63,6 +64,13 @@ synthetic fixture data; the driver never reads or logs a stored client token.
 Socket fault proxies preserve the client's Host and Origin headers while
 routing TCP to their loopback upstream. Replacing Host alone makes a valid
 native origin fail the server's authenticated socket checks.
+Host selection assertions follow the session ID while topology moves its row
+from Chats to a project. A stale display-row key cannot establish a different
+session's selection. Saved-host checks use a private native profile directory;
+they never read or change the user's host list.
+Queue qualification holds its synthetic base turn through the provider's turn
+gate, then releases it for delivery checks. Assertions still observe the real
+server's queue, live activity and message admission.
 
 `seed` starts `scripts/perf/isolated-server.mjs` on an empty root with the
 fixture provider and creates fixed sessions through

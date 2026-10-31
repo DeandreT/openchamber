@@ -41,6 +41,49 @@ test('interaction models require opt-in and the requested tool, with HTTP errors
   });
 });
 
+test('a controlled think turn stays held until release and cleans up when aborted', async () => {
+  const server = await startFixtureProvider(0);
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const control = async (held) => {
+    const response = await fetch(`${origin}/__fixture/turn-gate`, held === undefined ? {} : {
+      method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ held }),
+    });
+    assert.equal(response.status, 200);
+    return response.json();
+  };
+  const turn = (signal) => fetch(`${origin}/v1/chat/completions`, {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ model: 'think-30s', stream: true, messages: [] }), signal,
+  });
+  try {
+    assert.deepEqual(await control(), { held: false, waiting: 0 });
+    await control(true);
+    const response = await turn(AbortSignal.timeout(5000));
+    assert.deepEqual(await control(), { held: true, waiting: 1 });
+    await control(false);
+    assert.equal((await frames(response)).map((frame) => frame.choices[0].delta.content ?? '').join(''), 'Done.');
+    assert.deepEqual(await control(), { held: false, waiting: 0 });
+
+    await control(true);
+    const controller = new AbortController();
+    const aborted = await turn(controller.signal);
+    assert.equal((await control()).waiting, 1);
+    controller.abort();
+    await assert.rejects(aborted.text());
+    for (let attempt = 0; attempt < 100 && (await control()).waiting; attempt++) {
+      await new Promise((done) => setTimeout(done, 10));
+    }
+    assert.equal((await control()).waiting, 0);
+    const invalid = await fetch(`${origin}/__fixture/turn-gate`, { method: 'PUT', body: 'null' });
+    assert.equal(invalid.status, 400);
+  } finally {
+    try { await control(false); } finally {
+      server.closeAllConnections();
+      await new Promise((done) => server.close(done));
+    }
+  }
+});
+
 test('interaction models emit exact calls, finish after a tool result, and reset each user turn', async () => {
   await withProvider(true, async (request) => {
     for (const name of ['shell', 'question']) {

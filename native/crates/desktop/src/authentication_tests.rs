@@ -103,6 +103,73 @@ fn trust_device_changes_through_pointer_and_keyboard_activation(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
+fn a_late_connection_after_forgetting_cannot_repopulate_the_token_cache(cx: &mut TestAppContext) {
+    cx.executor().allow_parking();
+    use crate::authentication::{ConnectOutcome, VerifiedConnection};
+    use crate::connection::{Connection, ServerConfig};
+    use openchamber_native_transport::client::ServerClient;
+    use openchamber_native_transport::credential::Credential;
+    use openchamber_native_transport::endpoint::Endpoint;
+    use openchamber_native_transport::identity::ServerIdentity;
+
+    let (window, workspace) = crate::workspace_tests::open(cx);
+    let endpoint = Endpoint::parse("http://127.0.0.1:1/").expect("endpoint");
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let lease = workspace
+                .authentication
+                .store
+                .capture(endpoint.as_str())
+                .expect("lease");
+            workspace
+                .authentication
+                .store
+                .invalidate_endpoint(endpoint.as_str())
+                .expect("forgotten");
+            workspace.connection = Some(
+                Connection::new(ServerConfig::for_endpoint(endpoint.clone())).expect("network"),
+            );
+            let credential = Credential::ClientToken("oc_client_late".into());
+            let client = ServerClient::new(endpoint.clone(), credential.clone()).expect("client");
+            workspace.finish_connect(
+                0,
+                Some(Ok(ConnectOutcome::Ready(Box::new(VerifiedConnection {
+                    client,
+                    credential,
+                    lease: Some(lease),
+                    identity: ServerIdentity {
+                        openchamber_version: "2.5.3".into(),
+                        runtime: "web".into(),
+                        server_id: Some("one".into()),
+                        api_version: 1,
+                        capabilities: Vec::new(),
+                    },
+                })))),
+                window,
+                cx,
+            );
+            assert!(
+                !workspace
+                    .authentication
+                    .remembered
+                    .contains_key(endpoint.as_str())
+            );
+            assert!(
+                workspace
+                    .connection
+                    .as_ref()
+                    .expect("connection")
+                    .client
+                    .is_some(),
+                "the open authenticated connection can finish"
+            );
+            workspace.connection = None;
+        });
+    })
+    .expect("window");
+}
+
+#[gpui_kit::test]
 fn http_revocation_locks_without_a_websocket_event_and_preserves_the_draft(
     cx: &mut TestAppContext,
 ) {

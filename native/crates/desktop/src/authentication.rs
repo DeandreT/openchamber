@@ -1,5 +1,6 @@
 //! Password entry, saved-token recovery and authentication ownership.
 
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use gpui_kit::component::input::{InputEvent, InputState};
@@ -11,7 +12,7 @@ use openchamber_native_transport::error::TransportError;
 use openchamber_native_transport::identity::{GLOBAL_EVENTS_CAPABILITY, ServerIdentity};
 
 use crate::connection::{ConnectionFailure, ConnectionState, ServerConfig};
-use crate::credential_store::{CredentialOwner, CredentialStore, StoreError};
+use crate::credential_store::{CredentialLease, CredentialOwner, CredentialStore, StoreError};
 use crate::workspace::Workspace;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -29,7 +30,7 @@ pub(crate) struct Authentication {
     pub(crate) failure: Option<ConnectionFailure>,
     pub(crate) storage_error: Option<StoreError>,
     pub(crate) store: CredentialStore,
-    pub(crate) remembered: Option<(CredentialOwner, Credential)>,
+    pub(crate) remembered: HashMap<String, RememberedCredential>,
     pub(crate) task: Option<Task<()>>,
     pub(crate) unlock_focus: FocusHandle,
     pub(crate) trust_focus: FocusHandle,
@@ -53,7 +54,7 @@ impl Authentication {
             failure: None,
             storage_error: None,
             store: CredentialStore::default(),
-            remembered: None,
+            remembered: HashMap::new(),
             task: None,
             unlock_focus: cx.focus_handle(),
             trust_focus: cx.focus_handle(),
@@ -67,6 +68,14 @@ pub(crate) struct VerifiedConnection {
     pub(crate) client: ServerClient,
     pub(crate) identity: ServerIdentity,
     pub(crate) credential: Credential,
+    pub(crate) lease: Option<CredentialLease>,
+}
+
+#[derive(Clone)]
+pub(crate) struct RememberedCredential {
+    pub(crate) owner: CredentialOwner,
+    pub(crate) credential: Credential,
+    pub(crate) lease: CredentialLease,
 }
 
 pub(crate) enum ConnectOutcome {
@@ -89,8 +98,9 @@ fn require_compatible(identity: &ServerIdentity) -> Result<(), TransportError> {
 /// Probe identity before reading or sending any remembered credential.
 pub(crate) async fn connect_server(
     config: ServerConfig,
-    remembered: Option<(CredentialOwner, Credential)>,
+    mut remembered: HashMap<String, RememberedCredential>,
     store: CredentialStore,
+    lease: Option<CredentialLease>,
 ) -> Result<ConnectOutcome, TransportError> {
     let anonymous = ServerClient::new(config.endpoint.clone(), Credential::None)?;
     let identity = anonymous.probe().await?;
@@ -107,6 +117,7 @@ pub(crate) async fn connect_server(
             client,
             identity,
             credential,
+            lease,
         })));
     } else {
         let status = anonymous.authentication_status().await?;
@@ -115,11 +126,16 @@ pub(crate) async fn connect_server(
                 client: anonymous.with_identity(&identity),
                 identity,
                 credential: Credential::None,
+                lease,
             })));
         }
-        let cached = remembered.filter(|(cached_owner, _)| Some(cached_owner) == owner.as_ref());
-        if let Some((_, credential)) = cached {
-            credential
+        let cached = remembered
+            .remove(config.endpoint.as_str())
+            .filter(|cached| {
+                Some(&cached.owner) == owner.as_ref() && store.is_current(&cached.lease)
+            });
+        if let Some(cached) = cached {
+            cached.credential
         } else if let Some(owner) = owner.clone() {
             match store.load(owner).await {
                 Ok(Some(credential)) => credential,
@@ -145,6 +161,7 @@ pub(crate) async fn connect_server(
             client,
             identity,
             credential,
+            lease,
         })))
     } else {
         // A definite rejection retires only this verified owner's saved token.
@@ -159,6 +176,25 @@ pub(crate) async fn connect_server(
 }
 
 impl Workspace {
+    pub(crate) fn clear_host_authentication(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.authentication.task = None;
+        self.authentication.retry_task = None;
+        self.authentication.retry_not_before = None;
+        self.authentication.visible = false;
+        self.authentication.submitting = false;
+        self.authentication.trust_device = false;
+        self.authentication.failure = None;
+        self.authentication.storage_error = None;
+        self.authentication.method = SignInMethod::Password;
+        self.authentication
+            .password
+            .update(cx, |input, cx| input.set_value("", window, cx));
+    }
+
     pub(crate) fn watch_authentication(
         &mut self,
         generation: u64,
@@ -240,7 +276,11 @@ impl Workspace {
         self.authentication.submitting = false;
         self.authentication.failure = Some(failure);
         self.authentication.storage_error = storage_error;
-        self.authentication.remembered = None;
+        if let Some(connection) = &self.connection {
+            self.authentication
+                .remembered
+                .remove(connection.config.endpoint.as_str());
+        }
         self.authentication.retry_task = None;
         self.authentication.retry_not_before = None;
         if let ConnectionFailure::AuthenticationRateLimited {
@@ -298,6 +338,7 @@ impl Workspace {
             LoginTrust::Session
         };
         let store = self.authentication.store.clone();
+        let lease = store.capture(config.endpoint.as_str());
         self.authentication.submitting = true;
         self.authentication.failure = None;
         let task = connection.network.run(async move {
@@ -310,9 +351,14 @@ impl Workspace {
             let client = ServerClient::new(config.endpoint.clone(), credential.clone())?
                 .with_identity(&identity);
             let storage_error = match CredentialOwner::new(&config.endpoint, &identity) {
-                Some(owner) if trust == LoginTrust::Device => {
-                    store.save(owner, credential.clone()).await.err()
-                }
+                Some(owner) if trust == LoginTrust::Device => match lease.clone() {
+                    Some(lease) => store
+                        .save_for_lease(owner, credential.clone(), lease)
+                        .await
+                        .err()
+                        .filter(|error| *error != StoreError::Superseded),
+                    None => Some(StoreError::Unavailable),
+                },
                 Some(owner) => store.remove(owner).await.err(),
                 None if trust == LoginTrust::Device => Some(StoreError::Unavailable),
                 None => None,
@@ -322,6 +368,7 @@ impl Workspace {
                     client,
                     identity,
                     credential,
+                    lease,
                 },
                 storage_error,
             ))

@@ -43,6 +43,13 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  'desktopHostSwitcher.error.invalidFile': 'Saved instance data is invalid. Restore hosts.json and refresh.',
+  'desktopHostSwitcher.error.invalidLabel': 'Use a label of up to 256 characters on one line.',
+  'desktopHostSwitcher.error.duplicateUrl': 'This server address is already saved.',
+  'desktopHostSwitcher.error.profileLimit': 'Too many saved instances. Remove one and try again.',
+  'desktopHostSwitcher.error.profilesChanged': 'Saved instances changed elsewhere. Refresh and try again.',
+  'desktopHostSwitcher.error.profilesBusy': 'Another window is saving instances. Try again.',
+  'desktopHostSwitcher.error.failedToForget': 'Could not remove saved sign-in. Unlock the credential store and try again.',
   'sessionAuth.error.savedSignInUnavailable': 'Saved sign-in is unavailable. Enter your password.',
   'sessionAuth.error.credentialUpdateFailed': 'Signed in. Could not update saved credentials on this device.',
   "opencodeCompatibility.bundled": "OpenCode is bundled with OpenChamber. Update OpenChamber to get OpenCode v2.",

@@ -44,6 +44,13 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  'desktopHostSwitcher.error.invalidFile': '저장된 인스턴스 데이터가 잘못되었습니다. hosts.json을 복원하고 새로 고치세요.',
+  'desktopHostSwitcher.error.invalidLabel': '이름은 한 줄에 256자 이내로 입력하세요.',
+  'desktopHostSwitcher.error.duplicateUrl': '이미 저장된 서버 주소입니다.',
+  'desktopHostSwitcher.error.profileLimit': '저장된 인스턴스가 너무 많습니다. 하나를 삭제하고 다시 시도하세요.',
+  'desktopHostSwitcher.error.profilesChanged': '다른 곳에서 저장된 인스턴스를 변경했습니다. 새로 고친 후 다시 시도하세요.',
+  'desktopHostSwitcher.error.profilesBusy': '다른 창에서 인스턴스를 저장하고 있습니다. 다시 시도하세요.',
+  'desktopHostSwitcher.error.failedToForget': '저장된 로그인 정보를 삭제하지 못했습니다. 자격 증명 저장소의 잠금을 해제하고 다시 시도하세요.',
   'sessionAuth.error.savedSignInUnavailable': '저장된 로그인 정보를 사용할 수 없습니다. 비밀번호를 입력하세요.',
   'sessionAuth.error.credentialUpdateFailed': '로그인했습니다. 이 기기에 저장된 인증 정보를 업데이트하지 못했습니다.',
   "opencodeCompatibility.bundled": "OpenCode는 OpenChamber에 포함되어 있습니다. OpenCode v2를 사용하려면 OpenChamber를 업데이트하세요.",

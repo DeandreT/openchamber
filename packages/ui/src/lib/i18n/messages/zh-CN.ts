@@ -44,6 +44,13 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  'desktopHostSwitcher.error.invalidFile': '已保存的实例数据无效。请恢复 hosts.json 后刷新。',
+  'desktopHostSwitcher.error.invalidLabel': '请使用不超过 256 个字符的单行名称。',
+  'desktopHostSwitcher.error.duplicateUrl': '此服务器地址已保存。',
+  'desktopHostSwitcher.error.profileLimit': '已保存的实例过多。请移除一个后重试。',
+  'desktopHostSwitcher.error.profilesChanged': '已保存的实例在其他位置被修改。请刷新后重试。',
+  'desktopHostSwitcher.error.profilesBusy': '另一个窗口正在保存实例。请重试。',
+  'desktopHostSwitcher.error.failedToForget': '无法删除已保存的登录信息。请解锁凭据存储后重试。',
   'sessionAuth.error.savedSignInUnavailable': '无法使用已保存的登录信息。请输入密码。',
   'sessionAuth.error.credentialUpdateFailed': '已登录。无法更新此设备上保存的凭据。',
   "opencodeCompatibility.bundled": "OpenCode 随 OpenChamber 一起提供。请更新 OpenChamber 以获取 OpenCode v2。",

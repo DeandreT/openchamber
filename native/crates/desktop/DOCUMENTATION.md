@@ -92,6 +92,12 @@ prompt. Attachments and worktree creation remain separate workflows.
   choice and token recovery. `authentication_view.rs` draws the masked form.
   `credential_store.rs` serializes OS credential operations through `keyring`;
   saved entries use the canonical endpoint and verified server identity together.
+- `host_profiles.rs` owns versioned, non-secret `hosts.json` profiles and
+  conflict-checked atomic writes. `host_manager.rs` owns the direct-host picker,
+  profile edits and endpoint changes. Credentials never enter the profile file.
+  Direct HTTP(S) profiles are supported here; SSH, relay, request-header and
+  pairing profiles remain separate native work. The full Settings navigation
+  and window-opening actions are not provided by this picker yet.
 - `network.rs` owns the Tokio runtime. GPUI tasks await `NetworkTask`s, and
   dropping one aborts its network work.
 - `send_catalog.rs` holds the composer's catalogs per configuration directory
@@ -280,6 +286,26 @@ prompt. Attachments and worktree creation remain separate workflows.
   A launch-supplied password is consumed by its first connection attempt.
   A successful login retains the issued token before any later request, so
   connection recovery uses the token instead of repeating the password POST.
+- Removing a saved host first forgets this app's stored credentials for its
+  endpoint, then removes the profile. The live client can finish current work.
+  Credential removal failures retain the profile for retry. Endpoint-scoped
+  generations invalidate earlier login persistence and cache insertion; a late
+  successful login can finish its live connection but cannot restore a removed
+  saved sign-in. Metadata search reads no password values.
+- Switching hosts clears password input and its trust choice before replacing
+  the connection. The new connection continues the generation sequence; old
+  callbacks cannot match a replacement connection by a reused generation.
+  Old executors remain alive while captured network work or durable mutation
+  chains need them. Reads and subscriptions owned by the old connection stop.
+  A queue take that has committed can still return its text to its original
+  draft after the switch.
+- Host profile writes compare the complete loaded snapshot under a file lock
+  before replacing it. Conflicts require a fresh read; neither a failed load nor
+  a malformed file grants permission to overwrite it. Default host selection
+  references an existing profile, and deletion clears that reference.
+  Normal close drains pending profile writes before the draft journal and keeps
+  the window open when a profile write fails. Host mutation controls remain
+  disabled during this drain; read-only profile loads need no close barrier.
 
 - Switching away from a dirty file asks Save, Discard or Cancel. Only a
   successful save with no remaining edits or an explicit Discard replaces

@@ -37,6 +37,8 @@ mod fonts;
 mod form_copy;
 mod form_input;
 mod git_view;
+mod host_manager;
+mod host_profiles;
 mod install_id;
 mod journal_worker;
 mod locale;
@@ -213,7 +215,26 @@ fn main() {
 /// A configured server, else synthetic data. `None` after reporting a
 /// configuration the client cannot use.
 fn requested_source() -> Option<Source> {
-    let Some(config) = ServerConfig::from_env() else {
+    let mut profile_label = None;
+    let config = ServerConfig::from_env().or_else(|| {
+        if std::env::var_os("OPENCHAMBER_NATIVE_WORKLOAD").is_some() {
+            return None;
+        }
+        let directory = install_id::config_directory()?;
+        match host_profiles::ProfileStore::new(&directory).load() {
+            Ok(profiles) => profiles.default_profile().map(|host| {
+                profile_label = Some(host.label.clone());
+                Ok(ServerConfig::for_endpoint(host.endpoint.clone()))
+            }),
+            Err(_) => {
+                tracing::warn!(
+                    "saved host profiles could not be read; no default host was selected"
+                );
+                None
+            }
+        }
+    });
+    let Some(config) = config else {
         return Some(Source::Synthetic(requested_workload()));
     };
     let config = match config {
@@ -224,7 +245,10 @@ fn requested_source() -> Option<Source> {
         }
     };
     match Connection::new(config) {
-        Ok(connection) => Some(Source::Server(Box::new(connection))),
+        Ok(mut connection) => {
+            connection.display_label = profile_label;
+            Some(Source::Server(Box::new(connection)))
+        }
         Err(error) => {
             tracing::error!(%error, "the network runtime could not start");
             None
