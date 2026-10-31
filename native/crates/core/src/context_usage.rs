@@ -105,6 +105,7 @@ mod tests {
                 notice: None,
                 assistant: None,
                 compaction: None,
+                synthetic: None,
             },
             parts: Vec::new(),
         }

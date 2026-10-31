@@ -17,24 +17,60 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `client.rs` | `ServerClient`: identity probe, password login, session pages, message pages, whole messages, running status, settings reads and writes, Chats roots, projects and worktrees. |
 | `catalog.rs` | Routing readiness (Auto and the safety net) and the composer's catalogs in one directory: agents, the flat model catalog with OpenCode's default model, folded config defaults, the skill count and the connected MCP count. |
 | `project.rs` | A directory's Git status (`GET /api/git/status`) and a project's configured actions (`GET /api/projects/:projectId/config`, the path-derived ID). |
+| `files.rs` | The Files surface's filesystem routes: folder listings, OpenCode's fuzzy file search (`/api/fs/find`), ripgrep content search, stat, text reads, writes and renames, scoped to the workspace by the directory header. |
+| `git.rs` | The Git surface's routes: the full status, path and batch diffs, stage, unstage, discard, commit, branches, the repository's transport binding and planned network operations. |
 | `prompt.rs` | Prompt submission with its synthetic context, resumption of an uncertain send, slash commands, ordered session model/agent selection, inbox admission receipts, observation and interruption of one named session. |
 | `prompt_parts.rs` | What a prompt carries besides text (file references, agent and skill references, metadata, synthetic context), the command request, and their private request bodies. |
-| `session_actions.rs` | Rename (`PATCH /api/session/:id`, then a read back and a best-effort user-title note), delete (`DELETE`, 404 is already gone), archive and restore (`POST /api/openchamber/sessions/archive` and `/unarchive`), and pin and work state as merge patches to `/api/openchamber/sessions/:id/metadata` computed from a fresh read. |
+| `session_actions.rs` | Rename (`PATCH /api/session/:id`, then a read back and a best-effort user-title note), delete (`DELETE`, 404 is already gone), archive and restore (`POST /api/openchamber/sessions/archive` and `/unarchive`), and pin and work state as merge patches to `/api/openchamber/sessions/:id/metadata` computed from a fresh read; fork (`POST /api/session/:id/fork`) and the fork's source-owned link cleanup, revert stage and clear (`POST .../revert/stage`, `DELETE .../revert`), the `/btw` marker, link, unlink and promotion, and stopping a subagent (a non-resuming synthetic note, then the child's interrupt). |
 | `session_create.rs` | Immutable root-session requests, exact-ID observation and identity/location verification before exposing a session record. |
 | `requests.rs`, `request_wire.rs` | Explicit blocking-request lists, exact reads, permission replies, form answers/cancellation and private pinned-2.2 wire decoding. |
+| `message_queue.rs` | The server-owned queue (`/api/message-queue`): snapshots, enqueue, remove, reorder and take, routed to an isolated space's own server by the directory header, and the `openchamber:message-queue.updated` broadcast. |
+| `starters.rs` | A project's starters in its setup (personal and shared writes) and the magic-prompt overrides a directory resolves. |
 | `permission_policy.rs` | Per-session permission modes: `GET /api/permission-auto-accept` and `PUT /api/permission-auto-accept/sessions/:id`, both answering the whole policy. |
 | `public_asset.rs` | `PublicAssetClient`: public assets the web client loads from third-party hosts, such as models.dev's provider logos. |
 | `wire.rs` | Serde shapes of the fields the client reads. Private. |
 | `projection.rs` | Wire records to core records, mirroring `packages/ui/src/lib/opencode/projection.ts`. Private. |
 | `event.rs` | Bridge frames to `ServerEvent`s, mirroring `lib/opencode/events.ts` and `sync/event-pipeline.ts`. |
 | `stream.rs` | `EventStream`: the reconnecting WebSocket subscription. |
+| `terminal.rs` | Server terminals: `TerminalApi` (shells, list, touch, create, restart, resize, close, terminal settings) and `TerminalSocket`, the reconnecting protocol v3 socket with its binary codec and input splitting. |
 | `parity_tests.rs` | Differential tests against the official client's fixture. |
 | `tests/server.rs` | The transport against a scripted loopback HTTP and WebSocket server: login fields, bearer use, failure classes, redirects, paging, cancellation, resume and reset cursors, fragmented frames and the `ready` timeout. |
+| `tests/terminal.rs` | The terminal socket and commands against scripted loopback servers: bearer upgrade, sequence handling, reconnect with snapshot replay, input under the frame limit, idle close, refused credentials, request fidelity and refusals. |
 
 `examples/probe.rs` exercises the crate against a running server and prints
 counts and identifiers only.
 
 ## Invariants
+
+- Filesystem routes send the workspace in `x-opencode-directory`, URI-encoded
+  and marked with `x-opencode-directory-encoding: uri`, as `runtimeFetch`
+  does; the server decodes only marked values. Paths stay absolute in the
+  server's path space.
+- A declined filesystem or Git answer keeps its status, the server's message
+  and its `reason` or `code`; `not-found`, `not-directory`, `os-permission`
+  and `already-exists` are their own `FilesError` variants. A 403 the server
+  explained in JSON is its refusal (the filesystem routes report denied access
+  so); one without a JSON `error` stays `AuthenticationRequired`. No refusal
+  reads as an empty folder, an empty file or an empty diff.
+- `stat_file` asks with `optional=true`, so a missing file is
+  `StatRead::Missing` and a failed stat is an error; the open-file poll needs
+  that difference. `read_file` accepts only a `text/plain` body.
+- Content search declares `invalid-pattern` and `search-unavailable` as
+  outcomes, not errors. Dropping the search future closes the request, which
+  ends ripgrep on the server.
+- `git_diff` maps the declared 422 `nested_repository` and
+  `untracked_directory` and 404 `path_not_found` to `PathDiff` outcomes;
+  `git_diffs` carries each path's outcome and never fails the others.
+- Push, pull and fetch are planned operations only. The plan body carries
+  exactly the fields of its action (the server rejects unknown ones): refs
+  for push and pull, `fetchScope: "remote"` for a whole-remote fetch.
+  Execute, read and cancel send no body and address the operation by its ID.
+  The legacy push, pull and fetch routes are never called. An operation with
+  an unknown state or action is malformed.
+- `repository_binding` derives an unconfigured repository's grants as ready
+  System grants for every remote (`effectiveRepositoryBinding`). A bound
+  grant takes the repository's current endpoints and is ready only while its
+  fingerprints still match them.
 
 - `host_session_status` retains optional pending permission/form identity hints
   from `/api/sessions/status`. Invalid entries are omitted independently; omission
@@ -178,6 +214,33 @@ counts and identifiers only.
   rather than reading as nothing archived. Metadata patches carry only the
   keys the change touches, so other features' keys stay; an empty patch
   sends nothing. Rename and delete expect 204, as the pinned client does.
+- Queue answers and broadcasts carry the revision of the queue they
+  describe; a malformed one fails the call (a broadcast becomes
+  `Unsupported`), never an empty queue. A session-scoped queue request sends
+  the directory header only for a space directory, as `runtimeFetch` does;
+  host directories travel in the body. Projections keep each attachment's
+  name, source, size and server path, so a caller can tell a take it could not
+  record. Enqueued items carry the captured
+  selection and no attachments or context. A take returns the payloads a
+  snapshot leaves out: attachments as `file://` URIs for server paths or
+  their data URLs, and context in send order with an item's instructions
+  before it.
+- Merged queue sends use `reserve-prefix`, which leaves payloads under the
+  server owner's exclusion until admission of the receipt's prompt ID.
+  A nonmutating `preview-prefix` supplies the whole prompt
+  for a local journal barrier before reservation. A matching 409 response with
+  `queue_prefix_unavailable`, session ID and message ID confirms non-acquisition;
+  other failures remain ambiguous. The native client compares the reserved
+  payload with its journaled request before admitting any prompt.
+  The immutable receipt retains composer text, selection and delivery across
+  lost responses and restarts. Receipt parsing validates session ownership,
+  ordered item identities, delivery and the captured configuration. A failed
+  or unsupported reservation is an error; there is no fallback to destructive
+  per-item or unbounded takes. Host and isolated-space routing use the same
+  authenticated queue transport as existing mutations.
+- Project starters fail as a whole on any malformed entry, and a failed read
+  is an error, so a caller never writes back a list built on a failed read.
+  Magic-prompt overrides require version 1.
 - Every failure is a distinct `TransportError`. None is an empty success; a
   caller keeps its last valid state.
 - `all_sessions` walks every page or fails as a whole. A partial list has no
@@ -212,6 +275,24 @@ counts and identifiers only.
   subscription only; it never stops the server or a running turn.
 - Unmodelled event types become `ServerEvent::Unsupported` with their name
   only, never a guessed state change.
+- `session.forked` carries IDs only, so it becomes `SessionForked` and the
+  consumer reads the record. `session.revert.staged` and `.cleared` patch the
+  record's marker; `.committed` becomes `RevertCommitted` followed by the
+  patch that clears the marker, so the consumer trims while the marker is
+  still known. A staged event without a marker or a commit without `to` is
+  `Unsupported`.
+- A synthetic record keeps its description and, when its metadata is a valid
+  `source: "subagent"` run (`readSubagentRun`), the child, agent and state.
+  Valid dispatched-session and workflow report metadata also retains the
+  reported session or run identity for transcript turn boundaries, using
+  `readDispatchedSessionResult` and `readWorkflowReport` validation rules.
+  A tool call's child comes from `metadata.sessionID`/`sessionId`, else its
+  `sessionID` input, in history and in the live called, progress, success and
+  failed events. Live tool events carry no tool name, so the view decides
+  which tools link to their child.
+- Promotion of a `/btw` fork drops the marker, then unlinks the parent; a
+  failed unlink puts the fork's metadata back, best effort, and fails.
+  Stopping a subagent interrupts nothing when the note was not admitted.
 - Catalog reads send the directory in `x-opencode-directory`, as the web
   client's `listAgents`, `getProvidersForConfig`, `getConfig` and
   `listMcpServers` do; the skill count reads `GET /api/config/skills` for the
@@ -250,7 +331,36 @@ counts and identifiers only.
   credential, cookie or OpenChamber header, requests only HTTPS URLs, follows
   only HTTPS redirects and refuses bodies over 256 KiB.
 
+- Terminal frames are binary in both directions: `0x01`, then UTF-8 JSON.
+  A frame the client cannot decode is dropped, as the web client's schema
+  drops it. Per attached terminal, an event at or below the last delivered
+  sequence is dropped; a snapshot resets that sequence, and output before the
+  first snapshot passes, as the web subscriber starts at -1.
+- Every (re)open of the terminal socket sends `hello` and one `attach` per
+  attached terminal, so the server answers each with a fresh snapshot. The
+  client resumes from that snapshot and never from what it missed.
+- Input is split into `write` frames of at most 64 KiB after JSON escaping and
+  65,536 UTF-16 units of data, at character boundaries and in order. Input the
+  socket could not send is reported as `WriteFailed` and never replayed later.
+- Reconnects wait `min(500 ms * 2^(n-1), 8 s)`, and 60 s after a 401 or 403.
+  The failure count resets when the server's `hello` arrives. Input dials at
+  once, as the web client's `write` does.
+- With no terminal attached the socket closes after a 15 s grace and dials
+  again only on the next attach. Dropping `TerminalSocket` detaches; no
+  client action other than `TerminalApi::close` stops a server terminal.
+- A terminal command's 4xx answer keeps the server's message and `code`
+  (`TERMINAL_CWD_MISSING`); a list read with a malformed envelope is an error,
+  while malformed entries are left out.
+
 ## Decisions
+
+### Why the Files and Git errors have their own enums
+
+The filesystem and Git routes explain refusals in JSON, and the views show
+those explanations (a ripgrep reason, `index.lock` held, a branch Git
+refused). `TransportError::Http` carries only a status, which would turn
+each of those into a generic failure. The routes' known reasons get
+variants, so callers can branch on them without parsing text.
 
 ### Why blocking-request errors have their own decoder
 
@@ -351,6 +461,26 @@ a resend. History records carry no session ID in the pinned schema; their sessio
 is the requested route, while their ID and user role are checked explicitly.
 Differential fixtures pin both SDK calls and response wrappers without a live
 provider. Whole-message reads reject a mismatched ID or user content without text.
+
+### Why terminal input is split and the web client's is not
+
+The server's socket accepts frames of at most 64 KiB and closes the connection
+(1009) on a larger one, so the web client loses a paste over that size. The
+native client splits every write under both server limits; the PTY receives
+the same bytes in the same order.
+
+### Why the terminal socket keeps no replay projection
+
+The web client keeps 512 KiB of replay text per terminal so a second view of
+the same terminal can start without a server round trip. The native panel
+keeps every tab's emulator alive and attached, so there is no second view to
+seed; a reconnect replays the server's snapshot.
+
+### Why the terminal socket sends the bearer header
+
+Native sets `Authorization` on the upgrade as the event socket does, which the
+server's `ensureSessionToken` accepts. The URL token exists for browsers that
+cannot set headers and would put a credential in a URL.
 
 ### Recording wire samples
 

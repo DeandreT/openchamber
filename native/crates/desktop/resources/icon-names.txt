@@ -90,3 +90,16 @@ inbox-archive
 inbox-unarchive
 delete-bin
 checkbox
+send-plane
+draggable
+target-fill
+user
+team
+book-open
+arrow-go-back
+external-link
+arrow-left
+eye-off
+folder-open
+refresh
+save-3

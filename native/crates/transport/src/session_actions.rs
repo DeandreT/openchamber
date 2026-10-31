@@ -1,5 +1,6 @@
 //! Session management from the sidebar menu: rename, delete, archive,
-//! restore, pin and work state.
+//! restore, pin and work state; and the branching actions of the chat: fork,
+//! staged revert, the `/btw` metadata links and stopping a subagent.
 //!
 //! Rename and delete are OpenCode's `session.update` and `session.remove`
 //! (`PATCH` and `DELETE /api/session/:id`). Archive state and metadata are
@@ -9,7 +10,7 @@
 //! retries; a lost answer leaves its outcome to the next authoritative read
 //! or event.
 
-use openchamber_native_core::ids::SessionId;
+use openchamber_native_core::ids::{MessageId, SessionId};
 use openchamber_native_core::session::{MetadataFacts, SessionRecord};
 use reqwest::{Method, StatusCode, Url};
 use serde::Deserialize;
@@ -18,6 +19,7 @@ use serde_json::{Map, Value, json};
 use crate::client::{ServerClient, read_json};
 use crate::error::TransportError;
 use crate::projection;
+use crate::prompt_parts::{Metadata, SyntheticContext};
 use crate::wire;
 
 /// The work state the user sets, `metadata.openchamber.work.state`.
@@ -278,6 +280,224 @@ impl ServerClient {
             .await
     }
 
+    pub(crate) fn fork_request(
+        &self,
+        id: &SessionId,
+        before: Option<&MessageId>,
+    ) -> reqwest::RequestBuilder {
+        let mut url = self.session_url(id);
+        url.path_segments_mut()
+            .expect("HTTP URLs have path segments")
+            .push("fork");
+        // The pinned client sends `{ before }`; JSON drops an absent cut.
+        let body = match before {
+            Some(before) => json!({ "before": before.as_str() }),
+            None => json!({}),
+        };
+        self.authorized(Method::POST, url).json(&body)
+    }
+
+    fn revert_url(&self, id: &SessionId, stage: bool) -> Url {
+        let mut url = self.session_url(id);
+        {
+            let mut segments = url
+                .path_segments_mut()
+                .expect("HTTP URLs have path segments");
+            segments.push("revert");
+            if stage {
+                segments.push("stage");
+            }
+        }
+        url
+    }
+
+    pub(crate) fn stage_revert_request(
+        &self,
+        id: &SessionId,
+        message: &MessageId,
+    ) -> reqwest::RequestBuilder {
+        self.authorized(Method::POST, self.revert_url(id, true))
+            .json(&json!({ "messageID": message.as_str() }))
+    }
+
+    pub(crate) fn clear_revert_request(&self, id: &SessionId) -> reqwest::RequestBuilder {
+        self.authorized(Method::DELETE, self.revert_url(id, false))
+    }
+
+    /// Forks a session (`session.fork`): the new session holds the messages
+    /// before `before`, or all of them without it. Nothing is retried; a lost
+    /// answer may still have created the fork, which `session.forked` reports.
+    pub async fn fork_session(
+        &self,
+        id: &SessionId,
+        before: Option<&MessageId>,
+    ) -> Result<SessionRecord, TransportError> {
+        let response = self
+            .fork_request(id, before)
+            .send()
+            .await
+            .map_err(TransportError::from_request)?;
+        let reply: wire::Single<wire::Session> =
+            read_json(response).await.map_err(receipt_error)?;
+        if reply.data.id.is_empty() || reply.data.id == id.as_str() {
+            return Err(TransportError::Malformed(
+                "the fork answer names no new session".to_owned(),
+            ));
+        }
+        Ok(projection::session(reply.data))
+    }
+
+    /// Drops what a user fork must not keep of its source's copied metadata
+    /// (`withoutSourceOwnedLinks`): the source's `/btw` and review links, a
+    /// `/btw` or scheduled marker, and an active goal, which arrives paused.
+    /// Returns `None` when there was nothing to change.
+    pub async fn clean_fork_links(
+        &self,
+        fork: &SessionId,
+    ) -> Result<Option<MetadataFacts>, TransportError> {
+        let session = self.raw_session(fork).await?;
+        let current = metadata_object(session.metadata.as_ref());
+        let next = without_source_owned_links(&current);
+        if next == current {
+            return Ok(None);
+        }
+        let metadata = self.update_metadata(fork, &current, &next).await?;
+        Ok(Some(projection::metadata_facts(Some(&Value::Object(
+            metadata,
+        )))))
+    }
+
+    /// Stages a revert to before `message` (`session.revert.stage`): later
+    /// messages hide and their file changes roll back until the next prompt
+    /// commits it or [`Self::clear_revert`] puts everything back. Returns the
+    /// marker the server stored.
+    pub async fn stage_revert(
+        &self,
+        id: &SessionId,
+        message: &MessageId,
+    ) -> Result<MessageId, TransportError> {
+        let response = self
+            .stage_revert_request(id, message)
+            .send()
+            .await
+            .map_err(TransportError::from_request)?;
+        let reply: wire::Single<wire::Revert> = read_json(response).await.map_err(receipt_error)?;
+        if reply.data.message_id.is_empty() {
+            return Err(TransportError::Malformed(
+                "the revert answer has no marker".to_owned(),
+            ));
+        }
+        Ok(MessageId::new(reply.data.message_id))
+    }
+
+    /// Clears a staged revert (`session.revert.clear`).
+    pub async fn clear_revert(&self, id: &SessionId) -> Result<(), TransportError> {
+        expect_status(
+            self.clear_revert_request(id).send().await,
+            StatusCode::NO_CONTENT,
+        )
+    }
+
+    /// Marks a fresh fork as `parent`'s `/btw` side conversation
+    /// (`withBtwSessionMarker`). The fork copied the parent's metadata, so its
+    /// `openchamber` namespace is replaced, not merged.
+    pub async fn mark_btw_fork(
+        &self,
+        fork: &SessionId,
+        parent: &SessionId,
+        boundary: Option<&MessageId>,
+    ) -> Result<MetadataFacts, TransportError> {
+        self.patch_metadata(fork, |metadata| {
+            let mut space = Map::new();
+            space.insert("kind".to_owned(), json!("btw"));
+            space.insert("originalSessionID".to_owned(), json!(parent.as_str()));
+            if let Some(boundary) = boundary {
+                space.insert("btwBoundaryMessageID".to_owned(), json!(boundary.as_str()));
+            }
+            with_namespace(metadata, space)
+        })
+        .await
+    }
+
+    /// Links `parent` to its active side conversation (`withBtwSessionLink`).
+    pub async fn link_btw(
+        &self,
+        parent: &SessionId,
+        fork: &SessionId,
+    ) -> Result<MetadataFacts, TransportError> {
+        self.patch_metadata(parent, |metadata| {
+            let mut space = namespace(metadata);
+            space.insert("btwSessionID".to_owned(), json!(fork.as_str()));
+            with_namespace(metadata, space)
+        })
+        .await
+    }
+
+    /// Unlinks `parent`, but only while it still points at `fork`
+    /// (`withoutBtwSessionLink`).
+    pub async fn unlink_btw(
+        &self,
+        parent: &SessionId,
+        fork: &SessionId,
+    ) -> Result<MetadataFacts, TransportError> {
+        self.patch_metadata(parent, |metadata| without_btw_link(metadata, fork))
+            .await
+    }
+
+    /// Keeps a side conversation as an ordinary session
+    /// (`promoteBtwSession`): drops the fork's marker for `btwPromoted`, then
+    /// unlinks the parent. When the unlink fails, the fork's metadata is put
+    /// back, best effort, and the unlink's error is returned.
+    pub async fn promote_btw(
+        &self,
+        parent: &SessionId,
+        fork: &SessionId,
+    ) -> Result<(), TransportError> {
+        let session = self.raw_session(fork).await?;
+        let original = metadata_object(session.metadata.as_ref());
+        let promoted = without_btw_marker(&original);
+        let stored = self.update_metadata(fork, &original, &promoted).await?;
+        if let Err(error) = self.unlink_btw(parent, fork).await {
+            let _ = self.update_metadata(fork, &stored, &original).await;
+            return Err(error);
+        }
+        Ok(())
+    }
+
+    /// Stops a subagent (`stopSubagent`): first a note in the parent that the
+    /// stop was the user's, so the agent does not start it again, then the
+    /// child's interrupt. Nothing is stopped when the note was not admitted.
+    pub async fn stop_subagent(
+        &self,
+        parent: &SessionId,
+        child: &SessionId,
+        note_id: &MessageId,
+        description: Option<&str>,
+    ) -> Result<(), TransportError> {
+        let note = subagent_cancellation_note(note_id.clone(), child, description);
+        let response = self
+            .synthetic_request(parent, &note, None)
+            .send()
+            .await
+            .map_err(TransportError::from_request)?;
+        let status = response.status();
+        if status.is_redirection() {
+            return Err(TransportError::Redirected);
+        }
+        if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
+            return Err(TransportError::AuthenticationRequired);
+        }
+        if status != StatusCode::OK {
+            return Err(TransportError::Http {
+                status: status.as_u16(),
+            });
+        }
+        self.abort_session(child)
+            .await
+            .map(|_| ())
+            .map_err(|error| error.source)
+    }
+
     /// `patchSessionMetadata`: reads the record, applies `update` and sends
     /// the difference as a merge patch, so keys other features own stay.
     async fn patch_metadata(
@@ -420,6 +640,98 @@ fn with_work_state(
     };
     space.insert("work".to_owned(), work);
     with_namespace(metadata, space)
+}
+
+/// `withoutSourceOwnedLinks`.
+fn without_source_owned_links(metadata: &Map<String, Value>) -> Map<String, Value> {
+    let Some(space) = metadata.get("openchamber").and_then(Value::as_object) else {
+        return metadata.clone();
+    };
+    let mut next = space.clone();
+    next.remove("btwSessionID");
+    next.remove("reviewSessionID");
+    if next.get("kind").and_then(Value::as_str) == Some("btw") {
+        for key in ["kind", "originalSessionID", "btwBoundaryMessageID"] {
+            next.remove(key);
+        }
+    }
+    if next.get("kind").and_then(Value::as_str) == Some("scheduled") {
+        next.remove("kind");
+    }
+    if let Some(goal) = next.get_mut("goal").and_then(Value::as_object_mut)
+        && goal.get("status").and_then(Value::as_str) == Some("active")
+    {
+        goal.insert("status".to_owned(), json!("paused"));
+        goal.insert("statusReason".to_owned(), json!("paused in fork"));
+    }
+    if &next == space {
+        return metadata.clone();
+    }
+    let mut result = metadata.clone();
+    if next.is_empty() {
+        result.remove("openchamber");
+    } else {
+        result.insert("openchamber".to_owned(), Value::Object(next));
+    }
+    result
+}
+
+/// `withoutBtwSessionLink`: the namespace goes when nothing else is in it.
+fn without_btw_link(metadata: &Map<String, Value>, fork: &SessionId) -> Map<String, Value> {
+    let mut space = namespace(metadata);
+    if space.get("btwSessionID").and_then(Value::as_str) != Some(fork.as_str()) {
+        return metadata.clone();
+    }
+    space.remove("btwSessionID");
+    if space.is_empty() {
+        let mut next = metadata.clone();
+        next.remove("openchamber");
+        return next;
+    }
+    with_namespace(metadata, space)
+}
+
+/// `withoutBtwSessionMarker`: `btwPromoted` stays behind, because the btw
+/// instructions stay in the transcript.
+fn without_btw_marker(metadata: &Map<String, Value>) -> Map<String, Value> {
+    let mut space = namespace(metadata);
+    if space.get("kind").and_then(Value::as_str) != Some("btw") {
+        return metadata.clone();
+    }
+    for key in ["kind", "originalSessionID", "btwBoundaryMessageID"] {
+        space.remove(key);
+    }
+    space.insert("btwPromoted".to_owned(), json!(true));
+    with_namespace(metadata, space)
+}
+
+/// `subagentCancellationNote`: model-facing text the UI never shows.
+fn subagent_cancellation_note(
+    id: MessageId,
+    child: &SessionId,
+    description: Option<&str>,
+) -> SyntheticContext {
+    let named = match description {
+        Some(description) => format!("the subagent \"{description}\""),
+        None => "a subagent".to_owned(),
+    };
+    let mut metadata = Map::new();
+    metadata.insert(
+        "openchamberSubagentCancellation".to_owned(),
+        json!({ "sessionID": child.as_str() }),
+    );
+    SyntheticContext {
+        id,
+        text: [
+            format!("The user stopped {named} (sessionID: {child})."),
+            "The result for it that follows reports that the subagent was cancelled.".to_owned(),
+            "That is how the stop shows up: the subagent did not fail on its own, the user cancelled it.".to_owned(),
+            "Do not start it again just because of that result. The same work is fine to delegate later when the task or the user needs it.".to_owned(),
+        ]
+        .join(" "),
+        description: Some("Subagent stopped by the user".to_owned()),
+        metadata: Some(Metadata(metadata)),
+    }
 }
 
 /// `withUserWorkTitle`.
@@ -602,6 +914,124 @@ mod tests {
                 &with_work_state(&empty, WorkState::Open, 1)
             )),
             json!({ "openchamber": { "work": { "state": "open", "openedAt": 1, "openedBy": "user" } } })
+        );
+    }
+
+    #[test]
+    fn branching_requests_match_the_pinned_client() {
+        // `@opencode/client` 2.x: session.fork, session.revert.stage/clear.
+        let client = client();
+        let session = SessionId::new("ses_a");
+        let (method, path, body, _) =
+            parts(client.fork_request(&session, Some(&MessageId::new("msg_cut"))));
+        assert_eq!(
+            (method.as_str(), path.as_str()),
+            ("POST", "/api/session/ses_a/fork")
+        );
+        assert_eq!(body, Some(json!({ "before": "msg_cut" })));
+        let (_, _, body, _) = parts(client.fork_request(&session, None));
+        assert_eq!(body, Some(json!({})), "an absent cut copies everything");
+        let (method, path, body, _) =
+            parts(client.stage_revert_request(&session, &MessageId::new("msg_2")));
+        assert_eq!(
+            (method.as_str(), path.as_str()),
+            ("POST", "/api/session/ses_a/revert/stage")
+        );
+        assert_eq!(body, Some(json!({ "messageID": "msg_2" })));
+        let (method, path, body, _) = parts(client.clear_revert_request(&session));
+        assert_eq!(
+            (method.as_str(), path.as_str(), body),
+            ("DELETE", "/api/session/ses_a/revert", None)
+        );
+    }
+
+    #[test]
+    fn btw_links_follow_session_btw_metadata() {
+        let fork = SessionId::new("ses_fork");
+        let parent = object(json!({ "openchamber": { "btwSessionID": "ses_fork" }, "x": 1 }));
+        assert_eq!(
+            Value::Object(without_btw_link(&parent, &fork)),
+            json!({ "x": 1 }),
+            "an emptied namespace goes"
+        );
+        let pinned =
+            object(json!({ "openchamber": { "btwSessionID": "ses_fork", "pinned": { "at": 1 } } }));
+        assert_eq!(
+            Value::Object(merge_patch(&pinned, &without_btw_link(&pinned, &fork))),
+            json!({ "openchamber": { "btwSessionID": null } })
+        );
+        let other = object(json!({ "openchamber": { "btwSessionID": "ses_other" } }));
+        assert_eq!(
+            without_btw_link(&other, &fork),
+            other,
+            "a parent linked to another fork stays"
+        );
+        let marked = object(json!({ "openchamber": {
+            "kind": "btw", "originalSessionID": "ses_p", "btwBoundaryMessageID": "msg_b", "pinned": { "at": 1 }
+        } }));
+        assert_eq!(
+            Value::Object(without_btw_marker(&marked)),
+            json!({ "openchamber": { "pinned": { "at": 1 }, "btwPromoted": true } })
+        );
+        let plain = object(json!({ "openchamber": { "kind": "review" } }));
+        assert_eq!(without_btw_marker(&plain), plain);
+    }
+
+    #[test]
+    fn a_fork_drops_source_owned_links_and_pauses_the_goal() {
+        let copied = object(json!({ "openchamber": {
+            "btwSessionID": "ses_b", "reviewSessionID": "ses_r", "kind": "btw",
+            "originalSessionID": "ses_p", "pinned": { "at": 1 },
+            "goal": { "id": "g", "status": "active" }
+        }, "other": true }));
+        assert_eq!(
+            Value::Object(without_source_owned_links(&copied)),
+            json!({ "openchamber": {
+                "pinned": { "at": 1 },
+                "goal": { "id": "g", "status": "paused", "statusReason": "paused in fork" }
+            }, "other": true })
+        );
+        let plain = object(json!({ "openchamber": { "pinned": { "at": 1 } } }));
+        assert_eq!(without_source_owned_links(&plain), plain);
+        let only_link = object(json!({ "openchamber": { "btwSessionID": "ses_b" } }));
+        assert_eq!(
+            Value::Object(without_source_owned_links(&only_link)),
+            json!({})
+        );
+    }
+
+    #[test]
+    fn the_cancellation_note_names_the_child_and_does_not_resume() {
+        let note = subagent_cancellation_note(
+            MessageId::new("msg_note"),
+            &SessionId::new("ses_child"),
+            Some("Explore"),
+        );
+        assert!(
+            note.text
+                .starts_with("The user stopped the subagent \"Explore\" (sessionID: ses_child).")
+        );
+        assert_eq!(
+            note.metadata.expect("metadata").0,
+            object(json!({ "openchamberSubagentCancellation": { "sessionID": "ses_child" } }))
+        );
+        let (method, path, body, _) = parts(client().synthetic_request(
+            &SessionId::new("ses_parent"),
+            &subagent_cancellation_note(MessageId::new("msg_note"), &SessionId::new("c"), None),
+            None,
+        ));
+        assert_eq!(
+            (method.as_str(), path.as_str()),
+            ("POST", "/api/session/ses_parent/synthetic")
+        );
+        let body = body.expect("body");
+        assert_eq!(body["resume"], json!(false));
+        assert_eq!(body["description"], json!("Subagent stopped by the user"));
+        assert!(
+            body["text"]
+                .as_str()
+                .expect("text")
+                .starts_with("The user stopped a subagent")
         );
     }
 

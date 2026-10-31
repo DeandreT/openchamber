@@ -11,7 +11,10 @@ pub mod credential;
 pub mod endpoint;
 pub mod error;
 pub mod event;
+pub mod files;
+pub mod git;
 pub mod identity;
+pub mod message_queue;
 #[cfg(test)]
 mod parity_tests;
 pub mod permission_policy;
@@ -24,5 +27,7 @@ mod request_wire;
 pub mod requests;
 pub mod session_actions;
 pub mod session_create;
+pub mod starters;
 pub mod stream;
+pub mod terminal;
 mod wire;

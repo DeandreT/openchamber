@@ -1709,6 +1709,7 @@ export const dict = {
   'filesView.dialog.confirm': 'Confirm',
   'filesView.dialog.delete.confirm': 'Delete',
   'filesView.editor.saving': 'Saving...',
+  'filesView.rename.unresolved': 'Rename outcome unknown. Saving is blocked. Refresh to check both paths again.',
   'filesView.editor.saved': 'Saved',
   'filesView.editor.saveNowTitle': 'Save now ({shortcut}) - auto-saves after 1.5s',
   'filesView.editor.saveNowManualTitle': 'Save now ({shortcut})',

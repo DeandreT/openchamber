@@ -127,6 +127,9 @@ pub struct Workspace {
     pub(crate) sidebar_open: bool,
     pub(crate) work_status_open: bool,
     pub(crate) work_status_overlay: bool,
+    /// The terminal panel, kept while hidden so its terminals keep parsing.
+    pub(crate) terminal_panel: Option<Entity<crate::terminal_view::TerminalPanel>>,
+    pub(crate) terminal_open: bool,
     pub(crate) prompt_panel: Option<PromptPanel>,
     pub(crate) prompt_hover_task: Option<Task<()>>,
     pub(crate) prompt_hover_suppressed: bool,
@@ -149,6 +152,7 @@ pub struct Workspace {
     pub(crate) session_menu: Option<crate::session_menu::SessionMenu>,
     pub(crate) session_rename: Option<crate::session_menu::SessionRename>,
     pub(crate) session_management: crate::session_management::SessionManagement,
+    pub(crate) branching: crate::session_branching::Branching,
     /// The archive page replaces the chat area while open.
     pub(crate) archive_open: bool,
     /// Whether the composer shows the short placeholder; unknown until the
@@ -168,6 +172,10 @@ pub struct Workspace {
     pub(crate) send_attempts: crate::send_attempt::SendAttempts,
     pub(crate) blocking: crate::blocking_requests::BlockingRequests,
     pub(crate) permission_modes: crate::permission_modes::PermissionModes,
+    pub(crate) queue: crate::message_queue::QueueState,
+    pub(crate) starters: crate::starters::Starters,
+    /// The session a first Escape armed a stop for, until when.
+    pub(crate) abort_primed: Option<(SessionId, Instant)>,
     pub(crate) recovery: crate::send_recovery::RecoveryState,
     pub(crate) persistence: crate::state_persistence::StatePersistence,
     pub(crate) mutation_tasks: HashMap<crate::send_attempt::SessionKey, Task<()>>,
@@ -183,6 +191,8 @@ pub struct Workspace {
     pub(crate) code_wrap_save_task: Option<Task<()>>,
     pub(crate) provider_logos: ProviderLogos,
     pub(crate) project_readouts: ProjectReadouts,
+    /// The context panel's Files, Git and Diff surfaces.
+    pub(crate) panels: crate::files_view::Panels,
     /// Set while the new window's content is held at its requested size.
     pub(crate) initial_size: Option<InitialSize>,
     /// The docked composer's slot, measured while painting.
@@ -240,6 +250,8 @@ impl Workspace {
             sidebar_open: true,
             work_status_open: true,
             work_status_overlay: false,
+            terminal_panel: None,
+            terminal_open: false,
             prompt_panel: None,
             prompt_hover_task: None,
             prompt_hover_suppressed: false,
@@ -259,6 +271,7 @@ impl Workspace {
             session_menu: None,
             session_rename: None,
             session_management: Default::default(),
+            branching: Default::default(),
             archive_open: false,
             composer_placeholder_compact: None,
             playback: HashMap::new(),
@@ -285,6 +298,9 @@ impl Workspace {
             send_attempts: crate::send_attempt::SendAttempts::default(),
             blocking: crate::blocking_requests::BlockingRequests::default(),
             permission_modes: crate::permission_modes::PermissionModes::default(),
+            queue: Default::default(),
+            starters: Default::default(),
+            abort_primed: None,
             recovery: crate::send_recovery::RecoveryState::default(),
             persistence: crate::state_persistence::StatePersistence::default(),
             mutation_tasks: HashMap::new(),
@@ -298,6 +314,7 @@ impl Workspace {
             code_wrap_save_task: None,
             provider_logos: ProviderLogos::default(),
             project_readouts: ProjectReadouts::default(),
+            panels: crate::files_view::Panels::default(),
             initial_size: None,
             composer_slot: Rc::default(),
             prompt_sequence: 0,
@@ -532,6 +549,7 @@ impl Workspace {
         self.save_scroll_position();
         self.selected = Some(id.clone());
         self.ensure_open(&id, cx);
+        self.open_btw_fork(cx);
         self.composer_key = next_key;
         self.restore_composer_draft(window, cx);
         self.focus_composer(window, cx);
@@ -739,6 +757,7 @@ impl Workspace {
             text: composer.value().to_string(),
             selection: composer.selected_range(),
         };
+        let draft = self.starters.persisted_draft(&key, draft);
         self.save_draft_preview(&key, &draft.text);
         self.drafts.save(key, draft);
     }
@@ -750,6 +769,10 @@ impl Workspace {
             .and_then(|key| self.drafts.get(key))
             .cloned()
             .unwrap_or_default();
+        let draft = match &self.composer_key {
+            Some(owner) => self.starters.visible_draft(owner, draft),
+            None => draft,
+        };
         self.composer.update(cx, |composer, cx| {
             composer.set_value(draft.text.clone(), window, cx);
             composer.set_selected_range(draft.selection.clone(), cx);
@@ -774,14 +797,26 @@ impl Workspace {
             self.queue_persistence(cx);
             cx.notify();
         }
-        if let InputEvent::PressEnter { shift: false, .. } = event {
-            self.submit(window, cx);
+        if let InputEvent::PressEnter {
+            shift: false,
+            secondary,
+        } = event
+        {
+            self.submit_from_enter(*secondary, window, cx);
         }
     }
 
     /// Sends to a selected session or durably creates the selected project draft.
     pub fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.is_synthetic() {
+            // `/fork`, `/btw` and an open side conversation take the text.
+            if self.run_branch_command(window, cx) {
+                return;
+            }
+            if self.btw_takes_composer() {
+                self.send_btw_follow_up(window, cx);
+                return;
+            }
             if self.selected.is_some() {
                 self.submit_connected(window, cx);
             } else {
@@ -824,6 +859,7 @@ impl Workspace {
                     notice: None,
                     assistant: None,
                     compaction: None,
+                    synthetic: None,
                 },
                 parts: vec![Part::text(PartId::new(format!("{user_id}-p0")), text)],
             },
@@ -836,6 +872,7 @@ impl Workspace {
                     notice: None,
                     assistant: None,
                     compaction: None,
+                    synthetic: None,
                 },
                 parts: vec![Part::text(part_id.clone(), String::new())],
             },
@@ -1043,10 +1080,17 @@ fn build_sidebar_items(
     };
     let mut sections = Vec::with_capacity(topology.projects.len());
     for project in &topology.projects {
+        // `partitionSidebarSessions`: a `/btw` fork never reaches a project.
         let mut sessions: Vec<&SessionRecord> = chats
             .project_sessions_by_project
             .get(&project.id)
-            .cloned()
+            .map(|bucket| {
+                bucket
+                    .iter()
+                    .copied()
+                    .filter(|session| !session.is_btw())
+                    .collect()
+            })
             .unwrap_or_default();
         sessions.sort_by(|left, right| {
             ordering.compare(

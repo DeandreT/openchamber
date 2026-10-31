@@ -2384,6 +2384,7 @@ export const dict: Record<I18nKey, string> = {
   'filesView.editor.saveNowTitle': 'Zapisz teraz ({shortcut}) — autozapis po 1,5 s',
   'filesView.editor.saved': 'Zapisano',
   'filesView.editor.saving': 'Zapisywanie...',
+  'filesView.rename.unresolved': 'Wynik zmiany nazwy jest nieznany. Zapis jest zablokowany. Odśwież, aby ponownie sprawdzić obie ścieżki.',
   'filesView.editor.selectFile': 'Wybierz plik',
   'filesView.editor.showControlsAria': 'Pokaż kontrolki edytora',
   'filesView.error.jsonViewerUnavailable': 'Podgląd JSON jest niedostępny',

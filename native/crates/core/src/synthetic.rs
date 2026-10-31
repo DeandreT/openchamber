@@ -200,6 +200,8 @@ impl SyntheticWorkspace {
                 overlay,
                 model: None,
                 agent: None,
+                revert: None,
+                btw: Default::default(),
             });
         }
 
@@ -274,6 +276,7 @@ pub fn conversation(session_id: &SessionId, shape: ConversationShape) -> Vec<Mes
                 notice: None,
                 assistant: None,
                 compaction: None,
+                synthetic: None,
             },
             parts: vec![Part::text(
                 PartId::new(format!("{user_id}-p0")),
@@ -290,6 +293,7 @@ pub fn conversation(session_id: &SessionId, shape: ConversationShape) -> Vec<Mes
                 notice: None,
                 assistant: None,
                 compaction: None,
+                synthetic: None,
             },
             parts: assistant_parts(&assistant_id, turn, shape),
         });
@@ -352,6 +356,7 @@ fn assistant_parts(message_id: &MessageId, turn: usize, shape: ConversationShape
                         title: Some(format!("packages/ui/src/sync/turn-{turn}.ts")),
                         output: Some(format!("{} lines", 40 + turn)),
                         elided: None,
+                        child: None,
                     },
                 ));
             }

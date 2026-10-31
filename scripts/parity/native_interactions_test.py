@@ -21,6 +21,32 @@ def shell_message(status="completed", text=interactions.SHELL_OUTPUT, exit_code=
 
 
 class Observations(unittest.TestCase):
+    def test_superseding_send_uses_immediate_send_shortcut(self):
+        for superseding in (False, True):
+            with self.subTest(superseding=superseding):
+                keys = []
+                interaction = object.__new__(interactions.Interaction)
+                interaction.prompts = 0
+                interaction.args = SimpleNamespace(timeout=1)
+                interaction.env = {"DISPLAY": ":private"}
+                interaction.pending = lambda kind: []
+                interaction.composer = lambda: object()
+                interaction.paste = lambda node, text: None
+                interaction.messages = lambda: [{"type": "user", "text": "Native interaction fixture turn 1."}]
+                interaction.client = SimpleNamespace(
+                    key=keys.append,
+                    _find=lambda name: SimpleNamespace(get_state_set=lambda: SimpleNamespace(contains=lambda state: True)),
+                )
+                with patch.object(interactions, "_atspi", return_value=SimpleNamespace(StateType=SimpleNamespace(ENABLED=1))), \
+                        patch.object(interactions, "command") as command:
+                    interaction.send(superseding=superseding)
+                if superseding:
+                    self.assertEqual(keys, [], "GDK key names cannot encode modifiers")
+                    command.assert_called_once_with(interaction.env, "xdotool", "key", "ctrl+Return")
+                else:
+                    self.assertEqual(keys, ["Return"])
+                    command.assert_not_called()
+
     def test_superseding_input_targets_only_the_composer_subtree(self):
         class Node:
             def __init__(self, role, children=()):
@@ -41,6 +67,11 @@ class Observations(unittest.TestCase):
         interaction = object.__new__(interactions.Interaction)
         interaction.client = SimpleNamespace(_find=lambda name: root, _walk=lambda: [other, composer])
         self.assertIs(interaction.composer(), composer)
+        root.children.clear()
+        self.assertIsNone(interaction.composer())
+        with patch.object(interaction.client, "_find", side_effect=LookupError("not rendered yet")):
+            self.assertIsNone(interaction.composer())
+        root.children.append(Node("group", [composer]))
         root.children.append(Node("entry"))
         with self.assertRaisesRegex(RuntimeError, "exactly one entry"):
             interaction.composer()

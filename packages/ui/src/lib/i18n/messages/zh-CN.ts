@@ -1675,6 +1675,7 @@ export const dict: Record<I18nKey, string> = {
   'filesView.dialog.confirm': '确认',
   'filesView.dialog.delete.confirm': '删除',
   'filesView.editor.saving': '保存中...',
+  'filesView.rename.unresolved': '无法确认重命名结果，已阻止保存。请刷新以重新检查两个路径。',
   'filesView.editor.saved': '已保存',
   'filesView.editor.saveNowTitle': '立即保存（{shortcut}）- 1.5 秒后自动保存',
   'filesView.editor.saveNowManualTitle': '立即保存（{shortcut}）',

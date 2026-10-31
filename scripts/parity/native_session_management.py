@@ -231,8 +231,7 @@ def qualify(args):
                 open_menu(target)
                 choose("unpin")
                 wait_for("the unpin write never reached the proxy", lambda: bool(proxy.failed), timeout=20)
-                # Toolkit toasts are not on the accessibility bus; the
-                # window's status node carries the same text.
+                # The window's status node keeps the toast's text.
                 wait_for("the unpin failure was not announced", lambda: notice() == "Couldn't unpin the session", timeout=10)
                 client.screenshot(args.output / "unpin-failed.png")
                 if "pinned" not in openchamber(target):

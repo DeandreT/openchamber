@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import test from 'node:test';
 import { reservePort } from './cdp.mjs';
-import { isolatedOpencodeConfig, isolatedServerEnv, startFixture, startInteractionServer, withInteractionServer } from './isolated-server.mjs';
+import { ensureGitFixture, ensureProject, isolatedOpencodeConfig, isolatedServerEnv, startFixture, startInteractionServer, withInteractionServer } from './isolated-server.mjs';
 import { INTERACTION_SHELL_COMMAND } from './fixture-provider.mjs';
 
 const interactionHost = process.platform === 'linux' && existsSync('/tmp/opencode') && !existsSync('/etc/opencode')
@@ -156,4 +157,27 @@ test('scoped interaction startup failure removes its process signal listeners', 
     assert.fail('invalid startup must not enter the callback');
   }), /directly under/);
   assert.deepEqual(['SIGINT', 'SIGTERM'].map((name) => process.listenerCount(name)), before);
+});
+
+test('the Git fixture tracks a bare remote and keeps a repository that already has commits', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'oc-git-fixture-'));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const project = join(root, 'project');
+  ensureProject(project);
+  ensureGitFixture(root, project);
+  const git = (cwd, ...args) => execFileSync('git', args, {
+    cwd, encoding: 'utf8', env: { PATH: process.env.PATH, HOME: root, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: '/dev/null' },
+  }).trim();
+  assert.equal(git(project, 'rev-list', '--count', 'HEAD'), '2');
+  assert.equal(git(project, 'rev-parse', '--abbrev-ref', '@{upstream}'), 'origin/main');
+  assert.equal(git(project, 'rev-parse', 'HEAD'), git(join(root, 'remote.git'), 'rev-parse', 'main'));
+  assert.equal(git(project, 'config', 'user.email'), 'fixture@example.invalid');
+  assert.deepEqual(git(project, 'status', '--porcelain').split('\n').sort(), ['?? nested/', '?? notes/']);
+  assert.equal(readFileSync(join(project, 'docs/crlf.txt'), 'utf8'), 'first\r\nsecond\r\nthird\r\n');
+  assert.equal(git(join(project, 'nested/inner'), 'rev-list', '--count', 'HEAD'), '1');
+  assert.ok(existsSync(join(project, 'ignored/secret.txt')));
+  writeFileSync(join(project, 'README.md'), 'changed by a scenario\n');
+  ensureGitFixture(root, project);
+  assert.equal(readFileSync(join(project, 'README.md'), 'utf8'), 'changed by a scenario\n');
+  assert.equal(git(project, 'rev-list', '--count', 'HEAD'), '2');
 });

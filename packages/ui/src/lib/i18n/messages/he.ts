@@ -1646,6 +1646,7 @@ export const dict = {
   'filesView.dialog.confirm': 'אישור',
   'filesView.dialog.delete.confirm': 'מחק',
   'filesView.editor.saving': 'שומר…',
+  'filesView.rename.unresolved': 'תוצאת שינוי השם אינה ידועה. השמירה חסומה. יש לרענן כדי לבדוק שוב את שני הנתיבים.',
   'filesView.editor.saved': 'נשמר',
   'filesView.editor.saveNowTitle': 'שמור עכשיו ({shortcut}) - שמירה אוטומטית אחרי 1.5 שניות',
   'filesView.editor.saveNowManualTitle': 'שמור עכשיו ({shortcut})',

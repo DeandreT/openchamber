@@ -20,7 +20,7 @@ import { cpSync, createWriteStream, existsSync, mkdirSync, readFileSync, realpat
 import { connect } from "node:net"
 import { platform } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import process from "node:process"
 
 import { reservePort, wait } from "./cdp.mjs"
@@ -49,6 +49,9 @@ Options:
                            directly under /tmp/opencode and an explicit binary.
                             Uses owned free ports; cannot combine with --fresh.
   --selections             Fresh model/agent/effort fixture with the same isolation.
+  --git-fixture            Make the project the Files and Git fixture repository:
+                           two commits tracking a bare remote at <root>/remote.git,
+                           untracked, gitignored, CRLF and nested-repository entries
   --port <port>            Server port (default: 4799)
   --fixture-port <port>    Fixture provider port (default: 4798); reused when
                            something already listens there
@@ -275,6 +278,72 @@ export const ensureProject = (project) => {
   }
 }
 
+/** The lines of the fixture's `src/app.txt`, far enough apart for two hunks. */
+const GIT_FIXTURE_APP_LINES = Array.from({ length: 40 }, (_, index) => `line ${index + 1}`)
+
+/** Git with no system or global configuration, and fixed commit times. */
+const fixtureGit = (cwd, args) => execFileSync("git", args, {
+  cwd,
+  env: {
+    PATH: process.env.PATH,
+    HOME: cwd,
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_GLOBAL: platform() === "win32" ? "NUL" : "/dev/null",
+    GIT_AUTHOR_DATE: "2026-01-02T03:04:05Z",
+    GIT_COMMITTER_DATE: "2026-01-02T03:04:05Z",
+  },
+  stdio: ["ignore", "pipe", "pipe"],
+  encoding: "utf8",
+})
+
+const configureFixtureRepository = (directory) => {
+  fixtureGit(directory, ["symbolic-ref", "HEAD", "refs/heads/main"])
+  fixtureGit(directory, ["config", "user.name", "Fixture Author"])
+  fixtureGit(directory, ["config", "user.email", "fixture@example.invalid"])
+  fixtureGit(directory, ["config", "commit.gpgsign", "false"])
+}
+
+/**
+ * Turns the project into the Files and Git qualification repository: two
+ * commits on `main` tracking `origin/main` in a local bare remote at
+ * `<root>/remote.git`, a CRLF file, a gitignored folder, an untracked file
+ * and a nested repository. A project that already has commits is left alone,
+ * so a restart keeps what a scenario changed.
+ */
+export const ensureGitFixture = (root, project) => {
+  const hasCommits = (() => {
+    try { fixtureGit(project, ["rev-parse", "--verify", "-q", "HEAD"]); return true } catch { return false }
+  })()
+  if (hasCommits) return
+  configureFixtureRepository(project)
+  const write = (file, content) => {
+    mkdirSync(dirname(join(project, file)), { recursive: true })
+    writeFileSync(join(project, file), content)
+  }
+  write(".gitignore", "ignored/\n")
+  write("README.md", "# Fixture\n\nFiles and Git qualification.\n")
+  write("src/app.txt", `${GIT_FIXTURE_APP_LINES.join("\n")}\n`)
+  write("docs/crlf.txt", "first\r\nsecond\r\nthird\r\n")
+  fixtureGit(project, ["add", "-A"])
+  fixtureGit(project, ["commit", "-q", "-m", "Initial fixture"])
+  write("src/app.txt", `${GIT_FIXTURE_APP_LINES.map((line, index) => index === 0 ? "line 1 changed" : line).join("\n")}\n`)
+  fixtureGit(project, ["commit", "-q", "-am", "Second fixture commit"])
+  write("ignored/secret.txt", "gitignored\n")
+  write("notes/untracked.txt", "untracked\n")
+  const nested = join(project, "nested", "inner")
+  mkdirSync(nested, { recursive: true })
+  fixtureGit(nested, ["init", "-q"])
+  configureFixtureRepository(nested)
+  writeFileSync(join(nested, "inner.txt"), "nested\n")
+  fixtureGit(nested, ["add", "-A"])
+  fixtureGit(nested, ["commit", "-q", "-m", "Nested fixture"])
+  const remote = join(root, "remote.git")
+  rmSync(remote, { recursive: true, force: true })
+  fixtureGit(root, ["init", "-q", "--bare", "-b", "main", remote])
+  fixtureGit(project, ["remote", "add", "origin", pathToFileURL(remote).href])
+  fixtureGit(project, ["push", "-q", "-u", "origin", "main"])
+}
+
 /** Replaces `state` with `seed`, or empties it when there is no seed. */
 export const restoreState = (state, seed) => {
   rmSync(state, { recursive: true, force: true })
@@ -286,7 +355,7 @@ export const restoreState = (state, seed) => {
  * isolated home under `state`. Resolves once it answers HTTP, with the served
  * main chunk checked against the build's index.html.
  */
-export const startIsolatedServer = async ({ repo, dist, state, project, port, fixturePort, opencodeBinary = defaultOpencodeBinary(), logFile, interactions = false, selections = false, signal }) => {
+export const startIsolatedServer = async ({ repo, dist, state, project, port, fixturePort, opencodeBinary = defaultOpencodeBinary(), logFile, interactions = false, selections = false, gitFixture = false, signal }) => {
   signal?.throwIfAborted()
   if (await portInUse(port)) throw new Error(`Port ${port} is already in use; stop that server or pass another port.`)
   signal?.throwIfAborted()
@@ -295,6 +364,7 @@ export const startIsolatedServer = async ({ repo, dist, state, project, port, fi
   mkdirSync(join(state, "home"), { recursive: true })
   mkdirSync(join(state, "oc-data"), { recursive: true })
   if (!interactions) ensureProject(project)
+  if (gitFixture) ensureGitFixture(dirname(project), project)
   writeSettings(state, project)
   if (interactions) {
     const settingsFile = join(state, "oc-data", "settings.json")
@@ -430,6 +500,7 @@ const parseArgs = (argv) => {
     else if (value === "--fresh") options.fresh = true
     else if (value === "--interactions") options.interactions = true
     else if (value === "--selections") options.selections = true
+    else if (value === "--git-fixture") options.gitFixture = true
     else if (value === "--port") options.port = Number(argv[++index])
     else if (value === "--fixture-port") options.fixturePort = Number(argv[++index])
     else if (value === "--opencode-binary") {
@@ -470,7 +541,7 @@ const main = async () => {
     server = await startIsolatedServer({
       repo: options.repo, dist: options.dist, state, project: join(options.root, "project"),
       port: options.port, fixturePort: options.fixturePort, opencodeBinary: options.opencodeBinary,
-      logFile: join(options.root, "server.log"),
+      logFile: join(options.root, "server.log"), gitFixture: options.gitFixture,
     })
   } catch (error) {
     await fixture.stop()

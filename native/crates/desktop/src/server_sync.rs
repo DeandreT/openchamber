@@ -80,6 +80,7 @@ impl Workspace {
                 this.finish_connect(generation, outcome, window, cx);
             });
         }));
+        self.invalidate_terminal_client(cx);
         cx.notify();
     }
 
@@ -121,6 +122,7 @@ impl Workspace {
                 if runtime != self.runtime {
                     self.switch_runtime(runtime, window, cx);
                 }
+                self.invalidate_terminal_client(cx);
                 self.subscribe(generation, window, cx);
                 self.save_code_wrap(cx);
             }
@@ -166,6 +168,7 @@ impl Workspace {
         self.prompt_hover_suppressed = false;
         self.session_menu = None;
         self.session_rename = None;
+        self.branching.switch_runtime();
         if self.session_management.switch_runtime() {
             gpui_kit::component::WindowExt::close_dialog(window, cx);
         }
@@ -174,7 +177,11 @@ impl Workspace {
         self.invalidate_blocking(None);
         self.blocking.selected = None;
         cx.set_global(CodeWrap::default());
-        self.runtime = runtime;
+        let previous = std::mem::replace(&mut self.runtime, runtime);
+        self.invalidate_terminal_client(cx);
+        self.reset_queue_runtime(&previous);
+        self.starters.reset();
+        self.abort_primed = None;
         self.sessions = SessionIndex::new();
         self.topology = Topology::default();
         self.reset_send_catalog();
@@ -255,6 +262,8 @@ impl Workspace {
                 // replay resumed.
                 self.load_auto_routing(cx);
                 self.load_permission_policy(cx);
+                // Queue broadcasts are not replayed either.
+                self.load_message_queue(cx);
             }
             StreamItem::Disconnected(error) => {
                 tracing::warn!(%error, "the event stream dropped");
@@ -697,6 +706,7 @@ impl Workspace {
         let generation = connection.generation;
         let runtime = self.runtime.clone();
         let since = open.transcript.revision();
+        let history_generation = open.history_generation;
         let request_id = id.clone();
         let request_cursor = cursor.clone();
         let task = connection.network.run(async move {
@@ -727,7 +737,9 @@ impl Workspace {
                     let Some(open) = this.open_sessions.get_mut(&id) else {
                         return;
                     };
-                    if open.older.as_ref() != Some(&cursor) {
+                    if open.history_generation != history_generation
+                        || open.older.as_ref() != Some(&cursor)
+                    {
                         return;
                     }
                     match result {
@@ -775,7 +787,14 @@ impl Workspace {
         let mut ordering = Vec::new();
         let mut reread: Vec<SessionId> = Vec::new();
         let mut git_changed: Vec<SessionId> = Vec::new();
+        let mut reverted: Vec<SessionId> = Vec::new();
         for event in events {
+            if let ServerEvent::SessionPatched { session_id, patch } = &event {
+                let key = self.mutation_key(session_id);
+                if let Some(read) = self.branching.fork_reads.get_mut(&key) {
+                    read.patches.push(patch.clone());
+                }
+            }
             if let Some(change) = event.session_change() {
                 changes.push(change);
             }
@@ -807,10 +826,25 @@ impl Workspace {
                     ordering.push(OrderingMutation::Observe { session_id, phase });
                 }
                 ServerEvent::SessionDeleted { session_id } => {
+                    self.branching
+                        .fork_reads
+                        .remove(&self.mutation_key(&session_id));
+                    self.forget_session_queue(&session_id);
                     self.remove_session_requests(&session_id);
                     self.forget_deleted_session(&session_id, cx);
                     self.live_status.remove(&session_id);
                     ordering.push(OrderingMutation::Remove { session_id });
+                }
+                ServerEvent::SessionForked {
+                    session_id,
+                    parent_id,
+                } => self.on_session_forked(session_id, &parent_id, window, cx),
+                // Before the batch's marker patch, which the trim reads.
+                ServerEvent::RevertCommitted { session_id, to } => {
+                    self.on_revert_committed(&session_id, &to, cx)
+                }
+                ServerEvent::SessionPatched { session_id, patch } if patch.revert.is_some() => {
+                    reverted.push(session_id);
                 }
                 ServerEvent::CatalogUpdated { kind, directory } => {
                     self.refresh_send_catalog(kind, directory.as_deref(), cx);
@@ -822,6 +856,9 @@ impl Workspace {
                     ..
                 } => self.permission_left_for_user(session_id, permission_id),
                 ServerEvent::RoutingUpdated => self.load_auto_routing(cx),
+                ServerEvent::MessageQueueUpdated { update, space } => {
+                    self.apply_queue_broadcast(update, space)
+                }
                 ServerEvent::Transcript { session_id, event } => {
                     if self.finishes_git_changing_call(&session_id, &event)
                         && !git_changed.contains(&session_id)
@@ -845,6 +882,11 @@ impl Workspace {
             self.rebuild_sidebar();
         }
         self.after_index_update(update, window, cx);
+        self.open_btw_fork(cx);
+        // The transcript's cut moved.
+        for id in reverted {
+            self.remeasure_transcript(&id);
+        }
         for id in reread {
             self.load_history(&id, cx);
         }

@@ -36,6 +36,8 @@ static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 mod creation_tests;
 #[path = "permission_mode_tests.rs"]
 mod permission_mode_tests;
+#[path = "queue_tests.rs"]
+mod queue_tests;
 #[path = "request_tests.rs"]
 mod request_tests;
 #[path = "send_path_tests.rs"]

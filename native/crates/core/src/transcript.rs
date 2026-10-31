@@ -8,7 +8,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
-use crate::ids::{MessageId, PartId};
+use crate::ids::{MessageId, PartId, SessionId};
 use crate::send_config::ModelChoice;
 
 /// What a transcript record is.
@@ -64,6 +64,8 @@ pub enum PartContent {
         /// Characters of a finished result the server left out of a history
         /// page. The whole message must be fetched to show the result.
         elided: Option<usize>,
+        /// The child session a `subagent` call runs in, once the call names it.
+        child: Option<SessionId>,
     },
     File {
         filename: String,
@@ -179,6 +181,40 @@ pub struct MessageInfo {
     pub assistant: Option<AssistantFacts>,
     /// A compaction record's lifecycle; `None` for every other role.
     pub compaction: Option<CompactionStatus>,
+    /// What a synthetic record's description and metadata establish; `None`
+    /// for every other role.
+    pub synthetic: Option<Box<SyntheticFacts>>,
+}
+
+/// A synthetic record's description and the metadata the client reads.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SyntheticFacts {
+    pub description: Option<String>,
+    /// `source: "subagent"`: the report of a background subagent run.
+    pub subagent: Option<SubagentRun>,
+    /// `source: "openchamber-session"`: the result of a session an agent
+    /// dispatched (`readDispatchedSessionResult`), naming that session.
+    pub dispatched_session: Option<SessionId>,
+    /// `source: "openchamber-workflow"`: a workflow run's report
+    /// (`readWorkflowReport`), naming the run.
+    pub workflow_run: Option<String>,
+}
+
+/// A background subagent run as its report names it (`readSubagentRun`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubagentRun {
+    /// `metadata.childID`.
+    pub child: SessionId,
+    pub agent: Option<String>,
+    pub state: SubagentRunState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SubagentRunState {
+    Running,
+    Completed,
+    Error,
+    Cancelled,
 }
 
 /// Where a compaction stands.
@@ -265,6 +301,12 @@ pub enum TranscriptEvent {
         /// When the transition happened: a call's start, a result's end.
         at: i64,
     },
+    /// A `subagent` call named the child session it runs in.
+    ToolChild {
+        message_id: MessageId,
+        part_id: PartId,
+        child: SessionId,
+    },
 }
 
 /// Which rows a mutation affected. Rows are messages in server order.
@@ -303,6 +345,10 @@ pub struct Transcript {
     removed_at: HashMap<MessageId, u64>,
     /// Text parts whose next delta may repeat the end of a full snapshot.
     overlapping_delta: HashSet<PartId>,
+    /// The newest committed revert's boundary and the revision it arrived
+    /// at; reads requested before it never bring the boundary or anything
+    /// after it back.
+    committed: Option<(MessageId, u64)>,
 }
 
 impl Transcript {
@@ -412,6 +458,9 @@ impl Transcript {
 
     /// Prepends a page requested at `since`, preserving newer deletions.
     pub fn prepend_page(&mut self, page: Vec<Message>, since: u64) -> TranscriptChange {
+        let Some(page) = self.without_committed(page, since) else {
+            return TranscriptChange::NeedsReconcile;
+        };
         let page = page
             .into_iter()
             .filter(|message| {
@@ -650,6 +699,31 @@ impl Transcript {
                 self.touch(row);
                 TranscriptChange::Updated { row }
             }
+            TranscriptEvent::ToolChild {
+                message_id,
+                part_id,
+                child: next,
+            } => {
+                let Some(row) = self.row_of(&message_id) else {
+                    return TranscriptChange::NeedsReconcile;
+                };
+                let Some(Part {
+                    content: PartContent::Tool { child, .. },
+                    ..
+                }) = self.messages[row]
+                    .parts
+                    .iter_mut()
+                    .find(|part| part.id == part_id)
+                else {
+                    return TranscriptChange::NeedsReconcile;
+                };
+                if child.as_ref() == Some(&next) {
+                    return TranscriptChange::Unchanged;
+                }
+                *child = Some(next);
+                self.touch(row);
+                TranscriptChange::Updated { row }
+            }
             TranscriptEvent::PartRemoved {
                 message_id,
                 part_id,
@@ -669,6 +743,41 @@ impl Transcript {
         }
     }
 
+    /// A committed revert: OpenCode deleted `to` and everything after it
+    /// without per-message removals (`session.revert.committed` in
+    /// `event-reducer.ts`). The held window is always the transcript's tail,
+    /// so a boundary it does not hold but the session's marker names is older
+    /// than everything loaded and trims it all. Every trimmed ID is recorded
+    /// as removed, so an older read cannot bring it back.
+    pub fn truncate_from(
+        &mut self,
+        to: &MessageId,
+        marker: Option<&MessageId>,
+    ) -> TranscriptChange {
+        // Remembered even when nothing is loaded yet, so a read still in
+        // flight cannot show what the commit deleted.
+        self.revision += 1;
+        self.committed = Some((to.clone(), self.revision));
+        let from = match self.row_of(to) {
+            Some(row) => row,
+            None if marker == Some(to) => 0,
+            None => return TranscriptChange::Unchanged,
+        };
+        if from >= self.messages.len() {
+            return TranscriptChange::Unchanged;
+        }
+        let removed: Vec<Message> = self.messages.drain(from..).collect();
+        for message in &removed {
+            self.row_by_id.remove(&message.info.id);
+            self.changed_at.remove(&message.info.id);
+            self.removed_at
+                .insert(message.info.id.clone(), self.revision);
+        }
+        TranscriptChange::Removed {
+            rows: from..from + removed.len(),
+        }
+    }
+
     /// Merges a newest-first history read into the transcript.
     ///
     /// Mirrors `materializeSessionSnapshots` in
@@ -678,6 +787,9 @@ impl Transcript {
     /// read does not list are older pages when they precede its oldest message
     /// and deletions when they follow it.
     pub fn materialize(&mut self, history: Vec<Message>, since: u64) -> TranscriptChange {
+        let Some(history) = self.without_committed(history, since) else {
+            return TranscriptChange::NeedsReconcile;
+        };
         let history: Vec<Message> = history
             .into_iter()
             .filter(|message| {
@@ -727,6 +839,21 @@ impl Transcript {
             }
         }
         self.install(merged)
+    }
+
+    /// A read in server order requested before the newest commit loses the
+    /// committed boundary and everything after it. Without the boundary,
+    /// the caller must reconcile; the page cannot prove what survived.
+    fn without_committed(&self, mut read: Vec<Message>, since: u64) -> Option<Vec<Message>> {
+        if let Some((to, at)) = &self.committed
+            && *at > since
+        {
+            // Without the boundary this page could be entirely before or
+            // after the cut. It has no replacement or insertion authority.
+            let index = read.iter().position(|message| &message.info.id == to)?;
+            read.truncate(index);
+        }
+        Some(read)
     }
 
     /// Replaces the messages and reports the narrowest change.
@@ -940,11 +1067,26 @@ fn merge_part(existing: &Part, next: Part) -> Part {
             held_status == next_status && next_elided.is_some() && held_elided.is_none();
         let regressed = is_final_tool(existing) && is_active_tool(&next);
         let earlier = *held_status == ToolStatus::Running && *next_status == ToolStatus::Pending;
-        return if shell_of_whole || regressed || earlier {
-            existing.clone()
-        } else {
-            next
-        };
+        if shell_of_whole || regressed || earlier {
+            return existing.clone();
+        }
+        // A running call's child comes only with live progress; a read of
+        // the running call does not carry it.
+        let mut next = next;
+        if let (
+            PartContent::Tool {
+                child: Some(held_child),
+                ..
+            },
+            PartContent::Tool {
+                child: child @ None,
+                ..
+            },
+        ) = (&existing.content, &mut next.content)
+        {
+            *child = Some(held_child.clone());
+        }
+        return next;
     }
     match (part_text(existing), part_text(&next)) {
         // The client streamed further than the read saw.
@@ -1109,6 +1251,7 @@ mod tests {
                 notice: None,
                 assistant: None,
                 compaction: None,
+                synthetic: None,
             },
             parts: vec![Part::text(format!("{id}-p0").as_str(), text)],
         }
@@ -1231,6 +1374,7 @@ mod tests {
                 notice: None,
                 assistant: None,
                 compaction: None,
+                synthetic: None,
             },
             parts: vec![Part {
                 id: PartId::from("call_1"),
@@ -1240,6 +1384,7 @@ mod tests {
                     title: None,
                     output: None,
                     elided: None,
+                    child: None,
                 },
                 time: PartTime::default(),
             }],
@@ -1283,6 +1428,7 @@ mod tests {
                 notice: None,
                 assistant: None,
                 compaction: None,
+                synthetic: None,
             },
             parts: vec![Part {
                 id: PartId::from("call_1"),
@@ -1292,6 +1438,7 @@ mod tests {
                     title: None,
                     output: Some(output.to_owned()),
                     elided,
+                    child: None,
                 },
                 time: PartTime::default(),
             }],
@@ -1324,6 +1471,7 @@ mod tests {
                 notice: None,
                 assistant: None,
                 compaction: None,
+                synthetic: None,
             },
             parts: vec![Part::text(format!("{id}:text:0"), text)],
         }
@@ -1433,6 +1581,7 @@ mod tests {
                 title: None,
                 output: None,
                 elided: None,
+                child: None,
             },
             time: PartTime::default(),
         };
@@ -1445,6 +1594,7 @@ mod tests {
                 notice: None,
                 assistant: None,
                 compaction: None,
+                synthetic: None,
             },
             parts: vec![tool(ToolStatus::Completed)],
         }]);
@@ -1468,5 +1618,150 @@ mod tests {
         assert_eq!(change, TranscriptChange::Removed { rows: 0..1 });
         assert_eq!(transcript.row_of(&MessageId::from("m3")), Some(1));
         assert_eq!(transcript.row_of(&MessageId::from("m1")), None);
+    }
+
+    #[test]
+    fn a_committed_revert_trims_the_tail_for_good() {
+        let history = vec![
+            message("m1", Role::User, "a"),
+            message("m2", Role::Assistant, "b"),
+            message("m3", Role::User, "c"),
+            message("m4", Role::Assistant, "d"),
+        ];
+        let mut transcript = Transcript::from_history(history.clone());
+        let since = transcript.revision();
+        assert_eq!(
+            transcript.truncate_from(&MessageId::from("m3"), None),
+            TranscriptChange::Removed { rows: 2..4 }
+        );
+        assert_eq!(transcript.len(), 2);
+        assert_eq!(
+            transcript.truncate_from(&MessageId::from("m3"), None),
+            TranscriptChange::Unchanged,
+            "a repeated commit changes nothing"
+        );
+        let _ = transcript.materialize(history.into_iter().rev().collect(), since);
+        assert_eq!(
+            transcript.len(),
+            2,
+            "a read started before the commit cannot restore trimmed messages"
+        );
+        // A boundary older than the loaded window trims everything only when
+        // the session's own marker names it.
+        assert_eq!(
+            transcript.truncate_from(&MessageId::from("older"), None),
+            TranscriptChange::Unchanged
+        );
+        let older = MessageId::from("older");
+        assert_eq!(
+            transcript.truncate_from(&older, Some(&older)),
+            TranscriptChange::Removed { rows: 0..2 }
+        );
+    }
+
+    #[test]
+    fn a_commit_during_a_load_keeps_the_cut_out_of_that_read() {
+        let history = vec![
+            message("m1", Role::User, "a"),
+            message("m2", Role::Assistant, "b"),
+            message("m3", Role::User, "c"),
+            message("m4", Role::Assistant, "d"),
+        ];
+        let mut transcript = Transcript::new();
+        let since = transcript.revision();
+        assert_eq!(
+            transcript.truncate_from(&MessageId::from("m3"), None),
+            TranscriptChange::Unchanged,
+            "nothing is loaded yet"
+        );
+        let _ = transcript.materialize(history.clone(), since);
+        let ids: Vec<&str> = transcript
+            .messages()
+            .iter()
+            .map(|message| message.info.id.as_str())
+            .collect();
+        assert_eq!(ids, ["m1", "m2"], "the read started before the commit");
+        // A read requested after the commit is the server's own answer.
+        let later = transcript.revision();
+        let _ = transcript.materialize(history, later);
+        assert_eq!(transcript.len(), 4);
+    }
+
+    #[test]
+    fn precommit_page_without_the_boundary_has_no_authority() {
+        let mut transcript = Transcript::new();
+        let since = transcript.revision();
+        let _ = transcript.truncate_from(&MessageId::from("boundary-outside-latest-page"), None);
+        let page = vec![message("suffix", Role::Assistant, "deleted suffix")];
+        assert_eq!(
+            transcript.materialize(page.clone(), since),
+            TranscriptChange::NeedsReconcile
+        );
+        assert!(transcript.is_empty());
+        let fresh_since = transcript.revision();
+        let fresh = vec![message("authoritative", Role::User, "new prompt")];
+        let _ = transcript.materialize(fresh, fresh_since);
+        assert_eq!(
+            transcript.prepend_page(page.clone(), since),
+            TranscriptChange::NeedsReconcile
+        );
+        assert_eq!(
+            transcript.materialize(page, since),
+            TranscriptChange::NeedsReconcile
+        );
+        assert_eq!(transcript.len(), 1);
+        assert_eq!(
+            transcript
+                .message(0)
+                .expect("the authoritative row remains")
+                .info
+                .id
+                .as_str(),
+            "authoritative"
+        );
+    }
+
+    #[test]
+    fn a_subagent_call_learns_its_child_and_reads_keep_it() {
+        let call = |child: Option<&str>, status: ToolStatus| Part {
+            id: PartId::from("call"),
+            content: PartContent::Tool {
+                tool: "subagent".to_owned(),
+                status,
+                title: None,
+                output: None,
+                elided: None,
+                child: child.map(SessionId::from),
+            },
+            time: PartTime::default(),
+        };
+        let mut step = message("m", Role::Assistant, "");
+        step.parts = vec![call(None, ToolStatus::Running)];
+        let mut transcript = Transcript::from_history(vec![step.clone()]);
+        let event = TranscriptEvent::ToolChild {
+            message_id: MessageId::from("m"),
+            part_id: PartId::from("call"),
+            child: SessionId::from("ses_child"),
+        };
+        assert_eq!(
+            transcript.apply(event.clone()),
+            TranscriptChange::Updated { row: 0 }
+        );
+        assert_eq!(transcript.apply(event), TranscriptChange::Unchanged);
+        assert_eq!(
+            transcript.apply(TranscriptEvent::ToolChild {
+                message_id: MessageId::from("m"),
+                part_id: PartId::from("missing"),
+                child: SessionId::from("ses_child"),
+            }),
+            TranscriptChange::NeedsReconcile
+        );
+        // A read of the running call has no child; the live one stays.
+        let since = transcript.revision();
+        let _ = transcript.materialize(vec![step], since);
+        assert_eq!(
+            transcript.messages()[0].parts[0],
+            call(Some("ses_child"), ToolStatus::Running)
+        );
     }
 }

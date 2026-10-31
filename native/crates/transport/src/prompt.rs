@@ -121,6 +121,8 @@ pub enum SendObservation {
 pub enum SendStage {
     /// Local validation failed before any request.
     Validation,
+    /// The server-owned queued prefix could not be reserved for this request.
+    Reservation,
     /// The model-selection request failed.
     Model,
     /// The agent-selection request failed.

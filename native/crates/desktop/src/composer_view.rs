@@ -200,6 +200,7 @@ impl Workspace {
                         window,
                         self.chat_area_width(window),
                     ))
+                    .children(self.render_btw_panel(palette, direction, cx))
                     .children(self.render_request_dock(palette, window, cx))
                     .child(self.render_composer_box(palette, direction, window, cx)),
             )
@@ -215,6 +216,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let recovery = self.render_send_recovery(palette, direction, window, cx);
+        let queue_strip = self.render_queue_strip(palette, direction, cx);
         // The width the effort, model and agent controls get: the web's
         // `@container/model-controls` hides their labels by it.
         let controls_width = self.composer_width(window)
@@ -278,6 +280,18 @@ impl Workspace {
         .test_support();
         div()
             .id("composer")
+            // ArrowUp in an empty composer over a queue edits the newest
+            // queued message, before the editor moves its caret.
+            .capture_action(cx.listener(
+                |this, _: &gpui_kit::component::input::MoveUp, window, cx| {
+                    if this.composer.read(cx).value().is_empty()
+                        && let Some(id) = this.newest_editable_queued()
+                    {
+                        cx.stop_propagation();
+                        this.edit_queued(&id, window, cx);
+                    }
+                },
+            ))
             .role(Role::Group)
             .accessibility_id("composer")
             .relative()
@@ -301,6 +315,8 @@ impl Workspace {
                         )),
                 )
             })
+            .children(queue_strip)
+            .children(self.render_revert_strip(palette, direction, cx))
             .child(recovery)
             .child(div().h(px(4.0)))
             .child(

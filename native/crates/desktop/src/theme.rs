@@ -129,6 +129,8 @@ pub struct Palette {
     pub inline_code_background: Hsla,
     pub syntax_background: Hsla,
     pub syntax_foreground: Hsla,
+    /// `syntax.base.comment`, the terminal's bright black.
+    pub syntax_comment: Hsla,
     /// Code highlighting from the theme's syntax tokens.
     pub highlight: Arc<HighlightTheme>,
     pub error: Hsla,
@@ -205,6 +207,7 @@ impl Palette {
             inline_code_background: color("markdown.inlineCodeBackground"),
             syntax_background: color("syntax.base.background"),
             syntax_foreground: color("syntax.base.foreground"),
+            syntax_comment: color("syntax.base.comment"),
             highlight: Arc::new(highlight_theme(entry)),
             error: color("readable.status.error"),
             warning: color("readable.status.warning"),

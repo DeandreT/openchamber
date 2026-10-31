@@ -339,7 +339,11 @@ class Interaction:
 
     def composer(self):
         entries = []
-        stack = [(self.client._find("composer"), 0)]
+        try:
+            root = self.client._find("composer")
+        except LookupError:
+            return None
+        stack = [(root, 0)]
         while stack:
             node, depth = stack.pop()
             if node is None or depth > 24:
@@ -348,17 +352,21 @@ class Interaction:
                 entries.append(node)
             for index in range(node.get_child_count()):
                 stack.append((node.get_child_at_index(index), depth + 1))
-        if len(entries) != 1:
+        if len(entries) > 1:
             raise RuntimeError("expected exactly one entry inside the composer")
-        return entries[0]
+        return entries[0] if entries else None
 
     def send(self, *, superseding=False):
         if not superseding and (self.pending("permission") or self.pending("form")):
             raise RuntimeError("cannot send another prompt while an interaction is pending")
         text = f"Native interaction fixture turn {self.prompts + 1}."
-        self.paste(self.composer(), text)
+        composer = until("composer entry did not appear", self.composer, self.args.timeout)
+        self.paste(composer, text)
         until("send control did not enable", lambda: self.client._find("composer-submit").get_state_set().contains(_atspi().StateType.ENABLED))
-        self.client.key("Return")
+        if superseding:
+            command(self.env, "xdotool", "key", "ctrl+Return")
+        else:
+            self.client.key("Return")
         self.prompts += 1
         until("prompt was not admitted exactly once", lambda: len([message for message in self.messages()
               if message.get("type") == "user" and message.get("text") == text]) == 1, self.args.timeout)

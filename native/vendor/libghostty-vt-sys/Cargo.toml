@@ -1,0 +1,32 @@
+# Vendored from crates.io libghostty-vt-sys 0.2.0. Only the manifest and
+# build.rs differ from the published crate; see DOCUMENTATION.md.
+
+[package]
+edition = "2024"
+rust-version = "1.90"
+name = "libghostty-vt-sys"
+version = "0.2.0"
+build = "build.rs"
+links = "ghostty-vt"
+autolib = false
+autobins = false
+autoexamples = false
+autotests = false
+autobenches = false
+description = "Raw FFI bindings for libghostty-vt, the Ghostty terminal emulation library"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/uzaaft/libghostty-rs"
+resolver = "2"
+
+[features]
+default = []
+# Declared because libghostty-vt forwards these features. The pinned build
+# links the static archive without Kitty graphics; build.rs rejects both.
+kitty-graphics = []
+link-dynamic = []
+
+[lib]
+name = "libghostty_vt_sys"
+path = "src/lib.rs"
+doctest = false

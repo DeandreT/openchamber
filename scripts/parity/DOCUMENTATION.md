@@ -29,13 +29,30 @@ PyGObject with AT-SPI, `busctl`, `dbus-run-session`, `xsettingsd` and fontconfig
 | `native_adapter.py` | The native window through AT-SPI: launch, activation, generated pointer and key input, accessibility actions, rows, geometry, and content capture. |
 | `clipboard_probe.py` | Asynchronous clipboard ownership and exact text after a real copy action on the private display. |
 | `native_platform.py` | Synthetic native window-manager and IBus checks with private profiles and service logs. |
-| `native_accessibility.py` | Orca-generated control announcements and AT-SPI transcript exposure, with silent private speech services. |
+| `native_accessibility.py` | Orca-generated control announcements, AT-SPI transcript exposure, disabled menu states and toast announcements, with silent private speech services. |
 | `native_workflow.py`, `workflow_proxy.py` | Connected native send/stop/restart checks and loopback-only loss injection before or after admission. |
+| `native_files.py` | Connected Files checks on the Git fixture project: tree and gitignored entries, keyboard navigation, name and content search with an invalid pattern, CRLF edit and save, autosave, external changes to clean and dirty files, a deleted open file, a rename conflict and a large file, each checked on disk. |
+| `native_git.py`, `git_http_remote.py` | Connected Git and Diff checks: staged and unstaged scopes, stage, unstage, confirmed discard, a stage failing on `index.lock`, commit, branches, push, fetch and pull as planned operations and a cancelled push. The fixture's bare remote is served through `git http-backend` on loopback, because the server plans network operations only for http, https and ssh remotes. |
 | `native_session_management.py` | Connected rename, pin, archive, restore and delete through the native session menu, with one injected write failure. |
+| `native_terminal.py` | Connected terminal checks behind a proxy that records terminal commands and severs the terminal socket: create and close, Unicode and IBus input, keys, resize, bracketed and large paste, scrollback, reconnect pacing, exit, lifetime and cleanup. Capture programs in the terminal record the exact bytes the PTY received. |
 | `compare.py` | Pixel, row and geometry comparison. |
 | `png.py` | PNG reading and writing with the standard library. |
 
 ## Fixtures and isolation
+
+The Git HTTP fixture decodes chunked transfer bodies and gzip content coding
+before calling `git http-backend`. Releasing a held receive-pack request
+returns an error without executing it, including after client disconnection.
+Bodies are limited to 16 MiB of encoded data and chunk framing, 32 MiB of
+decoded data and 16 KiB of trailers. Gzip decoding is incremental and bounded;
+socket reads time out after 5 seconds without progress. Invalid bodies close
+the connection without reaching the Git backend.
+The Git discard scenario verifies both the working tree and the staged version
+of an `MM` file. Files qualification includes Save, Discard and Cancel on a
+dirty switch, including an explicitly saved empty draft.
+
+The permission/form driver uses Ctrl+Enter for its superseding send. Plain
+Enter follows the queue/steer preference while a turn waits for a response.
 
 `seed` starts `scripts/perf/isolated-server.mjs` on an empty root with the
 fixture provider and creates fixed sessions through
@@ -276,15 +293,23 @@ Timeout and completion cancel any outstanding clipboard read.
 `native_accessibility.py` starts Orca and a private Speech Dispatcher with a
 silent module. It checks generated speech for the project trigger, search field,
 highlighted option and restored composer, plus rendered transcript text in the
-AT-SPI tree. Audio-server addresses point at nonexistent private sockets; the
-test never plays speech through the user's desktop. Audible playback and full
+AT-SPI tree. In synthetic mode it opens a session row menu and requires that
+only Rename exposes `ENABLED`. It then starts an isolated server from the parity
+seed behind the `ActionFaults` proxy, fails one pin write and requires exactly
+one polite AT-SPI `object:announcement` with the toast text, recorded by its own
+listener in `announcements.jsonl`. After the toast closes, Orca's log must
+speak its text exactly once. Audio-server
+addresses point at nonexistent private sockets; the test never plays speech
+through the user's desktop. Audible playback and full
 screen-reader browsing remain separate checks.
 
 ```sh
 python3 scripts/parity/native_accessibility.py
 ```
 
-It requires Orca and Speech Dispatcher. Reports and debug logs go into a new
+It requires Orca, Speech Dispatcher and the parity seed with the isolated
+server's dependencies (`--root`, `--dist`, `--opencode-binary`, as for the
+session management check). Reports and debug logs go into a new
 directory under `native/target/tmp`, with the same isolated display and profile
 rules as the window and IME checks.
 Both native check commands accept `--scale 1`, `1.25`, `1.5` or `2`; the
@@ -339,8 +364,7 @@ python3 scripts/parity/native_session_management.py --binary <release binary>
 The pin, its menu item and Undo are driven through accessibility actions, the
 rest through pointer clicks and typed keys. The `ActionFaults` proxy fails one
 unpin write with HTTP 500; the check requires the failure text in the
-`session-notice` status node (toolkit notifications are not on the
-accessibility bus), an unchanged server pin and a pinned row before the
+`session-notice` status node, an unchanged server pin and a pinned row before the
 retried unpin succeeds. The last step puts a session on the fixture's
 `think-30s` model, sends two prompts, deletes the session while a send is
 retained and requires that no recovery row or journal attempt remains;

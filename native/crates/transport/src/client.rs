@@ -4,7 +4,9 @@ use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use openchamber_native_core::chat_roots::ChatRoots;
+use openchamber_native_core::draft_starters::{self, StarterRef};
 use openchamber_native_core::ids::{MessageId, SessionId};
+use openchamber_native_core::message_queue::FollowUpBehavior;
 use openchamber_native_core::message_time::ClockPreference;
 use openchamber_native_core::ownership::{self, ConfiguredProject, WorktreeInfo};
 use openchamber_native_core::permission_mode::PermissionMode;
@@ -42,6 +44,35 @@ pub struct SettingsChanges {
     pub code_block_line_wrap: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub show_deletion_dialog: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub follow_up_behavior: Option<&'static str>,
+    /// The global starters; written with both offered-starter markers set,
+    /// so a removed built-in stays removed.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_starters"
+    )]
+    pub draft_starters: Option<Vec<StarterRef>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub draft_starters_craft_goal_added: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub draft_starters_schedule_task_added: Option<bool>,
+}
+
+fn serialize_starters<S: serde::Serializer>(
+    starters: &Option<Vec<StarterRef>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeSeq;
+    let starters = starters.as_deref().unwrap_or_default();
+    let mut sequence = serializer.serialize_seq(Some(starters.len()))?;
+    for starter in starters {
+        sequence.serialize_element(&serde_json::json!({
+            "type": starter.kind.as_wire(),
+            "name": starter.name,
+        }))?;
+    }
+    sequence.end()
 }
 
 /// The settings surface this client reads and writes.
@@ -159,6 +190,13 @@ pub struct ServerSettings {
     pub project_defaults: Vec<ProjectDefaults>,
     /// The display labels of registered projects that set one.
     pub project_labels: Vec<ProjectLabel>,
+    /// `followUpBehavior`, or the legacy `queueModeEnabled` it absorbs.
+    pub follow_up_behavior: Option<FollowUpBehavior>,
+    /// The global starters as saved, built-ins the user was never offered
+    /// added; absent until the user edits the list.
+    pub draft_starters: Option<Vec<StarterRef>>,
+    /// `draftStartersVisible`: absent shows the starters.
+    pub draft_starters_visible: Option<bool>,
 }
 
 /// A registered project's display label, trimmed.
@@ -303,6 +341,39 @@ impl ServerSettings {
                 .and_then(Value::as_bool),
             show_deletion_dialog: settings
                 .show_deletion_dialog
+                .as_ref()
+                .and_then(Value::as_bool),
+            follow_up_behavior: match (
+                settings.follow_up_behavior.as_ref().and_then(Value::as_str),
+                settings
+                    .queue_mode_enabled
+                    .as_ref()
+                    .and_then(Value::as_bool),
+            ) {
+                (None, None) => None,
+                (value, legacy) => Some(FollowUpBehavior::from_setting(value, legacy)),
+            },
+            draft_starters: settings
+                .draft_starters
+                .as_ref()
+                .and_then(Value::as_array)
+                .map(|entries| {
+                    let marker = |value: &Option<Value>| {
+                        value.as_ref().and_then(Value::as_bool) == Some(true)
+                    };
+                    draft_starters::with_offered_built_ins(
+                        draft_starters::sanitize(entries.iter().map(|entry| {
+                            (
+                                entry.get("type").and_then(Value::as_str),
+                                entry.get("name").and_then(Value::as_str),
+                            )
+                        })),
+                        marker(&settings.draft_starters_craft_goal_added),
+                        marker(&settings.draft_starters_schedule_task_added),
+                    )
+                }),
+            draft_starters_visible: settings
+                .draft_starters_visible
                 .as_ref()
                 .and_then(Value::as_bool),
             permission_default_mode: match settings

@@ -1583,6 +1583,7 @@ export const dict = {
   'filesView.dialog.confirm': 'Onayla',
   'filesView.dialog.delete.confirm': 'Sil',
   'filesView.editor.saving': 'Kaydediliyor...',
+  'filesView.rename.unresolved': 'Yeniden adlandırmanın sonucu bilinmiyor. Kaydetme engellendi. Her iki yolu tekrar kontrol etmek için yenileyin.',
   'filesView.editor.saved': 'Kaydedildi',
   'filesView.editor.saveNowTitle': 'Şimdi kaydet ({shortcut}) - 1,5 sn sonra otomatik kaydeder',
   'filesView.editor.saveNowManualTitle': 'Şimdi kaydet ({shortcut})',

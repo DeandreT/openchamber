@@ -47,6 +47,14 @@ pub(crate) struct Session {
     pub metadata: Option<Value>,
     pub model: Option<AgentModel>,
     pub agent: Option<String>,
+    pub revert: Option<Revert>,
+}
+
+/// `Session.Revert`: a staged revert's marker. Its file diffs are not read.
+#[derive(Debug, Deserialize)]
+pub(crate) struct Revert {
+    #[serde(rename = "messageID")]
+    pub message_id: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -133,7 +141,8 @@ pub(crate) enum AssistantItem {
         text: String,
         time: Option<ItemTime>,
     },
-    Tool(ToolItem),
+    /// Boxed: a call's input and metadata make it the largest item.
+    Tool(Box<ToolItem>),
     #[serde(other)]
     Unsupported,
 }
@@ -165,16 +174,21 @@ pub(crate) struct ToolTime {
 #[serde(tag = "status", rename_all = "kebab-case")]
 pub(crate) enum ToolState {
     Streaming,
-    Running,
+    Running {
+        input: Option<Value>,
+        metadata: Option<Value>,
+    },
     Completed {
         #[serde(default)]
         content: Vec<ToolContent>,
+        input: Option<Value>,
         metadata: Option<Value>,
     },
     Error {
         error: StructuredError,
         #[serde(default)]
         content: Vec<ToolContent>,
+        input: Option<Value>,
         metadata: Option<Value>,
     },
 }
@@ -263,6 +277,12 @@ pub(crate) struct Settings {
     pub prompt_navigator_enabled: Option<Value>,
     pub show_deletion_dialog: Option<Value>,
     pub permission_default_mode: Option<Value>,
+    pub follow_up_behavior: Option<Value>,
+    pub queue_mode_enabled: Option<Value>,
+    pub draft_starters: Option<Value>,
+    pub draft_starters_visible: Option<Value>,
+    pub draft_starters_craft_goal_added: Option<Value>,
+    pub draft_starters_schedule_task_added: Option<Value>,
 }
 
 /// OpenCode v2 list routes: `{ location, data }`.

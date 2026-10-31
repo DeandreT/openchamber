@@ -1666,6 +1666,7 @@ export const dict: Record<I18nKey, string> = {
   "filesView.dialog.confirm": "Confirmar",
   "filesView.dialog.delete.confirm": "Excluir",
   "filesView.editor.saving": "Salvando...",
+  'filesView.rename.unresolved': 'Resultado da renomeação desconhecido. Salvamento bloqueado. Atualize para verificar os dois caminhos.',
   "filesView.editor.saved": "Salvo",
   "filesView.editor.saveNowTitle": "Salvar agora ({shortcut}) - salva automaticamente após 1,5 segundo",
   "filesView.editor.saveNowManualTitle": "Salvar agora ({shortcut})",

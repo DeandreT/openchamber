@@ -31,10 +31,12 @@ actions!(
         ToggleCodeWrap,
         /// Opens or closes the prompt navigation panel.
         TogglePromptNavigator,
+        /// Opens or closes the terminal panel.
+        ToggleTerminal,
     ]
 );
 
-const KEY_CONTEXT: &str = "OpenChamberWorkspace";
+pub(crate) const KEY_CONTEXT: &str = "OpenChamberWorkspace";
 /// The header's session title: 14/17.5 px.
 const TITLE_SIZE: f32 = 0.875;
 const TITLE_LINE: f32 = 1.093_75;
@@ -47,6 +49,7 @@ pub fn bind_keys(cx: &mut gpui_kit::App) {
         KeyBinding::new("alt-up", SelectPreviousSession, Some(KEY_CONTEXT)),
         KeyBinding::new("escape", StopGenerating, Some(KEY_CONTEXT)),
         KeyBinding::new("ctrl-k n", TogglePromptNavigator, Some(KEY_CONTEXT)),
+        KeyBinding::new("ctrl-j", ToggleTerminal, Some(KEY_CONTEXT)),
         KeyBinding::new("cmd-k n", TogglePromptNavigator, Some(KEY_CONTEXT)),
         KeyBinding::new(
             "ctrl-n",
@@ -78,6 +81,8 @@ pub fn bind_keys(cx: &mut gpui_kit::App) {
             Some("ProjectChooser > List"),
         ),
     ]);
+    // After the workspace's bindings: a later `NoAction` cancels a pending chord.
+    crate::terminal_view::bind_keys(cx);
 }
 
 impl Render for Workspace {
@@ -111,6 +116,8 @@ impl Render for Workspace {
         self.ensure_send_catalog(cx);
         self.ensure_provider_logos(cx);
         self.ensure_project_readouts(cx);
+        self.ensure_space_queue(cx);
+        self.ensure_project_starters(cx);
         let palette = cx.global::<Palette>().clone();
         let direction = locale::strings(cx).direction();
         let chat = if self.archive_open {
@@ -130,6 +137,10 @@ impl Render for Workspace {
             self.render_startup(&palette, direction, window, cx)
                 .into_any_element()
         };
+        let side_panel = self
+            .render_side_panel(&palette, direction, window, cx)
+            .or_else(|| self.render_terminal_panel(window, cx));
+        let work_status = side_panel.is_none();
         div()
             .id("workspace")
             .role(Role::Group)
@@ -153,12 +164,17 @@ impl Render for Workspace {
             .on_action(cx.listener(|this, _: &StopGenerating, window, cx| {
                 if this.prompt_panel.is_some() {
                     this.close_prompt_panel(window, cx);
+                } else if this.escape_btw(cx) {
+                    // An open side conversation collapses first.
                 } else {
-                    this.stop(window, cx);
+                    this.escape_to_stop(window, cx);
                 }
             }))
             .on_action(cx.listener(|this, _: &TogglePromptNavigator, window, cx| {
                 this.toggle_prompt_navigator(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &ToggleTerminal, window, cx| {
+                this.toggle_terminal(window, cx);
             }))
             .on_action(cx.listener(|this, _: &ToggleCodeWrap, _, cx| {
                 this.toggle_code_wrap(cx);
@@ -196,10 +212,11 @@ impl Render for Workspace {
                             .min_h_0()
                             .flex_row_from(direction)
                             .child(chat)
-                            .when(self.work_status_inline(window), |this| {
+                            .children(side_panel)
+                            .when(work_status && self.work_status_inline(window), |this| {
                                 this.child(self.render_work_status_panel(&palette, direction, cx))
                             })
-                            .when(self.work_status_overlay, |this| {
+                            .when(work_status && self.work_status_overlay, |this| {
                                 this.child(
                                     div()
                                         .absolute()

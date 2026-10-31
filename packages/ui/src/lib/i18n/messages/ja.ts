@@ -1705,6 +1705,7 @@ export const dict: Record<I18nKey, string> = {
   'filesView.dialog.confirm': '確認',
   'filesView.dialog.delete.confirm': '削除',
   'filesView.editor.saving': '保存中...',
+  'filesView.rename.unresolved': '名前変更の結果を確認できません。保存はブロックされています。更新して両方のパスを再確認してください。',
   'filesView.editor.saved': '保存しました',
   'filesView.editor.saveNowTitle': '今すぐ保存（{shortcut}）- 1.5秒後に自動保存',
   'filesView.editor.saveNowManualTitle': '今すぐ保存（{shortcut}）',

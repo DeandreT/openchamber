@@ -177,11 +177,11 @@ impl IconButton {
     }
 
     /// The button with `action` on pointer and accessibility activation.
-    pub fn render(
+    pub fn render<V: 'static>(
         self,
         palette: &Palette,
-        cx: &Context<Workspace>,
-        action: impl Fn(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static,
+        cx: &Context<V>,
+        action: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static,
     ) -> AnyElement {
         let rest = match self.tone {
             ButtonTone::Quiet | ButtonTone::QuietFilled => palette.muted_foreground,

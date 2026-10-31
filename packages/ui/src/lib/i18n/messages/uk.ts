@@ -1666,6 +1666,7 @@ export const dict: Record<I18nKey, string> = {
   "filesView.dialog.confirm": "Підтвердити",
   "filesView.dialog.delete.confirm": "Видалити",
   "filesView.editor.saving": "Збереження...",
+  'filesView.rename.unresolved': 'Результат перейменування невідомий. Збереження заблоковано. Оновіть, щоб перевірити обидва шляхи.',
   "filesView.editor.saved": "Збережено",
   "filesView.editor.saveNowTitle": "Зберегти зараз ({shortcut}) - автоматично зберігає через 1,5 с",
   "filesView.editor.saveNowManualTitle": "Зберегти зараз ({shortcut})",
