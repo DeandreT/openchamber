@@ -43,6 +43,8 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  'sessionAuth.error.savedSignInUnavailable': 'הכניסה השמורה אינה זמינה. יש להזין את הסיסמה.',
+  'sessionAuth.error.credentialUpdateFailed': 'הכניסה הושלמה. לא ניתן לעדכן את פרטי הכניסה השמורים במכשיר הזה.',
   'opencodeCompatibility.bundled': 'OpenCode מגיע יחד עם OpenChamber. יש לעדכן את OpenChamber כדי לקבל את OpenCode v2.',
   'opencodeCompatibility.title': 'נדרש OpenCode v2',
   'opencodeCompatibility.outdatedTitle': 'עדכן את OpenCode',

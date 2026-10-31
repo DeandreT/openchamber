@@ -3,10 +3,11 @@
 
 use std::fmt;
 
+use crate::request::RequestBuilder;
 use openchamber_native_core::ids::{MessageId, SessionId};
 use openchamber_native_core::send_config::ModelChoice;
 use openchamber_native_core::transcript::{Message, Role};
-use reqwest::{Method, RequestBuilder, Response, StatusCode};
+use reqwest::{Method, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use crate::client::ServerClient;

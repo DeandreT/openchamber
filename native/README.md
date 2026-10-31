@@ -76,6 +76,14 @@ During development, connect only to an isolated server, such as
 
 ## Local recovery state
 
+Password-protected servers show a native sign-in form. Trust this device is
+off initially. Saved client tokens use the operating system's credential store:
+Secret Service on Linux, Keychain on macOS and Credential Manager on Windows.
+Linux needs an available, unlocked Secret Service provider. An unavailable
+store leaves sign-in usable for the session and reports a storage warning;
+there is no plain-text credential file. Tokens are scoped to the endpoint and
+the server identity verified before login.
+
 Connected clients keep drafts, pending root-session creations and text sends in
 `$XDG_CONFIG_HOME/openchamber-native/drafts-and-sends.json`, or the corresponding
 `~/.config` path. The directory is private and the file is mode 0600 on Linux.

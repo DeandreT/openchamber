@@ -997,6 +997,11 @@ fn apply_offline(
 async fn connect(client: &ServerClient, timing: SocketTiming) -> Result<Socket, bool> {
     let url = client.endpoint().websocket_url(SOCKET_ROUTE);
     let mut request = url.as_str().into_client_request().map_err(|_| false)?;
+    request.headers_mut().insert(
+        "origin",
+        HeaderValue::from_str(&client.endpoint().url("").origin().ascii_serialization())
+            .map_err(|_| false)?,
+    );
     if let Some(value) = client.credential().authorization() {
         let mut value = HeaderValue::from_str(&value).map_err(|_| false)?;
         value.set_sensitive(true);

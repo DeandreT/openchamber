@@ -30,6 +30,8 @@ import { stopProcessTree } from "./process-tree.mjs"
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..")
 const FIXTURE_SCRIPT = join(REPO_ROOT, "scripts/perf/fixture-provider.mjs")
 const MAC_BUNDLED_OPENCODE = "/Applications/OpenChamber.app/Contents/Resources/opencode-cli/opencode"
+// Public synthetic fixture data, never a credential for a user's server.
+export const AUTHENTICATION_FIXTURE_PASSWORD = "native-fixture-auth-only"
 
 const HELP = `Usage: bun run profile:serve -- [options]
 
@@ -49,6 +51,7 @@ Options:
                            directly under /tmp/opencode and an explicit binary.
                             Uses owned free ports; cannot combine with --fresh.
   --selections             Fresh model/agent/effort fixture with the same isolation.
+  --authentication         Fresh password-protected fixture with the same isolation.
   --git-fixture            Make the project the Files and Git fixture repository:
                            two commits tracking a bare remote at <root>/remote.git,
                            untracked, gitignored, CRLF and nested-repository entries
@@ -241,7 +244,7 @@ export const isolatedOpencodeConfig = (fixturePort, { interactions = false, sele
 })
 
 /** Isolate both Node's Windows home lookup and OpenCode's XDG paths. */
-export const isolatedServerEnv = ({ state, dist, config, opencodeBinary, inherited = process.env }) => {
+export const isolatedServerEnv = ({ state, dist, config, opencodeBinary, authentication = false, inherited = process.env }) => {
   const home = join(state, "home")
   const env = {}
   // Keep OS process-launch essentials, without provider credentials or app state.
@@ -262,6 +265,7 @@ export const isolatedServerEnv = ({ state, dist, config, opencodeBinary, inherit
     OPENCODE_CONFIG_CONTENT: JSON.stringify(config),
   })
   if (opencodeBinary) env.OPENCODE_BINARY = opencodeBinary
+  if (authentication) env.OPENCHAMBER_UI_PASSWORD = AUTHENTICATION_FIXTURE_PASSWORD
   return env
 }
 
@@ -355,7 +359,7 @@ export const restoreState = (state, seed) => {
  * isolated home under `state`. Resolves once it answers HTTP, with the served
  * main chunk checked against the build's index.html.
  */
-export const startIsolatedServer = async ({ repo, dist, state, project, port, fixturePort, opencodeBinary = defaultOpencodeBinary(), logFile, interactions = false, selections = false, gitFixture = false, signal }) => {
+export const startIsolatedServer = async ({ repo, dist, state, project, port, fixturePort, opencodeBinary = defaultOpencodeBinary(), logFile, interactions = false, selections = false, authentication = false, gitFixture = false, signal }) => {
   signal?.throwIfAborted()
   if (await portInUse(port)) throw new Error(`Port ${port} is already in use; stop that server or pass another port.`)
   signal?.throwIfAborted()
@@ -373,7 +377,7 @@ export const startIsolatedServer = async ({ repo, dist, state, project, port, fi
     writeFileSync(settingsFile, JSON.stringify(settings, null, 2))
   }
   const config = isolatedOpencodeConfig(fixturePort, { interactions, selections })
-  const env = isolatedServerEnv({ state, dist, config, opencodeBinary,
+  const env = isolatedServerEnv({ state, dist, config, opencodeBinary, authentication,
     ...(interactions ? { inherited: { PATH: process.env.PATH, LANG: "C.UTF-8", SHELL: "/bin/sh", TMPDIR: join(state, "tmp") } } : {}),
   })
   const child = spawn(process.execPath, [join(repo, "packages/web/bin/cli.js"), "serve", "--port", String(port), "--foreground"], {
@@ -422,7 +426,7 @@ export const startIsolatedServer = async ({ repo, dist, state, project, port, fi
 }
 
 /** Fresh interaction runs have no seed, repository discovery, or reusable listener. */
-export const startInteractionServer = async ({ root, dist, opencodeBinary, repo = REPO_ROOT, selections = false, signal }) => {
+export const startInteractionServer = async ({ root, dist, opencodeBinary, repo = REPO_ROOT, selections = false, authentication = false, signal }) => {
   signal?.throwIfAborted()
   root = resolve(root)
   if (platform() !== "linux" || dirname(root) !== "/tmp/opencode" || realpathSync(dirname(root)) !== "/tmp/opencode") {
@@ -447,7 +451,7 @@ export const startInteractionServer = async ({ root, dist, opencodeBinary, repo 
   let server
   try {
     server = await startIsolatedServer({ repo, dist, state, project, port: await reservePort(), fixturePort: fixture.port,
-      opencodeBinary, logFile: join(root, "server.log"), interactions: true, selections, signal })
+      opencodeBinary, logFile: join(root, "server.log"), interactions: true, selections, authentication, signal })
   } catch (error) {
     await fixture.stop()
     throw error
@@ -500,6 +504,7 @@ const parseArgs = (argv) => {
     else if (value === "--fresh") options.fresh = true
     else if (value === "--interactions") options.interactions = true
     else if (value === "--selections") options.selections = true
+    else if (value === "--authentication") options.authentication = true
     else if (value === "--git-fixture") options.gitFixture = true
     else if (value === "--port") options.port = Number(argv[++index])
     else if (value === "--fixture-port") options.fixturePort = Number(argv[++index])
@@ -515,9 +520,11 @@ const parseArgs = (argv) => {
 
 const main = async () => {
   const options = parseArgs(process.argv.slice(2))
-  if (options.interactions || options.selections) {
-    if (options.interactions && options.selections) throw new Error("Choose either --interactions or --selections")
-    const mode = options.selections ? "--selections" : "--interactions"
+  if (options.interactions || options.selections || options.authentication) {
+    if ([options.interactions, options.selections, options.authentication].filter(Boolean).length > 1) {
+      throw new Error("Choose one fixture mode: --interactions, --selections or --authentication")
+    }
+    const mode = options.authentication ? "--authentication" : options.selections ? "--selections" : "--interactions"
     if (!options.opencodeBinaryProvided) throw new Error(`${mode} requires an explicit --opencode-binary flag`)
     if (options.fresh) throw new Error(`${mode} cannot restore a seed`)
     try {

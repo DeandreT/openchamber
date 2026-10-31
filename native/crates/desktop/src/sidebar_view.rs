@@ -1167,5 +1167,11 @@ pub(crate) fn failure_text(
         ConnectionFailure::AuthenticationRejected => {
             strings.get("sessionAuth.error.incorrectPassword")
         }
+        ConnectionFailure::ClientAuthenticationRequired => {
+            strings.get("sessionAuth.locked.tunnelDescription")
+        }
+        ConnectionFailure::AuthenticationRateLimited { .. } => {
+            strings.get("sessionAuth.error.rateLimitTitle")
+        }
     }
 }

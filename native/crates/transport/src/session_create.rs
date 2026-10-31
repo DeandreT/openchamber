@@ -4,11 +4,12 @@
 //! retries, deletes a session, or submits a prompt. A missing observation does
 //! not prove that an earlier creation failed.
 
+use crate::request::RequestBuilder;
 use openchamber_native_core::ids::SessionId;
 use openchamber_native_core::path;
 use openchamber_native_core::send_config::ModelChoice;
 use openchamber_native_core::session::SessionRecord;
-use reqwest::{Method, RequestBuilder, StatusCode};
+use reqwest::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 
 use crate::client::ServerClient;

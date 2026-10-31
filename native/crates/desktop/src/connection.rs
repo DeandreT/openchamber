@@ -77,6 +77,8 @@ pub enum ConnectionFailure {
     Incompatible,
     AuthenticationRequired,
     AuthenticationRejected,
+    ClientAuthenticationRequired,
+    AuthenticationRateLimited { retry_after_seconds: Option<u64> },
 }
 
 impl ConnectionFailure {
@@ -86,6 +88,12 @@ impl ConnectionFailure {
             TransportError::Incompatible(_) => Self::Incompatible,
             TransportError::AuthenticationRequired => Self::AuthenticationRequired,
             TransportError::AuthenticationRejected => Self::AuthenticationRejected,
+            TransportError::ClientAuthenticationRequired => Self::ClientAuthenticationRequired,
+            TransportError::AuthenticationRateLimited {
+                retry_after_seconds,
+            } => Self::AuthenticationRateLimited {
+                retry_after_seconds: *retry_after_seconds,
+            },
             _ => Self::Unreachable,
         }
     }
@@ -125,6 +133,7 @@ pub struct Connection {
     pub stale: bool,
     pub connect_task: Option<Task<()>>,
     pub stream_task: Option<Task<()>>,
+    pub authentication_task: Option<Task<()>>,
     pub sessions_task: Option<Task<()>>,
     pub topology_task: Option<Task<()>>,
     /// A pending retry after a transient failure. It survives `restart`,
@@ -133,6 +142,13 @@ pub struct Connection {
 }
 
 impl Connection {
+    /// A launch-supplied password is authorization for one exchange only.
+    pub(crate) fn take_attempt_config(&mut self) -> ServerConfig {
+        let mut config = self.config.clone();
+        config.password = self.config.password.take();
+        config
+    }
+
     pub fn new(config: ServerConfig) -> std::io::Result<Self> {
         Ok(Self {
             config,
@@ -144,6 +160,7 @@ impl Connection {
             stale: false,
             connect_task: None,
             stream_task: None,
+            authentication_task: None,
             sessions_task: None,
             topology_task: None,
             retry_task: None,
@@ -159,6 +176,7 @@ impl Connection {
         self.stale = false;
         self.connect_task = None;
         self.stream_task = None;
+        self.authentication_task = None;
         self.sessions_task = None;
         self.topology_task = None;
         self.generation

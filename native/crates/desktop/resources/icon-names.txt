@@ -90,6 +90,7 @@ inbox-archive
 inbox-unarchive
 delete-bin
 checkbox
+lock-unlock
 send-plane
 draggable
 target-fill

@@ -17,6 +17,7 @@ futures-util = { version = "=0.3.34", default-features = false, features = ["std
 # The emulator, key encoder and paste encoder the web terminal runs as
 # WebAssembly, built from the same Ghostty revision (vendor/libghostty-vt-sys).
 libghostty-vt = { version = "=0.2.0", default-features = false }
+keyring = "=4.2.0"
 # Fenced code is highlighted with tree-sitter; the grammars cover the
 # languages agents most often write.
 gpui-kit = { version = "=0.7.3", features = [

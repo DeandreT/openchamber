@@ -88,6 +88,10 @@ prompt. Attachments and worktree creation remain separate workflows.
   restored prompt, and a fork from an assistant turn's footer are not ported.
 - `connection.rs` holds the configured server, the connection state the views
   explain and the tasks of the current connection attempt.
+- `authentication.rs` owns password entry, the sign-in gate, explicit trust
+  choice and token recovery. `authentication_view.rs` draws the masked form.
+  `credential_store.rs` serializes OS credential operations through `keyring`;
+  saved entries use the canonical endpoint and verified server identity together.
 - `network.rs` owns the Tokio runtime. GPUI tasks await `NetworkTask`s, and
   dropping one aborts its network work.
 - `send_catalog.rs` holds the composer's catalogs per configuration directory
@@ -255,6 +259,27 @@ prompt. Attachments and worktree creation remain separate workflows.
   frames, scrollback, selection, links and the key, paste and mouse encoders.
 
 ## Invariants
+
+- Connection startup verifies server identity and authentication before opening
+  the event stream or loading sessions. A malformed status cannot become either
+  a successful login or a guessed password challenge. A client-token-only
+  challenge offers no password form. Revoked event-stream authentication retires
+  that connection generation and returns to the gate without discarding data.
+- Passwords remain in the secret input and the captured login request only;
+  they never enter drafts, journal snapshots, accessibility values or diagnostics.
+  Trust this device is opt-in. Session-only login keeps the token in memory;
+  trusted login saves it to the operating system's credential store. Failed
+  storage reports a warning and has no file fallback. Storage errors discard
+  backend diagnostic payloads because those can contain secret bytes.
+- A stored credential belongs to both endpoint and server ID. Identity is
+  probed before retrieval or dispatch. A missing stable server ID prevents
+  persistence. Storage work runs off the UI thread in request order; cancellation
+  cannot move a newer operation ahead of an older write still in progress.
+- Sign-in respects the server's Retry-After delay and never retries a password
+  automatically. A later user activation starts a new explicit attempt.
+  A launch-supplied password is consumed by its first connection attempt.
+  A successful login retains the issued token before any later request, so
+  connection recovery uses the token instead of repeating the password POST.
 
 - Switching away from a dirty file asks Save, Discard or Cancel. Only a
   successful save with no remaining edits or an explicit Discard replaces

@@ -44,6 +44,8 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  'sessionAuth.error.savedSignInUnavailable': '无法使用已保存的登录信息。请输入密码。',
+  'sessionAuth.error.credentialUpdateFailed': '已登录。无法更新此设备上保存的凭据。',
   "opencodeCompatibility.bundled": "OpenCode 随 OpenChamber 一起提供。请更新 OpenChamber 以获取 OpenCode v2。",
   "opencodeCompatibility.title": "需要 OpenCode v2",
   "opencodeCompatibility.outdatedTitle": "请更新 OpenCode",

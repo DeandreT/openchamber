@@ -8,6 +8,10 @@
 mod activation;
 mod archive_view;
 mod assets;
+mod authentication;
+#[cfg(test)]
+mod authentication_tests;
+mod authentication_view;
 mod baseline;
 mod blocking_requests;
 #[cfg(test)]
@@ -22,6 +26,7 @@ mod composer_view;
 mod connection;
 mod context_panel;
 mod create_attempt;
+mod credential_store;
 mod diagnostics;
 mod diff_view;
 mod draft_sidebar;

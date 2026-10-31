@@ -68,6 +68,18 @@ async fn upgrade(stream: TcpStream, recorded: Arc<Mutex<Seen>>) -> WsServer {
         .max_frame_size(Some(MAX_FRAME_BYTES));
     let callback = move |request: &Request, response: Response| {
         assert_eq!(request.uri().path(), "/api/terminal/ws");
+        assert_eq!(
+            request
+                .headers()
+                .get("origin")
+                .and_then(|value| value.to_str().ok()),
+            request
+                .headers()
+                .get("host")
+                .and_then(|value| value.to_str().ok())
+                .map(|host| format!("http://{host}"))
+                .as_deref()
+        );
         let header = request
             .headers()
             .get("authorization")

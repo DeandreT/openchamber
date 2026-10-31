@@ -44,6 +44,8 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  'sessionAuth.error.savedSignInUnavailable': '저장된 로그인 정보를 사용할 수 없습니다. 비밀번호를 입력하세요.',
+  'sessionAuth.error.credentialUpdateFailed': '로그인했습니다. 이 기기에 저장된 인증 정보를 업데이트하지 못했습니다.',
   "opencodeCompatibility.bundled": "OpenCode는 OpenChamber에 포함되어 있습니다. OpenCode v2를 사용하려면 OpenChamber를 업데이트하세요.",
   "opencodeCompatibility.title": "OpenCode v2가 필요합니다",
   "opencodeCompatibility.outdatedTitle": "OpenCode를 업데이트하세요",

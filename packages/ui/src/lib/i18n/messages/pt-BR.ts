@@ -44,6 +44,8 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  'sessionAuth.error.savedSignInUnavailable': 'O login salvo não está disponível. Digite sua senha.',
+  'sessionAuth.error.credentialUpdateFailed': 'Login realizado. Não foi possível atualizar as credenciais salvas neste dispositivo.',
   "opencodeCompatibility.bundled": "O OpenCode está incluído no OpenChamber. Atualize o OpenChamber para obter o OpenCode v2.",
   "opencodeCompatibility.title": "OpenCode v2 necessário",
   "opencodeCompatibility.outdatedTitle": "Atualize o OpenCode",

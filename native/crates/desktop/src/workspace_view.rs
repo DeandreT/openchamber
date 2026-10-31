@@ -94,6 +94,13 @@ impl Render for Workspace {
             self.initial_size = None;
         }
         self.sync_composer_placeholder(window, cx);
+        if self.authentication.visible {
+            let palette = cx.global::<Palette>().clone();
+            let direction = locale::strings(cx).direction();
+            return self
+                .render_authentication(&palette, direction, window, cx)
+                .child(frame_markers(markers));
+        }
         if self.prompt_panel.is_some()
             && (self
                 .send_catalog
@@ -232,22 +239,26 @@ impl Render for Workspace {
                     ),
             )
             .child(self.render_session_notice())
-            .when(!markers.is_empty(), |this| {
-                // A zero-size canvas paints after the views above it in the same frame.
-                this.child(
-                    canvas(
-                        |_, _, _| {},
-                        move |_, _, _, _| {
-                            for (marker, started, count) in markers {
-                                let elapsed = started.map(|started| started.elapsed());
-                                diagnostics::mark(marker, elapsed, count);
-                            }
-                        },
-                    )
-                    .size_0(),
-                )
-            })
+            .child(frame_markers(markers))
     }
+}
+
+fn frame_markers(
+    markers: Vec<(
+        diagnostics::Marker,
+        Option<std::time::Instant>,
+        Option<usize>,
+    )>,
+) -> impl IntoElement {
+    canvas(
+        |_, _, _| {},
+        move |_, _, _, _| {
+            for (marker, started, count) in markers {
+                diagnostics::mark(marker, started.map(|started| started.elapsed()), count);
+            }
+        },
+    )
+    .size_0()
 }
 
 impl Workspace {

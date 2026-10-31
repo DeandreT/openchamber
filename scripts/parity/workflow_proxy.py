@@ -127,7 +127,8 @@ class FaultProxy:
             self.sockets.update((upstream, handler.connection))
         try:
             headers = "\r\n".join(f"{key}: {value}" for key, value in handler.headers.items() if key.lower() != "host")
-            upstream.sendall(f"GET {handler.path} HTTP/1.1\r\nHost: {self.host}:{self.port}\r\n{headers}\r\n\r\n".encode())
+            host = handler.headers.get("Host", f"{self.host}:{self.port}")
+            upstream.sendall(f"GET {handler.path} HTTP/1.1\r\nHost: {host}\r\n{headers}\r\n\r\n".encode())
             held = bytearray()
             while not self.stopped.is_set():
                 if held and not self.pause_events.is_set():

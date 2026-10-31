@@ -43,6 +43,8 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  'sessionAuth.error.savedSignInUnavailable': 'De opgeslagen aanmelding is niet beschikbaar. Voer je wachtwoord in.',
+  'sessionAuth.error.credentialUpdateFailed': 'Aangemeld. De opgeslagen inloggegevens op dit apparaat konden niet worden bijgewerkt.',
   "opencodeCompatibility.bundled": "OpenCode is inbegrepen bij OpenChamber. Werk OpenChamber bij om OpenCode v2 te krijgen.",
   "opencodeCompatibility.title": "OpenCode v2 vereist",
   "opencodeCompatibility.outdatedTitle": "OpenCode bijwerken",

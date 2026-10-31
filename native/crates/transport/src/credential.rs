@@ -12,6 +12,18 @@ pub enum Credential {
 }
 
 impl Credential {
+    /// Validates a token received from the server or the OS credential store.
+    /// Whitespace, control bytes and unbounded values cannot reach a header.
+    pub fn from_client_token(token: String) -> Option<Self> {
+        (token.len() > "oc_client_".len()
+            && token.len() <= 4096
+            && token.starts_with("oc_client_")
+            && token
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-'))
+        .then_some(Self::ClientToken(token))
+    }
+
     /// The `Authorization` header value, when there is one.
     pub(crate) fn authorization(&self) -> Option<String> {
         match self {

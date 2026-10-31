@@ -43,6 +43,8 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  'sessionAuth.error.savedSignInUnavailable': 'Die gespeicherte Anmeldung ist nicht verfügbar. Gib dein Passwort ein.',
+  'sessionAuth.error.credentialUpdateFailed': 'Angemeldet. Die gespeicherten Zugangsdaten auf diesem Gerät konnten nicht aktualisiert werden.',
   "opencodeCompatibility.bundled": "OpenCode ist in OpenChamber enthalten. Aktualisieren Sie OpenChamber, um OpenCode v2 zu erhalten.",
   "opencodeCompatibility.title": "OpenCode v2 erforderlich",
   "opencodeCompatibility.outdatedTitle": "OpenCode aktualisieren",

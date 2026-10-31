@@ -163,6 +163,7 @@ pub struct Workspace {
     pub(crate) live_status: HashMap<SessionId, LiveStatus>,
     /// Present when the source is a server.
     pub(crate) connection: Option<Connection>,
+    pub(crate) authentication: crate::authentication::Authentication,
     /// The composer's catalogs and defaults; empty for synthetic data.
     pub(crate) send_catalog: SendCatalog,
     pub(crate) composer_selections: openchamber_native_core::composer_selection::ComposerSelections,
@@ -277,6 +278,7 @@ impl Workspace {
             playback: HashMap::new(),
             live_status: HashMap::new(),
             connection,
+            authentication: crate::authentication::Authentication::new(window, cx),
             send_catalog: SendCatalog::default(),
             composer_selections:
                 openchamber_native_core::composer_selection::ComposerSelections::default(),
@@ -327,6 +329,11 @@ impl Workspace {
             _subscriptions: vec![subscription],
         };
         workspace.rebuild_sidebar();
+        workspace._subscriptions.push(cx.subscribe_in(
+            &workspace.authentication.password,
+            window,
+            Self::on_authentication_input,
+        ));
         // The window opens on a new session, as the web client does.
         workspace.composer_key = workspace.new_session_draft_key();
         workspace.start_persistence(window, cx);
