@@ -44,6 +44,13 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  'desktopHostSwitcher.error.invalidFile': 'Дані збережених екземплярів недійсні. Відновіть hosts.json і оновіть.',
+  'desktopHostSwitcher.error.invalidLabel': 'Використовуйте назву до 256 символів в одному рядку.',
+  'desktopHostSwitcher.error.duplicateUrl': 'Цю адресу сервера вже збережено.',
+  'desktopHostSwitcher.error.profileLimit': 'Забагато збережених екземплярів. Видаліть один і спробуйте ще раз.',
+  'desktopHostSwitcher.error.profilesChanged': 'Збережені екземпляри змінено в іншому місці. Оновіть і спробуйте ще раз.',
+  'desktopHostSwitcher.error.profilesBusy': 'Інше вікно зберігає екземпляри. Спробуйте ще раз.',
+  'desktopHostSwitcher.error.failedToForget': 'Не вдалося видалити збережений вхід. Розблокуйте сховище облікових даних і спробуйте ще раз.',
   'sessionAuth.error.savedSignInUnavailable': 'Збережений вхід недоступний. Введіть пароль.',
   'sessionAuth.error.credentialUpdateFailed': 'Вхід виконано. Не вдалося оновити збережені облікові дані на цьому пристрої.',
   "opencodeCompatibility.bundled": "OpenCode входить до складу OpenChamber. Оновіть OpenChamber, щоб отримати OpenCode v2.",

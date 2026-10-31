@@ -43,6 +43,13 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  'desktopHostSwitcher.error.invalidFile': 'Die gespeicherten Instanzdaten sind ungültig. Stelle hosts.json wieder her und aktualisiere die Ansicht.',
+  'desktopHostSwitcher.error.invalidLabel': 'Verwende einen einzeiligen Namen mit höchstens 256 Zeichen.',
+  'desktopHostSwitcher.error.duplicateUrl': 'Diese Serveradresse ist bereits gespeichert.',
+  'desktopHostSwitcher.error.profileLimit': 'Zu viele gespeicherte Instanzen. Entferne eine und versuche es erneut.',
+  'desktopHostSwitcher.error.profilesChanged': 'Gespeicherte Instanzen wurden andernorts geändert. Aktualisiere die Ansicht und versuche es erneut.',
+  'desktopHostSwitcher.error.profilesBusy': 'Ein anderes Fenster speichert gerade Instanzen. Versuche es erneut.',
+  'desktopHostSwitcher.error.failedToForget': 'Die gespeicherte Anmeldung konnte nicht entfernt werden. Entsperre den Anmeldedatenspeicher und versuche es erneut.',
   'sessionAuth.error.savedSignInUnavailable': 'Die gespeicherte Anmeldung ist nicht verfügbar. Gib dein Passwort ein.',
   'sessionAuth.error.credentialUpdateFailed': 'Angemeldet. Die gespeicherten Zugangsdaten auf diesem Gerät konnten nicht aktualisiert werden.',
   "opencodeCompatibility.bundled": "OpenCode ist in OpenChamber enthalten. Aktualisieren Sie OpenChamber, um OpenCode v2 zu erhalten.",

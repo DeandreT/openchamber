@@ -426,8 +426,12 @@ const streamText = (response, model, text, { delayMs, charactersPerSecond }) => 
   })
 })
 
-const streamCompletion = async (response, model, plan) => {
+const streamCompletion = async (response, model, plan, waitForTurnRelease) => {
   response.write(sseFrame(chunkFrame(model, { role: "assistant", content: "" })))
+  if (plan.delayMs > 0 && waitForTurnRelease) {
+    if (!await waitForTurnRelease(response)) return
+    plan = { ...plan, delayMs: 0 }
+  }
   try {
     await streamText(response, model, plan.text, plan)
   } catch {
@@ -449,7 +453,37 @@ const streamCompletion = async (response, model, plan) => {
 }
 
 export const startFixtureProvider = (port, { interactions = false } = {}) => new Promise((resolveServer, reject) => {
+  let holdTurns = false
+  const waitingTurns = new Set()
+  const waitForTurnRelease = (response) => new Promise((done) => {
+    const closed = () => finish(false)
+    const finish = (released) => {
+      waitingTurns.delete(release)
+      response.off("close", closed)
+      done(released)
+    }
+    const release = () => finish(true)
+    waitingTurns.add(release)
+    response.once("close", closed)
+  })
   const server = createServer(async (request, response) => {
+    if (request.url === "/__fixture/turn-gate") {
+      if (request.method === "PUT") {
+        const body = await readBody(request)
+        if (typeof body?.held !== "boolean") {
+          response.writeHead(400).end()
+          return
+        }
+        holdTurns = body.held
+        if (!holdTurns) for (const release of [...waitingTurns]) release()
+      } else if (request.method !== "GET") {
+        response.writeHead(405).end()
+        return
+      }
+      response.writeHead(200, { "content-type": "application/json" })
+      response.end(JSON.stringify({ held: holdTurns, waiting: waitingTurns.size }))
+      return
+    }
     if (request.method !== "POST" || !request.url?.endsWith("/chat/completions")) {
       response.writeHead(404).end()
       return
@@ -482,7 +516,7 @@ export const startFixtureProvider = (port, { interactions = false } = {}) => new
       return
     }
     response.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" })
-    void streamCompletion(response, body.model, plan)
+    void streamCompletion(response, body.model, plan, holdTurns ? waitForTurnRelease : null)
   })
   server.on("error", reject)
   server.listen(port, "127.0.0.1", () => resolveServer(server))

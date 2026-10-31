@@ -44,6 +44,13 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  'desktopHostSwitcher.error.invalidFile': 'Os dados das instâncias salvas são inválidos. Restaure hosts.json e atualize.',
+  'desktopHostSwitcher.error.invalidLabel': 'Use um nome de até 256 caracteres em uma única linha.',
+  'desktopHostSwitcher.error.duplicateUrl': 'Este endereço de servidor já está salvo.',
+  'desktopHostSwitcher.error.profileLimit': 'Há muitas instâncias salvas. Remova uma e tente novamente.',
+  'desktopHostSwitcher.error.profilesChanged': 'As instâncias salvas foram alteradas em outro lugar. Atualize e tente novamente.',
+  'desktopHostSwitcher.error.profilesBusy': 'Outra janela está salvando instâncias. Tente novamente.',
+  'desktopHostSwitcher.error.failedToForget': 'Não foi possível remover o login salvo. Desbloqueie o gerenciador de credenciais e tente novamente.',
   'sessionAuth.error.savedSignInUnavailable': 'O login salvo não está disponível. Digite sua senha.',
   'sessionAuth.error.credentialUpdateFailed': 'Login realizado. Não foi possível atualizar as credenciais salvas neste dispositivo.',
   "opencodeCompatibility.bundled": "O OpenCode está incluído no OpenChamber. Atualize o OpenChamber para obter o OpenCode v2.",

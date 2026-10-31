@@ -5129,6 +5129,7 @@ dependencies = [
  "chrono",
  "gpui-kit",
  "keyring",
+ "keyring-core",
  "libghostty-vt",
  "openchamber-native-core",
  "openchamber-native-transport",

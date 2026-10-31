@@ -26,6 +26,13 @@ pub struct ServerConfig {
 }
 
 impl ServerConfig {
+    pub(crate) fn for_endpoint(endpoint: Endpoint) -> Self {
+        Self {
+            endpoint,
+            password: None,
+            client: describe_client(),
+        }
+    }
     /// The server named in the environment, if one is.
     pub fn from_env() -> Option<Result<Self, TransportError>> {
         let url = std::env::var(SERVER_VARIABLE).ok()?;
@@ -120,6 +127,7 @@ pub enum ConnectionState {
 /// the server or a running turn.
 pub struct Connection {
     pub config: ServerConfig,
+    pub(crate) display_label: Option<String>,
     pub network: Network,
     /// Present once the identity check and authentication succeeded.
     pub client: Option<ServerClient>,
@@ -142,6 +150,12 @@ pub struct Connection {
 }
 
 impl Connection {
+    /// Drops obsolete reads and subscriptions while preserving the executor
+    /// that captured mutation chains may still be using.
+    pub(crate) fn into_network(self) -> Network {
+        self.network
+    }
+
     /// A launch-supplied password is authorization for one exchange only.
     pub(crate) fn take_attempt_config(&mut self) -> ServerConfig {
         let mut config = self.config.clone();
@@ -152,6 +166,7 @@ impl Connection {
     pub fn new(config: ServerConfig) -> std::io::Result<Self> {
         Ok(Self {
             config,
+            display_label: None,
             network: Network::new()?,
             client: None,
             state: ConnectionState::Connecting,

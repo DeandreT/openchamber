@@ -43,6 +43,13 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  'desktopHostSwitcher.error.invalidFile': 'Les données des instances enregistrées sont invalides. Restaurez hosts.json et actualisez.',
+  'desktopHostSwitcher.error.invalidLabel': 'Utilisez un nom de 256 caractères maximum sur une seule ligne.',
+  'desktopHostSwitcher.error.duplicateUrl': 'Cette adresse de serveur est déjà enregistrée.',
+  'desktopHostSwitcher.error.profileLimit': 'Trop d\'instances enregistrées. Supprimez-en une et réessayez.',
+  'desktopHostSwitcher.error.profilesChanged': 'Les instances enregistrées ont été modifiées ailleurs. Actualisez et réessayez.',
+  'desktopHostSwitcher.error.profilesBusy': 'Une autre fenêtre enregistre des instances. Réessayez.',
+  'desktopHostSwitcher.error.failedToForget': 'Impossible de supprimer la connexion enregistrée. Déverrouillez le gestionnaire d\'identifiants et réessayez.',
   'sessionAuth.error.savedSignInUnavailable': 'La connexion enregistrée est indisponible. Saisissez votre mot de passe.',
   'sessionAuth.error.credentialUpdateFailed': 'Connexion réussie. Impossible de mettre à jour les identifiants enregistrés sur cet appareil.',
   "opencodeCompatibility.bundled": "OpenCode est inclus dans OpenChamber. Mettez OpenChamber à jour pour obtenir OpenCode v2.",

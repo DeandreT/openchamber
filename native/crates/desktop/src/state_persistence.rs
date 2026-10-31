@@ -116,7 +116,7 @@ impl Workspace {
     }
 
     pub(crate) fn start_persistence(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.is_synthetic() {
+        if self.is_synthetic() || !matches!(self.persistence.status, Status::Disabled) {
             return;
         }
         let Some(path) =
@@ -329,6 +329,31 @@ impl Workspace {
 
     /// Close controls wait for the last full snapshot and release the file lock.
     pub(crate) fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.host_close.is_some() {
+            return;
+        }
+        if let Some(pending) = self.take_profile_flush(cx) {
+            self.host_close = Some(cx.spawn_in(window, async move |this, cx| {
+                pending.await;
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.host_close = None;
+                    let saved = this.host_manager.as_ref().is_none_or(|manager| {
+                        manager.update(cx, |manager, _| manager.finish_close())
+                    });
+                    if saved {
+                        this.request_close(window, cx);
+                    } else {
+                        this.notify_mutation_failure(
+                            "desktopHostSwitcher.error.failedToSave",
+                            window,
+                            cx,
+                        );
+                        cx.notify();
+                    }
+                });
+            }));
+            return;
+        }
         if self.is_synthetic() || !self.persistence.loaded() {
             window.remove_window();
             return;
@@ -338,6 +363,7 @@ impl Workspace {
         }
         self.persistence.debounce = None;
         let Some((stamp, saved)) = self.persistence_barrier(cx) else {
+            self.unfreeze_host_manager(cx);
             return;
         };
         self.persistence.status = Status::Closing;
@@ -356,6 +382,7 @@ impl Workspace {
                 // A stopped worker keeps rejecting writes; it is never reopened
                 // over possibly newer data from another process.
                 this.persistence.status = Status::Ready;
+                this.unfreeze_host_manager(cx);
                 this.record_persistence(stamp, &saved, cx);
                 None
             });
@@ -380,6 +407,7 @@ impl Workspace {
                         loaded: true,
                         issue,
                     };
+                    this.unfreeze_host_manager(cx);
                     cx.notify();
                 }
             });

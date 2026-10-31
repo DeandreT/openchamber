@@ -43,6 +43,13 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  'desktopHostSwitcher.error.invalidFile': 'De opgeslagen instantiegegevens zijn ongeldig. Herstel hosts.json en vernieuw.',
+  'desktopHostSwitcher.error.invalidLabel': 'Gebruik een naam van maximaal 256 tekens op één regel.',
+  'desktopHostSwitcher.error.duplicateUrl': 'Dit serveradres is al opgeslagen.',
+  'desktopHostSwitcher.error.profileLimit': 'Te veel opgeslagen instanties. Verwijder er een en probeer het opnieuw.',
+  'desktopHostSwitcher.error.profilesChanged': 'De opgeslagen instanties zijn elders gewijzigd. Vernieuw en probeer het opnieuw.',
+  'desktopHostSwitcher.error.profilesBusy': 'Een ander venster slaat instanties op. Probeer het opnieuw.',
+  'desktopHostSwitcher.error.failedToForget': 'De opgeslagen aanmelding kon niet worden verwijderd. Ontgrendel de sleutelbos en probeer het opnieuw.',
   'sessionAuth.error.savedSignInUnavailable': 'De opgeslagen aanmelding is niet beschikbaar. Voer je wachtwoord in.',
   'sessionAuth.error.credentialUpdateFailed': 'Aangemeld. De opgeslagen inloggegevens op dit apparaat konden niet worden bijgewerkt.',
   "opencodeCompatibility.bundled": "OpenCode is inbegrepen bij OpenChamber. Werk OpenChamber bij om OpenCode v2 te krijgen.",

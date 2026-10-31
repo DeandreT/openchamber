@@ -43,6 +43,13 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  'desktopHostSwitcher.error.invalidFile': 'נתוני המופעים השמורים אינם תקינים. יש לשחזר את hosts.json ולרענן.',
+  'desktopHostSwitcher.error.invalidLabel': 'יש להשתמש בשם של עד 256 תווים בשורה אחת.',
+  'desktopHostSwitcher.error.duplicateUrl': 'כתובת השרת הזאת כבר שמורה.',
+  'desktopHostSwitcher.error.profileLimit': 'יש יותר מדי מופעים שמורים. יש להסיר אחד ולנסות שוב.',
+  'desktopHostSwitcher.error.profilesChanged': 'המופעים השמורים שונו במקום אחר. יש לרענן ולנסות שוב.',
+  'desktopHostSwitcher.error.profilesBusy': 'חלון אחר שומר מופעים כעת. יש לנסות שוב.',
+  'desktopHostSwitcher.error.failedToForget': 'לא ניתן להסיר את הכניסה השמורה. יש לבטל את נעילת מאגר פרטי הכניסה ולנסות שוב.',
   'sessionAuth.error.savedSignInUnavailable': 'הכניסה השמורה אינה זמינה. יש להזין את הסיסמה.',
   'sessionAuth.error.credentialUpdateFailed': 'הכניסה הושלמה. לא ניתן לעדכן את פרטי הכניסה השמורים במכשיר הזה.',
   'opencodeCompatibility.bundled': 'OpenCode מגיע יחד עם OpenChamber. יש לעדכן את OpenChamber כדי לקבל את OpenCode v2.',

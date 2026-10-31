@@ -44,6 +44,13 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  'desktopHostSwitcher.error.invalidFile': '已儲存的執行個體資料無效。請還原 hosts.json 後重新整理。',
+  'desktopHostSwitcher.error.invalidLabel': '請使用不超過 256 個字元的單行名稱。',
+  'desktopHostSwitcher.error.duplicateUrl': '此伺服器位址已儲存。',
+  'desktopHostSwitcher.error.profileLimit': '已儲存的執行個體過多。請移除一個後重試。',
+  'desktopHostSwitcher.error.profilesChanged': '已儲存的執行個體已在其他位置變更。請重新整理後重試。',
+  'desktopHostSwitcher.error.profilesBusy': '另一個視窗正在儲存執行個體。請重試。',
+  'desktopHostSwitcher.error.failedToForget': '無法移除已儲存的登入資訊。請解鎖認證資訊儲存庫後重試。',
   'sessionAuth.error.savedSignInUnavailable': '無法使用已儲存的登入資訊。請輸入密碼。',
   'sessionAuth.error.credentialUpdateFailed': '已登入。無法更新此裝置上儲存的認證資訊。',
   "opencodeCompatibility.bundled": "OpenCode 隨 OpenChamber 一起提供。請更新 OpenChamber 以取得 OpenCode v2。",

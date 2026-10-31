@@ -163,7 +163,10 @@ pub struct Workspace {
     pub(crate) live_status: HashMap<SessionId, LiveStatus>,
     /// Present when the source is a server.
     pub(crate) connection: Option<Connection>,
+    pub(crate) retired_networks: Vec<(RuntimeId, crate::network::Network)>,
     pub(crate) authentication: crate::authentication::Authentication,
+    pub(crate) host_manager: Option<Entity<crate::host_manager::HostManager>>,
+    pub(crate) host_close: Option<Task<()>>,
     /// The composer's catalogs and defaults; empty for synthetic data.
     pub(crate) send_catalog: SendCatalog,
     pub(crate) composer_selections: openchamber_native_core::composer_selection::ComposerSelections,
@@ -278,7 +281,10 @@ impl Workspace {
             playback: HashMap::new(),
             live_status: HashMap::new(),
             connection,
+            retired_networks: Vec::new(),
             authentication: crate::authentication::Authentication::new(window, cx),
+            host_manager: None,
+            host_close: None,
             send_catalog: SendCatalog::default(),
             composer_selections:
                 openchamber_native_core::composer_selection::ComposerSelections::default(),
@@ -340,8 +346,12 @@ impl Workspace {
         workspace
             ._subscriptions
             .push(cx.on_app_quit(|workspace, cx| {
+                let hosts = workspace.take_profile_flush(cx);
                 let flushed = workspace.flush_before_quit(cx);
                 async move {
+                    if let Some(hosts) = hosts {
+                        hosts.await;
+                    }
                     if let Some(flushed) = flushed {
                         let _ = flushed.await;
                     }

@@ -131,6 +131,31 @@ def qualify(args):
             if "authentication-password" in {node.get_accessible_id() for node in client._walk()}:
                 raise RuntimeError("trusted sign-in was not restored")
             client.screenshot(args.output / "trusted-reopened.png")
+            client.click('instance-switcher')
+            if not client.wait_for({'elements': ['host-add']}, 15):
+                raise RuntimeError('host management did not open')
+            client.click('host-add')
+            for field, value in [('host-label', 'Authentication fixture'), ('host-url', fixture.url)]:
+                if not client.wait_for({'elements': [field]}, 15):
+                    raise RuntimeError('host editor did not open')
+                client.click(field)
+                command(env, 'xdotool', 'key', '--clearmodifiers', 'ctrl+a')
+                command(env, 'xdotool', 'type', '--clearmodifiers', value)
+            client.click('host-save')
+            profile_path = args.output / 'native-state/config/openchamber-native/hosts.json'
+            profile = until('fixture host was not saved', lambda: next((
+                item for item in json.loads(profile_path.read_text())['hosts']
+                if item['label'] == 'Authentication fixture'
+            ), None) if profile_path.is_file() else None, 15)
+            client.click('host-delete:' + profile['id'])
+            until('deleting the host did not finish', lambda: not json.loads(profile_path.read_text())['hosts'], 15)
+            client.close()
+            client = launch('forgotten-reopened')
+            if not client.wait_for({'elements': ['authentication-password']}, 15):
+                raise RuntimeError('deleting the host did not forget saved sign-in')
+            client.click('authentication-trust')
+            enter_password(PASSWORD)
+            client.wait_for_marker('sessions-shown', 40)
             probe = object.__new__(Interaction)
             probe.client = client
             composer = until("composer did not appear after sign-in", probe.composer, 15)
@@ -156,7 +181,7 @@ def qualify(args):
             if editable_text(probe.composer()) != draft:
                 raise RuntimeError("authentication recovery lost the unsent draft")
             result["checks"] = ["password-required", "wrong-password", "secret-accessibility", "session-only-restart",
-                                "trusted-restart", "http-revocation", "draft-preserved"]
+                                "trusted-restart", "delete-forgets-sign-in", "http-revocation", "draft-preserved"]
             for path in (args.output / "native-state").rglob("*"):
                 if path.is_file() and PASSWORD.encode() in path.read_bytes():
                     raise RuntimeError("password was persisted in native application state")

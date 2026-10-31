@@ -43,6 +43,13 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  'desktopHostSwitcher.error.invalidFile': 'Kaydedilmiş örnek verileri geçersiz. hosts.json dosyasını geri yükleyip yenileyin.',
+  'desktopHostSwitcher.error.invalidLabel': 'Tek satırda en fazla 256 karakterlik bir ad kullanın.',
+  'desktopHostSwitcher.error.duplicateUrl': 'Bu sunucu adresi zaten kayıtlı.',
+  'desktopHostSwitcher.error.profileLimit': 'Çok fazla kayıtlı örnek var. Birini kaldırıp tekrar deneyin.',
+  'desktopHostSwitcher.error.profilesChanged': 'Kayıtlı örnekler başka bir yerde değiştirildi. Yenileyip tekrar deneyin.',
+  'desktopHostSwitcher.error.profilesBusy': 'Başka bir pencere örnekleri kaydediyor. Tekrar deneyin.',
+  'desktopHostSwitcher.error.failedToForget': 'Kaydedilmiş oturum açma bilgileri silinemedi. Kimlik bilgisi deposunun kilidini açıp tekrar deneyin.',
   'sessionAuth.error.savedSignInUnavailable': 'Kaydedilmiş oturum açma bilgileri kullanılamıyor. Parolanızı girin.',
   'sessionAuth.error.credentialUpdateFailed': 'Oturum açıldı. Bu cihazda kaydedilmiş kimlik bilgileri güncellenemedi.',
   "opencodeCompatibility.bundled": "OpenCode, OpenChamber ile birlikte gelir. OpenCode v2 için OpenChamber’ı güncelleyin.",

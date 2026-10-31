@@ -65,6 +65,13 @@ The shared fresh-root server owner keeps process and credential isolation in
 one place. The selection configuration is a fixed opt-in branch, so the runner
 cannot inject arbitrary project settings into an interaction run.
 
+The synthetic provider's `/__fixture/turn-gate` control is off by default.
+Its PUT `{ "held": true }` holds delayed think turns until PUT
+`{ "held": false }`; GET reports the held state and waiting count. Client
+disconnection removes its waiter. Queue qualification uses this explicit
+release so UI interaction speed cannot make the base turn finish mid-scenario.
+Ordinary performance captures retain their configured think delay.
+
 ## Native permission mode qualification
 
 `python3 scripts/parity/native_permission_modes.py --scale 1.25` takes the same

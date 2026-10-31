@@ -799,6 +799,60 @@ fn fork_on_enter_is_never_queued(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn host_switch_keeps_a_committed_queue_take_alive_until_its_text_is_restored(
+    cx: &mut TestAppContext,
+) {
+    let harness = harness(cx, FollowUpBehavior::Queue);
+    harness.type_and_enter(cx, "retained from old host", false);
+    wait(cx, |cx| harness.queued(cx).len() == 1);
+    let owner = cx
+        .read(|cx| harness.workspace.read(cx).composer_key.clone())
+        .expect("draft owner");
+    let id = cx.read(|cx| harness.workspace.read(cx).selected_queue()[0].id.clone());
+    harness.server.state.lock().expect("state").hold = Some("/take");
+    harness.act(cx, |workspace, window, cx| {
+        workspace.edit_queued(&id, window, cx)
+    });
+    wait(cx, |_| {
+        harness.server.state.lock().expect("state").items.is_empty()
+    });
+    harness.act(cx, |workspace, window, cx| {
+        workspace.connect_to_host(
+            Endpoint::parse("http://127.0.0.1:1/").expect("endpoint"),
+            window,
+            cx,
+        );
+        workspace.switch_runtime(
+            openchamber_native_core::ids::RuntimeId::from("new-host"),
+            window,
+            cx,
+        );
+        workspace.release_retired_networks();
+        assert_eq!(
+            workspace.retired_networks.len(),
+            1,
+            "the committed take still needs its response"
+        );
+    });
+    harness.server.state.lock().expect("state").hold = None;
+    wait(cx, |cx| {
+        cx.read(|cx| {
+            harness
+                .workspace
+                .read(cx)
+                .drafts
+                .get(&owner)
+                .is_some_and(|draft| draft.text == "retained from old host")
+        })
+    });
+    assert_ne!(
+        harness.composer(cx),
+        "retained from old host",
+        "old-host content stays out of the new host's composer"
+    );
+}
+
+#[gpui_kit::test]
 fn btw_on_ctrl_enter_never_takes_the_queue(cx: &mut TestAppContext) {
     // The scripted server cannot fork, so the side conversation's own
     // failure path may give the question back; it is never queued.

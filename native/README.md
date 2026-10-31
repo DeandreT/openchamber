@@ -74,6 +74,15 @@ During development, connect only to an isolated server, such as
 `bun run profile:serve -- --root <dir> --port <port>`; see
 `scripts/perf/DOCUMENTATION.md`.
 
+The instance control also selects saved direct-server profiles. An explicit
+`OPENCHAMBER_NATIVE_SERVER` takes precedence at startup, followed by a saved
+default profile. `OPENCHAMBER_NATIVE_WORKLOAD` explicitly selects synthetic
+data when no server environment variable is set. Host profiles contain labels
+and endpoints only; sign-in credentials remain in the OS store.
+Profiles live in `hosts.json` beside the native mutation journal. A versioned
+snapshot and a file lock prevent one window from overwriting another's newer
+profile edit. A malformed or future-format file remains untouched.
+
 ## Local recovery state
 
 Password-protected servers show a native sign-in form. Trust this device is

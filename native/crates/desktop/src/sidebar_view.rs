@@ -369,7 +369,7 @@ impl Workspace {
                                 .child(instance.clone()),
                         ),
                     cx,
-                    |_, _, _| {},
+                    |this, window, cx| this.open_host_picker(window, cx),
                 )
                 .test_support(),
             )
@@ -377,6 +377,13 @@ impl Workspace {
 
     /// The name of the instance this window shows: Local for this machine.
     fn instance_name(&self, strings: &Strings) -> SharedString {
+        if let Some(label) = self
+            .connection
+            .as_ref()
+            .and_then(|connection| connection.display_label.as_ref())
+        {
+            return label.clone().into();
+        }
         match &self.connection {
             Some(connection) if !connection.config.endpoint.is_loopback() => {
                 connection.config.endpoint.authority().into()

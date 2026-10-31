@@ -88,6 +88,7 @@ pub fn bind_keys(cx: &mut gpui_kit::App) {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let markers = self.take_frame_markers();
+        self.release_retired_networks();
         if let Some(initial_size) = &self.initial_size
             && !initial_size.hold(window)
         {

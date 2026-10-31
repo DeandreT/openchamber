@@ -44,6 +44,13 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  'desktopHostSwitcher.error.invalidFile': 'Dane zapisanych instancji są nieprawidłowe. Przywróć hosts.json i odśwież.',
+  'desktopHostSwitcher.error.invalidLabel': 'Użyj nazwy o długości do 256 znaków w jednym wierszu.',
+  'desktopHostSwitcher.error.duplicateUrl': 'Ten adres serwera jest już zapisany.',
+  'desktopHostSwitcher.error.profileLimit': 'Zbyt wiele zapisanych instancji. Usuń jedną i spróbuj ponownie.',
+  'desktopHostSwitcher.error.profilesChanged': 'Zapisane instancje zmieniono w innym miejscu. Odśwież i spróbuj ponownie.',
+  'desktopHostSwitcher.error.profilesBusy': 'Inne okno zapisuje instancje. Spróbuj ponownie.',
+  'desktopHostSwitcher.error.failedToForget': 'Nie udało się usunąć zapisanego logowania. Odblokuj magazyn poświadczeń i spróbuj ponownie.',
   'sessionAuth.error.savedSignInUnavailable': 'Zapisane logowanie jest niedostępne. Wpisz hasło.',
   'sessionAuth.error.credentialUpdateFailed': 'Zalogowano. Nie udało się zaktualizować danych logowania zapisanych na tym urządzeniu.',
   "opencodeCompatibility.bundled": "OpenCode jest dołączony do OpenChamber. Zaktualizuj OpenChamber, aby uzyskać OpenCode v2.",

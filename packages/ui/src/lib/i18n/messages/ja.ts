@@ -44,6 +44,13 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict: Record<I18nKey, string> = {
+  'desktopHostSwitcher.error.invalidFile': '保存されたインスタンスデータが無効です。hosts.json を復元して更新してください。',
+  'desktopHostSwitcher.error.invalidLabel': 'ラベルは256文字以内の1行で入力してください。',
+  'desktopHostSwitcher.error.duplicateUrl': 'このサーバーアドレスはすでに保存されています。',
+  'desktopHostSwitcher.error.profileLimit': '保存されたインスタンスが多すぎます。1つ削除して再試行してください。',
+  'desktopHostSwitcher.error.profilesChanged': '保存されたインスタンスが別の場所で変更されました。更新して再試行してください。',
+  'desktopHostSwitcher.error.profilesBusy': '別のウィンドウがインスタンスを保存しています。再試行してください。',
+  'desktopHostSwitcher.error.failedToForget': '保存済みのログイン情報を削除できませんでした。認証情報ストアのロックを解除して、もう一度お試しください。',
   'sessionAuth.error.savedSignInUnavailable': '保存済みのログインを利用できません。パスワードを入力してください。',
   'sessionAuth.error.credentialUpdateFailed': 'ログインしました。このデバイスに保存された認証情報を更新できませんでした。',
   "opencodeCompatibility.bundled": "OpenCode は OpenChamber に同梱されています。OpenCode v2 を利用するには OpenChamber を更新してください。",
