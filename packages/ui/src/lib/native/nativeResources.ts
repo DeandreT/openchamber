@@ -18,6 +18,8 @@ import { getReadableThemeColors } from '@/lib/theme/readableColors';
 import { agentColorPalette } from '@/lib/agentColorPalette';
 import { PROVIDER_LOGO_ALIASES } from '@/lib/providerLogoCandidates';
 import { getLocaleDirection, LOCALES, type Locale } from '@/lib/i18n/runtime';
+import { getDefaultMagicPromptTemplate } from '@/lib/magicPrompts';
+import { MAGIC_PROMPT_COMMANDS } from '@/components/chat/composer/submit/slashCommands';
 import { getIntlLocale } from '@/lib/i18n/intl';
 import type { I18nDictionary } from '@/lib/i18n/store';
 import { dict as en } from '@/lib/i18n/messages/en';
@@ -49,6 +51,7 @@ export const NATIVE_ICON_NAMES_PATH = `${resourcesDirectory}/icon-names.txt`;
 export const NATIVE_ICONS_PATH = `${resourcesDirectory}/icons.json`;
 export const NATIVE_PROVIDER_LOGOS_PATH = `${resourcesDirectory}/provider-logos.json`;
 export const NATIVE_DATE_FORMATS_PATH = `${resourcesDirectory}/date-formats.json`;
+export const NATIVE_MAGIC_PROMPTS_PATH = `${resourcesDirectory}/magic-prompts.json`;
 /** The provider logos the web bundles, one SVG per provider ID. */
 const PROVIDER_LOGOS_DIRECTORY = 'packages/ui/src/assets/provider-logos';
 
@@ -201,6 +204,44 @@ export const renderNativeDateFormats = (): string => {
   return `${JSON.stringify(document, null, 2)}\n`;
 };
 
+/** Stands for the typed argument while a command's variables are exported. */
+const ARGUMENT_SENTINEL = '\u0000argument\u0000';
+
+/**
+ * Exports the composer's prompt-pair commands with the built-in templates of
+ * their prompts. A command's variables are functions of its argument; each is
+ * exported as its value without an argument and with `{{argument}}` standing
+ * for one, so the native client derives the same text.
+ */
+export const renderNativeMagicPrompts = (): string => {
+  const templates: Record<string, string> = {};
+  const commands = MAGIC_PROMPT_COMMANDS.map((command) => {
+    templates[command.visiblePrompt] = getDefaultMagicPromptTemplate(command.visiblePrompt);
+    templates[command.instructionsPrompt] = getDefaultMagicPromptTemplate(command.instructionsPrompt);
+    const empty = command.buildVariables?.('') ?? {};
+    const filled = command.buildVariables?.(ARGUMENT_SENTINEL) ?? {};
+    const variables = (['visible', 'instructions'] as const).flatMap((side) => Object.keys(filled[side] ?? {}).sort().map((key) => {
+      const withArgument = filled[side]?.[key] ?? '';
+      if (withArgument.split(ARGUMENT_SENTINEL).length > 2) throw new Error(`${command.name} uses its argument twice in ${key}`);
+      return {
+        side,
+        key,
+        empty: empty[side]?.[key] ?? '',
+        withArgument: withArgument.replace(ARGUMENT_SENTINEL, '{{argument}}'),
+      };
+    }));
+    return {
+      name: command.name,
+      visible: command.visiblePrompt,
+      instructions: command.instructionsPrompt,
+      requiresSession: command.requires === 'session',
+      errorToastKey: command.errorToastKey,
+      variables,
+    };
+  });
+  return `${JSON.stringify({ commands, templates }, null, 2)}\n`;
+};
+
 const writeNativeResources = (): string[] => {
   const outputs: Array<[string, string]> = [
     [NATIVE_LOCALES_PATH, renderNativeLocales()],
@@ -208,6 +249,7 @@ const writeNativeResources = (): string[] => {
     [NATIVE_ICONS_PATH, renderNativeIcons()],
     [NATIVE_PROVIDER_LOGOS_PATH, renderNativeProviderLogos()],
     [NATIVE_DATE_FORMATS_PATH, renderNativeDateFormats()],
+    [NATIVE_MAGIC_PROMPTS_PATH, renderNativeMagicPrompts()],
   ];
   return outputs.map(([relativePath, content]) => {
     const target = resolve(repoRoot, relativePath);

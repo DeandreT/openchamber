@@ -1646,6 +1646,7 @@ export const dict = {
   'filesView.dialog.confirm': 'تأكيد',
   'filesView.dialog.delete.confirm': 'حذف',
   'filesView.editor.saving': 'جارٍ الحفظ…',
+  'filesView.rename.unresolved': 'نتيجة إعادة التسمية غير معروفة. الحفظ محظور. حدّث للتحقق من المسارين مجددًا.',
   'filesView.editor.saved': 'تم الحفظ',
   'filesView.editor.saveNowTitle': 'احفظ الآن ({shortcut}) - يُحفظ تلقائيًا بعد 1.5 ثانية',
   'filesView.editor.saveNowManualTitle': 'احفظ الآن ({shortcut})',

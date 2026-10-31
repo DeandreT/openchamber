@@ -31,6 +31,16 @@ rendering asks for a projection and dispatches an action.
   `project_actions.rs` which project action its row shows and with which
   glyph, and `tool_names.rs` OpenCode's tool name comparison, including
   which finished calls may change what Git reports.
+- `file_tree.rs` holds the Files surface's tree: one snapshot per listed
+  folder, expanded and selected paths and the visible rows (folders first,
+  then names in `localeCompare` order; dotfiles shown, `node_modules` left
+  out until gitignored entries are shown). `file_draft.rs` ports
+  `fileEditorContent.ts`, `fileStatChange.ts` and `fileContentPoller.ts`: the
+  open file's loaded text, line ending, draft, one-snapshot saves and the
+  poll steps. `git_changes.rs` splits a status into staged and unstaged rows,
+  orders index mutations and status reads, builds network operation requests
+  for the tracked remote and checks operation snapshots
+  (`boundGitNetworkOperation.ts`).
 - `provider_logo.rs` ports the provider logo lookup of `useProviderLogo.ts`
   (bundled candidates, then models.dev) and inverts an SVG's paint colors for
   dark themes, as the web's `dark:invert` does.
@@ -61,6 +71,15 @@ rendering asks for a projection and dispatches an action.
   clocks. User and assistant messages carry parts; every
   other OpenCode record (synthetic, system, skill, shell, compaction, switched
   agent, model or location, idle) is a notice with one line of text.
+- `branching.rs` decides where fork, staged revert and `/btw` cut a loaded
+  transcript (`session-actions.ts`, `revertedMessageDockState.ts`,
+  `btw.ts`): a prompt's cut starts at its leading synthetic context, a
+  marker hides itself and what follows, `/fork` keeps the last finished turn
+  and `/btw` forks at the newest step that finished with `stop`. A record
+  carries its revert marker (`SessionRecord::revert`) and `/btw` links
+  (`BtwMetadata`); a synthetic record carries its description and subagent
+  run, dispatched-session result and workflow report (`SyntheticFacts`), and
+  a tool call the child session it names. Each report starts a new turn boundary.
 - `session_index.rs` ports the global session list of
   `useGlobalSessionsStore.ts` and `session-event-router.ts`: active and
   archived records, page merges, complete loads and live session changes.
@@ -86,6 +105,13 @@ rendering asks for a projection and dispatches an action.
 - `ownership.rs` also derives configured projects from settings paths and a
   project's linked worktrees from the server's listing, as the web client
   does.
+- `message_queue.rs` ports the projection of `messageQueueStore.ts`: the
+  server-owned queue keyed by runtime, normalized directory and session, the
+  owner (host or isolated space) that answers for each directory, which
+  messages a client may take itself (`takeable`), and the follow-up behavior
+  setting. `draft_starters.rs` ports the starter lists of
+  `draftStarters.ts` and `useDraftStarters.ts`; `magic_prompt.rs` ports the
+  prompt-pair commands' parsing, variables and template rendering.
 - `draft.rs` and `scroll_memory.rs` hold client-owned state keyed by the
   runtime and the session or draft identity captured when it was created.
 - `synthetic.rs` produces the documented offline workloads. It is part of the
@@ -95,7 +121,34 @@ The desktop crate owns timers, focus, text layout and windows. The transport
 crate owns wire parsing and authority checks, and hands the core records and
 `TranscriptEvent`s.
 
+- `terminal_tabs.rs` holds each working directory's terminal tabs: their
+  order, the active tab, the server terminal each shows and its lifecycle
+  (`Starting`, `Running`, `Exited`, `StartFailed`, `Ended`). It adopts the
+  server's interactive terminals from an authoritative list. The server owns
+  the terminals; tabs live for the window's lifetime and are not persisted.
+
 ## Invariants
+
+- A folder has at most one listing in flight. A mutation's listing replaces
+  it, a poll never does, and a listing from before a filter change is
+  dropped. A failed listing keeps the folder's last entries and reports its
+  failure; a failed first root listing is not an empty folder.
+- An open file's dirty draft is never replaced by an external change. A clean
+  file takes a change only after two reads agree, and a read started before a
+  load, swap or save is dropped. A save writes one snapshot, so edits made
+  while it runs stay dirty; autosave never writes an empty draft over a
+  non-empty file, and a read-only file never saves. A file that went missing
+  with a dirty draft keeps the draft; a clean one shows the failure and
+  reloads once it is back.
+- Line endings follow the file: the editor holds `\n`, and a save writes the
+  ending the file mostly used when it loaded.
+- Only the newest status read applies, and a failed read keeps the last
+  status. Index mutations run one at a time in the order asked.
+- A network operation request names the tracked remote (the longest remote
+  name the tracking ref starts with) and its branch; pull and push without
+  tracking, a detached HEAD, a missing or stale remote grant and a push over
+  an anonymous grant are refusals, never a guessed remote. A finished
+  operation never changes its outcome and completed steps never disappear.
 
 - Blocking-request keys include runtime, remote directory, actual session or
   location owner, and a typed permission/form ID. A location-owned form is never
@@ -175,6 +228,17 @@ crate owns wire parsing and authority checks, and hands the core records and
   including IDs not loaded yet. History reads and older pages discard those
   records when the deletion is newer than the read. A later authoritative
   live record may restore the ID.
+- A committed revert (`Transcript::truncate_from`) removes the boundary and
+  every later message and records each removal, so a read started before the
+  commit cannot restore them. A boundary the transcript does not hold trims
+  everything only when the session's own marker names it. An empty transcript
+  retains the commit boundary so an in-flight history read drops that boundary
+  and its following records when it materializes. A pre-commit page without
+  the boundary has unknown position relative to the cut and returns
+  `NeedsReconcile` without changing retained history. Reads started after the
+  commit retain their authority.
+- A running call's child comes only from live progress; a history read of the
+  running call keeps the child the transcript already holds.
 - A tool result a history page left out (`PartContent::Tool::elided`) never
   replaces the whole result a transcript holds for the same call and status,
   through `replace` or `push`. A live transition with output, or the whole
@@ -184,6 +248,12 @@ crate owns wire parsing and authority checks, and hands the core records and
 - A failed load keeps its retained snapshot; only `LoadState::Complete` grants
   full-scope authority.
 - A non-empty draft leaves the store only by an explicit send or clear.
+- A queue projection never goes back to an older revision: per queue, and
+  per runtime and owner for complete snapshots. A snapshot replaces only its
+  owner's queues and keeps those a newer answer changed. An owner speaks only
+  for its own directories. Nothing in the projection is persisted.
+- Starter edits keep entries this client cannot resolve; only the user's own
+  lists change, and shared project starters keep their place in front.
 - Default selections preserve configured identifiers through catalog gaps. Only
   remembered and automatic fallback choices skip models hidden in the picker.
 - Agent color allocation consumes a theme-prepared ordered palette. Its indices
@@ -191,6 +261,13 @@ crate owns wire parsing and authority checks, and hands the core records and
   configured colors accept six-digit hex except the migration placeholder.
 - Synthetic workloads are deterministic: the same size yields the same records
   and text.
+
+- Terminal adoption takes only an authoritative list: a failed read never
+  reaches `TerminalTabs::adopt`, because an empty list ends every running tab.
+  Adoption skips project-action terminals and never moves a tab that is still
+  starting. A create that completes after its tab closed is refused by
+  `started`, so the caller closes the orphaned terminal. Default labels number
+  one above the highest open "Terminal N", so they stay unique after closes.
 
 ## Decisions
 

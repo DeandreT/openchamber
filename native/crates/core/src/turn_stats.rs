@@ -331,6 +331,7 @@ mod tests {
                 notice: None,
                 assistant: None,
                 compaction: None,
+                synthetic: None,
             },
             parts: vec![Part::text("u-text", "go")],
         }
@@ -358,6 +359,7 @@ mod tests {
                     ..AssistantFacts::default()
                 }),
                 compaction: None,
+                synthetic: None,
             },
             parts,
         }
@@ -385,6 +387,7 @@ mod tests {
                 title: None,
                 output: None,
                 elided: None,
+                child: None,
             },
             time: PartTime {
                 start: Some(start),

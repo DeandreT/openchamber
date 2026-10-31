@@ -1,6 +1,6 @@
 //! Session records as the application model sees them.
 
-use crate::ids::{OpenCodeProjectId, SessionId};
+use crate::ids::{MessageId, OpenCodeProjectId, SessionId};
 use crate::path;
 use crate::send_config::ModelChoice;
 
@@ -67,13 +67,32 @@ pub struct SessionRecord {
     pub model: Option<ModelChoice>,
     /// The agent the session's next turn uses, as the server last reported it.
     pub agent: Option<String>,
+    /// A staged revert's marker: this message and everything after it are
+    /// hidden until the next prompt commits the revert or Restore clears it.
+    pub revert: Option<MessageId>,
+    pub btw: BtwMetadata,
+}
+
+/// The `/btw` links in a session's `metadata.openchamber`, as
+/// `sessionBtwMetadata.ts` reads them. Blank identifiers count as absent.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct BtwMetadata {
+    /// On a parent: `btwSessionID`, its active side conversation.
+    pub link: Option<SessionId>,
+    /// On a fork (`kind == "btw"`): `originalSessionID`, the parent.
+    pub original: Option<SessionId>,
+    /// On a fork: `btwBoundaryMessageID`, the last message it inherited.
+    pub boundary: Option<MessageId>,
+    /// `btwPromoted`: the session was a side conversation and was kept.
+    pub promoted: bool,
 }
 
 /// What a session's full metadata establishes for the client.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct MetadataFacts {
     pub overlay: SessionOverlay,
     pub kind: SessionKind,
+    pub btw: BtwMetadata,
 }
 
 /// A change to fields of one session record, as live events report it.
@@ -94,6 +113,8 @@ pub struct SessionPatch {
     pub model: Option<ModelChoice>,
     /// The newly selected agent.
     pub agent: Option<String>,
+    /// `Some(None)` clears a staged revert.
+    pub revert: Option<Option<MessageId>>,
 }
 
 impl SessionPatch {
@@ -185,9 +206,13 @@ impl SessionRecord {
         if let Some(archived) = patch.archived {
             next.time.archived = archived;
         }
-        if let Some(facts) = patch.metadata {
+        if let Some(facts) = &patch.metadata {
             next.overlay = facts.overlay;
             next.kind = facts.kind;
+            next.btw.clone_from(&facts.btw);
+        }
+        if let Some(revert) = &patch.revert {
+            next.revert.clone_from(revert);
         }
         if let Some(model) = &patch.model {
             next.model = Some(model.clone());

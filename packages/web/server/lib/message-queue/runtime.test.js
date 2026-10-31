@@ -131,6 +131,204 @@ const settle = async (ms = 30) => {
   await new Promise((resolve) => setTimeout(resolve, ms));
 };
 
+describe('recoverable prefix reservation', () => {
+  const request = (ids, id = 'msg_reserved_prefix') => ({
+    id, itemIds: ids, composer: 'typed', sendConfig: item().sendConfig, delivery: 'steer',
+  });
+
+  it('holds the whole owner across probes and retains the exact prefix through a lost reply and restart', async () => {
+    const fixture = createRuntime();
+    const { runtime, openCode, dataDir } = fixture;
+    const a = await runtime.enqueue(SESSION, DIRECTORY, item({ content: 'A' }));
+    const b = await runtime.enqueue(SESSION, DIRECTORY, item({ content: 'B' }));
+    const goal = await runtime.enqueue(SESSION, DIRECTORY, item({ goal: { tokenBudget: null } }));
+    const c = await runtime.enqueue(SESSION, DIRECTORY, item({ content: 'C' }));
+    const captured = request([a.itemId, b.itemId]);
+    const receipt = await runtime.reservePrefix(SESSION, captured);
+    await settle();
+    expect(openCode.state.sent).toEqual([]);
+    expect(receipt.items.map((entry) => entry.id)).toEqual(captured.itemIds);
+    expect(runtime.sessionSnapshot(SESSION).items.map((entry) => entry.id)).toEqual([a.itemId, b.itemId, goal.itemId, c.itemId]);
+    await expect(runtime.takeAll(SESSION)).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.take(SESSION, c.itemId)).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.remove(SESSION, a.itemId)).rejects.toMatchObject({ status: 409 });
+    await runtime.flush();
+    runtime.stop();
+    const restored = createRuntime({ dataDir, openCode });
+    await restored.runtime.load();
+    // Recovery uses the same identity that was journaled before reserving.
+    await expect(restored.runtime.reservePrefix(SESSION, request(captured.itemIds, 'msg_new_attempt'))).rejects.toMatchObject({ status: 409 });
+    const recovered = await restored.runtime.reservePrefix(SESSION, captured);
+    expect(recovered.reservation).toEqual(receipt.reservation);
+    expect(recovered.items).toEqual(receipt.items);
+    restored.runtime.start();
+    await settle();
+    expect(openCode.state.sent).toEqual([]);
+    restored.runtime.stop();
+  });
+
+  it('rejects a stale or ineligible prefix without consuming or skipping anything', async () => {
+    const { runtime } = createRuntime();
+    const a = await runtime.enqueue(SESSION, DIRECTORY, item());
+    const goal = await runtime.enqueue(SESSION, DIRECTORY, item({ goal: { tokenBudget: null } }));
+    const b = await runtime.enqueue(SESSION, DIRECTORY, item());
+    await expect(runtime.reservePrefix(SESSION, request([a.itemId, b.itemId]))).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.reservePrefix(SESSION, request([a.itemId, goal.itemId, b.itemId]))).rejects.toMatchObject({ status: 409 });
+    await runtime.remove(SESSION, a.itemId);
+    await expect(runtime.reservePrefix(SESSION, request([a.itemId]))).rejects.toMatchObject({ status: 409 });
+    expect(runtime.sessionSnapshot(SESSION).items.map((entry) => entry.id)).toEqual([goal.itemId, b.itemId]);
+    runtime.stop();
+  });
+
+  it('rechecks exclusion after an already-running idle probe and releases only the exact admitted ID', async () => {
+    vi.useFakeTimers();
+    const openCode = createOpenCode();
+    const originalFetch = openCode.fetchImpl;
+    let releaseProbe;
+    let probeStarted;
+    const started = new Promise((resolve) => { probeStarted = resolve; });
+    const held = new Promise((resolve) => { releaseProbe = resolve; });
+    let first = true;
+    let admitted = null;
+    let failObservation = false;
+    openCode.fetchImpl = vi.fn(async (url, init) => {
+      const pathname = new URL(url).pathname;
+      if (pathname === '/api/session/active' && first) {
+        first = false;
+        probeStarted();
+        await held;
+      }
+      if (pathname.endsWith('/inbox')) {
+        if (failObservation) return new Response('failed', { status: 500 });
+        return Response.json({ data: admitted ? [admitted] : [] });
+      }
+      return originalFetch(url, init);
+    });
+    const { runtime } = createRuntime({ openCode });
+    const a = await runtime.enqueue(SESSION, DIRECTORY, item({ text: 'A' }));
+    const b = await runtime.enqueue(SESSION, DIRECTORY, item({ text: 'B' }));
+    await vi.advanceTimersByTimeAsync(0);
+    await started;
+    const receipt = await runtime.reservePrefix(SESSION, request([a.itemId]));
+    releaseProbe();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(openCode.state.sent).toEqual([]);
+    for (const candidate of [null, { id: receipt.reservation.id, type: 'synthetic', sessionID: SESSION, time: { created: 1 } }]) {
+      admitted = candidate;
+      runtime.release(SESSION);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(runtime.sessionSnapshot(SESSION).items).toHaveLength(2);
+    }
+    admitted = { id: receipt.reservation.id, type: 'user', sessionID: SESSION, time: { created: 1 }, delivery: 'queue', payload: {} };
+    failObservation = true;
+    runtime.release(SESSION);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runtime.sessionSnapshot(SESSION).items).toHaveLength(2);
+    failObservation = false;
+    openCode.state.active[SESSION] = { type: 'running' };
+    runtime.release(SESSION);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runtime.sessionSnapshot(SESSION).items.map((entry) => entry.id)).toEqual([b.itemId]);
+    expect(openCode.state.sent).toEqual([]);
+    runtime.stop();
+    await runtime.flush();
+  });
+
+  it('never acknowledges a reservation whose persistence failed', async () => {
+    const { runtime, dataDir, openCode } = createRuntime();
+    openCode.state.active[SESSION] = { type: 'running' };
+    const a = await runtime.enqueue(SESSION, DIRECTORY, item());
+    await runtime.flush();
+    // Make the atomic rename fail without changing the retained queue file.
+    const target = path.join(dataDir, 'message-queue.json');
+    fs.renameSync(target, `${target}.retained`);
+    fs.mkdirSync(target);
+    await expect(runtime.reservePrefix(SESSION, request([a.itemId]))).rejects.toBeDefined();
+    await expect(runtime.take(SESSION, a.itemId)).rejects.toMatchObject({ status: 409 });
+    fs.rmdirSync(target);
+    fs.renameSync(`${target}.retained`, target);
+    const recovered = await runtime.reservePrefix(SESSION, request([a.itemId]));
+    expect(recovered.reservation.id).toBe('msg_reserved_prefix');
+    expect(JSON.parse(fs.readFileSync(target, 'utf8')).sessions[SESSION].reservation.id).toBe('msg_reserved_prefix');
+    runtime.stop();
+    await runtime.flush();
+  });
+
+  it('refuses scheduled and oversized inline items without reserving or taking later items', async () => {
+    for (const blocked of [
+      item({ scheduledTask: { projectId: 'p', taskId: 't' } }),
+      item({ attachments: [{ id: 'file', filename: 'large.txt', mimeType: 'text/plain', source: 'local', size: 1, dataUrl: `data:text/plain,${'a'.repeat(70000)}` }] }),
+    ]) {
+      const { runtime } = createRuntime();
+      const a = await runtime.enqueue(SESSION, DIRECTORY, item());
+      const middle = await runtime.enqueue(SESSION, DIRECTORY, blocked);
+      const c = await runtime.enqueue(SESSION, DIRECTORY, item());
+      await expect(runtime.reservePrefix(SESSION, request([a.itemId, middle.itemId, c.itemId]))).rejects.toMatchObject({ status: 409 });
+      expect(runtime.sessionSnapshot(SESSION).items).toHaveLength(3);
+      const receipt = await runtime.reservePrefix(SESSION, request([a.itemId]));
+      expect(receipt.items.map((entry) => entry.id)).toEqual([a.itemId]);
+      runtime.stop();
+      await runtime.flush();
+    }
+  });
+
+  it('previews without reserving, and refuses invalid or oversized complete payloads', async () => {
+    const { runtime, openCode } = createRuntime();
+    openCode.state.active[SESSION] = { type: 'running' };
+    const a = await runtime.enqueue(SESSION, DIRECTORY, item({ text: 'A' }));
+    const captured = request([a.itemId]);
+    const preview = await runtime.reservePrefix(SESSION, captured, true);
+    expect(preview.reservation).toEqual(captured);
+    // Preview neither removes the item nor blocks the existing clients.
+    await runtime.remove(SESSION, a.itemId);
+    expect(runtime.sessionSnapshot(SESSION).items).toEqual([]);
+    for (const context of [
+      [{ kind: 'synthetic', text: '' }],
+      Array.from({ length: 17 }, () => ({ kind: 'synthetic', text: 'a'.repeat(1024 * 1024) })),
+    ]) {
+      const queued = await runtime.enqueue(SESSION, DIRECTORY, item({ context }));
+      await expect(runtime.reservePrefix(SESSION, request([queued.itemId]))).rejects.toMatchObject({ status: 409 });
+      // Failed validation grants no reservation and leaves normal delivery available.
+      await runtime.remove(SESSION, queued.itemId);
+    }
+    runtime.stop();
+    await runtime.flush();
+  });
+
+  it('keeps the reservation on malformed inbox and whole-message observations', async () => {
+    vi.useFakeTimers();
+    const openCode = createOpenCode();
+    openCode.state.active[SESSION] = { type: 'running' };
+    const original = openCode.fetchImpl;
+    let inbox = [];
+    let history;
+    openCode.fetchImpl = vi.fn(async (url, init) => {
+      const pathname = new URL(url).pathname;
+      if (pathname.endsWith('/inbox')) return Response.json({ data: inbox });
+      if (pathname.includes('/message/')) return Response.json({ data: history });
+      return original(url, init);
+    });
+    const { runtime } = createRuntime({ openCode });
+    const queued = await runtime.enqueue(SESSION, DIRECTORY, item());
+    const captured = request([queued.itemId]);
+    await runtime.reservePrefix(SESSION, captured);
+    const malformed = { id: captured.id, type: 'user', sessionID: SESSION, time: { created: 1 } };
+    for (const [items, message] of [[[malformed], null], [[], malformed]]) {
+      inbox = items;
+      history = message;
+      runtime.release(SESSION);
+      await vi.advanceTimersByTimeAsync(100000);
+      expect(runtime.sessionSnapshot(SESSION).items).toHaveLength(1);
+    }
+    history = { ...malformed, text: 'plugin-prepared text' };
+    runtime.release(SESSION);
+    await vi.advanceTimersByTimeAsync(100000);
+    expect(runtime.sessionSnapshot(SESSION).items).toEqual([]);
+    runtime.stop();
+    await runtime.flush();
+  });
+});
+
 describe('scheduled task items', () => {
   const scheduled = (projectId = 'project-1', overrides = {}) => item({
     scheduledTask: { projectId, taskId: 'task-1' }, sendConfig: {}, ...overrides,

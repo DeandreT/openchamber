@@ -390,7 +390,9 @@ impl NodeWrapper<'_> {
 
         if state.is_read_only_supported() && state.is_read_only_or_disabled() {
             atspi_state.insert(State::ReadOnly);
-        } else {
+        } else if !state.is_disabled() {
+            // A disabled control without read-only support, such as a button
+            // or menu item, is neither enabled nor sensitive.
             atspi_state.insert(State::Enabled | State::Sensitive);
         }
 

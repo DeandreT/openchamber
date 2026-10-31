@@ -20,6 +20,13 @@ named default effort so an explicit Default selection must clear that choice.
 Tools are denied. The provider's existing stream responses make no tool calls.
 The default performance and `--interactions` configurations retain their behavior.
 
+`--git-fixture` turns a fresh root's project into the Files and Git fixture
+repository (`ensureGitFixture`): two commits on `main` tracking `origin/main`
+in a bare remote at `<root>/remote.git`, a CRLF file, a gitignored folder, an
+untracked file and a nested repository, all with fixed commit times and no
+system or global Git configuration. A project that already has commits is
+left as a scenario changed it. `native_files.py` and `native_git.py` use it.
+
 Every model, agent, effort and prompt input goes through the real window.
 HTTP creates the fresh session and observes records. The runner checks the exact
 Unicode user message and the subsequent completed assistant step's model,

@@ -28,12 +28,42 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::{Data, OpCode};
 
 #[path = "blocking_requests/mod.rs"]
 mod blocking_requests;
+#[path = "files/mod.rs"]
+mod files;
+#[path = "git/mod.rs"]
+mod git;
 #[path = "prompt_parts/mod.rs"]
 mod prompt_parts;
 #[path = "session_actions/mod.rs"]
 mod session_actions;
 #[path = "session_creation/mod.rs"]
 mod session_creation;
+
+#[tokio::test]
+async fn queue_non_acquisition_requires_the_exact_request_identity() {
+    use openchamber_native_core::ids::{MessageId, SessionId};
+    use openchamber_native_core::message_queue::{QueuedItemId, QueuedSendConfig};
+    use openchamber_native_transport::message_queue::QueueItemInput;
+    for (status, body, confirmed) in [
+        (409, json!({"code":"queue_prefix_unavailable", "sessionID":"ses_queue", "messageID":"msg_queue"}).to_string(), true),
+        (409, json!({"code":"queue_prefix_unavailable", "sessionID":"ses_other", "messageID":"msg_queue"}).to_string(), false),
+        (409, json!({"code":"queue_prefix_unavailable", "sessionID":"ses_queue", "messageID":"msg_other"}).to_string(), false),
+        (409, "{}".to_owned(), false),
+        (409, "x".repeat(4097), false),
+        (500, json!({"code":"queue_prefix_unavailable", "sessionID":"ses_queue", "messageID":"msg_queue"}).to_string(), false),
+    ] {
+        let server = Server::start(move |_| Reply::with_status(status, "application/json", &body), vec![]).await;
+        let client = ServerClient::new(server.endpoint(), Credential::None).expect("test client");
+        let failure = client.reserve_queued_prefix(
+            &SessionId::from("ses_queue"), "/repo", &MessageId::from("msg_queue"),
+            &[QueuedItemId::new("q1")], &QueueItemInput {
+                content: "typed".into(), text: "typed".into(),
+                send_config: QueuedSendConfig { provider_id: "provider".into(), model_id: "model".into(), agent: None, variant: None },
+            }, false,
+        ).await.expect_err("reservation was refused");
+        assert_eq!(matches!(failure, TransportError::QueuePrefixUnavailable), confirmed);
+    }
+}
 
 /// One request the server received.
 #[derive(Clone, Debug)]

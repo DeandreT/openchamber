@@ -26,3 +26,7 @@ path = "active_descendant.rs"
 [[test]]
 name = "editable_text"
 path = "editable_text.rs"
+
+[[test]]
+name = "notification_announcement"
+path = "notification_announcement.rs"

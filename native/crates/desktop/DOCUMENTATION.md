@@ -43,7 +43,10 @@ prompt. Attachments and worktree creation remain separate workflows.
   original prompt configuration. `session_id.rs` generates OpenCode's descending
   `ses_` identities using Unix milliseconds and the pinned 48-bit prefix layout.
 - `mutation_journal.rs` owns the private versioned snapshot of drafts and pending
-  sends and creations. Version 4 stores whole prompts: text, attachment
+  sends and creations. Version 6 adds the exact queue-reservation intent and
+  captured composer text. Version 5 retains each send's request-supersession
+  policy and server-reservation ownership. Versions 1 through 4 default
+  supersession to true and reservation ownership to false. Version 4 stores whole prompts: text, attachment
   references, agent and skill references, metadata, the ordered context items
   with their IDs, the prompt ID and delivery. Versions 1 to 3 load as prompts
   without parts. Unsupported or malformed snapshots grant no writer.
@@ -51,6 +54,15 @@ prompt. Attachments and worktree creation remain separate workflows.
   on one thread, coalescing queued snapshots while preserving save barriers.
   `state_persistence.rs` hydrates before editing, schedules draft saves, waits for
   durable preparation before a POST, and drains the last snapshot on normal close.
+- `message_queue.rs` owns the composer's side of the server-owned message
+  queue: the projection reads (the host's on every event-stream connection,
+  a space's once per connection when one of its sessions is selected),
+  broadcasts, and the queue, edit, send, send-now, remove and reorder
+  actions, plus Enter routing by the `followUpBehavior` setting.
+  `queue_strip.rs` draws the queued strip above the editor. `starters.rs`
+  owns the new-session starter chips: which resolve, activation through a
+  built-in's magic prompts, and the global (settings), personal and shared
+  (project setup) lists; `startup_view.rs` draws them and the add picker.
 - `send_recovery.rs` observes every step of one retained attempt (its context
   items and its prompt) through inbox and history reads.
   `recovery_view.rs` shows pending text separately from current typing, with
@@ -66,6 +78,14 @@ prompt. Attachments and worktree creation remain separate workflows.
   Copy ID, AI rename, export, worktree moves, folders, keep-warm, side panel
   and run overview are not ported, nor the archive page's project buckets,
   search, dates and archived worktrees.
+- `session_branching.rs` runs fork (a prompt's Fork, `/fork`), staged revert
+  and Restore, `/btw` (create, follow-ups, collapse, promote, destroy) and
+  subagent navigation (open a child, Return to parent, stop) against the
+  captured runtime. `branching_view.rs` draws a prompt's hover actions, the
+  reverted strip at the top of the composer, the `/btw` panel above it, a
+  subagent call's and report's Open and Stop, and Return to parent. The
+  goal-objective file copy of a fork, attachments and context chips on a
+  restored prompt, and a fork from an assistant turn's footer are not ported.
 - `connection.rs` holds the configured server, the connection state the views
   explain and the tasks of the current connection attempt.
 - `network.rs` owns the Tokio runtime. GPUI tasks await `NetworkTask`s, and
@@ -88,6 +108,23 @@ prompt. Attachments and worktree creation remain separate workflows.
   discarding a row use its captured runtime/directory key. Preview edits update
   one row; adding or removing a draft rebuilds the structural projection. This
   in-memory projection does not publish drafts to the server.
+- `files_view.rs` owns the context panel's server surfaces: the rail's Files,
+  Git and Diff buttons open one in place of the work status card, 640 px wide
+  while the chat keeps 320 px, for the selected session's directory (else the
+  draft's project, else the active project). Each surface is its own view
+  entity, retained per runtime and directory. The same file holds the Files
+  view: header with name and content search, the tree column
+  (`file_tree_view.rs`: virtualized tree items with level, position and
+  expanded state, arrow keys, Enter, Home, End and F2 rename) and Kit's code
+  editor. `diff_view.rs` shows patches in Kit's read-only diff: one path's pane
+  for the Git view and the Diff surface with every changed file of the
+  Changed or Staged scope. `git_view.rs` is the Git surface: branch menu with
+  create, rename, checkout and delete, fetch, pull and push as planned
+  operations with cancel, staged and unstaged changes with stage, unstage and
+  confirmed discard, the commit field and the selected change's diff.
+  Persisted tree state, read-only files outside the workspace from links,
+  hunk staging, identities, stash, merge and rebase, nested repository
+  listings, the walkthrough and project action run and stop are not ported.
 - `context_panel.rs` also reads the selected session's context fill against
   the limit `useContextWindowLimits` picks (the record's model, the newest
   answer's, the composer's) and draws its row and meter.
@@ -203,7 +240,59 @@ prompt. Attachments and worktree creation remain separate workflows.
   list and each visited session's first painted history.
   GPUI's own `log` records reach the same `tracing` subscriber.
 
+- `terminal_view.rs` owns the terminal panel the rail's Terminal button and
+  Ctrl+J open in the panel column: the tabs of the current directory (the
+  selected session's, else a draft's project), one `TerminalSocket` per
+  runtime, creates, closes, adoption, resize and keepalive requests, exit
+  handling by `terminalCloseOnExit`, the status line and the Copy/Paste menu.
+  Another panel surface taking the column hides it; its terminals keep
+  running. Relay and isolated-space terminals are not ported.
+- `terminal_surface.rs` is one terminal's entity: it paints the grid with
+  box drawing and Powerline procedurally, fits the grid to its box, maps keys,
+  IME, pointer, wheel and clipboard to the emulator's encoders and writes the
+  result to its terminal. `terminal_emulator.rs` wraps libghostty-vt
+  (`vendor/libghostty-vt-sys`) behind a renderer-independent API: replay,
+  frames, scrollback, selection, links and the key, paste and mouse encoders.
+
 ## Invariants
+
+- Switching away from a dirty file asks Save, Discard or Cancel. Only a
+  successful save with no remaining edits or an explicit Discard replaces
+  the editor. Autosave is enabled by default; its toggle waits for Settings.
+  Edits made during a save re-arm the debounce after completion.
+- Editor completions use a rename-stable identity. Folder renames rewrite
+  the open file's path prefix. Saves wait while the path is being renamed,
+  and renames wait for an outstanding save of that path to finish.
+  A lost rename response keeps writes blocked until source and destination
+  are reconciled through unfiltered parent listings, with the destination
+  present and the source absent.
+  Those reads cover directories as well as files. An unresolved rename also
+  blocks overlapping ancestor moves. Failed or ambiguous checks retain the draft;
+  Refresh repeats the checks. A still-present source does not prove the timed-out
+  operation stopped; an explicit repeat of the same rename can settle it.
+  Each rename and its observations carry an operation revision. Reconciliation
+  retires that revision, so a delayed retry answer cannot move the editor again.
+  An initial read from an obsolete path clears
+  its task and reads the editor's current path before applying content.
+- Retained Files, Git and Diff views resolve the live connection's client
+  and executor per request, including after authentication changes while
+  hidden. A disconnected or different-runtime owner cannot issue requests.
+  A disconnected autosave retains its pending state. Workspace readiness
+  notifications re-arm it for the same runtime even when the view is hidden.
+  Git operation reads stop after 3 consecutive failures; Refresh resumes
+  reading the same operation ID. Failed cancellation remains visible.
+- The Files surface protects a dirty draft itself, since the server's write
+  is last-writer-wins: the open file's stat is read every 2 s while the
+  surface is shown and a change replaces only a clean draft. A hidden
+  surface polls nothing; expanded folders are listed again every 8 s, except
+  folders over 1,000 entries. Changing the search query replaces its request,
+  which ends the previous ripgrep on the server.
+- Every Git mutation ends in a status read, failed or not, and no row shows a
+  state before the server reports it. Push, pull and fetch never retry:
+  a lost execute answer is resolved by reading the same operation ID.
+- Each surface's status line is one `Role::Status` node with the newest
+  outcome, so accessibility clients and scripts read it; errors put the
+  server's explanation after the localized title.
 
 - Routing readiness retains its last successful value on a failed same-runtime
   read. Initial connection generations and event-stream reconnections trigger
@@ -331,8 +420,8 @@ prompt. Attachments and worktree creation remain separate workflows.
   nothing. Writes for one session run in click order and the overlay stays
   until the last settles, so a failure shows the server's state again.
   Every session notification's text is mirrored into the `session-notice`
-  status node, because the toolkit's notifications are not exposed to
-  accessibility clients. A rename cannot start on a session whose previous
+  status node, which keeps it after the toast closes for automation; the toast
+  announces it to screen readers. A rename cannot start on a session whose previous
   rename is in flight. The deletion dialog's Never ask follows the newest
   click at once, as the web's settings store does; saves run one at a time
   with the newest choice, and a failed save returns it to the stored choice.
@@ -347,6 +436,36 @@ prompt. Attachments and worktree creation remain separate workflows.
   an error when the restore cannot start. A rename commits a trimmed, changed, nonempty title on
   Enter, the Save button or a press outside the field; Escape cancels, and
   neither key acts while an IME composition is active.
+- The transcript hides rows from the revert marker on; the optimistic marker
+  outranks the record's. A revert stops a busy session, reverts descendants
+  first, then stages; a refusal drops the marker and returns the composer to
+  what it held unless the user typed over the restored prompt. A cut or
+  marker change remeasures the session's rows. A commit trims the visited
+  transcript before the batch clears the marker.
+- A fork opens only while the reader is still where it started; its
+  composer gets the forked prompt's text either way. A `/btw` panel exists
+  while the parent's `btwSessionID` names a listed fork; its transcript loads
+  without being selected. While the panel is expanded, Enter sends the
+  composer to the fork with the boundary instruction; Escape collapses it
+  before the double-Escape stop. A failed `/btw` start deletes the fork.
+  Start and follow-up text stays in the captured persisted draft until
+  admission succeeds; success clears it only if it still matches the sent
+  text. Refused starts and newer typing preserve the draft.
+  A failed revert restores only text it actually replaced, using its captured
+  draft key even after a runtime switch. Cross-runtime completions do not
+  change markers or show notifications in the current runtime.
+- Fork events for locally creating parents do not read the raw fork. Other
+  fork reads track intervening patches and read once more before publishing;
+  patches received during that follow-up read apply in arrival order to its
+  result. No further read is started. A record already listed by completion
+  time always wins. Confirmed deletion invalidates the fork read. A callback
+  requires its captured runtime, session and read revision to match a live
+  request; missing state grants no authority. Read revisions survive runtime
+  resets so an older callback cannot consume a replacement request.
+- A committed revert retires the visited session's history generation and
+  starts a fresh latest-page read. Older latest and pagination completions
+  cannot settle history or send attempts, including when their whole page
+  follows a boundary outside the loaded window.
 - Timing markers end when the frame that shows the result paints. A zero-size
   canvas at the end of the workspace tree emits them, so they measure the
   client's own work and do not wait for compositor presentation.
@@ -430,9 +549,76 @@ prompt. Attachments and worktree creation remain separate workflows.
   send goes through only to supersede open requests (queueing is a separate
   path); a steer (`Delivery::Steer`) goes through and only while busy, as in
   the web composer. Abort can run beside acknowledged attempts.
+- The server delivers idle queues. The client sends queued text only after
+  an explicit activation. Enter first gives `/fork`, `/btw` and an open side conversation
+  their text, as the web plans local commands and checks BTW before
+  queueing; a branching command never takes the queue. Then, in a busy
+  session with text in the composer, Enter queues (also while requests are
+  open, which it leaves alone) or, with `followUpBehavior: steer`, steers in
+  together with the queue, and Ctrl+Enter sends now with OpenCode's own
+  delivery; otherwise Enter sends, taking the queue along, queued first and
+  joined by blank lines. Merged sends reserve only the leading eligible
+  prefix through the server owner's `reserve-prefix` operation. A nonmutating
+  preview supplies its complete prompt; that prompt and reservation intent
+  reach the journal before the reservation request leaves. An in-flight,
+  goal, scheduled or unjournalable item ends that prefix. Original payloads
+  stay persisted on the server, which excludes later delivery until it observes
+  admission of the reservation's stable prompt ID. Lost replies recover the
+  same receipt, composer text, selection and delivery; context IDs derive from
+  the stable prompt ID. No legacy destructive-take fallback runs against an
+  older server. An empty or failed reservation sends nothing. A row message
+  is taken out of the queue before it is sent or
+  edited, so it never goes out twice. A row's send steers while busy with the
+  selection it was queued with and, like the web's queued-only send, neither
+  dismisses open requests nor waits for them. Queueing clears the composer at
+  once and a failure gives the text back after anything typed since. ArrowUp
+  in an empty composer and Edit take the newest or chosen message into the
+  composer after any typed text. A runtime switch drops the projection and
+  every queue completion started before it; a taken message whose completion
+  arrives after a switch goes back to its draft.
+- Reserved sends remain pending under their saved identity after any refusal,
+  cancellation or unknown outcome. Retry retains that identity and every
+  context ID. They cannot be moved to an independent composer draft while
+  the server owns their originals. A lost reservation reply uses Check status
+  and Retry against the already-journaled intent, including after restart. It
+  never returns the captured text to a second queue submission.
+  If the server explicitly confirms that the prefix could not be acquired,
+  the attempt is retired and only its captured composer text is restored.
+  Row-send retries retain `supersedes: false` through restart and never
+  reject open permissions or forms.
+- Goal, scheduled and unjournalable messages stay for the server to deliver:
+  native cannot start a goal, a scheduled message belongs to its task, and an
+  attachment whose reference could exceed the journal's 64 KiB limit (a large
+  inline file; server files are referenced by path) could not be recorded.
+  Such a message offers no Send or Edit and no merge takes it. A message with
+  attachments or context can be sent but offers no Edit, since the composer
+  has no chips to restore them into.
+- Double Escape in the composer of a working session stops it: the first
+  press arms a stop for that session for three seconds, a second within them
+  stops it, and Escape elsewhere or in an idle session disarms it.
+- A starter chip submits at once into the selected project, as Enter does:
+  the starter, then the composer's text. That text leaves the composer at the
+  click but remains in persisted drafts until creation takes ownership. Draft
+  snapshots retain the captured text beside newer typing; restoring the active
+  field shows only that newer typing while the capture is pending. A failed read or creation
+  gives the carried text back after it. A built-in renders its visible
+  prompt and instructions from that project's magic-prompt overrides, read
+  for each activation over the generated built-in templates
+  (`resources/magic-prompts.json`); a failed read sends nothing and shows the
+  command's failure notice. The session receives the render, while a
+  definite send failure gives back what the chip submitted ("/craft-goal
+  idea"), as the web restores `presetText`. Only built-ins resolve, since
+  native lists no commands or skills; unresolved saved entries stay
+  untouched. Global and project edits show at once and save one at a time,
+  the newest edit made during a save waiting as a pending one; global saves
+  carry both offered-starter markers. A failed project save still writes its
+  newest pending edit, retaining any shared-file change from the failed write.
+  It re-reads only when no pending edit remains. A project list that failed to read
+  shows nothing, is never written, and is read again after a wait that
+  doubles from 2 s to at most 60 s.
 - A send clears its draft and appends one optimistic user
   message with its exact client ID. It never creates an assistant or changes
-  live status. A definite failure removes only that optimistic message and
+  live status. For an ordinary unreserved send, a definite failure removes only that optimistic message and
   restores its text and selection. Newer owner text remains first, followed by
   two newlines and the failed text.
 - Existing-session prompts use the explicit session metadata policy from
@@ -537,7 +723,67 @@ prompt. Attachments and worktree creation remain separate workflows.
   loading and is left out when the fetch or the SVG fails, as the web drops a
   broken image. A fetch cut short by a closing connection is tried again.
 
+- Every tab with a server terminal stays attached while the window lives, and
+  a surface the panel does not show keeps parsing its output and answering
+  its queries without painting. Closing the panel or the window never stops a
+  server terminal; only closing a tab (or an exit with `terminalCloseOnExit`)
+  sends `DELETE`.
+- A snapshot replays into a reset emulator at the size it was recorded at,
+  then reflows to the fitted grid, with the PTY writer detached: queries in
+  history are never answered. The server answers theme queries; this Ghostty
+  revision leaves OSC 10/11 unanswered, so the shell gets one reply.
+- A new terminal starts at the shown surface's fitted size, else 80 by 24. A
+  resize reaches the PTY once the grid has held its size for 150 ms; a tab
+  that is starting or adopted never sends the provisional size. Snapshots and
+  successful resizes establish the server size separately from the emulator
+  size. A fitted grid that differs from a new snapshot sends a resize even
+  when its local size has not changed.
+- Each terminal permits one HTTP resize in flight. Fitted-size changes
+  coalesce until completion, then send the latest target. A snapshot does not
+  release that gate; an acknowledgement from an older snapshot revision cannot
+  overwrite the new authority and triggers a corrective latest-size write.
+  Failed requests retry the latest target after 250, 500 and 1,000 ms, at most
+  three times. Rendering cannot restart exhausted retries; a new target or
+  snapshot can. Close and runtime invalidation cancel timers and owned HTTP.
+  A resize declined for a nonrunning tab clears the pending proposal without
+  retrying. The fitted target stays local until a restart event or running
+  snapshot resumes reconciliation.
+- Opening an empty terminal panel retains its directory-scoped focus request
+  until the first active surface exists. A directory change or later user
+  focus elsewhere cancels that request.
+- The terminal client belongs to a runtime and connection generation.
+  Connection restart and runtime switch dispose stale sockets synchronously,
+  including while the panel is hidden. This never closes the server PTYs.
+- Keys go through Ghostty's key encoder and pasted text through its paste
+  encoder; the paste shortcut (Ctrl+Shift+V, Shift+Insert) and the menu share
+  one path. Ctrl+C copies while text is selected and then clears the
+  selection, so the next Ctrl+C reaches the shell. Ctrl with `=`, `-` or `0`
+  stays with the app. While a composition is marked, keys belong to the input
+  method; committed text reaches the PTY as text.
+- The terminal context disables ancestor Root and workspace bindings except
+  Ctrl+J. This includes Root Copy on Ctrl+C, Tab, Escape, Alt+arrow, Ctrl+K
+  and Ctrl+K N. Ctrl+V, Ctrl+X, Ctrl+A, Ctrl+Z and Ctrl+W reach the shell;
+  Kit input/list bindings are scoped to their own contexts and do not apply.
+  Terminal selection copy and paste shortcuts stay with the surface handler.
+- The program owns the mouse while it enables reporting; Shift selects
+  instead. Ctrl+click opens an OSC 8 link or an `http(s)` URL of the logical
+  line through the platform opener.
+
 ## Decisions
+
+### Why the panel surfaces are their own entities
+
+Typing in the Files editor and polling the open file would re-render the
+whole workspace if their state lived in `Workspace`. Separate entities
+re-render only themselves, and keeping one per runtime and directory brings a
+dirty draft back after a session switch, as the web's retained views do. The
+activation helper and `IconButton` are generic over the owning view for this.
+
+### Why the Files surface polls and does not watch
+
+OpenCode's `file.watch` would shorten the poll to 30 s, but native has no
+watch subscription yet. A 2 s stat poll gives the same protection with one
+small request; the content is read only when size or mtime moved.
 
 ### Why uncertain replies need exact reads
 
@@ -585,7 +831,38 @@ turn runs. An acknowledged attempt is already ordered on the server, so only an
 uncertain or in-flight one still blocks a new identity; an explicit retry uses
 the same saved ID. Abort can run after the send request finishes and leaves
 running status to the live channel. New-session creation is owned by
-`session_creation.rs`; queue controls are outside this module.
+`session_creation.rs`; queue controls live in `message_queue.rs`.
+
+### Why merged queue sends retain server ownership
+
+Removing items one at a time allows the server to deliver a later item while
+the client still holds an earlier one. Even an atomic take without retained
+ownership can lose its payload in a dropped response. The existing queue
+owner therefore reserves a prefix durably, retains its immutable receipt and
+blocks later delivery until the stable prompt ID is admitted. Native journals
+that identity and retries it without creating an independent draft copy.
+
+### Why an attempt's draft may differ from its prompt
+
+A definite failure gives an unreserved attempt's draft back to the composer, and the
+journal stores the draft beside the prompt. A starter sends its rendered
+prompt but gives back what the chip submitted, so the user can edit and send
+it again in the form they chose; requiring the two to match would lose that
+form. A reserved merged send retains the delivered text in its journaled draft
+and keeps server ownership until admission, so recovery uses the same prompt ID.
+
+### Why goal messages are left to the server
+
+Taking a goal message and sending it as an ordinary prompt would drop its
+goal, since native has no goal arming or goal route. The web carries the goal
+through its own send; native leaves such a message queued, and the server
+starts the goal when it delivers it.
+
+### Why Edit appends to the composer instead of replacing it
+
+The web replaces the composer's text with the edited message. Native puts it
+after any typed text, as a failed send does, because replacing would discard
+what the user typed with no way back.
 
 ### Why creation has a durable handoff to ordinary sends
 
@@ -734,9 +1011,46 @@ scroll. The pending pin is an overlay outside the index, so a live event
 carrying older metadata cannot flip the row back while the write is in
 flight, and settling the overlay can never leave a stale value behind.
 
+### Why a revert marker is optimistic and a fork is not
+
+The web hides a revert's messages before the server answers, because the
+user just asked for exactly that view, and keeps the messages in the store
+behind the marker. Native keeps the marker as an overlay keyed by runtime and
+session, so a refusal only drops the overlay; no message moves. A fork
+creates a session the client cannot name before the answer, so it waits.
+
+### Why `/btw` retains drafts through admission
+
+BTW start and follow-up text remains in the normal persisted draft until the
+send succeeds, so closing during admission does not lose the question.
+There is no automatic replay into a temporary fork after restart. Success
+clears only the unchanged captured text; subsequent edits remain unsent.
+
 ### Why `.test_support()` on rows and controls
 
 GPUI Kit's headless test harness observes only elements marked with
 `.test_support()`. The call is the identity in normal builds, so production
 render chains keep their native types while `workspace_tests.rs` clicks rows
 and presses keys through real hit testing.
+
+### Why the terminal context disables workspace keys
+
+GPUI matches bindings before key-down handlers. Root Copy can therefore
+consume Ctrl+C when the transcript retains a selection. After registration,
+the terminal disables bindings applicable to its ancestor context stack with
+`NoAction`, including multi-key prefixes. Ctrl+J remains an app shortcut,
+matching `handleTerminalShortcutCapture` in `useKeyboardShortcuts.ts`.
+
+### Why scrollback is budgeted in bytes
+
+Ghostty bounds scrollback by page memory, not rows, despite its option's
+name; the reference passes 10,000 and keeps about 600 rows. The surface sizes
+the budget from the columns (16 bytes per column and 256 per row, for at
+least 100 columns), which keeps at least 10,000 rows. A narrower grid keeps
+more, since rows are pruned by whole pages.
+
+### Why the panel keeps every terminal attached
+
+The web client detaches hidden tabs and keeps a 512 KiB replay projection to
+restore them. Native keeps each tab's emulator and attachment, so switching
+tabs repaints at once and a hidden terminal answers its program's queries.

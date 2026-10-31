@@ -1704,6 +1704,7 @@ export const dict = {
   'filesView.dialog.confirm': 'Bevestigen',
   'filesView.dialog.delete.confirm': 'Verwijderen',
   'filesView.editor.saving': 'Opslaan...',
+  'filesView.rename.unresolved': 'Resultaat van hernoemen onbekend. Opslaan is geblokkeerd. Vernieuw om beide paden opnieuw te controleren.',
   'filesView.editor.saved': 'Opgeslagen',
   'filesView.editor.saveNowTitle': 'Nu opslaan ({shortcut}) - slaat na 1.5s automatisch op',
   'filesView.editor.saveNowManualTitle': 'Nu opslaan ({shortcut})',

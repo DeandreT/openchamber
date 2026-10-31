@@ -1447,6 +1447,7 @@ export const dict = {
   'filesView.dialog.confirm': 'Bestätigen',
   'filesView.dialog.delete.confirm': 'Löschen',
   'filesView.editor.saving': 'Speichern...',
+  'filesView.rename.unresolved': 'Ergebnis der Umbenennung unbekannt. Speichern ist gesperrt. Aktualisieren, um beide Pfade erneut zu prüfen.',
   'filesView.editor.saved': 'Gespeichert',
   'filesView.editor.saveNowTitle': 'Jetzt speichern ({shortcut}) - automatisches Speichern nach 1,5s',
   'filesView.editor.saveNowManualTitle': 'Jetzt speichern ({shortcut})',

@@ -1,6 +1,7 @@
 use std::{
     any::TypeId,
     borrow::Cow,
+    cell::Cell,
     collections::{HashMap, HashSet},
     rc::Rc,
     time::Duration,
@@ -130,6 +131,7 @@ pub struct Notification {
     on_click: Option<Rc<dyn Fn(&ClickEvent, &mut Window, &mut App)>>,
     on_close: Option<Rc<dyn Fn(&mut Window, &mut App)>>,
     transition_status: ToastTransitionStatus,
+    announcement_state: Rc<Cell<AnnouncementState>>,
 }
 
 impl From<String> for Notification {
@@ -167,6 +169,14 @@ where
 
 struct DefaultIdType;
 
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+enum AnnouncementState {
+    #[default]
+    Unseen,
+    Visible,
+    Hidden,
+}
+
 impl Notification {
     /// Create a new notification.
     ///
@@ -190,6 +200,7 @@ impl Notification {
             on_click: None,
             on_close: None,
             transition_status: ToastTransitionStatus::Starting,
+            announcement_state: Rc::new(Cell::new(AnnouncementState::Unseen)),
         }
     }
 
@@ -388,6 +399,14 @@ impl Notification {
         self.content_builder = Some(Rc::new(content));
         self
     }
+
+    /// The text assistive technology announces: the title, then the message.
+    fn announcement(&self) -> Option<SharedString> {
+        match (&self.title, &self.message) {
+            (Some(title), Some(message)) => Some(format!("{title}\n{message}").into()),
+            (title, message) => title.clone().or_else(|| message.clone()),
+        }
+    }
 }
 
 impl EventEmitter<DismissEvent> for Notification {}
@@ -418,9 +437,25 @@ impl Render for Notification {
         };
         let has_icon = icon.is_some();
         let placement = self.placement.unwrap_or(cx.theme().notification.placement);
+        let announcement = self.announcement();
+        let announcement_state = self.announcement_state.clone();
 
         BaseToast::new("notification")
             .transition_status(transition_status)
+            .when_some(announcement, |this, text| {
+                this.aria_label(text).when(!closing, |this| {
+                    this.a11y_synthetic_children(move |builder| {
+                        // This runs only when the toast contributes an
+                        // accessibility node, not on a speculative render.
+                        if announcement_state.get() != AnnouncementState::Hidden {
+                            announcement_state.set(AnnouncementState::Visible);
+                            builder
+                                .parent_node()
+                                .set_live(gpui::accesskit::Live::Polite);
+                        }
+                    })
+                })
+            })
             .h_flex()
             .group("")
             .occlude()
@@ -783,8 +818,19 @@ impl NotificationList {
         let settings = &cx.theme().notification;
         let (max_items, placement) = (settings.max_items, settings.placement);
 
+        let visible: Vec<_> = self.notifications.visible(max_items).collect();
+        let visible_ids: HashSet<_> = visible.iter().map(|(id, _, _)| (*id).clone()).collect();
+        for (id, item, _) in self.notifications.iter() {
+            if !visible_ids.contains(id) {
+                let state = &item.read(cx).announcement_state;
+                if state.get() == AnnouncementState::Visible {
+                    state.set(AnnouncementState::Hidden);
+                }
+            }
+        }
+
         let mut groups: Vec<(Anchor, Vec<(NotificationId, Entity<Notification>)>)> = Vec::new();
-        for (id, item, _) in self.notifications.visible(max_items) {
+        for (id, item, _) in visible {
             let anchor = item.read(cx).placement.unwrap_or(placement);
             match groups.iter_mut().find(|(a, _)| *a == anchor) {
                 Some((_, items)) => items.push((id.clone(), item.clone())),

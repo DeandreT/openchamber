@@ -65,6 +65,18 @@ pub enum ServerEvent {
     SessionDeleted {
         session_id: SessionId,
     },
+    /// OpenCode forked `parent_id` into `session_id`. No `session.created`
+    /// follows and the event carries no record, so the consumer reads it.
+    SessionForked {
+        session_id: SessionId,
+        parent_id: SessionId,
+    },
+    /// A staged revert became permanent: OpenCode deleted `to` and every
+    /// later message without per-message removals.
+    RevertCommitted {
+        session_id: SessionId,
+        to: MessageId,
+    },
     SessionStatus {
         session_id: SessionId,
         status: LiveStatus,
@@ -90,6 +102,12 @@ pub enum ServerEvent {
     },
     /// Routing availability changed; reread it rather than trust the frame.
     RoutingUpdated,
+    /// One session's server-owned queue after a change. `space` names the
+    /// isolated space whose own queue the host forwarded.
+    MessageQueueUpdated {
+        update: crate::message_queue::QueueUpdate,
+        space: Option<String>,
+    },
     Heartbeat,
     /// The server is shedding load; reconcile after it recovers.
     Backpressure,
@@ -376,6 +394,7 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
             notice: notice.map(str::to_owned),
             assistant: None,
             compaction: None,
+            synthetic: None,
         }))
     };
     let assistant = || text("assistantMessageID").map(MessageId::from);
@@ -430,9 +449,62 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                 agent: text("agent")
                     .filter(|agent| !agent.is_empty())
                     .map(str::to_owned),
+                revert: None,
+                btw: facts.btw,
             })]
         }
         "session.deleted" => vec![ServerEvent::SessionDeleted { session_id }],
+        "session.forked" => match text("parentID").filter(|id| !id.is_empty()) {
+            Some(parent) => vec![ServerEvent::SessionForked {
+                session_id,
+                parent_id: SessionId::from(parent),
+            }],
+            None => vec![ServerEvent::Unsupported {
+                kind: kind.to_owned(),
+            }],
+        },
+        "session.revert.staged" => match data
+            .pointer("/revert/messageID")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+        {
+            Some(marker) => vec![ServerEvent::SessionPatched {
+                session_id,
+                patch: SessionPatch {
+                    revert: Some(Some(MessageId::from(marker))),
+                    ..SessionPatch::default()
+                },
+            }],
+            None => vec![ServerEvent::Unsupported {
+                kind: kind.to_owned(),
+            }],
+        },
+        "session.revert.cleared" => vec![ServerEvent::SessionPatched {
+            session_id,
+            patch: SessionPatch {
+                revert: Some(None),
+                ..SessionPatch::default()
+            },
+        }],
+        // Trim first, then drop the marker, as `events.ts` orders them.
+        "session.revert.committed" => match text("to").filter(|id| !id.is_empty()) {
+            Some(to) => vec![
+                ServerEvent::RevertCommitted {
+                    session_id: session_id.clone(),
+                    to: MessageId::from(to),
+                },
+                ServerEvent::SessionPatched {
+                    session_id,
+                    patch: SessionPatch {
+                        revert: Some(None),
+                        ..SessionPatch::default()
+                    },
+                },
+            ],
+            None => vec![ServerEvent::Unsupported {
+                kind: kind.to_owned(),
+            }],
+        },
         "session.renamed" => vec![ServerEvent::SessionPatched {
             session_id: session_id.clone(),
             patch: SessionPatch {
@@ -506,7 +578,19 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                 data.pointer("/model/id").and_then(Value::as_str),
             ),
         ],
-        "session.synthetic" => vec![notice(Role::Synthetic, text("text"))],
+        "session.synthetic" => vec![transcript(TranscriptEvent::MessageUpdated(MessageInfo {
+            id: message_id_from_event(event_id),
+            role: Role::Synthetic,
+            created,
+            completed: None,
+            notice: text("text").map(str::to_owned),
+            assistant: None,
+            compaction: None,
+            synthetic: Some(projection::synthetic_facts(
+                text("description"),
+                data.get("metadata"),
+            )),
+        }))],
         "session.skill.activated" => vec![notice(Role::Skill, text("name"))],
         "session.instructions.updated" => match text("text") {
             Some(instructions) => vec![notice(Role::System, Some(instructions))],
@@ -540,6 +624,7 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                 notice,
                 assistant: None,
                 compaction: None,
+                synthetic: None,
             };
             let payload = data
                 .pointer("/item/payload")
@@ -565,10 +650,13 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                         .get("text")
                         .and_then(Value::as_str)
                         .map(str::to_owned);
-                    vec![transcript(TranscriptEvent::MessageUpdated(info(
-                        Role::Synthetic,
-                        notice,
-                    )))]
+                    vec![transcript(TranscriptEvent::MessageUpdated(MessageInfo {
+                        synthetic: Some(projection::synthetic_facts(
+                            payload.get("description").and_then(Value::as_str),
+                            payload.get("metadata"),
+                        )),
+                        ..info(Role::Synthetic, notice)
+                    }))]
                 }
                 _ => Vec::new(),
             }
@@ -598,6 +686,7 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                 notice: summary.map(str::to_owned),
                 assistant: None,
                 compaction: Some(status),
+                synthetic: None,
             }))]
         }
         "session.inbox.cancelled" => match text("inboxID") {
@@ -621,6 +710,7 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                     outcome: StepOutcome::default(),
                 }),
                 compaction: None,
+                synthetic: None,
             }))],
             None => Vec::new(),
         },
@@ -715,6 +805,7 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                         title: None,
                         output: None,
                         elided: None,
+                        child: None,
                     },
                     time: PartTime::default(),
                 },
@@ -747,13 +838,39 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                     )
                 }
             };
-            vec![transcript(TranscriptEvent::ToolTransition {
-                message_id,
+            let child = projection::tool_child(data.get("metadata"), data.get("input"));
+            let mut events = vec![transcript(TranscriptEvent::ToolTransition {
+                message_id: message_id.clone(),
                 part_id: PartId::from(call_id),
                 status,
                 output,
                 at: created,
-            })]
+            })];
+            if let Some(child) = child {
+                events.push(transcript(TranscriptEvent::ToolChild {
+                    message_id,
+                    part_id: PartId::from(call_id),
+                    child,
+                }));
+            }
+            events
+        }
+        // A running subagent names its child only through progress.
+        "session.tool.progress" => {
+            match (
+                assistant(),
+                text("id"),
+                projection::tool_child(data.get("metadata"), None),
+            ) {
+                (Some(message_id), Some(call_id), Some(child)) => {
+                    vec![transcript(TranscriptEvent::ToolChild {
+                        message_id,
+                        part_id: PartId::from(call_id),
+                        child,
+                    })]
+                }
+                _ => Vec::new(),
+            }
         }
         _ => vec![ServerEvent::Unsupported {
             kind: kind.to_owned(),
@@ -769,6 +886,17 @@ fn translate_openchamber(kind: &str, payload: &Value) -> Option<Vec<ServerEvent>
     let properties = payload.get("properties").unwrap_or(&Value::Null);
     if let Some(event) = permission_policy_event(kind, properties) {
         return Some(vec![event]);
+    }
+    if kind == "openchamber:message-queue.updated" {
+        // A malformed broadcast changes nothing; the next read corrects it.
+        return Some(vec![
+            crate::message_queue::decode_update(properties).map_or_else(
+                || ServerEvent::Unsupported {
+                    kind: kind.to_owned(),
+                },
+                |(update, space)| ServerEvent::MessageQueueUpdated { update, space },
+            ),
+        ]);
     }
     let session_id = properties
         .get("sessionID")
@@ -885,6 +1013,31 @@ fn tool_text(content: Option<&Value>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decodes_message_queue_broadcasts() {
+        let frame = decode_frame(
+            r#"{"type":"event","payload":{"type":"openchamber:message-queue.updated","properties":{"revision":3,"session":{"sessionId":"ses_1","directory":"/repo","items":[],"sendingId":"q1"}}}}"#,
+        )
+        .expect("valid");
+        let [ServerEvent::MessageQueueUpdated { update, space }] = frame.events.as_slice() else {
+            panic!("a queue update: {:?}", frame.events);
+        };
+        assert_eq!(update.revision, 3);
+        assert_eq!(
+            update.session.sending.as_ref().map(|id| id.as_str()),
+            Some("q1")
+        );
+        assert_eq!(space, &None);
+        let malformed = decode_frame(
+            r#"{"type":"event","payload":{"type":"openchamber:message-queue.updated","properties":{"revision":"x"}}}"#,
+        )
+        .expect("valid frame");
+        assert!(matches!(
+            malformed.events.as_slice(),
+            [ServerEvent::Unsupported { .. }]
+        ));
+    }
 
     #[test]
     fn decodes_ready_heartbeat_and_unknown_types() {
@@ -1054,6 +1207,148 @@ mod tests {
                 "{properties} changes nothing"
             );
         }
+    }
+
+    fn events(payload: &str) -> Vec<ServerEvent> {
+        decode_frame(&format!(r#"{{"type":"event","payload":{payload}}}"#))
+            .expect("valid frame")
+            .events
+    }
+
+    #[test]
+    fn forks_and_reverts_reach_the_session_and_its_transcript() {
+        assert_eq!(
+            events(
+                r#"{"id":"evt_1","created":5,"type":"session.forked","data":{"sessionID":"ses_f","parentID":"ses_p","boundary":{}}}"#
+            ),
+            [ServerEvent::SessionForked {
+                session_id: SessionId::from("ses_f"),
+                parent_id: SessionId::from("ses_p"),
+            }]
+        );
+        let patch = |revert: Option<Option<&str>>| SessionPatch {
+            revert: revert.map(|marker| marker.map(MessageId::from)),
+            ..SessionPatch::default()
+        };
+        assert_eq!(
+            events(
+                r#"{"id":"evt_2","created":5,"type":"session.revert.staged","data":{"sessionID":"s","revert":{"messageID":"msg_2","files":[]}}}"#
+            ),
+            [ServerEvent::SessionPatched {
+                session_id: SessionId::from("s"),
+                patch: patch(Some(Some("msg_2"))),
+            }]
+        );
+        assert_eq!(
+            events(
+                r#"{"id":"evt_3","created":5,"type":"session.revert.cleared","data":{"sessionID":"s"}}"#
+            ),
+            [ServerEvent::SessionPatched {
+                session_id: SessionId::from("s"),
+                patch: patch(Some(None)),
+            }]
+        );
+        assert_eq!(
+            events(
+                r#"{"id":"evt_4","created":5,"type":"session.revert.committed","data":{"sessionID":"s","to":"msg_2"}}"#
+            ),
+            [
+                ServerEvent::RevertCommitted {
+                    session_id: SessionId::from("s"),
+                    to: MessageId::from("msg_2"),
+                },
+                ServerEvent::SessionPatched {
+                    session_id: SessionId::from("s"),
+                    patch: patch(Some(None)),
+                },
+            ]
+        );
+        assert!(matches!(
+            &events(
+                r#"{"id":"evt_5","type":"session.revert.staged","data":{"sessionID":"s","revert":{}}}"#
+            )[..],
+            [ServerEvent::Unsupported { .. }]
+        ));
+    }
+
+    #[test]
+    fn synthetic_records_keep_their_subagent_run() {
+        let [
+            ServerEvent::Transcript {
+                event: TranscriptEvent::MessageUpdated(info),
+                ..
+            },
+        ] = &events(
+            r#"{"id":"evt_9","created":5,"type":"session.synthetic","data":{"sessionID":"s","text":"<subagent>done</subagent>","description":"Explore","metadata":{"source":"subagent","childID":"ses_c","agent":"explore","state":"completed"}}}"#,
+        )[..]
+        else {
+            panic!("one synthetic record");
+        };
+        assert_eq!(info.id.as_str(), "msg_9");
+        let facts = info.synthetic.as_ref().expect("synthetic facts");
+        assert_eq!(facts.description.as_deref(), Some("Explore"));
+        let run = facts.subagent.as_ref().expect("a subagent run");
+        assert_eq!(
+            (run.child.as_str(), run.agent.as_deref(), run.state),
+            (
+                "ses_c",
+                Some("explore"),
+                openchamber_native_core::transcript::SubagentRunState::Completed
+            )
+        );
+        let [
+            ServerEvent::Transcript {
+                event: TranscriptEvent::MessageUpdated(plain),
+                ..
+            },
+        ] = &events(
+            r#"{"id":"evt_10","created":5,"type":"session.synthetic","data":{"sessionID":"s","text":"ctx","metadata":{"source":"subagent","state":"done"}}}"#,
+        )[..]
+        else {
+            panic!("one synthetic record");
+        };
+        assert_eq!(
+            plain
+                .synthetic
+                .as_ref()
+                .and_then(|facts| facts.subagent.as_ref()),
+            None,
+            "an invalid run is ordinary context"
+        );
+    }
+
+    #[test]
+    fn subagent_calls_name_their_child() {
+        let child = |payload: &str| -> Vec<String> {
+            events(payload)
+                .into_iter()
+                .filter_map(|event| match event {
+                    ServerEvent::Transcript {
+                        event: TranscriptEvent::ToolChild { child, .. },
+                        ..
+                    } => Some(child.as_str().to_owned()),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(
+            child(
+                r#"{"id":"e","created":5,"type":"session.tool.progress","data":{"sessionID":"s","assistantMessageID":"msg_a","id":"call_1","metadata":{"sessionID":"ses_c"}}}"#
+            ),
+            ["ses_c"]
+        );
+        assert_eq!(
+            child(
+                r#"{"id":"e","created":5,"type":"session.tool.success","data":{"sessionID":"s","assistantMessageID":"msg_a","id":"call_1","content":[{"type":"text","text":"ok"}],"metadata":{"sessionId":"ses_d"},"executed":true}}"#
+            ),
+            ["ses_d"]
+        );
+        assert!(
+            child(
+                r#"{"id":"e","created":5,"type":"session.tool.called","data":{"sessionID":"s","assistantMessageID":"msg_a","id":"call_1","input":{},"executed":true}}"#
+            )
+            .is_empty()
+        );
     }
 
     #[test]

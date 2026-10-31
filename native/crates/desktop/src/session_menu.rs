@@ -229,7 +229,10 @@ impl Workspace {
                 .accessibility_id(format!("session-menu-item:{}", action.id()))
                 .aria_label(strings.get(action.label_key()))
                 .aria_description(strings.get(action.hint_key()))
-                .when(!enabled, |row| row.opacity(0.5))
+                .when(!enabled, |row| {
+                    row.opacity(0.5)
+                        .a11y_synthetic_children(|builder| builder.parent_node().set_disabled())
+                })
                 .tooltip({
                     let hint = strings.get(action.hint_key());
                     move |window, cx| Tooltip::new(hint.clone()).build(window, cx)
@@ -630,9 +633,9 @@ impl Workspace {
         )
     }
 
-    /// A status node carrying the newest session notification's text. The
-    /// toolkit's notifications are not exposed to accessibility clients, so
-    /// screen readers and automation read the outcome here.
+    /// A status node keeping the newest session notification's text, also
+    /// after its toast closes, so automation reads the outcome by a stable
+    /// ID. The toast itself announces the text to screen readers.
     pub(crate) fn render_session_notice(&self) -> AnyElement {
         div()
             .id("session-notice")

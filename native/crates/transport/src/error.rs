@@ -27,6 +27,9 @@ pub enum TransportError {
     Incompatible(String),
     #[error("the server answered HTTP {status}")]
     Http { status: u16 },
+    /// The server confirmed that this captured queue prefix was not reserved.
+    #[error("the queued prefix is no longer available for this message")]
+    QueuePrefixUnavailable,
     #[error("the server's answer is malformed: {0}")]
     Malformed(String),
     #[error("the event stream failed: {0}")]

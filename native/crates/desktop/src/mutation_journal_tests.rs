@@ -148,6 +148,67 @@ fn staged_selection_opened_before_handoff_round_trips_without_duplicate_owners()
 }
 
 #[test]
+fn queue_row_supersession_survives_storage_and_legacy_defaults_to_true() {
+    let fixture = Scratch::new();
+    let path = fixture.path();
+    let (mut journal, _) = MutationJournal::open(&path).expect("open");
+    let mut snapshot = sample();
+    snapshot.attempts[0].1.supersedes = false;
+    snapshot.attempts[0].1.queue_owned = true;
+    journal.save(&snapshot).expect("save row send");
+    drop(journal);
+    let (journal, value) = MutationJournal::open(&path).expect("reload");
+    let restored = loaded(value);
+    assert!(!restored.attempts[0].1.supersedes);
+    assert!(restored.attempts[0].1.queue_owned);
+    drop(journal);
+    let current: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).expect("read")).expect("JSON");
+    for version in 1..=4 {
+        let mut old = current.clone();
+        old["version"] = version.into();
+        for entry in old["attempts"].as_array_mut().expect("attempts") {
+            entry.as_object_mut().expect("attempt").remove("supersedes");
+            entry
+                .as_object_mut()
+                .expect("attempt")
+                .remove("queue_owned");
+        }
+        if version < 4 {
+            as_text_only(&mut old);
+        }
+        if version < 3 {
+            old.as_object_mut().expect("store").remove("selections");
+        }
+        if version < 2 {
+            old.as_object_mut().expect("store").remove("creations");
+        }
+        fs::write(&path, serde_json::to_vec(&old).expect("JSON")).expect("write legacy");
+        let (journal, value) = MutationJournal::open(&path).expect("migrate legacy");
+        let restored = loaded(value);
+        assert!(
+            restored.attempts[0].1.supersedes,
+            "version {version} defaults true"
+        );
+        assert!(
+            !restored.attempts[0].1.queue_owned,
+            "legacy sends have no reservation"
+        );
+        drop(journal);
+    }
+    let mut missing = current;
+    missing["attempts"][0]
+        .as_object_mut()
+        .expect("attempt")
+        .remove("supersedes");
+    fs::write(&path, serde_json::to_vec(&missing).expect("JSON")).expect("write malformed");
+    assert!(
+        MutationJournal::open(&path).is_err(),
+        "v5 must state its policy"
+    );
+}
+
+#[test]
 fn journal_v1_migrates_without_losing_existing_sends() {
     let fixture = Scratch::new();
     let path = fixture.path();
@@ -175,7 +236,7 @@ fn journal_v1_migrates_without_losing_existing_sends() {
     journal.save(&snapshot).expect("migrated save");
     let stored: serde_json::Value =
         serde_json::from_slice(&fs::read(&path).expect("read")).expect("JSON");
-    assert_eq!(stored["version"], 4);
+    assert_eq!(stored["version"], VERSION);
 }
 
 #[test]
@@ -353,6 +414,7 @@ fn as_text_only(stored: &mut serde_json::Value) {
             continue;
         };
         for entry in entries {
+            entry.as_object_mut().expect("entry").remove("supersedes");
             let prompt = entry["prompt"].as_object_mut().expect("prompt object");
             for field in ["files", "agents", "skills", "metadata", "context"] {
                 prompt.remove(field);
@@ -503,7 +565,7 @@ fn journal_v3_text_snapshot_migrates_to_v4() {
     journal.save(&migrated).expect("migrated save");
     let stored: serde_json::Value =
         serde_json::from_slice(&fs::read(&path).expect("read")).expect("JSON");
-    assert_eq!(stored["version"], 4);
+    assert_eq!(stored["version"], VERSION);
     assert_eq!(
         stored["attempts"][0]["prompt"]["context"],
         serde_json::json!([])

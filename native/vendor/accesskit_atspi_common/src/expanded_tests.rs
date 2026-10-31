@@ -8,8 +8,9 @@ use crate::{
     PlatformNode, State, StateSet, WindowBounds,
 };
 use accesskit::{
-    Action, ActionHandler, ActionRequest, Node, NodeId, Role, Tree, TreeId, TreeUpdate,
+    Action, ActionHandler, ActionRequest, Live, Node, NodeId, Role, Tree, TreeId, TreeUpdate,
 };
+use atspi_common::Politeness;
 use std::sync::{Arc, Mutex};
 
 struct EventCollector(Arc<Mutex<Vec<Event>>>);
@@ -470,4 +471,123 @@ fn expanded_state_transitions() {
             assert_eq!(count, 1, "{before:?} -> {after:?}: {state:?}={value}");
         }
     }
+}
+
+fn state_changes(events: &Mutex<Vec<Event>>, target: &PlatformNode) -> Vec<(State, bool)> {
+    let mut changes: Vec<_> = events
+        .lock()
+        .expect("event collector is not poisoned")
+        .drain(..)
+        .filter_map(|event| match event {
+            Event::Object {
+                target: NodeIdOrRoot::Node(id),
+                event: ObjectEvent::StateChanged(state, value),
+            } if id == target.id() => Some((state, value)),
+            _ => None,
+        })
+        .collect();
+    changes.sort_by_key(|(state, _)| *state as u32);
+    changes
+}
+
+#[test]
+fn disabled_controls_are_neither_enabled_nor_sensitive() {
+    for role in [Role::Button, Role::MenuItem] {
+        let mut data = Node::new(role);
+        data.set_label("Pin session");
+        data.set_disabled();
+        let (mut adapter, child, events) = build(data.clone());
+        let state = child.state();
+        assert!(
+            !state.contains(State::Enabled) && !state.contains(State::Sensitive),
+            "{role:?}: a disabled control is not operable: {state:?}"
+        );
+        assert!(!state.contains(State::ReadOnly), "{role:?}: {state:?}");
+
+        data.clear_disabled();
+        adapter.update(TreeUpdate {
+            nodes: vec![(NodeId(1), data.clone())],
+            tree: None,
+            tree_id: TreeId::ROOT,
+            focus: NodeId(0),
+        });
+        assert_eq!(
+            state_changes(&events, &child),
+            [(State::Enabled, true), (State::Sensitive, true)],
+            "{role:?}: enabling emits both state changes"
+        );
+
+        data.set_disabled();
+        adapter.update(TreeUpdate {
+            nodes: vec![(NodeId(1), data)],
+            tree: None,
+            tree_id: TreeId::ROOT,
+            focus: NodeId(0),
+        });
+        assert_eq!(
+            state_changes(&events, &child),
+            [(State::Enabled, false), (State::Sensitive, false)],
+            "{role:?}: disabling emits both state changes"
+        );
+    }
+}
+
+#[test]
+fn read_only_capable_controls_keep_their_read_only_state() {
+    for (role, disabled) in [(Role::TextInput, true), (Role::CheckBox, false)] {
+        let mut data = node(role, None);
+        if disabled {
+            data.set_disabled();
+        } else {
+            data.set_read_only();
+        }
+        let (_adapter, child, _) = build(data);
+        let state = child.state();
+        assert!(state.contains(State::ReadOnly), "{role:?}: {state:?}");
+        assert!(!state.contains(State::Enabled), "{role:?}: {state:?}");
+    }
+    let (_adapter, child, _) = build(Node::new(Role::Button));
+    let state = child.state();
+    assert!(state.contains(State::Enabled) && state.contains(State::Sensitive));
+}
+
+#[test]
+fn a_named_live_node_is_announced_once_when_it_appears() {
+    let (mut adapter, _, events) = build(Node::new(Role::Button));
+    let mut window = Node::new(Role::Window);
+    window.set_children(vec![NodeId(1), NodeId(2)]);
+    let mut toast = Node::new(Role::Alert);
+    toast.set_label("Couldn't pin the session");
+    toast.set_live(Live::Polite);
+    let update = TreeUpdate {
+        nodes: vec![(NodeId(0), window), (NodeId(2), toast)],
+        tree: None,
+        tree_id: TreeId::ROOT,
+        focus: NodeId(0),
+    };
+    let announcements = |events: &Mutex<Vec<Event>>| -> Vec<(String, Politeness)> {
+        events
+            .lock()
+            .expect("event collector is not poisoned")
+            .drain(..)
+            .filter_map(|event| match event {
+                Event::Object {
+                    event: ObjectEvent::Announcement(text, politeness),
+                    ..
+                } => Some((text, politeness)),
+                _ => None,
+            })
+            .collect()
+    };
+    adapter.update(update.clone());
+    assert_eq!(
+        announcements(&events),
+        [("Couldn't pin the session".to_owned(), Politeness::Polite)]
+    );
+    adapter.update(update);
+    assert_eq!(
+        announcements(&events),
+        [],
+        "an unchanged live node stays quiet"
+    );
 }

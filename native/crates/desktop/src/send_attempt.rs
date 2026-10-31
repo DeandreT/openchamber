@@ -39,6 +39,19 @@ pub(crate) struct SendAttempt {
     pub prompt: Prompt,
     pub optimistic: Message,
     pub admission: Admission,
+    /// Whether the send supersedes open requests; a retry keeps it.
+    pub supersedes: bool,
+    /// A reserved prefix remains on the server until this prompt is admitted.
+    pub queue_owned: bool,
+    /// Full prompt and capture are durable before any reserve request leaves.
+    pub reservation: Option<QueueReservation>,
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct QueueReservation {
+    pub items: Vec<String>,
+    pub composer: String,
 }
 
 /// Unresolved sends, several per session, in the order they began. At most
@@ -241,10 +254,33 @@ impl SendAttempts {
     pub(crate) fn discard(&mut self, key: &SessionKey, id: &MessageId) -> Option<SendAttempt> {
         if self.is_active(key)
             || !self.attempt(key, id).is_some_and(|attempt| {
-                attempt.admission == Admission::Uncertain && attempt.origin != SendOrigin::Deleted
+                attempt.admission == Admission::Uncertain
+                    && attempt.origin != SendOrigin::Deleted
+                    && !attempt.queue_owned
             })
         {
             return None;
+        }
+        self.remove(key, id)
+    }
+
+    /// Only a matching explicit server refusal can release queue ownership.
+    pub(crate) fn release_unreserved(
+        &mut self,
+        key: &SessionKey,
+        id: &MessageId,
+    ) -> Option<SendAttempt> {
+        if !self.attempt(key, id).is_some_and(|attempt| {
+            attempt.reservation.is_some()
+                && !matches!(
+                    attempt.admission,
+                    Admission::Admitted | Admission::Sending { observed: true }
+                )
+        }) {
+            return None;
+        }
+        if self.is_sending(key, id) {
+            self.active.remove(key);
         }
         self.remove(key, id)
     }
@@ -480,6 +516,10 @@ impl SendAttempts {
         if attempt.admission == Admission::Uncertain && outcome.is_err() {
             return None;
         }
+        if attempt.queue_owned && outcome.is_err() {
+            attempt.admission = Admission::Uncertain;
+            return None;
+        }
         match outcome {
             Ok(()) => attempt.admission = Admission::Admitted,
             Err(PromptAdmission::Unknown | PromptAdmission::Partial) => {
@@ -581,6 +621,7 @@ pub(crate) mod tests {
                     notice: None,
                     assistant: None,
                     compaction: None,
+                    synthetic: None,
                 },
                 parts: vec![Part::text(PartId::from("local-part"), draft.text.clone())],
             },
@@ -598,6 +639,41 @@ pub(crate) mod tests {
                 delivery: None,
             },
             admission: Admission::Sending { observed: false },
+            supersedes: true,
+            queue_owned: false,
+            reservation: None,
+        }
+    }
+
+    #[test]
+    fn a_reserved_prefix_keeps_its_identity_even_after_a_definite_refusal() {
+        let key = key("runtime", "session");
+        for failure in [
+            PromptAdmission::NotAttempted,
+            PromptAdmission::Rejected,
+            PromptAdmission::Unknown,
+        ] {
+            let mut captured = attempt(&key);
+            captured.queue_owned = true;
+            let id = captured.prompt.message_id.clone();
+            let mut attempts = SendAttempts::default();
+            assert!(attempts.begin(key.clone(), captured));
+            assert!(
+                attempts.finish(&key, &id, Err(failure)).is_none(),
+                "server-owned text is never returned as an independent draft"
+            );
+            assert_eq!(
+                attempts
+                    .attempt(&key, &id)
+                    .expect("retained reservation")
+                    .admission,
+                Admission::Uncertain
+            );
+            assert!(
+                attempts.discard(&key, &id).is_none(),
+                "discard cannot duplicate server-owned text into a draft"
+            );
+            assert!(attempts.begin_retry(&key, &id));
         }
     }
 

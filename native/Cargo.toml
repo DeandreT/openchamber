@@ -14,6 +14,9 @@ openchamber-native-core = { path = "crates/core" }
 openchamber-native-transport = { path = "crates/transport" }
 chrono = { version = "=0.4.45", default-features = false, features = ["clock"] }
 futures-util = { version = "=0.3.34", default-features = false, features = ["std", "sink"] }
+# The emulator, key encoder and paste encoder the web terminal runs as
+# WebAssembly, built from the same Ghostty revision (vendor/libghostty-vt-sys).
+libghostty-vt = { version = "=0.2.0", default-features = false }
 # Fenced code is highlighted with tree-sitter; the grammars cover the
 # languages agents most often write.
 gpui-kit = { version = "=0.7.3", features = [
@@ -62,3 +65,4 @@ gpui-component = { path = "vendor/gpui-component" }
 zed-xim = { path = "vendor/zed-xim" }
 xim-ctext = { path = "vendor/xim-ctext" }
 gpui-pre-linux = { path = "vendor/gpui-pre-linux" }
+libghostty-vt-sys = { path = "vendor/libghostty-vt-sys" }

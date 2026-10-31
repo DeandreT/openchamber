@@ -6,6 +6,7 @@ Run from the repository root:
 cargo test --offline --manifest-path native/vendor/gpui-base/input-tests/Cargo.toml --test input_accessibility
 cargo test --offline --manifest-path native/vendor/gpui-base/input-tests/Cargo.toml --test active_descendant
 cargo test --offline --manifest-path native/vendor/gpui-base/input-tests/Cargo.toml --test editable_text
+cargo test --offline --manifest-path native/vendor/gpui-base/input-tests/Cargo.toml --test notification_announcement
 ```
 
 These tests render the local gpui-base and gpui-component inputs on GPUI's
@@ -30,3 +31,8 @@ soft wraps and Unicode offsets, check selection after resize, reject obsolete
 run IDs, and verify that scrolling replaces geometry without assigning bounds
 to unlaid-out ranges. These coordinates come from GPUI's in-memory layout test
 platform; platform font shaping and AT-SPI extents still require native testing.
+
+Notification tests push toasts into gpui-component's list and read the emitted
+tree: each shown toast is a polite live region named by its title and message,
+and a closing toast or one returning to a full stack has no live setting. The AT-SPI announcement itself is
+covered by the `accesskit_atspi_common` tests and the Orca check.

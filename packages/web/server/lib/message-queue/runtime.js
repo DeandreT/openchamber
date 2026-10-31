@@ -13,6 +13,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import { z } from 'zod';
 import { assertPromptResponse } from '../opencode/prompt-response.js';
 import { unwrapOpenCodeResponse } from '../opencode/response-envelope.js';
 import { createSessionActivityProbe } from '../opencode/session-activity.js';
@@ -25,6 +26,19 @@ const QUEUE_FILE_VERSION = 1;
 const MAX_SESSIONS = 50;
 const MAX_ITEMS_PER_SESSION = 20;
 const CONTENT_CHAR_LIMIT = 200_000;
+// Match native's admission identity checks. Prepared attachments and metadata
+// are deliberately not compared: OpenCode plugins can change that content.
+const admissionIdentity = {
+  id: z.string().startsWith('msg_').min(5),
+  type: z.literal('user'),
+  time: z.object({ created: z.number().int().nonnegative().safe() }),
+};
+const inboxUserSchema = z.object({
+  ...admissionIdentity,
+  sessionID: z.string().startsWith('ses_').min(5),
+  delivery: z.enum(['queue', 'steer']),
+});
+const historyUserSchema = z.object({ ...admissionIdentity, text: z.string() });
 
 // Idle events arrive in bursts around a turn boundary; a short quiet window
 // coalesces them before the tick verifies idleness against OpenCode.
@@ -62,6 +76,29 @@ const asCount = (value) => (Number.isFinite(value) && value >= 0 ? Math.floor(va
 const isValidSessionId = (value) => SESSION_ID_PATTERN.test(asNonEmptyString(value));
 
 const httpError = (message, status) => Object.assign(new Error(message), { status });
+
+const parseReservation = (value) => {
+  const raw = asRecord(value);
+  const itemIds = asList(raw?.itemIds);
+  const sendConfig = parseSendConfig(raw?.sendConfig);
+  if (!raw || typeof raw.id !== 'string' || !/^msg_[a-zA-Z0-9_-]{1,120}$/.test(raw.id)
+      || !itemIds?.length || itemIds.length > MAX_ITEMS_PER_SESSION
+      || itemIds.some((id) => !asNonEmptyString(id)) || new Set(itemIds).size !== itemIds.length
+      || typeof raw.composer !== 'string' || raw.composer.length > CONTENT_CHAR_LIMIT
+      || !sendConfig || ![null, 'steer'].includes(raw.delivery ?? null)) {
+    throw new TypeError('invalid prefix reservation');
+  }
+  return { id: raw.id, itemIds: [...itemIds], composer: raw.composer, sendConfig, delivery: raw.delivery ?? null };
+};
+
+const nativeTakeable = (item) => !item.goal && !item.scheduledTask
+  && (item.context ?? []).every((part) => Buffer.byteLength(part.text) <= 1048576
+    && Buffer.byteLength(part.instructions ?? '') <= 1048576
+    && Buffer.byteLength(JSON.stringify(part.metadata ?? {})) <= 65536)
+  && item.attachments.every((file) => {
+  if (file.source === 'server' && file.serverPath) return 8 + 3 * Buffer.byteLength(file.serverPath) <= 65536;
+  return Math.ceil(file.size / 3) * 4 + 256 <= 65536 && Buffer.byteLength(file.dataUrl ?? '') <= 65536;
+});
 
 const parseSendConfig = (value) => {
   const raw = asRecord(value);
@@ -278,6 +315,10 @@ export function createMessageQueueRuntime({
 
   /** sessionId → { directory, items } */
   const queues = new Map();
+  // A native send borrows a prefix while the queue remains its durable owner.
+  // The stable prompt ID is also the receipt ID. No timeout releases ownership:
+  // a late client may still admit that ID after losing its HTTP response.
+  const reservations = new Map();
   let revision = 0;
   let loadPromise = null;
   let writePromise = Promise.resolve();
@@ -306,7 +347,10 @@ export function createMessageQueueRuntime({
     version: QUEUE_FILE_VERSION,
     revision,
     sessions: Object.fromEntries(
-      Array.from(queues.entries()).map(([sessionId, queue]) => [sessionId, { directory: queue.directory, items: queue.items }]),
+      Array.from(queues.entries()).map(([sessionId, queue]) => [sessionId, {
+        directory: queue.directory, items: queue.items,
+        ...(reservations.has(sessionId) ? { reservation: reservations.get(sessionId) } : {}),
+      }]),
     ),
   });
 
@@ -337,7 +381,11 @@ export function createMessageQueueRuntime({
       const directory = asNonEmptyString(entry.directory);
       const items = (asList(entry.items) ?? []).map(parseStoredItem).filter(Boolean);
       if (!directory || items.length === 0) continue;
-      sessions[sessionId] = { directory, items };
+      const reservation = entry.reservation == null ? null : parseReservation(entry.reservation);
+      if (reservation && !reservation.itemIds.every((id, index) => items[index]?.id === id && nativeTakeable(items[index]))) {
+        throw new TypeError('stored queue reservation does not match its prefix');
+      }
+      sessions[sessionId] = { directory, items, reservation };
     }
     return { sessions, revision: asCount(stored.revision) ?? 0 };
   };
@@ -346,7 +394,10 @@ export function createMessageQueueRuntime({
     if (!loadPromise) {
       loadPromise = readFile()
         .then((stored) => {
-          for (const [sessionId, entry] of Object.entries(stored.sessions)) queues.set(sessionId, entry);
+          for (const [sessionId, entry] of Object.entries(stored.sessions)) {
+            queues.set(sessionId, { directory: entry.directory, items: entry.items });
+            if (entry.reservation) reservations.set(sessionId, entry.reservation);
+          }
           revision = Math.max(revision, stored.revision);
         })
         .catch((error) => {
@@ -362,18 +413,18 @@ export function createMessageQueueRuntime({
 
   const persist = () => {
     const payload = JSON.stringify(serialize());
-    writePromise = writePromise
+    const write = writePromise
       .then(async () => {
         await fs.promises.mkdir(dataDir, { recursive: true });
         const tmpPath = `${filePath}.${process.pid}.tmp`;
         // Queued prompts are conversation content: readable by the owner only.
         await fs.promises.writeFile(tmpPath, payload, { encoding: 'utf8', mode: 0o600 });
         await fs.promises.rename(tmpPath, filePath);
-      })
-      .catch((error) => {
+      });
+    writePromise = write.catch((error) => {
         console.warn('[message-queue] failed to persist queue:', error?.message ?? error);
       });
-    return writePromise;
+    return write;
   };
 
   // --- snapshots -----------------------------------------------------------
@@ -403,7 +454,7 @@ export function createMessageQueueRuntime({
   /** Every mutation goes through here: bump, persist, broadcast. */
   const commit = (sessionId) => {
     revision += 1;
-    void persist();
+    void persist().catch(() => {});
     broadcast(sessionId);
     return { revision, session: sessionSnapshot(sessionId) };
   };
@@ -660,6 +711,10 @@ export function createMessageQueueRuntime({
 
   async function tick(sessionId) {
     if (stopped) return;
+    if (reservations.has(sessionId)) {
+      await reconcileReservation(sessionId);
+      return;
+    }
     const queue = queues.get(sessionId);
     if (!queue || queue.items.length === 0 || sending.has(sessionId) || isDeliveryHeld(sessionId)) return;
 
@@ -711,7 +766,7 @@ export function createMessageQueueRuntime({
     // Re-read after the awaits — the user may have edited the queue meanwhile.
     const current = queues.get(sessionId);
     const item = current?.items[0];
-    if (!item || item.id !== head.id || sending.has(sessionId)) return;
+    if (!item || item.id !== head.id || sending.has(sessionId) || reservations.has(sessionId)) return;
 
     sending.set(sessionId, item.id);
     broadcast(sessionId);
@@ -788,12 +843,19 @@ export function createMessageQueueRuntime({
       ...parsed,
     };
     const existing = queues.get(sessionId);
+    if (!existing && queues.size >= MAX_SESSIONS
+        && !Array.from(queues.keys()).some((id) => !sending.has(id) && !reservations.has(id))) {
+      throw httpError('message queue is full', 409);
+    }
+    if (reservations.has(sessionId) && existing.items.length >= MAX_ITEMS_PER_SESSION) {
+      throw httpError('reserved message queue is full', 409);
+    }
     const items = [...(existing?.items ?? []), item].slice(-MAX_ITEMS_PER_SESSION);
     setQueueItems(sessionId, directory, items);
     directories.set(sessionId, directory);
     if (queues.size > MAX_SESSIONS) {
       const oldest = Array.from(queues.entries())
-        .filter(([id]) => id !== sessionId && !sending.has(id))
+        .filter(([id]) => id !== sessionId && !sending.has(id) && !reservations.has(id))
         .sort((left, right) => (left[1].items[0]?.createdAt ?? 0) - (right[1].items[0]?.createdAt ?? 0))
         .slice(0, queues.size - MAX_SESSIONS);
       for (const [staleId] of oldest) {
@@ -813,6 +875,7 @@ export function createMessageQueueRuntime({
   const remove = async (sessionIdInput, itemId) => {
     const sessionId = requireSessionId(sessionIdInput);
     await load();
+    requireUnreserved(sessionId);
     if (sending.get(sessionId) === itemId) throw httpError('message is being sent', 409);
     const queue = queues.get(sessionId);
     if (!queue || !queue.items.some((item) => item.id === itemId)) {
@@ -826,6 +889,7 @@ export function createMessageQueueRuntime({
   const take = async (sessionIdInput, itemId) => {
     const sessionId = requireSessionId(sessionIdInput);
     await load();
+    requireUnreserved(sessionId);
     if (sending.get(sessionId) === itemId) throw httpError('message is being sent', 409);
     const queue = queues.get(sessionId);
     const item = queue?.items.find((entry) => entry.id === itemId);
@@ -839,6 +903,7 @@ export function createMessageQueueRuntime({
   const takeAll = async (sessionIdInput) => {
     const sessionId = requireSessionId(sessionIdInput);
     await load();
+    requireUnreserved(sessionId);
     const queue = queues.get(sessionId);
     if (!queue) return { revision, session: sessionSnapshot(sessionId), items: [] };
     const sendingId = sending.get(sessionId) ?? null;
@@ -848,12 +913,104 @@ export function createMessageQueueRuntime({
     return { ...commit(sessionId), items };
   };
 
+  const requireUnreserved = (sessionId) => {
+    if (reservations.has(sessionId)) throw httpError('queue prefix is reserved for a prompt', 409);
+  };
+
+  // No await occurs between the authoritative prefix check and exclusion.
+  // Original items stay in the queue file until admission of the stable ID.
+  const reservePrefix = async (sessionIdInput, input, preview = false) => {
+    const sessionId = requireSessionId(sessionIdInput);
+    const requested = parseReservation(input);
+    await load();
+    let reservation = reservations.get(sessionId);
+    const queue = queues.get(sessionId);
+    const unavailable = (message) => Object.assign(httpError(message, 409), {
+      code: 'queue_prefix_unavailable', sessionID: sessionId, messageID: requested.id,
+    });
+    if (reservation && JSON.stringify(reservation) !== JSON.stringify(requested)) {
+      throw unavailable('queue prefix is reserved for another captured prompt');
+    }
+    if (!reservation) {
+      if (!queue || sending.has(sessionId)
+          || !requested.itemIds.every((id, index) => queue.items[index]?.id === id && nativeTakeable(queue.items[index]))) {
+        throw unavailable('queue prefix changed or cannot be taken');
+      }
+      const prefix = queue.items.slice(0, requested.itemIds.length);
+      const texts = [...prefix.map((item) => item.text).filter((text) => text.trim()), requested.composer].filter((text) => text.trim());
+      if (Buffer.byteLength(texts.join('\n\n')) > 1048576
+          || prefix.some((item) => (item.context ?? []).some((part) => !part.text.trim() || (part.instructions && !part.instructions.trim())))
+          || prefix.reduce((count, item) => count + item.attachments.length + (item.agentMention ? 1 : 0) + (item.context ?? []).reduce((n, part) => n + (part.instructions ? 2 : 1), 0), 0) > 4096
+          // Bound the complete receipt, including both full payloads and its
+          // public snapshot. Leave room for native prompt/draft copies and
+          // JSON escaping within its 16 MiB journal and response limits.
+          || Buffer.byteLength(JSON.stringify({ reservation: requested, items: prefix, session: sessionSnapshot(sessionId) })) > 4 * 1024 * 1024) {
+        throw unavailable('queue prefix exceeds native journal limits');
+      }
+      reservation = requested;
+      if (preview) return { revision, session: sessionSnapshot(sessionId), reservation, items: prefix };
+      reservations.set(sessionId, reservation);
+      clearTimer(sessionId);
+      revision += 1;
+    }
+    if (preview) return { revision, session: sessionSnapshot(sessionId), reservation, items: queue.items.slice(0, reservation.itemIds.length) };
+    // A failed write retains the exclusion, and a repeated call retries it.
+    // An answer is handed out only after the receipt and original items are durable.
+    await persist();
+    broadcast(sessionId);
+    armDispatch(sessionId, retryDelayMs(1));
+    return {
+      revision, session: sessionSnapshot(sessionId), reservation,
+      items: queue.items.slice(0, reservation.itemIds.length),
+    };
+  };
+
+  const reconcileReservation = async (sessionId) => {
+    const reservation = reservations.get(sessionId);
+    if (!reservation) return;
+    try {
+      const prefix = `/api/session/${encodeURIComponent(sessionId)}`;
+      const inbox = await openCodeFetch(`${prefix}/inbox`);
+      if (!Array.isArray(inbox)) throw new TypeError('invalid inbox');
+      const matching = inbox.filter((item) => item?.id === reservation.id);
+      let admitted = false;
+      if (matching.length === 1) {
+        const user = inboxUserSchema.parse(matching[0]);
+        admitted = user.id === reservation.id && user.sessionID === sessionId;
+      }
+      if (matching.length && !admitted) throw new TypeError('conflicting inbox identity');
+      if (!admitted) {
+        const message = await openCodeFetch(`${prefix}/message/${encodeURIComponent(reservation.id)}`);
+        const user = historyUserSchema.parse(message);
+        admitted = user.id === reservation.id;
+      }
+      if (admitted && reservations.get(sessionId) === reservation) {
+        const queue = queues.get(sessionId);
+        setQueueItems(sessionId, queue.directory, queue.items.slice(reservation.itemIds.length));
+        reservations.delete(sessionId);
+        failures.delete(sessionId);
+        commit(sessionId);
+        // The next item waits behind this admitted prompt's live turn.
+        armDispatch(sessionId);
+        return;
+      }
+    } catch {
+      // Missing, failed and malformed observations cannot release ownership.
+    }
+    if (reservations.get(sessionId) !== reservation) return;
+    const previous = failures.get(sessionId);
+    const count = previous?.itemId === reservation.id ? previous.failures + 1 : 1;
+    failures.set(sessionId, { itemId: reservation.id, failures: count, nextAttemptAt: now() + retryDelayMs(count) });
+    armDispatch(sessionId, retryDelayMs(count));
+  };
+
   const reorder = async (sessionIdInput, itemIds) => {
     const sessionId = requireSessionId(sessionIdInput);
     if (!asList(itemIds) || itemIds.some((id) => !asNonEmptyString(id))) {
       throw new TypeError('itemIds must be a list of ids');
     }
     await load();
+    requireUnreserved(sessionId);
     const queue = queues.get(sessionId);
     if (!queue) return { revision, session: sessionSnapshot(sessionId) };
     const byId = new Map(queue.items.map((item) => [item.id, item]));
@@ -867,6 +1024,7 @@ export function createMessageQueueRuntime({
   const clear = async (sessionIdInput) => {
     const sessionId = requireSessionId(sessionIdInput);
     await load();
+    requireUnreserved(sessionId);
     const queue = queues.get(sessionId);
     if (!queue) return { revision, session: sessionSnapshot(sessionId) };
     // Never drop a message already handed to OpenCode: its send resolves and
@@ -891,6 +1049,7 @@ export function createMessageQueueRuntime({
     const deletedSessionId = extractDeletedSessionId(payload);
     if (deletedSessionId) {
       if (!queues.has(deletedSessionId)) return;
+      reservations.delete(deletedSessionId);
       setQueueItems(deletedSessionId, directories.get(deletedSessionId), []);
       clearTimer(deletedSessionId);
       failures.delete(deletedSessionId);
@@ -902,7 +1061,7 @@ export function createMessageQueueRuntime({
     const status = extractSessionStatus(payload);
     if (status) {
       if (!queues.has(status.sessionId)) return;
-      if (status.type === 'idle') armDispatch(status.sessionId);
+      if (status.type === 'idle' || reservations.has(status.sessionId)) armDispatch(status.sessionId);
       else clearTimer(status.sessionId);
       return;
     }
@@ -973,6 +1132,8 @@ export function createMessageQueueRuntime({
     remove,
     take,
     takeAll,
+    reservePrefix,
+    previewPrefix: (sessionId, input) => reservePrefix(sessionId, input, true),
     reorder,
     clear,
     release,
@@ -987,7 +1148,12 @@ export function createMessageQueueRuntime({
 export function registerMessageQueueRoutes(app, runtime) {
   const respondError = (res, error, fallback) => {
     const status = error instanceof TypeError ? 400 : (Number.isInteger(error?.status) ? error.status : 500);
-    res.status(status).json({ error: error?.message ?? fallback });
+    res.status(status).json({
+      error: error?.message ?? fallback,
+      ...(error?.code === 'queue_prefix_unavailable' ? {
+        code: error.code, sessionID: error.sessionID, messageID: error.messageID,
+      } : {}),
+    });
   };
 
   app.get('/api/message-queue', async (_req, res) => {
@@ -1013,6 +1179,22 @@ export function registerMessageQueueRoutes(app, runtime) {
       res.json(await runtime.takeAll(req.params.sessionId));
     } catch (error) {
       respondError(res, error, 'Failed to take queued messages');
+    }
+  });
+
+  app.post('/api/message-queue/sessions/:sessionId/reserve-prefix', async (req, res) => {
+    try {
+      res.json(await runtime.reservePrefix(req.params.sessionId, req.body));
+    } catch (error) {
+      respondError(res, error, 'Failed to reserve queued messages');
+    }
+  });
+
+  app.post('/api/message-queue/sessions/:sessionId/preview-prefix', async (req, res) => {
+    try {
+      res.json(await runtime.previewPrefix(req.params.sessionId, req.body));
+    } catch (error) {
+      respondError(res, error, 'Failed to preview queued messages');
     }
   });
 

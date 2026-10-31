@@ -1709,6 +1709,7 @@ export const dict: Record<I18nKey, string> = {
   'filesView.dialog.confirm': '확인',
   'filesView.dialog.delete.confirm': '삭제',
   'filesView.editor.saving': '저장 중…',
+  'filesView.rename.unresolved': '이름 변경 결과를 알 수 없습니다. 저장이 차단되었습니다. 새로고침하여 두 경로를 다시 확인하세요.',
   'filesView.editor.saved': '저장됨',
   'filesView.editor.saveNowTitle': '지금 저장({shortcut}) · 1.5초 후 자동 저장',
   'filesView.editor.saveNowManualTitle': '지금 저장({shortcut})',

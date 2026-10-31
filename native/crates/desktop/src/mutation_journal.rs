@@ -10,7 +10,10 @@
 //! Writes replace the whole snapshot, so callers must enqueue snapshots in mutation
 //! order. A failed open grants no write handle: malformed stores are left intact.
 //!
-//! Version 4 stores whole prompts: text, attachment references, agent and skill
+//! Version 6 adds the queue reservation intent saved before acquiring it.
+//! Version 5 adds whether each send supersedes open requests; older
+//! versions load with it set, as every send of theirs did. Version 4 stores
+//! whole prompts: text, attachment references, agent and skill
 //! references, metadata, the ordered synthetic context items with their IDs,
 //! the prompt ID and delivery. Versions 1 to 3 held text prompts and load as
 //! prompts without parts. Attachments are references (a server path or URI);
@@ -38,14 +41,14 @@ use crate::create_attempt::{CreateAttempt, CreationPhase};
 use crate::send_attempt::{Admission, SendAttempt, SendOrigin, SessionKey};
 use openchamber_native_transport::session_create::CreateSession;
 
-const VERSION: u32 = 4;
+const VERSION: u32 = 6;
 const MAX_FILE: u64 = 16 * 1024 * 1024;
 const MAX_TEXT: usize = 1024 * 1024;
 const MAX_ENTRIES: usize = 4096;
 const MAX_ID: usize = 4096;
 const MAX_DIRECTORY: usize = 16 * 1024;
 /// An attachment URI, including a small inline `data:` URI.
-const MAX_URI: usize = 64 * 1024;
+pub(crate) const MAX_URI: usize = 64 * 1024;
 const MAX_METADATA: usize = 64 * 1024;
 static TEMP_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
@@ -458,6 +461,14 @@ struct StoredAttempt<P = StoredPrompt> {
     optimistic_part_id: String,
     created: i64,
     admission: StoredAdmission,
+    /// Version 5: whether the send supersedes open requests. Older versions
+    /// lack it, and every send of theirs did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    supersedes: Option<bool>,
+    #[serde(default)]
+    queue_owned: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    reservation: Option<crate::send_attempt::QueueReservation>,
 }
 
 impl StoredAttempt<TextOnlyPrompt> {
@@ -471,6 +482,9 @@ impl StoredAttempt<TextOnlyPrompt> {
             optimistic_part_id: self.optimistic_part_id,
             created: self.created,
             admission: self.admission,
+            supersedes: self.supersedes,
+            queue_owned: self.queue_owned,
+            reservation: self.reservation,
         }
     }
 }
@@ -813,6 +827,9 @@ impl Store {
                     Admission::Admitted => StoredAdmission::Admitted,
                     Admission::Uncertain => StoredAdmission::Uncertain,
                 },
+                supersedes: Some(attempt.supersedes),
+                queue_owned: attempt.queue_owned,
+                reservation: attempt.reservation.clone(),
             })
             .collect();
         Ok(Self {
@@ -870,6 +887,20 @@ impl Store {
             .collect::<Result<_, _>>()?;
         let mut attempts = Vec::with_capacity(self.attempts.len());
         for stored in self.attempts {
+            if self.version < 5 && stored.queue_owned {
+                return Err(JournalError::Invalid("queue reservation before version 5"));
+            }
+            let supersedes = match (self.version, stored.supersedes) {
+                (5..=VERSION, None) => {
+                    return Err(JournalError::Invalid("attempt without supersession"));
+                }
+                (5..=VERSION, Some(supersedes)) => supersedes,
+                (_, None) => true,
+                (_, Some(_)) => return Err(JournalError::Invalid("supersession before version 5")),
+            };
+            if self.version < 6 && stored.reservation.is_some() {
+                return Err(JournalError::Invalid("reservation intent before version 6"));
+            }
             let (owner, draft) = stored.draft.into_draft()?;
             let prompt = stored.prompt.into_prompt();
             let optimistic = Message {
@@ -881,6 +912,7 @@ impl Store {
                     notice: None,
                     assistant: None,
                     compaction: None,
+                    synthetic: None,
                 },
                 parts: vec![Part::text(
                     PartId::from(stored.optimistic_part_id),
@@ -908,6 +940,9 @@ impl Store {
                         }
                         StoredAdmission::Admitted => Admission::Admitted,
                     },
+                    supersedes,
+                    queue_owned: stored.queue_owned,
+                    reservation: stored.reservation,
                 },
             ));
         }
@@ -1010,6 +1045,24 @@ fn validate_snapshot(snapshot: &JournalSnapshot) -> Result<(), JournalError> {
         identifier(key.session.as_str())?;
         Owner::capture(&attempt.owner).into_key()?;
         validate_draft(&attempt.draft)?;
+        if let Some(intent) = &attempt.reservation {
+            if !attempt.queue_owned
+                || intent.items.is_empty()
+                || intent.items.len() > 20
+                || intent.composer.len() > MAX_TEXT
+            {
+                return Err(JournalError::Invalid("invalid reservation intent"));
+            }
+            charge(&mut size, intent.composer.len())?;
+            let mut ids = HashSet::new();
+            for id in &intent.items {
+                identifier(id)?;
+                charge(&mut size, id.len())?;
+                if !ids.insert(id) {
+                    return Err(JournalError::Invalid("duplicate reservation item"));
+                }
+            }
+        }
         validate_prompt(&mut size, &key.runtime, &attempt.prompt, &mut messages)?;
         let unacknowledged = sessions.entry(key).or_insert(0usize);
         if attempt.admission != Admission::Admitted {
@@ -1021,11 +1074,6 @@ fn validate_snapshot(snapshot: &JournalSnapshot) -> Result<(), JournalError> {
         {
             return Err(JournalError::Invalid(
                 "invalid or duplicate attempt owner or identity",
-            ));
-        }
-        if attempt.prompt.text != attempt.draft.text {
-            return Err(JournalError::Invalid(
-                "prompt must match the captured draft",
             ));
         }
         if attempt.origin != SendOrigin::Existing {
@@ -1054,6 +1102,7 @@ fn validate_snapshot(snapshot: &JournalSnapshot) -> Result<(), JournalError> {
                 notice: None,
                 assistant: None,
                 compaction: None,
+                synthetic: None,
             },
             parts: vec![Part::text(part.id.clone(), attempt.prompt.text.clone())],
         };
@@ -1082,7 +1131,6 @@ fn validate_snapshot(snapshot: &JournalSnapshot) -> Result<(), JournalError> {
             || sessions.contains_key(key)
             || !created.insert(key)
             || (attempt.phase != CreationPhase::Deleted && !sources.insert(&attempt.source))
-            || attempt.prompt.text != attempt.draft.text
             || attempt.created < 0
             || attempt.prompt.delivery.is_some()
             || attempt.prompt.model.is_none()

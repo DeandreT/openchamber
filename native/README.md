@@ -26,6 +26,21 @@ Linux builds link with [mold](https://github.com/rui314/mold) through clang
 Nextest does not run doctests; if a crate gains one, add `cargo test --doc` to
 `native:test`.
 
+The terminal emulator is Ghostty's `libghostty-vt`, built from source by the
+[vendored `libghostty-vt-sys`](vendor/libghostty-vt-sys/DOCUMENTATION.md).
+Linux builds need [Zig](https://ziglang.org/download/) exactly 0.15.2, named by
+`ZIG` or first on `PATH`, and the pinned Ghostty source with its Zig packages,
+fetched once (about 600 MB, checked by digest) into the ignored
+`native/.cache/ghostty`:
+
+```sh
+ZIG=/path/to/zig-0.15.2/zig python3 native/scripts/fetch-ghostty.py
+```
+
+Builds after that run offline. Set `OPENCHAMBER_GHOSTTY_CACHE` to share one
+cache between checkouts. Each Cargo profile and target directory compiles
+Ghostty once, which takes several minutes.
+
 Cargo writes to `native/target`. Set `CARGO_TARGET_DIR` to keep a native
 Windows build apart from a Linux or WSL build of the same checkout.
 
@@ -75,8 +90,8 @@ New-session text submission uses the selected registered project's root director
 The client saves one session ID before creation, verifies its returned location,
 then durably binds the first message before sending. Check status never submits
 the saved message. Retry same message uses the original identities and captured
-configuration. An observed deletion never triggers recreation. Journal version 2
-reads version 1; malformed or future formats remain untouched.
+configuration. An observed deletion never triggers recreation. Journal version 6
+reads versions 1 through 5; malformed or future formats remain untouched.
 
 `native:fixtures` runs the TypeScript sidebar projection and rewrites
 `crates/core/tests/fixtures/sidebar-projection.json`. `native:resources`
@@ -97,10 +112,10 @@ libpinyin; screen-reader checks use Orca and a private, silent Speech Dispatcher
 These tools are test dependencies and are not bundled into the application.
 
 Local toolkit patches are pinned under `vendor/`: retained Markdown selection in
-[`gpui-base`](vendor/gpui-base/DOCUMENTATION.md), single-choice confirmation in
-[`gpui-component`](vendor/gpui-component/DOCUMENTATION.md), and AT-SPI expansion
-state in the bridge below. Each patch documents its compatibility and removal
-conditions.
+[`gpui-base`](vendor/gpui-base/DOCUMENTATION.md), single-choice confirmation and
+announced toasts in [`gpui-component`](vendor/gpui-component/DOCUMENTATION.md),
+and AT-SPI expansion and disabled state in the bridge below. Each patch
+documents its compatibility and removal conditions.
 
 The native window enables the local [`gpui-pre`](vendor/gpui-pre/DOCUMENTATION.md)
 logical-layout mode before its first layout. Fractional row sizes remain exact
@@ -114,7 +129,8 @@ recoverable without discarding the input connection.
 
 The workspace uses a [local AT-SPI translation patch](vendor/accesskit_atspi_common/DOCUMENTATION.md)
 for the pinned AccessKit dependency so expandable controls expose their expanded
-or collapsed state and state-change notifications.
+or collapsed state and state-change notifications, and disabled buttons and menu
+items stop reporting themselves enabled.
 
 AccessKit registers with AT-SPI only while the session's accessibility bus
 reports `org.a11y.Status.IsEnabled`. A screen reader turns it on; automation

@@ -183,6 +183,46 @@ A 2xx HTML app-shell response is a failed dispatch, not acceptance. The queued i
 
 ## Held delivery
 
+### Native prefix reservations
+
+`POST /api/message-queue/sessions/:id/reserve-prefix` atomically reserves a
+leading run of item IDs for one native prompt. The body carries `id`, the
+stable `msg_` prompt identity, `itemIds`, captured `composer`, `sendConfig`
+and optional `delivery: "steer"`. A stale prefix, an active delivery, or an
+item carrying a goal, scheduled provenance or payload beyond native journal
+limits returns 409 without taking anything. The operation never skips items.
+`preview-prefix` accepts the same body and returns the candidate without changing
+ownership. Native journals that complete prompt before acquiring the reservation.
+
+The original items remain in the queue. The same queue file retains the
+reservation beside them, and the response waits for its atomic write. Its
+`reservation` and full `items` form an immutable receipt. While a reservation
+exists, repeating the exact request returns that receipt. A different identity
+or payload returns 409. The caller retains the original request through a lost
+answer or restart, then
+uses the receipt's prompt ID and derives context IDs from it. A failed write
+returns failure and retains the in-memory exclusion until a retry persists it.
+
+The owner excludes automatic delivery and destructive queue mutations while
+the prefix is reserved. Dispatch probes recheck the reservation after their
+awaits, so a probe started before reservation cannot deliver past it. Appends
+remain available within the existing queue limit; reserved sessions and items
+cannot be evicted to make room. Existing routes retain their behavior on
+unreserved sessions and return 409 on reserved sessions.
+
+The owner observes the exact prompt ID through OpenCode's inbox and then
+exact-ID history. Only a matching user admission releases the prefix and
+removes its original items. Missing, malformed and failed observations leave
+the reservation intact. Checks use the existing bounded retry backoff and
+session events; no timeout expires the exclusion. A native client can recover
+a lost receipt by retrying its journaled send under the same IDs.
+This also preserves ordering when the client closes between taking ownership
+and sending. Session deletion clears the reservation with the queue. Do not
+downgrade the server while a reservation is pending, since older servers do
+not enforce this persisted ownership field.
+
+### Auto-review holds
+
 An auto-review run (`../auto-review`) bounces the reviewed session through
 idle between its steps, and a queued follow-up must not land in the middle.
 The runtime takes `isDeliveryHeld(sessionId)`, the auto-review runtime's
@@ -204,6 +244,8 @@ allowlists.
 | `DELETE .../sessions/:id/items/:itemId` | Remove; `409` while that item is in flight |
 | `POST .../sessions/:id/items/:itemId/take` | Remove and return the full item (payloads included); `404`/`409` |
 | `POST .../sessions/:id/take` | Remove and return every item not in flight, in order |
+| `POST .../sessions/:id/preview-prefix` | Read an eligible leading prefix and complete captured send without changing ownership |
+| `POST .../sessions/:id/reserve-prefix` | Persist an eligible leading prefix and its captured send under a stable prompt ID; repeat the exact request to recover its receipt |
 | `PUT .../sessions/:id/order` | `{ itemIds }` must be a complete permutation |
 | `DELETE .../sessions/:id` | Clear; the in-flight item stays |
 

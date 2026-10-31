@@ -249,7 +249,7 @@ impl Workspace {
     /// Runs `request` on the network and `finish` with its result on the
     /// window. The task belongs to the window; closing it cancels the
     /// request without stopping the server.
-    fn spawn_session_task<T: Send + 'static>(
+    pub(crate) fn spawn_session_task<T: Send + 'static>(
         &mut self,
         request: impl FnOnce(
             openchamber_native_transport::client::ServerClient,
@@ -279,7 +279,7 @@ impl Workspace {
         true
     }
 
-    fn push_error(
+    pub(crate) fn push_error(
         &mut self,
         title: &str,
         detail: Option<SharedString>,
@@ -295,7 +295,7 @@ impl Workspace {
     }
 
     /// Shows a notification and announces its text through the status node.
-    fn push_notice(
+    pub(crate) fn push_notice(
         &mut self,
         notification: Notification,
         text: SharedString,

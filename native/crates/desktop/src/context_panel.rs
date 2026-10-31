@@ -17,6 +17,7 @@ use crate::activation::on_activate;
 use crate::baseline::CssTextExt;
 use crate::chrome::{CONTROL_RADIUS, IconButton, glyph};
 use crate::elevation;
+use crate::files_view::PanelSurface;
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
 use crate::send_catalog::ModelControl;
@@ -398,7 +399,12 @@ impl Workspace {
                         }),
                 ),
             cx,
-            |_, _, _| {},
+            // The session context replaces an open server surface.
+            |this, _, cx| {
+                if this.panels.open.take().is_some() {
+                    cx.notify();
+                }
+            },
         )
         .test_support();
         div()
@@ -417,9 +423,28 @@ impl Workspace {
             .gap(px(8.0))
             .child(context)
             .children(RAIL_SURFACES.iter().map(|(id, icon, key)| {
+                let surface = match *id {
+                    "rail-files" => Some(PanelSurface::Files),
+                    "rail-git" => Some(PanelSurface::Git),
+                    "rail-diff" => Some(PanelSurface::Diff),
+                    _ => None,
+                };
+                let open = (surface.is_some() && self.panels.open == surface)
+                    || (*id == "rail-terminal" && self.terminal_open);
                 let button = IconButton::new(*id, icon, strings.get(key))
                     .size(RAIL_BUTTON, RAIL_GLYPH)
-                    .render(palette, cx, |_, _, _| {});
+                    .tone(if open {
+                        crate::chrome::ButtonTone::Active
+                    } else {
+                        crate::chrome::ButtonTone::Quiet
+                    })
+                    .render(palette, cx, move |this, window, cx| {
+                        if let Some(surface) = surface {
+                            this.toggle_panel(surface, cx);
+                        } else if *id == "rail-terminal" {
+                            this.toggle_terminal(window, cx);
+                        }
+                    });
                 if *id != "rail-diff" {
                     return button;
                 }

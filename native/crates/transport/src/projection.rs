@@ -10,11 +10,12 @@ use openchamber_native_core::send_config::{
     AgentEntry, AgentMode, FlatModel, FlatProvider, ModelChoice,
 };
 use openchamber_native_core::session::{
-    MetadataFacts, SessionKind, SessionOverlay, SessionRecord, SessionTime as CoreSessionTime,
+    BtwMetadata, MetadataFacts, SessionKind, SessionOverlay, SessionRecord,
+    SessionTime as CoreSessionTime,
 };
 use openchamber_native_core::transcript::{
     AssistantFacts, CompactionStatus, Message, MessageInfo, Part, PartContent, PartTime, Role,
-    StepOutcome, TokenUsage, ToolStatus, Usd,
+    StepOutcome, SubagentRun, SubagentRunState, SyntheticFacts, TokenUsage, ToolStatus, Usd,
 };
 use serde_json::Value;
 
@@ -45,7 +46,7 @@ pub(crate) mod part_ids {
 
 /// Projects a session record with its OpenChamber overlay.
 pub(crate) fn session(wire: wire::Session) -> SessionRecord {
-    let MetadataFacts { overlay, kind } = metadata_facts(wire.metadata.as_ref());
+    let MetadataFacts { overlay, kind, btw } = metadata_facts(wire.metadata.as_ref());
     SessionRecord {
         id: SessionId::new(wire.id),
         parent_id: wire
@@ -66,6 +67,41 @@ pub(crate) fn session(wire: wire::Session) -> SessionRecord {
         overlay,
         model: wire.model.map(model_choice),
         agent: wire.agent.filter(|agent| !agent.is_empty()),
+        revert: wire
+            .revert
+            .map(|revert| revert.message_id)
+            .filter(|id| !id.is_empty())
+            .map(MessageId::new),
+        btw,
+    }
+}
+
+/// `sessionBtwMetadata.ts`: a nonblank string, else absent.
+fn btw_id(openchamber: Option<&Value>, key: &str) -> Option<String> {
+    openchamber
+        .and_then(|value| value.get(key))
+        .and_then(Value::as_str)
+        .filter(|id| !id.trim().is_empty())
+        .map(str::to_owned)
+}
+
+/// The `/btw` links of an `openchamber` metadata namespace. A fork's own
+/// fields count only while it is marked `kind: "btw"`.
+fn btw_metadata(openchamber: Option<&Value>, is_btw: bool) -> BtwMetadata {
+    BtwMetadata {
+        link: btw_id(openchamber, "btwSessionID").map(SessionId::new),
+        original: is_btw
+            .then(|| btw_id(openchamber, "originalSessionID"))
+            .flatten()
+            .map(SessionId::new),
+        boundary: is_btw
+            .then(|| btw_id(openchamber, "btwBoundaryMessageID"))
+            .flatten()
+            .map(MessageId::new),
+        promoted: openchamber
+            .and_then(|value| value.get("btwPromoted"))
+            .and_then(Value::as_bool)
+            == Some(true),
     }
 }
 
@@ -114,7 +150,95 @@ pub(crate) fn metadata_facts(metadata: Option<&Value>) -> MetadataFacts {
     MetadataFacts {
         overlay: SessionOverlay { pinned_at, in_work },
         kind,
+        btw: btw_metadata(openchamber, is_btw),
     }
+}
+
+/// What a synthetic record's description and metadata establish
+/// (`readSubagentRun` in `lib/opencode/subagent-run.ts`).
+pub(crate) fn synthetic_facts(
+    description: Option<&str>,
+    metadata: Option<&Value>,
+) -> Box<SyntheticFacts> {
+    let text = |key: &str| {
+        metadata
+            .and_then(|metadata| metadata.get(key))
+            .and_then(Value::as_str)
+    };
+    let state = match text("state") {
+        Some("running") => Some(SubagentRunState::Running),
+        Some("completed") => Some(SubagentRunState::Completed),
+        Some("error") => Some(SubagentRunState::Error),
+        Some("cancelled") => Some(SubagentRunState::Cancelled),
+        _ => None,
+    };
+    let subagent = match (text("source"), text("childID"), state) {
+        (Some("subagent"), Some(child), Some(state)) if !child.is_empty() => Some(SubagentRun {
+            child: SessionId::from(child),
+            agent: text("agent").map(str::to_owned),
+            state,
+        }),
+        _ => None,
+    };
+    Box::new(SyntheticFacts {
+        description: description.map(str::to_owned),
+        subagent,
+        dispatched_session: match (text("source"), text("sessionID"), text("state")) {
+            (Some("openchamber-session"), Some(id), Some("completed" | "error" | "cancelled"))
+                if !id.is_empty()
+                    && metadata
+                        .and_then(|value| value.get("title"))
+                        .is_none_or(Value::is_string) =>
+            {
+                Some(SessionId::from(id))
+            }
+            _ => None,
+        },
+        workflow_run: match (text("source"), text("runId"), text("name"), text("state")) {
+            (
+                Some("openchamber-workflow"),
+                Some(id),
+                Some(_),
+                Some("completed" | "failed" | "stopped" | "declined"),
+            ) if !id.is_empty() => Some(id.to_owned()),
+            _ => None,
+        },
+    })
+}
+
+#[test]
+fn synthetic_report_boundaries_validate_reference_metadata() {
+    let facts = |value| synthetic_facts(None, Some(&value));
+    assert!(facts(serde_json::json!({"source":"openchamber-session", "sessionID":"ses_x", "state":"completed"})).dispatched_session.is_some());
+    assert!(facts(serde_json::json!({"source":"openchamber-workflow", "runId":"run_x", "name":"", "state":"declined"})).workflow_run.is_some());
+    for value in [
+        serde_json::json!({"source":"openchamber-session", "sessionID":"", "state":"completed"}),
+        serde_json::json!({"source":"openchamber-session", "sessionID":"ses_x", "state":"running"}),
+        serde_json::json!({"source":"openchamber-session", "sessionID":"ses_x", "state":"error", "title":null}),
+        serde_json::json!({"source":"openchamber-workflow", "runId":"run_x", "state":"completed"}),
+        serde_json::json!({"source":"openchamber-workflow", "runId":"run_x", "name":"x", "state":"running"}),
+    ] {
+        let result = facts(value);
+        assert!(result.dispatched_session.is_none() && result.workflow_run.is_none());
+    }
+}
+
+/// The child session a call names (`subagentSessionId`, then the call's own
+/// `sessionID` input as a resumed call carries it). Live tool events carry no
+/// tool name, so the view decides which tools link to their child.
+pub(crate) fn tool_child(metadata: Option<&Value>, input: Option<&Value>) -> Option<SessionId> {
+    let id = |record: Option<&Value>| {
+        let record = record?;
+        ["sessionID", "sessionId"].into_iter().find_map(|key| {
+            record
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|id| !id.is_empty())
+                .map(SessionId::from)
+        })
+    };
+    id(metadata).or_else(|| id(input))
 }
 
 #[cfg(test)]
@@ -160,6 +284,7 @@ pub(crate) fn message(envelope: wire::MessageEnvelope) -> Result<Option<Message>
     let body = Value::Object(body);
     let notice = |field: &str| body.get(field).and_then(Value::as_str).map(str::to_owned);
     let mut facts = None;
+    let mut synthetic = None;
     let compaction = (kind == "compaction")
         .then(|| match body.get("status").and_then(Value::as_str) {
             Some("running") => Some(CompactionStatus::Running),
@@ -193,7 +318,13 @@ pub(crate) fn message(envelope: wire::MessageEnvelope) -> Result<Option<Message>
             });
             (Role::Assistant, parts, None)
         }
-        "synthetic" => (Role::Synthetic, Vec::new(), notice("text")),
+        "synthetic" => {
+            synthetic = Some(synthetic_facts(
+                body.get("description").and_then(Value::as_str),
+                body.get("metadata"),
+            ));
+            (Role::Synthetic, Vec::new(), notice("text"))
+        }
         "system" => (Role::System, Vec::new(), notice("text")),
         "skill" => (Role::Skill, Vec::new(), notice("name")),
         "shell" => (Role::Shell, Vec::new(), notice("command")),
@@ -228,6 +359,7 @@ pub(crate) fn message(envelope: wire::MessageEnvelope) -> Result<Option<Message>
             notice,
             assistant: facts,
             compaction,
+            synthetic,
         },
         parts,
     }))
@@ -346,17 +478,28 @@ pub(crate) fn tool_part(tool: &wire::ToolItem) -> Part {
             .collect();
         texts.join("\n")
     };
-    let (status, output, elided) = match &tool.state {
-        wire::ToolState::Streaming => (ToolStatus::Pending, None, None),
-        wire::ToolState::Running => (ToolStatus::Running, None, None),
-        wire::ToolState::Completed { content, metadata } => (
+    let (status, output, elided, child) = match &tool.state {
+        wire::ToolState::Streaming => (ToolStatus::Pending, None, None, None),
+        wire::ToolState::Running { input, metadata } => (
+            ToolStatus::Running,
+            None,
+            None,
+            tool_child(metadata.as_ref(), input.as_ref()),
+        ),
+        wire::ToolState::Completed {
+            content,
+            input,
+            metadata,
+        } => (
             ToolStatus::Completed,
             Some(text(content)),
             elided_chars(metadata.as_ref()),
+            tool_child(metadata.as_ref(), input.as_ref()),
         ),
         wire::ToolState::Error {
             error,
             content,
+            input,
             metadata,
         } => {
             let output = text(content);
@@ -369,6 +512,7 @@ pub(crate) fn tool_part(tool: &wire::ToolItem) -> Part {
                 ToolStatus::Error,
                 Some(if output.is_empty() { message } else { output }),
                 elided_chars(metadata.as_ref()),
+                tool_child(metadata.as_ref(), input.as_ref()),
             )
         }
     };
@@ -394,6 +538,7 @@ pub(crate) fn tool_part(tool: &wire::ToolItem) -> Part {
             title: None,
             output,
             elided,
+            child,
         },
         time,
     }
@@ -544,5 +689,70 @@ mod tests {
         assert!(record.is_btw());
         assert!(record.is_archived());
         assert_eq!(record.title, "");
+        assert_eq!(
+            record.btw.original.as_ref().map(SessionId::as_str),
+            Some("s0")
+        );
+    }
+
+    #[test]
+    fn a_session_carries_its_revert_marker_and_btw_links() {
+        let wire: wire::Session = serde_json::from_str(
+            r#"{"id":"s1","location":{"directory":"/p"},"time":{"created":1,"updated":2},
+               "revert":{"messageID":"msg_2","files":[{"file":"a"}]},
+               "metadata":{"openchamber":{"btwSessionID":"ses_f","btwPromoted":true,"btwBoundaryMessageID":"msg_x"}}}"#,
+        )
+        .expect("valid");
+        let record = session(wire);
+        assert_eq!(record.revert.as_ref().map(MessageId::as_str), Some("msg_2"));
+        assert_eq!(
+            record.btw.link.as_ref().map(SessionId::as_str),
+            Some("ses_f")
+        );
+        assert!(record.btw.promoted);
+        assert_eq!(
+            record.btw.boundary, None,
+            "a boundary counts only on a marked fork"
+        );
+        let blank = metadata_facts(Some(
+            &serde_json::json!({"openchamber":{"btwSessionID":"  "}}),
+        ));
+        assert_eq!(blank.btw.link, None);
+    }
+
+    #[test]
+    fn synthetic_history_records_keep_their_run_and_tools_their_child() {
+        let report = message(envelope(
+            r#"{"id":"m4","time":{"created":1},"type":"synthetic","text":"x","description":"Explore",
+                "metadata":{"source":"subagent","childID":"ses_c","state":"running"}}"#,
+        ))
+        .expect("parses")
+        .expect("kept");
+        assert_eq!(
+            report
+                .info
+                .synthetic
+                .as_ref()
+                .and_then(|facts| facts.subagent.as_ref())
+                .map(|run| run.child.as_str()),
+            Some("ses_c")
+        );
+        let step = message(envelope(
+            r#"{"id":"m5","time":{"created":1},"type":"assistant","content":[
+                {"type":"tool","id":"call_1","name":"subagent","state":{"status":"running","input":{"description":"d"},"metadata":{}},"time":{"created":1}},
+                {"type":"tool","id":"call_2","name":"subagent","state":{"status":"completed","input":{},"content":[{"type":"text","text":"ok"}],"metadata":{"sessionID":"ses_c"}},"time":{"created":1}}
+            ]}"#,
+        ))
+        .expect("parses")
+        .expect("kept");
+        let children: Vec<Option<&str>> = step
+            .parts
+            .iter()
+            .map(|part| match &part.content {
+                PartContent::Tool { child, .. } => child.as_ref().map(SessionId::as_str),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(children, [None, Some("ses_c")]);
     }
 }

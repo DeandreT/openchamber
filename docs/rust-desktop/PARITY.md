@@ -168,6 +168,12 @@ selection and monitor/DPI changes require real Windows checks. A missing manual
 check remains not run. Carry the accessibility rules through virtualization;
 rows being unmounted cannot silently make a required action unreachable.
 
+### Approved behavior differences
+
+Editing a queued message preserves existing composer text and appends the queued
+text. This user-approved exception applies only to that edit action; queue order,
+delivery, cancellation and recovery retain their existing requirements.
+
 ## 5. Configuration coverage
 
 Use a standard fixture configuration of 1,280 by 800 logical client pixels,

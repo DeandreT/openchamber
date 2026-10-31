@@ -147,6 +147,7 @@ impl Workspace {
             .child(rows)
             .child(fades)
             .children(rail)
+            .children(self.render_return_to_parent(palette, direction, cx))
             .when(!following, |this| {
                 this.child(
                     div()
@@ -204,8 +205,22 @@ impl Workspace {
             return div().into_any_element();
         };
         let direction = locale::strings(cx).direction();
+        let session = self
+            .selected
+            .as_ref()
+            .expect("an open transcript is selected");
+        // A staged revert hides its cut and everything after it.
+        let hidden = index >= self.visible_rows(session);
         let body = match message.info.role {
-            MessageRole::User => Some(user_message(message, &palette, open.selection.read(cx), cx)),
+            _ if hidden => None,
+            MessageRole::User => Some(
+                div()
+                    .flex()
+                    .flex_col()
+                    .child(user_message(message, &palette, open.selection.read(cx), cx))
+                    .child(self.render_user_actions(&message.info.id, &palette, direction, cx))
+                    .into_any_element(),
+            ),
             MessageRole::Assistant => Some(
                 div()
                     .flex()
@@ -214,6 +229,7 @@ impl Workspace {
                         message,
                         &palette,
                         open.selection.read(cx),
+                        &mut self.subagent_controls(session, message, &palette, cx),
                         cx,
                     ))
                     .children(
@@ -222,9 +238,10 @@ impl Workspace {
                     .into_any_element(),
             ),
             MessageRole::Compaction | MessageRole::Shell => Some(notice_message(message, &palette)),
+            // A background subagent's report; other synthetic records are plumbing.
+            MessageRole::Synthetic => self.render_subagent_report(message, &palette, direction, cx),
             // `timelineRoles.ts`: plumbing, and switches the composer already shows.
-            MessageRole::Synthetic
-            | MessageRole::System
+            MessageRole::System
             | MessageRole::Skill
             | MessageRole::LocationSwitched
             | MessageRole::Idle
@@ -249,6 +266,9 @@ impl Workspace {
             .id(ElementId::Name(message.info.id.as_str().to_owned().into()))
             .role(Role::Paragraph)
             .accessibility_id(format!("message:{}", message.info.id))
+            .when(message.info.role == MessageRole::User, |row| {
+                row.group(crate::branching_view::MESSAGE_GROUP)
+            })
             .when(window.is_a11y_active(), |row| {
                 row.aria_label(
                     open.selection
@@ -324,6 +344,7 @@ fn assistant_message(
     message: &Message,
     palette: &Palette,
     selection: &crate::transcript_selection::TranscriptSelection,
+    controls: &mut std::collections::HashMap<openchamber_native_core::ids::PartId, AnyElement>,
     cx: &gpui_kit::App,
 ) -> AnyElement {
     // The text parts' `my-1`.
@@ -362,7 +383,8 @@ fn assistant_message(
                     .when_some(title.clone(), |this, title| {
                         this.child(div().truncate().child(title))
                     })
-                    .when_some(output.clone(), |this, output| this.child(output)),
+                    .when_some(output.clone(), |this, output| this.child(output))
+                    .children(controls.remove(&part.id)),
             ),
             PartContent::File { filename, .. } => column.child(
                 div()

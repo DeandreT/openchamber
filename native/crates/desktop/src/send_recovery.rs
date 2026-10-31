@@ -115,6 +115,7 @@ impl Workspace {
                     || self.creation_tasks.contains_key(key)
                     || attempt.origin == SendOrigin::Deleted;
                 let can_restore = !busy
+                    && !attempt.queue_owned
                     && self.persistence_ready()
                     && attempt.admission == Admission::Uncertain
                     && checking.is_some_and(|check| check.state.unresolvable());
@@ -212,7 +213,16 @@ impl Workspace {
             return;
         }
         if self.persistence_ready() {
-            let requests = self.requests_for_send(key);
+            // A send that left open requests alone never cancels them on retry.
+            let supersedes = self
+                .send_attempts
+                .attempt(key, id)
+                .is_none_or(|attempt| attempt.supersedes);
+            let requests = if supersedes {
+                self.requests_for_send(key)
+            } else {
+                Vec::new()
+            };
             self.start_recovery_check(key, id, CheckAction::RetryIfMissing(requests), window, cx);
         }
     }
@@ -240,6 +250,10 @@ impl Workspace {
     ) {
         let attempt_key = (key.clone(), id.clone());
         if key.runtime != self.runtime
+            || self
+                .send_attempts
+                .attempt(key, id)
+                .is_some_and(|attempt| attempt.queue_owned)
             || !self.persistence_ready()
             || self.recovery.tasks.contains_key(&attempt_key)
             || self.creation_tasks.contains_key(key)

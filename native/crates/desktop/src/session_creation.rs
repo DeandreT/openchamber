@@ -74,11 +74,23 @@ impl Workspace {
     }
 
     pub(crate) fn submit_new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.submit_new_session_with(None, window, cx);
+    }
+
+    /// Creates the selected project's session and sends its first prompt:
+    /// the composer's text, or a starter's rendered prompt. False when
+    /// nothing was created.
+    pub(crate) fn submit_new_session_with(
+        &mut self,
+        starter: Option<crate::starters::StarterPrompt>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
         if !self.can_create_connected() {
-            return;
+            return false;
         }
         let Some(source) = self.composer_key.clone() else {
-            return;
+            return false;
         };
         let Some(project) = self
             .topology
@@ -86,18 +98,35 @@ impl Workspace {
             .iter()
             .find(|project| project.path == source.directory())
         else {
-            return;
+            return false;
         };
         let project = project.id.to_string();
         let Some((_, selection)) = self.send_selection() else {
-            return;
+            return false;
         };
-        let draft = Draft {
-            text: self.composer.read(cx).value().to_string(),
-            selection: self.composer.read(cx).selected_range(),
+        let from_starter = starter.is_some();
+        let (draft, prompt_text, parts) = match starter {
+            // A definite failure gives back what the chip submitted, as the
+            // web restores `presetText`; the session receives the render.
+            Some(starter) => (
+                Draft {
+                    selection: starter.draft_text.len()..starter.draft_text.len(),
+                    text: starter.draft_text,
+                },
+                starter.prompt_text,
+                starter.parts,
+            ),
+            None => {
+                let draft = Draft {
+                    text: self.composer.read(cx).value().to_string(),
+                    selection: self.composer.read(cx).selected_range(),
+                };
+                let text = draft.text.clone();
+                (draft, text, Default::default())
+            }
         };
         if draft.text.trim().is_empty() {
-            return;
+            return false;
         }
         let id = self.session_ids.next();
         let Ok(request) = CreateSession::new(
@@ -106,7 +135,7 @@ impl Workspace {
             selection.model.clone(),
             selection.agent_name.clone(),
         ) else {
-            return;
+            return false;
         };
         let (message_id, created) = self.message_ids.next();
         let key = SessionKey {
@@ -120,8 +149,8 @@ impl Workspace {
             draft: draft.clone(),
             prompt: Prompt {
                 message_id,
-                text: draft.text,
-                parts: Default::default(),
+                text: prompt_text,
+                parts,
                 model: selection.model,
                 agent: selection.agent_name,
                 delivery: None,
@@ -131,7 +160,7 @@ impl Workspace {
             navigation: Some(self.navigation_revision),
         };
         if !self.creations.insert(key.clone(), attempt) {
-            return;
+            return false;
         }
         // The draft's own permission choice goes with its session; the next
         // draft starts from the Settings default again.
@@ -152,12 +181,17 @@ impl Workspace {
         }
         // Consume synchronously before yielding. Any subsequent typing, even
         // identical text, is a separate draft and is never filtered from disk.
+        // A starter took the text it carries when its chip was clicked;
+        // anything typed since stays in the composer.
         self.drafts.take(&source);
-        self.composer
-            .update(cx, |composer, cx| composer.set_value("", window, cx));
-        self.save_draft_preview(&source, "");
+        if !from_starter {
+            self.composer
+                .update(cx, |composer, cx| composer.set_value("", window, cx));
+            self.save_draft_preview(&source, "");
+        }
         let requests = self.requests_for_creation(&key, source.directory());
         self.start_creation_post(key, requests, window, cx);
+        true
     }
 
     fn start_creation_post(
@@ -498,6 +532,7 @@ impl Workspace {
                 notice: None,
                 assistant: None,
                 compaction: None,
+                synthetic: None,
             },
             parts: vec![Part::text(
                 PartId::new(format!("{}-local-text", attempt.prompt.message_id)),
@@ -511,6 +546,9 @@ impl Workspace {
             prompt: attempt.prompt,
             optimistic,
             admission: Admission::Preparing,
+            supersedes: true,
+            queue_owned: false,
+            reservation: None,
         };
         if !self.send_attempts.begin(key.clone(), send) {
             return;
@@ -554,6 +592,8 @@ impl Workspace {
                 prompt: dispatched,
                 requests,
                 admitted: Vec::new(),
+                consumes_composer: false,
+                supersedes: true,
             },
             &session,
             client,
@@ -683,6 +723,8 @@ impl Workspace {
                                         prompt: first_prompt_selection(&prompt, &session),
                                         requests,
                                         admitted,
+                                        consumes_composer: false,
+                                        supersedes: true,
                                     },
                                     &session,
                                     client,
