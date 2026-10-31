@@ -43,6 +43,8 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  'sessionAuth.error.savedSignInUnavailable': 'تسجيل الدخول المحفوظ غير متاح. أدخل كلمة المرور.',
+  'sessionAuth.error.credentialUpdateFailed': 'تم تسجيل الدخول. تعذّر تحديث بيانات الاعتماد المحفوظة على هذا الجهاز.',
   'opencodeCompatibility.bundled': 'يأتي OpenCode مضمّنًا مع OpenChamber. حدّث OpenChamber للحصول على OpenCode v2.',
   'opencodeCompatibility.title': 'يلزم OpenCode v2',
   'opencodeCompatibility.outdatedTitle': 'تحديث OpenCode',

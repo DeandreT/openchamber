@@ -414,10 +414,3 @@ pub(crate) struct WorktreeEntry {
     pub branch: Option<String>,
     pub name: Option<String>,
 }
-
-/// `/auth/session` with `issueClientToken`.
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub(crate) struct SessionLogin {
-    pub client_token: Option<String>,
-}

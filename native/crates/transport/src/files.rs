@@ -8,11 +8,12 @@
 //! in the server's path space. The server's write is last-writer-wins; the
 //! caller protects a dirty draft (`openchamber_native_core::file_draft`).
 
+use crate::request::RequestBuilder;
 use openchamber_native_core::file_draft::FileStat;
 use openchamber_native_core::file_tree::{DirectoryEntry, EntryKind, ListingFailure};
 use openchamber_native_core::path;
 use reqwest::header::CONTENT_TYPE;
-use reqwest::{Method, RequestBuilder, Response, StatusCode};
+use reqwest::{Method, Response, StatusCode};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::json;

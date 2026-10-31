@@ -226,7 +226,8 @@ class TerminalProxy:
                 self.tunnels.add(pair)
         try:
             headers = "\r\n".join(f"{key}: {value}" for key, value in handler.headers.items() if key.lower() != "host")
-            upstream.sendall(f"GET {handler.path} HTTP/1.1\r\nHost: {self.host}:{self.port}\r\n{headers}\r\n\r\n".encode())
+            host = handler.headers.get("Host", f"{self.host}:{self.port}")
+            upstream.sendall(f"GET {handler.path} HTTP/1.1\r\nHost: {host}\r\n{headers}\r\n\r\n".encode())
             while not self.stopped.is_set():
                 ready, _, _ = select.select([handler.connection, upstream], [], [], 0.1)
                 for source in ready:

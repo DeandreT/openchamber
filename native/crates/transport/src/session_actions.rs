@@ -105,12 +105,16 @@ impl ServerClient {
         url
     }
 
-    pub(crate) fn rename_request(&self, id: &SessionId, title: &str) -> reqwest::RequestBuilder {
+    pub(crate) fn rename_request(
+        &self,
+        id: &SessionId,
+        title: &str,
+    ) -> crate::request::RequestBuilder {
         self.authorized(Method::PATCH, self.session_url(id))
             .json(&json!({ "title": title }))
     }
 
-    pub(crate) fn delete_request(&self, id: &SessionId) -> reqwest::RequestBuilder {
+    pub(crate) fn delete_request(&self, id: &SessionId) -> crate::request::RequestBuilder {
         self.authorized(Method::DELETE, self.session_url(id))
     }
 
@@ -119,13 +123,13 @@ impl ServerClient {
         directory: &str,
         ids: &[SessionId],
         archived_at: i64,
-    ) -> reqwest::RequestBuilder {
+    ) -> crate::request::RequestBuilder {
         let ids: Vec<&str> = ids.iter().map(SessionId::as_str).collect();
         self.authorized(Method::POST, self.openchamber_sessions_url(&["archive"]))
             .json(&json!({ "directory": directory, "ids": ids, "archivedAt": archived_at }))
     }
 
-    pub(crate) fn restore_request(&self, ids: &[SessionId]) -> reqwest::RequestBuilder {
+    pub(crate) fn restore_request(&self, ids: &[SessionId]) -> crate::request::RequestBuilder {
         let ids: Vec<&str> = ids.iter().map(SessionId::as_str).collect();
         self.authorized(Method::POST, self.openchamber_sessions_url(&["unarchive"]))
             .json(&json!({ "ids": ids }))
@@ -135,7 +139,7 @@ impl ServerClient {
         &self,
         id: &SessionId,
         patch: &Map<String, Value>,
-    ) -> reqwest::RequestBuilder {
+    ) -> crate::request::RequestBuilder {
         self.authorized(
             Method::POST,
             self.openchamber_sessions_url(&[id.as_str(), "metadata"]),
@@ -284,7 +288,7 @@ impl ServerClient {
         &self,
         id: &SessionId,
         before: Option<&MessageId>,
-    ) -> reqwest::RequestBuilder {
+    ) -> crate::request::RequestBuilder {
         let mut url = self.session_url(id);
         url.path_segments_mut()
             .expect("HTTP URLs have path segments")
@@ -315,12 +319,12 @@ impl ServerClient {
         &self,
         id: &SessionId,
         message: &MessageId,
-    ) -> reqwest::RequestBuilder {
+    ) -> crate::request::RequestBuilder {
         self.authorized(Method::POST, self.revert_url(id, true))
             .json(&json!({ "messageID": message.as_str() }))
     }
 
-    pub(crate) fn clear_revert_request(&self, id: &SessionId) -> reqwest::RequestBuilder {
+    pub(crate) fn clear_revert_request(&self, id: &SessionId) -> crate::request::RequestBuilder {
         self.authorized(Method::DELETE, self.revert_url(id, false))
     }
 
@@ -788,7 +792,9 @@ mod tests {
         .expect("client")
     }
 
-    fn parts(builder: reqwest::RequestBuilder) -> (String, String, Option<Value>, Option<String>) {
+    fn parts(
+        builder: crate::request::RequestBuilder,
+    ) -> (String, String, Option<Value>, Option<String>) {
         let request = builder.build().expect("request");
         let body = request
             .body()

@@ -8,12 +8,13 @@
 //! server, as `runtimeFetch` does. Snapshots and broadcasts leave out the
 //! payloads (attachment data and context); a take returns them.
 
+use crate::request::RequestBuilder;
 use openchamber_native_core::ids::{MessageId, SessionId};
 use openchamber_native_core::message_queue::{
     AttachmentSource, QueueSession, QueuedAttachment, QueuedItemId, QueuedMessage,
     QueuedSendConfig, queue_owner,
 };
-use reqwest::{Method, RequestBuilder, Url};
+use reqwest::{Method, Url};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 

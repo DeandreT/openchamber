@@ -7,6 +7,13 @@ or extending these scripts. The methodology rules they enforce come from
 
 ## Native selection qualification
 
+`--authentication` uses the same fresh-root owner as the interaction fixture,
+with an explicit synthetic UI password. It never
+inherits a password or token from the launching environment. The default,
+interaction and selection modes remain password-free; only one fixture mode
+can be selected. Authentication qualification uses the real server's login
+route while keeping all state under its new private root.
+
 `python3 scripts/parity/native_selections.py --scale 1.25` opens the native client
 on an owned private Xvfb display. `--binary`, `--opencode-binary` and `--dist`
 select existing build inputs. No build or dependency install runs. `--output`

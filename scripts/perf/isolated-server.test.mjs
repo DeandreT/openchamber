@@ -124,7 +124,23 @@ test('selection CLI retains the fresh-root and explicit-binary boundary', () => 
       env: { PATH: process.env.PATH, OPENCODE_BINARY: process.execPath }, encoding: 'utf8', timeout: 5000,
     });
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /explicit --opencode-binary|either --interactions or --selections/);
+    assert.match(result.stderr, /explicit --opencode-binary|Choose one fixture mode/);
+  }
+});
+
+test('authentication is an explicit isolated fixture and never inherits a password', () => {
+  const input = { state: '/private/state', dist: '/private/dist', config: {},
+    inherited: { PATH: process.env.PATH, OPENCHAMBER_UI_PASSWORD: 'ambient-secret' } };
+  assert.equal(isolatedServerEnv(input).OPENCHAMBER_UI_PASSWORD, undefined);
+  const authenticated = isolatedServerEnv({ ...input, authentication: true });
+  assert.ok(authenticated.OPENCHAMBER_UI_PASSWORD);
+  assert.notEqual(authenticated.OPENCHAMBER_UI_PASSWORD, 'ambient-secret');
+  for (const flags of [['--authentication'], ['--authentication', '--interactions']]) {
+    const result = spawnSync(process.execPath, ['scripts/perf/isolated-server.mjs', ...flags], {
+      encoding: 'utf8', env: { PATH: process.env.PATH },
+    });
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /explicit --opencode-binary|Choose one fixture mode/);
   }
 });
 

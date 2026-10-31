@@ -5,13 +5,14 @@
 
 use crate::client::{ServerClient, encode_directory};
 use crate::error::TransportError;
+use crate::request::RequestBuilder;
 use crate::request_wire;
 use openchamber_native_core::form::{FormAnswer, FormDetail, FormRequest};
 use openchamber_native_core::pending_requests::{RequestId, RequestKey};
 use openchamber_native_core::permission::{PermissionReply, PermissionRequest};
 use openchamber_native_core::request_list::{RequestList, RequestListIssue, RequestListIssueKind};
 use openchamber_native_core::request_owner::{RequestOwner, RequestScope};
-use reqwest::{Method, RequestBuilder, Response, StatusCode};
+use reqwest::{Method, Response, StatusCode};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};

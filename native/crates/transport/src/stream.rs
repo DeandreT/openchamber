@@ -127,6 +127,13 @@ async fn connect_and_read(
         .as_str()
         .into_client_request()
         .map_err(|error| TransportError::Stream(error.to_string()))?;
+    // The authenticated server also checks the origin on native upgrades.
+    // Match the selected HTTP endpoint, retaining its scheme and port.
+    request.headers_mut().insert(
+        "origin",
+        HeaderValue::from_str(&client.endpoint().url("").origin().ascii_serialization())
+            .map_err(|_| TransportError::Stream("invalid endpoint origin".into()))?,
+    );
     if let Some(value) = client.credential().authorization() {
         let mut value = HeaderValue::from_str(&value).map_err(|_| {
             TransportError::Stream("the credential is not a valid header".to_owned())

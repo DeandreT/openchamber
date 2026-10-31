@@ -14,6 +14,8 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `endpoint.rs` | The user-selected base URL, its path prefix and the `ws`/`wss` form of a route. |
 | `identity.rs` | `/health` parsing, API compatibility and capabilities. |
 | `credential.rs` | The credential a client sends; its `Debug` output is redacted. |
+| `authentication.rs` | Exact bearer status at `/auth/session`, password exchange with explicit session/device trust, bounded response parsing and login rate limits. |
+| `request.rs` | The private authenticated request builder, preserving reqwest serialization and publishing a content-free signal on HTTP 401. |
 | `client.rs` | `ServerClient`: identity probe, password login, session pages, message pages, whole messages, running status, settings reads and writes, Chats roots, projects and worktrees. |
 | `catalog.rs` | Routing readiness (Auto and the safety net) and the composer's catalogs in one directory: agents, the flat model catalog with OpenCode's default model, folded config defaults, the skill count and the connected MCP count. |
 | `project.rs` | A directory's Git status (`GET /api/git/status`) and a project's configured actions (`GET /api/projects/:projectId/config`, the path-derived ID). |
@@ -41,6 +43,22 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 counts and identifiers only.
 
 ## Invariants
+
+- Authentication checks use the same bearer as subsequent API requests. A
+  validated 401 with `locked: true` identifies a password or pairing challenge;
+  failed reads and inconsistent bodies grant no authority. Password exchange
+  requires an authenticated answer with a bounded header-safe client token.
+  Authentication error parsing never includes raw response data in diagnostics.
+- Every authenticated HTTP operation signals a definitive 401 through its
+  client's authentication watch before a feature-specific body parser runs.
+  Cloned clients share that watch. Network failure and resource-policy 403
+  responses do not signal revocation. The desktop scopes the watch to the
+  connection generation and endpoint, cancels that generation and returns to
+  sign-in while retaining drafts and pending mutation identities.
+- Event and terminal WebSocket upgrades include the selected HTTP endpoint's
+  origin along with the bearer. Password-protected servers check both; an
+  absent origin is rejected even when the token is valid. Paths stay in the
+  upgrade URL and never in the origin header.
 
 - Filesystem routes send the workspace in `x-opencode-directory`, URI-encoded
   and marked with `x-opencode-directory-encoding: uri`, as `runtimeFetch`

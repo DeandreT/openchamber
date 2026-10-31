@@ -34,6 +34,7 @@ PyGObject with AT-SPI, `busctl`, `dbus-run-session`, `xsettingsd` and fontconfig
 | `native_files.py` | Connected Files checks on the Git fixture project: tree and gitignored entries, keyboard navigation, name and content search with an invalid pattern, CRLF edit and save, autosave, external changes to clean and dirty files, a deleted open file, a rename conflict and a large file, each checked on disk. |
 | `native_git.py`, `git_http_remote.py` | Connected Git and Diff checks: staged and unstaged scopes, stage, unstage, confirmed discard, a stage failing on `index.lock`, commit, branches, push, fetch and pull as planned operations and a cancelled push. The fixture's bare remote is served through `git http-backend` on loopback, because the server plans network operations only for http, https and ssh remotes. |
 | `native_session_management.py` | Connected rename, pin, archive, restore and delete through the native session menu, with one injected write failure. |
+| `native_authentication.py`, `secret_service_fixture.py` | Password sign-in, secret accessibility, session-only and trusted restart, HTTP token revocation and retained drafts, against a protected real server and a private encrypted KDE Secret Service. |
 | `native_terminal.py` | Connected terminal checks behind a proxy that records terminal commands and severs the terminal socket: create and close, Unicode and IBus input, keys, resize, bracketed and large paste, scrollback, reconnect pacing, exit, lifetime and cleanup. Capture programs in the terminal record the exact bytes the PTY received. |
 | `compare.py` | Pixel, row and geometry comparison. |
 | `png.py` | PNG reading and writing with the standard library. |
@@ -53,6 +54,15 @@ dirty switch, including an explicitly saved empty draft.
 
 The permission/form driver uses Ctrl+Enter for its superseding send. Plain
 Enter follows the queue/steer preference while a turn waits for a response.
+
+Authentication qualification also requires `ksecretd` and `secret-tool`. Its
+private Secret Service creates an encrypted wallet with synthetic data under
+the new output root and owns the first-use dialog on the test display. It uses
+neither the desktop bus nor the user's wallet. The server password is fixed
+synthetic fixture data; the driver never reads or logs a stored client token.
+Socket fault proxies preserve the client's Host and Origin headers while
+routing TCP to their loopback upstream. Replacing Host alone makes a valid
+native origin fail the server's authenticated socket checks.
 
 `seed` starts `scripts/perf/isolated-server.mjs` on an empty root with the
 fixture provider and creates fixed sessions through

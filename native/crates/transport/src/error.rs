@@ -23,6 +23,10 @@ pub enum TransportError {
     AuthenticationRequired,
     #[error("the server rejected the credentials")]
     AuthenticationRejected,
+    #[error("the server requires a paired client token")]
+    ClientAuthenticationRequired,
+    #[error("the server has limited sign-in attempts")]
+    AuthenticationRateLimited { retry_after_seconds: Option<u64> },
     #[error("the server is incompatible: {0}")]
     Incompatible(String),
     #[error("the server answered HTTP {status}")]

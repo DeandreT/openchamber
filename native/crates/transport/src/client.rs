@@ -3,6 +3,7 @@
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
+use crate::request::RequestBuilder;
 use openchamber_native_core::chat_roots::ChatRoots;
 use openchamber_native_core::draft_starters::{self, StarterRef};
 use openchamber_native_core::ids::{MessageId, SessionId};
@@ -14,7 +15,7 @@ use openchamber_native_core::session::{LiveStatus, SessionRecord};
 use openchamber_native_core::sidebar_rows::SidebarViewMode;
 use openchamber_native_core::transcript::Message;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
-use reqwest::{Method, RequestBuilder, Response, StatusCode, Url};
+use reqwest::{Method, Response, StatusCode, Url};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
@@ -444,6 +445,7 @@ pub struct ServerClient {
     credential: Credential,
     /// Whether message pages are requested with finished tool results left out.
     part_shells: bool,
+    authentication_failures: tokio::sync::watch::Sender<u64>,
 }
 
 /// Pending identity advertised by the host, without an actionable request body.
@@ -476,6 +478,7 @@ impl ServerClient {
             endpoint,
             credential,
             part_shells: false,
+            authentication_failures: tokio::sync::watch::channel(0).0,
         })
     }
 
@@ -491,6 +494,12 @@ impl ServerClient {
 
     pub fn credential(&self) -> &Credential {
         &self.credential
+    }
+
+    /// Revisions advance on definitive HTTP 401 responses from this client.
+    /// The channel carries no credentials or response contents.
+    pub fn authentication_failures(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.authentication_failures.subscribe()
     }
 
     /// Verifies the service identity without sending credentials.
@@ -543,23 +552,8 @@ impl ServerClient {
         password: &str,
         client: &ClientDescription,
     ) -> Result<Credential, TransportError> {
-        let response = self
-            .http
-            .post(self.endpoint.url("auth/session"))
-            .header(ACCEPT, "application/json")
-            .json(&Self::login_body(password, client))
-            .send()
+        self.login_with_trust(password, client, crate::authentication::LoginTrust::Device)
             .await
-            .map_err(TransportError::from_request)?;
-        if response.status() == StatusCode::UNAUTHORIZED {
-            return Err(TransportError::AuthenticationRejected);
-        }
-        let login: wire::SessionLogin = read_json(response).await?;
-        login
-            .client_token
-            .filter(|token| token.starts_with("oc_client_"))
-            .map(Credential::ClientToken)
-            .ok_or_else(|| TransportError::Malformed("the login issued no client token".to_owned()))
     }
 
     /// The URL of one global session page.
@@ -918,7 +912,10 @@ impl ServerClient {
             value.set_sensitive(true);
             headers.insert(AUTHORIZATION, value);
         }
-        self.http.request(method, url).headers(headers)
+        RequestBuilder::new(
+            self.http.request(method, url).headers(headers),
+            self.authentication_failures.clone(),
+        )
     }
 
     /// A GET with the credential, scoped to `directory` when one is named.

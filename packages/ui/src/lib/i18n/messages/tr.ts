@@ -43,6 +43,8 @@ import { sessionReferencesI18n } from './session-references.i18n';
 import { guestStatusViewI18n } from './guest-status-view.i18n';
 
 export const dict = {
+  'sessionAuth.error.savedSignInUnavailable': 'Kaydedilmiş oturum açma bilgileri kullanılamıyor. Parolanızı girin.',
+  'sessionAuth.error.credentialUpdateFailed': 'Oturum açıldı. Bu cihazda kaydedilmiş kimlik bilgileri güncellenemedi.',
   "opencodeCompatibility.bundled": "OpenCode, OpenChamber ile birlikte gelir. OpenCode v2 için OpenChamber’ı güncelleyin.",
   "opencodeCompatibility.title": "OpenCode v2 gerekli",
   "opencodeCompatibility.outdatedTitle": "OpenCode’u güncelleyin",

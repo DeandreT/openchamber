@@ -21,16 +21,16 @@ use openchamber_native_core::tool_names;
 use openchamber_native_core::transcript::{
     PartContent, ToolStatus, TranscriptChange, TranscriptEvent,
 };
-use openchamber_native_transport::client::{MessagePage, ServerClient, SettingsChanges};
-use openchamber_native_transport::credential::Credential;
+use openchamber_native_transport::client::{MessagePage, SettingsChanges};
 use openchamber_native_transport::error::TransportError;
 use openchamber_native_transport::event::ServerEvent;
-use openchamber_native_transport::identity::{GLOBAL_EVENTS_CAPABILITY, ServerIdentity};
 use openchamber_native_transport::stream::{EventStream, StreamItem};
 
+use crate::authentication::{ConnectOutcome, connect_server};
 use crate::code_card::CodeWrap;
 use crate::code_wrap_state::CodeWrapState;
 use crate::connection::{ConnectionFailure, ConnectionState};
+use crate::credential_store::CredentialOwner;
 use crate::diagnostics::Marker;
 use crate::send_attempt::HistoryMerge;
 use crate::workspace::{EarlierHistory, History, OpenSession, Topology, Workspace};
@@ -61,22 +61,23 @@ impl Workspace {
             return;
         };
         let generation = connection.restart();
-        let config = connection.config.clone();
-        let task = connection.network.run(async move {
-            let anonymous = ServerClient::new(config.endpoint.clone(), Credential::None)?;
-            let identity = anonymous.probe().await?;
-            let client = match &config.password {
-                Some(password) => ServerClient::new(
-                    config.endpoint,
-                    anonymous.login(password, &config.client).await?,
-                )?,
-                None => anonymous,
-            };
-            Ok::<_, TransportError>((client.with_identity(&identity), identity))
-        });
+        let config = connection.take_attempt_config();
+        let target_endpoint = config.endpoint.clone();
+        let task = connection.network.run(connect_server(
+            config,
+            self.authentication.remembered.clone(),
+            self.authentication.store.clone(),
+        ));
         connection.connect_task = Some(cx.spawn_in(window, async move |this, cx| {
             let outcome = task.await;
             let _ = this.update_in(cx, |this, window, cx| {
+                if this
+                    .connection
+                    .as_ref()
+                    .is_none_or(|connection| connection.config.endpoint != target_endpoint)
+                {
+                    return;
+                }
                 this.finish_connect(generation, outcome, window, cx);
             });
         }));
@@ -84,10 +85,10 @@ impl Workspace {
         cx.notify();
     }
 
-    fn finish_connect(
+    pub(crate) fn finish_connect(
         &mut self,
         generation: u64,
-        outcome: Option<Result<(ServerClient, ServerIdentity), TransportError>>,
+        outcome: Option<Result<ConnectOutcome, TransportError>>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -98,15 +99,12 @@ impl Workspace {
         else {
             return;
         };
-        let outcome = match outcome {
-            Some(Ok((_, identity))) if !identity.supports(GLOBAL_EVENTS_CAPABILITY) => Err(
-                TransportError::Incompatible("the server has no global event bridge".to_owned()),
-            ),
-            Some(outcome) => outcome,
-            None => Err(TransportError::Cancelled),
-        };
+        let outcome = outcome.unwrap_or(Err(TransportError::Cancelled));
         match outcome {
-            Ok((client, identity)) => {
+            Ok(ConnectOutcome::Ready(verified)) => {
+                let verified = *verified;
+                let was_locked = self.authentication.visible;
+                let identity = verified.identity;
                 tracing::info!(
                     version = identity.openchamber_version,
                     runtime = identity.runtime,
@@ -117,20 +115,53 @@ impl Workspace {
                     connection.config.endpoint.as_str(),
                     identity.server_id.as_deref().unwrap_or_default()
                 ));
-                connection.client = Some(client);
+                self.authentication.remembered =
+                    CredentialOwner::new(&connection.config.endpoint, &identity)
+                        .map(|owner| (owner, verified.credential));
+                self.authentication.visible = false;
+                self.authentication.submitting = false;
+                self.authentication.failure = None;
+                self.authentication
+                    .password
+                    .update(cx, |input, cx| input.set_value("", window, cx));
+                let auth_failures = verified.client.authentication_failures();
+                connection.client = Some(verified.client);
                 connection.state = ConnectionState::Connected;
                 if runtime != self.runtime {
                     self.switch_runtime(runtime, window, cx);
                 }
                 self.invalidate_terminal_client(cx);
+                self.watch_authentication(generation, auth_failures, window, cx);
                 self.subscribe(generation, window, cx);
                 self.save_code_wrap(cx);
+                if was_locked {
+                    self.focus_composer(window, cx);
+                }
+            }
+            Ok(ConnectOutcome::Locked {
+                status,
+                storage_error,
+            }) => {
+                let failure = match status {
+                    openchamber_native_transport::authentication::AuthenticationStatus::ClientTokenRequired => ConnectionFailure::ClientAuthenticationRequired,
+                    _ => ConnectionFailure::AuthenticationRequired,
+                };
+                connection.state = ConnectionState::Failed(failure);
+                self.show_authentication(failure, storage_error, window, cx);
             }
             Err(error) => {
                 let failure = ConnectionFailure::from_error(&error);
                 tracing::warn!(%error, "the server connection failed");
                 connection.state = ConnectionState::Failed(failure);
-                if failure.is_transient() {
+                if matches!(
+                    failure,
+                    ConnectionFailure::AuthenticationRequired
+                        | ConnectionFailure::AuthenticationRejected
+                        | ConnectionFailure::ClientAuthenticationRequired
+                        | ConnectionFailure::AuthenticationRateLimited { .. }
+                ) {
+                    self.show_authentication(failure, None, window, cx);
+                } else if failure.is_transient() {
                     connection.retry_task = Some(cx.spawn_in(window, async move |this, cx| {
                         cx.background_executor().timer(RETRY_DELAY).await;
                         let _ = this.update_in(cx, |this, window, cx| this.connect(window, cx));
@@ -267,8 +298,24 @@ impl Workspace {
             }
             StreamItem::Disconnected(error) => {
                 tracing::warn!(%error, "the event stream dropped");
+                let failure = ConnectionFailure::from_error(&error);
+                if matches!(
+                    failure,
+                    ConnectionFailure::AuthenticationRequired
+                        | ConnectionFailure::AuthenticationRejected
+                        | ConnectionFailure::ClientAuthenticationRequired
+                        | ConnectionFailure::AuthenticationRateLimited { .. }
+                ) {
+                    connection.restart();
+                    connection.retry_task = None;
+                    connection.state = ConnectionState::Failed(failure);
+                    self.show_authentication(failure, None, window, cx);
+                    self.invalidate_terminal_client(cx);
+                    cx.notify();
+                    return;
+                }
                 connection.stale = true;
-                connection.state = match ConnectionFailure::from_error(&error) {
+                connection.state = match failure {
                     ConnectionFailure::Unreachable => ConnectionState::Reconnecting,
                     failure => ConnectionState::Failed(failure),
                 };

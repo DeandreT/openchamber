@@ -11,11 +11,12 @@
 
 use std::collections::HashMap;
 
+use crate::request::RequestBuilder;
 use openchamber_native_core::git_changes::{
     ChangesRead, FileStatus, GitChanges, LineStat, NetworkAction, NetworkOperation, NetworkRequest,
     OperationError, OperationState, RemoteEndpoint, RemoteGrant, RepositoryBinding, TransportMode,
 };
-use reqwest::{Method, RequestBuilder, Url};
+use reqwest::{Method, Url};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use serde_json::{Map, Value, json};
