@@ -105,7 +105,8 @@ impl Workspace {
         match outcome {
             Ok(ConnectOutcome::Ready(verified)) => {
                 let verified = *verified;
-                let was_locked = self.authentication.visible;
+                let requested_focus = std::mem::take(&mut connection.focus_on_ready);
+                let focus_composer = self.authentication.visible || requested_focus;
                 let identity = verified.identity;
                 tracing::info!(
                     version = identity.openchamber_version,
@@ -146,7 +147,7 @@ impl Workspace {
                 self.watch_authentication(generation, auth_failures, window, cx);
                 self.subscribe(generation, window, cx);
                 self.save_code_wrap(cx);
-                if was_locked {
+                if focus_composer {
                     self.focus_composer(window, cx);
                 }
             }

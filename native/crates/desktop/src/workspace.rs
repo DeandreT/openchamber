@@ -63,11 +63,16 @@ const NEW_SESSION_DIRECTORY: &str = "/";
 
 /// Where the workspace's data comes from.
 #[derive(Debug)]
-pub enum Source {
+pub(crate) enum Source {
     /// Deterministic synthetic data; no network or provider calls.
     Synthetic(WorkloadSize),
     /// One explicitly configured OpenChamber server, not yet connected.
     Server(Box<Connection>),
+    /// A saved-host read failed. Keep the file intact and ask for recovery.
+    HostRecovery {
+        store: crate::host_profiles::ProfileStore,
+        error: crate::host_profiles::ProfilesError,
+    },
 }
 
 /// Projects, worktrees and Chats roots: what display ownership needs.
@@ -166,6 +171,7 @@ pub struct Workspace {
     pub(crate) retired_networks: Vec<(RuntimeId, crate::network::Network)>,
     pub(crate) authentication: crate::authentication::Authentication,
     pub(crate) host_manager: Option<Entity<crate::host_manager::HostManager>>,
+    pub(crate) host_recovery: Option<crate::host_recovery::HostRecovery>,
     pub(crate) host_close: Option<Task<()>>,
     /// The composer's catalogs and defaults; empty for synthetic data.
     pub(crate) send_catalog: SendCatalog,
@@ -214,9 +220,9 @@ pub struct Workspace {
 }
 
 impl Workspace {
-    pub fn new(source: Source, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(source: Source, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut sessions = SessionIndex::new();
-        let (topology, runtime, connection) = match source {
+        let (topology, runtime, connection, host_recovery) = match source {
             Source::Synthetic(size) => {
                 let data = SyntheticWorkspace::new(size);
                 let ticket = sessions.begin_load();
@@ -226,12 +232,18 @@ impl Workspace {
                     worktrees: data.worktrees,
                     chat_roots: Some(data.chat_roots),
                 };
-                (topology, RuntimeId::from("synthetic"), None)
+                (topology, RuntimeId::from("synthetic"), None, None)
             }
             Source::Server(connection) => {
                 let runtime = RuntimeId::new(connection.config.endpoint.as_str().to_owned());
-                (Topology::default(), runtime, Some(*connection))
+                (Topology::default(), runtime, Some(*connection), None)
             }
+            Source::HostRecovery { store, error } => (
+                Topology::default(),
+                RuntimeId::from("host-recovery"),
+                None,
+                Some(crate::host_recovery::HostRecovery::new(store, error, cx)),
+            ),
         };
         let placeholder = locale::strings(cx).get("chat.chatInput.placeholder.chat");
         let composer = cx.new(|cx| {
@@ -284,6 +296,7 @@ impl Workspace {
             retired_networks: Vec::new(),
             authentication: crate::authentication::Authentication::new(window, cx),
             host_manager: None,
+            host_recovery,
             host_close: None,
             send_catalog: SendCatalog::default(),
             composer_selections:
@@ -363,7 +376,11 @@ impl Workspace {
                 .update(cx, |workspace, cx| workspace.request_close(window, cx))
                 .is_err()
         });
-        workspace.focus_composer(window, cx);
+        if let Some(recovery) = &workspace.host_recovery {
+            recovery.focus(window, cx);
+        } else {
+            workspace.focus_composer(window, cx);
+        }
         if workspace.connection.is_some() {
             workspace.connect(window, cx);
         }
@@ -372,7 +389,7 @@ impl Workspace {
 
     /// Whether the workspace shows synthetic data.
     pub fn is_synthetic(&self) -> bool {
-        self.connection.is_none()
+        self.connection.is_none() && self.host_recovery.is_none()
     }
 
     /// The selected session's record.

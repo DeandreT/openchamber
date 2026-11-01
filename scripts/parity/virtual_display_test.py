@@ -9,12 +9,40 @@ import subprocess
 import sys
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import virtual_display
 
 
 class DisplayOwnershipTest(unittest.TestCase):
+    def test_probe_timeout_can_recover_inside_the_original_deadline(self):
+        process = Mock()
+        process.poll.return_value = None
+        with patch('virtual_display.time.monotonic', side_effect=[0, 0, 2]), \
+             patch('virtual_display.time.sleep'), \
+             patch('virtual_display.subprocess.run', side_effect=[
+                 subprocess.TimeoutExpired('xdpyinfo', 2), Mock(returncode=0),
+             ]) as probe:
+            self.assertTrue(virtual_display.wait_for_display(process, {'DISPLAY': ':1234'}, lambda: False))
+        self.assertEqual(probe.call_count, 2)
+        self.assertEqual(probe.call_args.kwargs['env'], {'DISPLAY': ':1234'})
+
+    def test_probe_timeout_never_establishes_readiness_after_the_deadline(self):
+        process = Mock()
+        process.poll.return_value = None
+        with patch('virtual_display.time.monotonic', side_effect=[0, 0, 11]), \
+             patch('virtual_display.time.sleep'), \
+             patch('virtual_display.subprocess.run', side_effect=subprocess.TimeoutExpired('xdpyinfo', 2)) as probe:
+            self.assertFalse(virtual_display.wait_for_display(process, {}, lambda: False))
+        self.assertEqual(probe.call_count, 1)
+
+    def test_cancelled_startup_does_not_probe(self):
+        process = Mock()
+        process.poll.return_value = None
+        with patch('virtual_display.subprocess.run') as probe:
+            self.assertFalse(virtual_display.wait_for_display(process, {}, lambda: True))
+        probe.assert_not_called()
+
     def test_sigterm_cleans_the_owned_display_and_runtime(self):
         if virtual_display.available():
             self.skipTest(virtual_display.available())

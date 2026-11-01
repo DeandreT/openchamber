@@ -39,6 +39,7 @@ mod form_input;
 mod git_view;
 mod host_manager;
 mod host_profiles;
+mod host_recovery;
 mod install_id;
 mod journal_worker;
 mod locale;
@@ -140,6 +141,7 @@ fn main() {
                 connection.config.endpoint.authority()
             )
         }
+        Source::HostRecovery { .. } => "OpenChamber Native".to_owned(),
     };
 
     gpui_kit::application()
@@ -216,24 +218,27 @@ fn main() {
 /// configuration the client cannot use.
 fn requested_source() -> Option<Source> {
     let mut profile_label = None;
+    let mut recovery = None;
     let config = ServerConfig::from_env().or_else(|| {
         if std::env::var_os("OPENCHAMBER_NATIVE_WORKLOAD").is_some() {
             return None;
         }
         let directory = install_id::config_directory()?;
-        match host_profiles::ProfileStore::new(&directory).load() {
+        let store = host_profiles::ProfileStore::new(&directory);
+        match store.load() {
             Ok(profiles) => profiles.default_profile().map(|host| {
                 profile_label = Some(host.label.clone());
                 Ok(ServerConfig::for_endpoint(host.endpoint.clone()))
             }),
-            Err(_) => {
-                tracing::warn!(
-                    "saved host profiles could not be read; no default host was selected"
-                );
+            Err(error) => {
+                recovery = Some(Source::HostRecovery { store, error });
                 None
             }
         }
     });
+    if let Some(recovery) = recovery {
+        return Some(recovery);
+    }
     let Some(config) = config else {
         return Some(Source::Synthetic(requested_workload()));
     };

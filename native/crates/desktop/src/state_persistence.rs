@@ -116,7 +116,10 @@ impl Workspace {
     }
 
     pub(crate) fn start_persistence(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.is_synthetic() || !matches!(self.persistence.status, Status::Disabled) {
+        if self.is_synthetic()
+            || self.host_recovery.is_some()
+            || !matches!(self.persistence.status, Status::Disabled)
+        {
             return;
         }
         let Some(path) =
