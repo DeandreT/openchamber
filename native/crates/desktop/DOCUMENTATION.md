@@ -88,6 +88,11 @@ prompt. Attachments and worktree creation remain separate workflows.
   restored prompt, and a fork from an assistant turn's footer are not ported.
 - `connection.rs` holds the configured server, the connection state the views
   explain and the tasks of the current connection attempt.
+- `about.rs` owns the footer's About dialog and its independent version reads.
+  Reads use the captured connection generation; closing the dialog cancels its
+  work. Unavailable OpenCode versions remain unknown, and an unavailable server
+  version falls back to the native package version. Public project links use
+  the existing link-opening boundary. The logo uses the canonical brand SVG.
 - `authentication.rs` owns password entry, the sign-in gate, explicit trust
   choice and token recovery. `authentication_view.rs` draws the masked form.
   `credential_store.rs` serializes OS credential operations through `keyring`;
@@ -259,6 +264,9 @@ prompt. Attachments and worktree creation remain separate workflows.
 - `theme.rs`, `locale.rs` and `assets.rs` load the generated resources in
   `resources/`; `bun run native:resources` owns their content. `fonts.rs`
   resolves the web client's default font stacks against the installed fonts.
+  The About logo embeds the canonical web brand SVG with its foreground
+  changed to `currentColor`, so it follows the selected palette without
+  maintaining a second drawing.
 - `diagnostics.rs` records timing markers without message or title text:
   window creation, first content, usable composer, completed switch, sidebar
   rebuilds, synthetic playback and, when connected, the first painted session

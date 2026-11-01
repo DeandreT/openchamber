@@ -13,6 +13,7 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | --- | --- |
 | `endpoint.rs` | The user-selected base URL, its path prefix and the `ws`/`wss` form of a route. |
 | `identity.rs` | `/health` parsing, API compatibility and capabilities. |
+| `system.rs` | Independent OpenChamber and OpenCode version readouts from the host's system and upgrade-status routes. |
 | `credential.rs` | The credential a client sends; its `Debug` output is redacted. |
 | `authentication.rs` | Exact bearer status at `/auth/session`, password exchange with explicit session/device trust, bounded response parsing and login rate limits. |
 | `request.rs` | The private authenticated request builder, preserving reqwest serialization and publishing a content-free signal on HTTP 401. |

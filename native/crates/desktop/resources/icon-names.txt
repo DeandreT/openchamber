@@ -30,6 +30,9 @@ donut-chart
 edit
 star
 star-fill
+github-fill
+discord-fill
+twitter-xfill
 equalizer-2
 error-warning
 eye

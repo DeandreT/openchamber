@@ -105,6 +105,7 @@ chat.workStatus.telemetry.toolDuration
 chat.workStatus.telemetry.ttft
 common.date.yesterdayWithTime
 common.loading
+openChamberLogo.aria.logo
 common.relative.daysAgoCompact
 common.relative.hoursAgoCompact
 common.relative.minutesAgoCompact
@@ -227,6 +228,11 @@ settings.window.description
 settings.view.nav.group.projects
 settings.page.remoteInstances.title
 settings.remoteInstances.direct.title
+aboutDialog.openChamberVersionLabel
+aboutDialog.openCodeVersionLabel
+aboutDialog.footerNote
+settings.openchamber.about.state.unknown
+common.loading
 sessions.sidebar.activity.chatsEmpty
 sessions.sidebar.activity.chatsTitle
 sessions.sidebar.activity.pinnedTitle

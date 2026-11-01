@@ -31,5 +31,6 @@ pub mod session_actions;
 pub mod session_create;
 pub mod starters;
 pub mod stream;
+pub mod system;
 pub mod terminal;
 mod wire;
