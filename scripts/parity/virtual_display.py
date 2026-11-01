@@ -118,6 +118,23 @@ def run_inside(command: list[str], width: int, height: int) -> int:
         signal.signal(signal.SIGTERM, previous)
 
 
+def wait_for_display(xvfb, env, stopping) -> bool:
+    """A timed-out probe is not readiness; retry only inside the startup budget."""
+    deadline = time.monotonic() + 10
+    while xvfb.poll() is None:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or stopping():
+            return False
+        try:
+            probe = subprocess.run(["xdpyinfo"], env=env, capture_output=True, timeout=min(2, remaining))
+            if probe.returncode == 0:
+                return True
+        except subprocess.TimeoutExpired:
+            pass
+        time.sleep(0.05)
+    return False
+
+
 def _run_inside(command: list[str], width: int, height: int, stopping) -> int:
     base = "/tmp/opencode" if Path("/tmp/opencode").is_dir() else None
     with tempfile.TemporaryDirectory(prefix="openchamber-parity-display-", dir=base) as temporary, ExitStack() as cleanup:
@@ -144,16 +161,7 @@ def _run_inside(command: list[str], width: int, height: int, stopping) -> int:
                     "-nolisten", "tcp", "-auth", env["XAUTHORITY"],
                 ], env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=log, start_new_session=True)
                 cleanup.callback(stop_process, xvfb)
-                deadline = time.monotonic() + 10
-                ready = False
-                while xvfb.poll() is None and time.monotonic() < deadline:
-                    if stopping():
-                        return 128 + signal.SIGTERM
-                    probe = subprocess.run(["xdpyinfo"], env=env, capture_output=True, timeout=2)
-                    if probe.returncode == 0:
-                        ready = True
-                        break
-                    time.sleep(0.05)
+                ready = wait_for_display(xvfb, env, stopping)
                 if ready:
                     break
                 stop_process(xvfb)

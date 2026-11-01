@@ -213,6 +213,7 @@ desktopHostSwitcher.field.labelPlaceholder
 desktopHostSwitcher.field.urlPlaceholder
 desktopHostSwitcher.error.invalidUrl
 desktopHostSwitcher.error.failedToLoad
+desktopHostSwitcher.state.loading
 desktopHostSwitcher.error.failedToSave
 desktopHostSwitcher.error.failedToForget
 desktopHostSwitcher.error.invalidFile

@@ -128,6 +128,7 @@ pub enum ConnectionState {
 pub struct Connection {
     pub config: ServerConfig,
     pub(crate) display_label: Option<String>,
+    pub(crate) focus_on_ready: bool,
     pub network: Network,
     /// Present once the identity check and authentication succeeded.
     pub client: Option<ServerClient>,
@@ -167,6 +168,7 @@ impl Connection {
         Ok(Self {
             config,
             display_label: None,
+            focus_on_ready: false,
             network: Network::new()?,
             client: None,
             state: ConnectionState::Connecting,

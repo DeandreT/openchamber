@@ -95,6 +95,12 @@ impl Render for Workspace {
             self.initial_size = None;
         }
         self.sync_composer_placeholder(window, cx);
+        if self.host_recovery.is_some() {
+            let palette = cx.global::<Palette>().clone();
+            return self
+                .render_host_recovery(&palette, window, cx)
+                .child(frame_markers(markers));
+        }
         if self.authentication.visible {
             let palette = cx.global::<Palette>().clone();
             let direction = locale::strings(cx).direction();

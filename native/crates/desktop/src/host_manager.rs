@@ -340,7 +340,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        let was_synthetic = self.is_synthetic();
+        let was_unconnected = self.connection.is_none();
         self.save_composer_draft(cx);
         self.queue_persistence(cx);
         let config = crate::connection::ServerConfig::for_endpoint(endpoint);
@@ -351,6 +351,7 @@ impl Workspace {
                 return;
             }
         };
+        connection.focus_on_ready = self.host_recovery.is_some();
         connection.generation = self
             .connection
             .as_ref()
@@ -361,7 +362,8 @@ impl Workspace {
                 .push((self.runtime.clone(), previous.into_network()));
         }
         self.connection = Some(connection);
-        if was_synthetic {
+        self.host_recovery = None;
+        if was_unconnected {
             self.start_persistence(window, cx);
         }
         window.close_dialog(cx);

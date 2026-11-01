@@ -36,6 +36,7 @@ PyGObject with AT-SPI, `busctl`, `dbus-run-session`, `xsettingsd` and fontconfig
 | `native_session_management.py` | Connected rename, pin, archive, restore and delete through the native session menu, with one injected write failure. |
 | `native_authentication.py`, `secret_service_fixture.py` | Password sign-in, secret accessibility, session-only and trusted restart, HTTP token revocation and retained drafts, against a protected real server and a private encrypted KDE Secret Service. |
 | `native_hosts.py` | Two isolated direct servers, saved profiles, default-host startup, runtime switching and per-server draft restoration. |
+| `native_host_recovery.py` | Invalid and unreadable host files, preserved bytes, explicit retry and restored composer focus on the recovered default server. |
 | `native_terminal.py` | Connected terminal checks behind a proxy that records terminal commands and severs the terminal socket: create and close, Unicode and IBus input, keys, resize, bracketed and large paste, scrollback, reconnect pacing, exit, lifetime and cleanup. Capture programs in the terminal record the exact bytes the PTY received. |
 | `compare.py` | Pixel, row and geometry comparison. |
 | `png.py` | PNG reading and writing with the standard library. |
@@ -117,6 +118,10 @@ attached to the private bus is stopped. The session's work directory lives in
 the 108-byte socket path limit whatever `TMPDIR` is. Xvfb has no window manager:
 OS-level minimize, maximize and window-decoration behavior requires separate
 isolated desktop checks.
+
+Xvfb readiness requires a successful `xdpyinfo` probe inside the 10-second
+startup budget. An individual timed-out probe can retry within that budget;
+timeout alone never marks the display ready.
 
 Isolated Electron launches set `GTK_IM_MODULE=gtk-im-context-simple`. GTK's
 automatic IBus selection can deadlock startup even after inherited input-method

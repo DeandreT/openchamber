@@ -98,6 +98,10 @@ prompt. Attachments and worktree creation remain separate workflows.
   Direct HTTP(S) profiles are supported here; SSH, relay, request-header and
   pairing profiles remain separate native work. The full Settings navigation
   and window-opening actions are not provided by this picker yet.
+- `host_recovery.rs` owns failed saved-host startup. It shows no session data
+  and leaves the file untouched. Refresh rereads the same file off the UI
+  thread, then connects its default or opens the instance picker. Entering a
+  recovered connection focuses the composer when authentication completes.
 - `network.rs` owns the Tokio runtime. GPUI tasks await `NetworkTask`s, and
   dropping one aborts its network work.
 - `send_catalog.rs` holds the composer's catalogs per configuration directory
