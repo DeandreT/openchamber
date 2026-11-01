@@ -200,6 +200,7 @@ pub struct Workspace {
     pub(crate) code_wrap_state: CodeWrapState,
     pub(crate) code_wrap_save_task: Option<Task<()>>,
     pub(crate) provider_logos: ProviderLogos,
+    pub(crate) enterprise: crate::enterprise::PolicyMonitor,
     pub(crate) project_readouts: ProjectReadouts,
     /// The context panel's Files, Git and Diff surfaces.
     pub(crate) panels: crate::files_view::Panels,
@@ -334,6 +335,7 @@ impl Workspace {
             code_wrap_state: CodeWrapState::default(),
             code_wrap_save_task: None,
             provider_logos: ProviderLogos::default(),
+            enterprise: crate::enterprise::PolicyMonitor::default(),
             project_readouts: ProjectReadouts::default(),
             panels: crate::files_view::Panels::default(),
             initial_size: None,

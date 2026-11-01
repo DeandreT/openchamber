@@ -94,6 +94,7 @@ enum LogoState {
     Loading { _fetch: Task<()> },
     Ready(Drawings),
     Missing,
+    Blocked,
 }
 
 /// What a provider's logo slot shows.
@@ -111,6 +112,13 @@ pub(crate) enum ProviderLogo {
 pub(crate) struct ProviderLogos {
     states: HashMap<LogoSource, LogoState>,
     client: Option<PublicAssetClient>,
+}
+
+impl ProviderLogos {
+    pub(crate) fn clear_remote(&mut self) {
+        self.states
+            .retain(|source, _| matches!(source, LogoSource::Bundled(_)));
+    }
 }
 
 impl Workspace {
@@ -148,6 +156,19 @@ impl Workspace {
         let Some(source) = LogoSource::of(provider_id) else {
             return;
         };
+        if matches!(source, LogoSource::Remote(_)) && self.enterprise.status.enabled {
+            if let std::collections::hash_map::Entry::Vacant(entry) =
+                self.provider_logos.states.entry(source)
+            {
+                entry.insert(LogoState::Blocked);
+                crate::diagnostics::mark(
+                    crate::diagnostics::Marker::PublicAssetBlocked,
+                    None,
+                    None,
+                );
+            }
+            return;
+        }
         if self.provider_logos.states.contains_key(&source) {
             return;
         }
@@ -172,12 +193,15 @@ impl Workspace {
         let Some(source) = LogoSource::of(provider_id) else {
             return ProviderLogo::Absent;
         };
+        if matches!(source, LogoSource::Remote(_)) && self.enterprise.status.enabled {
+            return ProviderLogo::Absent;
+        }
         match self.provider_logos.states.get(&source) {
             None | Some(LogoState::Loading { .. }) => ProviderLogo::Loading,
             Some(LogoState::Ready(drawings)) => {
                 ProviderLogo::Ready(drawings.for_appearance(appearance))
             }
-            Some(LogoState::Missing) => ProviderLogo::Absent,
+            Some(LogoState::Missing | LogoState::Blocked) => ProviderLogo::Absent,
         }
     }
 
@@ -200,7 +224,16 @@ impl Workspace {
             }
         };
         let url = provider_logo::remote_url(candidate);
-        let task = network.run(async move { client.fetch(&url).await });
+        let policy = self.enterprise.guard.clone();
+        let task = network.run(async move {
+            if tokio::task::spawn_blocking(move || policy.read())
+                .await
+                .map_or(true, |status| status.enabled)
+            {
+                return Err(TransportError::Cancelled);
+            }
+            client.fetch(&url).await
+        });
         let candidate = candidate.to_owned();
         Some(cx.spawn(async move |this, cx| {
             let outcome = task.await.unwrap_or(Err(TransportError::Cancelled));

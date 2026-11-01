@@ -93,6 +93,13 @@ store leaves sign-in usable for the session and reports a storage warning;
 there is no plain-text credential file. Tokens are scoped to the endpoint and
 the server identity verified before login.
 
+Native-owned public provider-logo downloads follow the machine's enterprise
+policy and `OPENCHAMBER_ENTERPRISE_MODE`. Enterprise mode uses bundled logos
+only. The native client reads the existing fixed policy locations, watches for
+changes, and checks again before each public request. An unreadable or invalid
+policy, or unavailable policy watching, keeps those requests blocked. This is
+separate from the selected server's enforcement of its own operations.
+
 Connected clients keep drafts, pending root-session creations and text sends in
 `$XDG_CONFIG_HOME/openchamber-native/drafts-and-sends.json`, or the corresponding
 `~/.config` path. The directory is private and the file is mode 0600 on Linux.

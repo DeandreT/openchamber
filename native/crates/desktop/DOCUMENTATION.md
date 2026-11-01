@@ -114,6 +114,15 @@ prompt. Attachments and worktree creation remain separate workflows.
   does.
 - `provider_logos.rs` resolves, loads and caches provider logos for the
   composer and turn footers. Sidebar rows do not request provider logos.
+- `enterprise.rs` reads the fixed machine-policy locations, validates the
+  existing policy-file schema and watches parent directories for replacement
+  or removal. A failed read or watcher keeps native public-asset requests
+  blocked. The request worker rereads the policy before starting a download;
+  the watched snapshot controls presentation and invalidates remote logo cache
+  entries when policy changes. Bundled logos require no network access.
+  Watch registration is renewed after directory moves/removal or a rescan
+  notice, including replacement at the same pathname. Policy reads never log
+  document content or pinned credentials.
 - `project_chooser.rs` lists and searches registered projects for a new-session
   draft, using saved project labels. Choosing a project changes the draft's
   directory and catalog scope without creating a server session. Draft text
@@ -827,6 +836,13 @@ prompt. Attachments and worktree creation remain separate workflows.
   line through the platform opener.
 
 ## Decisions
+
+### Why public-asset requests reread machine policy
+
+Filesystem notifications can arrive late or require a rescan. The watched
+snapshot keeps the interface current, while the request worker reads the
+policy again before network I/O. This keeps a stale interface snapshot from
+authorizing a download after an administrator enables the restriction.
 
 ### Why the panel surfaces are their own entities
 

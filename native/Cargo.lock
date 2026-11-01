@@ -5131,6 +5131,7 @@ dependencies = [
  "keyring",
  "keyring-core",
  "libghostty-vt",
+ "notify",
  "openchamber-native-core",
  "openchamber-native-transport",
  "serde",
