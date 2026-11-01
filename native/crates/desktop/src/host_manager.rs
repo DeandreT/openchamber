@@ -16,6 +16,12 @@ use crate::logical::LogicalStyledExt;
 use crate::theme::Palette;
 use crate::workspace::Workspace;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Presentation {
+    Picker,
+    Settings,
+}
+
 pub(crate) struct HostManager {
     owner: WeakEntity<Workspace>,
     store: Option<ProfileStore>,
@@ -28,6 +34,8 @@ pub(crate) struct HostManager {
     editing: Option<String>,
     label: Entity<InputState>,
     url: Entity<InputState>,
+    presentation: Presentation,
+    pub(crate) settings_scroll: gpui_kit::ScrollHandle,
 }
 
 impl HostManager {
@@ -61,6 +69,8 @@ impl HostManager {
             error: None,
             network: crate::network::Network::new().ok(),
             editing: None,
+            presentation: Presentation::Picker,
+            settings_scroll: gpui_kit::ScrollHandle::new(),
             label: cx.new(|cx| {
                 InputState::new(window, cx).placeholder(
                     locale::strings(cx).get("desktopHostSwitcher.field.labelOptionalPlaceholder"),
@@ -112,6 +122,10 @@ impl HostManager {
         if self.closing {
             return;
         }
+        if self.presentation == Presentation::Settings {
+            self.settings_scroll
+                .set_offset(gpui_kit::point(px(0.0), px(0.0)));
+        }
         use std::hash::{BuildHasher, Hasher};
         self.editing = Some(
             profile
@@ -140,6 +154,16 @@ impl HostManager {
         });
         self.error = None;
         cx.notify();
+    }
+
+    fn add_in_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.closing || self.task.is_some() {
+            return;
+        }
+        self.presentation = Presentation::Settings;
+        self.edit(None, window, cx);
+        crate::settings_view::open_hosts(cx.entity(), window, cx);
+        self.url.update(cx, |input, cx| input.focus(window, cx));
     }
 
     fn save(&mut self, cx: &mut Context<Self>) {
@@ -319,7 +343,10 @@ impl Workspace {
             .host_manager
             .get_or_insert_with(|| cx.new(|cx| HostManager::new(owner, window, cx)))
             .clone();
-        manager.update(cx, |manager, cx| manager.load(cx));
+        manager.update(cx, |manager, cx| {
+            manager.presentation = Presentation::Picker;
+            manager.load(cx);
+        });
         window.open_dialog(cx, move |dialog, _, cx| {
             dialog
                 .w(px(672.0))
@@ -407,12 +434,98 @@ impl Render for HostManager {
             .and_then(|profiles| profiles.default_profile())
             .map(|host| host.id.clone());
         let error = self.error.map(|key| strings.get(key)).unwrap_or_default();
+        let status = div()
+            .id("host-error")
+            .accessibility_id("host-error")
+            .role(Role::Status)
+            .aria_label(error.clone())
+            .a11y_synthetic_children(|builder| {
+                builder
+                    .parent_node()
+                    .set_live(gpui_kit::accesskit::Live::Polite)
+            })
+            .h(px(24.0))
+            .truncate()
+            .text_color(palette.error)
+            .child(error);
+        let (settings_status, picker_status) = if self.presentation == Presentation::Settings {
+            (Some(status), None)
+        } else {
+            (None, Some(status))
+        };
+        let editor = self.editing.is_some().then(|| {
+            div()
+                .flex()
+                .flex_col()
+                .gap(px(8.0))
+                .when(self.presentation == Presentation::Settings, |editor| {
+                    editor.w_full().max_w(px(384.0)).when(
+                        direction == crate::locale::Direction::RightToLeft,
+                        |editor| editor.self_end(),
+                    )
+                })
+                .child(
+                    Input::new(&self.label)
+                        .id("host-label")
+                        .accessibility_id("host-label")
+                        .aria_label(strings.get("desktopHostSwitcher.field.labelPlaceholder"))
+                        .focus_bordered(false)
+                        .when(
+                            direction == crate::locale::Direction::RightToLeft,
+                            |input| input.text_right(),
+                        )
+                        .disabled(busy),
+                )
+                .child(
+                    Input::new(&self.url)
+                        .id("host-url")
+                        .accessibility_id("host-url")
+                        .aria_label(strings.get("desktopHostSwitcher.field.urlPlaceholder"))
+                        .focus_bordered(false)
+                        .text_left()
+                        .disabled(busy),
+                )
+                .child(
+                    div()
+                        .flex_row_from(direction)
+                        .gap(px(8.0))
+                        .child(host_button(
+                            "host-save".into(),
+                            strings.get("desktopHostSwitcher.actions.save"),
+                            !busy,
+                            palette,
+                            cx,
+                            |this, _, cx| this.save(cx),
+                        ))
+                        .child(host_button(
+                            "host-cancel".into(),
+                            strings.get("desktopHostSwitcher.actions.cancel"),
+                            !busy,
+                            palette,
+                            cx,
+                            |this, _, cx| {
+                                this.editing = None;
+                                this.error = None;
+                                cx.notify();
+                            },
+                        )),
+                )
+        });
+        let (settings_editor, picker_editor) = if self.presentation == Presentation::Settings {
+            (editor, None)
+        } else {
+            (None, editor)
+        };
         div()
             .flex()
             .flex_col()
             .gap(px(12.0))
             .text_color(palette.foreground)
-            .child(strings.get("desktopHostSwitcher.description"))
+            .child(strings.get(if self.presentation == Presentation::Settings {
+                "settings.remoteInstances.direct.title"
+            } else {
+                "desktopHostSwitcher.description"
+            }))
             .child(
                 div()
                     .flex_row_from(direction)
@@ -433,6 +546,8 @@ impl Render for HostManager {
                         |this, _, cx| this.load(cx),
                     )),
             )
+            .children(settings_editor)
+            .children(settings_status)
             .children(rows.into_iter().map(|profile| {
                 let connect = profile.clone();
                 let edit = profile.clone();
@@ -443,14 +558,19 @@ impl Render for HostManager {
                     .flex_row_from(direction)
                     .items_center()
                     .gap(px(8.0))
-                    .child(host_button(
-                        format!("host-connect:{}", profile.id).into(),
-                        profile.label.clone().into(),
-                        !busy,
-                        palette,
-                        cx,
-                        move |this, window, cx| this.connect(&connect, window, cx),
-                    ))
+                    .child(
+                        host_button(
+                            format!("host-connect:{}", profile.id).into(),
+                            profile.label.clone().into(),
+                            !busy,
+                            palette,
+                            cx,
+                            move |this, window, cx| this.connect(&connect, window, cx),
+                        )
+                        .max_w(px(128.0))
+                        .min_w_0()
+                        .truncate(),
+                    )
                     .child(
                         div()
                             .flex_1()
@@ -458,8 +578,9 @@ impl Render for HostManager {
                             .truncate()
                             .child(profile.endpoint.as_str().to_owned()),
                     )
-                    .child(host_button(
+                    .child(host_icon_button(
                         format!("host-default:{}", profile.id).into(),
+                        if is_default { "star-fill" } else { "star" },
                         strings.get(if is_default {
                             "desktopHostSwitcher.header.default"
                         } else {
@@ -475,16 +596,18 @@ impl Render for HostManager {
                             }
                         },
                     ))
-                    .child(host_button(
+                    .child(host_icon_button(
                         format!("host-edit:{}", profile.id).into(),
+                        "edit",
                         strings.get("desktopHostSwitcher.actions.edit"),
                         !busy,
                         palette,
                         cx,
                         move |this, window, cx| this.edit(Some(&edit), window, cx),
                     ))
-                    .child(host_button(
+                    .child(host_icon_button(
                         format!("host-delete:{}", profile.id).into(),
+                        "delete-bin",
                         strings.get("desktopHostSwitcher.actions.delete"),
                         !busy,
                         palette,
@@ -492,62 +615,7 @@ impl Render for HostManager {
                         move |this, _, cx| this.remove_profile(&delete, cx),
                     ))
             }))
-            .when(self.editing.is_some(), |panel| {
-                panel.child(
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(8.0))
-                        .child(
-                            Input::new(&self.label)
-                                .id("host-label")
-                                .accessibility_id("host-label")
-                                .aria_label(
-                                    strings.get("desktopHostSwitcher.field.labelPlaceholder"),
-                                )
-                                .focus_bordered(false)
-                                .when(
-                                    direction == crate::locale::Direction::RightToLeft,
-                                    |input| input.text_right(),
-                                )
-                                .disabled(busy),
-                        )
-                        .child(
-                            Input::new(&self.url)
-                                .id("host-url")
-                                .accessibility_id("host-url")
-                                .aria_label(strings.get("desktopHostSwitcher.field.urlPlaceholder"))
-                                .focus_bordered(false)
-                                .text_left()
-                                .disabled(busy),
-                        )
-                        .child(
-                            div()
-                                .flex_row_from(direction)
-                                .gap(px(8.0))
-                                .child(host_button(
-                                    "host-save".into(),
-                                    strings.get("desktopHostSwitcher.actions.save"),
-                                    !busy,
-                                    palette,
-                                    cx,
-                                    |this, _, cx| this.save(cx),
-                                ))
-                                .child(host_button(
-                                    "host-cancel".into(),
-                                    strings.get("desktopHostSwitcher.actions.cancel"),
-                                    !busy,
-                                    palette,
-                                    cx,
-                                    |this, _, cx| {
-                                        this.editing = None;
-                                        this.error = None;
-                                        cx.notify();
-                                    },
-                                )),
-                        ),
-                )
-            })
+            .children(picker_editor)
             .when(self.editing.is_none(), |panel| {
                 panel.child(host_button(
                     "host-add".into(),
@@ -555,24 +623,10 @@ impl Render for HostManager {
                     !busy && self.profiles.is_some(),
                     palette,
                     cx,
-                    |this, window, cx| this.edit(None, window, cx),
+                    |this, window, cx| this.add_in_settings(window, cx),
                 ))
             })
-            .child(
-                div()
-                    .id("host-error")
-                    .accessibility_id("host-error")
-                    .role(Role::Status)
-                    .aria_label(error.clone())
-                    .a11y_synthetic_children(|builder| {
-                        builder
-                            .parent_node()
-                            .set_live(gpui_kit::accesskit::Live::Polite)
-                    })
-                    .h(px(24.0))
-                    .text_color(palette.error)
-                    .child(error),
-            )
+            .children(picker_status)
     }
 }
 
@@ -583,7 +637,7 @@ fn host_button(
     palette: &Palette,
     cx: &Context<HostManager>,
     action: impl Fn(&mut HostManager, &mut Window, &mut Context<HostManager>) + 'static,
-) -> impl IntoElement {
+) -> gpui_kit::base::Button {
     let button = gpui_kit::base::Button::new(id.clone())
         .accessibility_id(id)
         .accessibility_label(label.clone())
@@ -591,9 +645,34 @@ fn host_button(
         .h(px(28.0))
         .px(px(8.0))
         .rounded(px(7.0))
+        .whitespace_nowrap()
         .css_text(0.8125, 1.0, cx)
         .text_color(palette.foreground)
         .child(label);
+    on_activate(button, cx, move |this, window, cx| {
+        if enabled && this.task.is_none() && !this.closing {
+            action(this, window, cx);
+        }
+    })
+}
+
+fn host_icon_button(
+    id: SharedString,
+    icon: &'static str,
+    label: SharedString,
+    enabled: bool,
+    palette: &Palette,
+    cx: &Context<HostManager>,
+    action: impl Fn(&mut HostManager, &mut Window, &mut Context<HostManager>) + 'static,
+) -> impl IntoElement {
+    let button = gpui_kit::base::Button::new(id.clone())
+        .accessibility_id(id)
+        .accessibility_label(label)
+        .disabled(!enabled)
+        .size(px(28.0))
+        .flex_shrink_0()
+        .rounded(px(7.0))
+        .child(crate::chrome::glyph(icon, 16.0, palette.foreground));
     on_activate(button, cx, move |this, window, cx| {
         if enabled && this.task.is_none() && !this.closing {
             action(this, window, cx);

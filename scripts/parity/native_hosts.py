@@ -40,7 +40,7 @@ def qualify(args):
             env.pop('OPENCHAMBER_NATIVE_PASSWORD', None)
             def launch(name):
                 log = cleanup.enter_context((args.output / f'native-{name}.log').open('w'))
-                client = NativeClient(args.binary, env, args.scale, 1280, 800, stderr=log)
+                client = NativeClient(args.binary, env, args.scale, args.width, args.height, stderr=log)
                 cleanup.callback(client.close)
                 clients.append(client)
                 def capture_last():
@@ -70,17 +70,33 @@ def qualify(args):
                 command(env, 'xdotool', 'key', '--clearmodifiers', 'ctrl+a')
                 command(env, 'xdotool', 'type', '--clearmodifiers', text)
 
+            def require_visible(key):
+                x, y, width, height = client._rect(client._find(key))
+                if x < 0 or y < 0 or x + width > args.width + 1 or y + height > args.height + 1:
+                    raise RuntimeError(f'host control is outside the viewport: {key}')
+
             def add(label, url):
                 click('host-add')
+                if not client.wait_for({'elements': ['settings-dialog', 'settings-current-page']}, 15):
+                    raise RuntimeError('Add instance did not open Settings')
+                until('Settings did not focus the URL editor', lambda: client._find('host-url').get_state_set().contains(_atspi().StateType.FOCUSED), 15)
                 fill('host-label', label)
                 fill('host-url', url)
                 click('host-save')
                 return until('host was not saved', lambda: next((host for host in profiles()['hosts'] if host['label'] == label), None), 15)
 
             def select_session(index):
+                from gi.repository import GLib
                 sid = sessions[index]['id']
+                def current_rows():
+                    try:
+                        return client.rows()
+                    except GLib.Error as error:
+                        if error.domain == 'atspi_error' and error.code == 1 and error.message.startswith('Unknown object '):
+                            return []
+                        raise
                 def choose():
-                    rows = [row for row in client.rows() if row['key'].endswith(':session:' + sid)]
+                    rows = [row for row in current_rows() if row['key'].endswith(':session:' + sid)]
                     if len(rows) != 1:
                         return False
                     try:
@@ -90,12 +106,19 @@ def qualify(args):
                         # Topology can move the same session from Chats to its
                         # project between the row read and the pointer action.
                         return False
+                    except GLib.Error as error:
+                        if error.domain == 'atspi_error' and error.code == 1 and error.message.startswith('Unknown object '):
+                            return False
+                        raise
                 until('selected server sessions did not arrive', choose, 45)
                 until('host selected another session', lambda: any(
-                    row['selected'] and row['key'].endswith(':session:' + sid) for row in client.rows()), 20)
+                    row['selected'] and row['key'].endswith(':session:' + sid) for row in current_rows()), 20)
                 other_ids = {session['id'] for session in sessions if session['id'] != sid}
-                until('sessions from the previous host remained visible', lambda: not any(
-                    row['key'].rsplit(':session:', 1)[-1] in other_ids for row in client.rows()), 20)
+                def isolated():
+                    rows = current_rows()
+                    return any(row['key'].endswith(':session:' + sid) for row in rows) and not any(
+                        row['key'].rsplit(':session:', 1)[-1] in other_ids for row in rows)
+                until('sessions from the previous host remained visible', isolated, 20)
 
             click('instance-switcher')
             alpha = add('Alpha', first.url)
@@ -105,6 +128,7 @@ def qualify(args):
             fill('host-url', first.url)
             click('host-save')
             until('duplicate address was not reported', lambda: 'already saved' in (client._find('host-error').get_name() or ''), 10)
+            require_visible('host-error')
             if len(profiles()['hosts']) != 2:
                 raise RuntimeError('duplicate address changed the saved profiles')
             fill('host-url', 'not-an-address')
@@ -112,9 +136,15 @@ def qualify(args):
             until('invalid address was not reported', lambda: 'Invalid URL' in (client._find('host-error').get_name() or ''), 10)
             click('host-cancel')
             click('host-edit:' + beta['id'])
-            fill('host-label', 'Beta renamed')
+            beta_label = 'Beta renamed ' + 'wide-label-' * 12
+            fill('host-label', beta_label)
             click('host-save')
-            until('profile label was not edited', lambda: any(item['id'] == beta['id'] and item['label'] == 'Beta renamed' for item in profiles()['hosts']), 15)
+            until('profile label was not edited', lambda: any(item['id'] == beta['id'] and item['label'] == beta_label for item in profiles()['hosts']), 15)
+            for action in ('host-default:', 'host-edit:', 'host-delete:'):
+                key = action + beta['id']
+                if not client.wait_for({'elements': [key]}, 15):
+                    raise RuntimeError('edited host actions disappeared')
+                require_visible(key)
 
             click('host-add')
             fill('host-label', 'Retained after save failure')
@@ -125,6 +155,7 @@ def qualify(args):
                 profile_directory.chmod(0o500)
                 click('host-save')
                 until('failed save was not reported', lambda: 'Failed to save' in (client._find('host-error').get_name() or ''), 15)
+                require_visible('host-error')
                 if editable_text(client._find('host-label')) != 'Retained after save failure':
                     raise RuntimeError('failed save discarded the profile draft')
                 if len(profiles()['hosts']) != 2:
@@ -171,7 +202,7 @@ def qualify(args):
             client = launch('default')
             select_session(1)
             client.screenshot(args.output / 'default-beta.png')
-            result['checks'] = ['add', 'duplicate-address', 'invalid-address', 'edit', 'save-failure-retains-draft',
+            result['checks'] = ['settings-entry', 'add', 'duplicate-address', 'invalid-address', 'edit', 'save-failure-retains-draft',
                                 'save-retry', 'switch', 'draft-isolation', 'accessible-default', 'keyboard-default', 'default-restart']
             result['inputSubstitutions'] = [item for active in clients for item in active.substitutions]
             if result['inputSubstitutions']:
@@ -200,14 +231,18 @@ def main():
     parser.add_argument('--dist', type=Path, default=runner.DEFAULT_DIST)
     parser.add_argument('--opencode-binary', type=Path, default=runner.DEFAULT_OPENCODE)
     parser.add_argument('--scale', type=float, choices=(1, 1.25, 1.5, 2), default=1.25)
+    parser.add_argument('--width', type=int, default=1280)
+    parser.add_argument('--height', type=int, default=800)
     parser.add_argument('--output', type=Path, required=True)
     args = parser.parse_args()
     for key in ('binary', 'dist', 'opencode_binary', 'output'):
         setattr(args, key, getattr(args, key).resolve())
     if args.output.parent != Path('/tmp/opencode') or args.output.exists():
         parser.error('--output must be a new directory directly under /tmp/opencode')
+    if args.width < 800 or args.height < 520:
+        parser.error('viewport must meet the native 800 by 520 minimum')
     if not virtual_display.inside():
-        return virtual_display.run_inside([sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]], round(1280 * args.scale), round(800 * args.scale))
+        return virtual_display.run_inside([sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]], round(args.width * args.scale), round(args.height * args.scale))
     return qualify(args)
 
 

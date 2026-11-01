@@ -28,6 +28,8 @@ command
 compass-3
 donut-chart
 edit
+star
+star-fill
 equalizer-2
 error-warning
 eye

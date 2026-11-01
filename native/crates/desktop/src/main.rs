@@ -78,6 +78,7 @@ mod session_menu;
 #[cfg(test)]
 mod session_menu_tests;
 mod session_mutations;
+mod settings_view;
 mod sidebar_item;
 mod sidebar_view;
 mod starters;
