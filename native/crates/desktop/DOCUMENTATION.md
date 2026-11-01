@@ -96,8 +96,10 @@ prompt. Attachments and worktree creation remain separate workflows.
   conflict-checked atomic writes. `host_manager.rs` owns the direct-host picker,
   profile edits and endpoint changes. Credentials never enter the profile file.
   Direct HTTP(S) profiles are supported here; SSH, relay, request-header and
-  pairing profiles remain separate native work. The full Settings navigation
-  and window-opening actions are not provided by this picker yet.
+  pairing profiles remain separate native work. Add instance opens the native
+  Remote instances Settings page through `settings_view.rs`, reusing the same
+  profile model and write barrier. The remaining Settings navigation and
+  window-opening actions are separate work.
 - `host_recovery.rs` owns failed saved-host startup. It shows no session data
   and leaves the file untouched. Refresh rereads the same file off the UI
   thread, then connects its default or opens the instance picker. Entering a

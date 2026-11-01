@@ -223,6 +223,10 @@ desktopHostSwitcher.error.profileLimit
 desktopHostSwitcher.error.profilesChanged
 desktopHostSwitcher.error.profilesBusy
 desktopHostSwitcher.field.labelOptionalPlaceholder
+settings.window.description
+settings.view.nav.group.projects
+settings.page.remoteInstances.title
+settings.remoteInstances.direct.title
 sessions.sidebar.activity.chatsEmpty
 sessions.sidebar.activity.chatsTitle
 sessions.sidebar.activity.pinnedTitle
