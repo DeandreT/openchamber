@@ -40,6 +40,8 @@ mod prompt_parts;
 mod session_actions;
 #[path = "session_creation/mod.rs"]
 mod session_creation;
+#[path = "system_versions/mod.rs"]
+mod system_versions;
 
 #[tokio::test]
 async fn queue_non_acquisition_requires_the_exact_request_identity() {

@@ -328,11 +328,15 @@ impl Workspace {
                         "command",
                         "sessions.sidebar.footer.actions.shortcuts",
                     ))
-                    .child(button(
-                        "about",
-                        "information",
-                        "sessions.sidebar.footer.actions.aboutOpenChamber",
-                    )),
+                    .child(
+                        IconButton::new(
+                            "about",
+                            "information",
+                            strings.get("sessions.sidebar.footer.actions.aboutOpenChamber"),
+                        )
+                        .tone(ButtonTone::QuietFilled)
+                        .render(palette, cx, |this, window, cx| this.open_about(window, cx)),
+                    ),
             )
             .child(div().flex_1())
             .child(

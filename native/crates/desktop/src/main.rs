@@ -5,6 +5,7 @@
 //! window shows deterministic synthetic data and makes no network or
 //! provider calls.
 
+mod about;
 mod activation;
 mod archive_view;
 mod assets;

@@ -1,4 +1,4 @@
-//! Embedded assets: OpenChamber's sprite icons and GPUI Kit's defaults.
+//! Embedded assets: OpenChamber's sprite icons, brand logo and Kit defaults.
 //!
 //! `resources/icons.json` holds the web UI's own glyphs, exported from its
 //! icon sprite by `bun run native:resources`, so both clients draw identical
@@ -12,8 +12,10 @@ use gpui_kit::{AssetSource, Result, SharedString};
 
 const ICONS_JSON: &str = include_str!("../resources/icons.json");
 const ICON_PREFIX: &str = "openchamber/icons/";
+pub(crate) const APP_LOGO: &str = "openchamber/logo.svg";
+const APP_LOGO_SVG: &str = include_str!("../../../../packages/web/public/logo-dark-512x512.svg");
 
-/// Serves OpenChamber icons under `openchamber/icons/` and Kit assets elsewhere.
+/// Serves OpenChamber's embedded icons and logo, then Kit assets.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct AppAssets;
 
@@ -31,6 +33,11 @@ pub fn icon_path(name: &str) -> SharedString {
 
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if path == APP_LOGO {
+            return Ok(Some(Cow::Owned(
+                APP_LOGO_SVG.replace("#f5f5f7", "currentColor").into_bytes(),
+            )));
+        }
         if let Some(name) = path
             .strip_prefix(ICON_PREFIX)
             .and_then(|rest| rest.strip_suffix(".svg"))
@@ -42,6 +49,9 @@ impl AssetSource for AppAssets {
 
     fn list(&self, path: &str) -> Result<Vec<SharedString>> {
         let mut entries = gpui_kit::assets::Assets.list(path)?;
+        if APP_LOGO.starts_with(path) {
+            entries.push(APP_LOGO.into());
+        }
         for name in icons().keys() {
             let icon = icon_path(name);
             if icon.starts_with(path) {
@@ -69,5 +79,17 @@ mod tests {
                 .expect("unknown sprite icons are absent, not errors")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn app_logo_uses_the_canonical_brand_geometry_and_theme_color() {
+        let logo = AppAssets
+            .load(APP_LOGO)
+            .expect("asset source")
+            .expect("brand asset");
+        let text = std::str::from_utf8(&logo).expect("SVG is UTF-8");
+        assert!(text.contains("viewBox=\"-50 -50 100 100\""));
+        assert!(text.contains("currentColor"));
+        assert!(!text.contains("#f5f5f7"));
     }
 }
