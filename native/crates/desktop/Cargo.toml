@@ -17,6 +17,7 @@ gpui-kit.workspace = true
 libghostty-vt.workspace = true
 keyring.workspace = true
 keyring-core.workspace = true
+notify.workspace = true
 openchamber-native-core.workspace = true
 openchamber-native-transport.workspace = true
 serde.workspace = true

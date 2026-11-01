@@ -31,6 +31,7 @@ mod diagnostics;
 mod diff_view;
 mod draft_sidebar;
 mod elevation;
+mod enterprise;
 mod file_tree_view;
 mod files_view;
 mod fonts;
@@ -192,6 +193,7 @@ fn main() {
                 window.set_layout_mode(gpui_kit::LayoutMode::Logical);
                 cx.new(|cx| {
                     let mut workspace = Workspace::new(source, window, cx);
+                    workspace.start_policy_monitor(cx);
                     workspace.initial_size = Some(chrome::InitialSize::new(size(
                         px(WINDOW_WIDTH),
                         px(WINDOW_HEIGHT),

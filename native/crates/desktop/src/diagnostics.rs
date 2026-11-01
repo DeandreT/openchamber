@@ -29,6 +29,10 @@ pub enum Marker {
     SessionsShown,
     /// A visited session's first history read was painted.
     HistoryShown,
+    /// A native machine-policy read finished; count is 1 when restricted.
+    PolicyChecked,
+    /// A public asset was withheld by the native machine policy.
+    PublicAssetBlocked,
 }
 
 impl Marker {
@@ -42,6 +46,8 @@ impl Marker {
             Self::PlaybackCompleted => "playback-completed",
             Self::SessionsShown => "sessions-shown",
             Self::HistoryShown => "history-shown",
+            Self::PolicyChecked => "policy-checked",
+            Self::PublicAssetBlocked => "public-asset-blocked",
         }
     }
 }
