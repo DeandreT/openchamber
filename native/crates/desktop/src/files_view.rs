@@ -164,6 +164,47 @@ pub(crate) struct Panels {
 }
 
 impl Workspace {
+    /// Applies General choices only to the runtime that dispatched them.
+    pub(crate) fn apply_general_settings(
+        &mut self,
+        runtime: &RuntimeId,
+        preferences: &crate::general_settings::GeneralPreferences,
+        cx: &mut Context<Self>,
+    ) {
+        if &self.runtime == runtime {
+            if let Some(settings) = self.send_catalog.settings.as_mut() {
+                if let Some(value) = preferences.auto_save_enabled {
+                    settings.auto_save_enabled = Some(value);
+                }
+                if let Some(value) = preferences.terminal_close_on_exit {
+                    settings.terminal_close_on_exit = Some(value);
+                }
+                if let Some(value) = &preferences.terminal_shell {
+                    settings.terminal_shell = Some(value.clone());
+                }
+            }
+            if let Some(panel) = &self.terminal_panel {
+                panel.update(cx, |panel, cx| {
+                    if &panel.runtime == runtime {
+                        panel.apply_general_settings(
+                            preferences.terminal_close_on_exit,
+                            preferences.terminal_shell.as_deref(),
+                            cx,
+                        );
+                    }
+                });
+            }
+        }
+        if let Some(auto_save) = preferences.auto_save_enabled {
+            for ((owner, _), (view, _)) in &self.panels.files {
+                if owner == runtime {
+                    view.update(cx, |view, cx| view.set_auto_save(auto_save, cx));
+                }
+            }
+        }
+        cx.notify();
+    }
+
     /// Opens `surface`, or closes it when it is the open one.
     pub(crate) fn toggle_panel(&mut self, surface: PanelSurface, cx: &mut Context<Self>) {
         self.panels.open = (self.panels.open != Some(surface)).then_some(surface);
@@ -534,6 +575,7 @@ pub(crate) struct OpenEditor {
 
 /// The Files surface.
 pub(crate) struct FilesView {
+    auto_save: bool,
     pub(crate) scope: PanelScope,
     pub(crate) tree: FileTree,
     listings: HashMap<String, Task<()>>,
@@ -590,6 +632,7 @@ impl FilesView {
         let mut subscriptions = vec![subscription];
         if let Some(owner) = scope.owner.as_ref().and_then(|owner| owner.upgrade()) {
             subscriptions.push(cx.observe(&owner, |this, _, cx| {
+                this.sync_auto_save(cx);
                 if this.open.as_ref().is_some_and(|open| open.autosave_waiting)
                     && this.scope.client(cx).is_some()
                 {
@@ -598,6 +641,7 @@ impl FilesView {
             }));
         }
         let view = Self {
+            auto_save: true,
             tree: FileTree::new(scope.directory.clone()),
             scope,
             listings: HashMap::new(),
@@ -627,6 +671,7 @@ impl FilesView {
         let entity = cx.entity().downgrade();
         cx.defer(move |cx| {
             let _ = entity.update(cx, |view, cx| {
+                view.sync_auto_save(cx);
                 let root = view.tree.root().to_owned();
                 if let Some(ticket) = view.tree.request(&root, ListingCause::Reveal) {
                     view.list(ticket, cx);
@@ -926,18 +971,62 @@ impl FilesView {
         };
         let id = open.id;
         open.autosave_waiting = false;
-        open.autosave = (open.file.is_dirty() && !open.file.read_only()).then(|| {
-            cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(AUTOSAVE_DELAY).await;
-                let _ = this.update(cx, |this, cx| {
-                    let Some(open) = this.editor_mut(id) else {
-                        return;
-                    };
-                    open.autosave = None;
-                    let _ = this.save(SaveTrigger::Auto, cx);
-                });
-            })
-        });
+        open.autosave =
+            (self.auto_save && open.file.is_dirty() && !open.file.read_only()).then(|| {
+                cx.spawn(async move |this, cx| {
+                    cx.background_executor().timer(AUTOSAVE_DELAY).await;
+                    let _ = this.update(cx, |this, cx| {
+                        let Some(open) = this.editor_mut(id) else {
+                            return;
+                        };
+                        open.autosave = None;
+                        let _ = this.save(SaveTrigger::Auto, cx);
+                    });
+                })
+            });
+    }
+
+    fn set_auto_save(&mut self, enabled: bool, cx: &mut Context<Self>) {
+        if self.auto_save == enabled {
+            return;
+        }
+        self.auto_save = enabled;
+        self.arm_autosave(cx);
+        cx.notify();
+    }
+
+    fn sync_auto_save(&mut self, cx: &mut Context<Self>) {
+        let value = self
+            .scope
+            .owner
+            .as_ref()
+            .and_then(|owner| owner.upgrade())
+            .and_then(|owner| {
+                let owner = owner.read(cx);
+                owner
+                    .settings
+                    .as_ref()
+                    .and_then(|settings| {
+                        settings
+                            .read(cx)
+                            .general_preferences(&self.scope.runtime, cx)
+                    })
+                    .and_then(|preferences| preferences.auto_save_enabled)
+                    .or_else(|| {
+                        (owner.runtime == self.scope.runtime)
+                            .then(|| {
+                                owner
+                                    .send_catalog
+                                    .settings
+                                    .as_ref()
+                                    .and_then(|settings| settings.auto_save_enabled)
+                            })
+                            .flatten()
+                    })
+            });
+        if let Some(value) = value {
+            self.set_auto_save(value, cx);
+        }
     }
 
     /// A rename of `old` to `new` finished: the open file and a pending
@@ -1064,6 +1153,9 @@ impl FilesView {
     /// refused, since the write would recreate the old path; the rename's
     /// end arms autosave again.
     pub(crate) fn save(&mut self, trigger: SaveTrigger, cx: &mut Context<Self>) -> SaveStart {
+        if trigger == SaveTrigger::Auto && !self.auto_save {
+            return SaveStart::Refused;
+        }
         let Some(client) = self.scope.client(cx) else {
             if trigger == SaveTrigger::Auto
                 && let Some(open) = self.open.as_mut()
@@ -1841,6 +1933,12 @@ impl Focusable for FilesView {
 
 impl Render for FilesView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let placeholder = locale::strings(cx).get("filesView.tree.search.placeholder");
+        if self.search.read(cx).presentation().placeholder() != &placeholder {
+            self.search.update(cx, |input, cx| {
+                input.set_placeholder(placeholder, window, cx)
+            });
+        }
         self.sync_editor(window, cx);
         let palette = cx.global::<Palette>().clone();
         let direction = locale::strings(cx).direction();

@@ -75,6 +75,8 @@ search-eye
 send-plane-2
 server
 settings-3
+palette
+computer
 shield-check
 shield-star
 shield-user

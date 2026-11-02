@@ -14,9 +14,6 @@ use std::collections::HashMap;
 use gpui_kit::component::Theme;
 use gpui_kit::{App, SharedString, Styled, font, px, rems};
 
-/// Native views keep GPUI's root font size, the web's 16 px root.
-const ROOT_FONT_SIZE: f32 = 16.0;
-
 /// Chromium's baseline minus GPUI's, in pixels, for a font with `ascent` and
 /// `descent` (both positive, in pixels) in a line box of `line_height`.
 ///
@@ -68,7 +65,8 @@ pub(crate) trait CssTextExt: Styled + Sized {
     /// Chromium's baseline for that line. The move is a relative offset, so
     /// use it on elements that hold only text: it moves the whole element.
     fn css_text(self, size: f32, line_height: f32, cx: &App) -> Self {
-        let shift = ui_font_shift(size * ROOT_FONT_SIZE, line_height * ROOT_FONT_SIZE, cx);
+        let root = crate::appearance::root_font_size(cx);
+        let shift = ui_font_shift(size * root, line_height * root, cx);
         let sized = self.text_size(rems(size)).line_height(rems(line_height));
         if shift == 0.0 {
             sized

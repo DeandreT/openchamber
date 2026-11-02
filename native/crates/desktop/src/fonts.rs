@@ -95,12 +95,94 @@ pub struct FontFamilies {
     pub mono: SharedString,
 }
 
+/// The resolved system stacks survive user font choices and Kit mode resets.
+#[derive(Clone)]
+struct SystemFonts(FontFamilies);
+impl Global for SystemFonts {}
+
 /// The interface font's fallbacks: the stack's `sans-serif` family when it
 /// differs from the interface family.
 #[derive(Clone, Debug, Default)]
 pub struct UiFontFallbacks(pub Option<FontFallbacks>);
 
 impl Global for UiFontFallbacks {}
+
+/// Installed counterparts of the Electron font options. Native never downloads fonts.
+pub(crate) struct FontOption {
+    pub(crate) id: &'static str,
+    pub(crate) label: &'static str,
+}
+
+const UI_OPTIONS: &[(&str, &str)] = &[
+    ("inter", "Inter"),
+    ("fixel", "Fixel Text"),
+    ("geist-sans", "Geist Sans"),
+    ("atkinson-hyperlegible", "Atkinson Hyperlegible"),
+    ("source-sans-3", "Source Sans 3"),
+    ("roboto", "Roboto"),
+    ("noto-sans", "Noto Sans"),
+    ("dm-sans", "DM Sans"),
+    ("manrope", "Manrope"),
+];
+const MONO_OPTIONS: &[(&str, &str)] = &[
+    ("jetbrains-mono", "JetBrains Mono"),
+    ("fira-code", "Fira Code"),
+    ("geist-mono", "Geist Mono"),
+    ("commit-mono", "Commit Mono"),
+    ("source-code-pro", "Source Code Pro"),
+    ("cascadia-code", "Cascadia Code"),
+    ("roboto-mono", "Roboto Mono"),
+    ("iosevka", "Iosevka"),
+];
+
+pub(crate) fn valid_ui_font(id: &str) -> bool {
+    id == "system" || UI_OPTIONS.iter().any(|option| option.0 == id)
+}
+
+pub(crate) fn valid_mono_font(id: &str) -> bool {
+    id == "system-mono" || MONO_OPTIONS.iter().any(|option| option.0 == id)
+}
+
+fn available_fonts(options: &'static [(&'static str, &'static str)], cx: &App) -> Vec<FontOption> {
+    let installed = cx.text_system().all_font_names();
+    options
+        .iter()
+        .filter(|(_, family)| installed.iter().any(|name| name == family))
+        .map(|(id, label)| FontOption { id, label })
+        .collect()
+}
+
+/// Named installed fonts only. The caller supplies a localized System option.
+pub(crate) fn available_ui_fonts(cx: &App) -> Vec<FontOption> {
+    available_fonts(UI_OPTIONS, cx)
+}
+pub(crate) fn available_mono_fonts(cx: &App) -> Vec<FontOption> {
+    available_fonts(MONO_OPTIONS, cx)
+}
+
+/// Applies the saved IDs, falling back to system stacks if a font was uninstalled.
+pub(crate) fn apply_preferences(generic: &GenericFamilies, ui: &str, mono: &str, cx: &mut App) {
+    if cx.try_global::<SystemFonts>().is_none() {
+        apply(generic, cx);
+    }
+    let system = cx.global::<SystemFonts>().0.clone();
+    let installed = cx.text_system().all_font_names();
+    let pick = |options: &[(&str, &str)], id: &str| {
+        options
+            .iter()
+            .find(|(candidate, family)| {
+                *candidate == id && installed.iter().any(|name| name == family)
+            })
+            .map(|(_, family)| SharedString::from((*family).to_owned()))
+    };
+    let ui = pick(UI_OPTIONS, ui).unwrap_or(system.ui);
+    let mono = pick(MONO_OPTIONS, mono).unwrap_or(system.mono);
+    cx.set_global(UiFontFallbacks(ui_fallbacks(generic, &ui)));
+    Theme::update(cx, |theme| {
+        theme.font_family = ui;
+        theme.mono_font_family = mono;
+    });
+}
 
 /// The `sans-serif` family as the interface font's fallback, unless it is
 /// the interface family itself.
@@ -153,6 +235,7 @@ pub fn apply(generic: &GenericFamilies, cx: &mut App) {
     );
     let fallbacks = ui_fallbacks(generic, &families.ui);
     tracing::info!(ui = %families.ui, mono = %families.mono, ?fallbacks, "fonts selected");
+    cx.set_global(SystemFonts(families.clone()));
     cx.set_global(UiFontFallbacks(fallbacks));
     Theme::update(cx, |theme| {
         theme.font_family = families.ui.clone();
@@ -163,6 +246,25 @@ pub fn apply(generic: &GenericFamilies, cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui_kit::test]
+    fn system_choices_restore_the_original_stacks_after_a_named_choice(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            let generic = GenericFamilies::default();
+            apply(&generic, cx);
+            let system = cx.global::<SystemFonts>().0.clone();
+            Theme::update(cx, |theme| {
+                theme.font_family = "Named UI".into();
+                theme.mono_font_family = "Named Mono".into();
+            });
+            apply_preferences(&generic, "system", "system-mono", cx);
+            assert_eq!(Theme::global(cx).font_family, system.ui);
+            assert_eq!(Theme::global(cx).mono_font_family, system.mono);
+        });
+    }
 
     #[test]
     fn named_families_win_over_generic_ones_only_when_installed() {

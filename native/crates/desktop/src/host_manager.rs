@@ -7,6 +7,7 @@ use gpui_kit::{
     SharedString, StatefulInteractiveElement, Styled, Task, WeakEntity, Window, div,
     prelude::FluentBuilder, px,
 };
+use tokio::sync::oneshot;
 
 use crate::activation::on_activate;
 use crate::baseline::CssTextExt;
@@ -22,11 +23,27 @@ enum Presentation {
     Settings,
 }
 
+#[derive(Clone, Copy)]
+enum ProfileWriteError {
+    Forget,
+    Save(ProfilesError),
+}
+
+impl ProfileWriteError {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Forget => "desktopHostSwitcher.error.failedToForget",
+            Self::Save(error) => save_error_key(error),
+        }
+    }
+}
+
 pub(crate) struct HostManager {
     owner: WeakEntity<Workspace>,
     store: Option<ProfileStore>,
     profiles: Option<HostProfiles>,
     task: Option<Task<()>>,
+    pending_io: Option<Task<Result<HostProfiles, ProfileWriteError>>>,
     pending_write: bool,
     closing: bool,
     error: Option<&'static str>,
@@ -64,6 +81,7 @@ impl HostManager {
             store,
             profiles: None,
             task: None,
+            pending_io: None,
             pending_write: false,
             closing: false,
             error: None,
@@ -162,7 +180,9 @@ impl HostManager {
         }
         self.presentation = Presentation::Settings;
         self.edit(None, window, cx);
-        crate::settings_view::open_hosts(cx.entity(), window, cx);
+        let _ = self.owner.update(cx, |owner, cx| {
+            owner.show_settings(Some(crate::settings_navigation::Page::Hosts), window, cx);
+        });
         self.url.update(cx, |input, cx| input.focus(window, cx));
     }
 
@@ -221,26 +241,29 @@ impl HostManager {
         next.remove(id);
         let removed_id = id.to_owned();
         self.error = None;
-        self.pending_write = true;
+        let receipt = self.start_write_io(
+            async move {
+                if !matches!(forgotten.await, Some(Ok(()))) {
+                    return Err(ProfileWriteError::Forget);
+                }
+                store
+                    .save(&expected, &next)
+                    .map_err(ProfileWriteError::Save)
+            },
+            cx,
+        );
         self.task = Some(cx.spawn(async move |this, cx| {
-            if !matches!(forgotten.await, Some(Ok(()))) {
-                let _ = this.update(cx, |this, cx| {
-                    this.task = None;
-                    this.error = Some("desktopHostSwitcher.error.failedToForget");
-                    this.pending_write = false;
-                    cx.notify();
-                });
-                return;
-            }
-            owner.update(cx, |owner, _| {
-                owner.authentication.remembered.remove(&endpoint);
-            });
-            let result = cx
-                .background_executor()
-                .spawn(async move { store.save(&expected, &next) })
-                .await;
+            let result = receipt
+                .await
+                .unwrap_or(Err(ProfileWriteError::Save(ProfilesError::Unavailable)));
             let _ = this.update(cx, |this, cx| {
                 this.task = None;
+                this.pending_io = None;
+                if !matches!(result, Err(ProfileWriteError::Forget)) {
+                    let _ = this.owner.update(cx, |owner, _| {
+                        owner.authentication.remembered.remove(&endpoint);
+                    });
+                }
                 match result {
                     Ok(profiles) => {
                         this.apply_profiles(profiles, cx);
@@ -249,7 +272,7 @@ impl HostManager {
                             this.editing = None;
                         }
                     }
-                    Err(error) => this.error = Some(save_error_key(error)),
+                    Err(error) => this.error = Some(error.key()),
                 }
                 this.pending_write = false;
                 cx.notify();
@@ -265,14 +288,21 @@ impl HostManager {
         let (Some(store), Some(expected)) = (self.store.clone(), self.profiles.clone()) else {
             return;
         };
-        self.pending_write = true;
+        let receipt = self.start_write_io(
+            async move {
+                store
+                    .save(&expected, &next)
+                    .map_err(ProfileWriteError::Save)
+            },
+            cx,
+        );
         self.task = Some(cx.spawn(async move |this, cx| {
-            let result = cx
-                .background_executor()
-                .spawn(async move { store.save(&expected, &next) })
-                .await;
+            let result = receipt
+                .await
+                .unwrap_or(Err(ProfileWriteError::Save(ProfilesError::Unavailable)));
             let _ = this.update(cx, |this, cx| {
                 this.task = None;
+                this.pending_io = None;
                 match result {
                     Ok(profiles) => {
                         this.apply_profiles(profiles, cx);
@@ -281,13 +311,31 @@ impl HostManager {
                             this.editing = None;
                         }
                     }
-                    Err(error) => this.error = Some(save_error_key(error)),
+                    Err(error) => this.error = Some(error.key()),
                 }
                 this.pending_write = false;
                 cx.notify();
             });
         }));
         cx.notify();
+    }
+
+    /// Starts accepted I/O before a foreground callback can be blocked by app quit.
+    fn start_write_io(
+        &mut self,
+        work: impl std::future::Future<Output = Result<HostProfiles, ProfileWriteError>>
+        + Send
+        + 'static,
+        cx: &Context<Self>,
+    ) -> oneshot::Receiver<Result<HostProfiles, ProfileWriteError>> {
+        let (completed, receipt) = oneshot::channel();
+        self.pending_write = true;
+        self.pending_io = Some(cx.background_executor().spawn(async move {
+            let result = work.await;
+            let _ = completed.send(result.clone());
+            result
+        }));
+        receipt
     }
 
     fn connect(&self, profile: &HostProfile, window: &mut Window, cx: &mut Context<Self>) {
@@ -313,13 +361,63 @@ impl HostManager {
         }
     }
 
+    /// Quit blocks the foreground session, including an existing normal-close waiter.
+    pub(crate) fn take_quit_write(&mut self, cx: &Context<Self>) -> Option<Task<()>> {
+        self.closing = true;
+        self.task = None;
+        let pending = self.pending_io.take()?;
+        // A removal's credential task needs its original Tokio runtime until done.
+        let network = self.network.take();
+        Some(cx.background_executor().spawn(async move {
+            let _ = pending.await;
+            drop(network);
+        }))
+    }
+
     pub(crate) fn finish_close(&mut self) -> bool {
         self.closing = false;
         self.error.is_none()
     }
+
+    pub(crate) fn prepare_settings(&mut self, cx: &mut Context<Self>) {
+        self.presentation = Presentation::Settings;
+        if self.profiles.is_none() {
+            self.load(cx);
+        }
+    }
+
+    pub(crate) fn refresh_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let label = locale::strings(cx).get("desktopHostSwitcher.field.labelOptionalPlaceholder");
+        let url = locale::strings(cx).get("desktopHostSwitcher.field.urlPlaceholder");
+        self.label
+            .update(cx, |input, cx| input.set_placeholder(label, window, cx));
+        self.url
+            .update(cx, |input, cx| input.set_placeholder(url, window, cx));
+        cx.notify();
+    }
+
+    pub(crate) fn focus_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.settings_scroll
+            .set_offset(gpui_kit::point(px(0.0), px(0.0)));
+        if self.editing.is_some() {
+            self.url.update(cx, |input, cx| input.focus(window, cx));
+        }
+        cx.notify();
+    }
 }
 
 impl Workspace {
+    pub(crate) fn settings_host_manager(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<HostManager> {
+        let owner = cx.weak_entity();
+        self.host_manager
+            .get_or_insert_with(|| cx.new(|cx| HostManager::new(owner, window, cx)))
+            .clone()
+    }
+
     pub(crate) fn take_profile_flush(&mut self, cx: &mut Context<Self>) -> Option<Task<()>> {
         self.host_close.take().or_else(|| {
             self.host_manager
@@ -695,9 +793,365 @@ fn save_error_key(error: ProfilesError) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use gpui_kit::{AppContext, TestAppContext};
+    use gpui_kit::{AnyWindowHandle, AppContext, Entity, TestAppContext};
     use openchamber_native_core::ids::SessionId;
     use openchamber_native_transport::endpoint::Endpoint;
+
+    fn open_profile_manager(
+        cx: &mut TestAppContext,
+        store: &super::ProfileStore,
+        profiles: Option<super::HostProfiles>,
+    ) -> (
+        AnyWindowHandle,
+        Entity<crate::workspace::Workspace>,
+        Entity<super::HostManager>,
+    ) {
+        let (window, workspace) = crate::workspace_tests::open(cx);
+        let manager = cx
+            .update_window(window, |_, window, cx| {
+                let manager =
+                    cx.new(|cx| super::HostManager::new(workspace.downgrade(), window, cx));
+                manager.update(cx, |manager, _| {
+                    manager.store = Some(store.clone());
+                    manager.profiles = profiles;
+                });
+                workspace.update(cx, |workspace, _| {
+                    workspace.host_manager = Some(manager.clone());
+                });
+                manager
+            })
+            .expect("window");
+        (window, workspace, manager)
+    }
+
+    enum QuitPath {
+        Application,
+        ClosingWindow,
+    }
+
+    fn quit_with_profile_write(cx: &mut TestAppContext, path: QuitPath) {
+        let fixture = crate::recovery_tests::Fixture::new();
+        let store =
+            super::ProfileStore::new(fixture.journal().parent().expect("profile directory"));
+        let initial = store.load().expect("absent profiles");
+        let (window, workspace, manager) = open_profile_manager(cx, &store, Some(initial.clone()));
+        let mut next = initial.clone();
+        next.upsert("host_saved", "Saved", "https://example.test/")
+            .expect("profile");
+        next.set_default(Some("host_saved")).expect("listed host");
+        manager.update(cx, |manager, cx| {
+            manager.write(next.clone(), true, cx);
+            assert!(manager.pending_io.is_some(), "accepted I/O is independent");
+            // Host controls reject another edit while busy; they do not coalesce it.
+            let mut rejected = next.clone();
+            rejected
+                .upsert("host_saved", "Unaccepted", "https://other.test/")
+                .expect("second draft");
+            manager.write(rejected, true, cx);
+        });
+        if matches!(path, QuitPath::ClosingWindow) {
+            cx.update_window(window, |_, window, cx| {
+                workspace.update(cx, |workspace, cx| workspace.request_close(window, cx));
+            })
+            .expect("normal close begins");
+            cx.read(|cx| {
+                assert!(
+                    workspace.read(cx).host_close.is_some(),
+                    "normal close waits"
+                );
+                assert!(manager.read(cx).closing, "normal close freezes edits");
+            });
+        }
+        assert_eq!(
+            store.load(),
+            Ok(initial),
+            "the deterministic executor has not run the accepted write"
+        );
+        // Only the window owns the entities during shutdown, as in the app.
+        drop(manager);
+        drop(workspace);
+        cx.quit();
+        next.revision = 1;
+        assert_eq!(
+            store.load(),
+            Ok(next),
+            "quit returns after the accepted profile and default are durable"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn app_quit_drains_an_accepted_profile_before_its_foreground_task_runs(
+        cx: &mut TestAppContext,
+    ) {
+        quit_with_profile_write(cx, QuitPath::Application);
+    }
+
+    #[gpui_kit::test]
+    fn app_quit_drains_a_profile_write_already_waited_by_normal_close(cx: &mut TestAppContext) {
+        quit_with_profile_write(cx, QuitPath::ClosingWindow);
+    }
+
+    #[gpui_kit::test]
+    fn app_quit_preserves_another_windows_profiles_after_a_pending_cas_failure(
+        cx: &mut TestAppContext,
+    ) {
+        let fixture = crate::recovery_tests::Fixture::new();
+        let store =
+            super::ProfileStore::new(fixture.journal().parent().expect("profile directory"));
+        let initial = store.load().expect("absent profiles");
+        let (_, workspace, manager) = open_profile_manager(cx, &store, Some(initial.clone()));
+        let mut local = initial.clone();
+        local
+            .upsert("host_local", "Local", "https://local.test/")
+            .expect("local profile");
+        manager.update(cx, |manager, cx| manager.write(local, true, cx));
+        let mut foreign = initial.clone();
+        foreign
+            .upsert("host_foreign", "Foreign", "https://foreign.test/")
+            .expect("foreign profile");
+        let foreign = store
+            .save(&initial, &foreign)
+            .expect("another window saves");
+        drop(manager);
+        drop(workspace);
+        cx.quit();
+        assert_eq!(
+            store.load(),
+            Ok(foreign),
+            "quit cannot rebase or retry a rejected profile write"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn normal_close_keeps_a_profile_conflict_open_and_unfreezes_explicit_recovery(
+        cx: &mut TestAppContext,
+    ) {
+        let fixture = crate::recovery_tests::Fixture::new();
+        let store =
+            super::ProfileStore::new(fixture.journal().parent().expect("profile directory"));
+        let initial = store.load().expect("absent profiles");
+        let (window, workspace, manager) = open_profile_manager(cx, &store, Some(initial.clone()));
+        let mut local = initial.clone();
+        local
+            .upsert("host_local", "Local", "https://local.test/")
+            .expect("local profile");
+        manager.update(cx, |manager, cx| manager.write(local, true, cx));
+        let foreign = store
+            .save(&initial, &initial)
+            .expect("another window saves");
+        cx.update_window(window, |_, window, cx| {
+            workspace.update(cx, |workspace, cx| workspace.request_close(window, cx));
+        })
+        .expect("normal close begins");
+        cx.run_until_parked();
+        assert!(cx.update_window(window, |_, _, _| ()).is_ok());
+        manager.update(cx, |manager, cx| {
+            assert!(
+                !manager.closing,
+                "a failed close releases the mutation freeze"
+            );
+            assert!(!manager.pending_write);
+            assert!(manager.pending_io.is_none());
+            assert_eq!(
+                manager.error,
+                Some("desktopHostSwitcher.error.profilesChanged")
+            );
+            manager.load(cx);
+        });
+        cx.run_until_parked();
+        assert_eq!(store.load(), Ok(foreign.clone()), "refresh only reads");
+        manager.update(cx, |manager, cx| {
+            let mut next = manager.profiles.clone().expect("refreshed authority");
+            next.upsert("host_local", "Recovered", "https://local.test/")
+                .expect("explicit recovered edit");
+            manager.write(next, true, cx);
+        });
+        cx.run_until_parked();
+        let saved = store.load().expect("explicit retry saved");
+        assert_eq!(saved.revision, foreign.revision + 1);
+        assert_eq!(saved.hosts[0].label, "Recovered");
+    }
+
+    #[gpui_kit::test]
+    fn app_quit_grants_no_profile_writer_after_a_failed_read(cx: &mut TestAppContext) {
+        let fixture = crate::recovery_tests::Fixture::new();
+        let directory = fixture
+            .journal()
+            .parent()
+            .expect("profile directory")
+            .to_owned();
+        let store = super::ProfileStore::new(&directory);
+        store
+            .save(
+                &super::HostProfiles::default(),
+                &super::HostProfiles::default(),
+            )
+            .expect("private fixture file");
+        let bytes = b"unsupported profile document";
+        std::fs::write(directory.join("hosts.json"), bytes).expect("malformed fixture");
+        let (_, workspace, manager) = open_profile_manager(cx, &store, None);
+        manager.update(cx, |manager, cx| manager.load(cx));
+        cx.run_until_parked();
+        manager.update(cx, |manager, cx| {
+            assert!(
+                manager.profiles.is_none(),
+                "failed reads grant no authority"
+            );
+            assert!(manager.error.is_some(), "the read failure remains visible");
+            let mut next = super::HostProfiles::default();
+            next.upsert("host_saved", "Saved", "https://example.test/")
+                .expect("profile");
+            manager.write(next, true, cx);
+            assert!(manager.pending_io.is_none(), "no write was accepted");
+        });
+        drop(manager);
+        drop(workspace);
+        cx.quit();
+        assert_eq!(
+            std::fs::read(directory.join("hosts.json")).expect("preserved fixture"),
+            bytes,
+            "quit leaves an unknown document untouched"
+        );
+    }
+
+    struct ForgetBackend {
+        store: super::ProfileStore,
+        expected: super::HostProfiles,
+        saved: std::sync::Mutex<std::collections::BTreeSet<String>>,
+        release: std::sync::Mutex<std::sync::mpsc::Receiver<()>>,
+        calls: std::sync::atomic::AtomicUsize,
+        fail: bool,
+    }
+
+    impl crate::credential_store::CredentialBackend for ForgetBackend {
+        fn load(
+            &self,
+            _: &crate::credential_store::CredentialOwner,
+        ) -> Result<Option<String>, crate::credential_store::StoreError> {
+            Err(crate::credential_store::StoreError::Unavailable)
+        }
+
+        fn save(
+            &self,
+            _: &crate::credential_store::CredentialOwner,
+            _: &str,
+        ) -> Result<(), crate::credential_store::StoreError> {
+            Err(crate::credential_store::StoreError::Unavailable)
+        }
+
+        fn remove(
+            &self,
+            _: &crate::credential_store::CredentialOwner,
+        ) -> Result<(), crate::credential_store::StoreError> {
+            Err(crate::credential_store::StoreError::Unavailable)
+        }
+
+        fn forget_endpoint(
+            &self,
+            endpoint: &str,
+        ) -> Result<(), crate::credential_store::StoreError> {
+            self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            assert_eq!(
+                self.store.load(),
+                Ok(self.expected.clone()),
+                "credential deletion precedes profile deletion"
+            );
+            self.release
+                .lock()
+                .expect("fixture release")
+                .recv_timeout(std::time::Duration::from_secs(3))
+                .expect("quit releases credential work");
+            if self.fail {
+                return Err(crate::credential_store::StoreError::Unavailable);
+            }
+            self.saved
+                .lock()
+                .expect("fixture credentials")
+                .remove(endpoint);
+            Ok(())
+        }
+    }
+
+    fn quit_with_profile_removal(cx: &mut TestAppContext, fail: bool) {
+        use std::sync::Arc;
+        use std::sync::atomic::Ordering;
+
+        cx.executor().allow_parking();
+        let fixture = crate::recovery_tests::Fixture::new();
+        let store =
+            super::ProfileStore::new(fixture.journal().parent().expect("profile directory"));
+        let mut initial = super::HostProfiles::default();
+        initial
+            .upsert("host_removed", "Removed", "https://removed.test/")
+            .expect("removed profile");
+        initial
+            .upsert("host_kept", "Kept", "https://kept.test/")
+            .expect("unrelated profile");
+        initial.set_default(Some("host_removed")).expect("default");
+        let initial = store
+            .save(&super::HostProfiles::default(), &initial)
+            .expect("initial profiles");
+        let (release, waiting) = std::sync::mpsc::channel();
+        let backend = Arc::new(ForgetBackend {
+            store: store.clone(),
+            expected: initial.clone(),
+            saved: std::sync::Mutex::new(std::collections::BTreeSet::from([
+                "https://removed.test/".to_owned(),
+                "https://kept.test/".to_owned(),
+            ])),
+            release: std::sync::Mutex::new(waiting),
+            calls: std::sync::atomic::AtomicUsize::new(0),
+            fail,
+        });
+        let (_, workspace, manager) = open_profile_manager(cx, &store, Some(initial.clone()));
+        workspace.update(cx, |workspace, _| {
+            workspace.authentication.store =
+                crate::credential_store::CredentialStore::with_backend(backend.clone());
+        });
+        manager.update(cx, |manager, cx| manager.remove_profile("host_removed", cx));
+        // This background release runs only while quit blocks the foreground session.
+        let released = cx.executor().spawn(async move {
+            release.send(()).expect("release credential fixture");
+        });
+        drop(manager);
+        drop(workspace);
+        cx.quit();
+        drop(released);
+        assert_eq!(backend.calls.load(Ordering::SeqCst), 1, "no implicit retry");
+        let credentials = backend.saved.lock().expect("fixture credentials");
+        assert!(
+            credentials.contains("https://kept.test/"),
+            "unrelated host remains"
+        );
+        if fail {
+            assert!(credentials.contains("https://removed.test/"));
+            assert_eq!(
+                store.load(),
+                Ok(initial),
+                "failed forgetting retains the profile"
+            );
+        } else {
+            assert!(!credentials.contains("https://removed.test/"));
+            let mut expected = initial;
+            expected.remove("host_removed");
+            expected.revision += 1;
+            assert_eq!(
+                store.load(),
+                Ok(expected),
+                "quit returns after the profile and its default reference are removed"
+            );
+        }
+    }
+
+    #[gpui_kit::test]
+    fn app_quit_finishes_credential_removal_before_deleting_the_profile(cx: &mut TestAppContext) {
+        quit_with_profile_removal(cx, false);
+    }
+
+    #[gpui_kit::test]
+    fn app_quit_keeps_the_profile_when_credential_removal_fails(cx: &mut TestAppContext) {
+        quit_with_profile_removal(cx, true);
+    }
 
     fn close_with_profile_write(cx: &mut TestAppContext, fail: bool) {
         use std::time::{Duration, Instant};

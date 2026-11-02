@@ -253,6 +253,9 @@ pub(crate) struct HomeInfo {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Settings {
+    pub auto_save_enabled: Option<Value>,
+    pub terminal_close_on_exit: Option<Value>,
+    pub terminal_shell: Option<Value>,
     #[serde(default)]
     pub projects: Vec<Value>,
     pub home_directory: Option<Value>,

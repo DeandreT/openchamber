@@ -31,6 +31,7 @@ use crate::chrome::{CONTROL_RADIUS, IconButton, glyph};
 use crate::elevation;
 use crate::locale::{self, Strings};
 use crate::network::NetworkTask;
+use crate::terminal_emulator::TerminalColors;
 use crate::terminal_surface::{self, SurfaceEvent, TerminalSurface};
 use crate::theme::{Appearance, Palette};
 
@@ -139,8 +140,11 @@ pub(crate) struct TerminalPanel {
     generation: Option<u64>,
     server: Option<Server>,
     settings: TerminalSettings,
+    general_revision: [u64; 2],
     tabs: TerminalTabs,
     surfaces: HashMap<TabId, (Entity<TerminalSurface>, Subscription)>,
+    colors: TerminalColors,
+    mono_font: SharedString,
     /// Directories whose server terminals were adopted since the socket last
     /// connected.
     adopted: HashSet<String>,
@@ -152,6 +156,7 @@ pub(crate) struct TerminalPanel {
     pending_focus: Option<(String, gpui_kit::AnyWindowHandle)>,
     _keepalive: Option<Task<()>>,
     _settings: Option<Task<()>>,
+    _appearance: [Subscription; 2],
 }
 
 impl std::fmt::Debug for TerminalPanel {
@@ -165,6 +170,24 @@ impl std::fmt::Debug for TerminalPanel {
 }
 
 impl TerminalPanel {
+    /// General's current choice wins over a settings read started earlier.
+    pub(crate) fn apply_general_settings(
+        &mut self,
+        close_on_exit: Option<bool>,
+        shell: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(value) = close_on_exit {
+            self.general_revision[0] += 1;
+            self.settings.close_on_exit = value;
+        }
+        if let Some(value) = shell {
+            self.general_revision[1] += 1;
+            self.settings.shell = value.to_owned();
+        }
+        cx.notify();
+    }
+
     /// A panel for `runtime`. Without a client (synthetic data, or a server
     /// not yet authenticated) it shows why no terminal can start.
     pub fn new(
@@ -201,8 +224,11 @@ impl TerminalPanel {
             generation: None,
             server,
             settings: TerminalSettings::default(),
+            general_revision: [0; 2],
             tabs: TerminalTabs::new(),
             surfaces: HashMap::new(),
+            colors: terminal_surface::terminal_colors(cx.global::<Palette>()),
+            mono_font: Theme::global(cx).mono_font_family.clone(),
             adopted: HashSet::new(),
             directory: None,
             notices: HashMap::new(),
@@ -212,6 +238,10 @@ impl TerminalPanel {
             pending_focus: None,
             _keepalive: None,
             _settings: None,
+            _appearance: [
+                cx.observe_global::<Palette>(Self::refresh_appearance),
+                cx.observe_global::<Theme>(Self::refresh_appearance),
+            ],
         };
         panel.load_settings(cx);
         panel._keepalive = panel.server.is_some().then(|| {
@@ -225,6 +255,31 @@ impl TerminalPanel {
             })
         });
         panel
+    }
+
+    /// Global changes reach hidden tabs too. Compare once per notification,
+    /// before visiting surfaces; unrelated interface settings change neither.
+    fn refresh_appearance(&mut self, cx: &mut Context<Self>) {
+        let colors = terminal_surface::terminal_colors(cx.global::<Palette>());
+        let mono_font = Theme::global(cx).mono_font_family.clone();
+        let colors_changed = self.colors != colors;
+        let font_changed = self.mono_font != mono_font;
+        if !colors_changed && !font_changed {
+            return;
+        }
+        for (surface, _) in self.surfaces.values() {
+            surface.update(cx, |surface, cx| {
+                if colors_changed {
+                    surface.set_colors(colors.clone(), cx);
+                }
+                if font_changed {
+                    surface.set_font(font(mono_font.clone()), cx);
+                }
+            });
+        }
+        self.colors = colors;
+        self.mono_font = mono_font;
+        cx.notify();
     }
 
     /// Fire-and-forget work, such as a resize or a close: it completes even
@@ -248,12 +303,19 @@ impl TerminalPanel {
             return;
         };
         let api = server.api.clone();
+        let general_revision = self.general_revision;
         let Some(read) = self.run(async move { api.settings().await }) else {
             return;
         };
         self._settings = Some(cx.spawn(async move |this, cx| {
-            if let Some(Ok(settings)) = read.await {
+            if let Some(Ok(mut settings)) = read.await {
                 let _ = this.update(cx, |this, cx| {
+                    if this.general_revision[0] != general_revision[0] {
+                        settings.close_on_exit = this.settings.close_on_exit;
+                    }
+                    if this.general_revision[1] != general_revision[1] {
+                        settings.shell = this.settings.shell.clone();
+                    }
                     this.settings = settings;
                     cx.notify();
                 });
@@ -1138,9 +1200,27 @@ impl crate::workspace::Workspace {
                 .connection
                 .as_ref()
                 .map(|connection| connection.generation);
+            let preferences = self
+                .settings
+                .as_ref()
+                .and_then(|settings| settings.read(cx).general_preferences(&runtime, cx))
+                .unwrap_or_default();
+            let close = preferences.terminal_close_on_exit.or_else(|| {
+                self.send_catalog
+                    .settings
+                    .as_ref()
+                    .and_then(|settings| settings.terminal_close_on_exit)
+            });
+            let shell = preferences.terminal_shell.or_else(|| {
+                self.send_catalog
+                    .settings
+                    .as_ref()
+                    .and_then(|settings| settings.terminal_shell.clone())
+            });
             self.terminal_panel = Some(cx.new(|cx| {
                 let mut panel = TerminalPanel::new(runtime, client, cx);
                 panel.generation = generation;
+                panel.apply_general_settings(close, shell.as_deref(), cx);
                 panel
             }));
         }
@@ -1202,6 +1282,97 @@ mod tests {
     use super::*;
     use gpui_kit::test::TestWindowExt;
     use gpui_kit::{AppContext, TestAppContext};
+
+    #[gpui_kit::test]
+    fn global_appearance_updates_every_hidden_surface_once(cx: &mut TestAppContext) {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let (panel, surfaces) = cx.update(|cx| {
+            gpui_kit::init(cx);
+            cx.set_global(Strings::load("en"));
+            crate::theme::apply(Palette::default_for(Appearance::Dark), cx);
+            Theme::update(cx, |theme| theme.mono_font_family = "Kit Mono".into());
+            let panel = cx.new(|cx| TerminalPanel::new(RuntimeId::from("synthetic"), None, cx));
+            let surfaces = panel.update(cx, |panel, cx| {
+                ["/first", "/second"].map(|directory| {
+                    let id = panel.tabs.open(directory);
+                    panel.new_surface(id, 80, 24, cx)
+                })
+            });
+            (panel, surfaces)
+        });
+        let notifications = Rc::new(Cell::new([0; 2]));
+        cx.update(|cx| {
+            for (index, surface) in surfaces.iter().enumerate() {
+                let notifications = Rc::clone(&notifications);
+                cx.observe(surface, move |_, _| {
+                    let mut counts = notifications.get();
+                    counts[index] += 1;
+                    notifications.set(counts);
+                })
+                .detach();
+            }
+        });
+
+        cx.update(|cx| {
+            crate::theme::apply(Palette::default_for(Appearance::Light), cx);
+            Theme::update(cx, |theme| theme.mono_font_family = "Kit Mono".into());
+        });
+        assert_eq!(
+            notifications.get(),
+            [1, 1],
+            "both globals from one apply update each hidden surface once"
+        );
+        cx.update(|cx| {
+            crate::theme::apply(Palette::default_for(Appearance::Light), cx);
+            Theme::update(cx, |theme| {
+                theme.mono_font_family = "Kit Mono".into();
+                theme.font_family = "Other UI".into();
+                theme.font_size = px(32.0);
+            });
+        });
+        assert_eq!(
+            notifications.get(),
+            [1, 1],
+            "unchanged colors and interface typography do not visit surfaces"
+        );
+        cx.update(|cx| {
+            // The same theme ID can resolve new terminal colors.
+            let mut palette = cx.global::<Palette>().clone();
+            palette.status_error = palette.primary;
+            cx.set_global(palette);
+        });
+        assert_eq!(
+            notifications.get(),
+            [2, 2],
+            "a palette-only notification reaches both hidden directories"
+        );
+        cx.update(|cx| {
+            Theme::update(cx, |theme| theme.mono_font_family = "Wide Mono".into());
+        });
+        assert_eq!(
+            notifications.get(),
+            [3, 3],
+            "a code-font-only notification reaches both hidden directories"
+        );
+        cx.read(|cx| {
+            let panel = panel.read(cx);
+            for surface in &surfaces {
+                assert!(
+                    panel
+                        .surfaces
+                        .values()
+                        .any(|(retained, _)| retained.entity_id() == surface.entity_id()),
+                    "appearance preserves each retained surface identity"
+                );
+                assert!(
+                    !surface.read(cx).measured(),
+                    "a hidden surface remains unmeasured until shown"
+                );
+            }
+        });
+    }
 
     #[gpui_kit::test]
     fn exited_resize_resumes_after_external_restart_snapshot(cx: &mut TestAppContext) {

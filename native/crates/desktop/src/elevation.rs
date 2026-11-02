@@ -67,6 +67,24 @@ pub fn floating(palette: &Palette) -> Vec<BoxShadow> {
     floating_surface(palette, 0.06, 0.8)
 }
 
+/// Builds the `.oc-raised` control's inset edge, top light and short shadow.
+pub fn control(palette: &Palette) -> Vec<BoxShadow> {
+    let mut shadows = match palette.appearance {
+        Appearance::Light => vec![
+            shadow(0.0, 0.0, 1.0, palette.foreground.opacity(0.1), true),
+            shadow(1.0, 2.0, 0.0, black(0.06), false),
+        ],
+        Appearance::Dark => vec![
+            shadow(1.0, 0.0, 0.0, palette.foreground.opacity(0.015), true),
+            shadow(0.0, 0.0, 1.0, palette.foreground.opacity(0.06), true),
+            shadow(1.0, 1.0, 0.0, black(0.28), false),
+            shadow(2.0, 3.0, -2.0, black(0.2), false),
+        ],
+    };
+    shadows.reverse();
+    shadows
+}
+
 /// The dark composer's sheen, `color-mix(foreground 1%)` fading to nothing
 /// halfway down; light themes keep the plain fill.
 pub fn composer_sheen(palette: &Palette) -> Option<Hsla> {
@@ -137,6 +155,21 @@ pub fn mix(a: Hsla, b: Hsla, weight: f32) -> Hsla {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn controls_follow_the_short_raised_shadow_recipe() {
+        let light = control(&Palette::default_for(Appearance::Light));
+        assert_eq!(light.len(), 2);
+        assert_eq!(light[0].offset.y, px(1.0));
+        assert_eq!(light[0].blur_radius, px(1.0));
+        assert!(light[1].inset);
+        assert_eq!(light[1].color.a, 0.1);
+        let dark = control(&Palette::default_for(Appearance::Dark));
+        assert_eq!(dark.len(), 4);
+        assert_eq!(dark[0].spread_radius, px(-2.0));
+        assert_eq!(dark[3].color.a, 0.015);
+        assert!(dark[3].inset);
+    }
 
     #[test]
     fn css_recipes_convert_blur_and_paint_top_shadow_last() {

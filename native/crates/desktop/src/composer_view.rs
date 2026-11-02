@@ -130,15 +130,17 @@ impl Workspace {
         let full = locale::strings(cx).get("chat.chatInput.placeholder.chat");
         let available = self.composer_width(window) - EDITOR_TEXT_INSET;
         let compact = editor_text_width(&full, window) > available;
-        if self.composer_placeholder_compact == Some(compact) {
-            return;
-        }
-        self.composer_placeholder_compact = Some(compact);
         let placeholder = locale::strings(cx).get(if compact {
             "chat.chatInput.placeholder.chatCompact"
         } else {
             "chat.chatInput.placeholder.chat"
         });
+        if self.composer_placeholder_compact == Some(compact)
+            && self.composer.read(cx).presentation().placeholder() == &placeholder
+        {
+            return;
+        }
+        self.composer_placeholder_compact = Some(compact);
         self.composer.update(cx, |composer, cx| {
             composer.set_placeholder(placeholder, window, cx);
         });

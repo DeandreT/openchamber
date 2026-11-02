@@ -247,6 +247,24 @@ impl TerminalSurface {
         self.metrics.is_some()
     }
 
+    /// Updates existing cells and the selection without replaying the terminal.
+    pub fn set_colors(&mut self, colors: TerminalColors, cx: &mut Context<Self>) {
+        self.emulator.set_colors(colors);
+        cx.notify();
+    }
+
+    /// Keeps the terminal's explicit pixel size. A hidden surface waits for
+    /// its next paint to measure and reconcile the fitted grid with the PTY.
+    pub fn set_font(&mut self, font: Font, cx: &mut Context<Self>) {
+        if self.font == font {
+            return;
+        }
+        self.font = font;
+        self.metrics = None;
+        self.reconcile_size(cx);
+        cx.notify();
+    }
+
     /// Live output. Replies the emulator owes go back to the PTY.
     pub fn feed(&mut self, data: &str, cx: &mut Context<Self>) {
         self.emulator.feed(data.as_bytes());
@@ -1246,16 +1264,85 @@ fn paint_shapes(shapes: &[Shape], origin: Point<Pixels>, color: Hsla, window: &m
 
 #[cfg(test)]
 mod tests {
+    use std::borrow::Cow;
     use std::cell::RefCell;
+    use std::sync::Arc;
 
     use gpui_kit::test::TestWindowExt;
     use gpui_kit::{
-        AnyWindowHandle, AppContext, Entity, TestAppContext, WindowBounds, WindowOptions,
+        AnyWindowHandle, AppContext, DevicePixels, Entity, FontId, FontMetrics, FontRun, GlyphId,
+        LineLayout, NoopTextSystem, PlatformTextSystem, RenderGlyphParams, TestAppContext,
+        TextRenderingMode, WindowBounds, WindowOptions,
     };
 
     use super::*;
     use crate::locale::Strings;
     use crate::theme::{self, Appearance};
+
+    /// Two deterministic code fonts with different advances, without installed fonts.
+    struct TerminalFonts;
+
+    impl PlatformTextSystem for TerminalFonts {
+        fn add_fonts(&self, _: Vec<Cow<'static, [u8]>>) -> gpui_kit::Result<()> {
+            Ok(())
+        }
+
+        fn all_font_names(&self) -> Vec<String> {
+            vec!["Kit Mono".to_owned(), "Wide Mono".to_owned()]
+        }
+
+        fn font_id(&self, descriptor: &Font) -> gpui_kit::Result<FontId> {
+            let wide = descriptor.family.as_ref() == "Wide Mono";
+            Ok(FontId(if wide { 2 } else { 1 }))
+        }
+
+        fn font_metrics(&self, font: FontId) -> FontMetrics {
+            NoopTextSystem.font_metrics(font)
+        }
+
+        fn typographic_bounds(
+            &self,
+            font: FontId,
+            glyph: GlyphId,
+        ) -> gpui_kit::Result<Bounds<f32>> {
+            NoopTextSystem.typographic_bounds(font, glyph)
+        }
+
+        fn advance(&self, font: FontId, glyph: GlyphId) -> gpui_kit::Result<gpui_kit::Size<f32>> {
+            let mut advance = NoopTextSystem.advance(font, glyph)?;
+            if font == FontId(2) {
+                advance.width *= 2.0;
+            }
+            Ok(advance)
+        }
+
+        fn glyph_for_char(&self, font: FontId, character: char) -> Option<GlyphId> {
+            NoopTextSystem.glyph_for_char(font, character)
+        }
+
+        fn glyph_raster_bounds(
+            &self,
+            params: &RenderGlyphParams,
+        ) -> gpui_kit::Result<Bounds<DevicePixels>> {
+            NoopTextSystem.glyph_raster_bounds(params)
+        }
+
+        fn rasterize_glyph(
+            &self,
+            params: &RenderGlyphParams,
+            bounds: Bounds<DevicePixels>,
+        ) -> gpui_kit::Result<(gpui_kit::Size<DevicePixels>, Vec<u8>)> {
+            NoopTextSystem.rasterize_glyph(params, bounds)
+        }
+
+        fn layout_line(&self, text: &str, size: Pixels, runs: &[FontRun]) -> LineLayout {
+            NoopTextSystem.layout_line(text, size, runs)
+        }
+
+        fn recommended_rendering_mode(&self, font: FontId, size: Pixels) -> TextRenderingMode {
+            NoopTextSystem.recommended_rendering_mode(font, size)
+        }
+    }
 
     /// The workspace context around a surface, with the workspace's own
     /// Escape action, so tests see which one a key reaches.
@@ -1263,6 +1350,7 @@ mod tests {
         surface: Entity<TerminalSurface>,
         transcript: Option<Entity<gpui_kit::base::text::TextViewState>>,
         width: f32,
+        visible: bool,
         stops: usize,
     }
 
@@ -1281,12 +1369,12 @@ mod tests {
                         .as_ref()
                         .map(gpui_kit::base::text::TextView::new),
                 )
-                .child(
+                .children(self.visible.then(|| {
                     div()
                         .w(px(self.width))
                         .h(px(300.0))
-                        .child(self.surface.clone()),
-                )
+                        .child(self.surface.clone())
+                }))
         }
     }
 
@@ -1299,6 +1387,10 @@ mod tests {
     }
 
     fn open(cx: &mut TestAppContext) -> Opened {
+        open_with_font_size(cx, 14.0)
+    }
+
+    fn open_with_font_size(cx: &mut TestAppContext, font_size: f32) -> Opened {
         let written = Rc::new(RefCell::new(Vec::new()));
         let events = Rc::new(RefCell::new(Vec::new()));
         let (window, host, surface) = cx.update(|cx| {
@@ -1325,7 +1417,7 @@ mod tests {
                             80,
                             24,
                             gpui_kit::font("Kit Mono"),
-                            14.0,
+                            font_size,
                             &palette,
                             cx,
                         );
@@ -1343,6 +1435,7 @@ mod tests {
                         surface,
                         transcript: None,
                         width: 400.0,
+                        visible: true,
                         stops: 0,
                     })
                 },
@@ -1368,6 +1461,232 @@ mod tests {
 
     fn take(opened: &Opened) -> Vec<String> {
         std::mem::take(&mut *opened.written.borrow_mut())
+    }
+
+    #[gpui_kit::test]
+    fn appearance_preserves_a_hidden_terminal_and_refits_on_reopen(cx: &mut TestAppContext) {
+        let mut font_context = TestAppContext::build_with_text_system(
+            cx.dispatcher.clone(),
+            None,
+            Arc::new(TerminalFonts),
+        );
+        let cx = &mut font_context;
+        let opened = open_with_font_size(cx, 17.0);
+        let (text, scroll, grid, metrics, writer) = cx
+            .update_window(opened.window, |_, window, cx| {
+                opened.surface.update(cx, |surface, cx| {
+                    surface.set_pty_size(surface.grid_size(), cx);
+                    surface.feed(
+                        "hello \x1b[31mred\x1b[0m \x1b[38;2;17;34;51mRGB\x1b[0m\r\n",
+                        cx,
+                    );
+                    for line in 0..40 {
+                        surface.feed(&format!("line-{line}\r\n"), cx);
+                    }
+                    surface.emulator.scroll_to_top();
+                    surface.emulator.select((0, 0), (4, 0));
+                    surface.has_selection = true;
+                    surface.replace_and_mark_text_in_range(None, "ni", None, window, cx);
+                    (
+                        surface.emulator.viewport_text(),
+                        surface.emulator.scroll_position(),
+                        surface.grid_size(),
+                        surface.metrics.expect("initially measured"),
+                        surface.writer.clone().expect("test writer"),
+                    )
+                })
+            })
+            .expect("window open");
+        cx.update_window(opened.window, |_, window, cx| {
+            opened.host.update(cx, |host, cx| {
+                host.visible = false;
+                cx.notify();
+            });
+            window.render_frame(cx);
+            assert!(window.try_find("terminal-surface").is_none());
+        })
+        .expect("hidden terminal");
+
+        let mut colors = terminal_colors(&Palette::default_for(Appearance::Light));
+        colors.ansi[1] = Rgb(12, 34, 56);
+        let known_pty = (grid.0 + 1, grid.1);
+        cx.update(|cx| {
+            opened.surface.update(cx, |surface, cx| {
+                surface.set_pty_size(known_pty, cx);
+                surface.set_font(surface.font.clone(), cx);
+                surface.set_colors(colors.clone(), cx);
+                assert_eq!(
+                    surface.metrics,
+                    Some(metrics),
+                    "color and unchanged font keep the measured grid"
+                );
+                surface.set_font(gpui_kit::font("Wide Mono"), cx);
+                assert!(
+                    surface.metrics.is_none(),
+                    "font invalidates old metrics while hidden"
+                );
+                assert_eq!(surface.font.family.as_ref(), "Wide Mono");
+                assert_eq!(
+                    surface.font_size,
+                    px(17.0),
+                    "terminal pixel size is independent"
+                );
+                assert_eq!(
+                    surface.grid_size(),
+                    grid,
+                    "hidden font changes do not resize"
+                );
+                assert_eq!(surface.pty_size, Some(known_pty));
+                assert_eq!(surface.emulator.viewport_text(), text);
+                assert_eq!(surface.emulator.scroll_position(), scroll);
+                assert_eq!(surface.emulator.selection_text().as_deref(), Some("hello"));
+                assert!(surface.has_selection);
+                assert_eq!(surface.marked.as_deref(), Some("ni"));
+                assert!(Rc::ptr_eq(
+                    surface.writer.as_ref().expect("retained writer"),
+                    &writer
+                ));
+                let frame = surface.emulator.frame();
+                assert_eq!(frame.background, Some(colors.background));
+                assert_eq!(frame.rows[0][0].background, Some(colors.selection));
+                assert_eq!(frame.rows[0][0].foreground, colors.selection_foreground);
+                assert_eq!(
+                    frame.rows[0][6].foreground, colors.ansi[1],
+                    "existing ANSI cell"
+                );
+                assert_eq!(
+                    frame.rows[0][10].foreground,
+                    Rgb(17, 34, 51),
+                    "explicit RGB cell"
+                );
+                surface.feed("\x1b[6n", cx);
+            });
+        });
+        assert_eq!(take(&opened), [format!("\x1b[{};1R", grid.1)]);
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        assert!(
+            opened.events.borrow().is_empty(),
+            "invalidated metrics cancel the old settling target while hidden"
+        );
+
+        cx.update_window(opened.window, |_, window, cx| {
+            opened.host.update(cx, |host, cx| {
+                host.visible = true;
+                cx.notify();
+            });
+            window.render_frame(cx);
+            opened.surface.update(cx, |surface, _| {
+                let measured = surface.metrics.expect("reopening measures the new font");
+                assert_eq!(measured.width, metrics.width * 2.0);
+                assert_eq!(measured.height, metrics.height);
+                assert!(
+                    surface.grid_size().0 < grid.0,
+                    "the wider font fits fewer columns"
+                );
+                assert_eq!(surface.grid_size().1, grid.1);
+                assert_eq!(surface.emulator.viewport_text(), text);
+                assert_eq!(surface.emulator.selection_text().as_deref(), Some("hello"));
+                assert_eq!(surface.emulator.scroll_position(), scroll);
+                assert_eq!(surface.marked.as_deref(), Some("ni"));
+            });
+        })
+        .expect("reopened terminal");
+        let fitted = cx.read(|cx| opened.surface.read(cx).grid_size());
+        cx.executor().advance_clock(RESIZE_SETTLE * 2);
+        cx.run_until_parked();
+        assert_eq!(
+            opened.events.borrow().as_slice(),
+            [SurfaceEvent::Resized {
+                cols: fitted.0,
+                rows: fitted.1
+            }],
+            "the normal settled resize reports the new fit once"
+        );
+        cx.update(|cx| {
+            opened.surface.update(cx, |surface, cx| {
+                let request = surface.pending_resize().expect("normal resize path");
+                surface.resize_finished(request, true, cx);
+                assert_eq!(surface.pty_size, Some(fitted));
+            });
+        });
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(
+            opened.events.borrow().len(),
+            1,
+            "accepted fit stays reconciled"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn hidden_font_change_preserves_an_in_flight_resize(cx: &mut TestAppContext) {
+        let opened = open(cx);
+        cx.update(|cx| {
+            opened
+                .surface
+                .update(cx, |surface, cx| surface.set_pty_size((120, 40), cx));
+        });
+        cx.executor().advance_clock(RESIZE_SETTLE * 2);
+        cx.run_until_parked();
+        let pending = cx.read(|cx| opened.surface.read(cx).pending_resize().expect("old fit"));
+        cx.update(|cx| {
+            opened.host.update(cx, |host, cx| {
+                host.visible = false;
+                host.width = 600.0;
+                cx.notify();
+            });
+            opened.surface.update(cx, |surface, cx| {
+                surface.set_colors(
+                    terminal_colors(&Palette::default_for(Appearance::Light)),
+                    cx,
+                );
+                surface.set_font(gpui_kit::font("Wide Mono"), cx);
+                assert_eq!(
+                    surface.pending_resize(),
+                    Some(pending),
+                    "HTTP keeps its serial gate"
+                );
+                assert!(surface.metrics.is_none());
+            });
+        });
+        cx.executor().advance_clock(Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(
+            opened.events.borrow().len(),
+            1,
+            "no parallel resize while hidden"
+        );
+        cx.update(|cx| {
+            opened.surface.update(cx, |surface, cx| {
+                surface.resize_finished(pending, true, cx);
+                assert_eq!(surface.pty_size, Some(pending.size));
+                assert!(surface.pending_resize().is_none());
+            });
+        });
+        cx.update_window(opened.window, |_, window, cx| {
+            opened.host.update(cx, |host, cx| {
+                host.visible = true;
+                cx.notify();
+            });
+            window.render_frame(cx);
+        })
+        .expect("reopen after old HTTP completed");
+        cx.executor().advance_clock(RESIZE_SETTLE * 2);
+        cx.run_until_parked();
+        cx.update(|cx| {
+            opened.surface.update(cx, |surface, cx| {
+                let next = surface.pending_resize().expect("new measured fit");
+                assert_ne!(next.size, pending.size);
+                assert_eq!(next.size, surface.grid_size());
+                surface.resize_finished(next, true, cx);
+            });
+        });
+        assert_eq!(
+            opened.events.borrow().len(),
+            2,
+            "one resize after each measured fit"
+        );
     }
 
     #[gpui_kit::test]

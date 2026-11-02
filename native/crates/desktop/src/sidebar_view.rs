@@ -317,10 +317,25 @@ impl Workspace {
                 div()
                     .flex_row_from(direction)
                     .gap(px(4.0))
-                    .child(button(
-                        "settings",
-                        "settings-3",
-                        "sessions.sidebar.footer.actions.settings",
+                    .child(on_activate(
+                        gpui_kit::base::Button::new("settings")
+                            .accessibility_id("settings")
+                            .accessibility_label(
+                                strings.get("sessions.sidebar.footer.actions.settings"),
+                            )
+                            .group("settings-footer")
+                            .size(px(24.0))
+                            .p_0()
+                            .rounded(px(CONTROL_RADIUS))
+                            .hover(move |style| style.bg(hover_fill))
+                            .child(
+                                glyph("settings-3", 16.0, palette.muted_foreground)
+                                    .group_hover("settings-footer", move |style| {
+                                        style.text_color(foreground)
+                                    }),
+                            ),
+                        cx,
+                        |this, window, cx| this.open_settings(window, cx),
                     ))
                     .child(button("usage-stats", "bar-chart", "usageStats.openAction"))
                     .child(button(

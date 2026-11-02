@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use gpui_kit::{Context, Task, Window};
+use gpui_kit::{AnyWindowHandle, Context, Task, Window};
 use openchamber_native_core::draft::DraftStore;
 
 use crate::journal_worker::{
@@ -73,6 +73,13 @@ impl Workspace {
 
     pub(crate) fn persistence_closing(&self) -> bool {
         matches!(self.persistence.status, Status::Closing)
+    }
+
+    pub(crate) fn close_in_progress(&self) -> bool {
+        self.persistence_closing()
+            || self.general_close.is_some()
+            || self.appearance_close.is_some()
+            || self.host_close.is_some()
     }
 
     pub(crate) fn composer_editable(&self) -> bool {
@@ -330,8 +337,116 @@ impl Workspace {
         self.persistence.worker.as_ref().map(JournalWorker::flush)
     }
 
+    pub(crate) fn take_appearance_flush(
+        &mut self,
+        window: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) -> Option<Task<()>> {
+        // A normal-close waiter uses the foreground session that quit now blocks.
+        // The appearance owner retains its independent disk operation for this drain.
+        self.appearance_close = None;
+        if let Some(settings) = &self.settings {
+            // Quit observers run before GPUI removes windows. Without the
+            // input's window, only already accepted preferences may be flushed.
+            let _ = window.update(cx, |_, window, cx| {
+                settings.update(cx, |settings, cx| settings.prepare_close(window, cx));
+            });
+        }
+        let appearance = cx
+            .try_global::<crate::appearance_view::AppearanceOwner>()?
+            .0
+            .clone();
+        appearance.update(cx, |appearance, cx| appearance.take_quit_write(cx))
+    }
+
+    pub(crate) fn take_general_flush(&mut self, cx: &mut Context<Self>) -> Option<Task<()>> {
+        self.general_close = None;
+        let general = self.settings.as_ref()?.read(cx).general.clone();
+        general.update(cx, |general, cx| general.take_quit_write(cx))
+    }
+
+    pub(crate) fn take_profile_quit_flush(&mut self, cx: &mut Context<Self>) -> Option<Task<()>> {
+        self.host_close = None;
+        self.host_manager
+            .as_ref()?
+            .update(cx, |manager, cx| manager.take_quit_write(cx))
+    }
+
+    fn unfreeze_general(&mut self, cx: &mut Context<Self>) {
+        if let Some(settings) = &self.settings {
+            settings.read(cx).general.clone().update(cx, |general, cx| {
+                general.cancel_close(cx);
+            });
+        }
+    }
+
+    pub(crate) fn unfreeze_appearance(&mut self, cx: &mut Context<Self>) {
+        if let Some(appearance) = cx.try_global::<crate::appearance_view::AppearanceOwner>() {
+            appearance.0.clone().update(cx, |appearance, cx| {
+                appearance.cancel_close();
+                cx.notify();
+            });
+        }
+    }
+
     /// Close controls wait for the last full snapshot and release the file lock.
     pub(crate) fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.general_close.is_some() {
+            return;
+        }
+        if let Some(settings) = &self.settings {
+            let general = settings.read(cx).general.clone();
+            if let Some(pending) = general.update(cx, |general, cx| general.take_pending_write(cx))
+            {
+                self.general_close = Some(cx.spawn_in(window, async move |this, cx| {
+                    let _ = pending.await;
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.general_close = None;
+                        this.request_close(window, cx);
+                    });
+                }));
+                return;
+            }
+            if general.read(cx).has_failed_writes() {
+                self.unfreeze_general(cx);
+                self.notify_mutation_failure("settings.common.status.saveFailed", window, cx);
+                return;
+            }
+        }
+        if self.appearance_close.is_some() {
+            return;
+        }
+        if let Some(settings) = &self.settings {
+            settings.update(cx, |settings, cx| settings.prepare_close(window, cx));
+        }
+        if let Some(owner) = cx.try_global::<crate::appearance_view::AppearanceOwner>() {
+            let appearance = owner.0.clone();
+            let pending = appearance.update(cx, |appearance, cx| appearance.take_pending_write(cx));
+            if let Some(pending) = pending {
+                self.appearance_close = Some(cx.spawn_in(window, async move |this, cx| {
+                    pending.await;
+                    let _ = this.update_in(cx, |this, window, cx| {
+                        this.appearance_close = None;
+                        if appearance.update(cx, |appearance, _| appearance.finish_close()) {
+                            this.request_close(window, cx);
+                        } else {
+                            this.unfreeze_general(cx);
+                            this.notify_mutation_failure(
+                                "settings.common.status.saveFailed",
+                                window,
+                                cx,
+                            );
+                        }
+                    });
+                }));
+                return;
+            }
+            if !appearance.update(cx, |appearance, _| appearance.finish_close()) {
+                self.unfreeze_general(cx);
+                self.notify_mutation_failure("settings.common.status.saveFailed", window, cx);
+                return;
+            }
+        }
         if self.host_close.is_some() {
             return;
         }
@@ -346,6 +461,8 @@ impl Workspace {
                     if saved {
                         this.request_close(window, cx);
                     } else {
+                        this.unfreeze_appearance(cx);
+                        this.unfreeze_general(cx);
                         this.notify_mutation_failure(
                             "desktopHostSwitcher.error.failedToSave",
                             window,
@@ -367,6 +484,8 @@ impl Workspace {
         self.persistence.debounce = None;
         let Some((stamp, saved)) = self.persistence_barrier(cx) else {
             self.unfreeze_host_manager(cx);
+            self.unfreeze_appearance(cx);
+            self.unfreeze_general(cx);
             return;
         };
         self.persistence.status = Status::Closing;
@@ -386,6 +505,8 @@ impl Workspace {
                 // over possibly newer data from another process.
                 this.persistence.status = Status::Ready;
                 this.unfreeze_host_manager(cx);
+                this.unfreeze_appearance(cx);
+                this.unfreeze_general(cx);
                 this.record_persistence(stamp, &saved, cx);
                 None
             });
@@ -411,6 +532,8 @@ impl Workspace {
                         issue,
                     };
                     this.unfreeze_host_manager(cx);
+                    this.unfreeze_appearance(cx);
+                    this.unfreeze_general(cx);
                     cx.notify();
                 }
             });
@@ -423,6 +546,54 @@ impl Workspace {
 mod tests {
     use super::*;
     use gpui_kit::{AppContext, TestAppContext};
+
+    #[gpui_kit::test]
+    fn closing_cannot_create_settings_writers(cx: &mut TestAppContext) {
+        let (window, workspace) = crate::workspace_tests::open(cx);
+        cx.update_window(window, |_, window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.persistence.status = Status::Closing;
+                workspace.open_settings(window, cx);
+                workspace.show_settings(None, window, cx);
+                assert!(
+                    workspace.settings.is_none(),
+                    "journal drain blocks new page writers"
+                );
+                assert!(
+                    workspace.host_manager.is_none(),
+                    "blocked navigation starts no host work"
+                );
+
+                workspace.persistence.status = Status::Ready;
+                for phase in 0..3 {
+                    let barrier = cx.background_executor().spawn(async {});
+                    match phase {
+                        0 => workspace.general_close = Some(barrier),
+                        1 => workspace.appearance_close = Some(barrier),
+                        _ => workspace.host_close = Some(barrier),
+                    }
+                    workspace.open_settings(window, cx);
+                    workspace.show_settings(None, window, cx);
+                    assert!(
+                        workspace.settings.is_none(),
+                        "an earlier close barrier also blocks new page writers"
+                    );
+                    assert!(
+                        workspace.host_manager.is_none(),
+                        "blocked navigation keeps host creation lazy"
+                    );
+                    workspace.general_close = None;
+                    workspace.appearance_close = None;
+                    workspace.host_close = None;
+                }
+                assert!(
+                    !workspace.close_in_progress(),
+                    "cleared barriers release navigation"
+                );
+            });
+        })
+        .expect("test window remains open");
+    }
 
     #[gpui_kit::test]
     fn obsolete_writer_receipts_cannot_clear_current_failure(cx: &mut TestAppContext) {

@@ -1148,6 +1148,80 @@ async fn settings_write_failures_and_missing_values_remain_distinct() {
 }
 
 #[tokio::test]
+async fn general_settings_use_the_captured_clients_and_keep_failures_distinct() {
+    let first = Server::start(
+        |request| {
+            assert_eq!(
+                request.target,
+                "/prefix/api/config/settings?surface=desktop"
+            );
+            assert_eq!(
+                request.header("authorization"),
+                Some("Bearer general-first")
+            );
+            assert_eq!(request.json(), json!({"autoSaveEnabled": false}));
+            Reply::json(json!({"autoSaveEnabled": false, "defaultAgent": "build"}))
+        },
+        vec![],
+    )
+    .await;
+    let second = Server::start(
+        |request| {
+            assert_eq!(
+                request.header("authorization"),
+                Some("Bearer general-second")
+            );
+            assert_eq!(
+                request.json(),
+                json!({"terminalCloseOnExit": false, "terminalShell": "bash"})
+            );
+            Reply::with_status(503, "application/json", "{}")
+        },
+        vec![],
+    )
+    .await;
+    let first_client = ServerClient::new(
+        first.endpoint(),
+        Credential::ClientToken("general-first".into()),
+    )
+    .expect("first client");
+    let second_client = ServerClient::new(
+        second.endpoint(),
+        Credential::ClientToken("general-second".into()),
+    )
+    .expect("second client");
+    let old = first_client
+        .save_settings(&SettingsChanges {
+            auto_save_enabled: Some(false),
+            ..SettingsChanges::default()
+        })
+        .await
+        .expect("first server saves");
+    assert_eq!(old.auto_save_enabled, Some(false));
+    assert_eq!(old.default_agent.as_deref(), Some("build"));
+    assert!(
+        second_client
+            .save_settings(&SettingsChanges {
+                terminal_close_on_exit: Some(false),
+                terminal_shell: Some("bash".into()),
+                ..SettingsChanges::default()
+            })
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        first.requests().len(),
+        1,
+        "another runtime never receives the failed write"
+    );
+    assert_eq!(
+        second.requests().len(),
+        1,
+        "transport never retries a mutation"
+    );
+}
+
+#[tokio::test]
 async fn permission_modes_read_and_write_the_whole_policy_without_retry() {
     use openchamber_native_core::ids::SessionId;
     use openchamber_native_core::permission_mode::PermissionMode;
