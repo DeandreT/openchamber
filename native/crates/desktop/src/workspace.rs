@@ -171,8 +171,11 @@ pub struct Workspace {
     pub(crate) retired_networks: Vec<(RuntimeId, crate::network::Network)>,
     pub(crate) authentication: crate::authentication::Authentication,
     pub(crate) host_manager: Option<Entity<crate::host_manager::HostManager>>,
+    pub(crate) settings: Option<Entity<crate::settings_view::Settings>>,
     pub(crate) host_recovery: Option<crate::host_recovery::HostRecovery>,
     pub(crate) host_close: Option<Task<()>>,
+    pub(crate) appearance_close: Option<Task<()>>,
+    pub(crate) general_close: Option<Task<()>>,
     /// The composer's catalogs and defaults; empty for synthetic data.
     pub(crate) send_catalog: SendCatalog,
     pub(crate) composer_selections: openchamber_native_core::composer_selection::ComposerSelections,
@@ -297,8 +300,11 @@ impl Workspace {
             retired_networks: Vec::new(),
             authentication: crate::authentication::Authentication::new(window, cx),
             host_manager: None,
+            settings: None,
             host_recovery,
             host_close: None,
+            appearance_close: None,
+            general_close: None,
             send_catalog: SendCatalog::default(),
             composer_selections:
                 openchamber_native_core::composer_selection::ComposerSelections::default(),
@@ -350,6 +356,36 @@ impl Workspace {
             _subscriptions: vec![subscription],
         };
         workspace.rebuild_sidebar();
+        if let Some(appearance) = cx.try_global::<crate::appearance_view::AppearanceOwner>() {
+            let appearance = appearance.0.clone();
+            let mut previous = appearance.read(cx).preferences().clone();
+            workspace._subscriptions.push(cx.observe_in(
+                &appearance,
+                window,
+                move |workspace, appearance, window, cx| {
+                    let preferences = appearance.read(cx).preferences().clone();
+                    let metrics_changed = previous.font_size != preferences.font_size
+                        || previous.ui_font != preferences.ui_font
+                        || previous.mono_font != preferences.mono_font
+                        || previous.locale != preferences.locale;
+                    let locale_changed = previous.locale != preferences.locale;
+                    previous = preferences;
+                    if metrics_changed {
+                        workspace.sidebar_list.remeasure();
+                        for open in workspace.open_sessions.values() {
+                            open.list.remeasure();
+                        }
+                        workspace.composer_slot.set(ComposerSlot::default());
+                    }
+                    if locale_changed {
+                        workspace.refresh_input_language(window, cx);
+                    }
+                    if metrics_changed {
+                        cx.notify();
+                    }
+                },
+            ));
+        }
         workspace._subscriptions.push(cx.subscribe_in(
             &workspace.authentication.password,
             window,
@@ -358,12 +394,21 @@ impl Workspace {
         // The window opens on a new session, as the web client does.
         workspace.composer_key = workspace.new_session_draft_key();
         workspace.start_persistence(window, cx);
+        let window_handle = window.window_handle();
         workspace
             ._subscriptions
-            .push(cx.on_app_quit(|workspace, cx| {
-                let hosts = workspace.take_profile_flush(cx);
+            .push(cx.on_app_quit(move |workspace, cx| {
+                let general = workspace.take_general_flush(cx);
+                let appearance = workspace.take_appearance_flush(window_handle, cx);
+                let hosts = workspace.take_profile_quit_flush(cx);
                 let flushed = workspace.flush_before_quit(cx);
                 async move {
+                    if let Some(general) = general {
+                        general.await;
+                    }
+                    if let Some(appearance) = appearance {
+                        appearance.await;
+                    }
                     if let Some(hosts) = hosts {
                         hosts.await;
                     }
@@ -387,6 +432,43 @@ impl Workspace {
             workspace.connect(window, cx);
         }
         workspace
+    }
+
+    /// Updates retained placeholder presentation without replacing editor content.
+    fn refresh_input_language(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.composer_placeholder_compact = None;
+        let password = locale::strings(cx).get("sessionAuth.password.placeholder");
+        self.authentication
+            .password
+            .update(cx, |input, cx| input.set_placeholder(password, window, cx));
+        if let Some(manager) = &self.host_manager {
+            manager.update(cx, |manager, cx| manager.refresh_language(window, cx));
+        }
+        if let Some(rename) = &self.session_rename {
+            let placeholder = locale::strings(cx).get("sessions.sidebar.session.menu.rename");
+            rename.input.update(cx, |input, cx| {
+                input.set_placeholder(placeholder, window, cx)
+            });
+        }
+        let fallback = locale::strings(cx).get("chat.formCard.yourAnswer");
+        for draft in self.blocking.drafts.values() {
+            for field in &draft.form.fields {
+                if matches!(
+                    &field.kind,
+                    openchamber_native_core::form::FormFieldKind::String {
+                        placeholder: Some(_),
+                        ..
+                    }
+                ) {
+                    continue;
+                }
+                if let Some(input) = draft.inputs.get(&field.key) {
+                    input.update(cx, |input, cx| {
+                        input.set_placeholder(fallback.clone(), window, cx)
+                    });
+                }
+            }
+        }
     }
 
     /// Whether the workspace shows synthetic data.

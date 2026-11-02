@@ -39,6 +39,9 @@ PyGObject with AT-SPI, `busctl`, `dbus-run-session`, `xsettingsd` and fontconfig
 | `native_host_recovery.py` | Invalid and unreadable host files, preserved bytes, explicit retry and restored composer focus on the recovered default server. |
 | `native_policy.py` | Public-asset attempts observed through a rejecting loopback proxy, with enterprise mode on and off. No request reaches the public destination. |
 | `native_about.py` | Footer About activation, both server version rows, closing and retained composer text. |
+| `native_appearance.py` | Native Settings navigation and search, live mode/language controls, retained draft and focus, local save failure/retry and restart persistence. |
+| `native_general_settings.py` | General's server-backed Files autosave and terminal controls, independent failed edits, explicit retry and captured-runtime writes. |
+| `native_terminal_appearance.py` | Live theme and code-font changes on an existing terminal, with painted output, exact copied selection, process/socket identity and continued input. |
 | `native_terminal.py` | Connected terminal checks behind a proxy that records terminal commands and severs the terminal socket: create and close, Unicode and IBus input, keys, resize, bracketed and large paste, scrollback, reconnect pacing, exit, lifetime and cleanup. Capture programs in the terminal record the exact bytes the PTY received. |
 | `compare.py` | Pixel, row and geometry comparison. |
 | `png.py` | PNG reading and writing with the standard library. |

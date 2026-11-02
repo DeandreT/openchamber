@@ -1462,7 +1462,18 @@ impl GitView {
 }
 
 impl Render for GitView {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        for (input, key) in [
+            (&self.commit_input, "gitView.commit.messagePlaceholder"),
+            (&self.branch_input, "gitView.branch.newBranchPlaceholder"),
+        ] {
+            let placeholder = locale::strings(cx).get(key);
+            if input.read(cx).presentation().placeholder() != &placeholder {
+                input.update(cx, |input, cx| {
+                    input.set_placeholder(placeholder, window, cx)
+                });
+            }
+        }
         let palette = cx.global::<Palette>().clone();
         let strings = locale::strings(cx);
         let direction = strings.direction();

@@ -173,6 +173,42 @@ pub fn strings(cx: &App) -> &Strings {
     cx.global::<Strings>()
 }
 
+/// The canonical locale codes present in the generated native resources.
+pub(crate) fn supported_locales() -> Vec<String> {
+    // Keep the language picker's order identical to LOCALES in i18n/runtime.ts.
+    [
+        "en", "de", "fr", "nl", "zh-CN", "zh-TW", "uk", "es", "pt-BR", "ko", "pl", "ja", "tr",
+        "ar", "he",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .collect()
+}
+
+impl Strings {
+    pub(crate) fn locale_label(&self, code: &str) -> SharedString {
+        let language = match code {
+            "en" => "english",
+            "de" => "german",
+            "fr" => "french",
+            "nl" => "dutch",
+            "zh-CN" => "simplifiedChinese",
+            "zh-TW" => "traditionalChinese",
+            "uk" => "ukrainian",
+            "es" => "spanish",
+            "pt-BR" => "brazilianPortuguese",
+            "ko" => "korean",
+            "pl" => "polish",
+            "ja" => "japanese",
+            "tr" => "turkish",
+            "ar" => "arabic",
+            "he" => "hebrew",
+            _ => panic!("locale_label requires a supported locale"),
+        };
+        self.get(&format!("common.language.{language}"))
+    }
+}
+
 /// The locale requested by the environment, such as `ar` or `pt-BR`.
 ///
 /// `OPENCHAMBER_NATIVE_LOCALE` wins over `LANG`, so parity runs can pin a
@@ -186,7 +222,7 @@ pub fn requested_locale() -> String {
 
 /// Mirrors `normalizeLocale` in `packages/ui/src/lib/i18n/runtime.ts` for
 /// the forms an environment variable takes.
-fn normalize(raw: &str) -> String {
+pub(crate) fn normalize(raw: &str) -> String {
     let lowered = raw
         .split(['.', '@'])
         .next()
@@ -206,6 +242,12 @@ fn normalize(raw: &str) -> String {
         return "pt-BR".to_owned();
     }
     let language = lowered.split('-').next().unwrap_or_default();
+    if language == "iw" {
+        return "he".to_owned();
+    }
+    if language == "ua" {
+        return "uk".to_owned();
+    }
     if supported.contains(&language) {
         language.to_owned()
     } else {

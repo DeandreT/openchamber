@@ -29,6 +29,7 @@ struct ThemeFile {
 #[serde(rename_all = "camelCase")]
 struct ThemeEntry {
     id: String,
+    name: String,
     variant: String,
     colors: HashMap<String, String>,
     agent_palette: Vec<PaletteRole>,
@@ -152,6 +153,30 @@ pub struct Palette {
 }
 
 impl Global for Palette {}
+
+/// A built-in theme's canonical picker label and ID.
+pub(crate) struct ThemeOption {
+    pub(crate) id: String,
+    pub(crate) name: String,
+}
+
+pub(crate) fn options(appearance: Appearance) -> Vec<ThemeOption> {
+    let variant = match appearance {
+        Appearance::Light => "light",
+        Appearance::Dark => "dark",
+    };
+    let mut options: Vec<_> = theme_file()
+        .themes
+        .into_iter()
+        .filter(|entry| entry.variant == variant)
+        .map(|entry| ThemeOption {
+            id: entry.id,
+            name: entry.name,
+        })
+        .collect();
+    options.sort_by(|a, b| a.name.cmp(&b.name));
+    options
+}
 
 impl Palette {
     /// The default palette for an appearance.

@@ -281,7 +281,10 @@ counts and identifiers only.
   another project's worktrees.
 - Settings writes send only the changed keys with
   `PUT /api/config/settings?surface=desktop`, as the web client does, and
-  return the merged document the server answers with.
+  return the merged document the server answers with. General's fields retain
+  their actual names: `autoSaveEnabled`, `terminalCloseOnExit` and `terminalShell`.
+  Each read field validates independently; an invalid or absent sibling remains
+  unknown. The caller owns write ordering, runtime capture and failed-edit state.
 - The event stream delivers through a bounded channel and waits for the
   consumer instead of dropping events. A socket that does not send `ready`
   within 2 s or falls silent for 30 s is replaced, as the web client does.

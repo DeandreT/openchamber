@@ -7,6 +7,9 @@
 
 mod about;
 mod activation;
+mod appearance;
+mod appearance_storage;
+mod appearance_view;
 mod archive_view;
 mod assets;
 mod authentication;
@@ -38,6 +41,7 @@ mod files_view;
 mod fonts;
 mod form_copy;
 mod form_input;
+mod general_settings;
 mod git_view;
 mod host_manager;
 mod host_profiles;
@@ -80,6 +84,7 @@ mod session_menu;
 #[cfg(test)]
 mod session_menu_tests;
 mod session_mutations;
+mod settings_navigation;
 mod settings_view;
 mod sidebar_item;
 mod sidebar_view;
@@ -126,6 +131,11 @@ fn main() {
     diagnostics::start();
     // Read off the startup path; joined just before the first frame.
     let generic_fonts = fonts::spawn_generic_lookup();
+    let appearance = install_id::config_directory().map(|directory| {
+        let store = appearance_storage::AppearanceStore::new(&directory);
+        let reader = store.clone();
+        (store, std::thread::spawn(move || reader.load()))
+    });
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_env("OPENCHAMBER_NATIVE_LOG")
@@ -164,6 +174,15 @@ fn main() {
                 fonts::GenericFamilies::default()
             });
             fonts::apply(&generic_fonts, cx);
+            let appearance = appearance.map(|(store, reader)| {
+                let loaded = reader
+                    .join()
+                    .unwrap_or(Err(appearance_storage::AppearanceError::Unavailable));
+                let state =
+                    cx.new(|cx| appearance::AppearanceState::new(store, loaded, generic_fonts, cx));
+                cx.set_global(appearance_view::AppearanceOwner(state.clone()));
+                state
+            });
             workspace_view::bind_keys(cx);
 
             // The window grows by the frame line, so the content keeps the
@@ -192,6 +211,9 @@ fn main() {
             };
             let opened = gpui_kit::open_window(options, cx, |window, cx| {
                 window.set_layout_mode(gpui_kit::LayoutMode::Logical);
+                if let Some(appearance) = &appearance {
+                    appearance.update(cx, |appearance, cx| appearance.attach_window(window, cx));
+                }
                 cx.new(|cx| {
                     let mut workspace = Workspace::new(source, window, cx);
                     workspace.start_policy_monitor(cx);

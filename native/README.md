@@ -63,8 +63,8 @@ The desktop reads these environment variables:
 | Variable | Effect |
 | --- | --- |
 | `OPENCHAMBER_NATIVE_WORKLOAD` | `representative` (2,301 sessions, default), `stress` (23,010) or `small` |
-| `OPENCHAMBER_NATIVE_THEME` | A built-in theme ID such as `openchamber-dark`; otherwise the system appearance picks the default pair |
-| `OPENCHAMBER_NATIVE_LOCALE` | A supported locale such as `ar` or `pt-BR`; otherwise `LANG` |
+| `OPENCHAMBER_NATIVE_THEME` | Initial development override of the saved theme, using a built-in ID such as `openchamber-dark` |
+| `OPENCHAMBER_NATIVE_LOCALE` | Initial development override of the saved language, such as `ar` or `pt-BR`; without a saved choice, `LANG` supplies the language |
 | `OPENCHAMBER_NATIVE_DIAGNOSTICS` | `1` prints `OPENCHAMBER_NATIVE_MARK {json}` timing lines to stdout |
 | `OPENCHAMBER_NATIVE_LOG` | A `tracing` filter for stderr, `warn` by default |
 | `OPENCHAMBER_NATIVE_SERVER` | The base URL of an OpenChamber server to read instead of synthetic data, including any path prefix |
@@ -84,6 +84,18 @@ snapshot and a file lock prevent one window from overwriting another's newer
 profile edit. A malformed or future-format file remains untouched.
 
 ## Local recovery state
+
+Settings opens at General and retains its last page while the window lives.
+Appearance changes the current window's theme, language, installed fonts and
+interface size without replacing its workspace. These choices use a validated
+`appearance.json` beside the native journal. Invalid files remain untouched;
+failed saves retain live choices and offer explicit retry. Concurrent windows
+use conflict-checked writes and merge only locally edited fields on retry.
+
+General's autosave and terminal choices use the selected server's existing
+desktop settings. Host switching preserves accepted writes against their
+original server. Closing Settings leaves writes running; normal window close
+waits for them and keeps failed edits open for retry.
 
 Password-protected servers show a native sign-in form. Trust this device is
 off initially. Saved client tokens use the operating system's credential store:

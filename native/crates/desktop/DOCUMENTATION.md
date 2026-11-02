@@ -103,8 +103,20 @@ prompt. Attachments and worktree creation remain separate workflows.
   Direct HTTP(S) profiles are supported here; SSH, relay, request-header and
   pairing profiles remain separate native work. Add instance opens the native
   Remote instances Settings page through `settings_view.rs`, reusing the same
-  profile model and write barrier. The remaining Settings navigation and
-  window-opening actions are separate work.
+  profile model and write barrier. Window-opening actions are separate work.
+- `settings_view.rs` owns the retained Settings dialog, selected page and search
+  field. `settings_navigation.rs` indexes only implemented targets. General is
+  the first page; reopening keeps the selected page and clears the search.
+  Each page owns its scroll container and search anchors.
+- `appearance.rs` owns process-local live theme, language, installed-font and
+  interface-size preferences. `appearance_storage.rs` owns the validated v1
+  `appearance.json` snapshot, atomic writes and compare-and-swap authority.
+  `appearance_view.rs` retains the controls; `settings_picker.rs` confirms only
+  a selection gesture. A picker dismissal leaves its value unchanged.
+- `general_settings.rs` owns the General page's server-backed autosave, terminal
+  shell and close-on-exit preferences. Reads and serialized writes retain their
+  runtime and client; the page's executor outlives a host switch. Files and
+  Terminal consume its live choices, including edits whose saves failed.
 - `host_recovery.rs` owns failed saved-host startup. It shows no session data
   and leaves the file untouched. Refresh rereads the same file off the UI
   thread, then connects its default or opens the instance picker. Entering a
@@ -257,6 +269,8 @@ prompt. Attachments and worktree creation remain separate workflows.
 - `elevation.rs` converts CSS blur radii to Gaussian sigma and reverses CSS
   shadow order for GPUI's painter. The sidebar's inward shadow is a separate
   overlay inside its divider, so it paints above the content in both directions.
+  Raised Settings pickers use the short `.oc-raised` control recipe; their menus
+  use the floating recipe. Control heights follow the live rem size.
 - `baseline.rs` places text on Chromium's baseline (`css_text`), and
   `tracked_text.rs` draws text with CSS letter spacing. The new-session title
   uses one shaped line with a medium-weight run for the chosen project label,
@@ -329,10 +343,38 @@ prompt. Attachments and worktree creation remain separate workflows.
   Normal close drains pending profile writes before the draft journal and keeps
   the window open when a profile write fails. Host mutation controls remain
   disabled during this drain; read-only profile loads need no close barrier.
+- Appearance startup distinguishes absent, unreadable and malformed snapshots.
+  A failed read grants no writer. Live edits remain visible after a failed save;
+  Retry rereads explicitly and merges locally edited fields over the fresh
+  snapshot before another conflict-checked write. Unedited fields retain another
+  window's changes. Automatic writes never rebase a conflict.
+- Appearance changes update the existing palette, locale, font bindings and
+  Kit theme's root font size, which the root installs before each frame's layout.
+  They preserve workspace and input entities. Font and locale
+  changes remeasure retained lists with their logical anchors; placeholder changes
+  do not replace input text. Environment overrides apply once at startup.
+- Settings dismissal retains page models and accepted writes. Normal window close
+  freezes preference changes, drains pending writes and keeps failed edits open
+  for retry. A later host or journal failure releases the preference freeze.
+  Settings cannot create new page owners during any active close barrier.
+  A startup appearance read failure alone does not prevent closing an unedited app.
+  Before freezing, window close and app quit capture valid committed size input
+  through its owning window. Marked IME text remains provisional and is not saved.
+  App quit drains independent I/O receipts because GPUI blocks the foreground
+  session during shutdown. These drains retain network/credential runtimes and
+  captured writes without requiring entity updates. Normal close keeps its UI
+  failure/retry path; the toolkit's bounded shutdown deadline still applies to quit.
+  Appearance Retry moves its focus to the retained selected-mode control before
+  saving removes the button. A retry activated without focus leaves the current
+  focus alone, preserving keyboard routing inside the dialog.
+- General setting reads carry per-field mutation revisions. Missing or invalid
+  fields cannot replace known consumer state. A failed write retains that field's
+  live choice for explicit retry while other fields and runtimes can proceed.
 
 - Switching away from a dirty file asks Save, Discard or Cancel. Only a
   successful save with no remaining edits or an explicit Discard replaces
-  the editor. Autosave is enabled by default; its toggle waits for Settings.
+  the editor. Autosave is enabled by default and follows the General preference;
+  explicit Save remains available when autosave is off.
   Edits made during a save re-arm the debounce after completion.
 - Editor completions use a rename-stable identity. Folder renames rewrite
   the open file's path prefix. Saves wait while the path is being renamed,
@@ -844,6 +886,34 @@ prompt. Attachments and worktree creation remain separate workflows.
   line through the platform opener.
 
 ## Decisions
+
+### Why Settings owns scrolling and confirmation
+
+Settings uses the dialog's constrained content slot. Each page retains its own
+scroller, so scrolling a page leaves navigation in place. The dialog's generic
+confirmation is vetoed: single-line inputs propagate Enter after emitting their
+field event, and accepting that confirmation would dismiss Settings after a save.
+Explicit close and Escape keep the dialog's normal dismissal path.
+
+### Why quit owns I/O separately from UI completion
+
+GPUI blocks the foreground session while awaiting quit observers. A foreground
+save task cannot finish there, even when an observer awaits it. Preference and
+profile owners retain the raw I/O operation separately so quit can drain accepted
+work and coalesced choices after windows disappear. General's drain also owns its
+Tokio runtime; a cloned runtime handle alone cannot keep HTTP work running.
+
+### Why appearance has one live owner
+
+The palette, locale and fonts affect existing editors and retained transcripts.
+Updating their shared bindings preserves those entities and their selections;
+recreating the workspace would discard editing and scroll state.
+
+### Why preference retries merge individual fields
+
+A second window can change an unrelated preference before a failed write is
+retried. Explicit fieldwise merging preserves those changes while retaining the
+current window's edited values. Compare-and-swap still rejects a newer race.
 
 ### Why public-asset requests reread machine policy
 

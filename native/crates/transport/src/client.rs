@@ -42,6 +42,12 @@ const PART_SHELLS_VERSION: &str = "v1";
 #[serde(rename_all = "camelCase")]
 pub struct SettingsChanges {
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_save_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_close_on_exit: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_shell: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub code_block_line_wrap: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub show_deletion_dialog: Option<bool>,
@@ -159,6 +165,10 @@ pub struct MessagePage {
 /// out, never the whole document.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ServerSettings {
+    /// General settings; absent or malformed values preserve native defaults.
+    pub auto_save_enabled: Option<bool>,
+    pub terminal_close_on_exit: Option<bool>,
+    pub terminal_shell: Option<String>,
     pub projects: Vec<ConfiguredProject>,
     pub home_directory: Option<String>,
     pub last_directory: Option<String>,
@@ -299,6 +309,32 @@ impl ServerSettings {
                 .code_block_line_wrap
                 .as_ref()
                 .and_then(Value::as_bool),
+            auto_save_enabled: settings.auto_save_enabled.as_ref().and_then(Value::as_bool),
+            terminal_close_on_exit: settings
+                .terminal_close_on_exit
+                .as_ref()
+                .and_then(Value::as_bool),
+            terminal_shell: settings
+                .terminal_shell
+                .as_ref()
+                .and_then(Value::as_str)
+                .filter(|shell| {
+                    matches!(
+                        *shell,
+                        "auto"
+                            | "bash"
+                            | "zsh"
+                            | "sh"
+                            | "fish"
+                            | "pwsh"
+                            | "powershell"
+                            | "cmd"
+                            | "dash"
+                            | "ksh"
+                            | "nu"
+                    )
+                })
+                .map(str::to_owned),
             sidebar_view: match settings.sidebar_grouping.as_ref().and_then(Value::as_str) {
                 Some("time") => Some(SidebarViewMode::WorksByTime),
                 Some("project") => Some(SidebarViewMode::Works),
@@ -1092,6 +1128,51 @@ mod tests {
         assert_eq!(
             serde_json::to_value(SettingsChanges::default()).expect("serializes"),
             json!({})
+        );
+    }
+
+    #[test]
+    fn general_settings_read_and_write_the_exact_server_fields() {
+        let changes = SettingsChanges {
+            auto_save_enabled: Some(false),
+            terminal_close_on_exit: Some(false),
+            terminal_shell: Some("zsh".to_owned()),
+            ..SettingsChanges::default()
+        };
+        let document = json!({
+            "autoSaveEnabled": false,
+            "terminalCloseOnExit": false,
+            "terminalShell": "zsh"
+        });
+        assert_eq!(
+            serde_json::to_value(changes).expect("settings serialize"),
+            document
+        );
+        let settings =
+            ServerSettings::from_wire(serde_json::from_value(document).expect("settings parse"));
+        assert_eq!(settings.auto_save_enabled, Some(false));
+        assert_eq!(settings.terminal_close_on_exit, Some(false));
+        assert_eq!(settings.terminal_shell.as_deref(), Some("zsh"));
+        for document in [
+            json!({}),
+            json!({
+                "autoSaveEnabled": "false", "terminalCloseOnExit": 0, "terminalShell": "unknown"
+            }),
+        ] {
+            let settings = ServerSettings::from_wire(
+                serde_json::from_value(document).expect("settings parse"),
+            );
+            assert_eq!(settings.auto_save_enabled, None);
+            assert_eq!(settings.terminal_close_on_exit, None);
+            assert_eq!(settings.terminal_shell, None);
+        }
+        assert_eq!(
+            serde_json::to_value(SettingsChanges {
+                auto_save_enabled: Some(true),
+                ..SettingsChanges::default()
+            })
+            .expect("one field serializes"),
+            json!({"autoSaveEnabled": true})
         );
     }
 
