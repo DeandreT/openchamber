@@ -203,6 +203,7 @@ pub(crate) fn synthetic_facts(
             ) if !id.is_empty() => Some(id.to_owned()),
             _ => None,
         },
+        context: crate::context_payload::read(metadata),
     })
 }
 

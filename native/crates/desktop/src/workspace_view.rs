@@ -70,6 +70,8 @@ pub fn bind_keys(cx: &mut gpui_kit::App) {
         KeyBinding::new("ctrl-n", gpui_kit::base::actions::SelectDown, menu),
         KeyBinding::new("up", gpui_kit::base::actions::SelectUp, menu),
         KeyBinding::new("ctrl-p", gpui_kit::base::actions::SelectUp, menu),
+        KeyBinding::new("right", gpui_kit::base::actions::SelectRight, menu),
+        KeyBinding::new("left", gpui_kit::base::actions::SelectLeft, menu),
         KeyBinding::new("home", gpui_kit::base::actions::SelectFirst, menu),
         KeyBinding::new("end", gpui_kit::base::actions::SelectLast, menu),
         KeyBinding::new(

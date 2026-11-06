@@ -16,12 +16,31 @@ use crate::session_index::SessionIndex;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SessionAction {
     Rename,
+    /// Names the session from its latest completed turns on the small model.
+    AiRename,
+    CopyId,
+    /// Opens the Pin to submenu.
+    PinTo,
+    /// Pin to submenu: the default Pinned list.
     Pin,
+    /// Pin to submenu: leave the pin list.
     Unpin,
     /// Track as in work.
     TrackWork,
     /// Mark the work done.
     MarkDone,
+    KeepWarm,
+    StopWarm,
+    ExportMarkdown,
+    /// Opens the Move to worktree submenu.
+    MoveToWorktree,
+    /// Opens the dialog that moves the conversation to another project.
+    MoveSession,
+    OpenRunOverview,
+    /// Opens the Move to folder submenu.
+    MoveToFolder,
+    OpenInSidePanel,
+    OpenMiniChat,
     Archive,
     Restore,
     Delete,
@@ -32,10 +51,22 @@ impl SessionAction {
     pub fn id(self) -> &'static str {
         match self {
             Self::Rename => "rename",
+            Self::AiRename => "ai-rename",
+            Self::CopyId => "copy-id",
+            Self::PinTo => "pin-to",
             Self::Pin => "pin",
             Self::Unpin => "unpin",
             Self::TrackWork => "track",
             Self::MarkDone => "mark-done",
+            Self::KeepWarm => "keep-warm",
+            Self::StopWarm => "stop-warm",
+            Self::ExportMarkdown => "export-markdown",
+            Self::MoveToWorktree => "move-to-worktree",
+            Self::MoveSession => "move-session",
+            Self::OpenRunOverview => "run-overview",
+            Self::MoveToFolder => "move-to-folder",
+            Self::OpenInSidePanel => "side-panel",
+            Self::OpenMiniChat => "mini-chat",
             Self::Archive => "archive",
             Self::Restore => "restore",
             Self::Delete => "delete",
@@ -45,38 +76,83 @@ impl SessionAction {
     pub fn label_key(self) -> &'static str {
         match self {
             Self::Rename => "sessions.sidebar.session.menu.rename",
-            Self::Pin => "sessions.sidebar.session.menu.pin",
+            Self::AiRename => "sessions.aiRename.action",
+            Self::CopyId => "sessions.sidebar.session.menu.copyId",
+            Self::PinTo => "sessions.sidebar.pinTo.label",
+            Self::Pin => "sessions.sidebar.activity.pinnedTitle",
             Self::Unpin => "sessions.sidebar.session.menu.unpin",
             Self::TrackWork => "sessions.sidebar.session.work.track",
             Self::MarkDone => "sessions.sidebar.session.work.markDone",
+            Self::KeepWarm => "sessions.sidebar.session.menu.keepWarm",
+            Self::StopWarm => "sessions.sidebar.session.menu.stopWarm",
+            Self::ExportMarkdown => "sessions.sidebar.session.menu.exportMarkdown",
+            Self::MoveToWorktree => "sessions.sidebar.session.menu.moveToWorktreeTargets",
+            Self::MoveSession => "sessions.moveSession.menu",
+            Self::OpenRunOverview => "sessions.sidebar.session.menu.openRunOverview",
+            Self::MoveToFolder => "sessions.sidebar.folders.moveToFolder",
+            Self::OpenInSidePanel => "sessions.sidebar.session.menu.openInSidePanel",
+            Self::OpenMiniChat => "sessions.sidebar.session.menu.openMiniChatWindow",
             Self::Archive => "sessions.sidebar.bulkActions.archive",
             Self::Restore => "sessions.sidebar.bulkActions.restore",
             Self::Delete => "sessions.sidebar.bulkActions.delete",
         }
     }
 
-    /// The explanation shown after the pointer rests on the item.
-    pub fn hint_key(self) -> &'static str {
-        match self {
+    /// The explanation shown after the pointer rests on the item, as the
+    /// reference's `SessionMenuItemHint` wraps it. Items the reference
+    /// leaves unwrapped have none; Move to worktree explains itself only
+    /// while it is disabled.
+    pub fn hint_key(self, context: &MenuContext) -> Option<&'static str> {
+        Some(match self {
             Self::Rename => "sessions.sidebar.session.menuHint.rename",
-            Self::Pin => "sessions.sidebar.session.menuHint.pin",
-            Self::Unpin => "sessions.sidebar.session.menuHint.unpin",
+            Self::AiRename => context.ai_rename.hint_key(),
+            Self::CopyId => "sessions.sidebar.session.menuHint.copyId",
+            Self::PinTo | Self::Pin | Self::Unpin => return None,
             Self::TrackWork => "sessions.sidebar.session.menuHint.track",
             Self::MarkDone => "sessions.sidebar.session.menuHint.markDone",
+            Self::KeepWarm => "sessions.sidebar.session.menuHint.keepWarm",
+            Self::StopWarm => "sessions.sidebar.session.menuHint.stopWarm",
+            Self::ExportMarkdown => "sessions.sidebar.session.menuHint.exportMarkdown",
+            Self::MoveToWorktree if context.moving => {
+                "sessions.sidebar.session.moveToWorktree.tooltipMoving"
+            }
+            Self::MoveToWorktree if context.busy => {
+                "sessions.sidebar.session.moveToWorktree.tooltipBusy"
+            }
+            Self::MoveToWorktree => return None,
+            Self::MoveSession if context.busy => {
+                "sessions.sidebar.session.moveToWorktree.tooltipBusy"
+            }
+            Self::MoveSession => "sessions.moveSession.hint",
+            Self::OpenRunOverview => "sessions.sidebar.session.menuHint.openRunOverview",
+            Self::MoveToFolder => "sessions.sidebar.session.menuHint.moveToFolder",
+            Self::OpenInSidePanel => "sessions.sidebar.session.menuHint.openInSidePanel",
+            Self::OpenMiniChat => "sessions.sidebar.session.menuHint.openMiniChatWindow",
             Self::Archive => "sessions.sidebar.session.menuHint.archive",
             Self::Restore => "sessions.sidebar.session.menuHint.restore",
             Self::Delete => "sessions.sidebar.session.menuHint.delete",
-        }
+        })
     }
 
     /// The sprite glyph drawn before the label.
     pub fn icon(self) -> &'static str {
         match self {
             Self::Rename => "pencil-ai",
-            Self::Pin => "pushpin",
+            Self::AiRename => "ai-generate-2",
+            Self::CopyId => "file-copy",
+            Self::PinTo | Self::Pin => "pushpin",
             Self::Unpin => "unpin",
             Self::TrackWork => "eye",
             Self::MarkDone => "check",
+            Self::KeepWarm => "fire",
+            Self::StopWarm => "fire-fill",
+            Self::ExportMarkdown => "download",
+            Self::MoveToWorktree => "folder-shared",
+            Self::MoveSession => "folder-received",
+            Self::OpenRunOverview => "git-merge",
+            Self::MoveToFolder => "folder",
+            Self::OpenInSidePanel => "chat-4",
+            Self::OpenMiniChat => "window",
             Self::Archive => "inbox-archive",
             Self::Restore => "inbox-unarchive",
             Self::Delete => "delete-bin",
@@ -87,9 +163,68 @@ impl SessionAction {
         self == Self::Delete
     }
 
-    /// Whether the action writes to the server.
-    fn mutates(self) -> bool {
-        self != Self::Rename
+    /// The submenu the item opens instead of running.
+    pub fn submenu(self) -> Option<Submenu> {
+        match self {
+            Self::PinTo => Some(Submenu::Pin),
+            Self::MoveToWorktree => Some(Submenu::Worktree),
+            Self::MoveToFolder => Some(Submenu::Folder),
+            _ => None,
+        }
+    }
+
+    /// Whether the action needs a server. Rename opens its editor, Copy ID
+    /// writes the clipboard, Pin to opens its submenu and folders queue
+    /// their changes until the server is back, all without one.
+    fn needs_server(self) -> bool {
+        !matches!(
+            self,
+            Self::Rename | Self::CopyId | Self::PinTo | Self::MoveToFolder
+        )
+    }
+}
+
+/// A submenu of the row menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Submenu {
+    Pin,
+    Worktree,
+    Folder,
+}
+
+/// Whether the AI rename can run, as `useSessionAiRenameAction` decides it
+/// while the menu is open.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AiRenameState {
+    /// The history check has not answered yet.
+    #[default]
+    Checking,
+    Ready,
+    /// The session has no completed turn to name it from.
+    Empty,
+    /// The check failed; the item stays enabled and the run reports.
+    Unknown,
+    NoSmallModel,
+    /// A rename of this session is generating.
+    Pending,
+}
+
+impl AiRenameState {
+    fn disables(self) -> bool {
+        matches!(
+            self,
+            Self::Checking | Self::Empty | Self::NoSmallModel | Self::Pending
+        )
+    }
+
+    fn hint_key(self) -> &'static str {
+        match self {
+            Self::Pending => "sessions.aiRename.generating",
+            Self::NoSmallModel => "sessions.aiRename.noSmallModel",
+            Self::Checking => "sessions.aiRename.checking",
+            Self::Empty => "sessions.aiRename.noCompletedTurns",
+            Self::Ready | Self::Unknown => "sessions.sidebar.session.menuHint.aiRename",
+        }
     }
 }
 
@@ -111,6 +246,28 @@ pub struct MenuContext {
     pub renaming: bool,
     /// A work change of this session is in flight.
     pub changing_work: bool,
+    /// The session's directory is known.
+    pub has_directory: bool,
+    /// The session has a parent.
+    pub subtask: bool,
+    /// The session lives in an isolated space.
+    pub in_space: bool,
+    /// The row is drawn in a zone or the list by time.
+    pub timeline_row: bool,
+    /// A turn of the session is running.
+    pub busy: bool,
+    /// A move of the session to a worktree or project is in flight.
+    pub moving: bool,
+    /// Settings chose per-session warming.
+    pub warming_enabled: bool,
+    pub warmed: bool,
+    /// A warm change of this session is in flight.
+    pub changing_warm: bool,
+    /// The session belongs to a multi-run.
+    pub multi_run: bool,
+    /// Folder changes can be made for the session's scope.
+    pub folder_authority: bool,
+    pub ai_rename: AiRenameState,
 }
 
 /// One line of a row's menu.
@@ -136,22 +293,27 @@ impl MenuEntry {
     }
 }
 
-/// The ported subset of the row menu, in the reference's order: Rename, Pin
-/// or Unpin, Track or Mark done, then Archive or Restore and Delete after a
-/// separator.
+/// The row menu in the reference's order (`renderSessionMenuItems`):
+/// Rename, AI rename, Copy ID, Pin to, Track or Mark done, Keep or Stop
+/// warm, Export Markdown, Move to worktree, Move session, Open run
+/// overview, then Move to folder after a separator, Open in side panel,
+/// Open Mini Chat window, and Archive or Restore with Delete after another.
 pub fn menu_entries(context: MenuContext) -> Vec<MenuEntry> {
     let enabled = |action: SessionAction| {
-        let busy = match action {
-            SessionAction::Rename => context.renaming || context.removing,
-            SessionAction::TrackWork | SessionAction::MarkDone => {
-                context.changing_work || context.removing
+        let blocked = match action {
+            SessionAction::Rename => context.renaming,
+            SessionAction::AiRename => !context.has_directory || context.ai_rename.disables(),
+            SessionAction::TrackWork | SessionAction::MarkDone => context.changing_work,
+            SessionAction::KeepWarm | SessionAction::StopWarm => context.changing_warm,
+            SessionAction::MoveToWorktree => {
+                !context.has_directory || context.busy || context.moving
             }
-            SessionAction::Pin | SessionAction::Unpin => context.removing,
-            SessionAction::Archive | SessionAction::Restore | SessionAction::Delete => {
-                context.removing
-            }
+            SessionAction::MoveSession => context.busy || context.moving,
+            SessionAction::OpenInSidePanel | SessionAction::OpenMiniChat => !context.has_directory,
+            _ => false,
         };
-        (context.available || !action.mutates()) && !busy
+        let removing = context.removing && action != SessionAction::CopyId;
+        (context.available || !action.needs_server()) && !blocked && !removing
     };
     let item = |action| MenuEntry::Item {
         action,
@@ -159,11 +321,9 @@ pub fn menu_entries(context: MenuContext) -> Vec<MenuEntry> {
     };
     let mut entries = vec![
         item(SessionAction::Rename),
-        item(if context.pinned {
-            SessionAction::Unpin
-        } else {
-            SessionAction::Pin
-        }),
+        item(SessionAction::AiRename),
+        item(SessionAction::CopyId),
+        item(SessionAction::PinTo),
     ];
     if context.can_track_work {
         entries.push(item(if context.in_work {
@@ -172,6 +332,38 @@ pub fn menu_entries(context: MenuContext) -> Vec<MenuEntry> {
             SessionAction::TrackWork
         }));
     }
+    let can_keep_warm = context.warming_enabled
+        && !context.archived
+        && !context.subtask
+        && context.has_directory
+        && !context.in_space;
+    if can_keep_warm {
+        entries.push(item(if context.warmed {
+            SessionAction::StopWarm
+        } else {
+            SessionAction::KeepWarm
+        }));
+    }
+    entries.push(item(SessionAction::ExportMarkdown));
+    if !context.subtask && !context.archived && context.has_directory {
+        entries.push(item(SessionAction::MoveToWorktree));
+    }
+    if !context.subtask && !context.archived && context.has_directory && !context.in_space {
+        entries.push(item(SessionAction::MoveSession));
+    }
+    if context.multi_run {
+        entries.push(item(SessionAction::OpenRunOverview));
+    }
+    if context.has_directory
+        && !context.archived
+        && !context.timeline_row
+        && context.folder_authority
+    {
+        entries.push(MenuEntry::Separator);
+        entries.push(item(SessionAction::MoveToFolder));
+    }
+    entries.push(item(SessionAction::OpenInSidePanel));
+    entries.push(item(SessionAction::OpenMiniChat));
     entries.push(MenuEntry::Separator);
     entries.push(item(if context.archived {
         SessionAction::Restore
@@ -182,10 +374,139 @@ pub fn menu_entries(context: MenuContext) -> Vec<MenuEntry> {
     entries
 }
 
+/// What a submenu item does.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum SubmenuAction {
+    /// Pin to the default Pinned list.
+    Pin,
+    Unpin,
+    /// Move the session tree to an existing worktree.
+    MoveToWorktree {
+        path: String,
+    },
+    /// Create a worktree from the session's branch and move the tree there.
+    NewWorktree,
+    /// File the session in a folder of `scope`.
+    AssignFolder {
+        scope: String,
+        folder_id: String,
+    },
+    /// Take the session out of its folder in `scope`.
+    RemoveFromFolder {
+        scope: String,
+    },
+    /// Create a folder in `scope` holding the session and rename it.
+    NewFolder {
+        scope: String,
+    },
+}
+
+impl SubmenuAction {
+    /// A stable name for accessibility identities and automation.
+    pub fn id(&self) -> String {
+        match self {
+            Self::Pin => "pin".to_owned(),
+            Self::Unpin => "unpin".to_owned(),
+            Self::MoveToWorktree { path } => format!("worktree:{path}"),
+            Self::NewWorktree => "new-worktree".to_owned(),
+            Self::AssignFolder { folder_id, .. } => format!("folder:{folder_id}"),
+            Self::RemoveFromFolder { .. } => "remove-from-folder".to_owned(),
+            Self::NewFolder { .. } => "new-folder".to_owned(),
+        }
+    }
+}
+
+/// The text of a submenu line: a dictionary key or the user's own text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SubmenuLabel {
+    Key(&'static str),
+    Text(String),
+}
+
+/// One item of a submenu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubmenuItem {
+    pub action: SubmenuAction,
+    pub label: SubmenuLabel,
+    pub icon: Option<&'static str>,
+    pub enabled: bool,
+    /// A check marks the current choice.
+    pub checked: bool,
+    pub destructive: bool,
+    /// The full path, shown when the pointer rests on a worktree.
+    pub title: Option<String>,
+}
+
+impl SubmenuItem {
+    pub fn new(action: SubmenuAction, label: SubmenuLabel) -> Self {
+        Self {
+            action,
+            label,
+            icon: None,
+            enabled: true,
+            checked: false,
+            destructive: false,
+            title: None,
+        }
+    }
+}
+
+/// One line of a submenu.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SubmenuEntry {
+    Item(SubmenuItem),
+    /// A disabled line that says why nothing is listed.
+    Note(&'static str),
+    Separator,
+}
+
+impl SubmenuEntry {
+    pub fn is_enabled(&self) -> bool {
+        matches!(self, Self::Item(item) if item.enabled)
+    }
+
+    pub fn action(&self) -> Option<&SubmenuAction> {
+        match self {
+            Self::Item(item) => Some(&item.action),
+            _ => None,
+        }
+    }
+}
+
+/// `PinToMenu`: Pinned with a check while pinned, and Unpin while pinned.
+/// Named pin lists and New list belong to the custom sidebar sections,
+/// which the native sidebar does not draw.
+/// Without a server the pins cannot change, and the items say so.
+pub fn pin_submenu(pinned: bool, available: bool) -> Vec<SubmenuEntry> {
+    let mut entries = vec![SubmenuEntry::Item(SubmenuItem {
+        checked: pinned,
+        enabled: available,
+        ..SubmenuItem::new(
+            SubmenuAction::Pin,
+            SubmenuLabel::Key("sessions.sidebar.activity.pinnedTitle"),
+        )
+    })];
+    if pinned {
+        entries.push(SubmenuEntry::Item(SubmenuItem {
+            icon: Some("unpin"),
+            enabled: available,
+            ..SubmenuItem::new(
+                SubmenuAction::Unpin,
+                SubmenuLabel::Key("sessions.sidebar.session.menu.unpin"),
+            )
+        }));
+    }
+    entries
+}
+
 /// The enabled item `step` places from `from`, wrapping around; `None` when
 /// the menu has no enabled item.
-pub fn step_highlight(entries: &[MenuEntry], from: Option<usize>, step: isize) -> Option<usize> {
-    let count = entries.len();
+pub fn step_highlight_by(
+    count: usize,
+    enabled: impl Fn(usize) -> bool,
+    from: Option<usize>,
+    step: isize,
+) -> Option<usize> {
     if count == 0 {
         return None;
     }
@@ -196,7 +517,17 @@ pub fn step_highlight(entries: &[MenuEntry], from: Option<usize>, step: isize) -
     };
     (1..=count as isize)
         .map(|offset| (start + offset * step.signum()).rem_euclid(count as isize) as usize)
-        .find(|index| entries[*index].is_enabled())
+        .find(|index| enabled(*index))
+}
+
+/// The enabled item `step` places from `from` in the row menu.
+pub fn step_highlight(entries: &[MenuEntry], from: Option<usize>, step: isize) -> Option<usize> {
+    step_highlight_by(
+        entries.len(),
+        |index| entries[index].is_enabled(),
+        from,
+        step,
+    )
 }
 
 /// The first or last enabled item.
@@ -438,72 +769,238 @@ mod tests {
         entries.iter().map(|entry| entry.action()).collect()
     }
 
+    fn ready() -> MenuContext {
+        MenuContext {
+            available: true,
+            has_directory: true,
+            folder_authority: true,
+            ai_rename: AiRenameState::Ready,
+            ..MenuContext::default()
+        }
+    }
+
     #[test]
     fn the_menu_follows_the_reference_order_and_state() {
+        use SessionAction::*;
         let context = MenuContext {
-            available: true,
             can_track_work: true,
-            ..MenuContext::default()
+            warming_enabled: true,
+            multi_run: true,
+            ..ready()
         };
         assert_eq!(
             actions(&menu_entries(context)),
             [
-                Some(SessionAction::Rename),
-                Some(SessionAction::Pin),
-                Some(SessionAction::TrackWork),
+                Some(Rename),
+                Some(AiRename),
+                Some(CopyId),
+                Some(PinTo),
+                Some(TrackWork),
+                Some(KeepWarm),
+                Some(ExportMarkdown),
+                Some(MoveToWorktree),
+                Some(MoveSession),
+                Some(OpenRunOverview),
                 None,
-                Some(SessionAction::Archive),
-                Some(SessionAction::Delete),
+                Some(MoveToFolder),
+                Some(OpenInSidePanel),
+                Some(OpenMiniChat),
+                None,
+                Some(Archive),
+                Some(Delete),
             ]
         );
         let archived = MenuContext {
-            available: true,
-            pinned: true,
             archived: true,
-            ..MenuContext::default()
+            warming_enabled: true,
+            ..ready()
         };
         assert_eq!(
             actions(&menu_entries(archived)),
             [
-                Some(SessionAction::Rename),
-                Some(SessionAction::Unpin),
+                Some(Rename),
+                Some(AiRename),
+                Some(CopyId),
+                Some(PinTo),
+                Some(ExportMarkdown),
+                Some(OpenInSidePanel),
+                Some(OpenMiniChat),
                 None,
-                Some(SessionAction::Restore),
-                Some(SessionAction::Delete),
+                Some(Restore),
+                Some(Delete),
             ],
-            "an archived row restores and has no work action"
+            "an archived row restores and has no work, warm, move or folder action"
         );
         let in_work = MenuContext {
             in_work: true,
-            ..context
+            can_track_work: true,
+            warmed: true,
+            warming_enabled: true,
+            ..ready()
         };
-        assert_eq!(
-            menu_entries(in_work)[2].action(),
-            Some(SessionAction::MarkDone)
-        );
+        let entries = actions(&menu_entries(in_work));
+        assert_eq!(entries[4], Some(MarkDone));
+        assert_eq!(entries[5], Some(StopWarm));
+    }
+
+    #[test]
+    fn subtasks_spaces_and_timeline_rows_drop_what_the_reference_drops() {
+        use SessionAction::*;
+        let subtask = actions(&menu_entries(MenuContext {
+            subtask: true,
+            warming_enabled: true,
+            ..ready()
+        }));
+        assert!(!subtask.contains(&Some(KeepWarm)));
+        assert!(!subtask.contains(&Some(MoveToWorktree)));
+        assert!(!subtask.contains(&Some(MoveSession)));
+        let space = actions(&menu_entries(MenuContext {
+            in_space: true,
+            warming_enabled: true,
+            ..ready()
+        }));
+        assert!(!space.contains(&Some(KeepWarm)));
+        assert!(space.contains(&Some(MoveToWorktree)));
+        assert!(!space.contains(&Some(MoveSession)));
+        let timeline = actions(&menu_entries(MenuContext {
+            timeline_row: true,
+            ..ready()
+        }));
+        assert!(!timeline.contains(&Some(MoveToFolder)));
+        let nowhere = menu_entries(MenuContext {
+            has_directory: false,
+            ..ready()
+        });
+        assert!(!actions(&nowhere).contains(&Some(MoveToWorktree)));
+        let side_panel = nowhere
+            .iter()
+            .find(|entry| entry.action() == Some(OpenInSidePanel))
+            .expect("always listed");
+        assert!(!side_panel.is_enabled(), "it needs the session's directory");
     }
 
     #[test]
     fn unavailable_and_pending_rows_disable_only_what_cannot_run() {
-        let offline = menu_entries(MenuContext::default());
-        assert!(offline[0].is_enabled(), "renaming opens the editor offline");
-        assert!(
-            offline.iter().skip(1).all(|entry| !entry.is_enabled()),
-            "no server, no mutation"
+        use SessionAction::*;
+        let offline = menu_entries(MenuContext {
+            available: false,
+            ..ready()
+        });
+        let enabled: Vec<_> = offline
+            .iter()
+            .filter(|entry| entry.is_enabled())
+            .filter_map(|entry| entry.action())
+            .collect();
+        assert_eq!(
+            enabled,
+            [Rename, CopyId, PinTo, MoveToFolder],
+            "no server, no other action"
         );
         let removing = menu_entries(MenuContext {
-            available: true,
             removing: true,
-            ..MenuContext::default()
+            ..ready()
         });
-        assert!(removing.iter().all(|entry| !entry.is_enabled()));
+        let enabled: Vec<_> = removing
+            .iter()
+            .filter(|entry| entry.is_enabled())
+            .filter_map(|entry| entry.action())
+            .collect();
+        assert_eq!(enabled, [CopyId]);
         let renaming = menu_entries(MenuContext {
-            available: true,
             renaming: true,
-            ..MenuContext::default()
+            ..ready()
         });
         assert!(!renaming[0].is_enabled());
-        assert!(renaming[1].is_enabled(), "a rename leaves pinning alone");
+        assert!(renaming[3].is_enabled(), "a rename leaves pinning alone");
+        let busy = menu_entries(MenuContext {
+            busy: true,
+            ..ready()
+        });
+        for action in [MoveToWorktree, MoveSession] {
+            let entry = busy
+                .iter()
+                .find(|entry| entry.action() == Some(action))
+                .expect("listed");
+            assert!(!entry.is_enabled(), "{action:?} waits for the turn");
+        }
+    }
+
+    #[test]
+    fn ai_rename_explains_why_it_is_disabled() {
+        for (state, enabled, hint) in [
+            (AiRenameState::Checking, false, "sessions.aiRename.checking"),
+            (
+                AiRenameState::Empty,
+                false,
+                "sessions.aiRename.noCompletedTurns",
+            ),
+            (
+                AiRenameState::NoSmallModel,
+                false,
+                "sessions.aiRename.noSmallModel",
+            ),
+            (
+                AiRenameState::Pending,
+                false,
+                "sessions.aiRename.generating",
+            ),
+            (
+                AiRenameState::Unknown,
+                true,
+                "sessions.sidebar.session.menuHint.aiRename",
+            ),
+            (
+                AiRenameState::Ready,
+                true,
+                "sessions.sidebar.session.menuHint.aiRename",
+            ),
+        ] {
+            let context = MenuContext {
+                ai_rename: state,
+                ..ready()
+            };
+            assert_eq!(menu_entries(context)[1].is_enabled(), enabled, "{state:?}");
+            assert_eq!(
+                SessionAction::AiRename.hint_key(&context),
+                Some(hint),
+                "{state:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn move_items_explain_a_running_turn() {
+        let busy = MenuContext {
+            busy: true,
+            ..ready()
+        };
+        assert_eq!(
+            SessionAction::MoveToWorktree.hint_key(&busy),
+            Some("sessions.sidebar.session.moveToWorktree.tooltipBusy")
+        );
+        assert_eq!(SessionAction::MoveToWorktree.hint_key(&ready()), None);
+        assert_eq!(
+            SessionAction::MoveSession.hint_key(&ready()),
+            Some("sessions.moveSession.hint")
+        );
+    }
+
+    #[test]
+    fn the_pin_submenu_checks_pinned_and_offers_unpin_while_pinned() {
+        let checked =
+            |entry: &SubmenuEntry| matches!(entry, SubmenuEntry::Item(item) if item.checked);
+        let unpinned = pin_submenu(false, true);
+        assert_eq!(unpinned.len(), 1);
+        assert_eq!(unpinned[0].action(), Some(&SubmenuAction::Pin));
+        assert!(!checked(&unpinned[0]));
+        let pinned = pin_submenu(true, true);
+        assert!(
+            pin_submenu(true, false)
+                .iter()
+                .all(|entry| !entry.is_enabled())
+        );
+        assert!(checked(&pinned[0]));
+        assert_eq!(pinned[1].action(), Some(&SubmenuAction::Unpin));
     }
 
     #[test]
@@ -512,15 +1009,17 @@ mod tests {
             available: true,
             ..MenuContext::default()
         });
-        // Rename, Pin, separator, Archive, Delete.
+        // Rename, AI rename (checking), Copy ID, Pin to, Export, Side panel,
+        // Mini Chat (no directory), separator, Archive, Delete.
+        let last = entries.len() - 1;
         assert_eq!(step_highlight(&entries, None, 1), Some(0));
-        assert_eq!(step_highlight(&entries, Some(1), 1), Some(3));
-        assert_eq!(step_highlight(&entries, Some(4), 1), Some(0));
-        assert_eq!(step_highlight(&entries, None, -1), Some(4));
-        assert_eq!(step_highlight(&entries, Some(0), -1), Some(4));
-        assert_eq!(edge_highlight(&entries, true), Some(4));
+        assert_eq!(step_highlight(&entries, Some(0), 1), Some(2));
+        assert_eq!(step_highlight(&entries, Some(last), 1), Some(0));
+        assert_eq!(step_highlight(&entries, None, -1), Some(last));
+        assert_eq!(step_highlight(&entries, Some(0), -1), Some(last));
+        assert_eq!(edge_highlight(&entries, true), Some(last));
         let offline = menu_entries(MenuContext::default());
-        assert_eq!(step_highlight(&offline, Some(0), 1), Some(0));
+        assert_eq!(step_highlight(&offline, Some(2), 1), Some(3));
     }
 
     #[test]

@@ -9,7 +9,7 @@ use gpui_kit::SharedString;
 use openchamber_native_core::grouping::GroupLabel;
 use openchamber_native_core::ids::{ProjectId, SessionId};
 use openchamber_native_core::sidebar_rows::{
-    ActivityKey, EmptyKind, GroupLoadState, ShowControl, SidebarRow,
+    ActivityKey, EmptyKind, GroupLoadState, RenderContext, ShowControl, SidebarRow,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -44,6 +44,14 @@ pub enum SidebarItem {
         expanded: bool,
         session_ids: Vec<SessionId>,
     },
+    Folder {
+        key: SharedString,
+        scope: String,
+        folder_id: String,
+        name: SharedString,
+        collapsed: bool,
+        empty: bool,
+    },
     Session {
         key: SharedString,
         session_id: SessionId,
@@ -57,6 +65,8 @@ pub enum SidebarItem {
         owns_work: bool,
         /// The row lists an archived session.
         archived: bool,
+        /// `isTimelineRow`: a zone or Chats row, which files into no folder.
+        timeline_row: bool,
     },
     Show {
         key: SharedString,
@@ -88,6 +98,7 @@ impl SidebarItem {
             | Self::Project { key, .. }
             | Self::Group { key, .. }
             | Self::Worktree { key, .. }
+            | Self::Folder { key, .. }
             | Self::Session { key, .. }
             | Self::Show { key, .. }
             | Self::Status { key, .. }
@@ -145,6 +156,22 @@ impl SidebarItem {
                 expanded: *expanded,
                 session_ids: session_ids.clone(),
             },
+            SidebarRow::FolderHeader {
+                key,
+                scope,
+                folder_id,
+                name,
+                collapsed,
+                empty,
+                ..
+            } => Self::Folder {
+                key: key.clone().into(),
+                scope: scope.clone(),
+                folder_id: folder_id.clone(),
+                name: name.clone().into(),
+                collapsed: *collapsed,
+                empty: *empty,
+            },
             SidebarRow::Session {
                 key,
                 session,
@@ -154,6 +181,7 @@ impl SidebarItem {
                 expansion_key,
                 owns_work,
                 archived,
+                context,
                 ..
             } => Self::Session {
                 key: key.clone().into(),
@@ -166,6 +194,12 @@ impl SidebarItem {
                 pinned: session.overlay.pinned_at.is_some(),
                 owns_work: *owns_work,
                 archived: *archived,
+                timeline_row: matches!(
+                    context,
+                    RenderContext::TimelineMixed
+                        | RenderContext::MixedCompact
+                        | RenderContext::TreeChat
+                ),
             },
             SidebarRow::ShowControl {
                 key,

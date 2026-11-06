@@ -278,11 +278,16 @@ impl Workspace {
                         "search",
                         "sessions.sidebar.header.actions.searchSessions",
                     ))
-                    .child(button(
-                        "add-project",
-                        "folder-add",
-                        "sessions.sidebar.header.actions.addProject",
-                    ))
+                    .child(
+                        IconButton::new(
+                            "add-project",
+                            "folder-add",
+                            strings.get("sessions.sidebar.header.actions.addProject"),
+                        )
+                        .render(palette, cx, |this, window, cx| {
+                            this.open_add_project(None, window, cx)
+                        }),
+                    )
                     .child(button(
                         "display-mode",
                         "equalizer-2",
@@ -586,12 +591,12 @@ impl Workspace {
             }
             SidebarItem::Project {
                 key,
+                project_id,
                 label,
                 collapsed,
-                ..
             } => {
                 let toggled = item.clone();
-                self.header_row(
+                let header = self.header_row(
                     HeaderRow {
                         key,
                         label: label.clone(),
@@ -604,7 +609,19 @@ impl Workspace {
                     direction,
                     cx,
                     move |this, _, cx| this.toggle_collapsed(&toggled, cx),
-                )
+                );
+                let menu = self.render_project_menu(project_id, &palette, cx);
+                let opened = project_id.clone();
+                div()
+                    .on_mouse_down(
+                        gpui_kit::MouseButton::Right,
+                        cx.listener(move |this, event: &gpui_kit::MouseDownEvent, window, cx| {
+                            this.open_project_menu(opened.clone(), event.position, window, cx)
+                        }),
+                    )
+                    .child(header)
+                    .children(menu)
+                    .into_any_element()
             }
             SidebarItem::Group {
                 key,
@@ -633,6 +650,50 @@ impl Workspace {
                 })
                 .test_support()
                 .into_any_element()
+            }
+            SidebarItem::Folder {
+                key,
+                folder_id,
+                scope,
+                name,
+                collapsed,
+                empty,
+            } => {
+                let slot = if *empty {
+                    div().into_any_element()
+                } else {
+                    chevron(*collapsed, direction, &palette).into_any_element()
+                };
+                let renaming = self.render_folder_rename(folder_id, cx);
+                let row = tree_row(key, &palette, direction, 0, slot, false)
+                    .role(Role::TreeItem)
+                    .aria_label(name.clone())
+                    .aria_expanded(!*collapsed)
+                    .h(px(SESSION_HEIGHT))
+                    .child(glyph(
+                        if *collapsed { "folder" } else { "folder-open" },
+                        14.0,
+                        palette.muted_foreground,
+                    ))
+                    .children(renaming.is_none().then(|| {
+                        row_text(name.clone(), container_title(&palette), cx).into_any_element()
+                    }))
+                    .children(renaming);
+                let toggled = folder_id.clone();
+                let renamed = (scope.clone(), folder_id.clone());
+                on_activate(row, cx, move |this, _, cx| this.toggle_folder(&toggled, cx))
+                    .on_click(
+                        cx.listener(move |_, event: &gpui_kit::ClickEvent, window, cx| {
+                            if event.click_count() >= 2 {
+                                let (scope, id) = renamed.clone();
+                                cx.defer_in(window, move |this, window, cx| {
+                                    this.start_folder_rename(scope, id, window, cx)
+                                });
+                            }
+                        }),
+                    )
+                    .test_support()
+                    .into_any_element()
             }
             SidebarItem::Worktree {
                 key,

@@ -167,7 +167,7 @@ def qualify(args):
             check("transcript-text-exposure", transcript)
 
             def synthetic_menu_states():
-                # Without a server only Rename can act; the rest must not
+                # Without a server only Rename, Copy ID, Pin to and Move to folder can act; the rest must not
                 # expose ENABLED to assistive technology.
                 import gi
 
@@ -188,7 +188,7 @@ def qualify(args):
                 wait_for("the session menu did not open", read)
                 client.screenshot(args.output / "synthetic-session-menu.png")
                 (args.output / "synthetic-session-menu.json").write_text(json.dumps(dict(items), indent=2))
-                problems = menu_state_problems(items, {"rename"})
+                problems = menu_state_problems(items, {"rename", "copy-id", "pin-to", "move-to-folder"})
                 command(env, "xdotool", "key", "Escape")
                 if problems:
                     raise RuntimeError("; ".join(problems))
@@ -214,10 +214,12 @@ def qualify(args):
                     raise LookupError("the seed has no session row")
                 session = row["key"].rsplit(":session:", 1)[1]
                 connected.click(f"{row['key']}:menu")
-                wait_for("the pin item is missing", lambda: any((node.get_accessible_id() or "") == "session-menu-item:pin" for node in connected._walk()))
+                wait_for("the Pin to item is missing", lambda: any((node.get_accessible_id() or "") == "session-menu-item:pin-to" for node in connected._walk()))
+                connected.click("session-menu-item:pin-to")
+                wait_for("the pin item is missing", lambda: any((node.get_accessible_id() or "") == "session-submenu-item:pin" for node in connected._walk()))
                 spoken = len(speech())
                 proxy.fail_next("POST", rf"/api/openchamber/sessions/{re.escape(session)}/metadata")
-                connected.click("session-menu-item:pin")
+                connected.click("session-submenu-item:pin")
                 wait_for("the pin write never reached the proxy", lambda: bool(proxy.failed), timeout=20)
                 wait_for("no AT-SPI announcement carried the toast text", lambda: announced(announcements.read_text().splitlines(), PIN_FAILED), timeout=10)
                 wait_for("Orca did not speak the toast", lambda: said(PIN_FAILED, spoken), timeout=10)
