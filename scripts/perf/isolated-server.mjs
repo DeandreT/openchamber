@@ -52,6 +52,10 @@ Options:
                             Uses owned free ports; cannot combine with --fresh.
   --selections             Fresh model/agent/effort fixture with the same isolation.
   --authentication         Fresh password-protected fixture with the same isolation.
+  --github-fixture <proxy> <ca>
+                           Reach GitHub through a loopback fixture proxy
+                           (scripts/parity/github_fixture.py) that trusts <ca>,
+                           with a github.com origin remote on the project
   --git-fixture            Make the project the Files and Git fixture repository:
                            two commits tracking a bare remote at <root>/remote.git,
                            untracked, gitignored, CRLF and nested-repository entries
@@ -348,6 +352,19 @@ export const ensureGitFixture = (root, project) => {
   fixtureGit(project, ["push", "-q", "-u", "origin", "main"])
 }
 
+/**
+ * Points the project's `origin` at `acme/widgets` on github.com, the
+ * repository the GitHub fixture serves. Only the URL is set; nothing fetches.
+ */
+const ensureGitHubRemote = (project) => {
+  const url = "https://github.com/acme/widgets.git"
+  try {
+    fixtureGit(project, ["remote", "set-url", "origin", url])
+  } catch {
+    fixtureGit(project, ["remote", "add", "origin", url])
+  }
+}
+
 /** Replaces `state` with `seed`, or empties it when there is no seed. */
 export const restoreState = (state, seed) => {
   rmSync(state, { recursive: true, force: true })
@@ -359,7 +376,7 @@ export const restoreState = (state, seed) => {
  * isolated home under `state`. Resolves once it answers HTTP, with the served
  * main chunk checked against the build's index.html.
  */
-export const startIsolatedServer = async ({ repo, dist, state, project, port, fixturePort, opencodeBinary = defaultOpencodeBinary(), logFile, interactions = false, selections = false, authentication = false, gitFixture = false, signal }) => {
+export const startIsolatedServer = async ({ repo, dist, state, project, port, fixturePort, opencodeBinary = defaultOpencodeBinary(), logFile, interactions = false, selections = false, authentication = false, gitFixture = false, githubFixture = null, signal }) => {
   signal?.throwIfAborted()
   if (await portInUse(port)) throw new Error(`Port ${port} is already in use; stop that server or pass another port.`)
   signal?.throwIfAborted()
@@ -369,6 +386,7 @@ export const startIsolatedServer = async ({ repo, dist, state, project, port, fi
   mkdirSync(join(state, "oc-data"), { recursive: true })
   if (!interactions) ensureProject(project)
   if (gitFixture) ensureGitFixture(dirname(project), project)
+  if (githubFixture) ensureGitHubRemote(project)
   writeSettings(state, project)
   if (interactions) {
     const settingsFile = join(state, "oc-data", "settings.json")
@@ -381,6 +399,12 @@ export const startIsolatedServer = async ({ repo, dist, state, project, port, fi
   const env = isolatedServerEnv({ state, dist, config, opencodeBinary, authentication,
     inherited: interactions ? { PATH: process.env.PATH, LANG: "C.UTF-8", SHELL: "/bin/sh", TMPDIR: join(state, "tmp") } : undefined,
   })
+  if (githubFixture) {
+    // The server's own outbound proxy support reaches the fixture; loopback stays direct.
+    env.HTTPS_PROXY = githubFixture.proxy
+    env.NO_PROXY = "localhost,127.0.0.1,::1"
+    env.NODE_EXTRA_CA_CERTS = githubFixture.ca
+  }
   const child = spawn(process.execPath, [join(repo, "packages/web/bin/cli.js"), "serve", "--port", String(port), "--foreground"], {
     cwd: project,
     env,
@@ -507,6 +531,7 @@ const parseArgs = (argv) => {
     else if (value === "--selections") options.selections = true
     else if (value === "--authentication") options.authentication = true
     else if (value === "--git-fixture") options.gitFixture = true
+    else if (value === "--github-fixture") options.githubFixture = { proxy: argv[++index], ca: resolve(argv[++index]) }
     else if (value === "--port") options.port = Number(argv[++index])
     else if (value === "--fixture-port") options.fixturePort = Number(argv[++index])
     else if (value === "--opencode-binary") {
@@ -550,6 +575,7 @@ const main = async () => {
       repo: options.repo, dist: options.dist, state, project: join(options.root, "project"),
       port: options.port, fixturePort: options.fixturePort, opencodeBinary: options.opencodeBinary,
       logFile: join(options.root, "server.log"), gitFixture: options.gitFixture,
+      githubFixture: options.githubFixture ?? null,
     })
   } catch (error) {
     await fixture.stop()
