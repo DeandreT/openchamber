@@ -94,6 +94,7 @@ impl Workspace {
                     .child(self.render_title_controls(palette, direction, cx)),
             )
             .child(self.render_sidebar_toolbar(&strings, palette, direction, cx))
+            .children(self.render_sidebar_search(palette, direction, cx))
             .when_some(status, |this, status| {
                 this.child(
                     div()
@@ -220,8 +221,9 @@ impl Workspace {
         strings: &Strings,
         palette: &Palette,
         direction: Direction,
-        cx: &Context<Self>,
+        cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        let display_menu = self.render_display_menu(palette, direction, cx);
         let button = |id: &'static str, icon: &'static str, key: &str| {
             IconButton::new(id, icon, strings.get(key)).render(palette, cx, |_, _, _| {})
         };
@@ -273,11 +275,21 @@ impl Workspace {
                 div()
                     .flex_row_from(direction)
                     .gap(px(6.0))
-                    .child(button(
-                        "search-sessions",
-                        "search",
-                        "sessions.sidebar.header.actions.searchSessions",
-                    ))
+                    .child(
+                        IconButton::new(
+                            "search-sessions",
+                            "search",
+                            strings.get("sessions.sidebar.header.actions.searchSessions"),
+                        )
+                        .tone(if self.session_management.search.is_some() {
+                            ButtonTone::Active
+                        } else {
+                            ButtonTone::Quiet
+                        })
+                        .render(palette, cx, |this, window, cx| {
+                            this.toggle_sidebar_search(window, cx)
+                        }),
+                    )
                     .child(
                         IconButton::new(
                             "add-project",
@@ -288,11 +300,28 @@ impl Workspace {
                             this.open_add_project(None, window, cx)
                         }),
                     )
-                    .child(button(
-                        "display-mode",
-                        "equalizer-2",
-                        "sessions.sidebar.header.displayMode.label",
-                    )),
+                    .child(
+                        div()
+                            .relative()
+                            .child(
+                                IconButton::new(
+                                    "display-mode",
+                                    "equalizer-2",
+                                    strings.get("sessions.sidebar.header.displayMode.label"),
+                                )
+                                .tone(if self.session_management.display_menu.is_some() {
+                                    ButtonTone::Active
+                                } else {
+                                    ButtonTone::Quiet
+                                })
+                                .render(
+                                    palette,
+                                    cx,
+                                    |this, window, cx| this.toggle_display_menu(window, cx),
+                                ),
+                            )
+                            .children(display_menu),
+                    ),
             )
     }
 
@@ -456,6 +485,7 @@ impl Workspace {
         let palette = cx.global::<Palette>().clone();
         let strings = locale::strings(cx).clone();
         let direction = strings.direction();
+        let searching = self.sidebar_state.search.is_some();
         let row = match &item {
             SidebarItem::Draft { key, draft, title } => {
                 let selected = self.selected.is_none() && self.composer_key.as_ref() == Some(draft);
@@ -953,7 +983,11 @@ impl Workspace {
                     .flex_col()
                     .gap_1()
                     .child(row_text(
-                        strings.get("sessions.sidebar.empty.noSessions.title"),
+                        strings.get(if searching {
+                            "sessions.sidebar.empty.noMatches.title"
+                        } else {
+                            "sessions.sidebar.empty.noSessions.title"
+                        }),
                         palette.foreground,
                         cx,
                     ))
@@ -961,7 +995,11 @@ impl Workspace {
                         div()
                             .text_size(rems(XS_SIZE))
                             .text_color(palette.muted_foreground)
-                            .child(strings.get("sessions.sidebar.empty.noSessions.description")),
+                            .child(strings.get(if searching {
+                                "sessions.sidebar.empty.noMatches.description"
+                            } else {
+                                "sessions.sidebar.empty.noSessions.description"
+                            })),
                     )
                     .into_any_element(),
             },
