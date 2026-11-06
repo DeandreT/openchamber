@@ -57,6 +57,15 @@ pub struct AutoReviewHandoff {
     pub instructions: String,
 }
 
+/// The review session a review runs in.
+#[derive(Clone, Debug)]
+pub struct ReviewSession {
+    pub record: SessionRecord,
+    /// Made for this review, so it still needs the reviewed session's
+    /// permission mode; a reused one keeps its own.
+    pub created: bool,
+}
+
 /// `POST /api/auto-review/runs`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AutoReviewStart {
@@ -284,7 +293,7 @@ impl ServerClient {
         id: SessionId,
         model: &ModelChoice,
         agent: Option<&str>,
-    ) -> Result<SessionRecord, TransportError> {
+    ) -> Result<ReviewSession, TransportError> {
         let source = self.raw_session(original).await?;
         let source_metadata = metadata_object(source.metadata.as_ref());
         let link = review_link(&source_metadata);
@@ -292,7 +301,10 @@ impl ServerClient {
             if let Ok(existing) = self.session(link).await
                 && existing.kind == openchamber_native_core::session::SessionKind::Review
             {
-                return Ok(existing);
+                return Ok(ReviewSession {
+                    record: existing,
+                    created: false,
+                });
             }
             self.patch_metadata(original, without_review_link).await?;
         }
@@ -319,7 +331,10 @@ impl ServerClient {
             let _ = self.delete_session(&review.id).await;
             return Err(error);
         }
-        Ok(review)
+        Ok(ReviewSession {
+            record: review,
+            created: true,
+        })
     }
 
     /// Puts the reviewer's model on a review session reused from an earlier

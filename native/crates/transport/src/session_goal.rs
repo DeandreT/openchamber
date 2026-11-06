@@ -235,9 +235,9 @@ pub fn new_goal_id(now: i64) -> String {
     let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
     hasher.write_i64(now);
     format!(
-        "{}{}",
+        "{}{:0>6}",
         base36(now.max(0) as u64),
-        &format!("{:0>6}", base36(hasher.finish() % 36_u64.pow(6)))
+        base36(hasher.finish() % 36_u64.pow(6))
     )
 }
 
