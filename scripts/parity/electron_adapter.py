@@ -74,8 +74,9 @@ class ElectronClient:
                 raise RuntimeError(f"the Electron bridge exited during {command}")
             self._buffer += chunk
         reply = self._replies.pop(request)
-        if not reply.get("ok"):
+        if not reply.pop("ok", False):
             raise RuntimeError(f"{command}: {reply.get('error')}")
+        reply.pop("id")
         return reply
 
     def _call(self, command: str, **params) -> dict:
