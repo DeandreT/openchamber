@@ -111,6 +111,13 @@ pub enum ServerEvent {
     Heartbeat,
     /// The server is shedding load; reconcile after it recovers.
     Backpressure,
+    /// The server's per-session warming after a change.
+    SessionWarming(crate::session_warming::WarmingSnapshot),
+    /// Another client changed the shared session folders; `updated_at` is
+    /// the stored revision.
+    SessionFoldersChanged {
+        updated_at: i64,
+    },
     /// A type this client does not model.
     Unsupported {
         kind: String,
@@ -886,6 +893,32 @@ fn translate_openchamber(kind: &str, payload: &Value) -> Option<Vec<ServerEvent>
     let properties = payload.get("properties").unwrap_or(&Value::Null);
     if let Some(event) = permission_policy_event(kind, properties) {
         return Some(vec![event]);
+    }
+    if kind == "openchamber:session-warming" {
+        return Some(vec![
+            crate::session_warming::decode_snapshot(properties).map_or_else(
+                || ServerEvent::Unsupported {
+                    kind: kind.to_owned(),
+                },
+                ServerEvent::SessionWarming,
+            ),
+        ]);
+    }
+    if kind == "openchamber:session-folders-changed" {
+        return Some(vec![
+            properties
+                .get("updatedAt")
+                .and_then(Value::as_f64)
+                .filter(|updated_at| updated_at.is_finite())
+                .map_or_else(
+                    || ServerEvent::Unsupported {
+                        kind: kind.to_owned(),
+                    },
+                    |updated_at| ServerEvent::SessionFoldersChanged {
+                        updated_at: updated_at as i64,
+                    },
+                ),
+        ]);
     }
     if kind == "openchamber:message-queue.updated" {
         // A malformed broadcast changes nothing; the next read corrects it.

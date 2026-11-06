@@ -81,6 +81,7 @@ mod markdown_view;
 mod message_id;
 mod message_queue;
 mod model_controls;
+mod move_session_dialog;
 mod mutation_journal;
 mod network;
 mod open_in_app;
@@ -88,6 +89,7 @@ mod open_in_app;
 mod panel_tests;
 mod permission_modes;
 mod project_chooser;
+mod project_registration;
 mod project_section;
 mod prompt_rail;
 mod provider_logos;
@@ -109,14 +111,18 @@ mod send_catalog;
 mod send_recovery;
 mod server_sync;
 mod session_admission;
+mod session_ai_rename;
 mod session_branching;
 mod session_creation;
+mod session_export;
+mod session_folders;
 mod session_id;
 mod session_management;
 mod session_menu;
 #[cfg(test)]
 mod session_menu_tests;
 mod session_mutations;
+mod session_warming;
 mod settings_navigation;
 mod settings_view;
 mod sidebar_item;
@@ -138,6 +144,7 @@ mod workspace;
 #[cfg(test)]
 mod workspace_tests;
 mod workspace_view;
+mod worktree_actions;
 
 use gpui_kit::{
     AppContext, Bounds, TitlebarOptions, WindowAppearance, WindowBounds, WindowDecorations,

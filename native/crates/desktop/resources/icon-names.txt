@@ -111,3 +111,12 @@ eye-off
 folder-open
 refresh
 save-3
+ai-generate-2
+fire
+fire-fill
+download
+folder-shared
+folder-received
+window
+git-merge
+arrow-left-s

@@ -120,15 +120,27 @@ prompt. Attachments and worktree creation remain separate workflows.
   Check status and Retry same message. A retry performs a fresh observation and
   reuses the captured request identity and configuration.
 - `session_menu.rs` draws a session row's menu (the More button and a
-  secondary click open the same items), the inline rename field and the
-  archive/delete confirmation. `session_management.rs` runs rename, pin,
-  work state, archive, restore and delete against the captured runtime and
-  reports outcomes as notifications, with Undo after an archive.
+  secondary click open the same items), its Pin to, Move to worktree and
+  Move to folder submenus, the inline rename field and the archive/delete
+  confirmation. `session_management.rs` decides what the menu offers and
+  runs rename, Copy ID, pin, work state, archive, restore and delete against
+  the captured runtime, reporting outcomes as notifications, with Undo after
+  an archive. `session_ai_rename.rs` names a session on the small model,
+  `session_warming.rs` mirrors the server's per-session warming,
+  `session_export.rs` writes Export Markdown through the save dialog, and
+  `worktree_actions.rs` moves a session tree to a worktree, a new worktree
+  or (from `move_session_dialog.rs`) another project. `session_folders.rs`
+  keeps the server's shared folders with this window's unsent changes over
+  them and draws a folder's inline name field. `project_registration.rs`
+  adds, renames and closes projects and draws the project header menu and
+  the Add project dialog. Open run overview, Open in side panel and Open
+  Mini Chat window are listed and only log that their feature is not
+  ported; pin lists (custom sidebar sections), guest actions and the shared
+  setup trust prompt are not ported either.
   `archive_view.rs` is the archive page the toolbar's Archive button opens in
   place of the chat; it lists archived sessions with Restore and Delete.
-  Copy ID, AI rename, export, worktree moves, folders, keep-warm, side panel
-  and run overview are not ported, nor the archive page's project buckets,
-  search, dates and archived worktrees.
+  The archive page's project buckets, search, dates and archived worktrees
+  are not ported.
 - `legacy_queue_reservation.rs` preserves exact text-only reservation recovery
   for retained journal attempts. It compares the original composer, ordered item
   identities and complete prompt configuration before allowing dispatch.
@@ -616,6 +628,26 @@ prompt. Attachments and worktree creation remain separate workflows.
   an error when the restore cannot start. A rename commits a trimmed, changed, nonempty title on
   Enter, the Save button or a press outside the field; Escape cancels, and
   neither key acts while an IME composition is active.
+- A tree move goes descendants first and the root last, one request at a
+  time, and checks before each step that none of the remaining sessions
+  runs a turn. A failed step moves the already moved sessions back, newest
+  first. A worktree created for the move is removed with its branch after a
+  definite rejection and kept when the answer was lost, since OpenCode
+  admits a move before it answers; a lost answer also rereads the topology.
+  A quick worktree runs the project's setup commands except untrusted
+  shared ones, and the move waits until Git has checked it out.
+- Folder changes apply at once and go to the server in order, one batch at
+  a time; the shown copy is the newest server copy with the unsent changes
+  laid over it, and an older copy never replaces a newer one. A rejected
+  batch is dropped and the stored copy read again; a failed one stays first
+  in the queue and is retried with a delay up to 30 s and on every stream
+  connection. The queue lives in memory: changes not yet sent are lost if
+  the app quits before the server answers.
+- Warming and folder state are read on every event-stream connection,
+  because their broadcasts are not replayed. A warming snapshot older than
+  the shown one is ignored.
+- An AI rename saves nothing when the title, directory, archive state or
+  revert marker changed while it generated.
 - The transcript hides rows from the revert marker on; the optimistic marker
   outranks the record's. A revert stops a busy session, reverts descendants
   first, then stages; a refusal drops the marker and returns the composer to
@@ -1295,6 +1327,28 @@ GPUI's `list` with a retained `ListState` per session: returning to a session
 reuses the state that still holds its anchor message and offset, and
 `ScrollMemory` records the same anchor by message ID for sessions whose state
 is rebuilt.
+
+### Why menu items without a native feature log instead of hiding
+
+The row menu lists every item the reference lists, so its layout and
+keyboard order match. Open run overview, Open in side panel and Open Mini
+Chat window have no native feature behind them yet; they log a warning. Hiding
+them was the alternative, but that would make the menu differ for every
+session until those features land.
+
+### Why worktree moves run step by step on the window
+
+Each move step checks the live status of the sessions still to move before
+it sends, as the reference does, so a session that starts a turn during a
+long setup is not moved while it runs. One network future for the whole tree
+would have been simpler, but live status is window state.
+
+### Why folders sit in the sidebar state
+
+The row projection reads only `SidebarState` and the grouped sections. The
+folder copy and the collapse marks join it there, so the core builds folder
+rows without another input. The desktop's folder store stays the authority
+and copies its map in on every change.
 
 ### Why owned row snapshots
 

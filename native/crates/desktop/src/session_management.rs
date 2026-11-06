@@ -17,8 +17,12 @@ use gpui_kit::component::button::Button;
 use gpui_kit::component::notification::Notification;
 use gpui_kit::{Context, SharedString, Task, Window};
 use openchamber_native_core::ids::{RuntimeId, SessionId};
+use openchamber_native_core::permission_mode::is_space_directory;
+use openchamber_native_core::session::LiveStatus;
 use openchamber_native_core::session::SessionPatch;
-use openchamber_native_core::session_actions::{self, MenuContext, PendingPins, SessionAction};
+use openchamber_native_core::session_actions::{
+    self, MenuContext, PendingPins, SessionAction, Submenu, SubmenuAction, SubmenuEntry,
+};
 use openchamber_native_transport::client::SettingsChanges;
 use openchamber_native_transport::error::TransportError;
 use openchamber_native_transport::event::ServerEvent;
@@ -46,6 +50,19 @@ pub(crate) struct SessionManagement {
     pub(crate) deletion_dialog: DeletionDialogPreference,
     /// The row whose menu a press outside just closed, and where.
     pub(crate) menu_dismissed: Option<(SharedString, gpui_kit::Point<gpui_kit::Pixels>)>,
+    /// Where the open submenu was painted, so a press there stays inside.
+    pub(crate) submenu_bounds: Option<gpui_kit::Bounds<gpui_kit::Pixels>>,
+    pub(crate) moves: crate::worktree_actions::WorktreeMoves,
+    pub(crate) warming: crate::session_warming::SessionWarming,
+    pub(crate) folders: crate::session_folders::SessionFolders,
+    pub(crate) folder_rename: Option<crate::session_folders::FolderRename>,
+    pub(crate) ai_rename: crate::session_ai_rename::AiRename,
+    pub(crate) export: Option<crate::session_export::ExportConfirm>,
+    /// The session the Move session dialog moves, and its folder.
+    pub(crate) move_dialog: Option<(SessionId, String)>,
+    pub(crate) add_project: Option<crate::project_registration::AddProject>,
+    pub(crate) edit_project: Option<crate::project_registration::EditProject>,
+    pub(crate) project_menu: Option<crate::project_registration::ProjectMenu>,
     tasks: HashMap<u64, Task<()>>,
     next_task: u64,
 }
@@ -57,6 +74,10 @@ impl SessionManagement {
     pub(crate) fn switch_runtime(&mut self) -> bool {
         self.pins.clear();
         self.pin_queue.clear();
+        self.moves.switch_runtime();
+        self.warming.switch_runtime();
+        self.folder_rename = None;
+        self.ai_rename.switch_runtime();
         self.confirm.take().is_some()
     }
 }
@@ -186,6 +207,7 @@ impl Workspace {
             session_id,
             owns_work,
             archived,
+            timeline_row,
             ..
         } = item
         else {
@@ -194,6 +216,7 @@ impl Workspace {
         let session = self.sessions.get(session_id)?;
         let key = self.mutation_key(session_id);
         let settings = self.send_catalog.settings.as_ref();
+        let directory = session.resolved_directory();
         let in_chats = openchamber_native_core::chat_roots::is_chat_directory(
             self.topology.chat_roots.as_ref(),
             session.directory.as_deref(),
@@ -216,7 +239,84 @@ impl Workspace {
             removing: management.removing.contains(&key),
             renaming: management.renaming.contains(&key),
             changing_work: management.changing_work.contains(&key),
+            has_directory: directory.is_some(),
+            subtask: session.parent_id.is_some(),
+            in_space: directory.as_deref().is_some_and(is_space_directory),
+            timeline_row: *timeline_row,
+            busy: matches!(
+                self.live_status.get(session_id),
+                Some(LiveStatus::Busy | LiveStatus::Retry)
+            ),
+            moving: self.worktree_move_pending(session_id),
+            warming_enabled: management.warming.enabled(),
+            warmed: management.warming.is_warmed(session_id),
+            changing_warm: management.warming.is_changing(&key),
+            // Native reads no multi-run membership; the item stays hidden.
+            multi_run: false,
+            folder_authority: true,
+            ai_rename: self.ai_rename_state(session_id),
         })
+    }
+
+    /// The menu opened for `session`: what its items depend on is read now.
+    pub(crate) fn session_menu_opened(&mut self, session: &SessionId, cx: &mut Context<Self>) {
+        self.check_ai_rename(session, cx);
+    }
+
+    /// The menu closed: checks that only served it stop.
+    pub(crate) fn session_menu_closed(&mut self) {
+        self.session_management.submenu_bounds = None;
+        self.stop_ai_rename_check();
+    }
+
+    /// What a submenu lists for `session` now.
+    pub(crate) fn session_submenu_entries(
+        &mut self,
+        kind: Submenu,
+        session: &SessionId,
+        cx: &mut Context<Self>,
+    ) -> Vec<SubmenuEntry> {
+        match kind {
+            Submenu::Pin => {
+                let pinned = self
+                    .sessions
+                    .get(session)
+                    .is_some_and(|record| self.session_management.pins.shows_pinned(record));
+                session_actions::pin_submenu(pinned, self.session_actions_available())
+            }
+            Submenu::Worktree => self.worktree_submenu_entries(session, cx),
+            Submenu::Folder => self.folder_submenu_entries(session),
+        }
+    }
+
+    /// Runs one submenu item for a session.
+    pub(crate) fn run_session_submenu_action(
+        &mut self,
+        _row_key: SharedString,
+        session_id: SessionId,
+        action: SubmenuAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        match action {
+            SubmenuAction::Pin => self.set_pinned(&session_id, true, window, cx),
+            SubmenuAction::Unpin => self.set_pinned(&session_id, false, window, cx),
+            SubmenuAction::MoveToWorktree { path } => {
+                self.move_session_to_worktree(&session_id, &path, window, cx)
+            }
+            SubmenuAction::NewWorktree => {
+                self.move_session_to_new_worktree(&session_id, window, cx)
+            }
+            SubmenuAction::AssignFolder { scope, folder_id } => {
+                self.assign_session_folder(&session_id, &scope, &folder_id, cx)
+            }
+            SubmenuAction::RemoveFromFolder { scope } => {
+                self.remove_session_from_folder(&session_id, &scope, cx)
+            }
+            SubmenuAction::NewFolder { scope } => {
+                self.create_folder_for_session(&session_id, &scope, window, cx)
+            }
+        }
     }
 
     /// Runs one menu action for a session.
@@ -230,6 +330,10 @@ impl Workspace {
     ) {
         match action {
             SessionAction::Rename => self.start_rename(row_key, session_id, window, cx),
+            SessionAction::AiRename => self.ai_rename_session(&session_id, window, cx),
+            SessionAction::CopyId => self.copy_session_id(&session_id, window, cx),
+            // Submenu triggers open their submenu instead of running.
+            SessionAction::PinTo | SessionAction::MoveToWorktree | SessionAction::MoveToFolder => {}
             SessionAction::Pin => self.set_pinned(&session_id, true, window, cx),
             SessionAction::Unpin => self.set_pinned(&session_id, false, window, cx),
             SessionAction::TrackWork => {
@@ -238,11 +342,43 @@ impl Workspace {
             SessionAction::MarkDone => {
                 self.set_work_state(&session_id, WorkState::Done, window, cx)
             }
+            SessionAction::KeepWarm => self.set_session_warm(&session_id, true, window, cx),
+            SessionAction::StopWarm => self.set_session_warm(&session_id, false, window, cx),
+            SessionAction::ExportMarkdown => self.export_session_markdown(&session_id, window, cx),
+            SessionAction::MoveSession => self.open_move_session_dialog(&session_id, window, cx),
+            SessionAction::OpenRunOverview => unported::open_run_overview(&session_id),
+            SessionAction::OpenInSidePanel => unported::open_in_side_panel(&session_id),
+            SessionAction::OpenMiniChat => unported::open_mini_chat_window(&session_id),
             SessionAction::Archive => self.request_removal(&session_id, false, window, cx),
             SessionAction::Delete => self.request_removal(&session_id, true, window, cx),
             SessionAction::Restore => {
                 self.restore_sessions(vec![session_id], None, false, window, cx);
             }
+        }
+    }
+
+    /// Copies the session's ID and says whether that worked.
+    pub(crate) fn copy_session_id(
+        &mut self,
+        session_id: &SessionId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(
+            session_id.as_str().to_owned(),
+        ));
+        // The platform clipboard answers no write; reading it back is the
+        // only check there is.
+        let copied = cx
+            .read_from_clipboard()
+            .and_then(|item| item.text())
+            .is_some_and(|text| text == session_id.as_str());
+        let strings = locale::strings(cx).clone();
+        if copied {
+            let text = strings.get("sessions.sidebar.session.copyId.success");
+            self.push_notice(Notification::success(text.clone()), text, window, cx);
+        } else {
+            self.push_error("sessions.sidebar.session.copyId.error", None, window, cx);
         }
     }
 
@@ -1106,5 +1242,27 @@ impl Workspace {
         {
             self.select_session(reopen, window, cx);
         }
+    }
+}
+
+/// Menu items whose features the native client does not have yet. Each
+/// logs the request so it is visible in diagnostics; the session is left
+/// as it was.
+mod unported {
+    use openchamber_native_core::ids::SessionId;
+
+    /// The run overview of a multi-run (`setRunOverviewKey`).
+    pub(super) fn open_run_overview(session: &SessionId) {
+        tracing::warn!(%session, "the run overview is not ported to the native client");
+    }
+
+    /// A chat tab in the context panel (`openContextPanelTab`).
+    pub(super) fn open_in_side_panel(session: &SessionId) {
+        tracing::warn!(%session, "side panel chat tabs are not ported to the native client");
+    }
+
+    /// The Mini Chat window (`desktop_open_session_mini_chat_window`).
+    pub(super) fn open_mini_chat_window(session: &SessionId) {
+        tracing::warn!(%session, "the Mini Chat window is not ported to the native client");
     }
 }

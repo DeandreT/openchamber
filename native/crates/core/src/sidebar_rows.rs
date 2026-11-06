@@ -148,6 +148,19 @@ pub enum SidebarRow<'a> {
         /// Nothing to list, so the header offers no chevron.
         empty: bool,
     },
+    /// A session folder of a project's root; its works list under it.
+    FolderHeader {
+        key: String,
+        project_id: ProjectId,
+        scope: String,
+        folder_id: String,
+        /// The folder's name after its parents', `Parent / Child`.
+        name: String,
+        collapsed: bool,
+        /// Nothing filed, so the header offers no chevron.
+        empty: bool,
+        depth: usize,
+    },
     /// A linked worktree or isolated space, distinguished by its group label.
     Worktree {
         key: String,
@@ -203,6 +216,7 @@ impl SidebarRow<'_> {
             Self::ActivityHeader { key, .. }
             | Self::ProjectHeader { key, .. }
             | Self::GroupHeader { key, .. }
+            | Self::FolderHeader { key, .. }
             | Self::Worktree { key, .. }
             | Self::Session { key, .. }
             | Self::ShowControl { key, .. }
@@ -224,6 +238,10 @@ pub struct SidebarState {
     /// Worktrees start folded; their expansion is shared across placements.
     pub expanded_works: HashSet<String>,
     pub visible_count_by_container: HashMap<String, usize>,
+    /// The shared session folders, by scope.
+    pub folders: crate::folders::FoldersMap,
+    /// The folders this window shows collapsed.
+    pub collapsed_folders: HashSet<String>,
 }
 
 impl SidebarState {
@@ -498,7 +516,7 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
             return;
         }
         for work in works {
-            self.append_work(&work, "activity:work:");
+            self.append_work(&work, "activity:work:", 0);
         }
     }
 
@@ -559,7 +577,7 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
             return;
         }
         for work in &works {
-            self.append_work(work, "activity:timeline:");
+            self.append_work(work, "activity:timeline:", 0);
         }
         for (key, state) in statuses {
             self.push_status(&key, state, 0, false);
@@ -613,6 +631,7 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
                     }
                 }
             }
+            self.append_folders(section, &mut works);
             let container = format!("{project_id}:works");
             let count = inputs
                 .state
@@ -623,7 +642,7 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
                 .max(SESSIONS_INITIAL_LIMIT)
                 .min(works.len());
             for work in works.iter().take(count) {
-                self.append_work(work, "");
+                self.append_work(work, "", 0);
             }
             if works.len() > SESSIONS_INITIAL_LIMIT {
                 let (control, suffix) = if count < works.len() {
@@ -657,7 +676,104 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
         }
     }
 
-    fn append_work(&mut self, work: &SidebarWork, prefix: &str) {
+    /// The project root's folders before its other works: each folder's
+    /// header, the works filed in it one level in, then its subfolders.
+    /// Filed works leave the project's own list. A folder whose parent is
+    /// gone, or that sits in a cycle, is not shown (`selectFolderIdsForProjection`).
+    fn append_folders(&mut self, section: &'v ProjectSection<'a>, works: &mut Vec<SidebarWork>) {
+        let inputs = self.inputs;
+        let Some(scope) = section
+            .groups
+            .iter()
+            .find(|group| group.is_main)
+            .and_then(|group| group.directory.as_deref())
+            .or(Some(section.project.path.as_str()))
+            .and_then(crate::path::normalize)
+        else {
+            return;
+        };
+        let Some(folders) = inputs
+            .state
+            .folders
+            .get(&scope)
+            .filter(|list| !list.is_empty())
+        else {
+            return;
+        };
+        let valid = valid_folders(folders);
+        let member_id = |work: &SidebarWork| -> Option<String> {
+            match work {
+                SidebarWork::Session {
+                    root_session_id, ..
+                } => Some(root_session_id.as_str().to_owned()),
+                SidebarWork::Group { group_id, .. } => section
+                    .groups
+                    .iter()
+                    .find(|group| &group.id == group_id)
+                    .and_then(|group| group.directory.as_deref())
+                    .and_then(crate::path::normalize)
+                    .map(|directory| format!("worktree:{directory}")),
+            }
+        };
+        let filed: HashSet<&str> = folders
+            .iter()
+            .filter(|folder| valid.contains(folder.id.as_str()))
+            .flat_map(|folder| folder.session_ids.iter().map(String::as_str))
+            .collect();
+        let (in_folders, rest): (Vec<SidebarWork>, Vec<SidebarWork>) = works
+            .drain(..)
+            .partition(|work| member_id(work).is_some_and(|id| filed.contains(id.as_str())));
+        *works = rest;
+        let project_id = section.project.id.clone();
+        let mut stack: Vec<(&crate::folders::SessionFolder, String)> = folders
+            .iter()
+            .rev()
+            .filter(|folder| folder.parent_id.is_none() && valid.contains(folder.id.as_str()))
+            .map(|folder| (folder, String::new()))
+            .collect();
+        while let Some((folder, parent_path)) = stack.pop() {
+            let name = if parent_path.is_empty() {
+                folder.name.clone()
+            } else {
+                format!("{parent_path} / {}", folder.name)
+            };
+            let members: Vec<&SidebarWork> = in_folders
+                .iter()
+                .filter(|work| member_id(work).is_some_and(|id| folder.session_ids.contains(&id)))
+                .collect();
+            let children: Vec<&crate::folders::SessionFolder> = folders
+                .iter()
+                .filter(|child| {
+                    child.parent_id.as_deref() == Some(folder.id.as_str())
+                        && valid.contains(child.id.as_str())
+                })
+                .collect();
+            // An empty folder is always open, so the first work filed shows.
+            let empty = members.is_empty() && children.is_empty();
+            let collapsed = !empty && inputs.state.collapsed_folders.contains(&folder.id);
+            self.push(SidebarRow::FolderHeader {
+                key: format!("project:{project_id}:folder:{scope}:{}", folder.id),
+                project_id: project_id.clone(),
+                scope: scope.clone(),
+                folder_id: folder.id.clone(),
+                name: name.clone(),
+                collapsed,
+                empty,
+                depth: 0,
+            });
+            if collapsed {
+                continue;
+            }
+            for work in members {
+                self.append_work(work, "", 1);
+            }
+            for child in children.into_iter().rev() {
+                stack.push((child, name.clone()));
+            }
+        }
+    }
+
+    fn append_work(&mut self, work: &SidebarWork, prefix: &str, base_depth: usize) {
         let inputs = self.inputs;
         match work {
             SidebarWork::Session {
@@ -693,7 +809,7 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
                                 } else {
                                     RenderContext::MixedCompact
                                 },
-                                base_depth: 0,
+                                base_depth,
                                 inside_work: false,
                             },
                         );
@@ -1151,6 +1267,34 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
     }
 }
 
+/// The folders whose parent chain ends at a root without a cycle.
+fn valid_folders(folders: &[crate::folders::SessionFolder]) -> HashSet<&str> {
+    let by_id: HashMap<&str, &crate::folders::SessionFolder> = folders
+        .iter()
+        .map(|folder| (folder.id.as_str(), folder))
+        .collect();
+    folders
+        .iter()
+        .filter(|folder| {
+            let mut seen = HashSet::new();
+            let mut current = *folder;
+            loop {
+                if !seen.insert(current.id.as_str()) {
+                    return false;
+                }
+                match current.parent_id.as_deref() {
+                    None => return true,
+                    Some(parent) => match by_id.get(parent) {
+                        Some(next) => current = next,
+                        None => return false,
+                    },
+                }
+            }
+        })
+        .map(|folder| folder.id.as_str())
+        .collect()
+}
+
 fn is_pinned(session: &SessionRecord) -> bool {
     session.overlay.pinned_at.is_some()
 }
@@ -1347,6 +1491,9 @@ mod tests {
                 SidebarRow::ProjectHeader { project_id, .. } => format!("project:{project_id}"),
                 SidebarRow::GroupHeader { group_key, .. } => format!("group:{group_key}"),
                 SidebarRow::Worktree { group_key, .. } => format!("worktree:{group_key}"),
+                SidebarRow::FolderHeader {
+                    name, collapsed, ..
+                } => format!("folder:{name}{}", if *collapsed { "+" } else { "" }),
                 SidebarRow::Session { session, depth, .. } => format!("{}@{depth}", session.id),
                 SidebarRow::ShowControl { control, .. } => format!("show:{control:?}"),
                 SidebarRow::Status { state, .. } => format!("status:{state:?}"),
@@ -1448,6 +1595,65 @@ mod tests {
             ]
         );
         assert_eq!(model.rows.iter().filter(|row| matches!(row, SidebarRow::Worktree { group_key, .. } if group_key == "app:feature")).count(), 1);
+    }
+
+    #[test]
+    fn works_list_the_root_folders_first_with_their_filed_works() {
+        use crate::folders::SessionFolder;
+
+        let records = sessions(4);
+        let project = ConfiguredProject {
+            id: ProjectId::from("app"),
+            path: "/p".to_owned(),
+        };
+        let sections = [ProjectSection {
+            project: &project,
+            groups: vec![group("root", true, records.iter().map(node).collect())],
+        }];
+        let folder = |id: &str, parent: Option<&str>, sessions: &[&str]| SessionFolder {
+            id: id.to_owned(),
+            name: id.to_uppercase(),
+            session_ids: sessions.iter().map(|id| (*id).to_owned()).collect(),
+            created_at: 0,
+            parent_id: parent.map(str::to_owned),
+        };
+        let mut state = SidebarState::default();
+        state.folders.insert(
+            "/p".to_owned(),
+            vec![
+                folder("a", None, &["s01"]),
+                folder("b", Some("a"), &["s02"]),
+                folder("c", None, &[]),
+                folder("lost", Some("gone"), &["s03"]),
+            ],
+        );
+        let statuses = HashMap::new();
+        let mut ordering = SessionOrdering::new();
+        let mut input = timeline_inputs(&sections, &[], &[], &state, &statuses);
+        input.view_mode = SidebarViewMode::Works;
+        assert_eq!(
+            kinds(&build(&input, &mut ordering)),
+            [
+                "project:app",
+                "folder:A",
+                "s01@1",
+                "folder:A / B",
+                "s02@1",
+                "folder:C",
+                "s00@0",
+                "s03@0",
+            ],
+            "a folder with a missing parent shows nothing and keeps its works in the list"
+        );
+        let mut collapsed = state.clone();
+        collapsed.collapsed_folders.insert("a".to_owned());
+        collapsed.collapsed_folders.insert("c".to_owned());
+        input.state = &collapsed;
+        assert_eq!(
+            kinds(&build(&input, &mut ordering)),
+            ["project:app", "folder:A+", "folder:C", "s00@0", "s03@0"],
+            "a collapsed folder hides its subfolders; an empty one stays open"
+        );
     }
 
     #[test]
