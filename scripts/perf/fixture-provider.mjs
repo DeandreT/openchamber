@@ -91,9 +91,8 @@ export const FINAL_REVIEW_DISPUTED = "FINAL_REVIEW_STATUS: disputed"
 /** The text of a chat-completions message, whether a string or parts. */
 const messageText = (message) => {
   const content = message?.content
-  if (typeof content === "string") return content
-  if (!Array.isArray(content)) return ""
-  return content.map((part) => (typeof part?.text === "string" ? part.text : "")).join("\n")
+  if (Array.isArray(content)) return content.map((part) => String(part?.text ?? "")).join("\n")
+  return String(content ?? "")
 }
 
 const goalReport = ({ done, remaining, needs }) => [
