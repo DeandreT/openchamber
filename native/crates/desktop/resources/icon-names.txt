@@ -111,3 +111,8 @@ eye-off
 folder-open
 refresh
 save-3
+file
+file-image
+file-pdf
+folder-3-fill
+chat-3

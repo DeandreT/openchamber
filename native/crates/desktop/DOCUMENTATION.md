@@ -93,6 +93,22 @@ prompt. Attachments and worktree creation remain separate workflows.
   durable preparation before a POST, and drains the last snapshot on normal close.
   `attachment_retirement.rs` owns named native-root release requests and their
   handoff to durable local retirement intents after actor ownership ends.
+- `composer_autocomplete.rs` owns the composer's pickers: `/` commands, `$`
+  skills, `#` snippets and `@` agents, files, folders and sessions. A committed
+  edit (never IME preedit, never a restored draft) resolves the trigger
+  through the core's `autocomplete`; Up, Down, Ctrl+N/P, Enter, Tab and Escape
+  go to an open picker before the editor. Catalogs are read per runtime and
+  config directory, again when a picker opens more than five seconds after the
+  last read; the `@` search waits 180 ms and keeps the last rows on screen
+  until its answer. `composer_autocomplete_view.rs` draws the list above the
+  composer's start edge with its keyboard hint; the selected row is the
+  editor's active descendant. Snippet creation from the `#` list (the web's
+  quick-create dialog) and the emoji picker are not ported.
+- `composer_references.rs` resolves the session and message links in the
+  composer's text before a send: sessions from the session index, messages by
+  a whole-message read. A send waits for that read; each reference found joins
+  the draft as a context item in link order, and a link it cannot resolve
+  stays text with a notification.
 - `message_queue.rs` owns the composer's side of the server-owned message
   queue: the projection reads (the host's on every event-stream connection,
   a space's once per connection when one of its sessions is selected),
@@ -1108,6 +1124,32 @@ prompt. Attachments and worktree creation remain separate workflows.
   line through the platform opener.
 
 ## Decisions
+
+### Why a picker choice edits the textarea
+
+A choice replaces the trigger and query as one undoable textarea edit, as the
+web's `replaceRange` does. The draft, its journal and every send then see
+ordinary composer text, so a picked `@path`, `$skill` or `#snippet` is
+prepared at send exactly as one typed by hand. A separate chip model would
+need its own journal fields and preparation path. A picked file mention is
+not added to a confirmed-mention set the way the web's is, so a picked name
+without a dot or slash, or with a space, still reads as plain text at send.
+
+### Why the picker stays at the composer's edge
+
+The web measures the caret and places the list right above the line being
+typed; before that measurement it anchors to the composer's start edge. The
+native list keeps that anchor. The textarea exposes only the live caret's
+bounds, and placing the list at the trigger needs the trigger's position.
+
+### Why session references enter the draft at send
+
+The web derives references from the text at send: a deleted link is not sent.
+Native reads the links when a send starts and writes the references into the
+draft's context items under a `session-reference:` identity, replacing the
+previous set, so the existing rich send, its journal and its recovery carry
+them with no new persisted field. A failed send returns them with its draft,
+where they show as context chips; the next send replaces them from the text.
 
 ### Why Settings owns scrolling and confirmation
 

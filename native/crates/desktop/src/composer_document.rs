@@ -1572,6 +1572,7 @@ impl Workspace {
             self.drafts.save(owner, draft);
             self.queue_persistence(cx);
         }
+        self.autocomplete_after_edit(event, cx);
         self.resume_composer_close(window, cx);
         cx.notify();
     }
