@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { fixtureProviderConfig, startFixtureProvider, INTERACTION_QUESTIONS, INTERACTION_SHELL_COMMAND } from './fixture-provider.mjs';
+import { auditAnswer, FINAL_REVIEW_CLEAN, FINAL_REVIEW_DISPUTED, fixtureProviderConfig, planWorkflow, startFixtureProvider, INTERACTION_QUESTIONS, INTERACTION_SHELL_COMMAND } from './fixture-provider.mjs';
 
 async function withProvider(interactions, run) {
   const server = await startFixtureProvider(0, { interactions });
@@ -112,4 +112,55 @@ test('existing agent and auxiliary responses keep their behavior', async () => {
     const result = await frames(await request({ model: 'agent-1tools-20000cps', stream: true, messages: [{ role: 'user', content: 'List' }] }));
     assert.equal(result.flatMap((frame) => frame.choices[0].delta.tool_calls ?? [])[0].function.name, 'glob');
   });
+});
+
+const user = (content) => ({ role: 'user', content });
+const intro = user('<system-reminder>\nGoal mode is active for this session. The user message above defines the goal objective.\n</system-reminder>');
+const continuation = user('The session goal is still open. Take it through to the end in this run.\n<objective>\nShip [turns:3]\n</objective>');
+const audit = (report) => [user(`You check the progress of an AI coding agent.\n\n<objective>\nShip\n</objective>\n\n<answer>\n${report}\n</answer>\n\nReturn the JSON.`)];
+
+test('the workflow model reports a goal turn by turn, as its objective asks', () => {
+  const first = planWorkflow([intro, user('Ship [turns:3]')]);
+  assert.match(first, /- Remaining: steps 2 to 3/);
+  assert.match(planWorkflow([intro, user('Ship [turns:3]'), continuation]), /- Remaining: steps 3 to 3/);
+  assert.match(planWorkflow([intro, user('Ship [turns:3]'), continuation, continuation]), /- Remaining: nothing\n- Needs from the user: nothing/);
+  assert.match(planWorkflow([intro, user('Ship [blocked]')]), /- Needs from the user: an API key/);
+  assert.equal(planWorkflow([user('Hello')]), 'Done.');
+});
+
+test('the progress check answers from the report lines', () => {
+  const answer = (report) => JSON.parse(auditAnswer(audit(report)));
+  assert.deepEqual(answer(planWorkflow([intro, user('Ship [turns:2]')])), { all_done: false, remaining: true, needs_user: false });
+  assert.deepEqual(answer(planWorkflow([intro, user('Ship [turns:1]')])), { all_done: true, remaining: false, needs_user: false });
+  assert.deepEqual(answer(planWorkflow([intro, user('Ship [blocked]')])), { all_done: true, remaining: false, needs_user: true });
+  assert.equal(auditAnswer([user('Generate a title')]), null);
+});
+
+test('the workflow model walks a review loop to its final line', () => {
+  const handoff = planWorkflow([user('Prepare a handoff for another agent to review this work.')]);
+  assert.match(handoff, /^Handoff:/);
+  const review = [user(`Please review the changes described in this handoff.\n\n${handoff}`)];
+  assert.doesNotMatch(planWorkflow(review), /FINAL_REVIEW_STATUS/);
+  assert.match(planWorkflow([user('Another agent reviewed your changes and left the feedback below.')]), /^Fixed/);
+  const reReview = [...review, user('The agent implementing the changes has responded to the previous review feedback.')];
+  assert.ok(planWorkflow(reReview).endsWith(FINAL_REVIEW_CLEAN));
+  assert.ok(planWorkflow([user('[dispute]'), ...reReview]).endsWith(FINAL_REVIEW_DISPUTED));
+  assert.ok(planWorkflow([user('Please review the current workspace changes. [clean]')]).endsWith(FINAL_REVIEW_CLEAN));
+});
+
+test('workflow models and answers require opt-in', async () => {
+  assert.equal(fixtureProviderConfig(1234).provider.perf.models.workflow, undefined);
+  assert.ok(fixtureProviderConfig(1234, { workflows: true }).provider.perf.models['workflow-1s']);
+  const post = async (workflows, body) => {
+    const server = await startFixtureProvider(0, { workflows });
+    try {
+      const response = await fetch(`http://127.0.0.1:${server.address().port}/v1/chat/completions`, {
+        method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(5000),
+      });
+      return (await response.json()).choices[0].message.content;
+    } finally { await new Promise((resolve) => server.close(resolve)); }
+  };
+  const check = { model: 'stream-1200cps', stream: false, messages: audit('- Done: all\n- Remaining: nothing\n- Needs from the user: nothing') };
+  assert.equal(await post(false, check), 'Streaming capture');
+  assert.deepEqual(JSON.parse(await post(true, check)), { all_done: true, remaining: false, needs_user: false });
 });
