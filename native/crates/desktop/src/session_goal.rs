@@ -89,6 +89,9 @@ pub(crate) struct Goals {
     pub busy: HashSet<SessionKey>,
     pub dialog: Option<GoalDialog>,
     objectives: HashMap<ObjectiveKey, Option<String>>,
+    /// The last objective text read per session and goal, shown while a
+    /// later edit's text is read, as the web keeps its fetched text.
+    latest_objectives: HashMap<(RuntimeId, SessionId), (String, String)>,
     objective_reads: HashSet<ObjectiveKey>,
     small_model: HashMap<(RuntimeId, String), (Option<bool>, Instant)>,
     small_model_reads: HashSet<(RuntimeId, String)>,
@@ -180,16 +183,21 @@ impl Workspace {
         if let Some(objective) = goal.inline_objective() {
             return Some(objective.to_owned());
         }
-        self.goals
-            .objectives
-            .get(&ObjectiveKey {
-                runtime: self.runtime.clone(),
-                session: session.clone(),
-                goal: goal.id.clone(),
-                updated_at: goal.updated_at,
-            })
-            .cloned()
-            .flatten()
+        let key = ObjectiveKey {
+            runtime: self.runtime.clone(),
+            session: session.clone(),
+            goal: goal.id.clone(),
+            updated_at: goal.updated_at,
+        };
+        match self.goals.objectives.get(&key) {
+            Some(text) => text.clone(),
+            None => self
+                .goals
+                .latest_objectives
+                .get(&(key.runtime, key.session))
+                .filter(|(id, _)| *id == goal.id)
+                .map(|(_, text)| text.clone()),
+        }
     }
 
     /// Reads the selected goal's objective file, once per edit.
@@ -236,6 +244,16 @@ impl Workspace {
                         Some(Ok(text)) => text,
                         _ => None,
                     };
+                    if let Some(text) = &text {
+                        this.goals.latest_objectives.insert(
+                            (key.runtime.clone(), key.session.clone()),
+                            (key.goal.clone(), text.clone()),
+                        );
+                    }
+                    // One text per session: an earlier edit's is never shown again.
+                    this.goals.objectives.retain(|held, _| {
+                        held.runtime != key.runtime || held.session != key.session
+                    });
                     this.goals.objectives.insert(key, text);
                     this.seed_goal_dialog(window, cx);
                     cx.notify();

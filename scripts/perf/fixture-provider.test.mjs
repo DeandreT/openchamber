@@ -126,6 +126,9 @@ test('the workflow model reports a goal turn by turn, as its objective asks', ()
   assert.match(planWorkflow([intro, user('Ship [turns:3]'), continuation, continuation]), /- Remaining: nothing\n- Needs from the user: nothing/);
   assert.match(planWorkflow([intro, user('Ship [blocked]')]), /- Needs from the user: an API key/);
   assert.equal(planWorkflow([user('Hello')]), 'Done.');
+  // A later goal in the same session counts from its own start.
+  const earlier = [intro, user('Ship [turns:2]'), continuation, user('[blocked]')];
+  assert.match(planWorkflow([...earlier, intro, user('Next [turns:4]')]), /- Remaining: steps 2 to 4/);
 });
 
 test('the progress check answers from the report lines', () => {
