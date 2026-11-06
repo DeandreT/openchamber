@@ -75,6 +75,7 @@ fn source(text: &str) -> QueueLocalCapture {
 
 fn agent(name: &str, mode: Option<AgentMode>) -> AgentEntry {
     AgentEntry {
+        description: None,
         name: name.to_owned(),
         display_name: None,
         mode,

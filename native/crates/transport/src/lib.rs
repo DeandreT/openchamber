@@ -9,6 +9,7 @@ pub mod attachment;
 pub mod authentication;
 pub mod catalog;
 pub mod client;
+pub mod composer_catalog;
 pub mod composer_preparation;
 pub mod control_stream;
 pub mod credential;

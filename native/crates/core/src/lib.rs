@@ -5,6 +5,7 @@
 //! filesystem dependency: callers pass trusted, explicit inputs and receive
 //! owned values, stable identifiers or borrowed views.
 
+pub mod autocomplete;
 pub mod branching;
 pub mod chat_roots;
 pub mod composer_selection;
@@ -36,10 +37,12 @@ pub mod repository;
 pub mod request_list;
 pub mod request_owner;
 pub mod scroll_memory;
+pub mod search_rank;
 pub mod send_config;
 pub mod session;
 pub mod session_actions;
 pub mod session_index;
+pub mod session_reference;
 pub mod sidebar_collection;
 pub mod sidebar_rows;
 pub mod sidebar_work;

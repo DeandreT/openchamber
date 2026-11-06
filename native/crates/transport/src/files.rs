@@ -302,12 +302,32 @@ impl ServerClient {
         query: &str,
         limit: usize,
     ) -> Result<Vec<FileHit>, FilesError> {
+        self.find_paths(directory, query, limit, "file").await
+    }
+
+    /// The same search for folders, which the `@` picker lists with files.
+    pub async fn find_folders(
+        &self,
+        directory: &str,
+        query: &str,
+        limit: usize,
+    ) -> Result<Vec<FileHit>, FilesError> {
+        self.find_paths(directory, query, limit, "directory").await
+    }
+
+    async fn find_paths(
+        &self,
+        directory: &str,
+        query: &str,
+        limit: usize,
+        kind: &str,
+    ) -> Result<Vec<FileHit>, FilesError> {
         let limit = limit.to_string();
         let request = self.files_request(
             Method::GET,
             "api/fs/find",
             directory,
-            &[("query", query), ("type", "file"), ("limit", &limit)],
+            &[("query", query), ("type", kind), ("limit", &limit)],
         );
         let body: FindBody = files_json(request).await?;
         let root = directory.trim_end_matches('/');

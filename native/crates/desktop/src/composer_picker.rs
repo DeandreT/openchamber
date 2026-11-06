@@ -569,6 +569,7 @@ mod tests {
             ["build", "plan"]
                 .into_iter()
                 .map(|name| AgentEntry {
+                    description: None,
                     name: name.into(),
                     display_name: None,
                     mode: Some(AgentMode::Primary),

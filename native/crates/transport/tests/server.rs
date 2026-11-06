@@ -30,6 +30,8 @@ use tokio_tungstenite::tungstenite::protocol::frame::coding::{Data, OpCode};
 mod authentication;
 #[path = "blocking_requests/mod.rs"]
 mod blocking_requests;
+#[path = "composer_catalog/mod.rs"]
+mod composer_catalog;
 #[path = "files/mod.rs"]
 mod files;
 #[path = "git/mod.rs"]

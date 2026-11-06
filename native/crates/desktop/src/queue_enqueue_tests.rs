@@ -1408,6 +1408,7 @@ mod compound_workspace {
                 workspace.selected = Some(SessionId::from("ses_queue"));
                 let mut catalog = DirectoryCatalog::default();
                 catalog.agents = Load::Ready(vec![AgentEntry {
+                    description: None,
                     name: "build".into(),
                     display_name: None,
                     mode: None,

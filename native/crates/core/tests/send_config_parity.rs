@@ -105,6 +105,7 @@ impl From<&FixtureAgent> for AgentEntry {
             hidden: agent.hidden || agent.options_hidden,
             model: agent.model.as_ref().map(ModelChoice::from),
             color: agent.color.clone(),
+            description: None,
         }
     }
 }
