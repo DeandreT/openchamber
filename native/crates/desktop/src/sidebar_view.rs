@@ -192,7 +192,9 @@ impl Workspace {
                     "menu-2",
                     strings.get("header.actions.openAppMenuAria"),
                 )
-                .render(palette, cx, |_, _, _| {}),
+                .render(palette, cx, |this, window, cx| {
+                    this.toggle_app_menu(window, cx)
+                }),
             )
             .child(
                 IconButton::new(
@@ -420,7 +422,9 @@ impl Workspace {
                 "desktopHostSwitcher.startup.connectingTo",
                 &[("host", &host)],
             ),
-            ConnectionState::Reconnecting => strings.get("opencodeCompatibility.reconnecting"),
+            // The reference shows nothing while the stream reconnects; the
+            // last valid state stays on screen.
+            ConnectionState::Reconnecting => return None,
             ConnectionState::Failed(failure) => failure_text(strings, failure, &host),
             ConnectionState::Connected => match self.sessions.status() {
                 IndexStatus::Loading if self.sessions.active().is_empty() => {

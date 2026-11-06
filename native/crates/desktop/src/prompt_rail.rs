@@ -28,6 +28,9 @@ const INDICATOR_TICKS: usize = 5;
 const TICK_HEIGHT: f32 = 2.0;
 const TICK_WIDTH: f32 = 12.0;
 const PANEL_WIDTH: f32 = 320.0;
+/// The prompt list's key context. Its own key handler moves through the list
+/// with Ctrl+N and Ctrl+P, ahead of any application shortcut on those keys.
+pub(crate) const LIST_CONTEXT: &str = "PromptList";
 const PANEL_HEIGHT: f32 = 384.0;
 const ROW_HEIGHT: f32 = 30.0;
 /// Inactive ticks draw the surface foreground at 30%.
@@ -415,6 +418,7 @@ impl Workspace {
             .min(f32::from(chrome::content_size(window).height) - chrome::TITLE_ROW_HEIGHT - 24.0);
             let list = div()
                 .id("prompt-list")
+                .key_context(LIST_CONTEXT)
                 .role(Role::ListBox)
                 .accessibility_id("prompt-list")
                 .aria_label(label.clone())

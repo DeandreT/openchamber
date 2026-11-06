@@ -45,11 +45,6 @@ const KEEPALIVE: Duration = Duration::from_secs(10 * 60);
 /// The size a terminal starts with before its grid is measured.
 const PROVISIONAL: (u16, u16) = (80, 24);
 
-/// Chords the app keeps while a terminal has focus: the terminal toggle, as
-/// `handleTerminalShortcutCapture` lets it through. The surface's own key
-/// handler keeps the copy, paste and zoom chords.
-const APP_CHORDS: &[&str] = &["ctrl-j"];
-
 /// The key contexts above a focused terminal, outermost first: Kit's window
 /// root, the workspace and the surface.
 pub(crate) fn terminal_context_stack() -> Vec<KeyContext> {
@@ -64,21 +59,23 @@ pub(crate) fn terminal_context_stack() -> Vec<KeyContext> {
 }
 
 /// Gives the focused shell every chord a binding above it claims, except
-/// [`APP_CHORDS`]. Runs after every other binding is registered: a later
-/// `NoAction` outranks earlier bindings and cancels their pending chords.
-pub(crate) fn bind_keys(cx: &mut App) {
-    let chords = shadowed_chords(&cx.key_bindings().borrow());
-    cx.bind_keys(
-        chords
-            .iter()
-            .map(|keys| KeyBinding::new(keys, NoAction, Some(terminal_surface::KEY_CONTEXT))),
-    );
+/// `app_chords`: the terminal toggle, as `handleTerminalShortcutCapture` lets
+/// it through. The surface's own key handler keeps the copy, paste and zoom
+/// chords. Runs after every other binding is registered: a later `NoAction`
+/// outranks earlier bindings and cancels their pending chords. The bindings
+/// belong to `shortcuts::bind`, which rebuilds them with the shortcuts.
+pub(crate) fn bind_keys(app_chords: &[String], cx: &mut App) {
+    let chords = shadowed_chords(&cx.key_bindings().borrow(), app_chords);
+    cx.bind_keys(chords.iter().map(|keys| {
+        KeyBinding::new(keys, NoAction, Some(terminal_surface::KEY_CONTEXT))
+            .with_meta(crate::shortcuts::OWNED)
+    }));
 }
 
 /// The chords of every live binding enabled above a focused terminal. A
 /// multi-key chord brings its first key too, which would otherwise wait for
 /// the rest of the chord.
-fn shadowed_chords(keymap: &Keymap) -> BTreeSet<String> {
+fn shadowed_chords(keymap: &Keymap, app_chords: &[String]) -> BTreeSet<String> {
     let stack = terminal_context_stack();
     let mut chords = BTreeSet::new();
     for binding in keymap.bindings() {
@@ -99,7 +96,7 @@ fn shadowed_chords(keymap: &Keymap) -> BTreeSet<String> {
         let Some(first) = keys.first() else {
             continue;
         };
-        if APP_CHORDS.contains(&first.as_str()) {
+        if app_chords.contains(first) {
             continue;
         }
         if keys.len() > 1 {

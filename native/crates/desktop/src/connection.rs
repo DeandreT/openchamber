@@ -149,6 +149,12 @@ pub struct Connection {
     /// A pending retry after a transient failure. It survives `restart`,
     /// which the retry itself calls.
     pub retry_task: Option<Task<()>>,
+    /// The host's OpenCode compatibility. It survives `restart`: a failed
+    /// reconnect never dismisses a known incompatible answer.
+    pub(crate) compatibility: crate::compatibility_view::CompatibilityGate,
+    /// The compatibility check or recovery in flight. Its results check the
+    /// gate's revision.
+    pub(crate) compatibility_task: Option<Task<()>>,
 }
 
 impl Connection {
@@ -183,6 +189,8 @@ impl Connection {
             sessions_task: None,
             topology_task: None,
             retry_task: None,
+            compatibility: Default::default(),
+            compatibility_task: None,
         })
     }
 

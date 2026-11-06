@@ -7,6 +7,7 @@
 
 mod about;
 mod activation;
+mod app_menu;
 mod appearance;
 mod appearance_storage;
 mod appearance_view;
@@ -36,6 +37,7 @@ mod chrome;
 mod clipboard_attachment;
 mod code_card;
 mod code_wrap_state;
+mod compatibility_view;
 mod composer_attachment_input;
 mod composer_attachment_view;
 mod composer_choices;
@@ -119,6 +121,8 @@ mod session_menu_tests;
 mod session_mutations;
 mod settings_navigation;
 mod settings_view;
+mod shortcuts;
+mod shortcuts_settings;
 mod sidebar_item;
 mod sidebar_view;
 mod starter_capture;

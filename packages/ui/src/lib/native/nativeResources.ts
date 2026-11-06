@@ -9,7 +9,7 @@
  */
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { z } from 'zod';
 
 import { iconSpriteData } from '@/components/icon/sprite';
@@ -52,6 +52,10 @@ export const NATIVE_ICONS_PATH = `${resourcesDirectory}/icons.json`;
 export const NATIVE_PROVIDER_LOGOS_PATH = `${resourcesDirectory}/provider-logos.json`;
 export const NATIVE_DATE_FORMATS_PATH = `${resourcesDirectory}/date-formats.json`;
 export const NATIVE_MAGIC_PROMPTS_PATH = `${resourcesDirectory}/magic-prompts.json`;
+/** The Electron application menu's labels, which the native app menu shows. */
+export const NATIVE_MENU_LOCALES_PATH = `${resourcesDirectory}/menu-locales.json`;
+/** The Electron shell's own menu dictionaries, outside `@/lib/i18n`. */
+const MENU_LOCALES_SOURCE = 'packages/electron/menu-locales.mjs';
 /** The provider logos the web bundles, one SVG per provider ID. */
 const PROVIDER_LOGOS_DIRECTORY = 'packages/ui/src/assets/provider-logos';
 
@@ -245,6 +249,35 @@ export const renderNativeMagicPrompts = (): string => {
   return `${JSON.stringify({ commands, templates }, null, 2)}\n`;
 };
 
+const menuDictionaries = z.record(z.string(), z.record(z.string(), z.string()));
+const menuLocalesModule = z.object({ MENU_LOCALE_DICTIONARIES: menuDictionaries }).parse(
+  await import(pathToFileURL(resolve(repoRoot, MENU_LOCALES_SOURCE)).href),
+);
+
+/**
+ * Exports the Electron application menu's labels for every UI locale. Throws
+ * when a locale has no menu dictionary or lacks a label English has, so the
+ * native menu never falls back silently.
+ */
+export const renderNativeMenuLocales = (): string => {
+  const dictionaries = menuLocalesModule.MENU_LOCALE_DICTIONARIES;
+  const english = dictionaries.en;
+  if (!english) throw new Error('the menu dictionaries have no English entry');
+  const locales: Record<string, Record<string, string>> = {};
+  for (const locale of LOCALES) {
+    const dictionary = dictionaries[locale];
+    if (!dictionary) throw new Error(`locale ${locale} has no menu dictionary`);
+    const labels: Record<string, string> = {};
+    for (const key of Object.keys(english).sort()) {
+      const label = dictionary[key];
+      if (!label) throw new Error(`locale ${locale} has no menu label for ${key}`);
+      labels[key] = label;
+    }
+    locales[locale] = labels;
+  }
+  return `${JSON.stringify(locales, null, 2)}\n`;
+};
+
 const writeNativeResources = (): string[] => {
   const outputs: Array<[string, string]> = [
     [NATIVE_LOCALES_PATH, renderNativeLocales()],
@@ -253,6 +286,7 @@ const writeNativeResources = (): string[] => {
     [NATIVE_PROVIDER_LOGOS_PATH, renderNativeProviderLogos()],
     [NATIVE_DATE_FORMATS_PATH, renderNativeDateFormats()],
     [NATIVE_MAGIC_PROMPTS_PATH, renderNativeMagicPrompts()],
+    [NATIVE_MENU_LOCALES_PATH, renderNativeMenuLocales()],
   ];
   return outputs.map(([relativePath, content]) => {
     const target = resolve(repoRoot, relativePath);
