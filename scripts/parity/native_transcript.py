@@ -31,6 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import runner  # noqa: E402
 import virtual_display  # noqa: E402
+from clipboard_probe import ClipboardProbe  # noqa: E402
 from native_adapter import NativeClient, accessibility_enabled, set_accessibility  # noqa: E402
 
 THEME = "openchamber-dark"
@@ -154,6 +155,27 @@ def open_session(client: NativeClient, title: str) -> None:
     time.sleep(0.5)
 
 
+def put_settings(server: Server, changes: dict) -> None:
+    request = urllib.request.Request(
+        f"{server.url}/api/config/settings", data=json.dumps(changes).encode(), method="PUT",
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=15):
+        pass
+
+
+def press(client: NativeClient, keys: str) -> None:
+    """A real key chord (XTEST) to the focused client window."""
+    client._activate()
+    subprocess.run(["xdotool", "key", "--clearmodifiers", keys], check=True, timeout=10)
+
+
+def name(client: NativeClient, accessible_id: str) -> str:
+    target = node(client, accessible_id)
+    target.clear_cache()
+    return target.get_name() or ""
+
+
 def qualify(args) -> int:
     virtual_display.verify_owned_display()
     args.output.mkdir(parents=True)
@@ -166,7 +188,7 @@ def qualify(args) -> int:
             run()
             results.append({"check": name, "passed": True})
         except (OSError, RuntimeError, TimeoutError, LookupError, ValueError, KeyError, AssertionError,
-                subprocess.SubprocessError) as error:
+                StopIteration, subprocess.SubprocessError) as error:
             traceback.print_exc()
             results.append({"check": name, "passed": False, "error": str(error)})
             if clients:
@@ -189,12 +211,18 @@ def qualify(args) -> int:
                 Path(directory).mkdir(parents=True, exist_ok=True)
             env = runner.native_env(state, server.url, THEME)
             set_accessibility(True)
+            clipboard = ClipboardProbe()
             log = cleanup.enter_context((args.output / "native.log").open("w"))
-            client = NativeClient(args.binary, env, args.scale, 1280, 800, stderr=log)
-            cleanup.callback(client.close)
-            client.launch()
-            client.wait_ready(90, connected=True)
-            clients.append(client)
+
+            def launch():
+                launched = NativeClient(args.binary, env, args.scale, 1280, 800, stderr=log)
+                cleanup.callback(launched.close)
+                launched.launch()
+                launched.wait_ready(90, connected=True)
+                clients.append(launched)
+                return launched
+
+            client = launch()
 
             def failing_tool():
                 open_session(client, "transcript: failing tool")
@@ -251,17 +279,64 @@ def qualify(args) -> int:
 
             def compaction():
                 open_session(client, "transcript: compaction")
-                toggle = next(i for i in ids(client) if i.startswith("compaction:") and i.endswith(":toggle"))
+                toggles = lambda: [i for i in ids(client) if i.startswith("compaction:") and i.endswith(":toggle")]
+                wait_until(lambda: bool(toggles()), 20, "the compaction row")
+                toggle = toggles()[0]
                 client.screenshot(args.output / "compaction-collapsed.png")
                 client.click(toggle)
                 wait_until(lambda: expanded(client, toggle), 5, "the compaction summary to open")
                 client.screenshot(args.output / "compaction-expanded.png")
 
-            for name, run in (("failing-tool", failing_tool), ("reasoning", reasoning), ("diff", diff),
+            def message_actions():
+                open_session(client, "transcript: diff")
+                session = sessions["transcript: diff"]
+                final = next(message for message in server.messages(session)
+                             if message.get("info", message).get("type") == "assistant")
+                final_id = final.get("info", final)["id"]
+                copied = clipboard.copy(lambda: client.click(f"message-copy:{final_id}"))
+                assert copied == "The file now holds the renamed function.", copied
+                client.click(f"message-more:{final_id}")
+                wait_until(lambda: "message-actions-menu" in ids(client), 5, "the More menu")
+                client.screenshot(args.output / "message-more-menu.png")
+                link = clipboard.copy(lambda: client.click("message-actions-menu:0"))
+                assert link == f"openchamber://session/{session}?message={final_id}", link
+                before = len(client.rows())
+                client.click(f"message-continue:{final_id}")
+                wait_until(lambda: "message-actions-menu" in ids(client), 5, "the Continue menu")
+                press(client, "Return")
+                wait_until(lambda: len(client.rows()) > before, 20, "the fork's sidebar row")
+
+            def search_off():
+                open_session(client, "transcript: rich")
+                press(client, "ctrl+f")
+                time.sleep(0.5)
+                assert "transcript-search" not in ids(client), "search stays off by default"
+
+            def search_on():
+                nonlocal client
+                client.close()
+                put_settings(server, {"messageSearchEnabled": True})
+                client = launch()
+                open_session(client, "transcript: rich")
+                press(client, "ctrl+f")
+                wait_until(lambda: "transcript-search" in ids(client), 5, "the search bar")
+                client.type_text("Inline")
+                time.sleep(0.3)
+                wait_until(lambda: name(client, "transcript-search-status") not in ("", "Searching…"),
+                           20, "a search answer")
+                client.screenshot(args.output / "search-answered.png")
+                # Both answers in the session say "Inline"; the newest is current.
+                status = name(client, "transcript-search-status")
+                assert status == "2 of 2", status
+                press(client, "Escape")
+                wait_until(lambda: "transcript-search" not in ids(client), 5, "Escape to close the bar")
+
+            for check_name, run in (("failing-tool", failing_tool), ("reasoning", reasoning), ("diff", diff),
                               ("elided-result", elided_result), ("rich-content", rich_content),
-                              ("compaction", compaction)):
-                if not args.only or name in args.only:
-                    check(name, run)
+                              ("compaction", compaction), ("message-actions", message_actions),
+                              ("search-off", search_off), ("search-on", search_on)):
+                if not args.only or check_name in args.only:
+                    check(check_name, run)
     finally:
         set_accessibility(previous)
         (args.output / "report.json").write_text(json.dumps({

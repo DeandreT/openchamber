@@ -158,6 +158,7 @@ impl Workspace {
             .child(fades)
             .children(rail)
             .children(self.render_return_to_parent(palette, direction, cx))
+            .children(self.render_transcript_search(palette, direction, cx))
             .when(!following, |this| {
                 this.child(
                     div()
@@ -284,9 +285,13 @@ impl Workspace {
             .id(ElementId::Name(message.info.id.as_str().to_owned().into()))
             .role(Role::Paragraph)
             .accessibility_id(format!("message:{}", message.info.id))
-            .when(message.info.role == MessageRole::User, |row| {
-                row.group(crate::branching_view::MESSAGE_GROUP)
-            })
+            .when(
+                matches!(
+                    message.info.role,
+                    MessageRole::User | MessageRole::Assistant
+                ),
+                |row| row.group(crate::branching_view::MESSAGE_GROUP),
+            )
             .when(window.is_a11y_active(), |row| {
                 row.aria_label(
                     open.selection

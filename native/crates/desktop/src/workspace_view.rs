@@ -33,6 +33,8 @@ actions!(
         TogglePromptNavigator,
         /// Opens or closes the terminal panel.
         ToggleTerminal,
+        /// Searches the selected conversation.
+        FindInTranscript,
     ]
 );
 
@@ -50,6 +52,7 @@ pub fn bind_keys(cx: &mut gpui_kit::App) {
         KeyBinding::new("escape", StopGenerating, Some(KEY_CONTEXT)),
         KeyBinding::new("ctrl-k n", TogglePromptNavigator, Some(KEY_CONTEXT)),
         KeyBinding::new("ctrl-j", ToggleTerminal, Some(KEY_CONTEXT)),
+        KeyBinding::new("ctrl-f", FindInTranscript, Some(KEY_CONTEXT)),
         KeyBinding::new("cmd-k n", TogglePromptNavigator, Some(KEY_CONTEXT)),
         KeyBinding::new(
             "ctrl-n",
@@ -199,6 +202,9 @@ impl Render for Workspace {
             }))
             .on_action(cx.listener(|this, _: &ToggleTerminal, window, cx| {
                 this.toggle_terminal(window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &FindInTranscript, window, cx| {
+                this.open_transcript_search(window, cx);
             }))
             .on_action(cx.listener(|this, _: &ToggleCodeWrap, _, cx| {
                 this.toggle_code_wrap(cx);

@@ -178,6 +178,8 @@ pub struct Workspace {
     /// Running state per session, from the live channel only.
     pub(crate) live_status: HashMap<SessionId, LiveStatus>,
     pub(crate) transcript_clock: crate::transcript_clock::TranscriptClock,
+    pub(crate) message_actions: crate::message_actions::MessageActions,
+    pub(crate) transcript_search: Option<crate::transcript_search::TranscriptSearch>,
     /// Present when the source is a server.
     pub(crate) connection: Option<Connection>,
     pub(crate) retired_networks: Vec<(RuntimeId, crate::network::Network)>,
@@ -325,6 +327,8 @@ impl Workspace {
             playback: HashMap::new(),
             live_status: HashMap::new(),
             transcript_clock: Default::default(),
+            message_actions: Default::default(),
+            transcript_search: None,
             connection,
             retired_networks: Vec::new(),
             authentication: crate::authentication::Authentication::new(window, cx),

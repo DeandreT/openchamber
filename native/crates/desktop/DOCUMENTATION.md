@@ -261,7 +261,7 @@ prompt. Attachments and worktree creation remain separate workflows.
   the transcript's anchor or the panel's highlighted message.
 - `turn_footer.rs` draws the facts under a finished turn (model, effort,
   agent, duration, time) and fits them to the row as `useFactsFit` does,
-  keeping the place of the message actions the web lays out for hover. The
+  beside the message actions (`message_actions.rs`). The
   time is the step's completion in the local time zone (`chrono`), written
   with the locale's exported data; settings choose the clock.
   Fitted facts paint in one text row so fractional widths do not accumulate
@@ -312,6 +312,18 @@ prompt. Attachments and worktree creation remain separate workflows.
   preview once settled; opened to the text in a 320 px scroll box.
   `expandReasoningWhileStreaming` keeps its web default, off, so a streaming
   block stays folded until the reader opens it.
+- `message_actions.rs` draws the actions under a turn's last answer: Copy
+  (every assistant text of the turn, in order), Continue with Fork from
+  here, and More with Copy link (`openchamber://session/<id>?message=<id>`).
+  They show with the pointer over the message and while a menu is open; the
+  menus take the session menu's keys. Pin into context, Start new session
+  and the More menu's export, read-aloud and plan items are not ported.
+- `transcript_search.rs` is Ctrl+F's search bar while the server setting
+  `messageSearchEnabled` is on (off by default, as on the web). Queries go to
+  the server's message index after 200 ms, five pages of 200 at most, and
+  start at the newest hit; Enter and Shift+Enter step, Escape closes. A hit
+  scrolls to its message when the transcript holds it. Word highlighting and
+  loading older history to reach a hit are not ported.
 - `part_state.rs` keeps per open session what the reader opened (tool rows,
   hand-toggled blocks), the whole-message reads for left-out results and the
   folded reasoning previews. `transcript_clock.rs` is the once-a-second clock

@@ -130,3 +130,5 @@ flow-chart
 task
 scissors
 file-pdf
+chat-forward
+link
