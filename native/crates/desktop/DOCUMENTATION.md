@@ -1143,6 +1143,14 @@ need its own drains and could race General's writes on the same document. The
 Settings dialog lists only pages with implemented controls, so no page opens
 empty.
 
+### Why reduced motion comes from GPUI Kit and not a native module
+
+GPUI Kit's base layer reads the desktop's `reduced-motion` setting from the XDG
+portal at startup, follows its change signal, and gates every kit transition,
+spring and presence on `App::reduce_motion`. The desktop crate draws no
+animation of its own, so a second reader would only duplicate that flag. An
+animation added here must check `cx.reduce_motion()` as the kit's do.
+
 ### Why appearance has one live owner
 
 The palette, locale and fonts affect existing editors and retained transcripts.
