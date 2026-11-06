@@ -188,6 +188,8 @@ impl Render for Workspace {
             })
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
+            .on_mouse_move(cx.listener(Self::drag_pane))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::release_pane))
             .on_action(cx.listener(|this, _: &SelectNextSession, window, cx| {
                 this.select_adjacent(1, window, cx);
             }))

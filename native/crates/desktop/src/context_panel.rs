@@ -65,7 +65,7 @@ const RAIL_SURFACES: &[(&str, &str, &str)] = &[
 impl Workspace {
     pub(crate) fn work_status_fits(&self, window: &gpui_kit::Window) -> bool {
         let sidebar = if self.sidebar_open {
-            crate::sidebar_view::SIDEBAR_WIDTH
+            self.pane_sizes.sidebar_width()
         } else {
             0.0
         };

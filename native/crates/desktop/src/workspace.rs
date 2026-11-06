@@ -130,6 +130,8 @@ pub struct Workspace {
     pub(crate) sidebar_spacing: Vec<Option<SectionSpacing>>,
     pub(crate) sidebar_list: ListState,
     pub(crate) sidebar_open: bool,
+    /// The sidebar's and the context panel's widths and their drag.
+    pub(crate) pane_sizes: crate::pane_resize::PaneSizes,
     pub(crate) work_status_open: bool,
     pub(crate) work_status_overlay: bool,
     /// The terminal panel, kept while hidden so its terminals keep parsing.
@@ -285,6 +287,7 @@ impl Workspace {
             sidebar_spacing: Vec::new(),
             sidebar_list: ListState::new(0, ListAlignment::Top, px(SIDEBAR_OVERDRAW)),
             sidebar_open: true,
+            pane_sizes: Default::default(),
             work_status_open: true,
             work_status_overlay: false,
             terminal_panel: None,
@@ -660,6 +663,7 @@ impl Workspace {
 
     pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.sidebar_open = !self.sidebar_open;
+        self.save_layout(cx);
         cx.notify();
     }
 
