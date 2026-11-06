@@ -327,6 +327,22 @@ prompt. Attachments and worktree creation remain separate workflows.
   `server_sync.rs`. Code-card actions retain focus handles, participate in
   Tab navigation, and use GPUI's keyboard-generated clicks for Enter and
   Space. Pointer, keyboard and accessibility clicks use the same callback.
+  A `diff` fence is a proposal: its header says so and it has no wrap toggle.
+- `markdown_math.rs` claims `$…$` and `$$…$$` math. A single-dollar span that
+  reads as money stays prose, by the web tokenizer's rules. Formulas lay out
+  with RaTeX and draw as SVG images with KaTeX's glyph outlines in the body
+  color, cached per source, style and color; a formula that does not parse
+  shows its source in the error color. `\(…\)` and `\[…\]` delimiters are
+  not recognized (markdown-rs reads them as escaped brackets).
+- `markdown_diagram.rs` claims ` ```mermaid ` fences: the diagram in the
+  theme's colors with a Copy action for its source. It lays out on the
+  background executor the first time a source and theme are seen; the source
+  shows until then and when it does not parse. Pan, zoom and SVG download are
+  not ported.
+- `attachment_part_view.rs` draws a user message's files at the top of its
+  bubble: name chips and 64 px image thumbnails. A thumbnail draws a `data:`
+  image; any other address shows the failed state, as the web's `<img>` does
+  for a `file:` URL. Opening an attachment is not ported.
 - `markdown_links.rs` owns link activation for ordinary and retained Markdown.
   HTTP(S) links open through the platform; application protocols require an
   explicit one-time confirmation bound to the current workspace, runtime and
@@ -1357,6 +1373,21 @@ Reqwest and tokio-tungstenite need Tokio. Network work runs on two Tokio
 workers; GPUI tasks await the results without blocking either executor. Tokio
 channels and join handles complete from any executor, so the bridge is a join
 handle that aborts on drop and nothing more.
+
+### Why RaTeX for math
+
+The web renders math with KaTeX. RaTeX implements KaTeX's layout rules and
+ships KaTeX's fonts, so formulas keep KaTeX's spacing and glyphs without a
+JavaScript engine. Its SVG output with embedded glyph outlines needs no font
+setup in GPUI's SVG renderer.
+
+### Why diagrams lay out off the main thread
+
+`mermaid-rs-renderer` measures labels with system fonts, loading the font
+database the first time, which takes longer than a frame. A diagram's first
+layout runs on the background executor and the fence shows its source until
+it lands; later frames read the cached image. The renderer keeps a copy of the
+measured font under `$XDG_CACHE_HOME/mmdr`.
 
 ### Why one transcript clock that stops itself
 

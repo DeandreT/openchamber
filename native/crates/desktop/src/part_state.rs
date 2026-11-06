@@ -10,7 +10,9 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
-use gpui_kit::{SharedString, Task};
+use std::sync::Arc;
+
+use gpui_kit::{Image, SharedString, Task};
 use openchamber_native_core::ids::{MessageId, PartId};
 use openchamber_native_core::tool_shells;
 
@@ -44,6 +46,8 @@ pub(crate) struct PartState {
     /// Folded reasoning previews by part, with the text length they were
     /// made from. Reasoning only grows, so a length change means new text.
     summaries: RefCell<HashMap<PartId, (usize, SharedString)>>,
+    /// Attachment images by part, decoded once; `None` when one cannot be.
+    images: RefCell<HashMap<PartId, Option<Arc<Image>>>>,
 }
 
 impl PartState {
@@ -118,6 +122,19 @@ impl PartState {
         if matches!(self.hydration.get(message), Some(Hydration::Failed)) {
             self.hydration.remove(message);
         }
+    }
+
+    /// An attachment's image, made by `decode` the first time it is drawn.
+    pub(crate) fn attachment_image(
+        &self,
+        part: &PartId,
+        decode: impl FnOnce() -> Option<Arc<Image>>,
+    ) -> Option<Arc<Image>> {
+        self.images
+            .borrow_mut()
+            .entry(part.clone())
+            .or_insert_with(decode)
+            .clone()
     }
 
     /// The folded preview of a reasoning part, made once per text length.

@@ -675,7 +675,10 @@
         "chat.toolPart.moreToolCalls": "+{count} more",
         "chat.toolPart.outputTruncated": "Output was truncated",
         "chat.toolPart.scriptCalls": "Tool calls",
-        "chat.toolPart.background.label": "in background"
+        "chat.toolPart.background.label": "in background",
+        "common.image.loadFailed": "Image couldn't load",
+        "markdownRenderer.mermaid.actions.copyTitle": "Copy",
+        "markdownRenderer.code.proposal": "Proposal"
       }
     },
     "de": {
@@ -1352,7 +1355,10 @@
         "chat.toolPart.moreToolCalls": "+{count} weitere",
         "chat.toolPart.outputTruncated": "Ausgabe wurde gekürzt",
         "chat.toolPart.scriptCalls": "Tool-Aufrufe",
-        "chat.toolPart.background.label": "im Hintergrund"
+        "chat.toolPart.background.label": "im Hintergrund",
+        "common.image.loadFailed": "Bild konnte nicht geladen werden",
+        "markdownRenderer.mermaid.actions.copyTitle": "Kopieren",
+        "markdownRenderer.code.proposal": "Vorschlag"
       }
     },
     "fr": {
@@ -2029,7 +2035,10 @@
         "chat.toolPart.moreToolCalls": "+{count} de plus",
         "chat.toolPart.outputTruncated": "La sortie a été tronquée",
         "chat.toolPart.scriptCalls": "Appels d’outils",
-        "chat.toolPart.background.label": "en arrière-plan"
+        "chat.toolPart.background.label": "en arrière-plan",
+        "common.image.loadFailed": "Impossible de charger l’image",
+        "markdownRenderer.mermaid.actions.copyTitle": "Copie",
+        "markdownRenderer.code.proposal": "Proposition"
       }
     },
     "nl": {
@@ -2706,7 +2715,10 @@
         "chat.toolPart.moreToolCalls": "+{count} meer",
         "chat.toolPart.outputTruncated": "Uitvoer is afgekapt",
         "chat.toolPart.scriptCalls": "Toolaanroepen",
-        "chat.toolPart.background.label": "op de achtergrond"
+        "chat.toolPart.background.label": "op de achtergrond",
+        "common.image.loadFailed": "Afbeelding kon niet worden geladen",
+        "markdownRenderer.mermaid.actions.copyTitle": "Kopiëren",
+        "markdownRenderer.code.proposal": "Voorstel"
       }
     },
     "zh-CN": {
@@ -3383,7 +3395,10 @@
         "chat.toolPart.moreToolCalls": "还有 +{count} 个",
         "chat.toolPart.outputTruncated": "输出已截断",
         "chat.toolPart.scriptCalls": "工具调用",
-        "chat.toolPart.background.label": "后台运行"
+        "chat.toolPart.background.label": "后台运行",
+        "common.image.loadFailed": "图片加载失败",
+        "markdownRenderer.mermaid.actions.copyTitle": "复制",
+        "markdownRenderer.code.proposal": "提议"
       }
     },
     "zh-TW": {
@@ -4060,7 +4075,10 @@
         "chat.toolPart.moreToolCalls": "還有 +{count} 個",
         "chat.toolPart.outputTruncated": "輸出已截斷",
         "chat.toolPart.scriptCalls": "工具呼叫",
-        "chat.toolPart.background.label": "背景執行"
+        "chat.toolPart.background.label": "背景執行",
+        "common.image.loadFailed": "圖片載入失敗",
+        "markdownRenderer.mermaid.actions.copyTitle": "複製",
+        "markdownRenderer.code.proposal": "提議"
       }
     },
     "uk": {
@@ -4737,7 +4755,10 @@
         "chat.toolPart.moreToolCalls": "ще +{count}",
         "chat.toolPart.outputTruncated": "Вивід було скорочено",
         "chat.toolPart.scriptCalls": "Виклики інструментів",
-        "chat.toolPart.background.label": "у фоні"
+        "chat.toolPart.background.label": "у фоні",
+        "common.image.loadFailed": "Не вдалося завантажити зображення",
+        "markdownRenderer.mermaid.actions.copyTitle": "Копіювати",
+        "markdownRenderer.code.proposal": "Пропозиція"
       }
     },
     "es": {
@@ -5414,7 +5435,10 @@
         "chat.toolPart.moreToolCalls": "+{count} más",
         "chat.toolPart.outputTruncated": "La salida se truncó",
         "chat.toolPart.scriptCalls": "Llamadas a herramientas",
-        "chat.toolPart.background.label": "en segundo plano"
+        "chat.toolPart.background.label": "en segundo plano",
+        "common.image.loadFailed": "No se pudo cargar la imagen",
+        "markdownRenderer.mermaid.actions.copyTitle": "Copiar",
+        "markdownRenderer.code.proposal": "Propuesta"
       }
     },
     "pt-BR": {
@@ -6091,7 +6115,10 @@
         "chat.toolPart.moreToolCalls": "+{count} mais",
         "chat.toolPart.outputTruncated": "A saída foi truncada",
         "chat.toolPart.scriptCalls": "Chamadas de ferramentas",
-        "chat.toolPart.background.label": "em segundo plano"
+        "chat.toolPart.background.label": "em segundo plano",
+        "common.image.loadFailed": "Não foi possível carregar a imagem",
+        "markdownRenderer.mermaid.actions.copyTitle": "Copiar",
+        "markdownRenderer.code.proposal": "Proposta"
       }
     },
     "ko": {
@@ -6768,7 +6795,10 @@
         "chat.toolPart.moreToolCalls": "+{count}개 더",
         "chat.toolPart.outputTruncated": "출력이 잘렸습니다",
         "chat.toolPart.scriptCalls": "도구 호출",
-        "chat.toolPart.background.label": "백그라운드"
+        "chat.toolPart.background.label": "백그라운드",
+        "common.image.loadFailed": "이미지를 불러올 수 없습니다",
+        "markdownRenderer.mermaid.actions.copyTitle": "복사",
+        "markdownRenderer.code.proposal": "제안"
       }
     },
     "pl": {
@@ -7445,7 +7475,10 @@
         "chat.toolPart.moreToolCalls": "+{count} więcej",
         "chat.toolPart.outputTruncated": "Wynik został skrócony",
         "chat.toolPart.scriptCalls": "Wywołania narzędzi",
-        "chat.toolPart.background.label": "w tle"
+        "chat.toolPart.background.label": "w tle",
+        "common.image.loadFailed": "Nie udało się wczytać obrazu",
+        "markdownRenderer.mermaid.actions.copyTitle": "Kopiuj",
+        "markdownRenderer.code.proposal": "Propozycja"
       }
     },
     "ja": {
@@ -8122,7 +8155,10 @@
         "chat.toolPart.moreToolCalls": "他 +{count} 件",
         "chat.toolPart.outputTruncated": "出力は切り詰められました",
         "chat.toolPart.scriptCalls": "ツール呼び出し",
-        "chat.toolPart.background.label": "バックグラウンド"
+        "chat.toolPart.background.label": "バックグラウンド",
+        "common.image.loadFailed": "画像を読み込めませんでした",
+        "markdownRenderer.mermaid.actions.copyTitle": "コピー",
+        "markdownRenderer.code.proposal": "提案"
       }
     },
     "tr": {
@@ -8799,7 +8835,10 @@
         "chat.toolPart.moreToolCalls": "+{count} daha",
         "chat.toolPart.outputTruncated": "Çıktı kısaltıldı",
         "chat.toolPart.scriptCalls": "Araç çağrıları",
-        "chat.toolPart.background.label": "arka planda"
+        "chat.toolPart.background.label": "arka planda",
+        "common.image.loadFailed": "Görsel yüklenemedi",
+        "markdownRenderer.mermaid.actions.copyTitle": "Kopyala",
+        "markdownRenderer.code.proposal": "Öneri"
       }
     },
     "ar": {
@@ -9476,7 +9515,10 @@
         "chat.toolPart.moreToolCalls": "+{count} أخرى",
         "chat.toolPart.outputTruncated": "تم اقتطاع المخرجات",
         "chat.toolPart.scriptCalls": "استدعاءات الأدوات",
-        "chat.toolPart.background.label": "في الخلفية"
+        "chat.toolPart.background.label": "في الخلفية",
+        "common.image.loadFailed": "تعذّر تحميل الصورة",
+        "markdownRenderer.mermaid.actions.copyTitle": "نسخ",
+        "markdownRenderer.code.proposal": "اقتراح"
       }
     },
     "he": {
@@ -10153,7 +10195,10 @@
         "chat.toolPart.moreToolCalls": "+{count} נוספות",
         "chat.toolPart.outputTruncated": "הפלט קוצר",
         "chat.toolPart.scriptCalls": "קריאות לכלים",
-        "chat.toolPart.background.label": "ברקע"
+        "chat.toolPart.background.label": "ברקע",
+        "common.image.loadFailed": "לא ניתן לטעון את התמונה",
+        "markdownRenderer.mermaid.actions.copyTitle": "העתק",
+        "markdownRenderer.code.proposal": "הצעה"
       }
     }
   }

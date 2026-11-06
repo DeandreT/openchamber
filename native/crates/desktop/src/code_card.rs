@@ -16,7 +16,8 @@ use gpui_kit::{
     AccessibleAction, AnyElement, App, Bounds, ClipboardItem, ElementId, FontFeatures, Global,
     InteractiveElement, IntoElement, ParentElement, Pixels, Role, SharedString,
     StatefulInteractiveElement, StyleRefinement, Styled, TestSupportExt, TextAlign, TextRun,
-    Toggled, WeakEntity, Window, canvas, div, font, point, px, rems, transparent_black,
+    Toggled, WeakEntity, Window, canvas, div, font, point, prelude::FluentBuilder, px, rems,
+    transparent_black,
 };
 
 use crate::chrome::glyph;
@@ -138,6 +139,12 @@ fn code_card(
         .as_ref()
         .filter(|language| !language.is_empty())
         .map_or_else(|| "text".to_owned(), |language| language.to_lowercase());
+    // A fenced patch is a proposal (`MarkdownDiff.tsx`).
+    let label: SharedString = if label == "diff" {
+        crate::locale::strings(cx).get("markdownRenderer.code.proposal")
+    } else {
+        label.into()
+    };
     let header = div()
         .min_h(px(HEADER_HEIGHT))
         .px(px(HEADER_PADDING_X))
@@ -269,6 +276,10 @@ fn code_actions(
         })
         .detach();
     };
+    let proposal = fence
+        .language
+        .as_deref()
+        .is_some_and(|language| language.eq_ignore_ascii_case("diff"));
     let wrap_button = action_button(
         format!("code-wrap-{key}").into(),
         "text-wrap",
@@ -303,13 +314,14 @@ fn code_actions(
                 .gap(px(2.0))
                 .px(px(6.0))
                 .py(px(4.0))
-                .child(wrap_button)
+                // A proposal keeps its lines as written: no wrap toggle.
+                .when(!proposal, |this| this.child(wrap_button))
                 .child(copy_button),
         )
         .into_any_element()
 }
 
-fn action_button(
+pub(crate) fn action_button(
     id: SharedString,
     icon: &str,
     title: SharedString,

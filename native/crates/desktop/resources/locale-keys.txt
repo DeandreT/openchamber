@@ -675,3 +675,6 @@ chat.toolPart.moreToolCalls
 chat.toolPart.outputTruncated
 chat.toolPart.scriptCalls
 chat.toolPart.background.label
+common.image.loadFailed
+markdownRenderer.mermaid.actions.copyTitle
+markdownRenderer.code.proposal

@@ -401,6 +401,7 @@ pub(crate) fn user_parts(message_id: &str, user: &wire::UserBody, created: i64) 
             content: PartContent::File {
                 filename: file.name.clone().unwrap_or_default(),
                 mime: file.mime.clone(),
+                url: file_url(file),
             },
             time: PartTime::default(),
         });
@@ -415,6 +416,16 @@ pub(crate) fn user_parts(message_id: &str, user: &wire::UserBody, created: i64) 
         });
     }
     parts
+}
+
+/// Where a prompt's file loads from (`fileAttachmentUrl`): its URI, else its
+/// inline bytes as a data URL.
+fn file_url(file: &wire::FileAttachment) -> Option<String> {
+    match (&file.source, &file.data) {
+        (Some(wire::FileSource::Uri { uri }), _) => Some(uri.clone()),
+        (_, Some(data)) => Some(format!("data:{};base64,{data}", file.mime)),
+        _ => None,
+    }
 }
 
 /// Text and reasoning ordinals count per kind in content order, matching the

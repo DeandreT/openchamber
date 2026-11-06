@@ -20,7 +20,9 @@ use gpui_kit::{
 };
 
 use crate::code_card::CodeFence;
+use crate::markdown_diagram::MarkdownDiagram;
 use crate::markdown_list::{ListDepth, MarkdownList};
+use crate::markdown_math::{MarkdownDisplayMath, MarkdownMath};
 use crate::theme::{Appearance, Palette};
 use crate::transcript_selection::{self, RetainedText};
 
@@ -96,7 +98,14 @@ pub(crate) fn extensions(
                 nesting,
                 owner: owner.clone(),
             })
-            .plugin(MarkdownList { nesting, owner }),
+            .plugin(MarkdownList { nesting, owner })
+            .plugin(MarkdownDiagram)
+            .plugin(MarkdownDisplayMath {
+                author: nesting.author,
+            })
+            .plugin(MarkdownMath {
+                author: nesting.author,
+            }),
     )
 }
 
