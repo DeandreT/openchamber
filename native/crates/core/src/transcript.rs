@@ -499,6 +499,29 @@ impl Transcript {
         self.push(message)
     }
 
+    /// The answer a turn's footer copies: the text parts of every assistant
+    /// message from the turn's prompt through `row`, in order, without tool
+    /// output or reasoning.
+    pub fn turn_answer_text(&self, row: usize) -> String {
+        let Some(end) = self.messages.get(..=row) else {
+            return String::new();
+        };
+        let start = end
+            .iter()
+            .rposition(|message| message.info.role == Role::User)
+            .map_or(0, |prompt| prompt + 1);
+        let texts: Vec<&str> = end[start..]
+            .iter()
+            .filter(|message| message.info.role == Role::Assistant)
+            .flat_map(|message| &message.parts)
+            .filter_map(|part| match &part.content {
+                PartContent::Text { text } if !text.trim().is_empty() => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        texts.join("\n\n")
+    }
+
     /// Fills in the tool results a history page left out from a whole read
     /// of the same message. Only calls still held as shells change, and only
     /// with a whole result of the same status, so newer live changes to the
@@ -1475,6 +1498,44 @@ mod tests {
                 .and_then(|message| message.info.completed),
             Some(9)
         );
+    }
+
+    #[test]
+    fn a_turn_answer_joins_its_assistant_text() {
+        let message = |id: &str, role: Role, parts: Vec<Part>| Message {
+            info: MessageInfo {
+                id: MessageId::from(id),
+                role,
+                created: 0,
+                completed: None,
+                notice: None,
+                assistant: None,
+                compaction: None,
+                synthetic: None,
+            },
+            parts,
+        };
+        let reasoning = Part {
+            id: PartId::from("r"),
+            content: PartContent::Reasoning {
+                text: "thinking".to_owned(),
+            },
+            time: PartTime::default(),
+        };
+        let transcript = Transcript::from_history(vec![
+            message("u1", Role::User, vec![Part::text("u1t", "first")]),
+            message("a1", Role::Assistant, vec![Part::text("a1t", "old answer")]),
+            message("u2", Role::User, vec![Part::text("u2t", "second")]),
+            message(
+                "a2",
+                Role::Assistant,
+                vec![reasoning, Part::text("a2t", "Step one.")],
+            ),
+            message("a3", Role::Assistant, vec![Part::text("a3t", "Done.")]),
+        ]);
+        assert_eq!(transcript.turn_answer_text(4), "Step one.\n\nDone.");
+        assert_eq!(transcript.turn_answer_text(1), "old answer");
+        assert_eq!(transcript.turn_answer_text(9), "");
     }
 
     #[test]
