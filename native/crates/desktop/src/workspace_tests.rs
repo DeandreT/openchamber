@@ -1269,7 +1269,20 @@ fn returning_restores_the_exact_scroll_anchor(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn alt_down_selects_the_next_session_row(cx: &mut TestAppContext) {
+fn next_session_selects_the_next_session_row(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let rows = session_rows(&workspace, cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id(&rows[0].0), cx);
+        window.dispatch_action(Box::new(crate::workspace_view::SelectNextSession), cx);
+    })
+    .expect("window is open");
+    assert_eq!(selected(&workspace, cx), Some(rows[1].1.clone()));
+}
+
+#[gpui_kit::test]
+fn alt_arrows_are_no_session_shortcuts(cx: &mut TestAppContext) {
     let (window, workspace) = open(cx);
     let rows = session_rows(&workspace, cx);
     cx.update_window(window, |_, window, cx| {
@@ -1278,7 +1291,40 @@ fn alt_down_selects_the_next_session_row(cx: &mut TestAppContext) {
         window.press("alt-down", cx);
     })
     .expect("window is open");
-    assert_eq!(selected(&workspace, cx), Some(rows[1].1.clone()));
+    assert_eq!(selected(&workspace, cx), Some(rows[0].1.clone()));
+}
+
+#[gpui_kit::test]
+fn configured_shortcuts_dispatch_and_rebind(cx: &mut TestAppContext) {
+    use openchamber_native_core::shortcuts::{Overrides, save_override};
+
+    let (window, workspace) = open(cx);
+    let sidebar_open = |cx: &mut TestAppContext| cx.read(|cx| workspace.read(cx).sidebar_open);
+    assert!(sidebar_open(cx));
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.focus(&workspace.read(cx).focus_handle.clone(), cx);
+        window.press("ctrl-b", cx);
+    })
+    .expect("window is open");
+    assert!(!sidebar_open(cx), "the default binding toggles the sidebar");
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.save_shortcut_overrides(
+                save_override(&Overrides::new(), "toggle_sidebar", "mod+shift+y", None),
+                cx,
+            );
+        });
+        window.press("ctrl-b", cx);
+    })
+    .expect("window is open");
+    assert!(
+        !sidebar_open(cx),
+        "the replaced binding no longer dispatches"
+    );
+    cx.update_window(window, |_, window, cx| window.press("ctrl-shift-y", cx))
+        .expect("window is open");
+    assert!(sidebar_open(cx), "the new binding dispatches");
 }
 
 #[gpui_kit::test]

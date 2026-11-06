@@ -7,16 +7,23 @@ pub(crate) enum Page {
     #[default]
     General,
     Appearance,
+    Shortcuts,
     Hosts,
 }
 
 impl Page {
-    pub(crate) const ALL: [Self; 3] = [Self::General, Self::Appearance, Self::Hosts];
+    pub(crate) const ALL: [Self; 4] = [
+        Self::General,
+        Self::Appearance,
+        Self::Shortcuts,
+        Self::Hosts,
+    ];
 
     pub(crate) fn id(self) -> &'static str {
         match self {
             Self::General => "general",
             Self::Appearance => "appearance",
+            Self::Shortcuts => "shortcuts",
             Self::Hosts => "remote-instances",
         }
     }
@@ -25,13 +32,14 @@ impl Page {
         match self {
             Self::General => "settings.page.general.title",
             Self::Appearance => "settings.page.appearance.title",
+            Self::Shortcuts => "settings.page.shortcuts.title",
             Self::Hosts => "settings.page.remoteInstances.title",
         }
     }
 
     pub(crate) fn group(self) -> &'static str {
         match self {
-            Self::General | Self::Appearance => "settings.view.nav.group.general",
+            Self::General | Self::Appearance | Self::Shortcuts => "settings.view.nav.group.general",
             Self::Hosts => "settings.view.nav.group.projects",
         }
     }
@@ -40,6 +48,7 @@ impl Page {
         match self {
             Self::General => "settings.page.general.description",
             Self::Appearance => "settings.page.appearance.description",
+            Self::Shortcuts => "settings.page.shortcuts.description",
             Self::Hosts => "settings.remoteInstances.direct.description",
         }
     }
@@ -48,6 +57,7 @@ impl Page {
         match self {
             Self::General => "settings-3",
             Self::Appearance => "palette",
+            Self::Shortcuts => "command",
             Self::Hosts => "computer",
         }
     }
@@ -126,6 +136,13 @@ pub(crate) const SEARCH_ITEMS: &[SearchItem] = &[
         title: "settings.openchamber.visual.field.terminalShell",
         description: Some("settings.openchamber.visual.field.terminalShellHint"),
         keywords: "terminal shell bash zsh fish pwsh powershell",
+    },
+    SearchItem {
+        id: "shortcuts.keyboard-shortcuts",
+        page: Page::Shortcuts,
+        title: "settings.openchamber.keyboardShortcuts.title",
+        description: Some("settings.openchamber.keyboardShortcuts.tooltip"),
+        keywords: "keyboard hotkeys bindings",
     },
     SearchItem {
         id: "remote-instances.direct-hosts",

@@ -8,12 +8,14 @@ import {
   NATIVE_ICONS_PATH,
   NATIVE_LOCALES_PATH,
   NATIVE_MAGIC_PROMPTS_PATH,
+  NATIVE_MENU_LOCALES_PATH,
   NATIVE_PROVIDER_LOGOS_PATH,
   NATIVE_THEMES_PATH,
   renderNativeDateFormats,
   renderNativeIcons,
   renderNativeLocales,
   renderNativeMagicPrompts,
+  renderNativeMenuLocales,
   renderNativeProviderLogos,
   renderNativeThemes,
 } from './nativeResources';
@@ -41,6 +43,10 @@ describe('native desktop resources', () => {
 
   test('the checked-in magic prompts match the built-in templates', () => {
     expect(checkedIn(NATIVE_MAGIC_PROMPTS_PATH)).toBe(renderNativeMagicPrompts());
+  });
+
+  test('the checked-in menu labels match the Electron menu dictionaries', () => {
+    expect(checkedIn(NATIVE_MENU_LOCALES_PATH)).toBe(renderNativeMenuLocales());
   });
 
   test('the checked-in provider logos match the bundled logos and aliases', () => {
