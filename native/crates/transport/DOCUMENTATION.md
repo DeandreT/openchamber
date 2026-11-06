@@ -36,6 +36,7 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `public_asset.rs` | `PublicAssetClient`: public assets the web client loads from third-party hosts, such as models.dev's provider logos. |
 | `wire.rs` | Serde shapes of the fields the client reads. Private. |
 | `projection.rs` | Wire records to core records, mirroring `packages/ui/src/lib/opencode/projection.ts`. Private. |
+| `tool_facts.rs` | A tool call's input and metadata read into the core's `ToolFacts`, field by field as `lib/opencode/tools.ts` reads them; history records and live transitions share it. Private. |
 | `event.rs` | Bridge frames to `ServerEvent`s, mirroring `lib/opencode/events.ts` and `sync/event-pipeline.ts`. |
 | `stream.rs` | `EventStream`: the reconnecting WebSocket subscription. |
 | `terminal.rs` | Server terminals: `TerminalApi` (shells, list, touch, create, restart, resize, close, terminal settings) and `TerminalSocket`, the reconnecting protocol v3 socket with its binary codec and input splitting. |

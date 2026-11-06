@@ -36,6 +36,12 @@
  * regex lexing and hashing cost; the ASCII documents never reach that path.
  * `stream-20000cps`, `code-20000cps`, `unicode-20000cps` and the
  * `agent-*tools-20000cps` models exist only to seed long sessions quickly.
+ *
+ * Feature models seed the transcript's rarer rows for visual checks:
+ * `reasoning-300cps` thinks aloud before it answers, `failtool-300cps` lists
+ * files and then edits one that does not exist, so its second call fails, and
+ * `diff-300cps` writes a
+ * file and then edits it, so the turn carries both diffs.
  */
 
 import { createServer } from "node:http"
@@ -57,6 +63,8 @@ const FIXTURE_AGENT_PARALLEL = [{ calls: 100, parallel: 5 }]
 // The seeding rate grows agentic history quickly (`profile:session --grow`).
 const FIXTURE_AGENT_RATES = [300, FIXTURE_SEED_RATE]
 const THINK_ANSWER = "Done."
+const FIXTURE_FEATURE_RATES = [300, FIXTURE_SEED_RATE]
+const FIXTURE_FEATURES = ["reasoning", "failtool", "diff"]
 const CHUNK_CHARACTERS = 4
 
 export const INTERACTION_SHELL_COMMAND = "printf 'native-permission-ok\\n'"
@@ -309,7 +317,83 @@ const FIXTURE_SHOWCASE_DOCUMENT = [
   "",
 ].join("\n")
 
+// What the feature models say and do. The reasoning streams before the answer
+// as the provider's `reasoning_content`.
+const FEATURE_REASONING = [
+  "**Planning the answer**",
+  "",
+  "The request asks for an explanation, so I will first check what the transcript already shows,",
+  "then pick the two parts worth expanding and keep the rest short.",
+  "",
+  "- read the question again",
+  "- name the parts in order",
+].join("\n")
+const FEATURE_ANSWER = {
+  reasoning: "The plan above names the parts; this answer follows it.",
+  failtool: "The file does not exist, so the edit failed and the answer stops here.",
+  diff: "The file now holds the renamed function.",
+}
+export const FEATURE_DIFF_FILE = "perf-diff/sample.ts"
+const FEATURE_DIFF_CONTENT = "export function greet(name: string): string {\n  return `Hello, ${name}`\n}\n"
+const featureCalls = (feature, step) => {
+  if (feature === "failtool" && step === 0) {
+    return [{ id: "call_fixture_listing", name: "glob", arguments: { pattern: "perf-read/*.ts" } }]
+  }
+  if (feature === "failtool" && step === 1) {
+    return [{
+      id: "call_fixture_missing",
+      name: "edit",
+      arguments: { path: "perf-missing/does-not-exist.ts", oldString: "before", newString: "after" },
+    }]
+  }
+  if (feature === "diff" && step === 0) {
+    return [{ id: "call_fixture_write", name: "write", arguments: { path: FEATURE_DIFF_FILE, content: FEATURE_DIFF_CONTENT } }]
+  }
+  if (feature === "diff" && step === 1) {
+    return [{
+      id: "call_fixture_edit",
+      name: "edit",
+      arguments: { path: FEATURE_DIFF_FILE, oldString: "export function greet(", newString: "export function welcome(" },
+    }]
+  }
+  return []
+}
+
+// OpenCode asks for a compaction summary in a fixed Markdown template and
+// rejects one without its headings; only `seed-long-session.mjs --compact`
+// asks for one.
+const COMPACTION_SUMMARY = [
+  "## Objective",
+  "- Seed a session whose history ends in a compaction.",
+  "## Requirements",
+  "- (none)",
+  "## Decisions",
+  "- Keep the fixture deterministic.",
+  "## Work State",
+  "### Completed",
+  "- Every seeded turn",
+  "### Active",
+  "- (none)",
+  "### Blocked",
+  "- (none)",
+  "## Next Move",
+  "1. (none)",
+  "## Relevant Files",
+  "(none)",
+  "## Important Context",
+  "- (none)",
+].join("\n")
+const messageText = (content) => (Array.isArray(content) ? content.map((part) => part?.text ?? "").join("\n") : String(content ?? ""))
+const isCompactionRequest = (messages) => messages.some((message) => {
+  const content = messageText(message?.content)
+  return content.includes("<template>") && content.includes("## Objective")
+})
+
 const parseModel = (model) => {
+  const feature = /(reasoning|failtool|diff)-(\d+)cps/.exec(String(model ?? ""))
+  if (feature) {
+    return { delayMs: 0, charactersPerSecond: Math.max(1, Number(feature[2])), document: FEATURE_ANSWER[feature[1]], toolSteps: 0, feature: feature[1] }
+  }
   const think = /think-(\d+)s/.exec(String(model ?? ""))
   if (think) return { delayMs: Number(think[1]) * 1000, charactersPerSecond: 1200, document: THINK_ANSWER, toolSteps: 0 }
   const agent = /agent-(\d+)(tools|reads)(?:-x(\d+))?-(\d+)cps/.exec(String(model ?? ""))
@@ -341,10 +425,11 @@ const parseModel = (model) => {
  * long session agentic, not only the first.
  */
 const planResponse = (model, body, interactions = false) => {
-  const { delayMs, charactersPerSecond, document, toolSteps, reads, parallel = 1 } = parseModel(model)
+  const { delayMs, charactersPerSecond, document, toolSteps, reads, parallel = 1, feature } = parseModel(model)
   const messages = Array.isArray(body.messages) ? body.messages : []
   const lastPrompt = messages.findLastIndex((message) => message?.role === "user")
   const toolResults = messages.slice(lastPrompt + 1).filter((message) => message?.role === "tool").length
+  if (isCompactionRequest(messages)) return { delayMs: 0, charactersPerSecond: Math.max(charactersPerSecond, 2000), text: COMPACTION_SUMMARY, toolCalls: [] }
   if (String(model).startsWith("interaction-")) {
     if (!interactions) throw new Error("Interaction fixtures require --interactions")
     const name = { "interaction-shell": "shell", "interaction-question": "question" }[model]
@@ -362,6 +447,15 @@ const planResponse = (model, body, interactions = false) => {
           ? { command: INTERACTION_SHELL_COMMAND, timeout: 5000, background: false }
           : { questions: INTERACTION_QUESTIONS },
       }],
+    }
+  }
+  if (feature) {
+    const calls = featureCalls(feature, toolResults)
+    return {
+      delayMs, charactersPerSecond,
+      reasoning: feature === "reasoning" ? FEATURE_REASONING : "",
+      text: calls.length > 0 ? "" : document,
+      toolCalls: calls,
     }
   }
   if (toolSteps > 0 && toolResults < toolSteps) {
@@ -405,7 +499,7 @@ const usageFor = (text) => ({ prompt_tokens: 1, completion_tokens: Math.ceil(tex
  * timer drift cannot change the delivered rate between runs. Resolves once the
  * whole text is out, or rejects when the client went away first.
  */
-const streamText = (response, model, text, { delayMs, charactersPerSecond }) => new Promise((resolveStream, reject) => {
+const streamText = (response, model, text, { delayMs, charactersPerSecond }, field = "content") => new Promise((resolveStream, reject) => {
   const startedAt = Date.now() + delayMs
   let sent = 0
   const timer = setInterval(() => {
@@ -413,7 +507,7 @@ const streamText = (response, model, text, { delayMs, charactersPerSecond }) => 
     const due = Math.min(text.length, Math.floor(elapsedSeconds * charactersPerSecond))
     while (sent < due) {
       const next = Math.min(due, sent + CHUNK_CHARACTERS)
-      response.write(sseFrame(chunkFrame(model, { content: text.slice(sent, next) })))
+      response.write(sseFrame(chunkFrame(model, { [field]: text.slice(sent, next) })))
       sent = next
     }
     if (sent < text.length) return
@@ -433,7 +527,8 @@ const streamCompletion = async (response, model, plan, waitForTurnRelease) => {
     plan = { ...plan, delayMs: 0 }
   }
   try {
-    await streamText(response, model, plan.text, plan)
+    if (plan.reasoning) await streamText(response, model, plan.reasoning, plan, "reasoning_content")
+    await streamText(response, model, plan.text, plan.reasoning ? { ...plan, delayMs: 0 } : plan)
   } catch {
     return
   }
@@ -536,6 +631,10 @@ export const fixtureProviderConfig = (port, { interactions = false } = {}) => ({
         ...FIXTURE_UNICODE_RATES.map((rate) => [`unicode-${rate}cps`, { name: `Fixture non-Latin prose and code, ${rate} characters/s` }]),
         ...["stream", "code", "unicode", "showcase"].map((kind) => [`${kind}-${FIXTURE_SEED_RATE}cps`, { name: `Fixture ${kind}, seeding speed` }]),
         ...FIXTURE_THINK_SECONDS.map((seconds) => [`think-${seconds}s`, { name: `Fixture silence, ${seconds}s` }]),
+        ...FIXTURE_FEATURES.flatMap((feature) => FIXTURE_FEATURE_RATES.map((rate) => [
+          `${feature}-${rate}cps`,
+          { name: `Fixture ${feature}, ${rate} characters/s`, tool_call: feature !== "reasoning", reasoning: feature === "reasoning" },
+        ])),
         ...FIXTURE_AGENT_STEPS.flatMap((steps) => FIXTURE_AGENT_RATES.flatMap((rate) => [
           [`agent-${steps}tools-${rate}cps`, { name: `Fixture agent, ${steps} tool calls then ${rate} characters/s`, tool_call: true }],
           [`agent-${steps}reads-${rate}cps`, { name: `Fixture agent, ${steps} file reads then ${rate} characters/s`, tool_call: true }],

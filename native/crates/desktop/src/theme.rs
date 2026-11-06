@@ -145,6 +145,12 @@ pub struct Palette {
     pub status_warning: Hsla,
     pub status_warning_background: Hsla,
     pub status_info: Hsla,
+    pub status_error_background: Hsla,
+    /// Tool and reasoning rows (`--tools-*`).
+    pub tools_border: Hsla,
+    pub tools_icon: Hsla,
+    pub tools_title: Hsla,
+    pub tools_description: Hsla,
     pub cursor: Hsla,
     /// `syntax.base.*` in `AGENT_SYNTAX_ROLES` order.
     pub agent_syntax: [Hsla; AGENT_SYNTAX_ROLES.len()],
@@ -244,6 +250,11 @@ impl Palette {
             status_warning: color("status.warning"),
             status_warning_background: color("status.warningBackground"),
             status_info: color("status.info"),
+            status_error_background: color("status.errorBackground"),
+            tools_border: color("tools.border"),
+            tools_icon: color("tools.icon"),
+            tools_title: color("tools.title"),
+            tools_description: color("tools.description"),
             cursor: color("interactive.cursor"),
             agent_syntax: AGENT_SYNTAX_ROLES.map(|role| color(&format!("syntax.base.{role}"))),
             agent_palette: entry

@@ -388,6 +388,7 @@ mod tests {
                 output: None,
                 elided: None,
                 child: None,
+                facts: Box::default(),
             },
             time: PartTime {
                 start: Some(start),

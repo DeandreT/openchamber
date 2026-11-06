@@ -46,6 +46,7 @@ pub mod sidebar_work;
 pub mod synthetic;
 pub mod terminal_tabs;
 pub mod tool_names;
+pub mod tool_shells;
 pub mod transcript;
 pub mod turn_footer;
 pub mod turn_stats;
