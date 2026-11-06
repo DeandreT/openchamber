@@ -18,9 +18,13 @@ import selectors
 import signal
 import subprocess
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
+import ime_fixture
 import png
+import steps
 import virtual_display
 import x11_capture
 
@@ -327,8 +331,9 @@ class NativeClient:
 
     def wait_for(self, condition: dict, timeout_s: float) -> bool:
         """Whether the condition held within the timeout: ``{"elements": ids}``
-        for accessible elements, ``{"marker": name}`` for a diagnostic marker
-        emitted since the last input."""
+        for accessible elements, ``{"named": ...}`` for a node by name,
+        ``{"focusedText": text}`` for the focused editable's exact text, or
+        ``{"marker": name}`` for a diagnostic marker emitted since the last input."""
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
             if "elements" in condition:
@@ -342,12 +347,16 @@ class NativeClient:
             elif "named" in condition:
                 wanted = condition["named"]
                 present = any(
-                    node.get_name() == wanted["name"]
+                    ((node.get_name() or "").startswith(wanted["name"]) if wanted.get("prefix") else node.get_name() == wanted["name"])
                     and ("role" not in wanted or node.get_role_name() == wanted["role"])
                     and ("id" not in wanted or node.get_accessible_id() == wanted["id"])
                     for node in self._walk()
                 )
                 if present == condition.get("present", True):
+                    self._read_marks(0.3)
+                    return True
+            elif "focusedText" in condition:
+                if self.focused_text() == condition["focusedText"]:
                     self._read_marks(0.3)
                     return True
             elif any(mark["marker"] == condition["marker"] for mark in self.marks[self._input_mark:]):
@@ -360,17 +369,41 @@ class NativeClient:
         """A real pointer click at the target's centre. If synthetic pointer
         input fails, use the target's accessibility action, recorded as a
         substitution so the pointer path is never reported as verified."""
+        self._click_node(self._find(accessible_id), accessible_id)
+
+    def _click_node(self, node, label: str) -> None:
         self._input_mark = len(self.marks)
         atspi = _atspi()
         self._activate()
-        x, y = self._screen_point(self._find(accessible_id))
+        x, y = self._screen_point(node)
         atspi.generate_mouse_event(x, y, "abs")
         time.sleep(0.05)
         if self._pointer() != (x, y):
-            self.substitutions.append({"kind": "pointer", "key": accessible_id, "reference": "click", "replacedBy": "accessibility action"})
-            self.activate(accessible_id)
+            self.substitutions.append({"kind": "pointer", "key": label, "reference": "click", "replacedBy": "accessibility action"})
+            self._do_action(node, label)
             return
         atspi.generate_mouse_event(x, y, "b1c")
+
+    def click_named(self, query: dict) -> None:
+        """A pointer click on the one node with this accessible name and one
+        of the AT-SPI roles its ARIA role maps to."""
+        roles = query.get("roles")
+        matches = [node for node in self._walk()
+                   if node.get_name() == query["name"] and (roles is None or node.get_role_name() in roles)]
+        if len(matches) != 1:
+            raise LookupError(f"{len(matches)} native elements are named {query['name']!r} with roles {roles}")
+        self._click_node(matches[0], f"named:{query['name']}")
+
+    def hover(self, accessible_id: str) -> None:
+        """Moves the real pointer onto the target. Hover has no accessibility
+        equivalent, so a pointer the host does not move fails the step."""
+        self._input_mark = len(self.marks)
+        self._activate()
+        x, y = self._screen_point(self._find(accessible_id))
+        _atspi().generate_mouse_event(x, y, "abs")
+        time.sleep(0.05)
+        if self._pointer() != (x, y):
+            raise RuntimeError(f"the pointer did not reach {accessible_id}")
 
     def _pointer(self) -> tuple[int, int]:
         location = dict(
@@ -382,27 +415,166 @@ class NativeClient:
     def activate(self, accessible_id: str) -> None:
         """The target's accessibility action, as a screen reader invokes it."""
         self._input_mark = len(self.marks)
-        node = self._find(accessible_id)
+        self._do_action(self._find(accessible_id), accessible_id)
+
+    @staticmethod
+    def _do_action(node, label: str) -> None:
         action = node.get_action_iface()
         if action is None or action.get_n_actions() == 0:
-            raise LookupError(f"{accessible_id!r} offers no accessibility action")
+            raise LookupError(f"{label!r} offers no accessibility action")
         action.do_action(0)
 
     def click_target(self, accessible_id: str) -> None:
         self.click(accessible_id)
 
-    def key(self, name: str) -> None:
+    def key(self, spec: str) -> None:
+        """A bare key through AT-SPI's key synthesis, as before; a chord
+        through XTest on the owned display, modifiers held around the key."""
+        chord = steps.parse_key(spec)
         self._input_mark = len(self.marks)
-        atspi = _atspi()
-        from gi.repository import Gdk
+        if not chord.modifiers:
+            atspi = _atspi()
+            from gi.repository import Gdk
 
-        keyval = Gdk.keyval_from_name(name)
-        atspi.generate_keyboard_event(keyval, None, atspi.KeySynthType.SYM)
+            keyval = Gdk.keyval_from_name(chord.key)
+            atspi.generate_keyboard_event(keyval, None, atspi.KeySynthType.SYM)
+            return
+        self._activate()
+        self._xdotool("key", chord.xdotool())
+
+    def begin_key(self, spec: str):
+        """The chord, sent at once: XTest does not wait for the client to
+        read the clipboard. Returns a check, already true."""
+        self.key(spec)
+        return lambda: True
 
     def type_text(self, text: str) -> None:
         self._input_mark = len(self.marks)
         atspi = _atspi()
         atspi.generate_keyboard_event(0, text, atspi.KeySynthType.STRING)
+
+    @staticmethod
+    def _xdotool(*arguments: str) -> None:
+        virtual_display.verify_owned_display()
+        subprocess.run(["xdotool", *arguments], check=True, capture_output=True, timeout=15)
+
+    def focused_text(self) -> str | None:
+        """The text of the focused editable element, or None."""
+        atspi = _atspi()
+        for node in self._walk():
+            if node.get_state_set().contains(atspi.StateType.FOCUSED) and node.get_text_iface() is not None:
+                # GI's Accessible.get_text() is the interface getter and shadows Text.get_text.
+                return atspi.Text.get_text(node.get_text_iface(), 0, -1)
+        return None
+
+    # --- scenario tools --------------------------------------------------
+    # The runner attaches the services a scenario needs: `server_url` for
+    # reads, `faults` (a RuleFaultProxy), `ibus` (an IBusFixture), `portal`
+    # (a running PortalFixture) and `drop_source` (a DropSource).
+
+    server_url: str | None = None
+    faults = None
+    ibus = None
+    portal = None
+    drop_source = None
+
+    def compose(self, keys: str, _preedit: str | None = None) -> None:
+        """Pinyin keys typed into the private IBus engine, left composing;
+        the engine makes its own preedit."""
+        if self.ibus is None:
+            raise RuntimeError("IME steps need the scenario's IBus fixture")
+        self._input_mark = len(self.marks)
+        self._activate()
+        self.ibus.select(ime_fixture.ENGINE)
+        self._xdotool("type", "--clearmodifiers", "--delay", "40", keys)
+
+    def commit_composition(self, mode: str, _text: str) -> None:
+        """Space takes the engine's first candidate; Return commits the raw keys."""
+        self._input_mark = len(self.marks)
+        self._activate()
+        self._xdotool("key", "space" if mode == "candidate" else "Return")
+        self.ibus.select(ime_fixture.LATIN)
+
+    def drop(self, accessible_id: str, files: list[Path]) -> dict:
+        """Files dragged from an XDND source window onto the target."""
+        self._input_mark = len(self.marks)
+        self._activate()
+        return self.drop_source.drop(files, self._screen_point(self._find(accessible_id)))
+
+    def pick(self, files: list[Path], timeout_s: float) -> dict:
+        """Chooses the file in the portal's GTK chooser the client opened:
+        the location entry takes its path, Return opens it."""
+        if self.portal is None:
+            raise RuntimeError("pick steps need the scenario's portal fixture")
+        deadline = time.monotonic() + timeout_s
+        windows: list[str] = []
+        pid = None
+        while not windows and time.monotonic() < deadline:
+            application = self.portal.picker_application()
+            if application is not None:
+                pid = application.get_process_id()
+                windows = subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(pid)], capture_output=True, text=True).stdout.split()
+            time.sleep(0.1)
+        if not windows:
+            raise TimeoutError("no file chooser opened")
+        self._input_mark = len(self.marks)
+        self._xdotool("windowraise", windows[-1])
+        self._xdotool("windowfocus", "--sync", windows[-1])
+        self._xdotool("key", "ctrl+l")
+        time.sleep(0.2)
+        self._xdotool("type", "--clearmodifiers", "--delay", "10", str(files[0]))
+        time.sleep(0.2)
+        self._xdotool("key", "Return")
+        while time.monotonic() < deadline:
+            if not subprocess.run(["xdotool", "search", "--onlyvisible", "--pid", str(pid)], capture_output=True, text=True).stdout.split():
+                return {"window": windows[-1]}
+            time.sleep(0.1)
+        raise TimeoutError("the file chooser did not close after choosing")
+
+    def api_get(self, path: str) -> dict:
+        """``{"status", "body"}`` from the isolated server, never through the fault proxy."""
+        if self.server_url is None:
+            raise RuntimeError("no server to read")
+        request = urllib.request.Request(self.server_url + path)
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                status, text = response.status, response.read().decode()
+        except urllib.error.HTTPError as error:
+            status, text = error.code, error.read().decode(errors="replace")
+        try:
+            return {"status": status, "body": json.loads(text)}
+        except ValueError:
+            return {"status": status, "body": text}
+
+    def add_fault(self, rule: dict) -> None:
+        if self.faults is None:
+            raise RuntimeError("fault steps need the scenario's fault proxy")
+        self.faults.add(rule)
+
+    def release_fault(self, fault_id: str) -> None:
+        self.faults.release(fault_id)
+
+    def fault_hits(self) -> list[dict]:
+        return self.faults.hit_list() if self.faults is not None else []
+
+    def restart(self, after: str, timeout_s: float) -> dict:
+        """Quits with SIGTERM (or waits for an exit the scenario caused) and
+        starts again with the same profile and server."""
+        if after == "signal":
+            try:
+                os.kill(self.process.pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
+        try:
+            self.process.wait(timeout=timeout_s)
+            closed = {"exitCode": self.process.returncode}
+        except subprocess.TimeoutExpired:
+            closed = {"exitCode": None, "signal": "timeout"}
+        self.close()
+        self._selector.unregister(self.process.stdout)
+        self.process.stdout.close()
+        self.marks, self._buffer, self._input_mark, self._app = [], "", 0, None
+        return {"closed": closed, "launch": self.launch()}
 
     # --- evidence --------------------------------------------------------
 
