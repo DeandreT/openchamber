@@ -34,6 +34,13 @@ untracked file and a nested repository, all with fixed commit times and no
 system or global Git configuration. A project that already has commits is
 left as a scenario changed it. `native_files.py` and `native_git.py` use it.
 
+`--github-fixture <proxy> <ca>` points the project's `origin` at
+`https://github.com/acme/widgets.git` and gives only the server
+`HTTPS_PROXY=<proxy>`, a loopback `NO_PROXY` and `NODE_EXTRA_CA_CERTS=<ca>`,
+so its GitHub provider reaches `scripts/parity/github_fixture.py` and nothing
+else. No account is stored; `native_source_board.py` signs in through the
+server's device flow, which the fixture answers.
+
 Every model, agent, effort and prompt input goes through the real window.
 HTTP creates the fresh session and observes records. The runner checks the exact
 Unicode user message and the subsequent completed assistant step's model,
