@@ -87,6 +87,7 @@ mod open_in_app;
 #[cfg(test)]
 mod panel_tests;
 mod permission_modes;
+mod preference_pages;
 mod project_chooser;
 mod project_section;
 mod prompt_rail;
