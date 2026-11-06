@@ -63,6 +63,8 @@ pub(crate) struct SessionManagement {
     pub(crate) add_project: Option<crate::project_registration::AddProject>,
     pub(crate) edit_project: Option<crate::project_registration::EditProject>,
     pub(crate) project_menu: Option<crate::project_registration::ProjectMenu>,
+    pub(crate) search: Option<crate::sidebar_search::SidebarSearch>,
+    pub(crate) display_menu: Option<crate::display_mode_view::DisplayMenu>,
     tasks: HashMap<u64, Task<()>>,
     next_task: u64,
 }

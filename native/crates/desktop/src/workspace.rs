@@ -557,7 +557,10 @@ impl Workspace {
             &mut self.ordering,
             self.send_catalog.settings.as_ref(),
         );
-        self.append_draft_rows(&mut items, &mut spacing);
+        // A search matches sessions; drafts stay out of it.
+        if self.sidebar_state.search.is_none() {
+            self.append_draft_rows(&mut items, &mut spacing);
+        }
         let elapsed = started.elapsed();
         let top = self.sidebar_list.logical_scroll_top();
         let anchor = self
@@ -1348,7 +1351,10 @@ fn build_sidebar_items(
             project, &sessions, worktrees, &context, ordering,
         ));
     }
-    let chat_group = grouping::build_chat_group(&collection, topology.chat_roots.as_ref());
+    let mut chat_group = grouping::build_chat_group(&collection, topology.chat_roots.as_ref());
+    if let Some(query) = &state.search {
+        crate::sidebar_search::filter_sections(&mut sections, chat_group.as_mut(), query);
+    }
     let (pinned, work) = sidebar_rows::zone_items(&sections, chat_group.as_ref(), ordering);
     let timeline = sidebar_rows::timeline_items(&sections, ordering);
     let group_status = HashMap::new();

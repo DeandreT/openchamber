@@ -141,6 +141,15 @@ prompt. Attachments and worktree creation remain separate workflows.
   place of the chat; it lists archived sessions with Restore and Delete.
   The archive page's project buckets, search, dates and archived worktrees
   are not ported.
+- `sidebar_search.rs` owns the toolbar's session search: the field under the
+  toolbar, the match count and the filter that narrows the grouped sections
+  and Chats before the row model runs (`core::session_search`). While a query
+  is active the row model opens every container, applies no reveal limit and
+  leaves drafts out. `display_mode_view.rs` draws the Display mode menu: the
+  Sessions grouping submenu, saved as `sidebarGrouping`, and Collapse all and
+  Expand all. Project sorting and display, detailed rows, branch names for
+  worktrees, the sections manager, Select sessions and Mark all read are not
+  ported. Drag reordering of projects, folders and sessions is not ported.
 - `legacy_queue_reservation.rs` preserves exact text-only reservation recovery
   for retained journal attempts. It compares the original composer, ordered item
   identities and complete prompt configuration before allowing dispatch.

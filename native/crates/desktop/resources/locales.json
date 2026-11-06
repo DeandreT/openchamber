@@ -722,7 +722,19 @@
         "directoryExplorerDialog.browse.loadFailed": "Could not load this folder.",
         "sessions.sidebar.project.actions.edit": "Edit",
         "sessions.sidebar.project.actions.closeProject": "Close project",
-        "sessions.sidebar.project.actions.newSession": "New session"
+        "sessions.sidebar.project.actions.newSession": "New session",
+        "sessions.sidebar.header.search.matchCountSingle": "{count} match",
+        "sessions.sidebar.header.search.matchCountPlural": "{count} matches",
+        "sessions.sidebar.header.search.escapeHint": "Esc to clear",
+        "sessions.sidebar.header.search.placeholder": "Search sessions...",
+        "sessions.sidebar.header.search.clear": "Clear search",
+        "sessions.sidebar.empty.noMatches.title": "No matching sessions",
+        "sessions.sidebar.empty.noMatches.description": "Try a different title, branch, folder, or path.",
+        "sessions.sidebar.header.listGrouping.label": "Sessions",
+        "sessions.sidebar.header.listGrouping.project": "By project",
+        "sessions.sidebar.header.listGrouping.time": "By time",
+        "sessions.sidebar.header.displayMode.collapseAll": "Collapse all",
+        "sessions.sidebar.header.displayMode.expandAll": "Expand all"
       }
     },
     "de": {
@@ -1446,7 +1458,19 @@
         "directoryExplorerDialog.browse.loadFailed": "Dieser Ordner konnte nicht geladen werden.",
         "sessions.sidebar.project.actions.edit": "Bearbeiten",
         "sessions.sidebar.project.actions.closeProject": "Projekt schließen",
-        "sessions.sidebar.project.actions.newSession": "Neue Sitzung"
+        "sessions.sidebar.project.actions.newSession": "Neue Sitzung",
+        "sessions.sidebar.header.search.matchCountSingle": "{count} Treffer",
+        "sessions.sidebar.header.search.matchCountPlural": "{count} Treffer",
+        "sessions.sidebar.header.search.escapeHint": "Esc zum Löschen",
+        "sessions.sidebar.header.search.placeholder": "Sitzungen durchsuchen...",
+        "sessions.sidebar.header.search.clear": "Suche löschen",
+        "sessions.sidebar.empty.noMatches.title": "Keine passenden Sitzungen",
+        "sessions.sidebar.empty.noMatches.description": "Versuchen Sie einen anderen Titel, Branch, Ordner oder Pfad.",
+        "sessions.sidebar.header.listGrouping.label": "Sitzungen",
+        "sessions.sidebar.header.listGrouping.project": "Nach Projekt",
+        "sessions.sidebar.header.listGrouping.time": "Nach Zeit",
+        "sessions.sidebar.header.displayMode.collapseAll": "Alle einklappen",
+        "sessions.sidebar.header.displayMode.expandAll": "Alle ausklappen"
       }
     },
     "fr": {
@@ -2170,7 +2194,19 @@
         "directoryExplorerDialog.browse.loadFailed": "Impossible de charger ce dossier.",
         "sessions.sidebar.project.actions.edit": "Modifier",
         "sessions.sidebar.project.actions.closeProject": "Fermer le projet",
-        "sessions.sidebar.project.actions.newSession": "Nouvelle session"
+        "sessions.sidebar.project.actions.newSession": "Nouvelle session",
+        "sessions.sidebar.header.search.matchCountSingle": "Correspondance {count}",
+        "sessions.sidebar.header.search.matchCountPlural": "Correspondances {count}",
+        "sessions.sidebar.header.search.escapeHint": "Echap pour effacer",
+        "sessions.sidebar.header.search.placeholder": "Rechercher des sessions...",
+        "sessions.sidebar.header.search.clear": "Effacer la recherche",
+        "sessions.sidebar.empty.noMatches.title": "Aucune session correspondante",
+        "sessions.sidebar.empty.noMatches.description": "Essayez un autre titre, branche, dossier ou chemin.",
+        "sessions.sidebar.header.listGrouping.label": "Sessions",
+        "sessions.sidebar.header.listGrouping.project": "Par projet",
+        "sessions.sidebar.header.listGrouping.time": "Par date",
+        "sessions.sidebar.header.displayMode.collapseAll": "Tout réduire",
+        "sessions.sidebar.header.displayMode.expandAll": "Tout développer"
       }
     },
     "nl": {
@@ -2894,7 +2930,19 @@
         "directoryExplorerDialog.browse.loadFailed": "Kan deze map niet laden.",
         "sessions.sidebar.project.actions.edit": "Bewerken",
         "sessions.sidebar.project.actions.closeProject": "Project sluiten",
-        "sessions.sidebar.project.actions.newSession": "Nieuwe sessie"
+        "sessions.sidebar.project.actions.newSession": "Nieuwe sessie",
+        "sessions.sidebar.header.search.matchCountSingle": "{count} treffer",
+        "sessions.sidebar.header.search.matchCountPlural": "{count} treffers",
+        "sessions.sidebar.header.search.escapeHint": "Esc om te wissen",
+        "sessions.sidebar.header.search.placeholder": "Sessies zoeken...",
+        "sessions.sidebar.header.search.clear": "Zoekopdracht wissen",
+        "sessions.sidebar.empty.noMatches.title": "Geen overeenkomende sessies",
+        "sessions.sidebar.empty.noMatches.description": "Probeer een andere titel, branch, map of pad.",
+        "sessions.sidebar.header.listGrouping.label": "Sessies",
+        "sessions.sidebar.header.listGrouping.project": "Per project",
+        "sessions.sidebar.header.listGrouping.time": "Op tijd",
+        "sessions.sidebar.header.displayMode.collapseAll": "Alles inklappen",
+        "sessions.sidebar.header.displayMode.expandAll": "Alles uitklappen"
       }
     },
     "zh-CN": {
@@ -3618,7 +3666,19 @@
         "directoryExplorerDialog.browse.loadFailed": "无法加载此文件夹。",
         "sessions.sidebar.project.actions.edit": "编辑",
         "sessions.sidebar.project.actions.closeProject": "关闭项目",
-        "sessions.sidebar.project.actions.newSession": "新建会话"
+        "sessions.sidebar.project.actions.newSession": "新建会话",
+        "sessions.sidebar.header.search.matchCountSingle": "{count} 个匹配",
+        "sessions.sidebar.header.search.matchCountPlural": "{count} 个匹配",
+        "sessions.sidebar.header.search.escapeHint": "按 Esc 清除",
+        "sessions.sidebar.header.search.placeholder": "搜索会话...",
+        "sessions.sidebar.header.search.clear": "清除搜索",
+        "sessions.sidebar.empty.noMatches.title": "没有匹配的会话",
+        "sessions.sidebar.empty.noMatches.description": "请尝试其他标题、分支、文件夹或路径。",
+        "sessions.sidebar.header.listGrouping.label": "会话",
+        "sessions.sidebar.header.listGrouping.project": "按项目",
+        "sessions.sidebar.header.listGrouping.time": "按时间",
+        "sessions.sidebar.header.displayMode.collapseAll": "全部折叠",
+        "sessions.sidebar.header.displayMode.expandAll": "全部展开"
       }
     },
     "zh-TW": {
@@ -4342,7 +4402,19 @@
         "directoryExplorerDialog.browse.loadFailed": "無法載入此資料夾。",
         "sessions.sidebar.project.actions.edit": "編輯",
         "sessions.sidebar.project.actions.closeProject": "關閉專案",
-        "sessions.sidebar.project.actions.newSession": "新增會話"
+        "sessions.sidebar.project.actions.newSession": "新增會話",
+        "sessions.sidebar.header.search.matchCountSingle": "{count} 個符合",
+        "sessions.sidebar.header.search.matchCountPlural": "{count} 個符合",
+        "sessions.sidebar.header.search.escapeHint": "按 Esc 清除",
+        "sessions.sidebar.header.search.placeholder": "搜尋會話...",
+        "sessions.sidebar.header.search.clear": "清除搜尋",
+        "sessions.sidebar.empty.noMatches.title": "沒有符合的會話",
+        "sessions.sidebar.empty.noMatches.description": "請嘗試其他標題、分支、資料夾或路徑。",
+        "sessions.sidebar.header.listGrouping.label": "會話",
+        "sessions.sidebar.header.listGrouping.project": "依專案",
+        "sessions.sidebar.header.listGrouping.time": "依時間",
+        "sessions.sidebar.header.displayMode.collapseAll": "全部摺疊",
+        "sessions.sidebar.header.displayMode.expandAll": "全部展開"
       }
     },
     "uk": {
@@ -5066,7 +5138,19 @@
         "directoryExplorerDialog.browse.loadFailed": "Не вдалося завантажити цю папку.",
         "sessions.sidebar.project.actions.edit": "Редагувати",
         "sessions.sidebar.project.actions.closeProject": "Закрити проєкт",
-        "sessions.sidebar.project.actions.newSession": "Нова сесія"
+        "sessions.sidebar.project.actions.newSession": "Нова сесія",
+        "sessions.sidebar.header.search.matchCountSingle": "{count} збіг",
+        "sessions.sidebar.header.search.matchCountPlural": "Збігів: {count}",
+        "sessions.sidebar.header.search.escapeHint": "Esc, щоб очистити",
+        "sessions.sidebar.header.search.placeholder": "Пошук сесій...",
+        "sessions.sidebar.header.search.clear": "Очистити пошук",
+        "sessions.sidebar.empty.noMatches.title": "Немає відповідних сесій",
+        "sessions.sidebar.empty.noMatches.description": "Спробуйте інший заголовок, гілку, папку або шлях.",
+        "sessions.sidebar.header.listGrouping.label": "Сесії",
+        "sessions.sidebar.header.listGrouping.project": "За проєктами",
+        "sessions.sidebar.header.listGrouping.time": "За часом",
+        "sessions.sidebar.header.displayMode.collapseAll": "Згорнути все",
+        "sessions.sidebar.header.displayMode.expandAll": "Розгорнути все"
       }
     },
     "es": {
@@ -5790,7 +5874,19 @@
         "directoryExplorerDialog.browse.loadFailed": "No se pudo cargar esta carpeta.",
         "sessions.sidebar.project.actions.edit": "Editar",
         "sessions.sidebar.project.actions.closeProject": "Cerrar proyecto",
-        "sessions.sidebar.project.actions.newSession": "Nueva sesión"
+        "sessions.sidebar.project.actions.newSession": "Nueva sesión",
+        "sessions.sidebar.header.search.matchCountSingle": "{count} coincidencia",
+        "sessions.sidebar.header.search.matchCountPlural": "{count} coincidencias",
+        "sessions.sidebar.header.search.escapeHint": "Esc para limpiar",
+        "sessions.sidebar.header.search.placeholder": "Buscar sesiones...",
+        "sessions.sidebar.header.search.clear": "Limpiar búsqueda",
+        "sessions.sidebar.empty.noMatches.title": "No hay sesiones coincidentes",
+        "sessions.sidebar.empty.noMatches.description": "Inténtalo con un título, rama, carpeta o ruta diferente.",
+        "sessions.sidebar.header.listGrouping.label": "Sesiones",
+        "sessions.sidebar.header.listGrouping.project": "Por proyecto",
+        "sessions.sidebar.header.listGrouping.time": "Por fecha",
+        "sessions.sidebar.header.displayMode.collapseAll": "Colapsar todo",
+        "sessions.sidebar.header.displayMode.expandAll": "Expandir todo"
       }
     },
     "pt-BR": {
@@ -6514,7 +6610,19 @@
         "directoryExplorerDialog.browse.loadFailed": "Não foi possível carregar esta pasta.",
         "sessions.sidebar.project.actions.edit": "Editar",
         "sessions.sidebar.project.actions.closeProject": "Fechar projeto",
-        "sessions.sidebar.project.actions.newSession": "Nova sessão"
+        "sessions.sidebar.project.actions.newSession": "Nova sessão",
+        "sessions.sidebar.header.search.matchCountSingle": "{count} correspondência",
+        "sessions.sidebar.header.search.matchCountPlural": "{count} correspondências",
+        "sessions.sidebar.header.search.escapeHint": "Esc para limpar",
+        "sessions.sidebar.header.search.placeholder": "Pesquisar sessões...",
+        "sessions.sidebar.header.search.clear": "Limpar pesquisa",
+        "sessions.sidebar.empty.noMatches.title": "Não há sessões coincidentes",
+        "sessions.sidebar.empty.noMatches.description": "Tente com outro título, branch, pasta ou caminho.",
+        "sessions.sidebar.header.listGrouping.label": "Sessões",
+        "sessions.sidebar.header.listGrouping.project": "Por projeto",
+        "sessions.sidebar.header.listGrouping.time": "Por data",
+        "sessions.sidebar.header.displayMode.collapseAll": "Recolher tudo",
+        "sessions.sidebar.header.displayMode.expandAll": "Expandir tudo"
       }
     },
     "ko": {
@@ -7238,7 +7346,19 @@
         "directoryExplorerDialog.browse.loadFailed": "이 폴더를 불러올 수 없습니다.",
         "sessions.sidebar.project.actions.edit": "편집",
         "sessions.sidebar.project.actions.closeProject": "프로젝트 닫기",
-        "sessions.sidebar.project.actions.newSession": "새 세션"
+        "sessions.sidebar.project.actions.newSession": "새 세션",
+        "sessions.sidebar.header.search.matchCountSingle": "{count}개 일치",
+        "sessions.sidebar.header.search.matchCountPlural": "{count}개 일치",
+        "sessions.sidebar.header.search.escapeHint": "Esc로 지우기",
+        "sessions.sidebar.header.search.placeholder": "세션 검색…",
+        "sessions.sidebar.header.search.clear": "검색 지우기",
+        "sessions.sidebar.empty.noMatches.title": "일치하는 세션 없음",
+        "sessions.sidebar.empty.noMatches.description": "다른 제목, 브랜치, 폴더 또는 경로로 검색해 보세요.",
+        "sessions.sidebar.header.listGrouping.label": "세션",
+        "sessions.sidebar.header.listGrouping.project": "프로젝트별",
+        "sessions.sidebar.header.listGrouping.time": "시간순",
+        "sessions.sidebar.header.displayMode.collapseAll": "모두 접기",
+        "sessions.sidebar.header.displayMode.expandAll": "모두 펼치기"
       }
     },
     "pl": {
@@ -7962,7 +8082,19 @@
         "directoryExplorerDialog.browse.loadFailed": "Nie udało się wczytać tego folderu.",
         "sessions.sidebar.project.actions.edit": "Edytuj",
         "sessions.sidebar.project.actions.closeProject": "Zamknij projekt",
-        "sessions.sidebar.project.actions.newSession": "Nowa sesja"
+        "sessions.sidebar.project.actions.newSession": "Nowa sesja",
+        "sessions.sidebar.header.search.matchCountSingle": "{count} dopasowanie",
+        "sessions.sidebar.header.search.matchCountPlural": "{count} dopasowań",
+        "sessions.sidebar.header.search.escapeHint": "Esc aby wyczyścić",
+        "sessions.sidebar.header.search.placeholder": "Szukaj sesji...",
+        "sessions.sidebar.header.search.clear": "Wyczyść wyszukiwanie",
+        "sessions.sidebar.empty.noMatches.title": "Brak pasujących sesji",
+        "sessions.sidebar.empty.noMatches.description": "Spróbuj innego tytułu, gałęzi, folderu lub ścieżki.",
+        "sessions.sidebar.header.listGrouping.label": "Sesje",
+        "sessions.sidebar.header.listGrouping.project": "Według projektu",
+        "sessions.sidebar.header.listGrouping.time": "Według czasu",
+        "sessions.sidebar.header.displayMode.collapseAll": "Zwiń wszystkie",
+        "sessions.sidebar.header.displayMode.expandAll": "Rozwiń wszystkie"
       }
     },
     "ja": {
@@ -8686,7 +8818,19 @@
         "directoryExplorerDialog.browse.loadFailed": "このフォルダを読み込めませんでした。",
         "sessions.sidebar.project.actions.edit": "編集",
         "sessions.sidebar.project.actions.closeProject": "プロジェクトを閉じる",
-        "sessions.sidebar.project.actions.newSession": "新しいセッション"
+        "sessions.sidebar.project.actions.newSession": "新しいセッション",
+        "sessions.sidebar.header.search.matchCountSingle": "{count}件一致",
+        "sessions.sidebar.header.search.matchCountPlural": "{count}件一致",
+        "sessions.sidebar.header.search.escapeHint": "Escでクリア",
+        "sessions.sidebar.header.search.placeholder": "セッションを検索...",
+        "sessions.sidebar.header.search.clear": "検索をクリア",
+        "sessions.sidebar.empty.noMatches.title": "一致するセッションがありません",
+        "sessions.sidebar.empty.noMatches.description": "別のタイトル、ブランチ、フォルダ、パスをお試しください。",
+        "sessions.sidebar.header.listGrouping.label": "セッション",
+        "sessions.sidebar.header.listGrouping.project": "プロジェクト別",
+        "sessions.sidebar.header.listGrouping.time": "時間順",
+        "sessions.sidebar.header.displayMode.collapseAll": "すべて折りたたむ",
+        "sessions.sidebar.header.displayMode.expandAll": "すべて展開"
       }
     },
     "tr": {
@@ -9410,7 +9554,19 @@
         "directoryExplorerDialog.browse.loadFailed": "Bu klasör yüklenemedi.",
         "sessions.sidebar.project.actions.edit": "Düzenle",
         "sessions.sidebar.project.actions.closeProject": "Projeyi kapat",
-        "sessions.sidebar.project.actions.newSession": "Yeni session"
+        "sessions.sidebar.project.actions.newSession": "Yeni session",
+        "sessions.sidebar.header.search.matchCountSingle": "{count} eşleşme",
+        "sessions.sidebar.header.search.matchCountPlural": "{count} eşleşme",
+        "sessions.sidebar.header.search.escapeHint": "Temizlemek için Esc",
+        "sessions.sidebar.header.search.placeholder": "Session ara...",
+        "sessions.sidebar.header.search.clear": "Aramayı temizle",
+        "sessions.sidebar.empty.noMatches.title": "Eşleşen session yok",
+        "sessions.sidebar.empty.noMatches.description": "Farklı bir başlık, branch, klasör veya yol deneyin.",
+        "sessions.sidebar.header.listGrouping.label": "Session'lar",
+        "sessions.sidebar.header.listGrouping.project": "Projeye göre",
+        "sessions.sidebar.header.listGrouping.time": "Zamana göre",
+        "sessions.sidebar.header.displayMode.collapseAll": "Tümünü daralt",
+        "sessions.sidebar.header.displayMode.expandAll": "Tümünü genişlet"
       }
     },
     "ar": {
@@ -10134,7 +10290,19 @@
         "directoryExplorerDialog.browse.loadFailed": "تعذّر تحميل هذا المجلد.",
         "sessions.sidebar.project.actions.edit": "تعديل",
         "sessions.sidebar.project.actions.closeProject": "إغلاق المشروع",
-        "sessions.sidebar.project.actions.newSession": "جلسة جديدة"
+        "sessions.sidebar.project.actions.newSession": "جلسة جديدة",
+        "sessions.sidebar.header.search.matchCountSingle": "{count} نتيجة مطابقة",
+        "sessions.sidebar.header.search.matchCountPlural": "{count} نتائج مطابقة",
+        "sessions.sidebar.header.search.escapeHint": "Esc للمسح",
+        "sessions.sidebar.header.search.placeholder": "البحث في الجلسات…",
+        "sessions.sidebar.header.search.clear": "مسح البحث",
+        "sessions.sidebar.empty.noMatches.title": "لا توجد جلسات مطابقة",
+        "sessions.sidebar.empty.noMatches.description": "جرّب عنوانًا أو فرعًا أو مجلدًا أو مسارًا مختلفًا.",
+        "sessions.sidebar.header.listGrouping.label": "الجلسات",
+        "sessions.sidebar.header.listGrouping.project": "حسب المشروع",
+        "sessions.sidebar.header.listGrouping.time": "حسب الوقت",
+        "sessions.sidebar.header.displayMode.collapseAll": "طي الكل",
+        "sessions.sidebar.header.displayMode.expandAll": "توسيع الكل"
       }
     },
     "he": {
@@ -10858,7 +11026,19 @@
         "directoryExplorerDialog.browse.loadFailed": "לא ניתן היה לטעון את התיקייה הזו.",
         "sessions.sidebar.project.actions.edit": "ערוך",
         "sessions.sidebar.project.actions.closeProject": "סגור פרויקט",
-        "sessions.sidebar.project.actions.newSession": "הפעלה חדשה"
+        "sessions.sidebar.project.actions.newSession": "הפעלה חדשה",
+        "sessions.sidebar.header.search.matchCountSingle": "{count} התאמה",
+        "sessions.sidebar.header.search.matchCountPlural": "{count} התאמות",
+        "sessions.sidebar.header.search.escapeHint": "Esc לניקוי",
+        "sessions.sidebar.header.search.placeholder": "חיפוש הפעלות…",
+        "sessions.sidebar.header.search.clear": "נקה חיפוש",
+        "sessions.sidebar.empty.noMatches.title": "אין הפעלות תואמות",
+        "sessions.sidebar.empty.noMatches.description": "אפשר לנסות כותרת, ענף, תיקייה או נתיב אחרים.",
+        "sessions.sidebar.header.listGrouping.label": "הפעלות",
+        "sessions.sidebar.header.listGrouping.project": "לפי פרויקט",
+        "sessions.sidebar.header.listGrouping.time": "לפי זמן",
+        "sessions.sidebar.header.displayMode.collapseAll": "כווץ הכול",
+        "sessions.sidebar.header.displayMode.expandAll": "הרחב הכול"
       }
     }
   }

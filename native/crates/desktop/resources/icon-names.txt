@@ -120,3 +120,6 @@ folder-received
 window
 git-merge
 arrow-left-s
+folders
+contract-up-down
+expand-up-down

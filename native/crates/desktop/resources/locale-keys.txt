@@ -722,3 +722,15 @@ directoryExplorerDialog.browse.loadFailed
 sessions.sidebar.project.actions.edit
 sessions.sidebar.project.actions.closeProject
 sessions.sidebar.project.actions.newSession
+sessions.sidebar.header.search.matchCountSingle
+sessions.sidebar.header.search.matchCountPlural
+sessions.sidebar.header.search.escapeHint
+sessions.sidebar.header.search.placeholder
+sessions.sidebar.header.search.clear
+sessions.sidebar.empty.noMatches.title
+sessions.sidebar.empty.noMatches.description
+sessions.sidebar.header.listGrouping.label
+sessions.sidebar.header.listGrouping.project
+sessions.sidebar.header.listGrouping.time
+sessions.sidebar.header.displayMode.collapseAll
+sessions.sidebar.header.displayMode.expandAll
