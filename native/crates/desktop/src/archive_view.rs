@@ -29,6 +29,7 @@ const PAGE_WIDTH: f32 = 768.0;
 impl Workspace {
     /// The toolbar's Archive button opens the page and closes it again.
     pub(crate) fn toggle_archive_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.navigation_revision = self.navigation_revision.wrapping_add(1);
         self.archive_open = !self.archive_open;
         if !self.archive_open {
             self.focus_composer(window, cx);
@@ -44,7 +45,10 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let strings = locale::strings(cx).clone();
-        let sessions = session_actions::archive_page(&self.sessions);
+        let sessions: Vec<_> = session_actions::archive_page(&self.sessions)
+            .into_iter()
+            .filter(|session| self.session_admitted(&session.id))
+            .collect();
         let count = sessions.len();
         let count_label = if count == 1 {
             strings.format(

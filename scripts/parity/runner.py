@@ -477,6 +477,7 @@ def input_identities(args: argparse.Namespace) -> dict:
         "opencode": args.opencode_binary,
         "seed": args.root / "seed",
         "scenarios": SCENARIOS,
+        "inventory": INVENTORY,
         "exceptions": EXCEPTIONS,
     }.items()}
 
@@ -485,10 +486,12 @@ def run(args: argparse.Namespace) -> int:
     if not (args.root / "seed").exists():
         print(f"no seed under {args.root}; run the seed command first", file=sys.stderr)
         return 2
-    definitions = json.loads(SCENARIOS.read_text())
+    scenario_source = SCENARIOS.read_bytes()
+    inventory_source = INVENTORY.read_bytes()
+    definitions = json.loads(scenario_source.decode("utf-8"))
     scenarios = definitions["scenarios"]
     args.targets = definitions.get("targets", {})
-    features = json.loads(INVENTORY.read_text())["features"]
+    features = json.loads(inventory_source.decode("utf-8"))["features"]
     problems = check_contracts(scenarios, features, args.targets)
     if problems:
         for problem in problems:
@@ -509,6 +512,10 @@ def run(args: argparse.Namespace) -> int:
         inputs = input_identities(args)
     except OSError as error:
         print(f"cannot identify comparison inputs: {error}", file=sys.stderr)
+        return 2
+    if any(inputs.get(name, {}).get("sha256") != hashlib.sha256(source).hexdigest()
+           for name, source in (("scenarios", scenario_source), ("inventory", inventory_source))):
+        print("comparison declarations changed before the run; reload and retry", file=sys.stderr)
         return 2
     report = {"generatedAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "configuration": {key: str(value) for key, value in vars(args).items()}, "inputs": inputs, "scenarios": {}}
     failed = 0
@@ -537,7 +544,12 @@ def run(args: argparse.Namespace) -> int:
           f"{coverage['failed']} failed, {coverage['incomplete']} incomplete, {coverage['notRun']} not run, "
           f"{coverage['manual']} manual only")
     print(f"report: {output / 'report.json'}")
-    return 1 if failed else 0
+    inventory_refused = getattr(args, "require_complete_inventory", False) and (
+        not coverage["features"] or coverage["passed"] != coverage["features"]
+    )
+    if inventory_refused:
+        print_inventory_gaps(coverage)
+    return 1 if failed or inventory_refused else 0
 
 
 def check_contracts(scenarios: list[dict], features: list[dict], targets: dict[str, dict]) -> list[str]:
@@ -632,6 +644,29 @@ def inventory_coverage(features: list[dict], results: dict[str, dict], scenarios
         counts["byFeature"][feature["id"]] = status
         counts[{"passed": "passed", "failed": "failed", "incomplete": "incomplete", "not run": "notRun", "manual": "manual"}[status]] += 1
     return counts
+
+
+def print_inventory_gaps(coverage: dict) -> None:
+    """Keep terminal diagnostics bounded; the report retains every requirement."""
+    if not coverage["features"]:
+        print("complete inventory required: the inventory has no features", file=sys.stderr)
+        return
+    gaps = [(feature, status) for feature, status in coverage["byFeature"].items() if status != "passed"]
+    print(f"complete inventory required: {len(gaps)} of {coverage['features']} features did not pass", file=sys.stderr)
+
+    def summary(values):
+        shown = [value if len(value) <= 80 else value[:77] + "..." for value in values[:3]]
+        if len(values) > 3:
+            shown.append(f"+{len(values) - 3} more")
+        return ", ".join(shown) or "none"
+
+    for feature, status in gaps[:8]:
+        missing = coverage["missingRequirements"][feature]
+        print(f"  {feature}: {status}; missing behaviors: {summary(missing['behaviors'])}; "
+              f"missing states: {summary(missing['states'])}", file=sys.stderr)
+    if len(gaps) > 8:
+        print(f"  {len(gaps) - 8} more features did not pass", file=sys.stderr)
+    print("see report.json inventory for every feature and missing requirement", file=sys.stderr)
 
 
 def approved_exceptions(kind: str) -> set[tuple[str, str]]:
@@ -775,6 +810,10 @@ def main() -> int:
     commands.choices["seed"].add_argument("--force", action="store_true", help="rebuild an existing seed")
     runner = commands.choices["run"]
     runner.add_argument("--scenarios", help="comma-separated scenario IDs; all by default")
+    runner.add_argument(
+        "--require-complete-inventory", action="store_true",
+        help="fail unless every inventory feature passes with complete behavior and state proofs",
+    )
     runner.add_argument("--electron-app", type=Path, default=DEFAULT_ELECTRON)
     runner.add_argument("--native-binary", type=Path, default=DEFAULT_NATIVE)
     runner.add_argument("--theme", default="openchamber-dark")

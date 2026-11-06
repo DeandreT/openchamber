@@ -1,4 +1,4 @@
-# Layout and text wrapping public-API tests
+# Layout, text wrapping and quit public-API tests
 
 This standalone package tests the local `gpui-pre` patch as a dependency with
 `test-support`. It does not compile GPUI's upstream library unit-test module.
@@ -28,6 +28,41 @@ CARGO_TARGET_DIR="$PWD/target" cargo test --offline --locked \
 They cover ASCII-space overflow, repeated, leading and trailing spaces,
 unchanged NBSP, narrow NBSP and tab handling, UTF-8 byte indices and line clamps.
 They require no platform fonts and do not substitute a copied wrap algorithm.
+
+The quit lifecycle regressions run separately, after other native builds finish:
+
+```sh
+CARGO_TARGET_DIR="$PWD/target" cargo test --offline --locked \
+  --manifest-path vendor/gpui-pre/layout-tests/Cargo.toml \
+  --test quit
+```
+
+These tests call `App::quit` through the public test context and register the
+real quit subscriptions. Standard-library futures and explicit wakeups gate
+foreground save completion without timers, additional dependencies or platform
+fonts. Coverage includes persistent vetoes, callback delivery and request
+coalescing, foreground-dependent close, failed-save retry, synchronous
+last-window close, retained closed-window subscriptions and released entities.
+Deferred window creation and guard registration must receive a fresh consent
+check before quit can proceed. Unrelated deferred effects preserve consent.
+`TestAppContext::quit` is teardown and bypasses preflight; it is not used to
+request application quit in these scenarios.
+
+The test platform records `Platform::quit` calls and retains the real `on_quit`
+callback. `TestAppContext::platform_quit_count` observes accepted requests;
+`simulate_platform_quit` delivers the callback explicitly without stopping the
+test scheduler. Before an application quit, delivery models an OS-requested quit
+and preserves veto and borrowed-app rejection. After an accepted platform quit,
+delivery models final post-loop notification. Late idle window creation and guard
+registration cannot cancel that notification or skip exactly-once final cleanup.
+OS-requested quit still rechecks guards registered by deferred effects before
+committing to shutdown.
+
+This target exercises the real app callback, final cleanup, view updates and
+window lifetime. It does not prove that an operating system stops its loop,
+honors a platform callback veto or hands over its clipboard. Those require
+private-platform runtime qualification. The separate in-module quit tests remain
+outside this target.
 
 The first run resolves the standalone package's lockfile from the local cache.
 Retain that generated `Cargo.lock` and add `--locked` on subsequent runs.

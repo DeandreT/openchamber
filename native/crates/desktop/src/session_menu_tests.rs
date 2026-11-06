@@ -629,6 +629,7 @@ fn one_failed_delete_leaves_the_others_and_a_stale_runtime_changes_nothing(
         state.finish_delete(
             RuntimeId::from("another-server"),
             vec![first.clone()],
+            vec![(first.clone(), vec![first.clone()])],
             Some(vec![(first.clone(), Ok(Deleted::Removed))]),
             window,
             cx,
@@ -642,6 +643,10 @@ fn one_failed_delete_leaves_the_others_and_a_stale_runtime_changes_nothing(
         state.finish_delete(
             runtime.clone(),
             vec![first.clone(), second.clone()],
+            vec![
+                (first.clone(), vec![first.clone()]),
+                (second.clone(), vec![second.clone()]),
+            ],
             Some(vec![
                 (first.clone(), Ok(Deleted::AlreadyGone)),
                 (second.clone(), Err(TransportError::TimedOut)),

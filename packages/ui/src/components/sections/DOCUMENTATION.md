@@ -169,6 +169,15 @@ in the fixed order of `POPULAR_PROVIDERS`, with a one-line note and a
 Recommended pill on the ones the maintainer recommends; every other provider
 is a compact row behind "Show all", and the search covers all of them.
 
+A provider OpenCode lists with no model at all keeps a card on the grid while
+its integration holds a stored login (Copilot Free or Student): the login keeps
+it off the connect page, so this card is the only way to sign out or switch
+accounts. Its page is the usual provider page. Building such a provider from the
+integration list was rejected, because OpenCode reports the provider itself and
+the page then acts on OpenCode's record. A provider with no model and no stored
+login, such as a config entry with an empty model list, has no account to
+manage and stays off the grid.
+
 The integration list is kept for the app session by
 `lib/opencode/integration-catalog.ts`, so the page opens on it without a
 loading state. The desktop/web/VS Code app reads it once at startup when the
@@ -179,17 +188,70 @@ the list again on every visit and after every credential write, a read
 started earlier never replaces a later one, and a snapshot from another
 runtime is ignored.
 
+### Why runtime-only MCP rows wait for the config read
+
+The MCP grid adds runtime-reported servers only after the directory's first
+successful config read, matching configured servers by name so they never appear
+twice. Showing runtime rows earlier would make configured servers flash as
+read-only while their config loads; a failed initial read therefore keeps
+runtime-only rows hidden until a read succeeds. These rows expose neither open
+nor delete because no config entry backs them.
+
 ### MCP OAuth
 
 A remote MCP server with OAuth enabled is registered by OpenCode as an
 integration (`mcp_<hash>`, `metadata.source: "mcp"`, named after the server)
-with one `oauth` method, so signing in is the same connect / status /
+with `oauth` methods, so signing in is the same connect / status /
 complete flow the Providers page runs. `mcp/McpOAuthSignIn.tsx` looks the
 integration up by server name in the server's directory (the registration is
 per Location) and mounts the shared `providers/ProviderOAuthMethods.tsx`
-with that directory. It appears in the status card while the server reports
-`needs_auth`; once the credential is stored, the page connects the server
-again, which is what moves it out of `needs_auth`.
+with that directory. While the server reports `needs_auth`, the status card
+shows its sign-in row; once the credential is stored, the page connects the
+server again, which is what moves it out of `needs_auth` or `failed`.
+
+The detail page looks up the integration for a failed server or a configured
+remote server with `oauth !== false`. An absent `oauth` field is included:
+OpenCode can discover OAuth without an explicit config entry. The lookup is
+scoped to the selected server's directory and stops after 9 reads spaced
+750 ms apart, including when a header/token-auth remote server has no OAuth
+integration. Leaving the selection discards the result.
+
+### Why a failed OAuth server's header says "Sign in again"
+
+When the service rejects the stored token (a refresh answered with 403
+`access_denied`), OpenCode reports the server `failed`, not `needs_auth`, and
+keeps the rejected credential. Connect only sends it again. A fresh sign-in
+starts with no tokens (it reuses only the earlier client registration) and
+its new credential is the one the next connect uses, so signing in is the
+whole recovery; no sign-out call is needed.
+
+So for a `failed` server whose OAuth integration exists
+(`useMcpOAuthIntegration`), the header's primary button is "Sign in again" in
+place of Connect, and the card shows no second sign-in row: each press mounts
+a fresh `McpOAuthSignIn` with `autoStart`. A single method starts immediately
+with its start button hidden; multiple methods keep their start controls so
+the user can choose one. Test connection stays on the status line for
+the other cause of `failed`, a server that was down; it retries with the
+stored credential. A `failed` server without OAuth keeps Connect.
+
+The Integrations catalog keeps its sign-in row and labels its button "Sign in
+again" for `failed`, gated on the entry's `auth: 'oauth'` so a failed
+token-based entry gets no sign-in block. It starts the sign-in by itself after
+an install only for `needs_auth`: a first connect that failed for another
+reason waits for a click.
+
+### Why a connected OAuth server offers Authorize
+
+A connected transport can expose tools that still require user consent. When
+an OAuth integration exists, the detail header offers Authorize unless the
+server is `needs_auth`, `blocked`, or already offers Sign in again. Authorize
+mounts the status card and the same sign-in flow, even while connected;
+completion reconnects the server. Only one sign-in panel is mounted if the
+runtime changes to `needs_auth` during that flow.
+
+The Integrations catalog also offers sign-in for connected entries with
+`auth: 'oauth'`, labeled Authorize. Its view is mounted by `MainLayout` on web
+and desktop, not by mobile or VS Code; those use the shared MCP Settings page.
 
 ### Claude sign-in on Usage
 
@@ -295,7 +357,11 @@ the info hint stays.
 Where the descriptor's settings have a `username` field, the token form asks
 for a username above the token and sends both (`authSetToken(…, { username })`);
 an `http-password` field names the secret an HTTP password instead of a token
-(`sourceControlProviderSettings.ts`). Gerrit signs in this way.
+(`sourceControlProviderSettings.ts`). Gerrit signs in this way. A settings field
+with the id `sshUrl` adds an instance-level SSH address row, saved through
+`authSetSshUrl`; Gitea and Forgejo use it when `SSH_DOMAIN` differs from the
+web address. Its published kind stays `instance-url` so older clients, which
+ignore field ids they do not know, still draw the card.
 `normalizeInstanceInput` reads what the user typed the way the descriptor
 says: an origin or a bare host, HTTPS only (HTTP on loopback where allowed), a
 port only where allowed, reserved instances refused.
@@ -327,6 +393,47 @@ account switch where `multipleAccounts` is set. `TrackerProjectMapping` and
 `TrackerSessionComments` show where `projectMapping` and `sessionComments` are
 set. A tracker that offers no browser sign-in asks for an update instead of a
 dead Connect button.
+
+A tracker an extension serves (`ext-<guest id>`, `lib/trackers/extension.ts`)
+gets the same card, drawn by `integrations/GuestIntegrationsSection.tsx` under
+"Extension accounts" beside the extension's notification channel, and
+`IntegrationsPage.tsx` leaves it out of the built-in list. The card takes the
+installed extension and its public tracker contribution (`extension` prop) and
+reads the connect form from the auth status's `connect` block, never from the
+manifest alone: a `user` instance asks for the server address until an account
+lives on one (the first connect fixes it, a saved client alone does not, so a
+mistyped address is corrected by typing again; `INSTANCE_MISMATCH` says a
+second account must be on the same server); `token` auth shows the token form
+with the scopes and "Create token" link the contribution names, and a username
+where its scheme is `basic`; `oauth` auth shows the client id and secret form
+with the redirect URL to copy until the server holds a client (`hasClient`),
+then the browser sign-in. A tracker that takes both shows one form at a time
+behind a "Browser sign-in / API token" chip group, with one Connect button.
+While an account is connected the forms stay closed: Add account (where
+`multipleAccounts` is set) opens them with a Cancel beside, or starts the
+browser sign-in at once when that is the only step left. An extension's
+account name is the person, so the card names it once. Each failure code the connect routes answer
+(`TOKEN_REQUIRED`, `TOKEN_REFUSED`, `USERNAME_REQUIRED`, `USERNAME_INVALID`,
+`INSTANCE_REQUIRED`, `INSTANCE_MISMATCH`, `UNSUPPORTED_INSTANCE`,
+`CLIENT_MISSING`, `TRACKER_UNAVAILABLE`, `CONNECT_SUPERSEDED`) has its own
+toast (`settings.integrations.tracker.toast.*`), so a refused token is said in
+the tracker's name and never as "something went wrong"; a code the card does
+not know (`ACCOUNTS_FULL`, a route's `INVALID`) shows the server's own
+sentence. `trackerSettings.i18n.test.ts` holds every key these files name to
+the English dictionary. A written-off account
+arrives as `connected: false` with the account in `accounts` (`status:
+'invalid'`): the card shows the attention line, the server it was on, the
+connect form again and Disconnect, which removes it and frees the server. The
+card's description names the extension; its title is the tracker's label. Hosted and Capacitor mobile show
+no extension-account cards, as for channels: accounts are connected from web
+or desktop, and the phone shows the tracker's items once they are.
+
+### Why the extension tracker card sits under Extension accounts
+
+The maintainer placed it beside the extension's notification channel rather
+than among the built-in integrations: everything one extension owns is in one
+place, and "Built-in integrations" stays what ships with OpenChamber. The card
+itself is `TrackerSettings`, so mapping and session comments read the same.
 
 ### Why `{provider}` keys and not keys per provider
 
@@ -369,6 +476,26 @@ and a read older than the latest write is dropped. File paths render as their
 own `dir="ltr"` element so an RTL sentence never reorders them.
 
 The page is hidden in VS Code (`metadata.ts`).
+
+## Plugin duplicate sources
+
+`plugins/PluginsGrid.tsx` keeps every configuration entry and its editing target.
+A discovered package card is hidden when its normalized target is already
+represented by a declaration or another discovery record. Distinct declarations
+and their options remain separate, including declarations of the same target.
+Editable local files always keep their own cards and file edit/delete actions,
+including files declared in config.
+
+### Why paths determine discovery duplicates
+
+Names can match for unrelated plugins, and OpenCode's runtime list can omit
+disabled or not-yet-loaded plugins. Only exact target paths filter discovery;
+runtime status never controls card membership. Web, Electron and mobile use the
+server's path metadata; VS Code's file-only discovery stays visible.
+
+Discovery records keep their original `absolutePath` for runtime matching and
+their canonical `resolvedPath` for duplicate filtering. Resolving symlinks in
+the runtime path would lose statuses reported through the original alias.
 
 ## Entity shapes: OpenCode 2 only
 
@@ -449,7 +576,26 @@ Agents page uses) and the symbol or image, and the name is edited in place. Belo
 it a tab strip splits the rest: General (new-chat defaults, the team file, trust,
 plans folder), Actions (a card grid with an editor dialog), Worktrees (setup
 commands and a link to the worktrees page) and Environment (not in VS Code).
-Identity fields autosave through `useProjectIdentityAutoSave`, as before.
+Identity fields autosave through `useProjectIdentityAutoSave` after 450 ms.
+Unmounting flushes the pending valid name. Writes run serially and retain the
+latest committed edit during a write, including after unmount, with the captured
+project and save callback. Pending snapshots are retained per project when the
+mounted panel switches projects. A trailing edit reuses a completed icon operation.
+Queues for the same project drain in order across editor remounts; other projects
+do not wait for them. Queue tails are released after success or failure.
+Empty names are never saved. Failed saves show an error toast.
+
+### Why identity saves finish after unmount
+
+Closing the editor accepts its edits, so canceling the debounce or a queued
+follow-up would lose the last name typed. The mobile session sheet's separate
+editor keeps its explicit Save action. VS Code rejects project metadata writes.
+
+### Why identity queues share a project tail
+
+An upload may finish after its editor closes. A reopened editor waits for that
+editor's writes and trailing edit before saving, so an old snapshot cannot
+overwrite the newer name. A per-mount saving flag cannot order these writes.
 
 The Settings page also carries Close project in its header. It calls the same
 `removeProject` as the sidebar's Close project, after a confirm dialog like the

@@ -55,9 +55,11 @@ type RecordedRequest = {
   partShellsHeader: string | null;
   contentType: string | null;
   body: string | null;
+  bodyBytes?: number[];
 };
 
 const responseFor = (path: string, shelled: boolean): string => {
+  if (path === '/api/info') return JSON.stringify({ paths: { tmp: '/tmp/opencode' } });
   if (path === `/api/session/${RECORDED_SESSION}`) return readWire('session-created');
   if (path === '/api/session') return readWire('sessions');
   if (path === '/api/agent') return readWire('agents');
@@ -83,18 +85,26 @@ const createRecordingClient = (requests: RecordedRequest[], headers?: Record<str
     fetch: async (input: string | URL | Request, init?: RequestInit) => {
       const request = new Request(input, init);
       const url = new URL(request.url);
-      requests.push({
+      const contentType = request.headers.get('content-type');
+      const binaryBody = request.body !== null && contentType === 'application/octet-stream';
+      const recorded: RecordedRequest = {
         name: pendingName,
         method: request.method,
         path: url.pathname,
         query: [...url.searchParams.entries()].sort(([left], [right]) => (left < right ? -1 : 1)),
         directoryHeader: request.headers.get('x-opencode-directory'),
         partShellsHeader: request.headers.get(PART_SHELLS_HEADER),
-        contentType: request.headers.get('content-type'),
-        body: request.body ? await request.text() : null,
-      });
+        contentType,
+        body: request.body && !binaryBody ? await request.text() : null,
+      };
+      // Written to fixture JSON: a text request records no bodyBytes key.
+      if (binaryBody) recorded.bodyBytes = [...new Uint8Array(await request.arrayBuffer())];
+      requests.push(recorded);
       const shelled = request.headers.get(PART_SHELLS_HEADER) === PART_SHELLS_VERSION;
       if (request.method === 'POST') {
+        if (url.pathname === '/api/experimental/fs/write') {
+          return Response.json({ location: { directory: SCOPED_DIRECTORY }, data: { path: url.searchParams.get('path') } });
+        }
         if (url.pathname === '/api/session') return new Response(readWire('session-created'), { headers: { 'content-type': 'application/json' } });
         if (url.pathname.endsWith('/model') || url.pathname.endsWith('/agent')) return new Response(null, { status: 204 });
         if (url.pathname.endsWith('/prompt')) return new Response(readWire('prompt-admitted'), { headers: { 'content-type': 'application/json' } });
@@ -278,6 +288,11 @@ export const renderTransportFixtures = async (): Promise<string> => {
   const providers = await scoped.named('providers', () => scoped.client.provider.list());
   const config = mergeConfigDocuments(await scoped.named('config', () => scoped.client.config.get()));
   const mcp = await scoped.named('mcp servers', () => scoped.client.mcp.list());
+  await scoped.named('attachment temporary directory', () => scoped.client.server.info());
+  await scoped.named('write attachment bytes', () => scoped.client.file.write({
+    path: '/tmp/opencode/openchamber/0123456789abcdef/diagram ü.png',
+    payload: new Uint8Array([0, 255, 7]),
+  }));
 
   // Synthetic protocol samples, decoded by the pinned SDK. No live mutation.
   const created = await global.named('create root session', () => global.client.session.create({
@@ -403,7 +418,7 @@ export const renderTransportFixtures = async (): Promise<string> => {
       providers: providers.data.map((provider) => ({ id: provider.id, name: provider.name ?? null, enabled: provider.activation !== 'disabled' })),
       defaultModel: defaultModel.data ? { providerId: defaultModel.data.providerID, modelId: defaultModel.data.modelID } : null,
       opencodeDefaults: {
-        defaultAgent: typeof config.default_agent === 'string' && config.default_agent.trim() ? config.default_agent.trim() : null,
+        defaultAgent: config.default_agent?.trim() || null,
         model: configModelIdentifier(config.model) ?? null,
       },
       mcpConnected: mcp.data.filter((server) => server.status.status === 'connected').length,

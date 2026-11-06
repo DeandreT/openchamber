@@ -1,13 +1,13 @@
 use super::entrance::{DialogEntrance, EntranceSurface};
-use crate::root::WindowState;
+use crate::root::{DialogLayerHandle, WindowState};
 use gpui_base::TestSupportExt as _;
 use std::{rc::Rc, sync::LazyLock, time::Duration};
 
 use gpui::{
     Action, Anchor, Animation, AnimationExt as _, AnyElement, App, BoxShadow, ClickEvent, Edges,
-    FocusHandle, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels, RenderOnce,
-    SharedString, StyleRefinement, Styled, Window, WindowControlArea, anchored, div, hsla, point,
-    prelude::FluentBuilder, px,
+    ElementId, FocusHandle, Hsla, InteractiveElement, IntoElement, ParentElement, Pixels,
+    RenderOnce, SharedString, StyleRefinement, Styled, Window, WindowControlArea, anchored, div,
+    hsla, point, prelude::FluentBuilder, px,
 };
 use gpui_base::{ElementExt as _, TextSelectionScopeId};
 use rust_i18n::t;
@@ -250,6 +250,9 @@ impl BaseDialogRoot {
     fn layer(self, index: usize, topmost: bool) -> Self {
         map_base_root!(self, layer(index, topmost))
     }
+    fn layer_id(self, id: ElementId) -> Self {
+        map_base_root!(self, layer_id(id))
+    }
     fn focus_handle(self, focus: FocusHandle) -> Self {
         map_base_root!(self, focus_handle(focus))
     }
@@ -316,7 +319,9 @@ pub struct Dialog {
     /// This will be change when open the dialog, the focus handle is create when open the dialog.
     pub(crate) focus_handle: FocusHandle,
     pub(crate) layer_ix: usize,
+    pub(crate) layer_id: Option<ElementId>,
     pub(crate) selection_scope: TextSelectionScopeId,
+    pub(crate) close_handle: Option<DialogLayerHandle>,
 }
 
 pub(crate) fn overlay_color(overlay: bool, cx: &App) -> Hsla {
@@ -361,7 +366,9 @@ impl Dialog {
             props: DialogProps::default(),
             children: Vec::new(),
             layer_ix: 0,
+            layer_id: None,
             selection_scope: TextSelectionScopeId::default(),
+            close_handle: None,
             button_props: DialogButtonProps::default(),
         }
     }
@@ -597,7 +604,9 @@ impl RenderOnce for Dialog {
         }
 
         let layer_ix = self.layer_ix;
+        let layer_id = self.layer_id;
         let selection_scope = self.selection_scope;
+        let close_handle = self.close_handle;
         let on_close = self.button_props.close_handler();
         let on_ok = self.button_props.ok_handler();
         let on_cancel = self.button_props.cancel_handler();
@@ -667,7 +676,7 @@ impl RenderOnce for Dialog {
             .snap_to_window()
             .child(
                 div()
-                    .id("dialog")
+                    .id(layer_id.clone().unwrap_or_else(|| "dialog".into()))
                     .test_support()
                     .occlude()
                     .w(view_size.width)
@@ -681,6 +690,7 @@ impl RenderOnce for Dialog {
                                 (self.layer_ix + 1)
                                     == WindowState::read(window, cx).active_dialogs.len(),
                             )
+                            .when_some(layer_id.clone(), |this, id| this.layer_id(id))
                             .focus_handle(self.focus_handle.clone())
                             .close_on_escape(self.props.keyboard)
                             .close_on_backdrop_press(self.props.overlay_closable)
@@ -700,7 +710,9 @@ impl RenderOnce for Dialog {
                             .on_cancel(move |event, window, cx| on_cancel(event, window, cx))
                             .on_close(move |event, window, cx| on_close(event, window, cx))
                             .request_close(move |deferred, window, cx| {
-                                if deferred {
+                                if let Some(handle) = &close_handle {
+                                    window.close_dialog_by_handle(handle, cx);
+                                } else if deferred {
                                     Self::defer_close_dialog(window, cx);
                                 } else {
                                     window.close_dialog(cx);
@@ -714,7 +726,7 @@ impl RenderOnce for Dialog {
                                 .margin(margin)
                                 .child(
                                     v_flex()
-                                        .id(layer_ix)
+                                        .id(layer_id.unwrap_or_else(|| layer_ix.into()))
                                         .test_support()
                                         .debug_selector(move || format!("dialog-{layer_ix}"))
                                         .bg(cx.theme().tokens.background)

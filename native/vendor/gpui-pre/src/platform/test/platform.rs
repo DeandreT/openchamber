@@ -30,6 +30,8 @@ use std::{
 pub(crate) struct TestPlatform {
     background_executor: BackgroundExecutor,
     foreground_executor: ForegroundExecutor,
+    quit_callback: RefCell<Option<Box<dyn FnMut() -> bool>>>,
+    quit_count: Cell<usize>,
 
     pub(crate) active_window: RefCell<Option<TestWindow>>,
     displays: RefCell<Vec<TestDisplay>>,
@@ -203,6 +205,8 @@ impl TestPlatform {
         Rc::new_cyclic(|weak| TestPlatform {
             background_executor: executor,
             foreground_executor,
+            quit_callback: RefCell::new(None),
+            quit_count: Cell::new(0),
             #[cfg(any(test, feature = "test-support"))]
             prompts: Default::default(),
             screen_capture_sources: Default::default(),
@@ -226,6 +230,23 @@ impl TestPlatform {
             headless_renderer_factory,
             menus: Default::default(),
         })
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn platform_quit_count(&self) -> usize {
+        self.quit_count.get()
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    pub(crate) fn simulate_platform_quit(&self) -> bool {
+        let mut callback = self
+            .quit_callback
+            .borrow_mut()
+            .take()
+            .expect("the app installs a platform quit callback");
+        let allowed = callback();
+        self.quit_callback.borrow_mut().get_or_insert(callback);
+        allowed
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -486,7 +507,9 @@ impl Platform for TestPlatform {
         unimplemented!()
     }
 
-    fn quit(&self) {}
+    fn quit(&self) {
+        self.quit_count.set(self.quit_count.get() + 1);
+    }
 
     fn restart(&self, path: Option<PathBuf>, arguments: Vec<std::ffi::OsString>) {
         if let Some(tx) = self.expect_restart.take() {
@@ -647,7 +670,9 @@ impl Platform for TestPlatform {
         unimplemented!()
     }
 
-    fn on_quit(&self, _callback: Box<dyn FnMut() -> bool>) {}
+    fn on_quit(&self, callback: Box<dyn FnMut() -> bool>) {
+        self.quit_callback.borrow_mut().replace(callback);
+    }
 
     fn on_reopen(&self, _callback: Box<dyn FnMut()>) {
         unimplemented!()

@@ -481,6 +481,14 @@ impl Workspace {
             .connection
             .as_ref()
             .map_or(0, |current| current.generation);
+        if self
+            .connection
+            .as_ref()
+            .is_none_or(|current| current.config.endpoint != connection.config.endpoint)
+        {
+            self.effort_preferences.invalidate_instance();
+        }
+        self.reset_session_admission(window, cx);
         self.clear_host_authentication(window, cx);
         if let Some(previous) = self.connection.take() {
             self.retired_networks
@@ -498,6 +506,12 @@ impl Workspace {
     pub(crate) fn release_retired_networks(&mut self) {
         self.retired_networks.retain(|(runtime, network)| {
             !network.is_idle()
+                || self.attachment_staging.holds_runtime(runtime)
+                || self.queue.enqueues.holds_runtime(runtime)
+                || self.queue.takes.holds_runtime(runtime)
+                || self.queue.prefixes.holds_runtime(runtime)
+                || self.queue.local_sends.holds_runtime(runtime)
+                || self.effort_preferences.holds_runtime(runtime)
                 || self
                     .mutation_tasks
                     .keys()

@@ -6,9 +6,10 @@
 
 use std::fmt;
 
+pub use openchamber_native_core::draft_content::{AgentMention, Mention, SkillRef};
 use openchamber_native_core::ids::MessageId;
 use openchamber_native_core::send_config::ModelChoice;
-use serde::Serialize;
+use serde::{Serialize, Serializer};
 use serde_json::{Map, Value};
 
 use crate::prompt::Delivery;
@@ -26,34 +27,6 @@ impl fmt::Debug for PromptFile {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str("PromptFile([redacted])")
     }
-}
-
-/// Where a reference was typed in the prompt text, in the composer's offsets.
-#[derive(Clone, PartialEq, Eq, Serialize)]
-pub struct Mention {
-    pub start: u32,
-    pub end: u32,
-    pub text: String,
-}
-
-impl fmt::Debug for Mention {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "Mention({}..{})", self.start, self.end)
-    }
-}
-
-/// An agent named in the prompt (`@plan`).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct AgentMention {
-    pub name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub mention: Option<Mention>,
-}
-
-/// A skill OpenCode loads with the prompt, by its resolved ID.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
-pub struct SkillRef {
-    pub id: String,
 }
 
 /// A JSON object carried with a prompt or a context item. Display data only:
@@ -160,14 +133,57 @@ pub(crate) struct PromptBody<'a> {
     pub text: &'a str,
     #[serde(skip_serializing_if = "<[_]>::is_empty")]
     pub files: &'a [PromptFile],
-    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    #[serde(
+        skip_serializing_if = "<[_]>::is_empty",
+        serialize_with = "serialize_agents"
+    )]
     pub agents: &'a [AgentMention],
-    #[serde(skip_serializing_if = "<[_]>::is_empty")]
+    #[serde(
+        skip_serializing_if = "<[_]>::is_empty",
+        serialize_with = "serialize_skills"
+    )]
     pub skills: &'a [SkillRef],
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<&'a Metadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub delivery: Option<Delivery>,
+}
+
+#[derive(Serialize)]
+struct MentionWire<'a> {
+    start: u32,
+    end: u32,
+    text: &'a str,
+}
+
+#[derive(Serialize)]
+struct AgentWire<'a> {
+    name: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mention: Option<MentionWire<'a>>,
+}
+
+#[derive(Serialize)]
+struct SkillWire<'a> {
+    id: &'a str,
+}
+
+fn serialize_agents<S: Serializer>(
+    agents: &[AgentMention],
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(agents.iter().map(|agent| AgentWire {
+        name: &agent.name,
+        mention: agent.mention.as_ref().map(|mention| MentionWire {
+            start: mention.start,
+            end: mention.end,
+            text: &mention.text,
+        }),
+    }))
+}
+
+fn serialize_skills<S: Serializer>(skills: &[SkillRef], serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.collect_seq(skills.iter().map(|skill| SkillWire { id: &skill.id }))
 }
 
 #[derive(Serialize)]
@@ -227,6 +243,49 @@ pub(crate) fn valid_parts(parts: &PromptParts, prompt: &MessageId) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn core_references_keep_the_existing_prompt_body_bytes() {
+        let agents = [
+            AgentMention {
+                name: "plan".to_owned(),
+                mention: Some(Mention {
+                    start: 0,
+                    end: 5,
+                    text: "@plan".to_owned(),
+                }),
+            },
+            AgentMention {
+                name: "build".to_owned(),
+                mention: None,
+            },
+        ];
+        let skills = [SkillRef {
+            id: "skill_fixture".to_owned(),
+        }];
+        let body = PromptBody {
+            id: "msg_prompt",
+            text: "@plan",
+            files: &[],
+            agents: &agents,
+            skills: &skills,
+            metadata: None,
+            delivery: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&body).expect("private wire adapters serialize core references"),
+            r#"{"id":"msg_prompt","text":"@plan","agents":[{"name":"plan","mention":{"start":0,"end":5,"text":"@plan"}},{"name":"build"}],"skills":[{"id":"skill_fixture"}]}"#,
+        );
+        let text_only = PromptBody {
+            agents: &[],
+            skills: &[],
+            ..body
+        };
+        assert_eq!(
+            serde_json::to_string(&text_only).expect("empty references are omitted"),
+            r#"{"id":"msg_prompt","text":"@plan"}"#,
+        );
+    }
 
     #[test]
     fn debug_output_hides_content() {

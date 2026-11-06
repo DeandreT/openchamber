@@ -164,6 +164,7 @@ export function projectToolPart(
         status: "error",
         input: tool.state.input,
         error: structuredErrorText(tool.state.error),
+        errorType: tool.state.error.type,
         output: toolOutputText(tool.state.content) || undefined,
         metadata: tool.state.metadata,
         time: { start, end },
@@ -306,6 +307,7 @@ export function projectInboxMessage(
         text: item.payload.text,
         description: item.payload.description,
         metadata: item.payload.metadata,
+        pending: true,
       }),
       parts: null,
     }
@@ -343,6 +345,8 @@ export function projectUserParts(
         mime: file.mime,
         filename: file.name,
         url: fileAttachmentUrl(file),
+        description: file.description,
+        mention: file.mention,
       }),
     )
   })

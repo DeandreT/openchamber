@@ -54,6 +54,16 @@ pub fn bind_keys(cx: &mut gpui_kit::App) {
         KeyBinding::new(
             "ctrl-n",
             gpui_kit::base::actions::SelectDown,
+            Some("PopupMenu"),
+        ),
+        KeyBinding::new(
+            "ctrl-p",
+            gpui_kit::base::actions::SelectUp,
+            Some("PopupMenu"),
+        ),
+        KeyBinding::new(
+            "ctrl-n",
+            gpui_kit::base::actions::SelectDown,
             Some("ProjectChooser > List"),
         ),
         KeyBinding::new("down", gpui_kit::base::actions::SelectDown, menu),

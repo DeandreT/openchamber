@@ -2,6 +2,7 @@ import type { Session } from "@/lib/opencode/model";
 import type { SessionListOptions, SessionPage } from "@/lib/opencode/client";
 import type { SpaceMark } from "@/lib/spaces/spaces-store";
 import { runSessionListNetworkTask } from '@/lib/background-network';
+import { captureRuntimeInstance } from '@/lib/runtime-switch';
 import { retry } from "@/sync/retry";
 import { stripSessionListDetails } from "@/sync/sanitize";
 import { startSessionLoadPerformanceEvent } from "@/sync/session-load-performance";
@@ -55,11 +56,14 @@ export async function listGlobalSessionPages(
         parentID?: string;
         pageSize: number;
         onPage?: (sessions: GlobalSessionRecord[]) => void;
+        /** Stop after accepting this page, while retaining every record it returned. */
+        stopAfterPage?: (sessions: GlobalSessionRecord[]) => boolean;
         /** The first page's isolated-space marks: `null` when the page carried none. */
         onSpaces?: (spaces: SpaceMark[] | null) => void;
     },
 ): Promise<GlobalSessionRecord[]> {
     const all: GlobalSessionRecord[] = [];
+    const isCurrent = captureRuntimeInstance();
     const seenIds = new Set<string>();
     let cursor: string | undefined;
     const operation = options.directory ? "bootstrap.sessions.all" : "global-sessions.all";
@@ -72,6 +76,7 @@ export async function listGlobalSessionPages(
         });
         const page = await retry(
             () => runSessionListNetworkTask(async () => {
+                if (!isCurrent()) throw new Error('Runtime instance changed');
                 attempts += 1;
                 return await listPage({
                     ...(options.directory ? { directory: options.directory } : { global: true }),
@@ -80,12 +85,16 @@ export async function listGlobalSessionPages(
                     ...(cursor !== undefined ? { cursor } : {}),
                 });
             }),
-            { attempts: 3, delay: 500, retryIf: () => true },
+            { attempts: 3, delay: 500, retryIf: () => isCurrent() },
         ).catch((error) => {
             finishPerformanceEvent("error", { retryCount: Math.max(0, attempts - 1) });
             throw error;
         });
 
+        if (page === undefined) {
+            finishPerformanceEvent("error", { retryCount: Math.max(0, attempts - 1) });
+            throw new Error('Runtime instance changed');
+        }
         if (cursor === undefined) options.onSpaces?.(page.spaces ?? null);
         const payload = page.sessions.map((session) => stripSessionListDetails(session) as GlobalSessionRecord);
         finishPerformanceEvent("complete", {
@@ -106,7 +115,7 @@ export async function listGlobalSessionPages(
 
         const next = page.cursor.next;
         // No next cursor, or a page that added nothing new: stop rather than spin.
-        if (!next || next === cursor || accepted.length === 0) break;
+        if (!next || next === cursor || accepted.length === 0 || options.stopAfterPage?.(accepted)) break;
         cursor = next;
     }
 

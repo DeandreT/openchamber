@@ -70,6 +70,7 @@ impl Fixture {
                 attempts: vec![(key.clone(), attempt)],
                 creations: Vec::new(),
                 selections: Vec::new(),
+                ..JournalSnapshot::default()
             })
             .expect("attempt saves");
         assert!(matches!(result, JournalCommit::Durable));
@@ -159,12 +160,23 @@ impl Server {
                         .and_then(|bytes| serde_json::from_slice(&bytes).ok());
                 }
                 let prompt = request.path.ends_with("/prompt");
+                // A settings write answers with the merged settings: here, what it wrote.
+                let settings_echo = if request.method == "PUT" {
+                    String::from_utf8_lossy(&request.body).into_owned()
+                } else {
+                    "{}".to_owned()
+                };
                 let (status, body) = if request.path == "/api/routing" {
                     if routing.load(Ordering::Acquire) {
                         ("200 OK", r#"{"available":true,"autoReady":true}"#)
                     } else {
                         ("503 Service Unavailable", "{}")
                     }
+                } else if matches!(request.method.as_str(), "GET" | "PUT")
+                    && request.path.starts_with("/api/config/settings")
+                {
+                    // Remembered efforts reread and save the settings here.
+                    ("200 OK", settings_echo.as_str())
                 } else if request.method == "POST" && !prompt {
                     ("204 No Content", "")
                 } else if prompt {
@@ -390,6 +402,21 @@ fn configure_send(
     workspace
         .send_catalog
         .insert_test_directory("/project".to_owned(), catalog);
+    // Selection admits only sessions inside a registered project.
+    if !workspace
+        .topology
+        .projects
+        .iter()
+        .any(|project| project.path == "/project")
+    {
+        workspace
+            .topology
+            .projects
+            .push(openchamber_native_core::ownership::ConfiguredProject {
+                id: openchamber_native_core::ids::ProjectId::from("registered"),
+                path: "/project".into(),
+            });
+    }
     workspace.select_session(key.session.clone(), window, cx);
 }
 
@@ -563,6 +590,11 @@ fn composer_choices_drive_wire_send_and_restart_without_changing_pending_attempt
             let session = SessionRecord::new(key.session.clone(), "/project");
             let load = workspace.sessions.begin_load();
             let _ = workspace.sessions.complete_load(load, vec![session]);
+            workspace.topology.projects =
+                vec![openchamber_native_core::ownership::ConfiguredProject {
+                    id: openchamber_native_core::ids::ProjectId::from("registered"),
+                    path: "/project".into(),
+                }];
             workspace.select_session(key.session.clone(), window, cx);
         });
     })

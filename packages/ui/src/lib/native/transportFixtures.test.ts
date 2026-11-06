@@ -44,9 +44,31 @@ describe('native transport fixtures', () => {
     expect(fixture.creation.observed).toEqual(fixture.creation.created);
   });
 
+  test('attachment staging records scoped info and byte-exact binary writes', async () => {
+    const fixture = z.object({
+      scopedDirectory: z.string(),
+      requests: z.array(z.object({
+        name: z.string(), method: z.string(), path: z.string(),
+        directoryHeader: z.string().nullable(), contentType: z.string().nullable(),
+        query: z.array(z.tuple([z.string(), z.string()])), body: z.string().nullable(),
+        bodyBytes: z.array(z.number().int().min(0).max(255)).optional(),
+      })),
+    }).parse(JSON.parse(await renderTransportFixtures()));
+    expect(fixture.requests.find((request) => request.name === 'attachment temporary directory')).toMatchObject({
+      method: 'GET', path: '/api/info', query: [], body: null,
+      directoryHeader: encodeURIComponent(fixture.scopedDirectory),
+    });
+    expect(fixture.requests.find((request) => request.name === 'write attachment bytes')).toMatchObject({
+      method: 'POST', path: '/api/experimental/fs/write',
+      directoryHeader: encodeURIComponent(fixture.scopedDirectory),
+      contentType: 'application/octet-stream', body: null, bodyBytes: [0, 255, 7],
+      query: [['path', '/tmp/opencode/openchamber/0123456789abcdef/diagram ü.png']],
+    });
+  });
+
   test('blocking requests preserve global ownership and explicit mutation shapes', async () => {
     const fixture = z.object({
-      client: z.literal('@opencode/client@2.2.0'),
+      client: z.literal('@opencode/client@2.2.5'),
       scopedDirectory: z.string(),
       blockingRequests: z.object({ requests: z.array(z.object({
         name: z.string(), method: z.string(), path: z.string(), directoryHeader: z.string().nullable(),

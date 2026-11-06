@@ -8,7 +8,9 @@ import { writeScreenshot } from './screenshots.js';
 import { createProjectKnowledgeActions } from './project-knowledge.js';
 import { createPageAnswers, createRenderPageAction } from './render-page.js';
 import { createImageGenerationAction } from './generate-image.js';
+import { createSecretRequests } from './secret-request.js';
 import { createWorkNamer } from '../openchamber-sessions/work-naming.js';
+import { CHATS_SCOPE_PUBLIC_ID } from '../scheduled-tasks/chats-scope.js';
 
 const DEFAULT_WAIT_TIMEOUT_SECONDS = 600;
 const MAX_WAIT_TIMEOUT_SECONDS = 86_400;
@@ -219,6 +221,7 @@ export const createOpenChamberControlService = (dependencies) => {
     getOpenCodeAuthHeaders,
     waitForOpenCodeReady,
     sessionService,
+    chatsScope = null,
     scheduledTaskService,
     browserControl = null,
     fileOpen = null,
@@ -231,8 +234,12 @@ export const createOpenChamberControlService = (dependencies) => {
     resolveProjectContextId = null,
     isKnowledgeToolEnabled = async () => true,
     isRenderToolEnabled = async () => true,
+    isSecretToolEnabled = async () => true,
+    // Where `secret.request` writes what the user saves
+    // (`createSecretFiles`); absent means the server cannot take secrets.
+    secretFiles = null,
     // Hears when a page an agent shows starts and stops waiting for the
-    // user's answer (render.page with awaitAnswer).
+    // user's answer (render.page with awaitAnswer, and secret.request).
     onPageWaitChange = () => {},
     // Puts a plan in front of the user; answers how many windows it reached.
     showPlan = null,
@@ -242,8 +249,8 @@ export const createOpenChamberControlService = (dependencies) => {
     // An agent waiting on its pull request (../pr-watch); absent means the
     // server cannot offer it.
     prWatch = null,
-    // Agent workflows (../workflows/runtime.js); absent where they are not
-    // available, which is every build without OPENCHAMBER_WORKFLOWS_ENABLE.
+    // Agent workflows (../workflows/runtime.js); absent means the server
+    // cannot offer them.
     workflowRuntime = null,
     // Archive lives in OpenChamber's own store now — v2 has no route that sets
     // Session.time.archived — so an unwired store simply means nothing is archived.
@@ -304,10 +311,6 @@ export const createOpenChamberControlService = (dependencies) => {
       const client = await getClient();
       return client.session.get({ sessionID }).catch(() => null);
     },
-    renameSession: async (sessionID, title, directory) => {
-      const client = await getClient(directory);
-      await client.session.update({ sessionID, title });
-    },
     createError: (message, status) => new OpenChamberControlError(message, status),
   }) : null;
 
@@ -324,11 +327,14 @@ export const createOpenChamberControlService = (dependencies) => {
 
   const projects = async () => {
     const settings = await readSettingsFromDiskMigrated();
-    return sanitizeProjects(settings?.projects || []).map((project) => ({
+    const configured = sanitizeProjects(settings?.projects || []).map((project) => ({
       id: project.id,
       path: path.resolve(project.path),
       label: asNonEmptyString(project.label) || path.basename(project.path) || project.path,
     }));
+    return chatsScope
+      ? [...configured, { id: CHATS_SCOPE_PUBLIC_ID, path: chatsScope.root, label: 'Chats' }]
+      : configured;
   };
 
   // projectId and directory are two names for one scope. Accepting both let
@@ -357,8 +363,23 @@ export const createOpenChamberControlService = (dependencies) => {
     resolveDirectory: (input) => sessionService.resolveDirectory(input),
   });
 
+  // A message the user steered into the turn stays in OpenCode's inbox until
+  // a step ends. A queued one waits for the turn to end, so the page's call
+  // returning would not deliver it. A failed read counts as none, so the page
+  // waits as it did before this check.
+  const hasUnreadChat = async (sessionID) => {
+    try {
+      const client = await getClient();
+      const items = await client.session.inbox.list({ sessionID });
+      return items.some((item) => item.type === 'user' && item.delivery === 'steer');
+    } catch (error) {
+      console.warn('[render.page] could not read the session inbox:', error?.message ?? error);
+      return false;
+    }
+  };
   const pageAnswers = createPageAnswers({ onWaitChange: onPageWaitChange });
-  const renderPage = createRenderPageAction({ isEnabled: isRenderToolEnabled, pageAnswers });
+  const renderPage = createRenderPageAction({ isEnabled: isRenderToolEnabled, pageAnswers, hasUnreadChat });
+  const secretRequests = createSecretRequests({ isEnabled: isSecretToolEnabled, files: secretFiles, onWaitChange: onPageWaitChange, hasUnreadChat });
   const generateImage = createImageGenerationAction({
     getClient,
     readSettings: readSettingsFromDiskMigrated,
@@ -441,6 +462,27 @@ export const createOpenChamberControlService = (dependencies) => {
       total: matching.length,
       next: offset + limit < matching.length ? offset + limit : null,
     };
+  };
+
+  // Only validate a named model so tasks with a removed model stay editable.
+  const assertNamedModelKnown = async (projectID, input, task) => {
+    if (input.model === undefined) return;
+    const parsed = parseModel(input.model);
+    const directory = await scheduledTaskService.resolveExecutionDirectory(projectID, task.targetSessionId);
+    const client = await getClient(directory);
+    const catalog = await client.model.list();
+    const entries = Array.isArray(catalog.data) ? catalog.data : [];
+    if (entries.length === 0) return;
+    // Same matcher as the session routes' `findCatalogModel`: a catalog entry
+    // may carry a display override in `id`, and the `modelID` is the upstream
+    // name the fire path dispatches and the UI's model strings carry, so
+    // either form names a model that will run.
+    const known = entries
+      .some((model) => model.providerID === parsed.providerID
+        && (model.id === parsed.modelID || model.modelID === parsed.modelID));
+    if (!known) {
+      throw new OpenChamberControlError(`unknown model: ${parsed.providerID}/${parsed.modelID}`, 400);
+    }
   };
 
   // /api/session/active is global in v2 and reports only `{ type: 'running' }`.
@@ -902,6 +944,14 @@ export const createOpenChamberControlService = (dependencies) => {
       if (action === 'image.generate') {
         return await generateImage(input, { directory: asNonEmptyString(contextDirectory), signal: options.signal });
       }
+      if (action === 'secret.request') {
+        return await secretRequests.request(input, {
+          sessionId: asNonEmptyString(options.contextSessionId),
+          callId: asNonEmptyString(options.contextCallId),
+          directory: asNonEmptyString(contextDirectory),
+          signal: options.signal,
+        });
+      }
       if (action === 'file.open') {
         if (!fileOpen) {
           throw new OpenChamberControlError('The file viewer is not available on this server', 503);
@@ -934,13 +984,17 @@ export const createOpenChamberControlService = (dependencies) => {
           case 'schedule.list':
             return { scheduler: await scheduledTaskService.status(), tasks: await scheduledTaskService.list(projectID) };
           case 'schedule.create': {
-            const result = await scheduledTaskService.upsert(projectID, buildScheduledTask(input));
+            const task = buildScheduledTask(input);
+            await assertNamedModelKnown(projectID, input, task);
+            const result = await scheduledTaskService.upsert(projectID, task);
             return { task: result.task, created: result.created };
           }
           case 'schedule.update': {
             const existing = (await scheduledTaskService.list(projectID)).find((task) => task.id === taskID);
             if (!existing) throw new OpenChamberControlError(`Scheduled task not found: ${taskID}`, 404);
-            const result = await scheduledTaskService.upsert(projectID, patchScheduledTask(existing, input));
+            const task = patchScheduledTask(existing, input);
+            await assertNamedModelKnown(projectID, input, task);
+            const result = await scheduledTaskService.upsert(projectID, task);
             return { task: result.task, updated: true };
           }
           case 'schedule.run':
@@ -1097,6 +1151,6 @@ export const createOpenChamberControlService = (dependencies) => {
   // (v2 dropped `context.directory` from a tool call), so it sends the session
   // id and the directory is resolved here, where it is authoritative.
   // `answerPage` is the chat's side of a page that waits (render.page with
-  // awaitAnswer).
-  return { execute, resolveSessionDirectory, answerPage: pageAnswers.answer };
+  // awaitAnswer), `answerSecret` the chat's side of a secret.request card.
+  return { execute, resolveSessionDirectory, answerPage: pageAnswers.answer, answerSecret: secretRequests.answer };
 };

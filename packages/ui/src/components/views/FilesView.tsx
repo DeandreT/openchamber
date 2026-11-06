@@ -19,10 +19,12 @@ import {
   ContextMenuSeparator,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
+import { OverlayScrollbar } from '@/components/ui/OverlayScrollbar';
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
-import { ActionToolbar, ToolbarTooltipButton, type ToolbarAction, type ToolbarGroup } from '@/components/ui/action-toolbar';
+import { ActionToolbar, ToolbarTooltipButton, TooltipLabelWithShortcut, type ToolbarAction, type ToolbarGroup } from '@/components/ui/action-toolbar';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { CodeMirrorEditor } from '@/components/ui/CodeMirrorEditor';
 import { GoToLineDialog } from './GoToLineDialog';
 import { FilePathLabel } from './files/FilePathLabel';
@@ -39,7 +41,7 @@ import { languageByExtension, loadLanguageByExtension } from '@/lib/codemirror/l
 import { createFlexokiCodeMirrorTheme } from '@/lib/codemirror/flexokiTheme';
 import { codeHighlightExtension } from '@/lib/codemirror/codeHighlight';
 import { syncVimMappings } from '@/lib/codemirror/vimModeExtension';
-import { getCodeTokenTheme } from '@/lib/shiki/appThemeRegistry';
+import { ensurePierreThemeRegistered, getCodeTokenTheme, getThemeRenderName } from '@/lib/shiki/appThemeRegistry';
 import { File as PierreFile, VirtualizerContext, WorkerPoolContext } from '@pierre/diffs/react';
 import { useWorkerPool } from '@/contexts/DiffWorkerProvider';
 import { useFileViewVirtualizer, type FileViewVirtualizer } from './useFileViewVirtualizer';
@@ -59,9 +61,9 @@ import { cn, getRevealLabelKey } from '@/lib/utils';
 import { getLanguageFromExtension, getImageMimeType, isAudioFile, isBinaryFile, isDelimitedTableFile, isDrawioFile, isExcalidrawFile, isFontFile, isImageFile, isMermaidFile, isPdfFile, isSvgFile, isVideoFile, looksLikeBinaryText } from '@/lib/toolHelpers';
 import { shouldAllowFileDraftSave, shouldScheduleFileAutosave } from '@/lib/fileEditorAutosave';
 import { MAX_OPEN_FILE_BYTES } from '@/lib/fileOpenLimits';
-import { formatFileSize } from '@/lib/fileSize';
 import { LARGE_FILE_CHAR_THRESHOLD, initialFileTextMode, makeFileContentCacheKey, prepareFileEditorContent, serializeEditorContent, type FileLineEnding } from './fileEditorContent';
 import { getRuntimeKey } from '@/lib/runtime-switch';
+import { isRelayModeActive } from '@/lib/relay/runtime-tunnel';
 import { subscribeToFileContentInvalidation } from '@/lib/fileContentInvalidation';
 import { isFilePathMoveInFlight, rebaseMovedPath, rebaseMovedPathKeys, subscribeToFilePathMoves } from '@/lib/filePathMoves';
 import { DiagramEditor } from '@/components/diagram';
@@ -90,6 +92,7 @@ import { useFileTreeUpload } from './files/useFileTreeUpload';
 import { moveWorkspacePath } from './files/moveWorkspacePath';
 import { areDirectoryNodesEqual, buildFileTreeStatusIndex } from './files/fileTreeStatus';
 import { BinaryArtifact } from './files/previews/BinaryArtifact';
+import { PdfArtifact } from './files/previews/PdfArtifact';
 import { FontArtifact } from './files/previews/FontArtifact';
 import { ImageArtifact, type ImageNeighbor } from './files/previews/ImageArtifact';
 import { imageNeighborsOf } from './files/imageNeighbors';
@@ -106,6 +109,8 @@ import { opencodeClient } from '@/lib/opencode/client';
 import { useDirectoryShowHidden } from '@/lib/directoryShowHidden';
 import { useFilesViewShowGitignored } from '@/lib/filesViewShowGitignored';
 import { ErrorBoundary } from '@/components/ui/ErrorBoundary';
+import { ContentLoadingState, ContentState } from '@/components/ui/content-state';
+import { getContextFileSizeLimitMessage } from '@/lib/contextFileOpenGuard';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
 import { useDraftSpaceTarget } from '@/lib/spaces/useDraftSpaceTarget';
 import { panelContentDirectory } from '@/lib/spaces/space-creation-requests';
@@ -115,15 +120,17 @@ import {
   FileTreeFileMarkers,
   FileTreeFolderBadge,
   FileTreeIndentGuides,
+  FileTreeRowEnd,
 } from './files/FileTreeRowParts';
 import {
+  fileTreeRowMenuFillClassName,
   fileTreeRowPaddingLeft,
   fileTreeRowStateClassName,
   type FileTreeGitStatus,
 } from './files/fileTreeRow';
+import { useFileTreeDisclosure } from './files/useFileTreeDisclosure';
 import { Icon } from "@/components/icon/Icon";
 import { useMessageTTS } from '@/hooks/useMessageTTS';
-import { ensurePierreThemeRegistered } from '@/lib/shiki/appThemeRegistry';
 import { DIFFS_HIGHLIGHTER, toDiffsLanguage } from '@/lib/shiki/diffsHighlighter';
 import { getDefaultTheme } from '@/lib/theme/themes';
 import { isBrowserClientRuntime, isDesktopLocalOriginActive, openDesktopFileInApp, openDesktopPath } from '@/lib/desktop';
@@ -179,33 +186,6 @@ const getParentDirectoryPath = (path: string): string => {
     return `${parent}/`;
   }
   return parent;
-};
-
-const OpenInAppListIcon = ({ label, iconDataUrl }: { label: string; iconDataUrl?: string }) => {
-  const [failed, setFailed] = React.useState(false);
-  const initial = label.trim().slice(0, 1).toUpperCase() || '?';
-
-  if (iconDataUrl && !failed) {
-    return (
-      <img
-        src={iconDataUrl}
-        alt=""
-        className="size-4 rounded-sm"
-        onError={() => setFailed(true)}
-      />
-    );
-  }
-
-  return (
-    <span
-      className={cn(
-        'size-4 rounded-sm flex items-center justify-center',
-        'oc-tile-inset text-[0.5625rem] font-medium text-muted-foreground'
-      )}
-    >
-      {initial}
-    </span>
-  );
 };
 
 const sortNodes = (items: FileNode[]) =>
@@ -576,14 +556,14 @@ const FileRow: React.FC<FileRowProps> = ({
 
   return (
     <ContextMenu open={rightClickMenuPath === node.path} onOpenChange={(open) => setRightClickMenuPath(open ? node.path : null)}>
-      <ContextMenuTrigger render={<div className="group relative flex items-center" onContextMenu={!isMobile ? handleContextMenu : undefined} />}>
+      <ContextMenuTrigger render={<div className="group relative flex items-center" data-tree-disclosure-path={node.path} onContextMenu={!isMobile ? handleContextMenu : undefined} />}>
       <FileTreeIndentGuides depth={depth} />
       <button
         type="button"
         onClick={handleInteraction}
         onContextMenu={!isMobile ? handleContextMenu : undefined}
         className={cn(
-          'flex w-full items-center gap-1.5 rounded-md py-1 pe-8 text-start transition-colors select-none',
+          'oc-file-tree-row flex w-full items-center gap-1.5 rounded-md py-1 text-start select-none',
           fileTreeRowStateClassName(isActive)
         )}
         style={{ paddingLeft: fileTreeRowPaddingLeft(depth) }}
@@ -594,17 +574,21 @@ const FileRow: React.FC<FileRowProps> = ({
           <FileTypeIcon filePath={node.path} extension={node.extension} className="ms-0.5 size-3.5" />
         )}
         <span
-          className="min-w-0 flex-1 truncate typography-meta"
+          className="oc-file-tree-row-name typography-meta"
           title={node.path}
         >
           {node.name}
         </span>
-        {!isDir && <FileTreeFileMarkers isOpen={isOpen} status={status} />}
-        {isDir && badge && <FileTreeFolderBadge badge={badge} />}
+        <FileTreeRowEnd className="pe-2">
+          {!isDir && <FileTreeFileMarkers isOpen={isOpen} status={status} />}
+          {isDir && badge && <FileTreeFolderBadge badge={badge} />}
+        </FileTreeRowEnd>
       </button>
       {hasMenuActions && (
+        // Takes no width and fades in over the row's end lane, with its own fade over the name.
         <div className={cn(
-          "absolute inset-e-1 top-1/2 -translate-y-1/2",
+          "oc-file-tree-row-end -ms-7 w-7 pe-1 transition-opacity",
+          fileTreeRowMenuFillClassName(isActive),
           alwaysShowActions ? "opacity-100" : "opacity-0 focus-within:opacity-100 group-hover:opacity-100"
         )}>
           <DropdownMenu
@@ -814,7 +798,8 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   const searchInputRef = React.useRef<HTMLInputElement>(null);
 
   const [showMobilePageContent, setShowMobilePageContent] = React.useState(false);
-  const [wrapLines, setWrapLines] = React.useState(true);
+  const wrapLines = useUIStore((state) => state.fileEditorWrapLines);
+  const setWrapLines = useUIStore((state) => state.setFileEditorWrapLines);
   const [isFullscreen, setIsFullscreen] = React.useState(false);
   // The canvas lives in one place at a time (docked or fullscreen), so moving
   // it carries unsaved edits over through the draft, as the source toggle does.
@@ -890,11 +875,6 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
     () => availableThemes.find((theme) => theme.metadata.id === darkThemeId) ?? getDefaultTheme(true),
     [availableThemes, darkThemeId],
   );
-
-  React.useEffect(() => {
-    ensurePierreThemeRegistered(lightTheme);
-    ensurePierreThemeRegistered(darkTheme);
-  }, [lightTheme, darkTheme]);
 
   const EMPTY_PATHS: string[] = React.useMemo(() => [], []);
   const openPaths = useFilesViewTabsStore((state) => (root ? (state.byRoot[root]?.openPaths ?? EMPTY_PATHS) : EMPTY_PATHS));
@@ -1058,6 +1038,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   const [canvasSaved, setCanvasSaved] = React.useState(false);
   const [contentDetectedBinary, setContentDetectedBinary] = React.useState(false);
   const autoSaveEnabled = useUIStore((state) => state.autoSaveEnabled);
+  const shortcutOverrides = useUIStore((state) => state.shortcutOverrides);
   const setAutoSaveEnabled = useUIStore((state) => state.setAutoSaveEnabled);
 
   const [confirmDiscardOpen, setConfirmDiscardOpen] = React.useState(false);
@@ -2108,7 +2089,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
     if (sizeStat && sizeStat.size > MAX_OPEN_FILE_BYTES) {
       setFileContent('');
       setDraftContent('');
-      setFileError(t('contextFileOpen.failure.tooLargeSize', { size: formatFileSize(MAX_OPEN_FILE_BYTES) }));
+      setFileError(getContextFileSizeLimitMessage(sizeStat.size, t));
       setFailedFilePath(node.path);
       lastLoadedFileStatRef.current = null;
       setFileLoading(false);
@@ -2322,6 +2303,16 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   const isDirtyRef = React.useRef(isDirty);
   isDirtyRef.current = isDirty;
 
+  const reloadSelectedFile = React.useCallback(() => {
+    activeFileLoadIdRef.current += 1;
+    loadingFilePathRef.current = null;
+    lastLoadedFileStatRef.current = null;
+    setDesktopImageSrc('');
+    setFileError(null);
+    setLoadedFilePath(null);
+    setFileContentRevision((revision) => revision + 1);
+  }, []);
+
   React.useEffect(() => subscribeToFileContentInvalidation(({ runtimeKey, paths }) => {
     const selectedPath = selectedFile?.path;
     if (
@@ -2333,14 +2324,8 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
       return;
     }
 
-    activeFileLoadIdRef.current += 1;
-    loadingFilePathRef.current = null;
-    lastLoadedFileStatRef.current = null;
-    setDesktopImageSrc('');
-    setFileError(null);
-    setLoadedFilePath(null);
-    setFileContentRevision((revision) => revision + 1);
-  }), [selectedFile?.path]);
+    reloadSelectedFile();
+  }), [reloadSelectedFile, selectedFile?.path]);
 
   // Poll open file for external changes. Metadata is compared first so an
   // unchanged file never reads content, and a changed text file swaps content
@@ -2623,16 +2608,19 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
     return statusIndex.badgeByDir.get(relativeDir) ?? null;
   }, [gitStatus, statusIndex, root]);
 
+  const treeListRef = React.useRef<HTMLUListElement>(null);
+  const toggleWithMotion = useFileTreeDisclosure(treeListRef);
   const toggleDirectory = React.useCallback(async (dirPath: string) => {
     const normalized = normalizePath(dirPath);
     if (!root) return;
 
-    toggleExpandedPath(root, normalized);
+    const expanded = useFilesViewTabsStore.getState().byRoot[root]?.expandedPaths.includes(normalized) ?? false;
+    toggleWithMotion(dirPath, expanded, () => toggleExpandedPath(root, normalized));
 
     if (!loadedDirsRef.current.has(normalized)) {
       await loadDirectory(normalized);
     }
-  }, [loadDirectory, root, toggleExpandedPath]);
+  }, [loadDirectory, root, toggleExpandedPath, toggleWithMotion]);
 
   const fileRowPermissions = React.useMemo(
     () => ({ canRename, canCreateFile, canCreateFolder, canDelete, canReveal }),
@@ -2677,9 +2665,12 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
           {isDir && isExpanded && (
             <ul className="flex flex-col">
               {loadErrorsByDir[node.path] ? (
+                // As wide as the pane and held at its start, so a tree widened by a long
+                // name keeps the message and its button on screen.
                 <li
-                  className="relative flex items-center gap-2 py-1 pe-2 typography-meta text-muted-foreground"
+                  className="sticky inset-s-0 flex w-[100cqw] items-center gap-2 py-1 pe-2 typography-meta text-muted-foreground"
                   style={{ paddingLeft: fileTreeRowPaddingLeft(depth + 1) }}
+                  data-tree-disclosure-path={`${node.path}/`}
                 >
                   <FileTreeIndentGuides depth={depth + 1} />
                   <span className="min-w-0 flex-1 truncate text-[var(--status-error)]" title={loadErrorsByDir[node.path]}>{loadErrorsByDir[node.path]}</span>
@@ -3571,6 +3562,10 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
       return;
     }
     let cancelled = false;
+    if (!git.getGitFileDiff) {
+      setGitBaseline(null);
+      return;
+    }
     git.getGitFileDiff(root, { path: selectedRelativePath })
       .then((diff) => {
         if (cancelled) return;
@@ -3664,7 +3659,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
     if (shikiLanguage) {
       extensions.push(codeHighlightExtension({
         language: shikiLanguage,
-        themeName: currentTheme.metadata.id,
+        themeName: getThemeRenderName(currentTheme),
         theme: getCodeTokenTheme(currentTheme),
       }));
     }
@@ -3716,8 +3711,8 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   }, [currentTheme, selectedFile?.path, staticLanguageExtension, dynamicLanguageExtension, wrapLines, isMobile, nudgeEditorSelectionAboveKeyboard, editorFontSize, pinPreviewOnEditExtension, fileEditorKeymap, t, importLinksExtension]);
 
   const pierreTheme = React.useMemo(
-    () => ({ light: lightTheme.metadata.id, dark: darkTheme.metadata.id }),
-    [lightTheme.metadata.id, darkTheme.metadata.id],
+    () => ({ light: ensurePierreThemeRegistered(lightTheme), dark: ensurePierreThemeRegistered(darkTheme) }),
+    [lightTheme, darkTheme],
   );
 
   // PDFs, audio, video and fonts are handed to the browser as a URL it owns
@@ -3736,8 +3731,11 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
     [runtimeKey, selectedFile?.path, usesRawAssetUrl, root, fileContentRevision, selectedFileReadOptions.allowOutsideWorkspace],
   );
 
+  // The browser loads an HTML preview and its neighbouring files itself, and a
+  // URL it loads never enters the relay tunnel.
+  const htmlPreviewUnreachable = isRelayModeActive();
   const htmlPreviewRequest = React.useMemo(
-    () => (selectedFile?.path && isHtml && htmlViewMode === 'preview' && !runtime.isVSCode
+    () => (selectedFile?.path && isHtml && htmlViewMode === 'preview' && !runtime.isVSCode && !htmlPreviewUnreachable
       ? {
         path: selectedFile.path,
         directory: root || '',
@@ -3745,7 +3743,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
         outsideWorkspace: selectedFileReadOptions.allowOutsideWorkspace,
       }
       : null),
-    [selectedFile?.path, isHtml, htmlViewMode, runtime.isVSCode, root, fileContentRevision, selectedFileReadOptions.allowOutsideWorkspace],
+    [selectedFile?.path, isHtml, htmlViewMode, runtime.isVSCode, htmlPreviewUnreachable, root, fileContentRevision, selectedFileReadOptions.allowOutsideWorkspace],
   );
 
   const assetAuthErrorFallback = t('filesView.error.readFileFailed');
@@ -3781,16 +3779,6 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
 
   const pdfSrc = rawAsset.src;
 
-  const renderPdfPreview = React.useCallback((file: FileNode) => (
-    <div className="h-full overflow-hidden bg-[var(--surface-background)]">
-      <iframe
-        src={pdfSrc}
-        className="h-full w-full border-0"
-        title={file.name}
-      />
-    </div>
-  ), [pdfSrc]);
-
   const downloadButton = selectedFile && files.downloadFile ? (
     <Button
       type="button"
@@ -3814,9 +3802,20 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   // for both the docked and the fullscreen viewer, so they cannot drift.
   const renderArtifactPreview = (file: FileNode): React.ReactNode => {
     if (isSelectedImage && !isSvgSource) {
-      return <ImageArtifact src={imageSrc} name={file.name} sizeBytes={artifactSize} neighbors={imageNeighbors} />;
+      return (
+        <ImageArtifact
+          src={imageSrc}
+          name={file.name}
+          sizeBytes={artifactSize}
+          neighbors={imageNeighbors}
+          onRetry={reloadSelectedFile}
+          download={downloadButton}
+        />
+      );
     }
-    if (isSelectedPdf) return renderPdfPreview(file);
+    if (isSelectedPdf) {
+      return <PdfArtifact src={pdfSrc} name={file.name} sizeBytes={artifactSize} download={downloadButton} />;
+    }
     if (isSelectedMedia) {
       return (
         <MediaArtifact
@@ -3855,7 +3854,6 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
               content={`\`\`\`mermaid\n${fileContent}\n\`\`\``}
               className="markdown-mermaid-fullscreen h-full"
               enableFileReferences={false}
-              allowMermaidWheelEvents
             />
           </ErrorBoundary>
         </div>
@@ -3866,6 +3864,24 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   const artifactPreview = selectedFile && !fileLoading && !isPdfAssetAuthLoading && !fileError
     ? renderArtifactPreview(selectedFile)
     : null;
+
+  const fileLoadingState = suppressFileLoadingIndicator
+    ? <div className="h-full" />
+    : <ContentLoadingState label={t('filesView.artifact.state.loading')} />;
+  const renderFileErrorState = (file: FileNode) => (
+    <ContentState
+      icon={<Icon name="error-warning" className="size-10 text-[color:var(--status-error)]" />}
+      title={t('filesView.artifact.state.readFailed', { name: file.name })}
+      // The generic fallback adds nothing to the title; a server's reason does.
+      description={fileError && fileError !== assetAuthErrorFallback ? fileError : undefined}
+      actions={(
+        <Button type="button" variant="outline" size="sm" onClick={reloadSelectedFile}>
+          <Icon name="refresh" className="me-2 size-4" />
+          {t('filesView.artifact.state.retry')}
+        </Button>
+      )}
+    />
+  );
 
   React.useEffect(() => {
     let cancelled = false;
@@ -3919,7 +3935,10 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
           if (!cancelled) {
             setDesktopImageSrc('');
             setFileError(error instanceof Error ? error.message : t('filesView.error.readFileFailed'));
-            setLoadedFilePath(null);
+            // Marked failed like a text read. Clearing the loaded path would make
+            // the selection effect load the file again, which wipes this error
+            // without fetching the image and leaves the viewer empty.
+            setFailedFilePath(selectedFile.path);
           }
         })
         .finally(() => {
@@ -4176,7 +4195,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
             className="flex items-center gap-2"
             onClick={() => void handleOpenInApp(app)}
           >
-            <OpenInAppListIcon label={app.label} iconDataUrl={app.iconDataUrl} />
+            <Icon name={app.icon} className="size-4" />
             <span className="typography-ui-label text-foreground">{app.label}</span>
           </DropdownMenuItem>
         ))}
@@ -4252,7 +4271,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
 
     // Annotation needs the rendered page: from the source it switches to the
     // preview and starts once the page has loaded.
-    const annotateAction: ToolbarAction | null = isHtml && !isMobile && !runtime.isVSCode ? {
+    const annotateAction: ToolbarAction | null = isHtml && !isMobile && !runtime.isVSCode && !htmlPreviewUnreachable ? {
       id: 'annotate',
       label: t('contextPanel.browser.annotate.toggle'),
       icon: 'markup',
@@ -4273,6 +4292,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
       id: 'search',
       label: t('filesView.editor.findInFile'),
       icon: 'search',
+      shortcut: formatShortcutForDisplay(getEffectiveShortcutCombo('find_in_file', shortcutOverrides), ''),
       pressed: searchOpen,
       onSelect: () => {
         // The Markdown preview has its own find bar; every other mode searches the source.
@@ -4294,6 +4314,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
       id: 'go-to-line',
       label: t('filesView.editor.goToLine'),
       icon: 'hashtag',
+      shortcut: formatShortcutForDisplay(getEffectiveShortcutCombo('open_go_to_line', shortcutOverrides), ''),
       pressed: isGoToLineOpen,
       onSelect: () => {
         openSourceEditor();
@@ -4306,6 +4327,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
       id: 'symbols',
       label: t('filesView.editor.symbols'),
       icon: 'braces',
+      shortcut: formatShortcutForDisplay(getEffectiveShortcutCombo('open_document_symbols', shortcutOverrides), ''),
       pressed: isSymbolsOpen,
       onSelect: () => {
         openSourceEditor();
@@ -4331,14 +4353,16 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
     } : null;
 
     const copyPathLabel = t('filesView.editor.copyFilePathTitle', { path: displaySelectedPath });
+    const showsPathLabel = docked && Boolean(displaySelectedPath) && !isMobile;
+    const pathLabelCopies = showsPathLabel && canCopyPath;
+    const commentAction: ToolbarAction = {
+      id: 'comment-on-file',
+      label: t('inlineComment.actions.commentOnFile'),
+      icon: 'chat-1',
+      pressed: wholeFileComment.isOpen,
+      onSelect: wholeFileComment.toggle,
+    };
     const fileActions: ToolbarGroup = [
-      {
-        id: 'comment-on-file',
-        label: t('inlineComment.actions.commentOnFile'),
-        icon: 'chat-1',
-        pressed: wholeFileComment.isOpen,
-        onSelect: wholeFileComment.toggle,
-      },
       // Every item hands the path to this machine's OS. A remote server, WSL
       // included, keeps its files elsewhere, so the menu would only fail there.
       isDesktopLocalOriginActive() && {
@@ -4355,7 +4379,8 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
         onSelect: () => void copyContents(false),
         onMenuSelect: () => void copyContents(true),
       },
-      canCopyPath && {
+      // Where the toolbar names the file, a click on the name copies its path.
+      canCopyPath && !pathLabelCopies && {
         id: 'copy-path',
         label: copyPathLabel,
         icon: 'link',
@@ -4423,8 +4448,38 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
         start={docked ? (
           // Mobile hosts already show the file name in their own header;
           // a truncated duplicate here just eats toolbar width.
-          displaySelectedPath && !isMobile ? (
-            <FilePathLabel path={displaySelectedPath} className="typography-meta text-muted-foreground" />
+          showsPathLabel ? (
+            pathLabelCopies ? (
+              // The name copies the path: it brightens under the pointer and
+              // a copy mark appears after it; a check answers the click.
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <button
+                    type="button"
+                    onClick={() => void copyPath(false)}
+                    aria-label={copyPathLabel}
+                    className="group/path flex min-w-0 flex-1 items-center text-start typography-meta text-muted-foreground transition-colors hover:text-foreground focus-visible:text-foreground focus-visible:outline-none"
+                  >
+                    <FilePathLabel
+                      path={displaySelectedPath}
+                      title={null}
+                      trailing={(
+                        <Icon
+                          name={copiedPath ? 'check' : 'file-copy'}
+                          className={cn(
+                            'size-3 shrink-0 transition-opacity',
+                            copiedPath ? 'text-[color:var(--status-success)] opacity-100' : 'opacity-0 group-hover/path:opacity-100 group-focus-visible/path:opacity-100',
+                          )}
+                        />
+                      )}
+                    />
+                  </button>
+                </TooltipTrigger>
+                <TooltipContent side="bottom" sideOffset={6}><TooltipLabelWithShortcut label={copyPathLabel} /></TooltipContent>
+              </Tooltip>
+            ) : (
+              <FilePathLabel path={displaySelectedPath} className="typography-meta text-muted-foreground" />
+            )
           ) : null
         ) : undefined}
         status={status}
@@ -4438,12 +4493,15 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
             variant="inline"
           />
         ) : null}
+        // The row keeps what a file is read and worked with: its view mode,
+        // find and a comment on it. Editor aids, the file's own actions and
+        // document settings wait in "More actions", so the row stays a few
+        // buttons whatever the file is.
         groups={[
           [modeAction, annotateAction],
-          [searchAction, goToLineAction, symbolsAction, wrapAction, readAloudAction],
-          fileActions,
+          [searchAction, commentAction],
         ]}
-        menuOnly={[autoSaveAction]}
+        menuOnly={[goToLineAction, symbolsAction, wrapAction, readAloudAction, ...fileActions, autoSaveAction]}
         trailing={[fullscreenAction]}
         fold={docked}
         onMenuOpenChange={handleToolbarDropdownOpenChange}
@@ -4529,10 +4587,10 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   // Above the scroller, so an editor opened far down the file is on screen.
   // The fullscreen overlay shows it instead while it is open: one editor at a time.
   const wholeFileCommentPanel = wholeFileComment.editor || wholeFileComment.cards ? (
-    <div className="max-h-[50%] shrink-0 overflow-y-auto border-b border-border/40">
+    <ScrollableOverlay outerClassName="max-h-[50%] shrink-0 border-b border-edge-muted" disableHorizontal>
       {wholeFileComment.editor}
       {wholeFileComment.cards}
-    </div>
+    </ScrollableOverlay>
   ) : null;
 
   const fileViewer = (
@@ -4565,7 +4623,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <div className={cn('flex flex-col flex-shrink-0', showEditorTabsRow && 'border-b border-border/40')}>
+      <div className={cn('flex flex-col flex-shrink-0', showEditorTabsRow && 'border-b border-edge-muted')}>
         {/* Row 1: Tabs */}
         {showEditorTabsRow ? (
         <div className="flex min-w-0 items-center px-3 py-1.5">
@@ -4713,7 +4771,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
         {/* Row 2: Docked editor toolbar. 40px with 24px buttons, the same band
             the context panel's file tree draws beside it, so the two line up. */}
         {selectedFile ? (
-          <div className="flex h-8 min-w-0 shrink-0 items-center border-t border-border/40 px-2">
+          <div className="flex h-8 min-w-0 shrink-0 items-center border-t border-edge-muted px-2">
             {renderFileToolbar({ layout: 'docked' })}
           </div>
         ) : null}
@@ -4722,7 +4780,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
 
       {!(mode === 'full' && isFullscreen) && wholeFileCommentPanel}
       {suggestExcalidrawExtension ? (
-        <div className="flex flex-shrink-0 items-center gap-2 border-b border-border/40 bg-[var(--surface-muted)] px-3 py-1.5 typography-ui text-muted-foreground">
+        <div className="flex flex-shrink-0 items-center gap-2 border-b border-edge-muted bg-[var(--surface-muted)] px-3 py-1.5 typography-ui text-muted-foreground">
           <Icon name="information" className="size-4 shrink-0" />
           <span className="min-w-0 flex-1 truncate">{t('filesView.excalidraw.installHint')}</span>
           <Button type="button" size="xs" variant="outline" onClick={openExcalidrawExtensionCard}>
@@ -4735,17 +4793,10 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
           {!selectedFile ? (
             <div className="p-3 typography-ui text-muted-foreground">{t('filesView.editor.pickFileFromTree')}</div>
           ) : (fileLoading || isPdfAssetAuthLoading) ? (
-            suppressFileLoadingIndicator
-              ? <div className="p-3" />
-              : (
-                <div className="p-3 flex items-center gap-2 typography-ui text-muted-foreground">
-                  <Icon name="loader-4" className="size-4 animate-spin" />
-                  {t('filesView.state.loading')}
-                </div>
-              )
+            fileLoadingState
           ) : fileError ? (
-            <div className="p-3 typography-ui text-[color:var(--status-error)]">{fileError}</div>
-) : showCanvas ? (
+            renderFileErrorState(selectedFile)
+          ) : showCanvas ? (
             // Ahead of the built-in previews: a binary editor may claim an image or PDF.
             // Shown fullscreen instead while the overlay is open: one canvas instance.
             canvasInFullscreen ? <div className="h-full" /> : canvasElement
@@ -4771,7 +4822,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
                 </div>
               }
             >
-              <div className="h-full overflow-auto">
+              <div className="h-full">
                 <JsonTreeView
                   className="h-full"
                   jsonString={fileContent}
@@ -4786,7 +4837,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
           ) : selectedFile && isMarkdown && getMdViewMode() === 'preview' ? (
             <div className="relative h-full min-h-0">
               <div
-                className="oc-file-preview h-full overflow-auto p-3 outline-none"
+                className="oc-file-preview overlay-scrollbar-target overlay-scrollbar-container h-full overflow-auto p-3 outline-none"
                 // Focusable so Cmd/Ctrl+F reaches the find bar: the keybind only
                 // fires when the event target sits inside this container, and a
                 // plain div never holds focus. -1 keeps it out of the tab order.
@@ -4822,10 +4873,12 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
                       frontmatter="properties"
                       enableFileReferences={false}
                       allowRawHtml
+                      windowed
                     />
                   </div>
                 </ErrorBoundary>
               </div>
+              <OverlayScrollbar containerRef={mdPreviewContainerRef} />
               {!isFullscreen && (
                 <MarkdownPreviewSearch
                   containerRef={mdPreviewContainerRef}
@@ -4835,6 +4888,26 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
                 />
               )}
             </div>
+          ) : selectedFile && isHtml && htmlViewMode === 'preview' && htmlPreviewUnreachable ? (
+            <ContentState
+              icon={<FileTypeIcon filePath={selectedFile.path} className="size-10" />}
+              title={t('filesView.editor.htmlPreviewRelayUnavailable')}
+              actions={(
+                // For this file only: leaving this message is not choosing code
+                // as the default, which would follow the user to a direct host.
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    htmlViewModeByPathRef.current[selectedFile.path] = 'edit';
+                    setHtmlViewMode('edit');
+                  }}
+                >
+                  {t('filesView.editor.htmlPreviewShowCode')}
+                </Button>
+              )}
+            />
           ) : selectedFile && isHtml && htmlViewMode === 'preview' ? (
             !runtime.isVSCode && htmlPreview.status === 'loading' ? (
               <div className="flex h-full items-center justify-center text-muted-foreground typography-ui-label">
@@ -4928,11 +5001,12 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
   const hasTree = Boolean(root && childrenByDir[root]);
   const rootLoadError = root ? loadErrorsByDir[root] : null;
   const isSearchActive = debouncedSearchQuery.trim().length > 0;
+  const showsTree = hasTree && !searching && !isSearchActive && searchResults.length === 0 && !rootLoadError;
 
   const treePanel = treeEnabled ? (
     <section className={cn(
       "flex min-h-0 flex-col overflow-hidden",
-      isMobile ? "h-full w-full bg-background" : "h-full rounded-xl border border-border/60 bg-background/70"
+      isMobile ? "h-full w-full bg-background" : "h-full rounded-xl border border-edge bg-background/70"
     )}>
       <div className={cn("flex flex-col gap-2 py-2", isMobile ? "px-3" : "px-2")}>
         <div className="flex items-center gap-2">
@@ -4995,8 +5069,10 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
         </div>
       </div>
 
-      <ScrollableOverlay outerClassName="flex-1 min-h-0" className={cn("py-2", isMobile ? "px-3" : "px-2")}>
-        <ul className="flex flex-col">
+      {/* A container, so an error row can take the pane's width in a wider tree. */}
+      <ScrollableOverlay outerClassName="flex-1 min-h-0" className={cn("@container py-2", isMobile ? "px-3" : "px-2")}>
+        {/* The tree is as wide as its widest row and scrolls sideways; search results truncate. */}
+        <ul ref={treeListRef} className={cn('relative flex flex-col', showsTree && 'w-max min-w-full')}>
           {searching ? (
             <li className="flex items-center gap-1.5 px-2 py-1 typography-meta text-muted-foreground">
               <Icon name="loader-4" className="size-4 animate-spin" />
@@ -5058,17 +5134,10 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
         </div>
         <ScrollableOverlay ref={setFullscreenPreviewScroller} outerClassName="h-full min-w-0" className={cn('h-full min-w-0', isLargeFile && '[overflow-anchor:none]')}>
           {(fileLoading || isPdfAssetAuthLoading) ? (
-            suppressFileLoadingIndicator
-              ? <div className="p-4" />
-              : (
-                <div className="p-4 flex items-center gap-2 typography-ui text-muted-foreground">
-                  <Icon name="loader-4" className="size-4 animate-spin" />
-                  Loading…
-                </div>
-              )
+            fileLoadingState
           ) : fileError ? (
-            <div className="p-4 typography-ui text-[color:var(--status-error)]">{fileError}</div>
-) : showCanvas ? (
+            renderFileErrorState(selectedFile)
+          ) : showCanvas ? (
             canvasElement
           ) : artifactPreview ? (
             artifactPreview
@@ -5078,7 +5147,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
             // highlighted by the search it drives.
             <div className="relative h-full min-h-0">
             <div
-              className="oc-file-preview h-full overflow-auto p-4 outline-none"
+              className="oc-file-preview overlay-scrollbar-target overlay-scrollbar-container h-full overflow-auto p-4 outline-none"
               tabIndex={-1}
               onMouseDown={focusMdPreviewContainer}
               ref={setFullscreenMarkdownScroller}
@@ -5113,10 +5182,12 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
                     frontmatter="properties"
                     enableFileReferences={false}
                     allowRawHtml
+                    windowed
                   />
                 </div>
               </ErrorBoundary>
             </div>
+              <OverlayScrollbar containerRef={mdFullscreenPreviewContainerRef} />
               <MarkdownPreviewSearch
                 containerRef={mdFullscreenPreviewContainerRef}
                 open={mdPreviewFindOpen}
@@ -5204,7 +5275,7 @@ export const FilesView: React.FC<FilesViewProps> = ({ mode = 'full', visible = t
                {treePanel}
              </div>
            )}
-           <div className="flex-1 min-h-0 min-w-0 overflow-hidden rounded-xl border border-border/60 bg-background">
+           <div className="flex-1 min-h-0 min-w-0 overflow-hidden rounded-xl border border-edge bg-background">
              {fileViewer}
            </div>
          </div>

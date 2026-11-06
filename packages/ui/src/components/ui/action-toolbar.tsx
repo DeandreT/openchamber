@@ -43,13 +43,16 @@ export interface ToolbarAction {
   pinned?: boolean;
   /** Attributes on the button, for code that recognises it (outside-click checks). */
   buttonAttributes?: Record<`data-${string}`, string>;
+  /** The action's keyboard shortcut as the shortcuts dialog writes it (`formatShortcutForDisplay`), shown in its tooltip and menu item. */
+  shortcut?: string;
 }
 
 /** Actions that belong together, set apart from the next group by space. */
 export type ToolbarGroup = ReadonlyArray<ToolbarAction | null | false | undefined>;
 
 const REST_CLASS = 'text-muted-foreground hover:bg-transparent hover:text-foreground focus-visible:text-foreground active:bg-transparent';
-const PRESSED_CLASS = 'bg-interactive-selection text-interactive-selection-foreground hover:bg-interactive-selection hover:text-interactive-selection-foreground active:bg-interactive-selection';
+/** The toggle-on fill, shared with the markdown wrap toggles that keep their own geometry. */
+export const PRESSED_CLASS = 'bg-interactive-selection text-interactive-selection-foreground hover:bg-interactive-selection hover:text-interactive-selection-foreground active:bg-interactive-selection';
 
 /**
  * The 24px icon button every toolbar row shares. Three looks: an action rests
@@ -89,8 +92,14 @@ export function ToolbarButton({
   );
 }
 
+/** A label with its keyboard shortcut after it, muted, for a tooltip. */
+export function TooltipLabelWithShortcut({ label, shortcut }: { label: React.ReactNode; shortcut?: string }) {
+  if (!shortcut) return <>{label}</>;
+  return <span className="inline-flex items-center gap-2">{label}<span className="text-muted-foreground">{shortcut}</span></span>;
+}
+
 /** A `ToolbarButton` with its tooltip, which opens below so it never covers the row. */
-export function ToolbarTooltipButton({ label, ...props }: React.ComponentProps<typeof ToolbarButton>) {
+export function ToolbarTooltipButton({ label, shortcut, ...props }: React.ComponentProps<typeof ToolbarButton> & { shortcut?: string }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -99,7 +108,7 @@ export function ToolbarTooltipButton({ label, ...props }: React.ComponentProps<t
           <ToolbarButton label={label} {...props} />
         </span>
       </TooltipTrigger>
-      <TooltipContent side="bottom" sideOffset={6}>{label}</TooltipContent>
+      <TooltipContent side="bottom" sideOffset={6}><TooltipLabelWithShortcut label={label} shortcut={shortcut} /></TooltipContent>
     </Tooltip>
   );
 }
@@ -222,6 +231,7 @@ export function ActionToolbar({
         done={action.done}
         disabled={action.disabled}
         iconClassName={action.iconClassName}
+        shortcut={action.shortcut}
         onClick={action.onSelect}
         {...action.buttonAttributes}
       />
@@ -237,7 +247,7 @@ export function ActionToolbar({
               </DropdownMenuTrigger>
             </span>
           </TooltipTrigger>
-          <TooltipContent side="bottom" sideOffset={6}>{action.label}</TooltipContent>
+          <TooltipContent side="bottom" sideOffset={6}><TooltipLabelWithShortcut label={action.label} shortcut={action.shortcut} /></TooltipContent>
         </Tooltip>
         <DropdownMenuContent align="end" className="w-56 max-h-[70vh] overflow-y-auto">
           {action.menu}
@@ -269,7 +279,8 @@ export function ActionToolbar({
     >
       <Icon name={action.icon} className={cn('size-4', action.iconClassName)} />
       <span className="min-w-0 truncate typography-ui-label text-foreground">{action.label}</span>
-      {action.pressed ? <Icon name="check" className="ms-auto size-4 text-foreground" /> : null}
+      {action.shortcut ? <span className="ms-auto shrink-0 ps-3 typography-meta text-muted-foreground">{action.shortcut}</span> : null}
+      {action.pressed ? <Icon name="check" className={cn('size-4 shrink-0 text-foreground', !action.shortcut && 'ms-auto')} /> : null}
     </DropdownMenuItem>
   );
 
@@ -286,7 +297,7 @@ export function ActionToolbar({
           </TooltipTrigger>
           <TooltipContent side="bottom" sideOffset={6}>{moreLabel}</TooltipContent>
         </Tooltip>
-        <DropdownMenuContent align="end" className="w-56">
+        <DropdownMenuContent align="end" className="w-max min-w-56 max-w-80">
           {foldedActions.map(renderMenuItem)}
           {foldedActions.length > 0 && menuOnlyActions.length > 0 ? <DropdownMenuSeparator /> : null}
           {menuOnlyActions.map(renderMenuItem)}

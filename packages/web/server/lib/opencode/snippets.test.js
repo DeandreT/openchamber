@@ -20,6 +20,24 @@ function writeSnippet(relativePath, content) {
   fs.writeFileSync(filePath, content, 'utf8');
 }
 
+function expectSourceRanges(input, mapped) {
+  let inputEnd = 0;
+  let outputEnd = 0;
+  const scalarBoundary = (text, offset) => !(offset > 0 && offset < text.length
+    && /[\uD800-\uDBFF]/.test(text[offset - 1]) && /[\uDC00-\uDFFF]/.test(text[offset]));
+  for (const range of mapped.sourceRanges) {
+    expect(range.inputStart).toBeGreaterThanOrEqual(inputEnd);
+    expect(range.outputStart).toBeGreaterThanOrEqual(outputEnd);
+    expect(range.inputEnd).toBeGreaterThan(range.inputStart);
+    expect(range.outputEnd - range.outputStart).toBe(range.inputEnd - range.inputStart);
+    expect(input.slice(range.inputStart, range.inputEnd)).toBe(mapped.text.slice(range.outputStart, range.outputEnd));
+    for (const offset of [range.inputStart, range.inputEnd]) expect(scalarBoundary(input, offset)).toBe(true);
+    for (const offset of [range.outputStart, range.outputEnd]) expect(scalarBoundary(mapped.text, offset)).toBe(true);
+    inputEnd = range.inputEnd;
+    outputEnd = range.outputEnd;
+  }
+}
+
 describe('snippets', () => {
   beforeEach(() => {
     projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'openchamber-snippets-'));
@@ -90,6 +108,73 @@ describe('snippets', () => {
     writeSnippet('.opencode/snippet/review.md', '<prepend>Before</prepend>Review #base<append>After</append>');
 
     expect(expandSnippets('Please #review', projectDir)).toBe('Before\n\nPlease Review Base text\n\nAfter');
+  });
+
+  test('maps actual recursive replacements and prepend/append placement in UTF-16', () => {
+    writeSnippet('.opencode/snippet/native-map-base.md', 'Base text');
+    writeSnippet('.opencode/snippet/native-map-review.md', '<prepend>Before</prepend>Review #native-map-base<append>After</append>');
+    const input = '  😀 left #native-map-review right 😀  ';
+    const mapped = expandSnippets(input, projectDir, { sourceMap: true });
+    expect(mapped.text).toBe('Before\n\n😀 left Review Base text right 😀\n\nAfter');
+    expect(mapped.text).toBe(expandSnippets(input, projectDir));
+    const tokenStart = '  😀 left '.length;
+    const tokenEnd = tokenStart + '#native-map-review'.length;
+    const outputStart = 'Before\n\n'.length;
+    const rightStart = outputStart + '😀 left Review Base text'.length;
+    expect(mapped.sourceRanges).toEqual([
+      { inputStart: 2, inputEnd: tokenStart, outputStart, outputEnd: outputStart + '😀 left '.length },
+      { inputStart: tokenEnd, inputEnd: input.length - 2, outputStart: rightStart, outputEnd: rightStart + ' right 😀'.length },
+    ]);
+    expectSourceRanges(input, mapped);
+  });
+
+  test('identical generated text never acquires an original occurrence', () => {
+    writeSnippet('.opencode/snippet/native-map-same.md', '[token]');
+    const input = '[token] #native-map-same [token]';
+    const tokenEnd = '[token] #native-map-same'.length;
+    const mapped = expandSnippets(input, projectDir, { sourceMap: true });
+    expect(mapped.text).toBe('[token] [token] [token]');
+    expect(mapped.sourceRanges).toEqual([
+      { inputStart: 0, inputEnd: '[token] '.length, outputStart: 0, outputEnd: '[token] '.length },
+      { inputStart: tokenEnd, inputEnd: input.length, outputStart: '[token] [token]'.length, outputEnd: mapped.text.length },
+    ]);
+    expectSourceRanges(input, mapped);
+  });
+
+  test('source mapping preserves loop counts and distinguishes a same-spelling replacement', () => {
+    writeSnippet('.opencode/snippet/native-map-self.md', '<prepend>p</prepend>#native-map-self');
+    const input = 'kept #native-map-self suffix #native-map-self';
+    const mapped = expandSnippets(input, projectDir, { sourceMap: true });
+    const prefix = `${Array(15).fill('p').join('\n\n')}\n\n`;
+    expect(mapped.text).toBe(`${prefix}${input}`);
+    expect(mapped.text).toBe(expandSnippets(input, projectDir));
+    expect(mapped.sourceRanges).toEqual([
+      { inputStart: 0, inputEnd: 'kept '.length, outputStart: prefix.length, outputEnd: prefix.length + 'kept '.length },
+      { inputStart: 'kept #native-map-self'.length, inputEnd: input.length, outputStart: prefix.length + 'kept #native-map-self'.length, outputEnd: mapped.text.length },
+    ]);
+    expectSourceRanges(input, mapped);
+  });
+
+  test('unknown and skill-call exception tokens keep origin while trims remove only whitespace', () => {
+    writeSnippet('.opencode/snippet/skill.md', 'must not expand the call');
+    const input = '\uFEFF😀 #skill(arg) #native-map-unknown\n';
+    const mapped = expandSnippets(input, projectDir, { sourceMap: true });
+    expect(mapped.text).toBe('😀 #skill(arg) #native-map-unknown');
+    expect(mapped.sourceRanges).toEqual([{ inputStart: 1, inputEnd: input.length - 1, outputStart: 0, outputEnd: mapped.text.length }]);
+    expectSourceRanges(input, mapped);
+    expect(expandSnippets(' \n ', projectDir, { sourceMap: true })).toEqual({ text: '', sourceRanges: [] });
+  });
+
+  test('source mapping refuses excessive origin fragmentation without changing default limits', () => {
+    const tokens = [];
+    for (let index = 0; index < 274; index += 1) {
+      const name = `native-map-bound-${index}`;
+      writeSnippet(`.opencode/snippet/${name}.md`, 'x');
+      tokens.push(...Array(15).fill(`#${name}`));
+    }
+    const input = `left ${tokens.join(' kept ')} right`;
+    expect(() => expandSnippets(input, projectDir, { sourceMap: true })).toThrow('source map exceeds');
+    expect(expandSnippets(input, projectDir)).toBe(`left ${Array(tokens.length).fill('x').join(' kept ')} right`);
   });
 
   test('refuses a new snippet under a name or alias already in use', () => {

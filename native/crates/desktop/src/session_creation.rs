@@ -46,7 +46,7 @@ pub(crate) fn first_prompt_selection(prompt: &Prompt, session: &SessionRecord) -
 
 impl Workspace {
     pub(crate) fn can_create_connected(&self) -> bool {
-        if self.selected.is_some() || !self.persistence_ready() {
+        if self.selected.is_some() || !self.persistence_ready() || self.close_in_progress() {
             return false;
         }
         let Some(owner) = self.composer_key.as_ref() else {
@@ -92,6 +92,9 @@ impl Workspace {
         let Some(source) = self.composer_key.clone() else {
             return false;
         };
+        if starter.is_none() && !self.starters.captures.can_begin(&source) {
+            return false;
+        }
         let Some(project) = self
             .topology
             .projects
@@ -101,31 +104,49 @@ impl Workspace {
             return false;
         };
         let project = project.id.to_string();
-        let Some((_, selection)) = self.send_selection() else {
-            return false;
-        };
         let from_starter = starter.is_some();
-        let (draft, prompt_text, parts) = match starter {
-            // A definite failure gives back what the chip submitted, as the
-            // web restores `presetText`; the session receives the render.
-            Some(starter) => (
-                Draft {
-                    selection: starter.draft_text.len()..starter.draft_text.len(),
-                    text: starter.draft_text,
-                },
-                starter.prompt_text,
-                starter.parts,
-            ),
-            None => {
-                let draft = Draft {
-                    text: self.composer.read(cx).value().to_string(),
-                    selection: self.composer.read(cx).selected_range(),
-                };
-                let text = draft.text.clone();
-                (draft, text, Default::default())
-            }
-        };
-        if draft.text.trim().is_empty() {
+        let (draft, prompt_text, parts, selection, permission_mode, capture_id, effort) =
+            match starter {
+                // A definite failure gives back what the chip submitted, as the
+                // web restores `presetText`. All content and configuration belong
+                // to the activation, independently of the now-current composer.
+                Some(starter) => {
+                    let Some(capture) = self
+                        .starters
+                        .captures
+                        .get(&starter.capture_id)
+                        .filter(|capture| capture.owner == source && capture.project == project)
+                    else {
+                        return false;
+                    };
+                    (
+                        starter.draft,
+                        starter.prompt_text,
+                        starter.parts,
+                        capture.selection.clone(),
+                        capture.permission_mode,
+                        Some(starter.capture_id),
+                        starter.effort,
+                    )
+                }
+                None => {
+                    let Some((_, selection)) = self.send_selection() else {
+                        return false;
+                    };
+                    let draft = self.composer_draft(cx);
+                    let text = draft.text.clone();
+                    let effort = selection
+                        .model
+                        .as_ref()
+                        .map(|model| self.capture_user_effort(model));
+                    let Ok(parts) = self.capture_draft_parts(&source, &draft) else {
+                        self.notify_mutation_failure("chat.nativeRecovery.sendFailed", window, cx);
+                        return false;
+                    };
+                    (draft, text, parts, selection, None, None, effort)
+                }
+            };
+        if !draft.has_sendable_content() {
             return false;
         }
         let id = self.session_ids.next();
@@ -138,6 +159,7 @@ impl Workspace {
             return false;
         };
         let (message_id, created) = self.message_ids.next();
+        let effort_id = message_id.clone();
         let key = SessionKey {
             runtime: self.runtime.clone(),
             session: id,
@@ -147,6 +169,7 @@ impl Workspace {
             project,
             request,
             draft: draft.clone(),
+            resources: crate::attachment_preparation::prepared_resources(&draft),
             prompt: Prompt {
                 message_id,
                 text: prompt_text,
@@ -162,12 +185,23 @@ impl Workspace {
         if !self.creations.insert(key.clone(), attempt) {
             return false;
         }
+        if let Some(effort) = effort {
+            self.effort_preferences
+                .retain_user_send(&key.runtime, &effort_id, effort);
+        }
         // The draft's own permission choice goes with its session; the next
         // draft starts from the Settings default again.
-        if let Some(mode) = self.permission_modes.drafts.remove(&key.runtime) {
+        let permission_mode = if from_starter {
+            permission_mode
+        } else {
+            self.permission_modes.drafts.remove(&key.runtime)
+        };
+        if let Some(mode) = permission_mode {
             self.permission_modes.creating.insert(key.clone(), mode);
         }
-        if let Some(from) = self.selection_owner() {
+        // A starter's later composer choices are already independent. The first
+        // session opens from its captured prompt selection during handoff.
+        if !from_starter && let Some(from) = self.selection_owner() {
             let to = openchamber_native_core::composer_selection::SelectionOwner {
                 draft: DraftKey::new(
                     key.runtime.clone(),
@@ -181,13 +215,20 @@ impl Workspace {
         }
         // Consume synchronously before yielding. Any subsequent typing, even
         // identical text, is a separate draft and is never filtered from disk.
-        // A starter took the text it carries when its chip was clicked;
-        // anything typed since stays in the composer.
-        self.drafts.take(&source);
-        if !from_starter {
+        // A starter took its complete source when clicked. Transfer its resources
+        // and rollback content to creation in this same foreground transition;
+        // the preparation barrier persists both sides of that handoff together.
+        if let Some(id) = capture_id {
+            self.starters
+                .captures
+                .handoff(&id)
+                .expect("the inserted creation takes its retained starter capture");
+            self.save_composer_draft(cx);
+        } else {
+            self.drafts.take(&source);
             self.composer
                 .update(cx, |composer, cx| composer.set_value("", window, cx));
-            self.save_draft_preview(&source, "");
+            self.save_draft_preview(&source, &Draft::default(), cx);
         }
         let requests = self.requests_for_creation(&key, source.directory());
         self.start_creation_post(key, requests, window, cx);
@@ -218,6 +259,11 @@ impl Workspace {
             return;
         }
         let request = attempt.request.clone();
+        let message_id = attempt.prompt.message_id.clone();
+        if attempt.phase == CreationPhase::Uncertain {
+            self.effort_preferences
+                .forget_user_send(&key.runtime, &message_id);
+        }
         let Some(connection) = self
             .connection
             .as_ref()
@@ -230,6 +276,8 @@ impl Workspace {
         };
         let executor = connection.network.handle();
         let Some((stamp, saved)) = self.persistence_barrier(cx) else {
+            self.effort_preferences
+                .forget_user_send(&key.runtime, &message_id);
             self.creations.phase(&key, CreationPhase::Uncertain);
             cx.notify();
             return;
@@ -250,6 +298,8 @@ impl Workspace {
                         )
                     });
                     if !durable || !eligible {
+                        this.effort_preferences
+                            .forget_user_send(&key.runtime, &message_id);
                         if eligible {
                             this.creations.phase(&key, CreationPhase::Uncertain);
                         }
@@ -276,7 +326,13 @@ impl Workspace {
                         .get(&key)
                         .is_none_or(|attempt| attempt.phase == CreationPhase::Deleted)
                     {
+                        this.effort_preferences
+                            .forget_user_send(&key.runtime, &message_id);
                         return;
+                    }
+                    if !matches!(&result, Some(Ok(_))) {
+                        this.effort_preferences
+                            .forget_user_send(&key.runtime, &message_id);
                     }
                     match result {
                         Some(Ok(session)) => {
@@ -349,6 +405,10 @@ impl Workspace {
             return;
         }
         let request = attempt.request.clone();
+        if retry {
+            self.effort_preferences
+                .forget_user_send(&key.runtime, &attempt.prompt.message_id);
+        }
         let requests = if retry {
             self.requests_for_creation(key, request.directory())
         } else {
@@ -503,6 +563,8 @@ impl Workspace {
             return;
         };
         if !self.send_attempts.can_send(key) {
+            self.effort_preferences
+                .forget_user_send(&key.runtime, &attempt.prompt.message_id);
             return;
         }
         let Some(owner) = DraftKey::new(
@@ -510,6 +572,8 @@ impl Workspace {
             attempt.request.directory(),
             DraftTarget::Session(key.session.clone()),
         ) else {
+            self.effort_preferences
+                .forget_user_send(&key.runtime, &attempt.prompt.message_id);
             return;
         };
         let dispatched = first_prompt_selection(&attempt.prompt, &session);
@@ -542,6 +606,7 @@ impl Workspace {
         let send = SendAttempt {
             origin: SendOrigin::Created,
             owner,
+            resources: attempt.resources,
             draft: attempt.draft,
             prompt: attempt.prompt,
             optimistic,
@@ -551,6 +616,8 @@ impl Workspace {
             reservation: None,
         };
         if !self.send_attempts.begin(key.clone(), send) {
+            self.effort_preferences
+                .forget_user_send(&key.runtime, &dispatched.message_id);
             return;
         }
         let source = if self.drafts.get(&attempt.source).is_some() {
@@ -603,6 +670,18 @@ impl Workspace {
     }
 
     pub(crate) fn mark_creation_deleted(&mut self, key: &SessionKey, cx: &mut Context<Self>) {
+        if let Some(id) = self
+            .creations
+            .get(key)
+            .map(|attempt| attempt.prompt.message_id.clone())
+            .or_else(|| {
+                self.send_attempts
+                    .created_attempt(key)
+                    .map(|attempt| attempt.prompt.message_id.clone())
+            })
+        {
+            self.effort_preferences.forget_user_send(&key.runtime, &id);
+        }
         self.permission_modes.creating.remove(key);
         let changed = self.creations.phase(key, CreationPhase::Deleted);
         let bound = self.send_attempts.mark_created_deleted(key);

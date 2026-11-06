@@ -2,6 +2,9 @@ import { beforeEach, describe, expect, mock, test } from "bun:test"
 import { selectInputHistoryEntries, useInputHistoryStore } from "./useInputHistoryStore"
 import type { AttachedFile } from "./types/sessionTypes"
 import type { MessageQueueUpdatedEvent } from "./messageQueueStore"
+import { mapInputHistoryEntriesToValues } from '@/components/chat/inputHistory'
+import { createHistoryState, stepOlder } from '@/components/chat/composer/state/useMessageHistory'
+import { attachmentPromptFile } from '@/lib/attachmentIdentity'
 
 type FetchCall = { path: string; method: string; body: ReturnType<typeof JSON.parse>; directory?: string }
 let calls: FetchCall[] = []
@@ -287,7 +290,7 @@ describe("server-owned message queue", () => {
       content: "hi @reviewer",
       text: "hi",
       agentMention: "reviewer",
-      attachments: [attachment],
+      attachments: [{ ...attachment, agentPath: '/Users/me/Documents/note.txt' }],
       sendConfig: { providerID: "p", modelID: "m", agent: "build" },
     })
     expect(useMessageQueueStore.getState().queuedMessages[key]).toHaveLength(1)
@@ -303,7 +306,7 @@ describe("server-owned message queue", () => {
           content: "hi @reviewer",
           text: "hi",
           agentMention: "reviewer",
-          attachments: [{ id: "att-1", filename: "note.txt", mimeType: "text/plain", size: 2, source: "local", dataUrl: attachment.dataUrl }],
+          attachments: [{ id: "att-1", filename: "note.txt", mimeType: "text/plain", size: 2, source: "local", dataUrl: attachment.dataUrl, agentPath: '/Users/me/Documents/note.txt' }],
           context: [],
           sendConfig: { providerID: "p", modelID: "m", agent: "build" },
         },
@@ -423,7 +426,7 @@ describe("server-owned message queue", () => {
       revision: 7,
       session: session([]),
       item: serverItem("q1", "with file", {
-        attachments: [{ id: "att-1", filename: "note.txt", mimeType: "text/plain", size: 2, source: "local", dataUrl: "data:text/plain;base64,aGk=" }],
+        attachments: [{ id: "att-1", filename: "note.txt", mimeType: "text/plain", size: 2, source: "local", dataUrl: "data:text/plain;base64,aGk=", agentPath: '/Users/me/Documents/note.txt' }],
       }),
     })
     const [taken] = await useMessageQueueStore.getState().takeForSend(target, "q1")
@@ -432,6 +435,7 @@ describe("server-owned message queue", () => {
     expect(calls[0]?.method).toBe("POST")
     expect(taken?.content).toBe("with file")
     expect(taken?.attachments?.[0]?.dataUrl).toBe("data:text/plain;base64,aGk=")
+    expect(taken?.attachments?.[0]?.agentPath).toBe('/Users/me/Documents/note.txt')
     expect(taken?.attachments?.[0]?.file.size).toBe(2)
     expect(useMessageQueueStore.getState().queuedMessages[key]).toBe(undefined)
   })
@@ -445,6 +449,55 @@ describe("server-owned message queue", () => {
     expect(taken.map((m) => m.content)).toEqual(["second"])
     expect(useMessageQueueStore.getState().queuedMessages[key]?.map((m) => m.id)).toEqual(["q1"])
   })
+
+  test("supported full takes retain typed file references through editing and requeue without inline byte descriptors", async () => {
+    const references = [
+      { uri: 'file:///server/report.pdf', name: '/server/report.pdf', description: 'PDF source', mention: { start: 0, end: 4, text: '@pdf' } },
+      { uri: 'file:///server/report.pdf', name: 'report.pdf', description: 'second occurrence' },
+    ]
+    const full = serverItem('q-reference', 'reference prompt', { promptParts: { fileReferences: references } })
+    respond = () => json({ revision: 7, session: session([]), item: full })
+    const edited = await useMessageQueueStore.getState().popToInput(target, full.id)
+    expect(edited?.attachments?.map((file) => file.fileReference)).toEqual(references)
+    expect(edited?.attachments?.every((file) => file.file.size === 0)).toBe(true)
+    if (!edited) throw new Error('Expected the supported full take')
+    respond = () => json({ revision: 8, session: session([full]) })
+    await useMessageQueueStore.getState().addToQueue(target, edited)
+    expect(calls.at(-1)?.body.item.attachments).toEqual([])
+    expect(calls.at(-1)?.body.item.promptParts).toEqual({ fileReferences: references })
+  })
+
+  for (const action of ['resend', 'requeue'] as const) {
+    test(`supported full take reference survives history ArrowUp recall and ${action}`, async () => {
+      const reference = { uri: 'file:///server/original%20report.pdf', name: '/server/original report.pdf',
+        description: 'original PDF source', mention: { start: 0, end: 4, text: '@pdf' } }
+      const historyTarget = { ...target, sessionId: `reference-history-${action}` }
+      const full = serverItem('q-reference-history', 'reference history prompt', { promptParts: { fileReferences: [reference] } })
+      const historySession = (items: ServerItem[]): ServerSession => ({ ...session(items), sessionId: historyTarget.sessionId })
+      respond = () => json({ revision: 7, session: historySession([]), item: full })
+      const taken = await useMessageQueueStore.getState().popToInput(historyTarget, full.id)
+      if (!taken) throw new Error('Expected the supported full take')
+      // Queue acceptance records the taken draft through the actual history-store adapter.
+      respond = () => json({ revision: 8, session: historySession([full]) })
+      await useMessageQueueStore.getState().addToQueue(historyTarget, taken)
+      const entries = selectInputHistoryEntries({ ...useInputHistoryStore.getState(), scope: 'session' }, historyTarget)
+      const values = mapInputHistoryEntriesToValues(entries)
+      const recalled = stepOlder(createHistoryState(values, `reference-history-${action}`), values,
+        { text: '', attachments: [] }).value
+      if (!recalled) throw new Error('Expected ArrowUp to recall the accepted taken draft')
+      if (action === 'resend') {
+        expect(recalled.attachments.map(attachmentPromptFile)).toEqual([{ type: 'file', mime: 'application/pdf',
+          url: reference.uri, filename: reference.name, description: reference.description, mention: reference.mention }])
+      } else {
+        respond = () => json({ revision: 9, session: historySession([full]) })
+        await useMessageQueueStore.getState().addToQueue(historyTarget, {
+          content: recalled.text, attachments: [...recalled.attachments], sendConfig: full.sendConfig,
+        })
+        expect(calls.at(-1)?.body.item.attachments).toEqual([])
+        expect(calls.at(-1)?.body.item.promptParts).toEqual({ fileReferences: [reference] })
+      }
+    })
+  }
 
   test("bulk take leaves scheduled items in the projection", async () => {
     const scheduled: ServerItem = {

@@ -10,6 +10,7 @@ export const PROVIDER_LOGO_ALIASES: ReadonlyMap<string, string> = new Map([
     ['codex', 'openai'],
     ['chatgpt', 'openai'],
     ['claude', 'anthropic'],
+    ['claude-agent', 'claude-code'],
     ['cline-pass', 'cline'],
     ['gemini', 'google'],
     ['evroc-ai', 'evroc'],

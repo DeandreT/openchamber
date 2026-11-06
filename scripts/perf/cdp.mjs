@@ -146,9 +146,9 @@ const removeTemporaryProfile = async (dir) => {
 /**
  * The Chrome profile for one run. `--profile-dir` keeps a directory the caller
  * owns; without it every run gets a fresh temporary profile, removed once
- * Chrome exits. The app keeps sidebar state, the last session, panel widths and
- * the rail order in localStorage per origin, so a shared default profile
- * carried one run's (and one build's) state into the next.
+ * Chrome exits. The app keeps sidebar state, the last session, panel widths and the rail order in
+ * localStorage per origin, so a shared default profile carried one run's (and
+ * one build's) state into the next.
  */
 export const resolveProfileDir = (explicit, name) => {
   if (explicit) return { dir: resolve(explicit), temporary: false, remove: async () => {} }

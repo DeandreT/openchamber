@@ -529,6 +529,248 @@ fn project_chooser_isolates_the_same_directory_between_runtimes(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
+fn attachment_only_drafts_keep_their_owner_and_survive_text_edits(cx: &mut TestAppContext) {
+    use openchamber_native_core::draft_content::{DraftFile, DraftFileContent};
+    use openchamber_native_core::ids::AttachmentId;
+
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let directory = workspace.topology.projects[0].path.clone();
+            workspace.choose_draft_project(&directory, window, cx);
+            let owner = workspace.composer_key.clone().expect("project draft owner");
+            let mut draft = openchamber_native_core::draft::Draft::default();
+            draft.content.files.push(DraftFile {
+                id: AttachmentId::from("reference-one"),
+                name: Some("kept.png".to_owned()),
+                media_type: Some("image/png".to_owned()),
+                byte_len: None,
+                source_document_id: None,
+                content: DraftFileContent::Reference { uri: "file:///project/kept.png".to_owned() },
+            });
+            workspace.drafts.save(owner.clone(), draft);
+            workspace.restore_composer_draft(window, cx);
+            assert!(workspace.composer_has_sendable_content(cx), "file-only drafts are sendable");
+            assert!(workspace.sidebar_items.iter().any(|item| matches!(
+                item, SidebarItem::Draft { draft, title, .. } if draft == &owner && title.as_ref() == "kept.png"
+            )), "file-only drafts remain reachable from the sidebar");
+        });
+        window.render_frame(cx);
+        window.input("new text", cx);
+    }).expect("window remains open");
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let owner = workspace.composer_key.clone().expect("original owner");
+            let saved = workspace.drafts.get(&owner).expect("draft stays retained");
+            assert_eq!(saved.text, "new text");
+            assert_eq!(saved.content.files[0].name.as_deref(), Some("kept.png"));
+            let other = workspace.topology.projects[1].path.clone();
+            workspace.choose_draft_project(&other, window, cx);
+            assert!(
+                !workspace.composer_has_sendable_content(cx),
+                "another project inherits no content"
+            );
+            workspace.open_draft(&owner, window, cx);
+            assert_eq!(workspace.composer_draft(cx).content.files.len(), 1);
+            assert_eq!(workspace.composer.read(cx).value().as_ref(), "new text");
+        });
+    })
+    .expect("window remains open");
+}
+
+#[gpui_kit::test]
+fn restored_mentions_can_be_replaced_and_saved_to_the_real_journal(cx: &mut TestAppContext) {
+    use openchamber_native_core::draft::Draft;
+    use openchamber_native_core::draft_content::{
+        AgentMention, DraftContext, DraftFile, DraftFileContent, Mention,
+    };
+    use openchamber_native_core::ids::{AttachmentId, ContextItemId};
+
+    use crate::mutation_journal::{JournalCommit, JournalSnapshot, LoadedJournal, MutationJournal};
+    use crate::recovery_tests::Fixture;
+
+    let fixture = Fixture::new();
+    let (mut journal, _) = MutationJournal::open(&fixture.journal()).expect("journal opens");
+    let mut original = Draft::new("@plan @plan");
+    original.content.agents = [0, 6]
+        .into_iter()
+        .map(|start| AgentMention {
+            name: "plan".to_owned(),
+            mention: Some(Mention {
+                start,
+                end: start + 5,
+                text: "@plan".to_owned(),
+            }),
+        })
+        .collect();
+    original.content.files.push(DraftFile {
+        id: AttachmentId::from("kept-file"),
+        name: Some("kept.txt".to_owned()),
+        media_type: Some("text/plain".to_owned()),
+        byte_len: None,
+        source_document_id: None,
+        content: DraftFileContent::Reference {
+            uri: "file:///project/kept.txt".to_owned(),
+        },
+    });
+    original.content.context.push(DraftContext {
+        id: ContextItemId::from("kept-context"),
+        text: "kept context".to_owned(),
+        description: None,
+        metadata_json: Some("{\"source\":\"selection\"}".to_owned()),
+        instructions: Some("Read the selection".to_owned()),
+    });
+    original.content.metadata_json = Some("{\"kept\":true}".to_owned());
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let directory = workspace.topology.projects[0].path.clone();
+            workspace.choose_draft_project(&directory, window, cx);
+            let owner = workspace.composer_key.clone().expect("project draft owner");
+            workspace.drafts.save(owner, original.clone());
+            workspace.restore_composer_draft(window, cx);
+            workspace.focus_composer(window, cx);
+            workspace.composer.update(cx, |composer, cx| {
+                composer.set_selected_range(0..original.text.len(), cx);
+            });
+        });
+        window.render_frame(cx);
+        window.input("x", cx);
+    })
+    .expect("window remains open");
+    cx.run_until_parked();
+    let saved = cx.read(|cx| {
+        let workspace = workspace.read(cx);
+        let owner = workspace.composer_key.clone().expect("same project owner");
+        let draft = workspace.drafts.get(&owner).expect("edited draft retained");
+        assert_eq!(draft.text, "x");
+        assert_eq!(draft.selection, 1..1);
+        let mut expected = original.content.clone();
+        expected.agents = vec![AgentMention {
+            name: "plan".to_owned(),
+            mention: None,
+        }];
+        assert_eq!(draft.content, expected, "only replaced anchors change");
+        (owner, draft.clone())
+    });
+    let snapshot = JournalSnapshot {
+        drafts: vec![saved.clone()],
+        ..JournalSnapshot::default()
+    };
+    assert!(matches!(
+        journal
+            .save(&snapshot)
+            .expect("edited mentions remain journalable"),
+        JournalCommit::Durable
+    ));
+    drop(journal);
+    let (_, loaded) = MutationJournal::open(&fixture.journal()).expect("saved journal reopens");
+    let LoadedJournal::Present(restored) = loaded else {
+        panic!("the edited draft must be durable");
+    };
+    assert_eq!(restored.drafts, vec![saved]);
+}
+
+#[gpui_kit::test]
+fn composer_capture_rebases_mentions_before_a_change_callback(cx: &mut TestAppContext) {
+    use openchamber_native_core::draft::Draft;
+    use openchamber_native_core::draft_content::{AgentMention, Mention};
+
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let directory = workspace.topology.projects[0].path.clone();
+            workspace.choose_draft_project(&directory, window, cx);
+            let owner = workspace.composer_key.clone().expect("project draft owner");
+            let mut original = Draft::new("@plan");
+            original.content.agents.push(AgentMention {
+                name: "plan".to_owned(),
+                mention: Some(Mention {
+                    start: 0,
+                    end: 5,
+                    text: "@plan".to_owned(),
+                }),
+            });
+            workspace.drafts.save(owner.clone(), original.clone());
+            workspace.restore_composer_draft(window, cx);
+            for (text, expected) in [
+                (
+                    "😀@plan",
+                    Some(Mention {
+                        start: 2,
+                        end: 7,
+                        text: "@plan".to_owned(),
+                    }),
+                ),
+                ("x", None),
+            ] {
+                // set_value deliberately emits no Change, leaving the old owner
+                // available while an action captures the current widget value.
+                workspace.composer.update(cx, |composer, cx| {
+                    composer.set_value(text, window, cx);
+                    composer.set_selected_range(text.len()..text.len(), cx);
+                });
+                let captured = workspace.composer_draft(cx);
+                assert_eq!(captured.text, text);
+                assert_eq!(captured.selection, text.len()..text.len());
+                assert_eq!(captured.content.agents[0].mention, expected);
+                assert_eq!(workspace.drafts.get(&owner), Some(&original));
+                let mut size = 0;
+                crate::draft_storage::validate(&mut size, &captured)
+                    .expect("an immediate action captures a journalable draft");
+            }
+            let captured = workspace.composer_draft(cx);
+            workspace.save_composer_draft(cx);
+            assert_eq!(workspace.drafts.get(&owner), Some(&captured));
+        });
+    })
+    .expect("window remains open");
+}
+
+#[gpui_kit::test]
+fn consuming_a_capture_preserves_a_newer_attachment_with_the_same_text(cx: &mut TestAppContext) {
+    use openchamber_native_core::draft::Draft;
+    use openchamber_native_core::draft_content::{DraftFile, DraftFileContent};
+    use openchamber_native_core::ids::AttachmentId;
+
+    let file = |id: &str| DraftFile {
+        id: AttachmentId::from(id),
+        name: Some(format!("{id}.txt")),
+        media_type: Some("text/plain".to_owned()),
+        byte_len: None,
+        source_document_id: None,
+        content: DraftFileContent::Reference {
+            uri: format!("file:///project/{id}.txt"),
+        },
+    };
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let directory = workspace.topology.projects[0].path.clone();
+            workspace.choose_draft_project(&directory, window, cx);
+            let owner = workspace.composer_key.clone().expect("project draft owner");
+            let mut captured = Draft::new("same text");
+            captured.content.files.push(file("sent"));
+            let mut current = captured.clone();
+            current.content.files.push(file("newer"));
+            workspace.drafts.save(owner.clone(), current);
+            workspace.restore_composer_draft(window, cx);
+            workspace.consume_draft_capture(&owner, &captured, window, cx);
+            let remaining = workspace
+                .drafts
+                .get(&owner)
+                .expect("newer attachment retains the draft");
+            assert!(remaining.text.is_empty());
+            assert_eq!(remaining.content.files, vec![file("newer")]);
+            assert!(workspace.composer.read(cx).value().is_empty());
+            assert!(workspace.composer_has_sendable_content(cx));
+        });
+    })
+    .expect("window remains open");
+}
+
+#[gpui_kit::test]
 fn editing_a_hidden_draft_preserves_project_collapse(cx: &mut TestAppContext) {
     let (window, workspace) = open(cx);
     cx.update_window(window, |_, window, cx| {

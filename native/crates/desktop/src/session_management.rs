@@ -612,6 +612,7 @@ impl Workspace {
 
     fn save_deletion_dialog(&mut self, show: bool, window: &mut Window, cx: &mut Context<Self>) {
         let runtime = self.runtime.clone();
+        let effort_read = self.begin_effort_settings_read();
         let started = self.spawn_session_task(
             move |client| {
                 Box::pin(async move {
@@ -630,7 +631,8 @@ impl Workspace {
                 }
                 // The merged document is authoritative for this runtime.
                 let stored = match result {
-                    Some(Ok(settings)) => {
+                    Some(Ok(mut settings)) => {
+                        this.reconcile_effort_settings(&effort_read, &mut settings);
                         this.send_catalog.settings = Some(settings);
                         Some(this.stored_deletion_dialog())
                     }
@@ -673,6 +675,10 @@ impl Workspace {
         let runtime = confirm.runtime.clone();
         let started = if confirm.hard_delete {
             let ids = confirm.targets.clone();
+            let subtrees = ids
+                .iter()
+                .map(|id| (id.clone(), self.deleted_session_subtree(id)))
+                .collect();
             self.spawn_session_task(
                 move |client| {
                     Box::pin(async move {
@@ -686,7 +692,7 @@ impl Workspace {
                     })
                 },
                 move |this, result, window, cx| {
-                    this.finish_delete(runtime, confirm.targets, result, window, cx)
+                    this.finish_delete(runtime, confirm.targets, subtrees, result, window, cx)
                 },
                 window,
                 cx,
@@ -742,6 +748,7 @@ impl Workspace {
         &mut self,
         runtime: RuntimeId,
         targets: Vec<SessionId>,
+        subtrees: Vec<(SessionId, Vec<SessionId>)>,
         result: Option<Vec<(SessionId, Result<Deleted, TransportError>)>>,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -757,23 +764,33 @@ impl Workspace {
         let mut deleted = Vec::new();
         let mut first_error = None;
         for (id, outcome) in outcomes {
+            if !targets.contains(&id) {
+                continue;
+            }
             match outcome {
-                Ok(_) => deleted.push(id),
+                Ok(_) => {
+                    if !deleted.contains(&id) {
+                        deleted.push(id.clone());
+                    }
+                    if let Some((_, captured)) = subtrees.iter().find(|(root, _)| root == &id) {
+                        for child in captured {
+                            if !deleted.contains(child) {
+                                deleted.push(child.clone());
+                            }
+                        }
+                    }
+                }
                 Err(error) => {
                     first_error.get_or_insert(error);
                 }
             }
         }
-        if !stale {
-            let events = deleted
-                .iter()
-                .map(|id| ServerEvent::SessionDeleted {
-                    session_id: id.clone(),
-                })
-                .collect();
-            self.apply_server_events(events, window, cx);
+        if stale {
+            self.forget_deleted_sessions(&runtime, &deleted, window, cx);
+            return;
         }
-        let failed = stale || deleted.len() < targets.len();
+        self.apply_confirmed_session_deletions(&deleted, window, cx);
+        let failed = targets.iter().any(|id| !deleted.contains(id));
         let strings = locale::strings(cx).clone();
         if failed {
             let detail = first_error.map(|error| describe_error(&strings, &error));

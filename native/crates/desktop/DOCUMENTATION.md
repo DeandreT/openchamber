@@ -31,7 +31,11 @@ prompt. Attachments and worktree creation remain separate workflows.
   sequence, global session, status and topology reads, history reads and live
   event delivery.
 - `session_mutations.rs` owns selected-session prompt submission, steering and
-  named-session abort orchestration. `send_attempt.rs` retains, per attempt,
+  named-session abort orchestration. A composer send whose preparation would
+  return it unchanged (text only, with no files, context, references, `@`
+  mentions, `$skill` or `#snippet` tokens) becomes a send attempt with its
+  optimistic message. Every other send goes to the journaled rich actor in
+  `queue_local_send.rs`, which has no narrower fallback. `send_attempt.rs` retains, per attempt,
   the captured runtime, session, draft owner, prompt with its parts and context,
   selection, resolved model/variant, agent and delivery until an authoritative
   identity or definite rejection settles it. A session can hold several.
@@ -43,7 +47,12 @@ prompt. Attachments and worktree creation remain separate workflows.
   original prompt configuration. `session_id.rs` generates OpenCode's descending
   `ses_` identities using Unix milliseconds and the pinned 48-bit prefix layout.
 - `mutation_journal.rs` owns the private versioned snapshot of drafts and pending
-  sends and creations. Version 6 adds the exact queue-reservation intent and
+  sends and creations. Version 8 adds compact queue operation ownership and
+  separately held spool chunks. Version 7 retains full draft content, immutable attachment
+  descriptors, preparation and retirement intents, staging targets and starter
+  captures. `draft_storage.rs` validates semantic content; `attachment_catalog.rs`
+  validates byte ownership and captured targets without performing I/O.
+  Version 6 adds the exact queue-reservation intent and
   captured composer text. Version 5 retains each send's request-supersession
   policy and server-reservation ownership. Versions 1 through 4 default
   supersession to true and reservation ownership to false. Version 4 stores whole prompts: text, attachment
@@ -52,8 +61,38 @@ prompt. Attachments and worktree creation remain separate workflows.
   without parts. Unsupported or malformed snapshots grant no writer.
   `journal_worker.rs` holds its exclusive file lock and serializes disk I/O
   on one thread, coalescing queued snapshots while preserving save barriers.
+  `attachment_io.rs` uses the same worker and lock for the private SHA-256 spool.
+  Only a validated load or durable save authorizes byte operations. Pending or
+  uncertain snapshots grant no write or deletion authority. Read receipts retain
+  their buffer reservation until consumed or dropped.
+  `queue_capture.rs` binds local chunk labels, lengths and digests;
+  `queue_storage.rs` owns enqueue, take, prefix and local-send transitions, native source
+  roots and explicit retirement intents. Expanded payloads remain outside the
+  journal once a verified companion owns them.
+  `queue_payload_io.rs` implements committed chunk puts, reads and whole-stream
+  verification through that worker. `queue_enqueue.rs` owns explicit native
+  composer enqueue, its stable upload labels and request body, exact receipt
+  checks and journaled server-delivery retry authorizations.
+  `queue_take.rs` materializes complete sealed transfers and verifies separate
+  attachment custody before acknowledgement. `draft_companion.rs` retains ordered
+  original queue sources outside the native draft's narrower content model.
+    `composer_document.rs` backs the existing textarea with source-aware edits,
+    compact verified editing snapshots and exact source-local reference removals.
+    Loaded source metadata supplies the existing attachment strip's companion
+    file and reference chips. Undo layouts share this window-local projection;
+    persisted edit bytes omit it and rebuild it from verified original sources.
+   Its local read recovery never performs another server Take or acknowledgement.
+   `composer_preparation.rs` plans explicit mentions under the captured owner and
+   maps anchors through trimming and snippet expansion. `composer_delivery.rs`
+   projects the exact source/literal document and coordinates operation-owned
+   preparation. `composer_file_preparation.rs` reads typed file requests through
+   the captured server, normalizes on the background executor and publishes exact
+   complete bundles. `composer_payload.rs` persists and seals one combined
+   prepared composer for enqueue and prefix use.
   `state_persistence.rs` hydrates before editing, schedules draft saves, waits for
   durable preparation before a POST, and drains the last snapshot on normal close.
+  `attachment_retirement.rs` owns named native-root release requests and their
+  handoff to durable local retirement intents after actor ownership ends.
 - `message_queue.rs` owns the composer's side of the server-owned message
   queue: the projection reads (the host's on every event-stream connection,
   a space's once per connection when one of its sessions is selected),
@@ -63,6 +102,18 @@ prompt. Attachments and worktree creation remain separate workflows.
   owns the new-session starter chips: which resolve, activation through a
   built-in's magic prompts, and the global (settings), personal and shared
   (project setup) lists; `startup_view.rs` draws them and the add picker.
+  `starter_capture.rs` retains each activation's full source draft, configuration,
+  permission choice and converted parts independently of newer composer input.
+- `attachment_files.rs`, `document_attachments.rs` and `attachment_images.rs`
+  own format normalization, bounded Office/OpenDocument extraction and HEIC
+  conversion. `attachment_intake.rs` admits complete regular-file or memory input
+  before normalization. It performs no draft, spool or network mutation.
+  Intake never publishes the picked or dropped file's original path. Electron
+  sends that path only to its own local instance, and native connects only to
+  externally owned hosts; a loopback URL can be a forward to another machine, so
+  it is not proof of local ownership. The server receives the safe filename.
+  `heic_worker.rs` runs HEIC decoding in the same executable's early worker branch
+  under Linux address-space and elapsed-time limits, before desktop initialization.
 - `send_recovery.rs` observes every step of one retained attempt (its context
   items and its prompt) through inbox and history reads.
   `recovery_view.rs` shows pending text separately from current typing, with
@@ -78,6 +129,9 @@ prompt. Attachments and worktree creation remain separate workflows.
   Copy ID, AI rename, export, worktree moves, folders, keep-warm, side panel
   and run overview are not ported, nor the archive page's project buckets,
   search, dates and archived worktrees.
+- `legacy_queue_reservation.rs` preserves exact text-only reservation recovery
+  for retained journal attempts. It compares the original composer, ordered item
+  identities and complete prompt configuration before allowing dispatch.
 - `session_branching.rs` runs fork (a prompt's Fork, `/fork`), staged revert
   and Restore, `/btw` (create, follow-ups, collapse, promote, destroy) and
   subagent navigation (open a child, Return to parent, stop) against the
@@ -117,6 +171,13 @@ prompt. Attachments and worktree creation remain separate workflows.
   shell and close-on-exit preferences. Reads and serialized writes retain their
   runtime and client; the page's executor outlives a host switch. Files and
   Terminal consume its live choices, including edits whose saves failed.
+- `effort_preferences.rs` owns model-scoped effort memory in the server profile.
+  Explicit effort choices update effective memory immediately. Serialized writes
+  retain their original runtime and preserve other models. Incoming settings
+  overlay newer local choices before publication. Successful ordinary user sends
+  carry memory-only submit captures; recovered and background sends cannot create
+  these captures. Normal close drains writes and keeps failed edits open for
+  explicit picker retry. App quit retains captured executors through its drain.
 - `host_recovery.rs` owns failed saved-host startup. It shows no session data
   and leaves the file untouched. Refresh rereads the same file off the UI
   thread, then connects its default or opens the instance picker. Entering a
@@ -527,10 +588,13 @@ prompt. Attachments and worktree creation remain separate workflows.
   reach the workspace through an action.
 - Session management keys every in-flight change by runtime and session.
   Rename, work state, archive, restore and delete change nothing until the
-  server confirms; their results go through `apply_server_events` as the
-  matching live event would, so the index's mutation revisions keep a
-  delayed list read from undoing them and a deletion runs the same cleanup
-  as `session.deleted`. A completion for another runtime edits nothing.
+  server confirms. Results use the live-event index reducer, so its mutation
+  revisions keep a delayed list read from undoing them. DELETE completions clean
+  only the runtime and subtree captured before their request; descendants created
+  during the request retain their local drafts and sends. A real `session.deleted`
+  event resolves its current descendants before index removal. A completion for
+  another runtime never edits the current index or derives its cleanup scope from
+  replacement-runtime records.
   Pins change at once through `PendingPins`; each menu item names its
   target state, so a stale menu asking for what the row already shows writes
   nothing. Writes for one session run in click order and the overlay stays
@@ -676,7 +740,11 @@ prompt. Attachments and worktree creation remain separate workflows.
   joined by blank lines. Merged sends reserve only the leading eligible
   prefix through the server owner's `reserve-prefix` operation. A nonmutating
   preview supplies its complete prompt; that prompt and reservation intent
-  reach the journal before the reservation request leaves. An in-flight,
+  reach the journal before the reservation request leaves. Local admission
+  checks the whole prospective journal, including unrelated retained drafts
+  and attempts. A size refusal leaves storage usable and originals unreserved.
+  A failed first write releases the local capture without requesting server
+  ownership; storage recovery retains the composer's text. An in-flight,
   goal, scheduled or unjournalable item ends that prefix. Original payloads
   stay persisted on the server, which excludes later delivery until it observes
   admission of the reservation's stable prompt ID. Lost replies recover the
@@ -686,11 +754,12 @@ prompt. Attachments and worktree creation remain separate workflows.
   is taken out of the queue before it is sent or
   edited, so it never goes out twice. A row's send steers while busy with the
   selection it was queued with and, like the web's queued-only send, neither
-  dismisses open requests nor waits for them. Queueing clears the composer at
-  once and a failure gives the text back after anything typed since. ArrowUp
+  dismisses open requests nor waits for them. Composer enqueue publishes its
+  complete native source and payload companion before consuming the matching
+  draft. Newer typing and independent content remain. ArrowUp
   in an empty composer and Edit take the newest or chosen message into the
   composer after any typed text. A runtime switch drops the projection and
-  every queue completion started before it; a taken message whose completion
+  obsolete projection completions; a taken message whose completion
   arrives after a switch goes back to its draft.
 - Reserved sends remain pending under their saved identity after any refusal,
   cancellation or unknown outcome. Retry retains that identity and every
@@ -702,22 +771,25 @@ prompt. Attachments and worktree creation remain separate workflows.
   the attempt is retired and only its captured composer text is restored.
   Row-send retries retain `supersedes: false` through restart and never
   reject open permissions or forms.
-- Goal, scheduled and unjournalable messages stay for the server to deliver:
-  native cannot start a goal, a scheduled message belongs to its task, and an
-  attachment whose reference could exceed the journal's 64 KiB limit (a large
-  inline file; server files are referenced by path) could not be recorded.
-  Such a message offers no Send or Edit and no merge takes it. A message with
-  attachments or context can be sent but offers no Edit, since the composer
-  has no chips to restore them into.
+- Goals and scheduled messages stay for the server to deliver through their own
+  protocols. Ordinary rich messages use bounded payload transfers for Edit and
+  Send. Their original captures, indexes, file descriptors and independent prompt
+  parts remain retained through compact companion references. Inline attachment
+  size does not turn a display preview into byte ownership or acknowledgement
+  authority.
 - Double Escape in the composer of a working session stops it: the first
   press arms a stop for that session for three seconds, a second within them
   stops it, and Escape elsewhere or in an idle session disarms it.
 - A starter chip submits at once into the selected project, as Enter does:
-  the starter, then the composer's text. That text leaves the composer at the
-  click but remains in persisted drafts until creation takes ownership. Draft
-  snapshots retain the captured text beside newer typing; restoring the active
-  field shows only that newer typing while the capture is pending. A failed read or creation
-  gives the carried text back after it. A built-in renders its visible
+  the starter, then the composer's text. The complete source draft leaves the
+  composer at the click and becomes a separate persisted starter capture until
+  creation takes ownership. Newer typing and attachments remain in their own
+  draft. Ordinary creation waits while its source has a retained starter capture.
+  A failed read restores source content after newer typing. Conflicting metadata
+  or immutable identities retain both owners for explicit recovery. Hydration
+  restores captures locally and never resumes activation. Local recovery remains
+  available after a loaded journal write failure; dispatch still requires a
+  durable snapshot. A built-in renders its visible
   prompt and instructions from that project's magic-prompt overrides, read
   for each activation over the generated built-in templates
   (`resources/magic-prompts.json`); a failed read sends nothing and shows the
@@ -762,12 +834,26 @@ prompt. Attachments and worktree creation remain separate workflows.
   context after the observed leading run, then the prompt. Context observed
   after a missing item marks the attempt out of order, with no retry. Recovery
   checks, tasks and rows are keyed by runtime, session and message ID.
-- A deleted session, from this client or a `session.deleted` event, takes its
-  descendants' and its own send state with it: every attempt and its checks,
-  any creation entry and its checks, and its drafts, in one journal save, as
-  the web client's confirmed-deletion cleanup does. The composer stops saving
-  under that session. A chain still running finds its attempt gone, releases
-  its slot and changes nothing else.
+- A confirmed deleted session takes its captured descendants' and its own legacy
+  attempts, creation entries, checks and drafts with it in one journal save.
+  Rich local sends become terminal `Deleted`, which grants only local cleanup
+  authority and never claims message admission. Exact runtime/session actor tasks
+  and unpublished RAM inputs are canceled. The document owner invalidates matching
+  loads, saves and native generations before the composer can save that owner
+  again. Independent runtimes and sessions retain their state.
+- Deleted local-send cleanup uses the retained ledger's exact native, derived and
+  companion descriptors, including Proposed holds, without reading source or
+  prepared-input bytes. Incomplete or pristine preparation markers remain valid
+  roots on Deleted operations, with no preparation, publication or dispatch
+  authority. Consumer removal, exact hold removal and newly unowned attachment
+  intents share a rollback-safe snapshot before any byte release. The local
+   continuation retains its deletion cause after consumer removal. Explicit cleanup
+   retry needs no connection or live session; hydration starts no work.
+- The committed worker authority keeps Deleted preparation and object roots while
+  separately denying their generic puts, downloaded puts, repairs and new
+  verification receipts. Stored byte reads and release exclusions remain intact.
+  The denial takes effect on a validated load or durable deletion save; an
+  in-memory transition cannot replace committed worker authority.
 - An attempt nothing can settle offers Move to composer on its row: one whose
   context is out of order, or whose retry the server definitely refused again
   (a 400, 401, 403 or 404, or expired authentication; for example a saved
@@ -799,6 +885,142 @@ prompt. Attachments and worktree creation remain separate workflows.
   Application-quit hooks also request a flush within GPUI's
   bounded shutdown window. Forced termination can lose the latest debounced
   draft edits, but every dispatched prompt already has a durable attempt.
+- Queue captures retain their runtime, exact server directory, session, draft
+  owner and frozen configuration. Version 7 loads with an empty queue ledger;
+  older envelopes cannot carry version 8 fields. Hydration restores unresolved
+  operations without starting network requests, inspecting chunks or releasing
+  their server ownership. Runtime switching preserves the local ledger.
+- New unified composer operations admit an empty preparation marker with their
+  original source, before the first save. This distinguishes interrupted native-only
+  preparation from older native-only operations. Input fingerprints, derived file
+  plans and context IDs append under the original source seal; they never rewrite
+  the captured intent, configuration or original file and context facts.
+- A fresh file read requires an explicit parsed mention and resolved path in its
+  exact source. Existing model-facing file names and reference URIs authorize no
+  read. PDF and path-only mentions remain typed file references. Document and image
+  mentions use the existing bounded raw intake and normalization pipeline.
+- Every normalized mention bundle records its raw length and SHA-256, complete
+  ordered outputs and exact pre-put holds before any output write. Publication
+  requires the durable receipt and saves catalog custody before another bundle is
+  processed. Independent successful bundles remain rooted when a file fails.
+  Partial explicit retries compare the raw input and every normalized output,
+  including cataloged siblings. Fully cataloged bundles use their held bytes.
+- Prepared inputs bind the source seal, owner, editing generation/revision,
+  configuration, complete context order and exact file descriptors. All derived
+  files must be cataloged before input sealing. The shared payload envelope retains
+  the original local capture bytes within the 50 MiB whole-object limit and 4 MiB
+  metadata limit. Restore reads only its verified one-time binding and never runs
+  mention resolution, conversion or snippet expansion again.
+- Live native captures carry window-local consumption authority. Published captures
+  reconstructed after restart preserve current input even when old counters and
+  text happen to match. Advanced compound revisions retain their entire document,
+  rich references and undo history while the captured send finishes independently.
+- New acknowledged Edit Takes record an irreversible first consumer claim. That
+  consumer keeps the original context IDs. Later consumers share the immutable
+  source read-only and bind fresh context IDs through per-item occurrence records,
+  including an explicit empty binding for a source with no context. Each record
+  binds its flattened source index, original Take/item, consumer source seal and
+  original payload/index digests. Captured intents and original Take proofs remain
+  unchanged. Admission allocates and validates the complete mapping atomically.
+- A claimed Take retains its spent original context IDs and first-consumer
+  operation identity after consumer retirement. Failed admission rolls back the
+  claim and mapping together. Earlier version-8 Takes without source-use history
+  cannot authorize new claims; their existing captured retries retain their
+  original IDs. Hydration never infers unused identities from a missing consumer.
+- Composer consumption names its exact published consumer. Preserving newer input
+  changes neither current roots nor editor history and needs no live draft
+  membership. Clearing a captured current revision additionally requires its exact
+  current companion order and published edit identity. Source matching alone
+  cannot select a different consumer.
+- Companion attachment controls name the original operation, companion object,
+  item, reference kind and source-local ordinal. Equal names and URIs remain
+  separate occurrences. Removal records only that occurrence's semantic exclusion
+  and preserves textarea text, selection, undo and original Take bytes. These
+  controls grant no path read, upload, staging or native attachment retirement.
+  Known chip metadata survives an additional source read's loading or failed state;
+  unavailable editing authority disables removal until local recovery succeeds.
+- A queue chunk is distinct from a composer attachment. Its exact operation,
+  object, generation, ordinal and descriptor must be durably held before a put.
+  Each durable put receipt is journaled before whole-stream verification. Only
+  the serialized file owner constructs a verification receipt after checking
+  every chunk and the combined SHA-256. A published native companion retains
+  prepared-file and source-document roots for attachment retirement checks.
+- Queue payloads and native companions are bounded to 50 MiB, each chunk to
+  20 MiB, and frozen outgoing bodies to 128 MiB. Request and reply metadata
+  remain bounded to 4 MiB. The complete encoded journal retains its 16 MiB
+  ceiling, including unrelated drafts and pending mutations. Candidate admission
+  borrows retained state and returns a refused source unchanged.
+- A take acknowledgement requires its exact committed local destination,
+  verified capture chunks and separate attachment descriptors. Ordered file
+  proofs come from sealed transport materialization and bind the original
+  capture and index digests to each manifest blob or legacy file ordinal. The
+  file owner compares local descriptors with those original byte bindings and
+  rereads every file before issuing an acknowledgement permit.
+  Failed or uncertain journal saves revoke that authority. Unknown enqueue,
+  reservation and acknowledgement outcomes retain their original identities.
+  Only terminal operations can enter explicit retirement; a durable retirement
+  intent and current reference checks precede any named chunk release.
+- Explicit Retry may resume a short unpublished spool file only under its exact
+  committed operation, hold and full-byte descriptor. Initial writes retain
+  collision refusal. Prefix download bindings are committed before a put and
+  become immutable preparation roots; transient UI holds grant no repair authority.
+  Operation retirement and all newly unowned attachment intents share a snapshot
+  before either namespace releases bytes. Independent release failures retain
+  their own intents while successful releases remain durable.
+- Prefix Capturing proves reservation has not been attempted. Abandonment also
+  requires definite local refusal or a fresh complete captured-owner snapshot
+  establishing that the selected prefix is unavailable. The captured native draft
+  must return to its original owner before operation removal; newer input and
+  source-document groups remain. Restoration conflicts preserve every original
+  owner and byte root. A reserved or uncertain reservation never uses this path.
+- Indexed payloads persist through the transport's sealed `body()` bytes.
+  Native prefix comparison records contain typed identities and seals, so a
+  display preview never becomes hash material. Preview and reservation compare
+  ordered items, payload/index seals, context IDs and delivery independently of
+  the queue revision. The frozen prompt precedes reservation in the save order.
+- Composer enqueue uses payload-v1 and immutable prepared file bytes. Typed file
+  references carry no upload or byte-read authority. Native draft file entries
+  without prepared byte custody refuse before capture; their source stays in the
+  composer. Protocol metadata and full-snapshot admission refuse before
+  acquiring ownership. No path reads a file from a captured server path or agent
+  path. Native semantic IDs and source-document grouping remain in the source
+  companion; the enqueue receipt supplies official admission IDs.
+- Queue uploads use validated safe basenames. A per-use manifest `agentPath`
+  retains the exact model-facing name when it differs, including names that need
+  an internal upload label. Windows and UNC separator handling follows the shared
+  attachment identity helper; literal POSIX backslashes remain in model metadata.
+  Prefix recovery accepts earlier captures without the field and validates any
+  present identity against its captured local input without rewriting saved bytes.
+- An unresolved enqueue retains its original exact owner, source, upload labels,
+  payload and request body. Another enqueue from that draft waits. Unknown
+  outcomes never append their text back as a new submission. Check status reads
+  only the original request. Retry first checks it and repeats only the retained
+  request when unknown. An accepted receipt cannot become fresh enqueue authority
+  after a later missing lookup. Hydration starts no reads, uploads or retries.
+- Accepted enqueues retain their immutable receipt and local roots through queued
+  or uncertain delivery. Each explicit server-delivery retry first saves the
+  next attempt number and exact authorization body. A lost answer retains that
+  authorization; recovery observes or repeats the same attempt before another
+  user activation can authorize a later one. Terminal receipt observations permit
+  local retirement, followed by durable named-chunk release. Failed release keeps
+  its retirement intent for an explicit local retry. No server upload is released
+  by the native enqueue caller.
+- Queue enqueue tasks survive projection resets and retain their original network
+  runtime through disk waits. Close prevents further dispatch and drains accepted
+  worker writes; a cancelled network request leaves its prewritten unknown state.
+   Permissions and forms never enter queue captures or retry authorizations.
+- Enqueue, Prefix and LocalSend finalizers return their captured native file and
+  source-group identities after dropping their ephemeral roots. The attachment
+  retirement owner considers only these named catalog entries and preserves all
+  remaining draft, operation, consumer and preparation owners. Unwritten named
+  requests stay pending through unavailable storage, close, capacity refusal and
+  failed saves until the existing durable retirement intent owns the release.
+  Logical groups without byte descriptors grant no release authority.
+- Normal close first waits for actors with retained native file or source-group
+  roots across all runtimes. Their task slots remain intact while existing close
+  guards stop new admission and dispatch. Foreground finalizers release their roots
+  and resume close. Newly pending retirement or failed editor saves keep the window
+  and exclusive writer available for explicit retry before worker shutdown.
 - Retained Markdown uses the same parser extensions before and after painting.
   Copy includes unpainted intermediate messages exactly once, preserves selected
   whitespace and uses fixed UTF-8 endpoints across compatible appends and reflow.
@@ -984,6 +1206,15 @@ the same saved ID. Abort can run after the send request finishes and leaves
 running status to the live channel. New-session creation is owned by
 `session_creation.rs`; queue controls live in `message_queue.rs`.
 
+### Why deleted local sends retain a distinct terminal state
+
+Confirmed session deletion ends dispatch authority even when preparation never
+published complete inputs. Retaining the original source and partial byte roots
+under `Deleted` lets local cleanup resume after restart or a failed save without
+inventing server admission. Named released native roots go through the shared
+attachment retirement owner, which preserves independent consumers and saves
+deletion intent before releasing bytes.
+
 ### Why merged queue sends retain server ownership
 
 Removing items one at a time allows the server to deliver a later item while
@@ -1001,6 +1232,13 @@ prompt but gives back what the chip submitted, so the user can edit and send
 it again in the form they chose; requiring the two to match would lose that
 form. A reserved merged send retains the delivered text in its journaled draft
 and keeps server ownership until admission, so recovery uses the same prompt ID.
+
+### Why repeated submissions bind working context identities
+
+Original Take payloads and indexes retain the byte and acknowledgement proof.
+Independent later submissions receive fresh context IDs in working local captures
+so server deduplication cannot treat newer input as a replay of an earlier send.
+The durable claim keeps original IDs spent even after that first consumer retires.
 
 ### Why goal messages are left to the server
 
@@ -1041,6 +1279,13 @@ The captured client sends to the original endpoint, and the result belongs to
 the original draft owner even after the visible composer changes. Dropping a
 mutation merely because selection changes could lose both its result and the
 submitted text. Each window retains the task and owner until completion.
+
+### Why close waits for native-root callbacks
+
+A worker flush drains accepted I/O before foreground actor callbacks consume its
+receipts. Those callbacks can still release a removed attachment's last temporary
+root. Close waits for that ownership transition before sealing the worker, so the
+resulting named retirement request can retain its writer or reach durable custody.
 
 ### Why one `ListState` per visited session
 

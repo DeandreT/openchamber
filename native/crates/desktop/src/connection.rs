@@ -142,6 +142,7 @@ pub struct Connection {
     pub stale: bool,
     pub connect_task: Option<Task<()>>,
     pub stream_task: Option<Task<()>>,
+    pub control_task: Option<Task<()>>,
     pub authentication_task: Option<Task<()>>,
     pub sessions_task: Option<Task<()>>,
     pub topology_task: Option<Task<()>>,
@@ -177,6 +178,7 @@ impl Connection {
             stale: false,
             connect_task: None,
             stream_task: None,
+            control_task: None,
             authentication_task: None,
             sessions_task: None,
             topology_task: None,
@@ -193,6 +195,7 @@ impl Connection {
         self.stale = false;
         self.connect_task = None;
         self.stream_task = None;
+        self.control_task = None;
         self.authentication_task = None;
         self.sessions_task = None;
         self.topology_task = None;

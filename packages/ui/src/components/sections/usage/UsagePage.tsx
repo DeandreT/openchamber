@@ -46,8 +46,6 @@ export const UsagePage: React.FC = () => {
   const results = useQuotaStore((state) => state.results);
   const selectedProviderId = useQuotaStore((state) => state.selectedProviderId);
   const setSelectedProvider = useQuotaStore((state) => state.setSelectedProvider);
-  const loadSettings = useQuotaStore((state) => state.loadSettings);
-  const fetchAllQuotas = useQuotaStore((state) => state.fetchAllQuotas);
   const fetchProviderQuota = useQuotaStore((state) => state.fetchProviderQuota);
   const isLoading = useQuotaStore((state) => state.isLoading);
   const blink = useWaitingBlink(isLoading);
@@ -59,12 +57,7 @@ export const UsagePage: React.FC = () => {
   const toggleModelSelected = useQuotaStore((state) => state.toggleModelSelected);
   const applyDefaultSelections = useQuotaStore((state) => state.applyDefaultSelections);
 
-  useQuotaAutoRefresh();
-
-  React.useEffect(() => {
-    void loadSettings();
-    void fetchAllQuotas();
-  }, [loadSettings, fetchAllQuotas]);
+  useQuotaAutoRefresh(true, true);
 
   React.useEffect(() => {
     if (selectedProviderId) {
@@ -270,7 +263,7 @@ export const UsagePage: React.FC = () => {
                 >
                   <CollapsibleTrigger className="flex w-full items-center justify-between py-0.5 group">
                     <div className="flex items-center gap-1.5 text-start">
-                      <span className="typography-ui-label font-normal text-foreground">{family.label}</span>
+                      <span className="typography-ui-label font-normal text-foreground">{family.labelKey ? t(family.labelKey) : family.label}</span>
                       <span className="typography-micro text-muted-foreground">
                         ({familyModels.length})
                       </span>

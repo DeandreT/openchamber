@@ -11,7 +11,7 @@ qualify before a desktop release.
 
 ## UI parity requirement
 
-The repaired Electron desktop is the reference for appearance, interaction,
+The selected upstream Electron desktop is the reference for appearance, interaction,
 accessibility and feature coverage. Follow the [desktop UI parity method](PARITY.md)
 for each migrated feature: capture its baseline, run matched visual and behavior
 scenarios, resolve differences and retain regression coverage. Intentional
@@ -171,21 +171,20 @@ successful completion.
 
 ### Sidebar visibility
 
-The native projection preserves the fork's compact layout and session reachability:
+The native projection follows the selected upstream sidebar's layout and
+membership rules:
 
 - Use the global session index for unopened-directory and archive coverage.
   Expanding or rendering a project row does not initialize its OpenCode location.
-- Preserve an active unowned root in Chats until configured topology or canonical
-  project metadata resolves its owner. Include its active descendants across
-  directories and retain owned children's project navigation.
-- Keep fallback roots out of duplicate project, Pinned and In work rows. Do not
-  promote a child whose parent is missing, archived or a temporary `/btw` session.
+- Derive Chats, projects, worktrees, spaces, custom sections and visible session
+  trees from the upstream collection and row model. Apply their ownership,
+  archive, pin and section-visibility rules consistently.
 - Use the real session directory for routing, pin identity and drafts. Display
   grouping never rewrites it. OpenCode's catch-all `global` project ID cannot
   establish configured-project ownership.
-- Apply authoritative moves without requiring a new prompt, including a move
-  announced after the agent becomes idle. Failed topology discovery keeps the
-  fallback reachable. Search and collapse preferences retain their existing rules.
+- Apply authoritative moves through the upstream session-move and folder-admission
+  rules without requiring a new prompt. A failed discovery retains the last valid
+  topology. Search and collapse preferences follow the selected reference.
 - Keep activity separate from membership. Token arrivals do not reorder the
   structural sidebar. Running and pending-request indicators use live state.
 

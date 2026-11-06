@@ -1,6 +1,6 @@
 # Desktop UI parity method
 
-The Rust desktop preserves the repaired Electron desktop's appearance and
+The Rust desktop preserves the selected upstream Electron desktop's appearance and
 behavior. Every migrated feature has a repeatable comparison against that
 baseline before it is complete. Intentional changes require the user's approval.
 Electron remains usable until the replacement qualifies across the full feature
@@ -17,11 +17,12 @@ a native GPUI window.
 
 ## 1. Establish the reference
 
-Pin a release build of the qualified fork that contains the compact-sidebar and
-session-visibility repairs. Record the source revision, built assets, Electron
-and OpenCode versions and fixture identity in the baseline manifest. Confirm the
-running window uses those assets. A current upstream build or the installed app
-with a different profile cannot silently substitute for this reference.
+Pin a release build of the selected upstream revision. Its sidebar and session
+visibility behavior define the reference. Record the source revision, built
+assets, Electron and OpenCode versions and fixture identity in the baseline
+manifest. Confirm the running window uses those assets. A newer build or the
+installed app with a different profile cannot silently substitute for this
+reference.
 
 Use disposable profiles and synthetic fixtures for each client. For connected
 scenarios, reset independent server data copies to the same seed before each

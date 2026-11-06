@@ -20,6 +20,11 @@ libghostty-vt = { version = "=0.2.0", default-features = false }
 keyring = "=4.2.0"
 keyring-core = "=1.0.1"
 notify = "=8.2.0"
+heic-rs = { version = "=0.1.4", default-features = false }
+image = { version = "=0.25.10", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
+quick-xml = "=0.41.0"
+sha2 = { version = "=0.11.1", default-features = false }
+zip = { version = "=9.2.2", default-features = false, features = ["deflate"] }
 # Fenced code is highlighted with tree-sitter; the grammars cover the
 # languages agents most often write.
 gpui-kit = { version = "=0.7.3", features = [

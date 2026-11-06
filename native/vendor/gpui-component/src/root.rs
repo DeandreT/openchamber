@@ -11,8 +11,8 @@ use crate::{
 };
 use gpui::{
     App, AppContext, Context, DefiniteLength, ElementId, Entity, FocusHandle, InteractiveElement,
-    IntoElement, ParentElement as _, Render, RenderOnce, Styled, WeakFocusHandle, Window, div,
-    prelude::FluentBuilder as _,
+    IntoElement, ParentElement as _, Render, RenderOnce, Styled, WeakEntity, WeakFocusHandle,
+    Window, div, prelude::FluentBuilder as _,
 };
 use gpui_base::{TextSelection, TextSelectionScopeId};
 use std::{any::TypeId, rc::Rc};
@@ -31,7 +31,24 @@ pub(crate) struct WindowState {
     pub(crate) native_menu_overlay: Entity<FallbackMenuOverlay>,
     touch_selection_overlay: Entity<WindowTouchSelectionOverlay>,
     sheet_size: Option<DefiniteLength>,
-    pending_focus_restore: Option<WeakFocusHandle>,
+    pending_focus_restore: Option<PendingFocusRestore>,
+}
+
+struct PendingFocusRestore {
+    handle: WeakFocusHandle,
+    dialog: Option<WeakFocusHandle>,
+    dismissed_focus: Option<WeakFocusHandle>,
+    token: Rc<()>,
+}
+
+impl PendingFocusRestore {
+    fn has_focus_authority(&self, window: &Window, cx: &App) -> bool {
+        // The dismissed control may disappear before the timer. Explicit focus
+        // elsewhere supersedes its return target, including for a later opening.
+        window.focused(cx).is_none_or(|focus| {
+            self.dismissed_focus.as_ref() == Some(&focus.downgrade())
+        })
+    }
 }
 
 #[derive(Clone)]
@@ -50,7 +67,17 @@ pub(crate) struct ActiveDialog {
     /// The previous focused handle before opening the Dialog.
     previous_focused_handle: Option<WeakFocusHandle>,
     selection_scope: TextSelectionScopeId,
+    close_handle: Option<DialogLayerHandle>,
     builder: Rc<dyn Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static>,
+}
+
+/// Identifies one dialog opening in its original window root.
+///
+/// Clones name the same layer without keeping the dialog or its root alive.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DialogLayerHandle {
+    root: WeakEntity<WindowState>,
+    focus_handle: WeakFocusHandle,
 }
 
 impl ActiveDialog {
@@ -64,6 +91,7 @@ impl ActiveDialog {
             focus_handle,
             previous_focused_handle,
             selection_scope,
+            close_handle: None,
             builder: Rc::new(builder),
         }
     }
@@ -85,7 +113,7 @@ impl WindowState {
         }
     }
 
-    fn entity(window: &Window, cx: &App) -> Option<Entity<Self>> {
+    pub(crate) fn entity(window: &Window, cx: &App) -> Option<Entity<Self>> {
         window.root::<gpui_base::Root>()??.read(cx).plugin::<Self>()
     }
 
@@ -209,6 +237,8 @@ impl WindowState {
                 // So we keep the focus handle in the `active_dialog`, this is owned by the `WindowState`.
                 dialog.focus_handle = active_dialog.focus_handle.clone();
                 dialog.selection_scope = active_dialog.selection_scope;
+                dialog.close_handle = active_dialog.close_handle.clone();
+                dialog.layer_id = Some((&active_dialog.focus_handle).into());
 
                 dialog.layer_ix = i;
                 // Find the dialog which one needs to show overlay.
@@ -248,8 +278,12 @@ impl WindowState {
 
         // Use pending focus restore if available to maintain correct focus chain
         // when a new dialog is opened immediately after closing another dialog.
-        if let Some(pending_handle) = self.pending_focus_restore.take() {
-            previous_focused_handle = Some(pending_handle);
+        if let Some(pending) = self.pending_focus_restore.take()
+            && pending.dialog
+                == self.active_dialogs.last().map(|dialog| dialog.focus_handle.downgrade())
+            && pending.has_focus_authority(window, cx)
+        {
+            previous_focused_handle = Some(pending.handle);
         }
 
         let focus_handle = cx.focus_handle();
@@ -276,6 +310,89 @@ impl WindowState {
             .and_then(|h| h.upgrade())
     }
 
+    pub fn open_dialog_with_handle<F>(
+        &mut self,
+        build: F,
+        window: &mut Window,
+        cx: &mut Context<'_, WindowState>,
+    ) -> DialogLayerHandle
+    where
+        F: Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static,
+    {
+        self.open_dialog(build, window, cx);
+        let dialog = self
+            .active_dialogs
+            .last_mut()
+            .expect("opening pushed a dialog");
+        let handle = DialogLayerHandle {
+            root: cx.weak_entity(),
+            focus_handle: dialog.focus_handle.downgrade(),
+        };
+        dialog.close_handle = Some(handle.clone());
+        handle
+    }
+
+    pub fn close_dialog_by_handle(
+        &mut self,
+        handle: &DialogLayerHandle,
+        window: &mut Window,
+        cx: &mut Context<'_, WindowState>,
+    ) -> bool {
+        if handle.root != cx.weak_entity() {
+            return false;
+        }
+        let Some(index) = self
+            .active_dialogs
+            .iter()
+            .position(|dialog| handle.focus_handle == dialog.focus_handle)
+        else {
+            return false;
+        };
+        let removed = self.active_dialogs.remove(index);
+        let was_top = index == self.active_dialogs.len();
+        let belongs_to_removed = |focus: &WeakFocusHandle| {
+            focus == &removed.focus_handle
+                || focus
+                    .upgrade()
+                    .is_some_and(|focus| removed.focus_handle.contains(&focus, window))
+        };
+        // A newer dialog may return focus to a control inside the removed layer.
+        // Bypass that layer while leaving the newer dialog's current focus alone.
+        for dialog in &mut self.active_dialogs[index..] {
+            if dialog
+                .previous_focused_handle
+                .as_ref()
+                .is_some_and(&belongs_to_removed)
+            {
+                dialog.previous_focused_handle = removed.previous_focused_handle.clone();
+            }
+        }
+        if self
+            .pending_focus_restore
+            .as_ref()
+            .is_some_and(|pending| {
+                pending.dialog.as_ref().is_some_and(|dialog| dialog == &removed.focus_handle)
+                    || belongs_to_removed(&pending.handle)
+            })
+        {
+            // The timer still holds the old control strongly. Retire its authority
+            // even if a later opening happens to reuse the same stack depth.
+            self.pending_focus_restore = None;
+        }
+        if was_top {
+            self.focused_input = None;
+            if let Some(focus) = removed
+                .previous_focused_handle
+                .and_then(|focus| focus.upgrade())
+            {
+                window.focus(&focus, cx);
+            }
+            gpui_base::TextSelection::clear(window, cx);
+        }
+        cx.notify();
+        true
+    }
+
     pub fn close_dialog(&mut self, window: &mut Window, cx: &mut Context<'_, WindowState>) {
         if let Some(handle) = self.close_dialog_internal() {
             window.focus(&handle, cx);
@@ -289,21 +406,42 @@ impl WindowState {
         window: &mut Window,
         cx: &mut Context<'_, WindowState>,
     ) {
+        let dismissed_focus = self.active_dialogs.last().and_then(|dialog| {
+            let focus = window.focused(cx)?;
+            (focus == dialog.focus_handle || dialog.focus_handle.contains(&focus, window))
+                .then(|| focus.downgrade())
+        });
         if let Some(handle) = self.close_dialog_internal() {
-            let dialogs_count = self.active_dialogs.len();
+            let token = Rc::new(());
 
             // Save for new dialogs opened during animation to maintain focus chain
-            self.pending_focus_restore = Some(handle.downgrade());
+            self.pending_focus_restore = Some(PendingFocusRestore {
+                handle: handle.downgrade(),
+                dialog: self.active_dialogs.last().map(|dialog| dialog.focus_handle.downgrade()),
+                dismissed_focus,
+                token: token.clone(),
+            });
 
             cx.spawn_in(window, async move |this, cx| {
                 cx.background_executor().timer(*ANIMATION_DURATION).await;
                 let _ = this.update_in(cx, |this, window, cx| {
-                    let current_dialogs_count = this.active_dialogs.len();
-                    // Only restore focus if no new dialogs were opened during animation
-                    if current_dialogs_count == dialogs_count {
+                    if Self::entity(window, cx).as_ref() != Some(&cx.entity()) {
+                        return;
+                    }
+                    if this.pending_focus_restore.as_ref().is_none_or(|pending| {
+                        !Rc::ptr_eq(&pending.token, &token)
+                    }) {
+                        return;
+                    }
+                    let pending = this.pending_focus_restore.take().expect("restore token matched");
+                    // Only the current return target and its surviving dialog may
+                    // restore focus. Older callbacks cannot clear a newer restore.
+                    if pending.dialog
+                        == this.active_dialogs.last().map(|dialog| dialog.focus_handle.downgrade())
+                        && pending.has_focus_authority(window, cx)
+                    {
                         window.focus(&handle, cx);
                     }
-                    this.pending_focus_restore = None;
                 });
             })
             .detach();

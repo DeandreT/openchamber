@@ -1,16 +1,19 @@
 //! Hydration, save barriers and normal-close draining for private native state.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui_kit::{AnyWindowHandle, Context, Task, Window};
-use openchamber_native_core::draft::DraftStore;
+use openchamber_native_core::draft::{Draft, DraftKey, DraftStore};
+use openchamber_native_core::draft_content::{DraftFile, DraftFileContent};
 
+use crate::attachment_catalog::{AttachmentCatalog, PreparationHold, PreparedAttachment};
+use crate::attachment_spool::BlobDescriptor;
 use crate::journal_worker::{
     CommitOutcome, JournalFailure, JournalReceipt, JournalResult, JournalWorker,
 };
-use crate::mutation_journal::{JournalSnapshot, LoadedJournal};
+use crate::mutation_journal::{JournalError, JournalSnapshot, JournalView, LoadedJournal};
 use crate::recovery_view::StorageNotice;
 use crate::send_attempt::SendAttempts;
 use crate::workspace::Workspace;
@@ -49,6 +52,9 @@ pub(crate) struct StatePersistence {
     debounce: Option<Task<()>>,
     saving: Option<Task<()>>,
     closing: Option<Task<()>>,
+    composer_close: Option<Task<()>>,
+    composer_hydration_close: bool,
+    native_root_close: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -67,6 +73,14 @@ impl StatePersistence {
 }
 
 impl Workspace {
+    pub(crate) fn attachment_worker(&self) -> Option<&JournalWorker> {
+        self.persistence.worker.as_ref()
+    }
+
+    pub(crate) fn persistence_loaded(&self) -> bool {
+        self.persistence.loaded()
+    }
+
     pub(crate) fn persistence_ready(&self) -> bool {
         matches!(self.persistence.status, Status::Ready)
     }
@@ -77,13 +91,61 @@ impl Workspace {
 
     pub(crate) fn close_in_progress(&self) -> bool {
         self.persistence_closing()
+            || self.persistence.native_root_close
+            || self.composer_close_in_progress()
             || self.general_close.is_some()
             || self.appearance_close.is_some()
             || self.host_close.is_some()
+            || self.attachment_storage_close.is_some()
+            || self.effort_close.is_some()
+            || self.effort_preferences.is_closing()
+    }
+
+    pub(crate) fn composer_close_in_progress(&self) -> bool {
+        self.persistence.composer_close.is_some() || self.persistence.composer_hydration_close
+    }
+
+    pub(crate) fn composer_hydration_close_in_progress(&self) -> bool {
+        self.persistence.composer_hydration_close
+    }
+
+    /// Local document completion resumes a waiting close without starting another
+    /// read or polling. A failed read reaches freeze's ordinary refusal path.
+    pub(crate) fn resume_composer_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.persistence.composer_hydration_close || self.composer_documents_pending() {
+            return;
+        }
+        self.persistence.composer_hydration_close = false;
+        self.request_close(window, cx);
+    }
+
+    pub(crate) fn native_root_actors_pending(&self) -> bool {
+        self.queue.enqueues.has_native_root_holds()
+            || self.queue.prefixes.has_native_root_holds()
+            || self.queue.local_sends.has_native_root_holds()
+    }
+
+    /// Actor callbacks run on the foreground before the journal owner can seal.
+    /// A new unwritten cleanup request keeps the window and writer for retry.
+    pub(crate) fn resume_native_root_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.persistence.native_root_close || self.native_root_actors_pending() {
+            return;
+        }
+        self.persistence.native_root_close = false;
+        if self.has_pending_attachment_retirements() {
+            self.unfreeze_host_manager(cx);
+            self.unfreeze_appearance(cx);
+            self.unfreeze_general(cx);
+            self.notify_mutation_failure("chat.nativeRecovery.storageFailed", window, cx);
+            cx.notify();
+            return;
+        }
+        self.request_close(window, cx);
     }
 
     pub(crate) fn composer_editable(&self) -> bool {
         (self.is_synthetic() || self.persistence.loaded())
+            && !self.close_in_progress()
             && self
                 .selected
                 .as_ref()
@@ -176,7 +238,7 @@ impl Workspace {
                     Ok(loaded) => {
                         let snapshot = match loaded {
                             LoadedJournal::Missing => JournalSnapshot::default(),
-                            LoadedJournal::Present(snapshot) => snapshot,
+                            LoadedJournal::Present(snapshot) => *snapshot,
                         };
                         let attempts = match SendAttempts::from_snapshot(snapshot.attempts) {
                             Ok(attempts) => attempts,
@@ -199,7 +261,21 @@ impl Workspace {
                         this.send_attempts = attempts;
                         this.creations =
                             crate::create_attempt::CreateAttempts::restore(snapshot.creations);
-                        this.restore_draft_previews();
+                        this.attachments = snapshot.attachments;
+                        this.attachment_preparations = snapshot.preparations;
+                        this.retired_attachment_blobs = snapshot.retired_blobs;
+                        this.queue_storage = snapshot.queue;
+                        this.queue.enqueues.restore(&this.queue_storage);
+                        this.queue.local_sends.restore(&this.queue_storage);
+                        this.starters.captures = crate::starter_capture::StarterCaptures::restore(snapshot.starter_captures);
+                        let drained = this.starters.captures.drain(&mut this.drafts);
+                        for capture in drained.restored {
+                            capture.restore_selection(&mut this.composer_selections);
+                            if let Some(mode) = capture.permission_mode {
+                                this.permission_modes.drafts.entry(capture.owner.runtime().clone()).or_insert(mode);
+                            }
+                        }
+                        this.restore_draft_previews(cx);
                         this.restore_composer_draft(window, cx);
                         this.persistence.status = Status::Ready;
                     }
@@ -216,6 +292,149 @@ impl Workspace {
         }));
     }
 
+    fn journal_drafts(&self) -> Vec<(&DraftKey, &Draft)> {
+        // During the durable barrier the field still displays the submitted
+        // text. The attempt owns that copy in storage; a later identical draft
+        // typed after dispatch is a separate value and remains in the journal.
+        let preparing: HashMap<_, _> = self
+            .send_attempts
+            .iter()
+            .filter(|(_, attempt)| {
+                attempt.admission == crate::send_attempt::Admission::Preparing
+                    && attempt.origin == crate::send_attempt::SendOrigin::Existing
+            })
+            .map(|(_, attempt)| (&attempt.owner, &attempt.draft))
+            .collect();
+        self.drafts
+            .iter()
+            .filter(|(key, draft)| {
+                preparing
+                    .get(key)
+                    .is_none_or(|captured| !captured.same_content(draft))
+            })
+            .collect()
+    }
+
+    fn validate_attachment_snapshot(
+        &self,
+        attachments: &AttachmentCatalog,
+        preparations: &[PreparationHold],
+        added_files: Option<(&DraftKey, &Draft)>,
+    ) -> Result<(), JournalError> {
+        let selections = self.composer_selections.snapshot();
+        let empty = Draft::default();
+        let mut drafts = self.journal_drafts();
+        if let Some((owner, _)) = added_files {
+            // Appended files make a preparing send's former duplicate draft an
+            // independent owner again, exactly as the next save will see it.
+            if !drafts.iter().any(|(key, _)| *key == owner) {
+                drafts.push((owner, self.drafts.get(owner).unwrap_or(&empty)));
+            }
+        }
+        JournalView {
+            drafts,
+            attempts: self.send_attempts.iter().collect(),
+            creations: self.creations.iter().collect(),
+            selections: &selections,
+            attachments,
+            preparations,
+            retired_blobs: &self.retired_attachment_blobs,
+            starter_captures: self.starters.captures.iter().collect(),
+            added_files,
+            queue: &self.queue_storage,
+        }
+        .validate()
+    }
+
+    /// Checks a newly captured queue send against all other retained owners
+    /// before its first save or server reservation can acquire ownership.
+    pub(crate) fn validate_queue_intent_admission(&self) -> Result<(), JournalError> {
+        self.validate_attachment_snapshot(&self.attachments, &self.attachment_preparations, None)
+    }
+
+    /// Runs the canonical full-snapshot preflight against a proposed queue ledger.
+    pub(crate) fn validate_queue_candidate(
+        &self,
+        queue: &crate::queue_storage::QueueStorage,
+    ) -> Result<(), JournalError> {
+        let selections = self.composer_selections.snapshot();
+        JournalView {
+            drafts: self.journal_drafts(),
+            attempts: self.send_attempts.iter().collect(),
+            creations: self.creations.iter().collect(),
+            selections: &selections,
+            attachments: &self.attachments,
+            preparations: &self.attachment_preparations,
+            retired_blobs: &self.retired_attachment_blobs,
+            starter_captures: self.starters.captures.iter().collect(),
+            added_files: None,
+            queue,
+        }
+        .validate()
+    }
+
+    /// Admits a complete source's initial holds without acquiring any ownership.
+    pub(crate) fn validate_attachment_preparation_admission(
+        &self,
+        holds: &[PreparationHold],
+    ) -> Result<(), JournalError> {
+        if holds.is_empty() {
+            return Err(JournalError::Invalid("empty attachment preparation"));
+        }
+        let mut preparations = self.attachment_preparations.clone();
+        preparations.extend_from_slice(holds);
+        self.validate_attachment_snapshot(&self.attachments, &preparations, None)
+    }
+
+    /// Checks the complete canonical v7 snapshot before atomic source publication.
+    pub(crate) fn validate_attachment_bundle_publication(
+        &self,
+        owner: &DraftKey,
+        members: &[(&PreparationHold, BlobDescriptor, DraftFile)],
+    ) -> Result<(), JournalError> {
+        if members.is_empty() {
+            return Err(JournalError::Invalid("empty attachment publication"));
+        }
+        let mut ids = HashSet::new();
+        let mut attachments = self.attachments.clone();
+        let mut additions = Draft::default();
+        for (hold, descriptor, file) in members {
+            if &hold.owner != owner
+                || file.id != hold.id
+                || descriptor.id() != &hold.blob
+                || !matches!(&file.content, DraftFileContent::Prepared)
+                || !ids.insert(&hold.id)
+                || self.attachments.contains_key(&hold.id)
+                || self
+                    .attachment_preparations
+                    .iter()
+                    .filter(|existing| existing.id == hold.id)
+                    .count()
+                    != 1
+                || !self.attachment_preparations.contains(hold)
+            {
+                return Err(JournalError::Invalid(
+                    "attachment publication differs from exact preparation",
+                ));
+            }
+            attachments.insert(
+                hold.id.clone(),
+                PreparedAttachment {
+                    blob: *descriptor,
+                    staging: None,
+                },
+            );
+            additions.content.files.push(file.clone());
+        }
+        let preparations: Vec<_> = self
+            .attachment_preparations
+            .iter()
+            .filter(|hold| !members.iter().any(|(expected, _, _)| *expected == *hold))
+            .cloned()
+            .collect();
+        self.validate_attachment_snapshot(&attachments, &preparations, Some((owner, &additions)))
+    }
+
     /// Full snapshots are collected only at a save boundary, not on each keystroke.
     pub(crate) fn persistence_barrier(
         &mut self,
@@ -227,28 +446,20 @@ impl Workspace {
             return None;
         }
         self.save_composer_draft(cx);
-        // During the durable barrier the field still displays the submitted
-        // text. The attempt owns that copy in storage; a later identical draft
-        // typed after dispatch is a separate value and remains in the journal.
-        let preparing: HashMap<_, _> = self
-            .send_attempts
-            .iter()
-            .filter(|(_, attempt)| {
-                attempt.admission == crate::send_attempt::Admission::Preparing
-                    && attempt.origin == crate::send_attempt::SendOrigin::Existing
-            })
-            .map(|(_, attempt)| (&attempt.owner, attempt.draft.text.as_str()))
-            .collect();
         let snapshot = JournalSnapshot {
             drafts: self
-                .drafts
-                .iter()
-                .filter(|(key, draft)| preparing.get(key).is_none_or(|text| *text != draft.text))
+                .journal_drafts()
+                .into_iter()
                 .map(|(key, draft)| (key.clone(), draft.clone()))
                 .collect(),
             attempts: self.send_attempts.snapshot(),
             creations: self.creations.snapshot(),
             selections: self.composer_selections.snapshot(),
+            attachments: self.attachments.clone(),
+            preparations: self.attachment_preparations.clone(),
+            retired_blobs: self.retired_attachment_blobs.clone(),
+            starter_captures: self.starters.captures.snapshot(),
+            queue: self.queue_storage.clone(),
         };
         let worker = self.persistence.worker.as_ref()?;
         self.persistence.revision += 1;
@@ -320,6 +531,7 @@ impl Workspace {
     }
 
     pub(crate) fn retry_persistence(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.retry_composer_submissions(None, window, cx);
         if self.persistence.loaded() && self.persistence.worker.is_some() {
             self.start_background_save(cx);
         } else if let Some(path) = self.persistence.path.clone() {
@@ -329,7 +541,9 @@ impl Workspace {
         }
     }
 
-    pub(crate) fn flush_before_quit(&mut self, cx: &gpui_kit::App) -> Option<JournalReceipt> {
+    pub(crate) fn flush_before_quit(&mut self, cx: &mut Context<Self>) -> Option<JournalReceipt> {
+        self.cancel_attachment_staging(cx);
+        self.attachment_retirement.cancel();
         self.persistence.debounce = None;
         let (_, saved) = self.persistence_barrier(cx)?;
         // The flush receipt covers this save and every earlier accepted write.
@@ -373,6 +587,11 @@ impl Workspace {
     }
 
     fn unfreeze_general(&mut self, cx: &mut Context<Self>) {
+        self.persistence.native_root_close = false;
+        self.persistence.composer_hydration_close = false;
+        self.unfreeze_composer_documents();
+        self.cancel_effort_close();
+        self.attachment_storage.resume_accepting();
         if let Some(settings) = &self.settings {
             settings.read(cx).general.clone().update(cx, |general, cx| {
                 general.cancel_close(cx);
@@ -391,6 +610,110 @@ impl Workspace {
 
     /// Close controls wait for the last full snapshot and release the file lock.
     pub(crate) fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.persistence_closing() || self.persistence.native_root_close {
+            return;
+        }
+        if self.native_root_actors_pending() && !self.composer_submissions_pending() {
+            self.persistence.native_root_close = true;
+            cx.notify();
+            return;
+        }
+        if self.composer_close_in_progress() {
+            return;
+        }
+        if !self.close_in_progress() && !self.composer_submissions_pending() {
+            self.retry_pending_attachment_retirements(window, cx);
+            if self.has_pending_attachment_retirements() {
+                self.unfreeze_host_manager(cx);
+                self.unfreeze_appearance(cx);
+                self.unfreeze_general(cx);
+                self.notify_mutation_failure("chat.nativeRecovery.storageFailed", window, cx);
+                cx.notify();
+                return;
+            }
+        }
+        self.reconcile_composer_documents_for_close(window, cx);
+        if self.composer_documents_pending() {
+            self.authorize_submission_hydration_close();
+            self.persistence.composer_hydration_close = true;
+            cx.notify();
+            return;
+        }
+        let captures = match self.freeze_composer_documents(cx) {
+            Ok(captures) => captures,
+            Err(_) => {
+                self.unfreeze_host_manager(cx);
+                self.unfreeze_appearance(cx);
+                self.unfreeze_general(cx);
+                self.notify_mutation_failure("chat.nativeRecovery.storageFailed", window, cx);
+                cx.notify();
+                return;
+            }
+        };
+        let submissions = self.submission_close_permits();
+        if !captures.is_empty() || !submissions.is_empty() {
+            self.persistence.composer_close = Some(cx.spawn_in(window, async move |this, cx| {
+                let mut saved = crate::composer_document::drain_submissions(&this, cx, submissions)
+                    .await
+                    .is_ok();
+                for capture in captures {
+                    if !saved {
+                        break;
+                    }
+                    if !this
+                        .update_in(cx, |workspace, _, _| {
+                            workspace.composer_capture_needs_flush(&capture)
+                        })
+                        .unwrap_or(true)
+                    {
+                        continue;
+                    }
+                    if crate::composer_document::flush(&this, cx, capture)
+                        .await
+                        .is_err()
+                    {
+                        saved = false;
+                        break;
+                    }
+                }
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.persistence.composer_close = None;
+                    if saved {
+                        this.request_close(window, cx);
+                    } else {
+                        this.unfreeze_host_manager(cx);
+                        this.unfreeze_appearance(cx);
+                        this.unfreeze_general(cx);
+                        this.notify_mutation_failure(
+                            "chat.nativeRecovery.storageFailed",
+                            window,
+                            cx,
+                        );
+                        cx.notify();
+                    }
+                });
+            }));
+            cx.notify();
+            return;
+        }
+        if self.effort_close.is_some() {
+            return;
+        }
+        if let Some(pending) = self.take_effort_close() {
+            self.effort_close = Some(cx.spawn_in(window, async move |this, cx| {
+                let _ = pending.await;
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.effort_close = None;
+                    this.request_close(window, cx);
+                });
+            }));
+            return;
+        }
+        if self.effort_preferences.has_failed_writes() {
+            self.unfreeze_general(cx);
+            self.notify_mutation_failure("settings.common.status.saveFailed", window, cx);
+            return;
+        }
         if self.general_close.is_some() {
             return;
         }
@@ -474,6 +797,27 @@ impl Workspace {
             }));
             return;
         }
+        if self.attachment_storage_close.is_some() {
+            return;
+        }
+        self.attachment_storage.stop_accepting();
+        if let Some(drain) = self.attachment_storage.take_drain() {
+            self.attachment_storage_close = Some(cx.spawn_in(window, async move |this, cx| {
+                drain.await;
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.attachment_storage_close = None;
+                    this.request_close(window, cx);
+                });
+            }));
+            return;
+        }
+        if self.has_uncommitted_attachment_storage() {
+            self.unfreeze_host_manager(cx);
+            self.unfreeze_appearance(cx);
+            self.unfreeze_general(cx);
+            self.notify_mutation_failure("chat.nativeRecovery.storageFailed", window, cx);
+            return;
+        }
         if self.is_synthetic() || !self.persistence.loaded() {
             window.remove_window();
             return;
@@ -481,6 +825,8 @@ impl Workspace {
         if matches!(self.persistence.status, Status::Closing) {
             return;
         }
+        self.cancel_attachment_staging(cx);
+        self.attachment_retirement.cancel();
         self.persistence.debounce = None;
         let Some((stamp, saved)) = self.persistence_barrier(cx) else {
             self.unfreeze_host_manager(cx);
@@ -491,12 +837,25 @@ impl Workspace {
         self.persistence.status = Status::Closing;
         self.persistence.closing = Some(cx.spawn_in(window, async move |this, cx| {
             let saved = saved.await.unwrap_or(Err(JournalFailure::WorkerStopped));
-            let finished = this.update_in(cx, |this, _, cx| {
+            let finished = this.update_in(cx, |this, window, cx| {
                 if this.persistence.epoch != stamp.epoch {
                     return None;
                 }
                 // Older background receipts must not clear a failed close.
                 this.persistence.last_result = stamp.revision;
+                if this.has_pending_attachment_retirements()
+                    || this.native_root_actors_pending()
+                    || this.composer_submissions_pending()
+                {
+                    this.persistence.status = Status::Ready;
+                    this.unfreeze_host_manager(cx);
+                    this.unfreeze_appearance(cx);
+                    this.unfreeze_general(cx);
+                    this.record_persistence(stamp, &saved, cx);
+                    this.notify_mutation_failure("chat.nativeRecovery.storageFailed", window, cx);
+                    cx.notify();
+                    return None;
+                }
                 if matches!(saved, Ok(CommitOutcome::Durable)) {
                     return this.persistence.worker.as_ref().map(JournalWorker::finish);
                 }
@@ -548,6 +907,54 @@ mod tests {
     use gpui_kit::{AppContext, TestAppContext};
 
     #[gpui_kit::test]
+    fn close_refuses_uncommitted_named_attachment_retirement(cx: &mut TestAppContext) {
+        use crate::attachment_catalog::PreparedAttachment;
+        use crate::attachment_spool::{BlobDescriptor, BlobId};
+        use openchamber_native_core::ids::AttachmentId;
+
+        let (window, workspace) = crate::workspace_tests::open(cx);
+        cx.update_window(window, |_, window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.persistence.status = Status::Ready;
+                let blob = BlobId::parse("ffffffffffffffffffffffffffffffff")
+                    .expect("exact unowned byte label");
+                let id = AttachmentId::from(blob.as_str());
+                workspace.attachments.insert(
+                    id.clone(),
+                    PreparedAttachment {
+                        blob: BlobDescriptor::new(blob, 1, [7; 32]),
+                        staging: None,
+                    },
+                );
+                workspace.retired_attachment_blobs = (0..crate::mutation_journal::MAX_ENTRIES)
+                    .map(|index| {
+                        BlobId::parse(&format!("{index:032x}"))
+                            .expect("bounded existing retirement label")
+                    })
+                    .collect();
+                workspace.retire_released_native_roots(vec![id.clone()], window, cx);
+                assert!(
+                    workspace.has_pending_attachment_retirements(),
+                    "capacity refusal retains the exact release request"
+                );
+                workspace.request_close(window, cx);
+                assert!(workspace.has_pending_attachment_retirements());
+                assert!(
+                    workspace.attachments.contains_key(&id),
+                    "uncommitted cleanup cannot release catalog custody"
+                );
+                assert!(
+                    !workspace.close_in_progress(),
+                    "close refusal keeps the owner usable for explicit local cleanup"
+                );
+            })
+        })
+        .expect("named pending cleanup prevents normal window removal");
+        cx.update_window(window, |_, window, _| window.remove_window())
+            .expect("the refused close left the test-owned window open");
+    }
+
+    #[gpui_kit::test]
     fn closing_cannot_create_settings_writers(cx: &mut TestAppContext) {
         let (window, workspace) = crate::workspace_tests::open(cx);
         cx.update_window(window, |_, window, cx| {
@@ -565,12 +972,14 @@ mod tests {
                 );
 
                 workspace.persistence.status = Status::Ready;
-                for phase in 0..3 {
+                for phase in 0..5 {
                     let barrier = cx.background_executor().spawn(async {});
                     match phase {
                         0 => workspace.general_close = Some(barrier),
                         1 => workspace.appearance_close = Some(barrier),
-                        _ => workspace.host_close = Some(barrier),
+                        2 => workspace.host_close = Some(barrier),
+                        3 => workspace.effort_close = Some(barrier),
+                        _ => workspace.persistence.composer_close = Some(barrier),
                     }
                     workspace.open_settings(window, cx);
                     workspace.show_settings(None, window, cx);
@@ -585,6 +994,8 @@ mod tests {
                     workspace.general_close = None;
                     workspace.appearance_close = None;
                     workspace.host_close = None;
+                    workspace.effort_close = None;
+                    workspace.persistence.composer_close = None;
                 }
                 assert!(
                     !workspace.close_in_progress(),
@@ -593,6 +1004,65 @@ mod tests {
             });
         })
         .expect("test window remains open");
+    }
+
+    #[gpui_kit::test]
+    fn hydration_close_wait_blocks_mutations_and_cancellation_releases_it(cx: &mut TestAppContext) {
+        let (window, workspace) = crate::workspace_tests::open(cx);
+        cx.update_window(window, |_, window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.persistence.composer_hydration_close = true;
+                assert!(
+                    workspace.close_in_progress(),
+                    "waiting for local hydration is a close barrier"
+                );
+                assert!(
+                    !workspace.composer_editable(),
+                    "typing cannot outrun a pending close"
+                );
+                workspace.open_settings(window, cx);
+                assert!(
+                    workspace.settings.is_none(),
+                    "hydration close cannot create another writer"
+                );
+                workspace.unfreeze_general(cx);
+                assert!(
+                    !workspace.composer_hydration_close_in_progress(),
+                    "a failed close releases the hydration gate"
+                );
+                assert!(
+                    !workspace.close_in_progress(),
+                    "independent work can resume after refusal"
+                );
+            });
+        })
+        .expect("test workspace remains open");
+    }
+
+    #[gpui_kit::test]
+    fn cancelled_close_releases_effort_preference_freeze(cx: &mut TestAppContext) {
+        let (_, workspace) = crate::workspace_tests::open(cx);
+        cx.update(|cx| {
+            workspace.update(cx, |workspace, cx| {
+                assert!(
+                    workspace.take_effort_close().is_none(),
+                    "no accepted effort write is pending"
+                );
+                assert!(
+                    workspace.close_in_progress(),
+                    "the drain freezes further preference writes"
+                );
+                workspace.unfreeze_general(cx);
+                assert!(
+                    !workspace.effort_preferences.is_closing(),
+                    "a later close failure permits explicit retry"
+                );
+                assert!(
+                    !workspace.close_in_progress(),
+                    "all close barriers were released"
+                );
+            });
+        });
     }
 
     #[gpui_kit::test]

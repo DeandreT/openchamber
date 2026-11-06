@@ -157,6 +157,12 @@ impl QueuedMessage {
                 .all(|file| file.reference_bound() <= reference_limit)
     }
 
+    /// Whether a sealed payload transfer can preserve this item's ownership.
+    /// File bytes and rich context travel separately from the native journal.
+    pub fn payload_takeable(&self) -> bool {
+        !self.scheduled && !self.goal && self.send_config.is_some()
+    }
+
     /// Whether a take can bring the whole message back into the composer:
     /// text only, since the native composer has no attachment or context chips.
     pub fn editable_as_text(&self) -> bool {
@@ -583,6 +589,48 @@ mod tests {
             "revisions start over after a reset"
         );
         assert!(queue.forget_session(&runtime(), &SessionId::from("ses_1")));
+    }
+
+    #[test]
+    fn payload_takes_keep_rich_items_and_require_their_captured_configuration() {
+        let mut item = message("rich", "display text");
+        item.text = "delivered text".to_owned();
+        item.has_context = true;
+        item.attachments.push(QueuedAttachment {
+            filename: "large.bin".to_owned(),
+            source: AttachmentSource::Local,
+            size: 20 * 1024 * 1024,
+            server_path: None,
+        });
+        assert!(
+            !item.payload_takeable(),
+            "a take cannot invent missing send configuration"
+        );
+        item.send_config = Some(QueuedSendConfig {
+            provider_id: "provider".to_owned(),
+            model_id: "model".to_owned(),
+            agent: Some("build".to_owned()),
+            variant: None,
+        });
+        assert!(
+            item.payload_takeable(),
+            "payload transfers retain rich content outside the journal"
+        );
+        assert!(
+            !item.takeable(64 * 1024),
+            "legacy URI limits do not govern payload transfers"
+        );
+        item.goal = true;
+        assert!(
+            !item.payload_takeable(),
+            "goal ownership stays with the server"
+        );
+        item.goal = false;
+        item.scheduled = true;
+        assert!(
+            !item.payload_takeable(),
+            "scheduled ownership stays with its task"
+        );
     }
 
     #[test]

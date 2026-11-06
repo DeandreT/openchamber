@@ -5,9 +5,9 @@
 
 use std::collections::BTreeMap;
 
-use openchamber_native_core::chat_projection;
 use openchamber_native_core::chat_roots::ChatRoots;
 use openchamber_native_core::ids::{OpenCodeProjectId, ProjectId, SessionId, SpaceId};
+use openchamber_native_core::ordering::SessionOrdering;
 use openchamber_native_core::ownership::{
     ConfiguredProject, DirectoryOwner, OpenCodeProject, OwnerKind, OwnershipInputs,
     ProjectWorktrees, SessionOwnershipIndex, SpaceMark, Surface, WorktreeInfo,
@@ -15,6 +15,7 @@ use openchamber_native_core::ownership::{
 use openchamber_native_core::session::{
     SessionKind, SessionOverlay, SessionProjectMetadata, SessionRecord, SessionTime,
 };
+use openchamber_native_core::sidebar_collection::SidebarCollection;
 use serde::Deserialize;
 
 const FIXTURE: &str = include_str!("fixtures/sidebar-projection.json");
@@ -216,7 +217,7 @@ fn run(input: &Input, roots: &ChatRoots) -> Expected {
         other => panic!("fixture surface must be desktop or vscode, got {other}"),
     };
 
-    let ownership = SessionOwnershipIndex::build(&OwnershipInputs {
+    let inputs = OwnershipInputs {
         sessions: &sessions,
         archived_sessions: &archived_sessions,
         projects: &projects,
@@ -224,8 +225,9 @@ fn run(input: &Input, roots: &ChatRoots) -> Expected {
         authoritative_projects: &authoritative_projects,
         spaces: &spaces,
         surface,
-    });
-    let chats = chat_projection::project(&sessions, &ownership, Some(roots), surface);
+    };
+    let collection = SidebarCollection::build(&inputs, Some(roots), &mut SessionOrdering::new());
+    let ownership = SessionOwnershipIndex::build_for_sidebar(&inputs, &collection);
 
     let all_sessions = sessions.iter().chain(&archived_sessions);
     let owners = all_sessions
@@ -264,9 +266,9 @@ fn run(input: &Input, roots: &ChatRoots) -> Expected {
         archived_sessions_by_project,
         sessions_by_scope,
         directory_resolutions: ownership.directory_resolutions(),
-        chat_sessions: ids(&chats.chat_sessions),
-        project_sessions: ids(&chats.project_sessions),
-        project_sessions_by_project: bucket_ids(&chats.project_sessions_by_project),
+        chat_sessions: ids(&collection.chat_sessions),
+        project_sessions: ids(&collection.project_sessions),
+        project_sessions_by_project: bucket_ids(ownership.sessions_by_project()),
     }
 }
 

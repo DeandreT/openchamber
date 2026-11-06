@@ -200,9 +200,13 @@ impl Workspace {
         effort: Effort,
         cx: &mut Context<Self>,
     ) {
-        if !self.composer_editable() || self.selection_owner().as_ref() != Some(owner) {
+        if !self.composer_editable()
+            || self.selection_owner().as_ref() != Some(owner)
+            || self.effort_preferences.is_closing()
+        {
             return;
         }
+        let explicit = effort != Effort::Inherit;
         let changed = self.edit_choices(|_, choices, inputs| {
             if let Effort::Named(name) = &effort {
                 let valid = choices
@@ -213,14 +217,17 @@ impl Workspace {
                     })
                     .is_some_and(|model| model.variants.contains(name));
                 if !valid {
-                    return false;
+                    return None;
                 }
             }
             choices.pick_effort(owner, effort, &inputs.context());
-            true
+            choices.get(owner).and_then(|state| state.selection().model)
         });
-        if changed != Some(true) {
+        let Some(Some(model)) = changed else {
             return;
+        };
+        if explicit {
+            self.remember_picker_effort(&model, cx);
         }
         self.queue_persistence(cx);
         cx.notify();

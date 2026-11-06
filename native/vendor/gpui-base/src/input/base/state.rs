@@ -128,9 +128,38 @@ actions!(
 #[derive(Clone)]
 pub enum InputEvent {
     Change,
+    /// The IME released its marked range, including a canceled preedit. This
+    /// does not imply a text edit; committed text is reported separately.
+    CompositionEnded,
     PressEnter { secondary: bool, shift: bool },
     Focus,
     Blur,
+}
+
+/// One exact UTF-8 replacement, in application order within a committed edit.
+#[derive(Clone)]
+pub struct InputReplacement {
+    pub range: Range<usize>,
+    pub text: SharedString,
+}
+
+/// An opt-in committed edit, including undo and redo. IME preedit is withheld.
+/// Checkpoints identify toolkit undo states; coalesced typing retains its endpoint.
+#[derive(Clone)]
+pub struct CommittedInputEdit {
+    pub replacements: Vec<InputReplacement>,
+    pub before: u64,
+    pub after: u64,
+    pub text: Rope,
+    pub selection: Range<usize>,
+}
+
+struct CommittedEditObserver {
+    pending: Vec<InputReplacement>,
+    before: Option<u64>,
+    text: Rope,
+    selection: Range<usize>,
+    batching: bool,
 }
 
 pub(super) const CONTEXT: &str = "Input";
@@ -403,6 +432,7 @@ impl PrepaintCaretGeometry {
 /// would leave `InputState` unable to do anything. Prefer naming the aliases
 /// — write `InputState`, not `InputBaseState<InputMode>`.
 pub struct InputBaseState<M: InputModeKind> {
+    committed_edit_observer: Option<CommittedEditObserver>,
     /// State only this mode needs. See [`InputModeKind::Extras`].
     pub(crate) extras: M::Extras,
     pub(super) focus_handle: FocusHandle,
@@ -624,6 +654,7 @@ impl InputPresentation {
 }
 
 impl<M: InputModeKind> EventEmitter<InputEvent> for InputBaseState<M> {}
+impl<M: InputModeKind> EventEmitter<CommittedInputEdit> for InputBaseState<M> {}
 
 impl<M: InputModeKind> InputBaseState<M> {
     #[doc(hidden)]
@@ -835,6 +866,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             selections: Selections::default(),
             selected_word_range: None,
             ime_marked_range: None,
+            committed_edit_observer: None,
             input_bounds: Bounds::default(),
             selecting: false,
             touch_selection: Default::default(),
@@ -1061,7 +1093,96 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.reset_scroll_to_start();
 
         self.undo_manager.clear();
+        let selection = self.selected_range();
+        if let Some(observer) = &mut self.committed_edit_observer {
+            observer.pending.clear();
+            observer.before = None;
+            observer.text = self.text.clone();
+            observer.selection = selection;
+        }
         cx.notify();
+    }
+
+    /// Enable exact committed edits for a compound document owner.
+    pub fn observe_committed_edits(mut self) -> Self {
+        self.committed_edit_observer = Some(CommittedEditObserver {
+            pending: Vec::new(), before: None, text: self.text.clone(),
+            selection: self.selected_range(), batching: false,
+        });
+        self
+    }
+
+    /// The last committed text and caret, excluding an active IME preedit.
+    pub fn committed_snapshot(&self) -> (Rope, Range<usize>) {
+        match &self.committed_edit_observer {
+            Some(observer) if self.ime_marked_range.is_some() =>
+                (observer.text.clone(), observer.selection.clone()),
+            _ => (self.text.clone(), self.selected_range()),
+        }
+    }
+
+    /// Whether replacing this document would interrupt an IME composition.
+    pub fn is_composing(&self) -> bool {
+        self.ime_marked_range.is_some()
+    }
+
+    /// Identity of the current toolkit undo state.
+    pub fn history_checkpoint(&self) -> u64 {
+        self.undo_manager.checkpoint()
+    }
+
+    /// Append one undoable edit without moving the user's selection. Returns
+    /// false while an IME preedit owns the document; callers may defer the append.
+    pub fn append_preserving_selection(
+        &mut self, text: impl Into<SharedString>, window: &mut Window, cx: &mut Context<Self>,
+    ) -> bool {
+        self.append_with_selection(text, None, window, cx)
+    }
+
+    /// Append one undoable edit and restore a persisted selection when supplied.
+    /// With no supplied range, preserve the current selection.
+    pub fn append_with_selection(
+        &mut self, text: impl Into<SharedString>, selection: Option<Range<usize>>,
+        window: &mut Window, cx: &mut Context<Self>,
+    ) -> bool {
+        if self.is_composing() { return false; }
+        let before = *self.active_selection();
+        if let Some(observer) = &mut self.committed_edit_observer { observer.batching = true; }
+        let text = text.into();
+        self.with_edits_allowed(|this| {
+            this.undo_manager.set_pending_intent(EditIntent::Atomic);
+            let end = this.range_to_utf16(&(this.text.len()..this.text.len()));
+            this.replace_text_in_range_silent(Some(end), text.as_ref(), window, cx);
+            match selection {
+                Some(selection) => this.set_selected_range(selection, cx),
+                None => this.selections.replace_all(vec![before]),
+            }
+            this.undo_manager.record_selections(vec![before], vec![*this.active_selection()]);
+        });
+        if let Some(observer) = &mut self.committed_edit_observer { observer.batching = false; }
+        self.emit_committed_edit(cx);
+        cx.notify();
+        true
+    }
+
+    fn emit_committed_edit(&mut self, cx: &mut Context<Self>) {
+        if !self.emit_events || self.ime_marked_range.is_some() { return; }
+        let after = self.undo_manager.checkpoint();
+        let selection = self.selected_range();
+        let Some(observer) = &mut self.committed_edit_observer else { return; };
+        if observer.batching { return; }
+        let Some(before) = observer.before.take() else { return; };
+        if before == after && observer.text == self.text {
+            observer.pending.clear();
+            observer.selection = selection;
+            return;
+        }
+        observer.text = self.text.clone();
+        observer.selection = selection.clone();
+        cx.emit(CommittedInputEdit {
+            replacements: std::mem::take(&mut observer.pending), before, after,
+            text: self.text.clone(), selection,
+        });
     }
 
     /// Replace the entire text content while preserving undo history.
@@ -2947,6 +3068,15 @@ impl<M: InputModeKind> InputBaseState<M> {
         selection_before: CursorSelection,
         selection_after: Option<CursorSelection>,
     ) -> bool {
+        if self.emit_events {
+            let checkpoint = self.undo_manager.checkpoint();
+            if let Some(observer) = &mut self.committed_edit_observer {
+                observer.before.get_or_insert(checkpoint);
+                observer.pending.push(InputReplacement {
+                    range: range.clone(), text: SharedString::new(new_text.to_owned()),
+                });
+            }
+        }
         self.document_revision = self.document_revision.wrapping_add(1);
         let token_delta = self.edit_tokens(range, new_text.len());
         if self.undo_manager.is_ignoring() {
@@ -3000,6 +3130,7 @@ impl<M: InputModeKind> InputBaseState<M> {
         if !self.is_editable() {
             return;
         }
+        let history_before = self.undo_manager.checkpoint();
         let replay = if undo {
             self.undo_manager.undo()
         } else {
@@ -3008,6 +3139,10 @@ impl<M: InputModeKind> InputBaseState<M> {
         let Some(replay) = replay else {
             return;
         };
+        if let Some(observer) = &mut self.committed_edit_observer {
+            observer.before = Some(history_before);
+            observer.batching = true;
+        }
         let token_aware = self.inline_tokens.is_some()
             || replay
                 .changes
@@ -3040,6 +3175,8 @@ impl<M: InputModeKind> InputBaseState<M> {
         self.undo_manager.set_ignoring(false);
         self.replaying_history = false;
         self.emit_events = emit_events;
+        if let Some(observer) = &mut self.committed_edit_observer { observer.batching = false; }
+        self.emit_committed_edit(cx);
         if token_aware && emit_events {
             cx.emit(InputEvent::Change);
         }
@@ -4039,14 +4176,16 @@ impl<M: InputModeKind> InputBaseState<M> {
                 .record_selections(selections_before, selections_after);
         }
 
-        self.ime_marked_range.take();
+        let ended_composition = self.ime_marked_range.take().is_some();
         self.update_preferred_column();
         self.dismiss_touch_selection(cx);
         if self.is_multi_line() {
             self.mode.update_auto_grow(&self.display_map);
         }
         if self.emit_events {
+            self.emit_committed_edit(cx);
             cx.emit(InputEvent::Change);
+            if ended_composition { cx.emit(InputEvent::CompositionEnded); }
         }
         cx.notify();
     }
@@ -4131,9 +4270,11 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
             .map(|range| self.range_to_utf16(&range.into()))
     }
 
-    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
-        self.ime_marked_range = None;
+    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let ended_composition = self.ime_marked_range.take().is_some();
         self.undo_manager.commit_transaction();
+        self.emit_committed_edit(cx);
+        if self.emit_events && ended_composition { cx.emit(InputEvent::CompositionEnded); }
     }
 
     /// Replace text in range.
@@ -4373,7 +4514,9 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
             M::on_text_typed(self, &range, &new_text, window, cx);
         }
         if self.emit_events {
+            self.emit_committed_edit(cx);
             cx.emit(InputEvent::Change);
+            if ends_composition { cx.emit(InputEvent::CompositionEnded); }
         }
         cx.notify();
     }
@@ -4395,6 +4538,11 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
 
         let starts_composition = self.ime_marked_range.is_none();
         if starts_composition {
+            let selection = self.selected_range();
+            if let Some(observer) = &mut self.committed_edit_observer {
+                observer.text = self.text.clone();
+                observer.selection = selection;
+            }
             // Even a canceled preedit separates the typing gestures on either
             // side; its no-op transaction must not reconnect those gestures.
             self.undo_manager.break_transaction_coalescing();
@@ -4505,6 +4653,10 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         }
         if new_text.is_empty() {
             self.undo_manager.commit_transaction();
+        }
+        self.emit_committed_edit(cx);
+        if self.emit_events && !starts_composition && new_text.is_empty() {
+            cx.emit(InputEvent::CompositionEnded);
         }
         cx.notify();
     }
@@ -4931,6 +5083,77 @@ impl<M: InputModeKind> Render for InputBaseState<M> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[gpui::test]
+    fn committed_edits_withhold_preedit_and_follow_undo_checkpoints(cx: &mut TestAppContext) {
+        use std::cell::RefCell;
+        let view = InputView::build_textarea(cx, |state| state.default_value("old").observe_committed_edits());
+        let edits = Rc::new(RefCell::new(Vec::<CommittedInputEdit>::new()));
+        let observed = edits.clone();
+        view.window_handle.update(cx, |_, window, cx| {
+            cx.subscribe(&view.input, move |_, _, event: &CommittedInputEdit, _| {
+                observed.borrow_mut().push(event.clone());
+            }).detach();
+            view.input.update(cx, |state, cx| {
+                state.set_selected_range(3..3, cx);
+                state.replace_and_mark_text_in_range(None, "p", Some(1..1), window, cx);
+                assert_eq!(state.committed_snapshot().0.to_string(), "old");
+                assert!(!state.append_preserving_selection("later", window, cx));
+                state.replace_and_mark_text_in_range(None, "拼", Some(1..1), window, cx);
+                assert_eq!(state.committed_snapshot().0.to_string(), "old");
+            });
+        }).unwrap();
+        assert!(edits.borrow().is_empty(), "provisional replacements are not committed edits");
+        view.window_handle.update(cx, |_, window, cx| {
+            view.input.update(cx, |state, cx| state.replace_text_in_range(None, "拼", window, cx));
+        }).unwrap();
+        assert_eq!(edits.borrow().len(), 1);
+        let committed = edits.borrow()[0].clone();
+        assert_eq!(committed.text.to_string(), "old拼");
+        assert_eq!(committed.replacements[0].range, 3..3);
+        assert_ne!(committed.before, committed.after);
+        view.window_handle.update(cx, |_, window, cx| {
+            view.input.update(cx, |state, cx| state.undo(&Undo, window, cx));
+        }).unwrap();
+        let undone = edits.borrow().last().unwrap().clone();
+        assert_eq!(undone.text.to_string(), "old");
+        assert_eq!(undone.after, committed.before);
+        view.window_handle.update(cx, |_, window, cx| {
+            view.input.update(cx, |state, cx| state.redo(&Redo, window, cx));
+        }).unwrap();
+        assert_eq!(edits.borrow().last().unwrap().after, committed.after);
+    }
+
+    #[gpui::test]
+    fn canceled_preedit_does_not_invalidate_compound_anchors(cx: &mut TestAppContext) {
+        use std::cell::RefCell;
+        let view = InputView::build_textarea(cx, |state| state.default_value("old").observe_committed_edits());
+        let count = Rc::new(RefCell::new(0));
+        let observed = count.clone();
+        let ended = Rc::new(RefCell::new(0));
+        let observed_end = ended.clone();
+        view.window_handle.update(cx, |_, window, cx| {
+            cx.subscribe(&view.input, move |_, _, _: &CommittedInputEdit, _| { *observed.borrow_mut() += 1; }).detach();
+            cx.subscribe(&view.input, move |_, _, event: &InputEvent, _| {
+                if matches!(event, InputEvent::CompositionEnded) { *observed_end.borrow_mut() += 1; }
+            }).detach();
+            view.input.update(cx, |state, cx| {
+                state.set_selected_range(3..3, cx);
+                state.replace_and_mark_text_in_range(None, "x", Some(1..1), window, cx);
+                state.replace_and_mark_text_in_range(None, "", Some(0..0), window, cx);
+                assert_eq!(state.committed_snapshot().0.to_string(), "old");
+            });
+        }).unwrap();
+        assert_eq!(*count.borrow(), 0, "a canceled composition is not an authored source edit");
+        assert_eq!(*ended.borrow(), 1, "a canceled preedit releases deferred compound appends");
+        view.window_handle.update(cx, |_, window, cx| {
+            view.input.update(cx, |state, cx| {
+                assert!(!state.is_composing());
+                assert!(state.append_preserving_selection("queued", window, cx));
+                assert_eq!(state.committed_snapshot().0.to_string(), "oldqueued");
+            });
+        }).unwrap();
+    }
 
     #[gpui::test]
     fn test_multicursor_unicode_completion_uses_post_edit_start(cx: &mut TestAppContext) {

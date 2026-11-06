@@ -9,7 +9,7 @@ use gpui_kit::component::input::Textarea;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Sizable, Size};
 use gpui_kit::{
-    AnyElement, Context, InteractiveElement, IntoElement, ParentElement, Role,
+    AnyElement, Context, ExternalPaths, InteractiveElement, IntoElement, ParentElement, Role,
     StatefulInteractiveElement, Styled, TestSupportExt, Window, canvas, div, linear_color_stop,
     linear_gradient, prelude::FluentBuilder, px, rems,
 };
@@ -230,12 +230,20 @@ impl Workspace {
         let streaming = self.selected.as_ref().is_some_and(|id| {
             self.is_streaming(id) && self.requests_for_send(&self.mutation_key(id)).is_empty()
         });
-        let empty = self.composer.read(cx).value().trim().is_empty();
+        let empty = !self.composer_has_sendable_content(cx);
+        let intake_pending = self.composer_key.as_ref().is_some_and(|owner| {
+            self.attachment_storage.has_pending(owner)
+                || (self.selected.is_none() && !self.starters.captures.can_begin(owner))
+        });
         let can_send = !empty
+            && !intake_pending
             && self.composer_editable()
             && ((self.selected.is_some() && (self.is_synthetic() || self.can_send_connected()))
                 || (self.selected.is_none() && self.can_create_connected()));
         let strings = locale::strings(cx);
+        let paste_workspace = cx.weak_entity();
+        let drop_workspace = cx.weak_entity();
+        let drop_fill = palette.selection;
         let (label, icon) = if streaming {
             (
                 strings.get("chat.chatInput.actions.stopGeneratingAria"),
@@ -282,6 +290,25 @@ impl Workspace {
         .test_support();
         div()
             .id("composer")
+            .can_drop(move |value, _, cx| {
+                value.is::<ExternalPaths>()
+                    && drop_workspace
+                        .read_with(cx, |workspace, _| {
+                            workspace.composer_editable()
+                                && workspace.persistence_loaded()
+                                && !workspace.close_in_progress()
+                        })
+                        .unwrap_or(false)
+            })
+            .drag_over::<ExternalPaths>(move |style, _, _, _| style.bg(drop_fill))
+            .on_drop::<ExternalPaths>(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                if this.composer_editable()
+                    && !this.close_in_progress()
+                    && let Some(owner) = this.composer_key.clone()
+                {
+                    this.attach_selected_paths(owner, paths.paths().to_vec(), window, cx);
+                }
+            }))
             // ArrowUp in an empty composer over a queue edits the newest
             // queued message, before the editor moves its caret.
             .capture_action(cx.listener(
@@ -318,6 +345,7 @@ impl Workspace {
                 )
             })
             .children(queue_strip)
+            .children(self.render_composer_attachments(palette, direction, cx))
             .children(self.render_revert_strip(palette, direction, cx))
             .child(recovery)
             .child(div().h(px(4.0)))
@@ -333,6 +361,21 @@ impl Workspace {
                     .pb(px(8.0 - EDITOR_INSET_Y))
                     .child(
                         Textarea::new(&self.composer)
+                            .on_paste(move |item, window, cx| {
+                                paste_workspace
+                                    .update(cx, |workspace, cx| {
+                                        workspace.paste_attachments(item, window, cx)
+                                    })
+                                    .unwrap_or_else(|_| {
+                                        item.entries().iter().any(|entry| {
+                                            matches!(
+                                                entry,
+                                                gpui_kit::ClipboardEntry::Image(_)
+                                                    | gpui_kit::ClipboardEntry::ExternalPaths(_)
+                                            )
+                                        })
+                                    })
+                            })
                             .readonly(!self.composer_editable())
                             .appearance(false)
                             .bordered(false)
@@ -357,11 +400,7 @@ impl Workspace {
                             .flex_row_from(direction)
                             .items_center()
                             .gap(px(START_GAP))
-                            .child(action(
-                                "composer-attach",
-                                "add-circle",
-                                "chat.chatInput.actions.addAttachment",
-                            ))
+                            .child(self.render_attachment_menu(palette, direction, cx))
                             .child(self.render_permission_mode(palette, cx))
                             .child(action(
                                 "composer-goal",

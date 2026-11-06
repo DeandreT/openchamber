@@ -4,7 +4,9 @@ Run from this directory with `python3 -m unittest runner_test`.
 """
 
 import argparse
+import copy
 import hashlib
+import io
 import itertools
 import json
 import os
@@ -14,6 +16,12 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import runner
+
+
+def declaration_identities():
+    return {name: runner.artifact_identity(path) for name, path in (
+        ("scenarios", runner.SCENARIOS), ("inventory", runner.INVENTORY),
+    )}
 
 
 class ArtifactIdentityTest(unittest.TestCase):
@@ -84,7 +92,8 @@ class ArtifactIdentityTest(unittest.TestCase):
                 report["scenarios"]["shell.startup"] = {"status": "passed"}
                 return 0
 
-            with patch.object(runner, "input_identities", side_effect=[{"input": "before"}, {"input": "after"}]):
+            declarations = declaration_identities()
+            with patch.object(runner, "input_identities", side_effect=[{**declarations, "input": "before"}, {**declarations, "input": "after"}]):
                 with patch.object(runner, "run_scenarios", side_effect=passing):
                     with patch.object(runner.native_adapter, "accessibility_enabled", return_value=False):
                         with patch.object(runner.native_adapter, "set_accessibility"):
@@ -311,6 +320,294 @@ class ScenarioSettingsTest(unittest.TestCase):
             self.assertEqual(json.loads(preferences.read_text()), original)
 
 
+class CompleteInventoryGateTest(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        for name in ("electron/app", "electron/resources/app.asar",
+                     "electron/resources/web-dist/index.html", "electron/resources/opencode-cli/opencode",
+                     "native", "staged/index.html", "server-opencode", "seed/snapshot"):
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(name)
+        self.scenarios_file = self.root / "scenarios.json"
+        self.inventory_file = self.root / "inventory.json"
+        self.exceptions_file = self.root / "exceptions.json"
+        self.exceptions_file.write_text("{}")
+        self.features = [
+            {"id": "menu", "coverage": "automated", "scenarios": ["menu.open", "menu.result"],
+             "requiredBehaviors": ["activation", "outcome"], "states": ["open", "failed"]},
+            {"id": "editor", "coverage": "automated", "scenarios": ["editor.save"],
+             "requiredBehaviors": ["save"], "states": ["restored"]},
+        ]
+        self.scenarios = [
+            {"id": "menu.open", "feature": "menu", "steps": [{"capture": "open"}],
+             "proofs": {"menu": {"behaviors": ["activation"], "states": ["open"]}}},
+            {"id": "menu.result", "feature": "menu", "steps": [{"capture": "result"}],
+             "proofs": {"menu": {"behaviors": ["outcome"], "states": ["failed"]}}},
+            {"id": "editor.save", "feature": "editor", "steps": [{"capture": "saved"}],
+             "proofs": {"editor": {"behaviors": ["save"], "states": ["restored"]}}},
+        ]
+        self.statuses = {}
+        self.executed = []
+        self.after_run = lambda: None
+        self.scenario_executor = self.simulated_scenarios
+        self.run_number = 0
+
+    def simulated_scenarios(self, scenarios, wanted, output, report, args):
+        for scenario in scenarios:
+            if wanted and scenario["id"] not in wanted:
+                continue
+            self.executed.append(scenario["id"])
+            report["scenarios"][scenario["id"]] = {"status": self.statuses.get(scenario["id"], "passed")}
+        self.after_run()
+        return sum(result["status"] != "passed" for result in report["scenarios"].values())
+
+    def run_fixture(self, *, require_complete=False, selected=None, cli=False):
+        self.scenarios_file.write_text(json.dumps({"scenarios": self.scenarios, "targets": {}}))
+        self.inventory_file.write_text(json.dumps({"features": self.features}))
+        self.run_number += 1
+        self.executed = []
+        args = argparse.Namespace(
+            root=self.root, output=self.root / f"result-{self.run_number}", scenarios=selected,
+            require_complete_inventory=require_complete,
+            electron_app=self.root / "electron/app", native_binary=self.root / "native",
+            dist=self.root / "staged", opencode_binary=self.root / "server-opencode",
+            scale=1.0, tolerance=0,
+        )
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with patch.object(runner, "SCENARIOS", self.scenarios_file), \
+             patch.object(runner, "INVENTORY", self.inventory_file), \
+             patch.object(runner, "EXCEPTIONS", self.exceptions_file), \
+             patch.object(runner, "run_scenarios", side_effect=self.scenario_executor), \
+             patch.object(runner.native_adapter, "accessibility_enabled", return_value=False), \
+             patch.object(runner.native_adapter, "set_accessibility"), \
+             patch.object(runner.sys, "stdout", stdout), patch.object(runner.sys, "stderr", stderr):
+            if cli:
+                argv = ["runner.py", "run"]
+                for flag, value in (("--root", args.root), ("--output", args.output),
+                                    ("--electron-app", args.electron_app), ("--native-binary", args.native_binary),
+                                    ("--dist", args.dist), ("--opencode-binary", args.opencode_binary)):
+                    argv.extend((flag, str(value)))
+                if require_complete:
+                    argv.append("--require-complete-inventory")
+                if selected is not None:
+                    argv.extend(("--scenarios", selected))
+                with patch.object(runner.sys, "argv", argv), patch.object(runner.virtual_display, "inside", return_value=True):
+                    code = runner.main()
+            else:
+                code = runner.run(args)
+        report_path = args.output / "report.json"
+        report = json.loads(report_path.read_text()) if report_path.exists() else None
+        return code, report, stdout.getvalue(), stderr.getvalue()
+
+    def test_complete_feature_proof_unions_pass_the_cli_gate(self):
+        code, report, _, stderr = self.run_fixture(require_complete=True, cli=True)
+        self.assertEqual(code, 0)
+        self.assertEqual(report["inventory"]["byFeature"], {"menu": "passed", "editor": "passed"})
+        self.assertEqual(report["inventory"]["passed"], 2)
+        self.assertTrue(report["inputsUnchanged"])
+        self.assertIn("inventory", report["inputs"])
+        self.assertNotIn("complete inventory required", stderr)
+
+    def test_missing_behavior_or_state_fails_only_the_opt_in_cli_gate(self):
+        proof = self.scenarios[1]["proofs"]["menu"]
+        for field in ("behaviors", "states"):
+            with self.subTest(field=field):
+                missing = proof[field].pop()
+                code, _, _, stderr = self.run_fixture(cli=True)
+                self.assertEqual(code, 0, "focused checks retain their existing exit contract")
+                self.assertNotIn("complete inventory required", stderr)
+                code, report, _, stderr = self.run_fixture(require_complete=True, cli=True)
+                self.assertEqual(code, 1)
+                self.assertEqual(report["inventory"]["missingRequirements"]["menu"][field], [missing])
+                self.assertIn("menu: incomplete", stderr)
+                self.assertIn(f"missing {field}: {missing}", stderr)
+                proof[field].append(missing)
+
+    def test_focused_selection_does_not_shrink_the_required_inventory(self):
+        selected = "menu.open,menu.result"
+        self.assertEqual(self.run_fixture(selected=selected)[0], 0)
+        code, report, _, stderr = self.run_fixture(require_complete=True, selected=selected)
+        self.assertEqual(code, 1)
+        self.assertEqual(self.executed, ["menu.open", "menu.result"])
+        self.assertEqual(report["inventory"]["byFeature"], {"menu": "passed", "editor": "not run"})
+        self.assertEqual(report["inventory"]["missingRequirements"]["editor"], {
+            "behaviors": ["save"], "states": ["restored"],
+        })
+        self.assertIn("editor: not run", stderr)
+
+    def test_nonpassing_results_never_grant_gate_proofs(self):
+        for status in ("failed", "blocked", "incomplete", "skipped", "not run"):
+            with self.subTest(status=status):
+                self.statuses = {"menu.result": status}
+                self.assertEqual(self.run_fixture()[0], 1)
+                code, report, _, _ = self.run_fixture(require_complete=True)
+                self.assertEqual(code, 1)
+                self.assertNotEqual(report["inventory"]["byFeature"]["menu"], "passed")
+                self.assertEqual(report["inventory"]["missingRequirements"]["menu"], {
+                    "behaviors": ["outcome"], "states": ["failed"],
+                })
+
+    def test_nonpassing_linked_scenario_blocks_even_when_other_proofs_cover_everything(self):
+        self.features[0]["scenarios"].append("menu.extra")
+        self.scenarios.append({"id": "menu.extra", "feature": "menu", "steps": [], "proofs": {}})
+        for status in ("failed", "blocked", "incomplete", "skipped"):
+            with self.subTest(status=status):
+                self.statuses = {"menu.extra": status}
+                code, report, _, _ = self.run_fixture(require_complete=True)
+                self.assertEqual(code, 1)
+                self.assertNotEqual(report["inventory"]["byFeature"]["menu"], "passed")
+                self.assertEqual(report["inventory"]["missingRequirements"]["menu"], {"behaviors": [], "states": []})
+
+    def test_pointer_substitution_leaves_the_scenario_and_inventory_unqualified(self):
+        self.features = [{"id": "menu", "coverage": "automated", "scenarios": ["menu.open"],
+                          "requiredBehaviors": ["activation"], "states": ["open"]}]
+        self.scenarios = self.scenarios[:1]
+        self.scenario_executor = runner.run_scenarios
+
+        def captured_client(kind, scenario, work, args):
+            checkpoint = {"image": "unused.png", "rows": [], "targets": {}, "waits": [], "settled": True}
+            if kind == "native":
+                checkpoint["substitutions"] = [{"target": "menu", "input": "accessibility instead of pointer"}]
+            return {"checkpoints": {"open": checkpoint}}
+
+        image = Mock()
+        image.as_dict.return_value = {
+            "sizeMatches": True, "differingPixels": 0, "differingShare": 0,
+            "glyphEdgePixels": 0, "paintNoisePixels": 0, "composerGradientNoisePixels": 0,
+        }
+        with patch.object(runner, "run_client", side_effect=captured_client), \
+             patch.object(runner.compare, "compare_images", return_value=image):
+            code, report, _, _ = self.run_fixture(require_complete=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(report["scenarios"]["menu.open"]["status"], "incomplete")
+        self.assertEqual(report["inventory"]["passed"], 0)
+        self.assertEqual(report["inventory"]["missingRequirements"]["menu"], {
+            "behaviors": ["activation"], "states": ["open"],
+        })
+
+    def test_manual_classification_cannot_be_promoted_by_automated_proofs(self):
+        self.features[1].update(coverage="manual", manualCheck="Observe the real supported host.")
+        self.assertEqual(self.run_fixture()[0], 0)
+        code, report, _, stderr = self.run_fixture(require_complete=True)
+        self.assertEqual(code, 1)
+        self.assertEqual(report["inventory"]["byFeature"]["editor"], "manual")
+        self.assertIn("editor: manual", stderr)
+
+    def test_empty_inventory_cannot_qualify_a_replacement(self):
+        self.scenarios, self.features = [], []
+        self.assertEqual(self.run_fixture()[0], 0)
+        code, _, _, stderr = self.run_fixture(require_complete=True)
+        self.assertEqual(code, 1)
+        self.assertIn("inventory has no features", stderr)
+
+    def test_unknown_selection_and_invalid_proofs_still_fail_before_execution(self):
+        code, report, _, stderr = self.run_fixture(require_complete=True, selected="unknown", cli=True)
+        self.assertEqual(code, 2)
+        self.assertIsNone(report)
+        self.assertEqual(self.executed, [])
+        self.assertIn("unknown parity scenarios: unknown", stderr)
+        self.scenarios[0]["proofs"]["menu"]["behaviors"].append("invented")
+        code, report, _, stderr = self.run_fixture(require_complete=True)
+        self.assertEqual(code, 2)
+        self.assertIsNone(report)
+        self.assertEqual(self.executed, [])
+        self.assertIn("unknown behaviors menu:invented", stderr)
+
+    def test_declarations_changed_before_initial_fingerprint_cannot_start_a_run(self):
+        identify = runner.input_identities
+        for changed in (self.inventory_file, self.scenarios_file):
+            with self.subTest(changed=changed.name):
+                def replace_before_fingerprint(args):
+                    changed.write_text("replaced declarations")
+                    return identify(args)
+
+                with patch.object(runner, "input_identities", side_effect=replace_before_fingerprint):
+                    code, report, _, stderr = self.run_fixture(require_complete=True)
+                self.assertEqual(code, 2)
+                self.assertIsNone(report)
+                self.assertEqual(self.executed, [])
+                self.assertIn("declarations changed before the run", stderr)
+
+    def test_changed_inventory_scenarios_or_binary_block_all_previously_passed_proofs(self):
+        for changed in (self.inventory_file, self.scenarios_file, self.root / "native"):
+            with self.subTest(changed=changed.name):
+                self.after_run = lambda: changed.write_text("replaced input")
+                code, report, _, _ = self.run_fixture(require_complete=True)
+                self.assertEqual(code, 1)
+                self.assertFalse(report["inputsUnchanged"])
+                self.assertTrue(all(result["status"] == "blocked" for result in report["scenarios"].values()))
+                self.assertEqual(report["inventory"]["passed"], 0)
+                self.assertEqual(report["inventory"]["missingRequirements"]["menu"], {
+                    "behaviors": ["activation", "outcome"], "states": ["open", "failed"],
+                })
+
+    def test_final_fingerprint_failure_blocks_complete_proofs(self):
+        identify = runner.input_identities
+        calls = 0
+
+        def unavailable_at_finish(args):
+            nonlocal calls
+            calls += 1
+            if calls == 2:
+                raise OSError("comparison input unavailable")
+            return identify(args)
+
+        with patch.object(runner, "input_identities", side_effect=unavailable_at_finish):
+            code, report, _, _ = self.run_fixture(require_complete=True)
+        self.assertEqual(code, 1)
+        self.assertFalse(report["inputsUnchanged"])
+        self.assertEqual(report["inventory"]["passed"], 0)
+
+    def test_declarations_replaced_after_final_fingerprint_cannot_rewrite_executed_proofs(self):
+        self.scenarios[1]["proofs"]["menu"]["behaviors"] = []
+        identify = runner.input_identities
+        for changed in ("scenarios", "inventory"):
+            with self.subTest(changed=changed):
+                calls = 0
+
+                def replace_after_fingerprint(args):
+                    nonlocal calls
+                    calls += 1
+                    identities = identify(args)
+                    if calls == 2:
+                        if changed == "scenarios":
+                            replacement = copy.deepcopy(self.scenarios)
+                            replacement[1]["proofs"]["menu"]["behaviors"] = ["outcome"]
+                            self.scenarios_file.write_text(json.dumps({"scenarios": replacement, "targets": {}}))
+                        else:
+                            replacement = copy.deepcopy(self.features)
+                            replacement[0]["requiredBehaviors"] = ["activation"]
+                            self.inventory_file.write_text(json.dumps({"features": replacement}))
+                    return identities
+
+                with patch.object(runner, "input_identities", side_effect=replace_after_fingerprint):
+                    code, report, _, _ = self.run_fixture(require_complete=True)
+                self.assertEqual(code, 1)
+                self.assertTrue(report["inputsUnchanged"])
+                self.assertEqual(report["inventory"]["byFeature"]["menu"], "incomplete")
+                self.assertEqual(report["inventory"]["missingRequirements"]["menu"]["behaviors"], ["outcome"])
+
+    def test_diagnostics_bound_feature_and_requirement_details(self):
+        features = [{"id": f"feature-{index}", "coverage": "automated", "scenarios": [],
+                     "requiredBehaviors": [f"behavior-{number}-" + "x" * 200 for number in range(20)],
+                     "states": [f"state-{number}" for number in range(20)]} for index in range(20)]
+        coverage = runner.inventory_coverage(features, {}, [])
+        stderr = io.StringIO()
+        with patch.object(runner.sys, "stderr", stderr):
+            runner.print_inventory_gaps(coverage)
+        text = stderr.getvalue()
+        self.assertIn("feature-0: not run", text)
+        self.assertIn("feature-7: not run", text)
+        self.assertNotIn("feature-8:", text)
+        self.assertIn("12 more features", text)
+        self.assertIn("+17 more", text)
+        self.assertIn("report.json", text)
+        self.assertLess(len(text), 4000)
+
+
 class InventoryCoverageTest(unittest.TestCase):
     def setUp(self):
         self.feature = {
@@ -351,17 +648,18 @@ class InventoryCoverageTest(unittest.TestCase):
                 return 0
 
             def replace_after_read():
+                identities = declaration_identities()
                 replacement = json.loads(scenarios_file.read_text())
                 replacement["scenarios"][0]["proofs"]["menu"] = {
                     "behaviors": self.feature["requiredBehaviors"], "states": self.feature["states"],
                 }
                 scenarios_file.write_text(json.dumps(replacement))
-                return {"fingerprint": "same"}
+                return identities
 
             reads = iter((False, True))
 
             def read_inputs(_args):
-                return replace_after_read() if next(reads) else {"fingerprint": "same"}
+                return replace_after_read() if next(reads) else declaration_identities()
 
             with patch.object(runner, "SCENARIOS", scenarios_file), patch.object(runner, "INVENTORY", inventory_file):
                 with patch.object(runner, "input_identities", side_effect=read_inputs):

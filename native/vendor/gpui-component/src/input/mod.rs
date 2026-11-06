@@ -28,7 +28,7 @@ pub use gpui_base::input::{
     DeleteToEndOfLine, DeleteToNextWordEnd, DeleteToPreviousWordStart, DisplayMap, DisplayPoint,
     DocumentColorProvider, DocumentRangeSemanticTokensProvider, EditorState, Enter, Escape,
     FoldRange, GoToDefinition, HighlightStyleResolver, HoverPopoverState, HoverProvider, Indent,
-    IndentInline, InputEdit, InputEvent, InputHighlighter, InputHighlighterFactory, InputState,
+    IndentInline, InputEdit, InputEvent, CommittedInputEdit, InputReplacement, InputHighlighter, InputHighlighterFactory, InputState,
     Lsp, MaskPattern, MoveDown, MoveEnd, MoveHome, MoveLeft, MovePageDown, MovePageUp, MoveRight,
     MoveToEnd, MoveToEndOfLine, MoveToNextWord, MoveToPreviousWord, MoveToStart, MoveToStartOfLine,
     MoveUp, Outdent, OutdentInline, Paste, Point, PrepaintCaretGeometry, RangeDecoration,

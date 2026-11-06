@@ -233,6 +233,21 @@ impl TestAppContext {
         Self::build(self.dispatcher.clone(), self.fn_name)
     }
 
+    /// Returns how often an accepted application quit reached the test platform.
+    /// The test platform records the request without stopping the scheduler or
+    /// automatically delivering the platform quit callback.
+    pub fn platform_quit_count(&self) -> usize {
+        self.test_platform.platform_quit_count()
+    }
+
+    /// Delivers the registered platform quit callback without first borrowing the app.
+    /// Before a recorded platform quit, this models a cancellable OS quit request.
+    /// After a recorded platform quit, this models final post-loop notification.
+    /// Returns whether the callback permits quit; the test scheduler stays live.
+    pub fn simulate_platform_quit(&self) -> bool {
+        self.test_platform.simulate_platform_quit()
+    }
+
     /// Called by the test helper to end the test.
     /// public so the macro can call it.
     pub fn quit(&self) {

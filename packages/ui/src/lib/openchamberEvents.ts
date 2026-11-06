@@ -1,6 +1,8 @@
 import { getRuntimeUrlResolver } from './runtime-url';
 import { runtimeFetch } from './runtime-fetch';
 import { useAuthSessionStore, waitForAuthSession } from './runtime-auth-expiry';
+import { getRuntimeExtraHeadersSync } from './runtime-auth';
+import { isCapacitorApp } from './platform';
 import { isRelayModeActive } from './relay/runtime-tunnel';
 import { subscribeRuntimeEndpointChanged } from './runtime-switch';
 import { isVSCodeRuntime } from './desktop';
@@ -19,7 +21,7 @@ type ScheduledTaskRanEvent = {
   projectId: string;
   taskId: string;
   ranAt: number;
-  status: 'running' | 'success' | 'error';
+  status: 'running' | 'sent' | 'success' | 'error';
   sessionId?: string;
 };
 
@@ -135,6 +137,26 @@ type BrowserProviderResetEvent = { type: 'browser-provider-reset' } & z.infer<ty
 type SourceControlProvidersChangedEvent = { type: 'source-control-providers-changed' };
 
 /**
+ * The set of trackers the server serves changed: an extension that acts as a
+ * tracker was approved, enabled, updated, paused or removed, or connected its
+ * server. Carries nothing; listeners re-read the tracker list.
+ */
+type TrackerProvidersChangedEvent = { type: 'tracker-providers-changed' };
+
+/**
+ * The extension catalog changed: an extension was installed, updated, approved,
+ * paused, enabled or removed, or a folder install's files changed. Carries
+ * nothing; listeners re-read the catalog.
+ */
+type GuestsChangedEvent = { type: 'guests-changed' };
+
+/**
+ * A theme file in the server's custom themes folder was added, removed or
+ * rewritten. Carries nothing; listeners re-read the custom themes.
+ */
+type ThemesChangedEvent = { type: 'themes-changed' };
+
+/**
  * A usage limit stopped a session and the server moved on: the provider to
  * its next account (for every session), or this session to the fallback model.
  */
@@ -209,6 +231,32 @@ type RoutingSafetySkippedEvent = { type: 'routing-safety-skipped' } & z.infer<ty
 export type PermissionPolicySyncEvent = Extract<SyncEvent, { type: 'openchamber.permission-auto-accept' | 'openchamber.permission-left-for-user' }>;
 type PermissionPolicyEvent = { type: 'permission-policy'; event: PermissionPolicySyncEvent };
 
+/**
+ * OpenChamber's own session announcements the sync layer applies: a page
+ * waiting for an answer, a pending recap, a workflow run, an archive. The main
+ * event stream carries them only over the WebSocket; over SSE it is OpenCode's
+ * own stream, so this stream is where every transport hears them.
+ */
+const CONTROL_STREAM_SYNC_TYPES = new Set([
+  'openchamber:page-waiting',
+  'openchamber:page-settled',
+  'openchamber:session-assist',
+  'openchamber:session-archived',
+  'openchamber:workflow-run',
+  'openchamber:workflow-run-removed',
+]);
+export type ControlStreamSyncEvent = Extract<SyncEvent, {
+  type: 'openchamber.page-waiting' | 'openchamber.page-settled' | 'openchamber.session-assist' | 'session.patched'
+    | 'openchamber.workflow-run' | 'openchamber.workflow-run-removed';
+}>;
+type ControlStreamSyncEnvelope = { type: 'control-sync'; event: ControlStreamSyncEvent };
+
+const isControlStreamSyncEvent = (event: SyncEvent): event is ControlStreamSyncEvent => (
+  event.type === 'openchamber.page-waiting' || event.type === 'openchamber.page-settled'
+  || event.type === 'openchamber.session-assist' || event.type === 'session.patched'
+  || event.type === 'openchamber.workflow-run' || event.type === 'openchamber.workflow-run-removed'
+);
+
 /** Followed pull requests, merge requests or issues whose state the server saw move. */
 type TrackedItemsChangedEvent = { type: 'tracked-items-changed'; records: z.infer<typeof trackedItemRecordsSchema> };
 
@@ -229,6 +277,7 @@ const notificationPropertiesSchema = z.object({
 });
 
 type OpenChamberEvent =
+  | { type: 'terminal-sessions-changed' }
   | { type: 'notification'; payload: z.infer<typeof notificationPropertiesSchema> }
   /** `connectionId` names this connection on the server; absent from servers before tracked items. */
   | { type: 'event-stream-ready'; connectionId: string | null }
@@ -243,6 +292,7 @@ type OpenChamberEvent =
   | AutoReviewUpdatedEvent
   | PrWatchUpdatedEvent
   | PermissionPolicyEvent
+  | ControlStreamSyncEnvelope
   /** Which sessions the server keeps warm, as a full snapshot. */
   | { type: 'session-warming'; snapshot: SessionWarmingSnapshot }
   /** The host follows this space's queue again; what changed in a gap is read from the space. */
@@ -257,6 +307,9 @@ type OpenChamberEvent =
   | PlanOpenRequestEvent
   | BrowserProviderResetEvent
   | SourceControlProvidersChangedEvent
+  | TrackerProvidersChangedEvent
+  | GuestsChangedEvent
+  | ThemesChangedEvent
   | LimitFailoverEvent
   | ProjectContextChangedEvent
   | SessionFoldersChangedEvent
@@ -270,13 +323,17 @@ const worktreeChangedPropertiesSchema = z.object({
 });
 
 let eventSource: EventSource | null = null;
-let relayAbortController: AbortController | null = null;
+let streamAbortController: AbortController | null = null;
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let authSessionWait: AbortController | null = null;
 let heartbeatTimer: ReturnType<typeof setTimeout> | null = null;
 let reconnectAttempt = 0;
 let runtimeChangeUnsubscribe: (() => void) | null = null;
 const listeners = new Set<Listener>();
+// The ready event of the open connection. A listener that subscribes after it
+// arrived gets it replayed, since the server sends it once per connection and
+// some listeners (tracked-items interest) cannot act until they have it.
+let readyEvent: Extract<OpenChamberEvent, { type: 'event-stream-ready' }> | null = null;
 
 const MAX_RECONNECT_DELAY_MS = 30_000;
 const HEARTBEAT_TIMEOUT_MS = 45_000;
@@ -320,18 +377,19 @@ const scheduleReconnect = () => {
 };
 
 const cleanupSource = () => {
+  readyEvent = null;
   clearHeartbeatTimer();
-  relayAbortController?.abort();
-  relayAbortController = null;
+  streamAbortController?.abort();
+  streamAbortController = null;
   if (eventSource) {
     eventSource.close();
   }
   eventSource = null;
 };
 
-const connectRelay = (canControlBrowser: boolean) => {
+const connectFetchStream = (canControlBrowser: boolean) => {
   const controller = new AbortController();
-  relayAbortController = controller;
+  streamAbortController = controller;
   void (async () => {
     try {
       const response = await runtimeFetch('/api/openchamber/events', {
@@ -381,7 +439,7 @@ const connectRelay = (canControlBrowser: boolean) => {
     } catch {
       // A failed or ended stream follows the same reconnect path as EventSource.
     }
-    if (relayAbortController !== controller) return;
+    if (streamAbortController !== controller) return;
     cleanupSource();
     scheduleReconnect();
   })();
@@ -424,6 +482,10 @@ const getEventProperties = (properties: unknown): Record<string, unknown> | null
 };
 
 const dispatchFromEnvelope = (envelope: { type: string; properties: unknown }) => {
+  if (envelope.type === 'openchamber:terminal-sessions-changed') {
+    for (const listener of listeners) listener({ type: 'terminal-sessions-changed' });
+    return;
+  }
   if (envelope.type === 'openchamber:notification') {
     const parsed = notificationPropertiesSchema.safeParse(envelope.properties);
     if (parsed.success) {
@@ -436,7 +498,9 @@ const dispatchFromEnvelope = (envelope: { type: string; properties: unknown }) =
     reconnectAttempt = 0;
     const ready = eventStreamReadySchema.safeParse(envelope.properties);
     const connectionId = ready.success ? ready.data.connectionId ?? null : null;
-    for (const listener of listeners) listener({ type: 'event-stream-ready', connectionId });
+    const event = { type: 'event-stream-ready', connectionId } as const;
+    readyEvent = event;
+    for (const listener of listeners) listener(event);
     return;
   }
 
@@ -482,6 +546,16 @@ const dispatchFromEnvelope = (envelope: { type: string; properties: unknown }) =
     for (const { event } of classified.events) {
       if (event.type !== 'openchamber.permission-auto-accept' && event.type !== 'openchamber.permission-left-for-user') continue;
       for (const listener of listeners) listener({ type: 'permission-policy', event });
+    }
+    return;
+  }
+
+  if (CONTROL_STREAM_SYNC_TYPES.has(envelope.type)) {
+    const classified = classifyStreamPayload(envelope, undefined);
+    if (classified.kind !== 'events') return;
+    for (const { event } of classified.events) {
+      if (!isControlStreamSyncEvent(event)) continue;
+      for (const listener of listeners) listener({ type: 'control-sync', event });
     }
     return;
   }
@@ -552,6 +626,21 @@ const dispatchFromEnvelope = (envelope: { type: string; properties: unknown }) =
 
   if (envelope.type === 'openchamber:source-control-providers-changed') {
     for (const listener of listeners) listener({ type: 'source-control-providers-changed' });
+    return;
+  }
+
+  if (envelope.type === 'openchamber:tracker-providers-changed') {
+    for (const listener of listeners) listener({ type: 'tracker-providers-changed' });
+    return;
+  }
+
+  if (envelope.type === 'openchamber:guests-changed') {
+    for (const listener of listeners) listener({ type: 'guests-changed' });
+    return;
+  }
+
+  if (envelope.type === 'openchamber:themes-changed') {
+    for (const listener of listeners) listener({ type: 'themes-changed' });
     return;
   }
 
@@ -665,7 +754,7 @@ const dispatchFromEnvelope = (envelope: { type: string; properties: unknown }) =
   const taskId = typeof properties?.taskId === 'string' ? properties.taskId : '';
   const ranAt = typeof properties?.ranAt === 'number' ? properties.ranAt : Date.now();
   const rawStatus = properties?.status;
-  const status = rawStatus === 'running' || rawStatus === 'error' ? rawStatus : 'success';
+  const status = rawStatus === 'running' || rawStatus === 'sent' || rawStatus === 'error' ? rawStatus : 'success';
   if (!projectId || !taskId) {
     return;
   }
@@ -689,7 +778,7 @@ const connect = () => {
   if (typeof window === 'undefined' || listeners.size === 0) {
     return;
   }
-  if (relayAbortController || (eventSource && eventSource.readyState !== EventSource.CLOSED)) {
+  if (streamAbortController || (eventSource && eventSource.readyState !== EventSource.CLOSED)) {
     return;
   }
 
@@ -700,8 +789,10 @@ const connect = () => {
   // driven, and the agent tool needs to know which it is talking to without a
   // setting anyone has to remember to change.
   const canControlBrowser = canDriveBrowserPage();
-  if (isRelayModeActive()) {
-    connectRelay(canControlBrowser);
+  // Native mobile has no desktop realtime proxy. Fetch can attach the saved
+  // instance headers to SSE; EventSource cannot.
+  if (isRelayModeActive() || (Object.keys(getRuntimeExtraHeadersSync()).length > 0 && isCapacitorApp())) {
+    connectFetchStream(canControlBrowser);
     return;
   }
   if (typeof EventSource !== 'function') return;
@@ -755,6 +846,12 @@ export const subscribeOpenchamberEvents = (listener: Listener): (() => void) => 
   listeners.add(listener);
   ensureRuntimeChangeSubscription();
   connect();
+  if (readyEvent) {
+    const event = readyEvent;
+    queueMicrotask(() => {
+      if (readyEvent === event && listeners.has(listener)) listener(event);
+    });
+  }
 
   return () => {
     listeners.delete(listener);

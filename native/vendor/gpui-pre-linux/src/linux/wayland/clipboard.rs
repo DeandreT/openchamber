@@ -1,22 +1,27 @@
 use std::{
     fs::File,
-    io::{ErrorKind, Write},
+    io::{ErrorKind, Read as _, Write},
     os::fd::{AsRawFd, BorrowedFd, OwnedFd},
 };
 
 use calloop::{LoopHandle, PostAction};
-use filedescriptor::Pipe;
+use filedescriptor::{FileDescriptor, Pipe};
 use strum::IntoEnumIterator;
 use wayland_client::{Connection, protocol::wl_data_offer::WlDataOffer};
 use wayland_protocols::wp::primary_selection::zv1::client::zwp_primary_selection_offer_v1::ZwpPrimarySelectionOfferV1;
 
-use crate::linux::platform::{PIPE_READ_TIMEOUT, read_fd_with_timeout};
+use crate::linux::{
+    clipboard_files::{
+        GNOME_COPIED_FILES_MIME_TYPE, MAX_FILE_LIST_BYTES, URI_LIST_MIME_TYPE, parse_file_list,
+    },
+    platform::{PIPE_READ_TIMEOUT, read_fd_with_timeout},
+};
 use gpui::{ClipboardEntry, ClipboardItem, Image, ImageFormat, hash};
 
 /// Text mime types that we'll offer to other programs.
 pub(crate) const TEXT_MIME_TYPES: [&str; 3] =
     ["text/plain;charset=utf-8", "UTF8_STRING", "text/plain"];
-pub(crate) const FILE_LIST_MIME_TYPE: &str = "text/uri-list";
+pub(crate) const FILE_LIST_MIME_TYPE: &str = URI_LIST_MIME_TYPE;
 
 /// Text mime types that we'll accept from other programs.
 pub(crate) const ALLOWED_TEXT_MIME_TYPES: [&str; 2] = ["text/plain;charset=utf-8", "UTF8_STRING"];
@@ -76,6 +81,12 @@ impl<T: ReceiveData> DataOffer<T> {
         self.mime_types.iter().any(|t| t == mime_type)
     }
 
+    fn file_list_mime_type(&self) -> Option<&'static str> {
+        [FILE_LIST_MIME_TYPE, GNOME_COPIED_FILES_MIME_TYPE]
+            .into_iter()
+            .find(|mime_type| self.has_mime_type(mime_type))
+    }
+
     fn read_bytes(&self, connection: &Connection, mime_type: &str) -> Option<Vec<u8>> {
         let pipe = Pipe::new().unwrap();
         self.inner.receive_data(mime_type.to_string(), unsafe {
@@ -86,7 +97,11 @@ impl<T: ReceiveData> DataOffer<T> {
 
         connection.flush().unwrap();
 
-        match read_fd_with_timeout(fd, PIPE_READ_TIMEOUT) {
+        let result = match mime_type {
+            FILE_LIST_MIME_TYPE | GNOME_COPIED_FILES_MIME_TYPE => read_file_list_fd(fd),
+            _ => read_fd_with_timeout(fd, PIPE_READ_TIMEOUT),
+        };
+        match result {
             Ok(bytes) => Some(bytes),
             Err(err) => {
                 log::error!("error reading clipboard pipe: {err:?}");
@@ -200,9 +215,16 @@ impl Clipboard {
             return self.contents.clone();
         }
 
-        let item = offer
-            .read_text(&self.connection)
-            .or_else(|| offer.read_image(&self.connection))?;
+        let item = if let Some(mime_type) = offer.file_list_mime_type() {
+            let bytes = offer.read_bytes(&self.connection, mime_type)?;
+            ClipboardItem {
+                entries: vec![ClipboardEntry::ExternalPaths(parse_file_list(mime_type, &bytes)?)],
+            }
+        } else {
+            offer
+                .read_text(&self.connection)
+                .or_else(|| offer.read_image(&self.connection))?
+        };
 
         self.cached_read = Some(item.clone());
         Some(item)
@@ -253,5 +275,65 @@ impl Clipboard {
                 },
             )
             .unwrap();
+    }
+}
+
+// The ordinary clipboard reader accepts arbitrarily sized images and text. File
+// lists have their own metadata bound, enforced before each buffer extension.
+fn read_file_list_fd(mut fd: FileDescriptor) -> anyhow::Result<Vec<u8>> {
+    fd.set_non_blocking(true)?;
+    let mut bytes = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        let mut poll_fds = [filedescriptor::pollfd {
+            fd: fd.as_raw_fd(),
+            events: filedescriptor::POLLIN,
+            revents: 0,
+        }];
+        let ready = match filedescriptor::poll(&mut poll_fds, Some(PIPE_READ_TIMEOUT)) {
+            Ok(ready) => ready,
+            Err(filedescriptor::Error::Poll(err)) if err.kind() == ErrorKind::Interrupted => continue,
+            Err(err) => return Err(err.into()),
+        };
+        if ready == 0 {
+            anyhow::bail!("timed out waiting for clipboard file list");
+        }
+        match fd.read(&mut chunk) {
+            Ok(0) => return Ok(bytes),
+            Ok(len) => {
+                anyhow::ensure!(
+                    len <= MAX_FILE_LIST_BYTES.saturating_sub(bytes.len()),
+                    "clipboard file list exceeds metadata byte bound"
+                );
+                bytes.extend_from_slice(&chunk[..len]);
+            }
+            Err(err) if matches!(err.kind(), ErrorKind::WouldBlock | ErrorKind::Interrupted) => {}
+            Err(err) => return Err(err.into()),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct UnreadOffer;
+
+    impl ReceiveData for UnreadOffer {
+        fn receive_data(&self, _mime_type: String, _fd: BorrowedFd<'_>) {
+            panic!("MIME negotiation must not request clipboard data");
+        }
+    }
+
+    #[test]
+    fn only_advertised_file_list_mimes_are_selected() {
+        let mut offer = DataOffer::new(UnreadOffer);
+        offer.add_mime_type("text/plain".to_owned());
+        offer.add_mime_type("image/png".to_owned());
+        assert_eq!(offer.file_list_mime_type(), None);
+        offer.add_mime_type(GNOME_COPIED_FILES_MIME_TYPE.to_owned());
+        assert_eq!(offer.file_list_mime_type(), Some(GNOME_COPIED_FILES_MIME_TYPE));
+        offer.add_mime_type(FILE_LIST_MIME_TYPE.to_owned());
+        assert_eq!(offer.file_list_mime_type(), Some(FILE_LIST_MIME_TYPE));
     }
 }

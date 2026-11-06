@@ -501,6 +501,7 @@ impl Workspace {
             opencode_default_agent: opencode.default_agent.clone(),
             opencode_default_model: opencode.model.clone(),
             last_selected_model: settings.last_selected_model.clone(),
+            last_used_efforts: settings.last_used_efforts.clone().unwrap_or_default(),
             hidden_models: settings.hidden_models.clone(),
             allow_fallback: true,
             auto_routing: self.send_catalog.routing,
@@ -699,4 +700,89 @@ fn is_auto(choice: &ModelChoice) -> bool {
 /// `isPrimaryMode`: an absent mode is primary.
 fn is_primary(agent: &AgentEntry) -> bool {
     !matches!(agent.mode, Some(send_config::AgentMode::Subagent))
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::{AppContext, TestAppContext};
+    use openchamber_native_core::send_config::CatalogModel;
+
+    use super::*;
+
+    #[gpui_kit::test]
+    fn server_effort_memory_reaches_production_send_selection(cx: &mut TestAppContext) {
+        let (window, workspace) = crate::workspace_tests::open(cx);
+        cx.update_window(window, |_, _, cx| {
+            workspace.update(cx, |workspace, _| {
+                let project = workspace.topology.projects[0].clone();
+                let directory = project.path.clone();
+                workspace
+                    .draft_projects
+                    .insert(workspace.runtime.clone(), directory.clone());
+                workspace.composer_selections = Default::default();
+                workspace.send_catalog.insert_test_directory(
+                    directory.clone(),
+                    DirectoryCatalog {
+                        agents: Load::Ready(vec![AgentEntry {
+                            name: "build".to_owned(),
+                            display_name: None,
+                            mode: None,
+                            hidden: false,
+                            model: None,
+                            color: None,
+                        }]),
+                        providers: Load::Ready(vec![CatalogProvider {
+                            id: "perf".to_owned(),
+                            name: None,
+                            models: vec![CatalogModel {
+                                id: "stream".to_owned(),
+                                provider_model_id: None,
+                                name: None,
+                                variants: vec!["low".to_owned(), "high".to_owned()],
+                                context_limit: None,
+                            }],
+                        }]),
+                        opencode: Load::Ready(OpenCodeDefaults::default()),
+                        ..DirectoryCatalog::default()
+                    },
+                );
+                for (remembered, expected) in [
+                    (None, None),
+                    (Some(None), None),
+                    (Some(Some("high")), Some("high")),
+                    (Some(Some("retired")), None),
+                ] {
+                    workspace.send_catalog.settings = Some(ServerSettings {
+                        projects: vec![project.clone()],
+                        default_model: Some("perf/stream".to_owned()),
+                        last_used_efforts: remembered.map(|effort| {
+                            HashMap::from([("perf/stream".to_owned(), effort.map(str::to_owned))])
+                        }),
+                        ..ServerSettings::default()
+                    });
+                    let defaults =
+                        workspace.selection_defaults(&directory, &OpenCodeDefaults::default());
+                    assert_eq!(
+                        defaults.last_used_efforts.get("perf/stream").cloned(),
+                        remembered.map(|effort| effort.map(str::to_owned)),
+                        "the settings projection must preserve Default versus absence"
+                    );
+                    let (selected_directory, selection) = workspace
+                        .send_selection()
+                        .expect("loaded catalogs and settings resolve a send selection");
+                    assert_eq!(selected_directory, directory);
+                    assert_eq!(
+                        selection.model,
+                        Some(ModelChoice {
+                            provider_id: "perf".to_owned(),
+                            model_id: "stream".to_owned(),
+                            variant: expected.map(str::to_owned),
+                        }),
+                        "the production send must use remembered effort {remembered:?}"
+                    );
+                }
+            });
+        })
+        .expect("the test workspace remains open");
+    }
 }

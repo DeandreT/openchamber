@@ -19,3 +19,7 @@ path = "logical_layout.rs"
 [[test]]
 name = "text_wrap"
 path = "text_wrap.rs"
+
+[[test]]
+name = "quit"
+path = "quit.rs"

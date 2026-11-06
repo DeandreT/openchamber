@@ -9,6 +9,96 @@ const SNIPPET_EXTENSION = '.md';
 const SNIPPET_NAME_PATTERN = /^[a-z0-9][a-z0-9_-]{0,79}$/i;
 const HASHTAG_PATTERN = /#([a-z0-9_-]+)/gi;
 const MAX_EXPANSION_COUNT = 15;
+const MAX_SOURCE_RANGES = 4096;
+const MAX_SOURCE_MAP_BYTES = 4 * 1024 * 1024;
+const MAX_MAPPED_TEXT_BYTES = 50 * 1024 * 1024;
+
+function sourceMapLimit() {
+  const error = new Error('Snippet source map exceeds its limit');
+  error.code = 'snippet_source_map_limit';
+  return error;
+}
+
+function appendSourceRange(ranges, range) {
+  if (range.inputStart === range.inputEnd) return;
+  const previous = ranges.at(-1);
+  if (previous?.inputEnd === range.inputStart && previous.outputEnd === range.outputStart) {
+    previous.inputEnd = range.inputEnd;
+    previous.outputEnd = range.outputEnd;
+    return;
+  }
+  if (ranges.length >= MAX_SOURCE_RANGES) throw sourceMapLimit();
+  ranges.push(range);
+}
+
+// Each replace callback names a range in that pass's input. Copy only the
+// original-origin segments outside those ranges; replacement text has no origin.
+function sourceReplacementPass(ranges) {
+  const result = [];
+  let index = 0;
+  let consumed = 0;
+  let delta = 0;
+  const copyThrough = (end) => {
+    while (index < ranges.length && ranges[index].outputStart < end) {
+      const range = ranges[index];
+      const start = Math.max(range.outputStart, consumed);
+      const stop = Math.min(range.outputEnd, end);
+      if (start < stop) appendSourceRange(result, {
+        inputStart: range.inputStart + start - range.outputStart,
+        inputEnd: range.inputStart + stop - range.outputStart,
+        outputStart: start + delta,
+        outputEnd: stop + delta,
+      });
+      if (range.outputEnd > end) break;
+      index += 1;
+    }
+  };
+  return {
+    replace(start, end, length) {
+      copyThrough(start);
+      consumed = end;
+      delta += length - (end - start);
+      while (index < ranges.length && ranges[index].outputEnd <= end) index += 1;
+    },
+    finish(length) {
+      copyThrough(length);
+      return result;
+    },
+  };
+}
+
+function mappedSnippetResult(input, raw, sourceRanges, collector) {
+  const expanded = raw.trim();
+  const trimStart = raw.length - raw.trimStart().length;
+  const trimEnd = trimStart + expanded.length;
+  const sections = [
+    ...collector.prepend.map((text) => ({ text, original: false })),
+    { text: expanded, original: true },
+    ...collector.append.map((text) => ({ text, original: false })),
+  ].filter((section) => section.text);
+  const text = sections.map((section) => section.text).join('\n\n');
+  if (Buffer.byteLength(input, 'utf8') > MAX_MAPPED_TEXT_BYTES
+    || Buffer.byteLength(text, 'utf8') > MAX_MAPPED_TEXT_BYTES) throw sourceMapLimit();
+  const mapped = [];
+  let offset = 0;
+  for (const section of sections) {
+    if (section.original) {
+      for (const range of sourceRanges) {
+        const start = Math.max(range.outputStart, trimStart);
+        const end = Math.min(range.outputEnd, trimEnd);
+        if (start < end) appendSourceRange(mapped, {
+          inputStart: range.inputStart + start - range.outputStart,
+          inputEnd: range.inputStart + end - range.outputStart,
+          outputStart: offset + start - trimStart,
+          outputEnd: offset + end - trimStart,
+        });
+      }
+    }
+    offset += section.text.length + 2;
+  }
+  if (Buffer.byteLength(JSON.stringify({ sourceRanges: mapped }), 'utf8') > MAX_SOURCE_MAP_BYTES) throw sourceMapLimit();
+  return { text, sourceRanges: mapped };
+}
 
 function getProjectSnippetDirs(workingDirectory) {
   if (!workingDirectory) return [];
@@ -195,13 +285,14 @@ function parseSnippetBlocks(content) {
   return { inline, prepend: blocks.prepend, append: blocks.append };
 }
 
-function expandText(text, registry, expansionCounts, collector) {
+function expandText(text, registry, expansionCounts, collector, source = null) {
   let expanded = text;
   let changed = true;
 
   while (changed) {
     const previous = expanded;
     let loopDetected = false;
+    const sourcePass = source ? sourceReplacementPass(source.ranges) : null;
     HASHTAG_PATTERN.lastIndex = 0;
 
     expanded = expanded.replace(HASHTAG_PATTERN, (match, name, offset, input) => {
@@ -220,8 +311,12 @@ function expandText(text, registry, expansionCounts, collector) {
       const parsed = parseSnippetBlocks(snippet.content);
       for (const block of parsed.prepend) collector.prepend.push(expandText(block, registry, expansionCounts, collector));
       for (const block of parsed.append) collector.append.push(expandText(block, registry, expansionCounts, collector));
-      return expandText(parsed.inline, registry, expansionCounts, collector);
+      const replacement = expandText(parsed.inline, registry, expansionCounts, collector);
+      sourcePass?.replace(offset, offset + match.length, replacement.length);
+      return replacement;
     });
+
+    if (sourcePass) source.ranges = sourcePass.finish(previous.length);
 
     changed = expanded !== previous && !loopDetected;
   }
@@ -284,10 +379,17 @@ export function deleteSnippet(name, workingDirectory) {
   fs.unlinkSync(existing.filePath);
 }
 
-export function expandSnippets(text, workingDirectory) {
+export function expandSnippets(text, workingDirectory, options) {
+  const input = text || '';
+  const mapped = options?.sourceMap === true;
+  // The expand route admits only string prompt text for a source map.
+  if (mapped && Buffer.byteLength(input, 'utf8') > MAX_MAPPED_TEXT_BYTES) throw sourceMapLimit();
   const registry = loadSnippetRegistry(workingDirectory);
   const collector = { prepend: [], append: [] };
-  const expanded = expandText(text || '', registry, new Map(), collector).trim();
+  const source = mapped ? { ranges: input.length ? [{ inputStart: 0, inputEnd: input.length, outputStart: 0, outputEnd: input.length }] : [] } : null;
+  const raw = expandText(input, registry, new Map(), collector, source);
+  if (source) return mappedSnippetResult(input, raw, source.ranges, collector);
+  const expanded = raw.trim();
   return [...collector.prepend, expanded, ...collector.append].filter(Boolean).join('\n\n');
 }
 

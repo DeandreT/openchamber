@@ -67,6 +67,8 @@ mod context;
 mod entity_map;
 #[cfg(any(test, feature = "test-support"))]
 mod headless_app_context;
+#[cfg(test)]
+mod quit_tests;
 #[cfg(any(test, feature = "test-support"))]
 mod test_app;
 #[cfg(any(test, feature = "test-support"))]
@@ -392,9 +394,18 @@ type MissingGlyphCallback = Box<dyn FnMut(&[MissingGlyph], &mut App) + 'static>;
 pub(crate) type KeystrokeObserver =
     Box<dyn FnMut(&KeystrokeEvent, &mut Window, &mut App) -> bool + 'static>;
 type QuitHandler = Box<dyn FnOnce(&mut App) -> LocalBoxFuture<'static, ()> + 'static>;
+type RequestQuitHandler = Box<dyn FnMut(&mut App) -> bool + 'static>;
 type WindowClosedHandler = Box<dyn FnMut(&mut App, WindowId)>;
 type ReleaseListener = Box<dyn FnOnce(&mut dyn Any, &mut App) + 'static>;
 type NewEntityListener = Box<dyn FnMut(AnyEntity, &mut Option<&mut Window>, &mut App) + 'static>;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum QuitRequest {
+    Idle,
+    Pending,
+    Allowed(u64),
+    Committed,
+}
 
 struct MissingGlyphCallbackEntry {
     registration: Rc<()>,
@@ -855,6 +866,7 @@ pub struct App {
     pub(crate) release_listeners: SubscriberSet<EntityId, ReleaseListener>,
     pub(crate) global_observers: SubscriberSet<TypeId, Handler>,
     pub(crate) quit_observers: SubscriberSet<(), QuitHandler>,
+    request_quit_observers: SubscriberSet<(), RequestQuitHandler>,
     pub(crate) restart_observers: SubscriberSet<(), Handler>,
     pub(crate) window_closed_observers: SubscriberSet<(), WindowClosedHandler>,
 
@@ -907,6 +919,8 @@ pub struct App {
     pub(crate) accessibility_force_disabled: bool,
     pending_updates: usize,
     quit_mode: QuitMode,
+    quit_request: Cell<QuitRequest>,
+    quit_revision: Cell<u64>,
     quitting: bool,
 
     // We need to ensure the leak detector drops last, after all tasks, callbacks and things have been dropped.
@@ -992,6 +1006,7 @@ impl App {
                 system_wake_observers: SubscriberSet::new(),
                 global_observers: SubscriberSet::new(),
                 quit_observers: SubscriberSet::new(),
+                request_quit_observers: SubscriberSet::new(),
                 restart_observers: SubscriberSet::new(),
                 restart_path: None,
                 restart_arguments: Vec::new(),
@@ -1004,6 +1019,8 @@ impl App {
                 #[cfg(any(feature = "inspector", debug_assertions))]
                 inspector_element_registry: InspectorElementRegistry::default(),
                 quit_mode: QuitMode::default(),
+                quit_request: Cell::new(QuitRequest::Idle),
+                quit_revision: Cell::new(0),
                 quitting: false,
                 cursor_hide_mode: CursorHideMode::default(),
                 reduce_motion: false,
@@ -1092,6 +1109,16 @@ impl App {
                 };
                 match cx.try_borrow_mut() {
                     Ok(mut cx) => {
+                        if cx.quit_request.get() != QuitRequest::Committed {
+                            if !cx.update(|cx| cx.preflight_quit()) {
+                                return false;
+                            }
+                            if !cx.has_current_quit_consent() {
+                                cx.quit();
+                                return false;
+                            }
+                            cx.quit_request.set(QuitRequest::Committed);
+                        }
                         cx.shutdown();
                         true
                     }
@@ -1227,9 +1254,86 @@ impl App {
         subscription
     }
 
-    /// Gracefully quit the application via the platform's standard routine.
+    /// Request a graceful quit via the platform's standard routine.
+    ///
+    /// Runs [`Self::on_request_quit`] callbacks on the foreground executor after the
+    /// current update returns. A veto leaves the event loop and windows alive.
+    /// Repeated requests before that check completes are coalesced.
     pub fn quit(&self) {
-        self.platform.quit();
+        if matches!(self.quit_request.get(), QuitRequest::Pending | QuitRequest::Committed)
+            || self.has_current_quit_consent()
+        {
+            return;
+        }
+        self.quit_request.set(QuitRequest::Pending);
+        let app = self.this.clone();
+        self.foreground_executor
+            .spawn(async move {
+                let Some(app) = app.upgrade() else {
+                    return;
+                };
+                let platform = {
+                    let mut cx = app.borrow_mut();
+                    let allowed = cx.update(|cx| {
+                        cx.quit_request.get() == QuitRequest::Pending && cx.preflight_quit()
+                    });
+                    if allowed && cx.has_current_quit_consent() {
+                        // Platform::quit may stop the loop before delivering its final callback.
+                        // Idle work drained after that stop cannot revoke final cleanup.
+                        cx.quit_request.set(QuitRequest::Committed);
+                        Some(cx.platform.clone())
+                    } else {
+                        if allowed {
+                            // Deferred effects added a window or guard after the callbacks ran.
+                            cx.quit();
+                        }
+                        None
+                    }
+                };
+                // Some platforms call on_quit synchronously. Release the AppCell borrow first.
+                if let Some(platform) = platform {
+                    platform.quit();
+                }
+            })
+            .detach();
+    }
+
+    fn preflight_quit(&mut self) -> bool {
+        if self.has_current_quit_consent() {
+            return true;
+        }
+        self.quit_request.set(QuitRequest::Pending);
+        let revision = self.quit_revision.get();
+        let window_count = self.windows.len();
+        let mut allowed = true;
+        self.request_quit_observers.clone().retain(&(), |callback| {
+            allowed = callback(self) && allowed;
+            true
+        });
+        self.quit_request.set(if allowed {
+            QuitRequest::Allowed(revision)
+        } else {
+            QuitRequest::Idle
+        });
+        if !allowed && self.windows.len() < window_count {
+            // A synchronous close can reissue quit while the callbacks are running.
+            // Recheck after its window is gone; a veto without a close never retries itself.
+            self.quit();
+        }
+        allowed
+    }
+
+    fn has_current_quit_consent(&self) -> bool {
+        self.quit_request.get() == QuitRequest::Allowed(self.quit_revision.get())
+    }
+
+    fn invalidate_quit_consent(&self) {
+        self.quit_revision.set(
+            self.quit_revision
+                .get()
+                .checked_add(1)
+                .expect("quit consent revision exhausted"),
+        );
     }
 
     /// Switches the platform between headless and windowed modes.
@@ -1522,6 +1626,7 @@ impl App {
 
                     cx.window_handles.insert(id, window.handle);
                     cx.windows.get_mut(id).unwrap().replace(Box::new(window));
+                    cx.invalidate_quit_consent();
                     Ok(handle)
                 }
                 Err(e) => {
@@ -2711,8 +2816,36 @@ impl App {
         self.actions.documentation()
     }
 
+    /// Register a callback before a requested quit can stop the event loop or close windows.
+    ///
+    /// Every callback runs for each request. Returning `false` vetoes that request
+    /// without removing the subscription. The callback can start an asynchronous
+    /// close or drain and request quit again when it finishes. Failed preparation
+    /// remains vetoed until the application explicitly retries.
+    /// Windows or quit callbacks added during preparation require a fresh check
+    /// after deferred effects complete. Unrelated effects preserve consent.
+    /// Once accepted quit reaches the platform, final cleanup proceeds even if
+    /// remaining platform work opens a window or registers another callback.
+    ///
+    /// This also gates platform quit callbacks that support cancellation. It cannot
+    /// recover from an event loop that has already stopped externally. With no
+    /// callbacks, quit proceeds normally. Keep the returned subscription alive.
+    pub fn on_request_quit(
+        &self,
+        on_request_quit: impl FnMut(&mut App) -> bool + 'static,
+    ) -> Subscription {
+        let (subscription, activate) = self
+            .request_quit_observers
+            .insert((), Box::new(on_request_quit));
+        activate();
+        self.invalidate_quit_consent();
+        subscription
+    }
+
     /// Register a callback to be invoked when the application is about to quit.
     /// It is not possible to cancel the quit event at this point.
+    /// Use [`Self::on_request_quit`] for preparation that needs live windows or
+    /// foreground updates. Futures returned here must finish without either.
     pub fn on_app_quit<Fut>(
         &self,
         mut on_quit: impl FnMut(&mut App) -> Fut + 'static,

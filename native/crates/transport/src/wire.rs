@@ -265,6 +265,8 @@ pub(crate) struct Settings {
     pub default_variant: Option<Value>,
     pub default_agent: Option<Value>,
     pub last_selected_model: Option<Value>,
+    #[serde(default, deserialize_with = "effort_memory")]
+    pub last_used_efforts: Option<Vec<(String, Value)>>,
     pub hidden_models: Option<Value>,
     pub routing_feature_available: Option<Value>,
     pub time_format_preference: Option<Value>,
@@ -286,6 +288,66 @@ pub(crate) struct Settings {
     pub draft_starters_visible: Option<Value>,
     pub draft_starters_craft_goal_added: Option<Value>,
     pub draft_starters_schedule_task_added: Option<Value>,
+}
+
+// A JSON object's encounter order is the profile's effort-recency order.
+// Decode this field directly, before serde_json::Value sorts its object keys.
+fn effort_memory<'de, D>(deserializer: D) -> Result<Option<Vec<(String, Value)>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct MemoryVisitor;
+    impl<'de> serde::de::Visitor<'de> for MemoryVisitor {
+        type Value = Option<Vec<(String, Value)>>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a model effort map")
+        }
+
+        fn visit_map<M>(self, mut map: M) -> Result<Self::Value, M::Error>
+        where
+            M: serde::de::MapAccess<'de>,
+        {
+            let mut entries = Vec::new();
+            while let Some(entry) = map.next_entry()? {
+                entries.push(entry);
+            }
+            Ok(Some(entries))
+        }
+
+        fn visit_seq<S>(self, mut sequence: S) -> Result<Self::Value, S::Error>
+        where
+            S: serde::de::SeqAccess<'de>,
+        {
+            while sequence.next_element::<serde::de::IgnoredAny>()?.is_some() {}
+            Ok(None)
+        }
+
+        fn visit_unit<E: serde::de::Error>(self) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_bool<E: serde::de::Error>(self, _: bool) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_i64<E: serde::de::Error>(self, _: i64) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_u64<E: serde::de::Error>(self, _: u64) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_f64<E: serde::de::Error>(self, _: f64) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+
+        fn visit_str<E: serde::de::Error>(self, _: &str) -> Result<Self::Value, E> {
+            Ok(None)
+        }
+    }
+    deserializer.deserialize_any(MemoryVisitor)
 }
 
 /// OpenCode v2 list routes: `{ location, data }`.

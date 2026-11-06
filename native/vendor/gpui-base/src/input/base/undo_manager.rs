@@ -16,6 +16,7 @@ pub(crate) enum EditIntent {
 
 #[derive(Debug)]
 struct UndoTransaction {
+    checkpoint: u64,
     intent: EditIntent,
     changes: Vec<Change>,
     /// How many changes the most recently appended batch contributed. A batch
@@ -64,6 +65,8 @@ pub(crate) struct Replay {
 /// several already-bracketed edits into one undo entry.
 #[derive(Debug)]
 pub(crate) struct UndoManager {
+    next_checkpoint: u64,
+    base_checkpoint: u64,
     undo_transactions: Vec<UndoTransaction>,
     redo_transactions: Vec<UndoTransaction>,
     ignoring: bool,
@@ -76,6 +79,8 @@ pub(crate) struct UndoManager {
 impl UndoManager {
     pub(super) fn new() -> Self {
         Self {
+            next_checkpoint: 1,
+            base_checkpoint: 0,
             undo_transactions: Vec::new(),
             redo_transactions: Vec::new(),
             ignoring: false,
@@ -220,9 +225,12 @@ impl UndoManager {
         }
 
         if self.undo_transactions.len() >= MAX_UNDO_TRANSACTIONS {
-            self.undo_transactions.remove(0);
+            self.base_checkpoint = self.undo_transactions.remove(0).checkpoint;
         }
+        let checkpoint = self.next_checkpoint;
+        self.next_checkpoint = self.next_checkpoint.checked_add(1).expect("input history exhausted");
         self.undo_transactions.push(UndoTransaction {
+            checkpoint,
             intent,
             last_batch_len: changes.len(),
             recorded_changes: changes.len(),
@@ -336,6 +344,12 @@ impl UndoManager {
         self.pending = None;
         self.pending_intent = None;
         self.coalescing_boundary = false;
+        self.base_checkpoint = self.next_checkpoint;
+        self.next_checkpoint = self.next_checkpoint.checked_add(1).expect("input history exhausted");
+    }
+
+    pub(super) fn checkpoint(&self) -> u64 {
+        self.undo_transactions.last().map_or(self.base_checkpoint, |entry| entry.checkpoint)
     }
 
     pub(super) fn undo(&mut self) -> Option<Replay> {

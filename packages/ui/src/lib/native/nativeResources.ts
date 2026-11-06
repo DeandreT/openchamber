@@ -162,6 +162,9 @@ export const renderNativeProviderLogos = (): string => {
   return `${JSON.stringify({ aliases: Object.fromEntries(PROVIDER_LOGO_ALIASES), logos }, null, 2)}\n`;
 };
 
+type ClockFormat = { layout: string[] | null; hours: string[]; dayPeriods: string[] };
+type LocaleDateFormat = { hour12ByDefault: boolean; months: string[]; twelveHour: ClockFormat; twentyFourHour: ClockFormat };
+
 /**
  * How each locale writes a message's time, as `formatTimestampForDisplay`
  * asks `Intl` for it: the short month names and, for the 12- and 24-hour
@@ -170,23 +173,23 @@ export const renderNativeProviderLogos = (): string => {
  * of its own, so it fills these in rather than formatting.
  */
 export const renderNativeDateFormats = (): string => {
-  const document: Record<string, unknown> = {};
+  const document: Record<string, LocaleDateFormat> = {};
   for (const locale of LOCALES) {
     const intl = getIntlLocale(locale);
-    const clock = (hour12: boolean) => {
+    const clock = (hour12: boolean): ClockFormat => {
       const format = new Intl.DateTimeFormat(intl, { hour: 'numeric', minute: '2-digit', hour12 });
       let layout: string[] | null = null;
       const hours: string[] = [];
       const dayPeriods: string[] = [];
       for (let hour = 0; hour < 24; hour += 1) {
         const parts = format.formatToParts(new Date(2026, 0, 1, hour, 5));
-        const shape = parts.map((part) => (
+        const hourLayout = parts.map((part) => (
           part.type === 'literal' ? part.value : `{${part.type}}`
         ));
-        if (layout && shape.join('\u0000') !== layout.join('\u0000')) {
+        if (layout && hourLayout.join('\u0000') !== layout.join('\u0000')) {
           throw new Error(`${intl} writes ${hour}:05 in another layout`);
         }
-        layout = shape;
+        layout = hourLayout;
         const minute = parts.find((part) => part.type === 'minute')?.value;
         if (minute !== '05') throw new Error(`${intl} writes minute 5 as ${minute}`);
         hours.push(parts.find((part) => part.type === 'hour')?.value ?? '');
