@@ -366,6 +366,7 @@ pub(crate) struct AgentInfo {
     pub options: Option<Value>,
     pub model: Option<AgentModel>,
     pub color: Option<String>,
+    pub description: Option<String>,
 }
 
 /// A model reference: an agent's pinned model, or a session's current one.

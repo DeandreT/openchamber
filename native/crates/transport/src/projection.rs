@@ -572,6 +572,7 @@ pub(crate) fn agent(wire: wire::AgentInfo) -> AgentEntry {
         hidden: wire.hidden == Some(true) || hidden_option == Some(true),
         model: wire.model.map(model_choice),
         color: wire.color,
+        description: wire.description,
     }
 }
 

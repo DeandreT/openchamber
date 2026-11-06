@@ -20,6 +20,16 @@ rendering asks for a projection and dispatches an action.
   by revision (`PermissionPolicy`) and the hold-back bookkeeping of fresh
   requests the server may answer itself (`AutoAnswerHolds`). It answers nothing.
 
+- `search_rank.rs` ports the web's list matchers: `rankByQuery` and
+  `matchesRankQuery` (`lib/search/fuzzySearch.ts`), `matchesFuzzyQuery`, and
+  `rankBySubsequence` with its path mode (`lib/search/subsequenceSearch.ts`).
+- `autocomplete.rs` ports the composer's pickers: which one the caret opens
+  (`composer/language/triggers.ts`, `fileMentionAutocompleteState.ts`), what
+  each lists and in which order (commands, skills, snippets, and `@` agents,
+  files and sessions), and the edit a choice makes. It performs no I/O.
+- `session_reference.rs` ports `sessionReferences.ts` and the text side of
+  `sessionLinks.ts`: link candidates in text, link keys, and the context text a
+  session or message reference sends.
 - `send_config.rs` ports default agent/model selection, an existing session's selection from its record, catalog grouping, composer labels and agent color allocation from the web client.
 - Default effort follows the configured choice, a supported matching agent pin,
   then the model's remembered choice from server settings. A remembered explicit
@@ -301,6 +311,17 @@ crate owns wire parsing and authority checks, and hands the core records and
   one above the highest open "Terminal N", so they stay unique after closes.
 
 ## Decisions
+
+### Why Fuse's fallback is an edit distance
+
+`rankByQuery` and `matchesFuzzyQuery` fall back to Fuse.js for typos. With
+`ignoreLocation`, Fuse's Bitap search accepts a pattern whose fewest
+insertions, deletions and substitutions against some substring of the text,
+over the pattern's length, stay under the threshold; that score, floored at
+0.001 and raised to the field norm, orders the fuzzy tail. `search_rank.rs`
+computes the same quantity with Sellers' algorithm, so the core keeps no
+dependency and the match set is the same. Fuse's split of patterns longer
+than 32 characters is not reproduced; picker queries are shorter.
 
 ### Why draft metadata stays opaque
 

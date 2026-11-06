@@ -83,6 +83,7 @@ fn skill_names_respect_external_flags_policy_order_and_real_attachment_ids() {
         name: "deploy".to_owned(),
     }];
     let skills = available_skills(discovered, config, listed).expect("complete skills");
+    let skills: Vec<ComposerSkill> = skills.into_iter().map(|(skill, _)| skill).collect();
     assert_eq!(
         skills,
         vec![
@@ -237,5 +238,33 @@ fn identical_result_text_does_not_authorize_unmapped_generated_positions() {
     assert_eq!(
         mapped.source_ranges(),
         &[range(0, 2, 0, 2), range(7, 9, 7, 9)]
+    );
+}
+
+#[test]
+fn picker_details_keep_each_skills_scope_and_description() {
+    let discovered = serde_json::from_str(
+        r#"{"skills":[
+        {"name":"deploy","path":"/repo/.agents/skills/deploy/SKILL.md","scope":"project","description":"Ship it"},
+        {"name":"notes","path":"/home/u/.agents/skills/notes/SKILL.md","scope":"user"}]}"#,
+    )
+    .expect("discovery");
+    let skills = available_skills(discovered, Vec::new(), Vec::new()).expect("complete skills");
+    let details: Vec<(&str, Option<&str>, Option<&str>)> = skills
+        .iter()
+        .map(|(skill, detail)| {
+            (
+                skill.name.as_str(),
+                detail.scope.as_deref(),
+                detail.description.as_deref(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        details,
+        [
+            ("deploy", Some("project"), Some("Ship it")),
+            ("notes", Some("user"), None)
+        ]
     );
 }

@@ -1223,6 +1223,7 @@ mod tests {
             Self {
                 agents: ["build", "plan", "review"]
                     .map(|name| AgentEntry {
+                        description: None,
                         name: name.to_owned(),
                         display_name: None,
                         mode: None,

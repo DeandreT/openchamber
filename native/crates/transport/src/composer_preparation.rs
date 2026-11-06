@@ -180,6 +180,20 @@ impl fmt::Debug for ComposerSkill {
     }
 }
 
+/// A skill as the `$` picker lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SkillChoice {
+    pub name: String,
+    /// The project's own skill; the rest are the user's.
+    pub project: bool,
+    pub description: Option<String>,
+}
+
+struct SkillDetail {
+    scope: Option<String>,
+    description: Option<String>,
+}
+
 /// Captured request authority. The caller binds this client to its verified owner
 /// before starting preparation and retains that owner through every await.
 #[derive(Clone)]
@@ -234,6 +248,32 @@ impl ComposerPreparation {
     /// external-root flags and integration.use policy. Partial scans are errors.
     /// IDs come from OpenCode's own list; unlisted names require an instruction.
     pub async fn skills(&self) -> Result<Vec<ComposerSkill>, TransportError> {
+        Ok(self
+            .read_available_skills()
+            .await?
+            .into_iter()
+            .map(|(skill, _)| skill)
+            .collect())
+    }
+
+    /// The same skills as `skills`, as the `$` picker lists them: whether
+    /// each is the project's own, and what it is for.
+    pub async fn skill_choices(&self) -> Result<Vec<SkillChoice>, TransportError> {
+        Ok(self
+            .read_available_skills()
+            .await?
+            .into_iter()
+            .map(|(skill, detail)| SkillChoice {
+                name: skill.name,
+                project: detail.scope.as_deref() == Some("project"),
+                description: detail.description,
+            })
+            .collect())
+    }
+
+    async fn read_available_skills(
+        &self,
+    ) -> Result<Vec<(ComposerSkill, SkillDetail)>, TransportError> {
         let discovered: DiscoveredSkills = read(
             self.request(Method::GET, "api/config/skills", true),
             CATALOG_BYTES,
@@ -397,6 +437,10 @@ struct DiscoveredSkill {
     id: Option<String>,
     name: String,
     path: String,
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    description: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -421,7 +465,7 @@ fn available_skills(
     discovered: DiscoveredSkills,
     config: Vec<ConfigEntry>,
     listed: Vec<ListedSkill>,
-) -> Result<Vec<ComposerSkill>, TransportError> {
+) -> Result<Vec<(ComposerSkill, SkillDetail)>, TransportError> {
     if discovered.open_code_skills_unavailable {
         return Err(malformed());
     }
@@ -478,10 +522,16 @@ fn available_skills(
             .iter()
             .find(|listed| listed.name == skill.name)
             .or_else(|| listed.iter().find(|listed| listed.id == skill.name));
-        available.push(ComposerSkill {
-            name: skill.name,
-            id: attached.map(|skill| skill.id.clone()),
-        });
+        available.push((
+            ComposerSkill {
+                name: skill.name,
+                id: attached.map(|skill| skill.id.clone()),
+            },
+            SkillDetail {
+                scope: skill.scope,
+                description: skill.description,
+            },
+        ));
     }
     Ok(available)
 }
