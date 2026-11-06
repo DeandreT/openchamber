@@ -5,22 +5,26 @@
 //! the affected row; tail following continues only while the reader is at
 //! the end.
 
+use std::collections::HashMap;
+
 use gpui_kit::{
-    AnyElement, Bounds, Context, ElementId, FontWeight, InteractiveElement, IntoElement,
+    AnyElement, App, Bounds, Context, ElementId, FontWeight, InteractiveElement, IntoElement,
     ParentElement, Role, StatefulInteractiveElement, Styled, TestSupportExt, Window, canvas, div,
     fill, linear_color_stop, linear_gradient, list, point, prelude::FluentBuilder, px, rems, size,
 };
+use openchamber_native_core::ids::PartId;
 use openchamber_native_core::transcript::{Message, PartContent, Role as MessageRole};
 
 use crate::activation::on_activate;
 use crate::chrome::{self, glyph};
 use crate::connection::ConnectionFailure;
 use crate::locale::{self, Direction};
-use crate::markdown_view::{self, Author};
 use crate::theme::Palette;
+use crate::transcript_selection::TranscriptSelection;
 use crate::workspace::{History, Workspace};
+use crate::{attachment_part_view, reasoning_view, text_part_view, tool_part_view};
 
-const META_SIZE: f32 = 0.781_25;
+pub(crate) const META_SIZE: f32 = 0.781_25;
 
 impl Workspace {
     pub(crate) fn render_transcript(
@@ -217,7 +221,12 @@ impl Workspace {
                 div()
                     .flex()
                     .flex_col()
-                    .child(user_message(message, &palette, open.selection.read(cx), cx))
+                    .child(text_part_view::user_message(
+                        message,
+                        &palette,
+                        open.selection.read(cx),
+                        cx,
+                    ))
                     .child(self.render_user_actions(&message.info.id, &palette, direction, cx))
                     .into_any_element(),
             ),
@@ -295,40 +304,6 @@ impl Workspace {
     }
 }
 
-fn user_message(
-    message: &Message,
-    palette: &Palette,
-    selection: &crate::transcript_selection::TranscriptSelection,
-    cx: &gpui_kit::App,
-) -> AnyElement {
-    let text = message.plain_text();
-    let part_id = message
-        .parts
-        .first()
-        .map(|part| part.id.as_str().to_owned())
-        .unwrap_or_default();
-    div()
-        .flex()
-        .justify_end()
-        .child(
-            div()
-                .max_w(gpui_kit::relative(0.85))
-                .px_3()
-                .py_2()
-                .rounded(px(12.0))
-                .bg(palette.user_message_background)
-                .child(
-                    selection
-                        .view(&message.info.id, None, cx)
-                        .map(|view| markdown_view::styled(view, palette, Author::User))
-                        .unwrap_or_else(|| {
-                            markdown_view::markdown(&part_id, &text, palette, Author::User)
-                        }),
-                ),
-        )
-        .into_any_element()
-}
-
 /// A one-line record such as a switched agent or a finished turn.
 fn notice_message(message: &Message, palette: &Palette) -> AnyElement {
     div()
@@ -340,64 +315,40 @@ fn notice_message(message: &Message, palette: &Palette) -> AnyElement {
         .into_any_element()
 }
 
+/// An assistant message's parts, each drawn by its kind's module.
 fn assistant_message(
     message: &Message,
     palette: &Palette,
-    selection: &crate::transcript_selection::TranscriptSelection,
-    controls: &mut std::collections::HashMap<openchamber_native_core::ids::PartId, AnyElement>,
-    cx: &gpui_kit::App,
+    selection: &TranscriptSelection,
+    controls: &mut HashMap<PartId, AnyElement>,
+    cx: &App,
 ) -> AnyElement {
     // The text parts' `my-1`.
     let mut column = div().py(px(4.0)).flex().flex_col().gap_2();
     for part in &message.parts {
         column = match &part.content {
-            PartContent::Text { text } => column.child(
-                selection
-                    .view(&message.info.id, Some(&part.id), cx)
-                    .map(|view| markdown_view::styled(view, palette, Author::Assistant))
-                    .unwrap_or_else(|| {
-                        markdown_view::markdown(part.id.as_str(), text, palette, Author::Assistant)
-                    }),
-            ),
-            PartContent::Reasoning { text } => column.child(
-                div()
-                    .text_size(rems(META_SIZE))
-                    .italic()
-                    .text_color(palette.muted_foreground)
-                    .child(text.clone()),
-            ),
+            PartContent::Text { text } => column.child(text_part_view::assistant_text(
+                message, &part.id, text, palette, selection, cx,
+            )),
+            PartContent::Reasoning { text } => column.child(reasoning_view::render(text, palette)),
             PartContent::Tool {
                 tool,
                 title,
                 output,
                 ..
-            } => column.child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .text_size(rems(META_SIZE))
-                    .text_color(palette.muted_foreground)
-                    .child(glyph("terminal", 16.0, palette.muted_foreground))
-                    .child(div().font_weight(FontWeight::MEDIUM).child(tool.clone()))
-                    .when_some(title.clone(), |this, title| {
-                        this.child(div().truncate().child(title))
-                    })
-                    .when_some(output.clone(), |this, output| this.child(output))
-                    .children(controls.remove(&part.id)),
-            ),
-            PartContent::File { filename, .. } => column.child(
-                div()
-                    .text_size(rems(META_SIZE))
-                    .text_color(palette.muted_foreground)
-                    .child(filename.clone()),
-            ),
-            PartContent::Agent { name } => column.child(
-                div()
-                    .text_size(rems(META_SIZE))
-                    .text_color(palette.muted_foreground)
-                    .child(format!("@{name}")),
-            ),
+            } => column.child(tool_part_view::render(
+                tool,
+                title.as_deref(),
+                output.as_deref(),
+                controls.remove(&part.id),
+                palette,
+            )),
+            PartContent::File { filename, .. } => {
+                column.child(attachment_part_view::file(filename, palette))
+            }
+            PartContent::Agent { name } => {
+                column.child(attachment_part_view::agent_mention(name, palette))
+            }
             PartContent::Unsupported { .. } => column,
         };
     }
