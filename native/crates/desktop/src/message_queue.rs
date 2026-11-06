@@ -265,6 +265,13 @@ impl Workspace {
             self.send_btw_follow_up(window, cx);
             return;
         }
+        if !self.session_references_ready(
+            Box::new(move |this, window, cx| this.submit_from_enter(secondary, window, cx)),
+            window,
+            cx,
+        ) {
+            return;
+        }
         let has_content = self.composer_has_sendable_content(cx);
         let can_queue = has_content && self.is_streaming(&session);
         match (can_queue, secondary, self.follow_up_behavior()) {
