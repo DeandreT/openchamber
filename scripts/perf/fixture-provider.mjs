@@ -36,6 +36,11 @@
  * regex lexing and hashing cost; the ASCII documents never reach that path.
  * `stream-20000cps`, `code-20000cps`, `unicode-20000cps` and the
  * `agent-*tools-20000cps` models exist only to seed long sessions quickly.
+ *
+ * With `--workflows`, `workflow` and `workflow-<n>s` (each turn starts after
+ * n seconds) drive the session goal and review loops deterministically from
+ * what the conversation says (`planWorkflow`), and the goal's progress check
+ * gets the JSON answer its report lines call for (`auditAnswer`).
  */
 
 import { createServer } from "node:http"
@@ -69,6 +74,85 @@ export const INTERACTION_QUESTIONS = [
   ] },
   { header: "Custom", question: "Enter fixture text.", options: [] },
 ]
+
+// What the goal and review loops send, as the server and the magic prompts
+// word them. The workflow model answers by these, so one model can be the
+// goal agent, the implementer and the reviewer.
+const AUDIT_MARKER = "You check the progress of an AI coding agent"
+const GOAL_INTRO_MARKER = "Goal mode is active for this session"
+const GOAL_CONTINUATION_MARKER = "The session goal is still open"
+const HANDOFF_MARKER = "Prepare a handoff for another agent"
+const REVIEW_MARKERS = ["Please review the changes described in this handoff", "Please review the current workspace changes"]
+const RE_REVIEW_MARKER = "has responded to the previous review feedback"
+const FEEDBACK_MARKER = "Another agent reviewed your changes"
+export const FINAL_REVIEW_CLEAN = "FINAL_REVIEW_STATUS: no_remaining_findings"
+export const FINAL_REVIEW_DISPUTED = "FINAL_REVIEW_STATUS: disputed"
+
+/** The text of a chat-completions message, whether a string or parts. */
+const messageText = (message) => {
+  const content = message?.content
+  if (typeof content === "string") return content
+  if (!Array.isArray(content)) return ""
+  return content.map((part) => (typeof part?.text === "string" ? part.text : "")).join("\n")
+}
+
+const goalReport = ({ done, remaining, needs }) => [
+  `Fixture goal turn finished.`,
+  "",
+  `- Done: ${done}`,
+  "- Verified: not verified",
+  `- Remaining: ${remaining}`,
+  `- Needs from the user: ${needs}`,
+].join("\n")
+
+/**
+ * The workflow model's answer, from the conversation alone. The objective
+ * steers a goal: `[turns:n]` takes n turns (two by default) and `[blocked]`
+ * stops on something only the user can give. A review prompt gets findings
+ * first and a clean final line on the re-review; `[clean]` anywhere makes the
+ * first review clean and `[dispute]` ends the re-review disputed.
+ */
+export const planWorkflow = (messages) => {
+  const users = messages.filter((message) => message?.role === "user").map(messageText)
+  const all = users.join("\n")
+  const last = users.at(-1) ?? ""
+  if (last.includes(HANDOFF_MARKER)) {
+    return "Handoff: the fixture change renames the greeting and adds its test. Intent: keep the greeting short."
+  }
+  if (last.includes(RE_REVIEW_MARKER)) {
+    return all.includes("[dispute]")
+      ? `The rename is still open.\n\nDisputed findings:\n- Rename: the implementer keeps the old name; I still prefer the new one.\n\n${FINAL_REVIEW_DISPUTED}`
+      : `Every earlier finding is fixed.\n\n${FINAL_REVIEW_CLEAN}`
+  }
+  if (REVIEW_MARKERS.some((marker) => last.includes(marker))) {
+    return all.includes("[clean]")
+      ? `Nothing to fix.\n\n${FINAL_REVIEW_CLEAN}`
+      : "Finding (non-blocker): the greeting test does not cover the empty name."
+  }
+  if (last.includes(FEEDBACK_MARKER)) return "Fixed the finding: the test now covers the empty name."
+  if (all.includes(GOAL_INTRO_MARKER) || all.includes(GOAL_CONTINUATION_MARKER)) {
+    if (all.includes("[blocked]")) return goalReport({ done: "the first step", remaining: "nothing", needs: "an API key for the fixture service" })
+    const turns = Math.max(1, Number(/\[turns:(\d+)\]/.exec(all)?.[1] ?? 2))
+    const turn = users.filter((text) => text.includes(GOAL_CONTINUATION_MARKER)).length + 1
+    return turn >= turns
+      ? goalReport({ done: `all ${turns} steps`, remaining: "nothing", needs: "nothing" })
+      : goalReport({ done: `step ${turn} of ${turns}`, remaining: `steps ${turn + 1} to ${turns}`, needs: "nothing" })
+  }
+  return THINK_ANSWER
+}
+
+/** The progress check's JSON for the report in its `<answer>`, or null for another request. */
+export const auditAnswer = (messages) => {
+  const prompt = messages.map(messageText).find((text) => text.includes(AUDIT_MARKER))
+  if (!prompt) return null
+  const answer = /<answer>\n?([\s\S]*?)\n?<\/answer>/.exec(prompt)?.[1] ?? ""
+  const said = (label) => {
+    const value = new RegExp(`${label}:\\s*(.*)`, "i").exec(answer)?.[1]?.trim() ?? ""
+    return value.length > 0 && !/^nothing\b/i.test(value)
+  }
+  const remaining = said("Remaining")
+  return JSON.stringify({ all_done: /Done:/i.test(answer) && !remaining, remaining, needs_user: said("Needs from the user") })
+}
 
 // Read-only lookups over the session's directory: small results, no
 // permission prompt, and a different one on each step.
@@ -340,9 +424,17 @@ const parseModel = (model) => {
  * streams the document. Counting from the last prompt makes every turn of a
  * long session agentic, not only the first.
  */
-const planResponse = (model, body, interactions = false) => {
-  const { delayMs, charactersPerSecond, document, toolSteps, reads, parallel = 1 } = parseModel(model)
+const planResponse = (model, body, interactions = false, workflows = false) => {
   const messages = Array.isArray(body.messages) ? body.messages : []
+  if (workflows) {
+    const audit = auditAnswer(messages)
+    if (audit) return { delayMs: 0, charactersPerSecond: 20000, text: audit, toolCalls: [] }
+    const workflow = /^workflow(?:-(\d+)s)?$/.exec(String(model ?? ""))
+    if (workflow) {
+      return { delayMs: Number(workflow[1] ?? 0) * 1000, charactersPerSecond: 1200, text: planWorkflow(messages), toolCalls: [] }
+    }
+  }
+  const { delayMs, charactersPerSecond, document, toolSteps, reads, parallel = 1 } = parseModel(model)
   const lastPrompt = messages.findLastIndex((message) => message?.role === "user")
   const toolResults = messages.slice(lastPrompt + 1).filter((message) => message?.role === "tool").length
   if (String(model).startsWith("interaction-")) {
@@ -452,7 +544,7 @@ const streamCompletion = async (response, model, plan, waitForTurnRelease) => {
   response.end("data: [DONE]\n\n")
 }
 
-export const startFixtureProvider = (port, { interactions = false } = {}) => new Promise((resolveServer, reject) => {
+export const startFixtureProvider = (port, { interactions = false, workflows = false } = {}) => new Promise((resolveServer, reject) => {
   let holdTurns = false
   const waitingTurns = new Set()
   const waitForTurnRelease = (response) => new Promise((done) => {
@@ -494,6 +586,20 @@ export const startFixtureProvider = (port, { interactions = false } = {}) => new
       response.end(JSON.stringify({ error: { message: "Interaction fixtures require streaming", type: "invalid_request_error" } }))
       return
     }
+    // The goal's progress check is answered as its report says.
+    const audit = workflows ? auditAnswer(Array.isArray(body.messages) ? body.messages : []) : null
+    if (audit && !body.stream) {
+      response.writeHead(200, { "content-type": "application/json" })
+      response.end(JSON.stringify({
+        id: "chatcmpl-fixture",
+        object: "chat.completion",
+        created: 0,
+        model: body.model,
+        choices: [{ index: 0, message: { role: "assistant", content: audit }, finish_reason: "stop" }],
+        usage: usageFor(audit),
+      }))
+      return
+    }
     // Title generation and other auxiliary calls are not part of the stimulus.
     if (!body.stream) {
       response.writeHead(200, { "content-type": "application/json" })
@@ -509,7 +615,7 @@ export const startFixtureProvider = (port, { interactions = false } = {}) => new
     }
     let plan
     try {
-      plan = planResponse(body.model, body, interactions)
+      plan = planResponse(body.model, body, interactions, workflows)
     } catch (error) {
       response.writeHead(400, { "content-type": "application/json" })
       response.end(JSON.stringify({ error: { message: error.message, type: "invalid_request_error" } }))
@@ -523,7 +629,9 @@ export const startFixtureProvider = (port, { interactions = false } = {}) => new
 })
 
 /** OpenCode configuration that registers this provider; pass it as `OPENCODE_CONFIG_CONTENT`. */
-export const fixtureProviderConfig = (port, { interactions = false } = {}) => ({
+export const FIXTURE_WORKFLOW_MODELS = ["workflow", "workflow-1s"]
+
+export const fixtureProviderConfig = (port, { interactions = false, workflows = false } = {}) => ({
   provider: {
     [FIXTURE_PROVIDER_ID]: {
       npm: "@ai-sdk/openai-compatible",
@@ -531,6 +639,7 @@ export const fixtureProviderConfig = (port, { interactions = false } = {}) => ({
       options: { baseURL: `http://127.0.0.1:${port}/v1`, apiKey: "unused" },
       models: Object.fromEntries([
         ...(interactions ? ["interaction-shell", "interaction-question"].map((id) => [id, { name: id, tool_call: true }]) : []),
+        ...(workflows ? FIXTURE_WORKFLOW_MODELS.map((id) => [id, { name: id }]) : []),
         ...FIXTURE_RATES.map((rate) => [`stream-${rate}cps`, { name: `Fixture stream, ${rate} characters/s` }]),
         ...FIXTURE_CODE_RATES.map((rate) => [`code-${rate}cps`, { name: `Fixture code block, ${rate} characters/s` }]),
         ...FIXTURE_UNICODE_RATES.map((rate) => [`unicode-${rate}cps`, { name: `Fixture non-Latin prose and code, ${rate} characters/s` }]),
@@ -554,12 +663,13 @@ export const fixtureProviderConfig = (port, { interactions = false } = {}) => ({
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const port = Number(process.argv[2] ?? 4601)
   const interactions = process.argv.includes("--interactions")
+  const workflows = process.argv.includes("--workflows")
   if (process.argv.includes("--print-config")) {
-    console.log(JSON.stringify(fixtureProviderConfig(port, { interactions })))
+    console.log(JSON.stringify(fixtureProviderConfig(port, { interactions, workflows })))
   } else {
-    const server = await startFixtureProvider(port, { interactions })
+    const server = await startFixtureProvider(port, { interactions, workflows })
     console.log(`Fixture provider listening on http://127.0.0.1:${server.address().port}/v1 (${FIXTURE_DOCUMENT.length} characters per response)`)
-    console.log(`Models: ${Object.keys(fixtureProviderConfig(port, { interactions }).provider[FIXTURE_PROVIDER_ID].models).map((id) => `${FIXTURE_PROVIDER_ID}/${id}`).join(", ")}`)
+    console.log(`Models: ${Object.keys(fixtureProviderConfig(port, { interactions, workflows }).provider[FIXTURE_PROVIDER_ID].models).map((id) => `${FIXTURE_PROVIDER_ID}/${id}`).join(", ")}`)
     process.send?.({ port: server.address().port })
   }
 }

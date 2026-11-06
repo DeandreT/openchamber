@@ -24,7 +24,7 @@ import { fileURLToPath, pathToFileURL } from "node:url"
 import process from "node:process"
 
 import { reservePort, wait } from "./cdp.mjs"
-import { AGENT_READ_FILES, agentReadFileContent, fixtureProviderConfig, INTERACTION_SHELL_COMMAND } from "./fixture-provider.mjs"
+import { AGENT_READ_FILES, agentReadFileContent, FIXTURE_WORKFLOW_MODELS, fixtureProviderConfig, INTERACTION_SHELL_COMMAND } from "./fixture-provider.mjs"
 import { stopProcessTree } from "./process-tree.mjs"
 
 export const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..")
@@ -52,6 +52,9 @@ Options:
                             Uses owned free ports; cannot combine with --fresh.
   --selections             Fresh model/agent/effort fixture with the same isolation.
   --authentication         Fresh password-protected fixture with the same isolation.
+  --workflows              Fresh session goal and review loop fixture with the same
+                           isolation: the workflow models are the default, and the
+                           goal's progress check is answered from the turn's report.
   --git-fixture            Make the project the Files and Git fixture repository:
                            two commits tracking a bare remote at <root>/remote.git,
                            untracked, gitignored, CRLF and nested-repository entries
@@ -118,10 +121,10 @@ export const startFixture = async ({ port, logFile }) => {
 
 // Port zero is bound by the owned child itself. IPC acknowledges that exact
 // listener; a pre-existing process can never satisfy readiness.
-const startInteractionProvider = async ({ state, project, logFile, signal }) => {
+const startInteractionProvider = async ({ state, project, logFile, workflows = false, signal }) => {
   signal?.throwIfAborted()
   const log = createWriteStream(logFile)
-  const child = spawn(process.execPath, [FIXTURE_SCRIPT, "0", "--interactions"], {
+  const child = spawn(process.execPath, [FIXTURE_SCRIPT, "0", "--interactions", ...(workflows ? ["--workflows"] : [])], {
     cwd: project, detached: true,
     env: isolatedServerEnv({ state, dist: "", config: {}, inherited: { PATH: process.env.PATH, LANG: "C.UTF-8", SHELL: "/bin/sh" } }),
     stdio: ["ignore", "pipe", "pipe", "ipc"],
@@ -188,7 +191,20 @@ const writeSettings = (state, project) => {
 
 /** The OpenCode configuration an isolated server runs with: the fixture
  * provider on `fixturePort` as the default model, nothing that reaches out. */
-export const isolatedOpencodeConfig = (fixturePort, { interactions = false, selections = false } = {}) => selections ? {
+export const isolatedOpencodeConfig = (fixturePort, { interactions = false, selections = false, workflows = false } = {}) => workflows ? {
+  ...isolatedOpencodeConfig(fixturePort, { interactions: true }),
+  providers: {
+    perf: {
+      name: "Workflow fixture",
+      package: "@opencode/ai/providers/openai-compatible",
+      settings: { baseURL: `http://127.0.0.1:${fixturePort}/v1`, apiKey: "unused" },
+      models: Object.fromEntries([...FIXTURE_WORKFLOW_MODELS, "stream-1200cps"].map((id) => [id, {
+        name: id, capabilities: { tools: false, input: ["text"], output: ["text"] },
+      }])),
+    },
+  },
+  model: "perf/workflow-1s",
+} : selections ? {
   ...isolatedOpencodeConfig(fixturePort, { interactions: true }),
   providers: {
     perf: {
@@ -359,7 +375,7 @@ export const restoreState = (state, seed) => {
  * isolated home under `state`. Resolves once it answers HTTP, with the served
  * main chunk checked against the build's index.html.
  */
-export const startIsolatedServer = async ({ repo, dist, state, project, port, fixturePort, opencodeBinary = defaultOpencodeBinary(), logFile, interactions = false, selections = false, authentication = false, gitFixture = false, signal }) => {
+export const startIsolatedServer = async ({ repo, dist, state, project, port, fixturePort, opencodeBinary = defaultOpencodeBinary(), logFile, interactions = false, selections = false, workflows = false, authentication = false, gitFixture = false, signal }) => {
   signal?.throwIfAborted()
   if (await portInUse(port)) throw new Error(`Port ${port} is already in use; stop that server or pass another port.`)
   signal?.throwIfAborted()
@@ -373,10 +389,10 @@ export const startIsolatedServer = async ({ repo, dist, state, project, port, fi
   if (interactions) {
     const settingsFile = join(state, "oc-data", "settings.json")
     const settings = JSON.parse(readFileSync(settingsFile, "utf8"))
-    settings.defaultModel = selections ? "perf/stream-1200cps" : "perf/interaction-shell"
+    settings.defaultModel = workflows ? "perf/workflow-1s" : selections ? "perf/stream-1200cps" : "perf/interaction-shell"
     writeFileSync(settingsFile, JSON.stringify(settings, null, 2))
   }
-  const config = isolatedOpencodeConfig(fixturePort, { interactions, selections })
+  const config = isolatedOpencodeConfig(fixturePort, { interactions, selections, workflows })
   // An undefined `inherited` takes the default, process.env.
   const env = isolatedServerEnv({ state, dist, config, opencodeBinary, authentication,
     inherited: interactions ? { PATH: process.env.PATH, LANG: "C.UTF-8", SHELL: "/bin/sh", TMPDIR: join(state, "tmp") } : undefined,
@@ -427,7 +443,7 @@ export const startIsolatedServer = async ({ repo, dist, state, project, port, fi
 }
 
 /** Fresh interaction runs have no seed, repository discovery, or reusable listener. */
-export const startInteractionServer = async ({ root, dist, opencodeBinary, repo = REPO_ROOT, selections = false, authentication = false, signal }) => {
+export const startInteractionServer = async ({ root, dist, opencodeBinary, repo = REPO_ROOT, selections = false, workflows = false, authentication = false, signal }) => {
   signal?.throwIfAborted()
   root = resolve(root)
   if (platform() !== "linux" || dirname(root) !== "/tmp/opencode" || realpathSync(dirname(root)) !== "/tmp/opencode") {
@@ -448,11 +464,11 @@ export const startInteractionServer = async ({ root, dist, opencodeBinary, repo 
   for (const directory of [project, ...["home", "config", "data", "cache", "xdg-state", "tmp", "oc-data"].map((name) => join(state, name))]) {
     mkdirSync(directory, { recursive: true, mode: 0o700 })
   }
-  const fixture = await startInteractionProvider({ state, project, logFile: join(root, "fixture.log"), signal })
+  const fixture = await startInteractionProvider({ state, project, logFile: join(root, "fixture.log"), workflows, signal })
   let server
   try {
     server = await startIsolatedServer({ repo, dist, state, project, port: await reservePort(), fixturePort: fixture.port,
-      opencodeBinary, logFile: join(root, "server.log"), interactions: true, selections, authentication, signal })
+      opencodeBinary, logFile: join(root, "server.log"), interactions: true, selections, workflows, authentication, signal })
   } catch (error) {
     await fixture.stop()
     throw error
@@ -506,6 +522,7 @@ const parseArgs = (argv) => {
     else if (value === "--interactions") options.interactions = true
     else if (value === "--selections") options.selections = true
     else if (value === "--authentication") options.authentication = true
+    else if (value === "--workflows") options.workflows = true
     else if (value === "--git-fixture") options.gitFixture = true
     else if (value === "--port") options.port = Number(argv[++index])
     else if (value === "--fixture-port") options.fixturePort = Number(argv[++index])
@@ -521,11 +538,11 @@ const parseArgs = (argv) => {
 
 const main = async () => {
   const options = parseArgs(process.argv.slice(2))
-  if (options.interactions || options.selections || options.authentication) {
-    if ([options.interactions, options.selections, options.authentication].filter(Boolean).length > 1) {
-      throw new Error("Choose one fixture mode: --interactions, --selections or --authentication")
+  if (options.interactions || options.selections || options.workflows || options.authentication) {
+    if ([options.interactions, options.selections, options.workflows, options.authentication].filter(Boolean).length > 1) {
+      throw new Error("Choose one fixture mode: --interactions, --selections, --workflows or --authentication")
     }
-    const mode = options.authentication ? "--authentication" : options.selections ? "--selections" : "--interactions"
+    const mode = options.authentication ? "--authentication" : options.selections ? "--selections" : options.workflows ? "--workflows" : "--interactions"
     if (!options.opencodeBinaryProvided) throw new Error(`${mode} requires an explicit --opencode-binary flag`)
     if (options.fresh) throw new Error(`${mode} cannot restore a seed`)
     try {
