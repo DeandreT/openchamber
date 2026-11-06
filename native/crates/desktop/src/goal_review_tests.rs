@@ -789,3 +789,85 @@ fn a_manual_review_without_handoff_prompts_the_review_session_and_opens_it(
     );
     close(cx, window, &workspace);
 }
+
+#[gpui_kit::test]
+fn the_dialog_edits_a_live_goal_in_place_and_removes_it(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let key = tests::key("goal-dialog-runtime", "ses_dialog");
+    let stored = json!({ "openchamber": { "goal": {
+        "id": "g1", "objective": "", "objectiveFile": true, "status": "blocked",
+        "tokensUsed": 900, "turnsUsed": 3, "updatedAt": 5
+    } } });
+    let scripted = Scripted::new(State {
+        metadata: HashMap::from([("ses_dialog".to_owned(), stored.clone())]),
+        objectives: HashMap::from([("ses_dialog".to_owned(), "Ship it".to_owned())]),
+        ..State::default()
+    });
+    let (window, workspace) = setup(cx, &scripted, &fixture, &key);
+    update(cx, window, &workspace, |workspace, window, cx| {
+        workspace.apply_server_events(
+            vec![ServerEvent::SessionPatched {
+                session_id: key.session.clone(),
+                patch: openchamber_native_core::session::SessionPatch {
+                    metadata: Some(openchamber_native_core::session::MetadataFacts {
+                        goal: openchamber_native_transport::session_goal::goal_of(
+                            stored.as_object().expect("object"),
+                        ),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            }],
+            window,
+            cx,
+        );
+        workspace.press_goal_button(window, cx);
+        assert!(workspace.goals.dialog.is_some(), "a goal opens its dialog");
+    });
+    // The file-backed objective fills the untouched field once read.
+    wait(cx, |cx| {
+        cx.read(|cx| {
+            let workspace = workspace.read(cx);
+            workspace
+                .goals
+                .dialog
+                .as_ref()
+                .is_some_and(|dialog| dialog.objective.read(cx).value() == "Ship it")
+        })
+    });
+    update(cx, window, &workspace, |workspace, window, cx| {
+        assert!(!workspace.goal_dialog_can_save(cx), "nothing changed yet");
+        workspace.toggle_goal_dialog_budget(cx);
+        assert!(workspace.goal_dialog_can_save(cx));
+        workspace.save_goal_dialog(window, cx);
+    });
+    wait(cx, |cx| {
+        cx.read(|cx| workspace.read(cx).goals.dialog.is_none())
+    });
+    let saved = scripted.body_of("POST /api/openchamber/sessions/ses_dialog/metadata")["patch"]
+        ["openchamber"]["goal"]
+        .clone();
+    assert_eq!(saved["tokenBudget"], json!(200_000));
+    assert_eq!(saved["status"], "active");
+    assert_eq!(saved["statusReason"], "resumed");
+    assert!(
+        saved.get("id").is_none(),
+        "an edit keeps the goal's id and accounting"
+    );
+    wait(cx, |cx| {
+        goal_of(cx, &workspace, &key) == Some(GoalStatus::Active)
+    });
+
+    update(cx, window, &workspace, |workspace, window, cx| {
+        workspace.open_goal_dialog(window, cx);
+        workspace.clear_goal_dialog(window, cx);
+    });
+    wait(cx, |cx| goal_of(cx, &workspace, &key).is_none());
+    let calls = scripted.calls();
+    assert!(calls.contains(&"DELETE /api/goals/objective/ses_dialog".to_owned()));
+    assert!(
+        calls.contains(&"POST /api/session/ses_dialog/interrupt".to_owned()),
+        "removing a running goal stops its turn"
+    );
+    close(cx, window, &workspace);
+}
