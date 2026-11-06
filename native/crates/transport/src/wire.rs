@@ -88,6 +88,20 @@ pub(crate) struct UserBody {
 pub(crate) struct FileAttachment {
     pub mime: String,
     pub name: Option<String>,
+    pub source: Option<FileSource>,
+    /// The bytes, base64, of a file the prompt carried inline.
+    pub data: Option<String>,
+}
+
+/// Where a prompt's file came from (`PromptFileAttachment.source`).
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub(crate) enum FileSource {
+    Uri {
+        uri: String,
+    },
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Deserialize)]

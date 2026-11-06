@@ -1,21 +1,32 @@
 //! Text parts: the user's prompt bubble and an assistant's Markdown.
 
-use gpui_kit::{AnyElement, App, IntoElement, ParentElement, Styled, div, px};
+use gpui_kit::{
+    AnyElement, App, IntoElement, ParentElement, Styled, div, prelude::FluentBuilder, px,
+};
 use openchamber_native_core::ids::PartId;
 use openchamber_native_core::transcript::Message;
 
+use crate::attachment_part_view;
+use crate::locale::{self, Direction};
 use crate::markdown_view::{self, Author};
+use crate::part_state::PartState;
 use crate::theme::Palette;
 use crate::transcript_selection::TranscriptSelection;
 
 /// The user's prompt in its end-aligned bubble.
 pub(crate) fn user_message(
     message: &Message,
+    parts: &PartState,
     palette: &Palette,
+    direction: Direction,
     selection: &TranscriptSelection,
     cx: &App,
 ) -> AnyElement {
     let text = message.plain_text();
+    // Attachments lead the bubble, above the text.
+    let attachments =
+        attachment_part_view::attachments(message, parts, palette, direction, locale::strings(cx));
+    let has_text = !text.is_empty();
     let part_id = message
         .parts
         .first()
@@ -31,14 +42,20 @@ pub(crate) fn user_message(
                 .py_2()
                 .rounded(px(12.0))
                 .bg(palette.user_message_background)
-                .child(
-                    selection
-                        .view(&message.info.id, None, cx)
-                        .map(|view| markdown_view::styled(view, palette, Author::User))
-                        .unwrap_or_else(|| {
-                            markdown_view::markdown(&part_id, &text, palette, Author::User)
-                        }),
-                ),
+                .flex()
+                .flex_col()
+                .gap_2()
+                .children(attachments)
+                .when(has_text, |this| {
+                    this.child(
+                        selection
+                            .view(&message.info.id, None, cx)
+                            .map(|view| markdown_view::styled(view, palette, Author::User))
+                            .unwrap_or_else(|| {
+                                markdown_view::markdown(&part_id, &text, palette, Author::User)
+                            }),
+                    )
+                }),
         )
         .into_any_element()
 }

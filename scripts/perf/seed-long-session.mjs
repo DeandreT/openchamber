@@ -15,7 +15,8 @@
  * (see DOCUMENTATION.md). Prints the session id, and with --json the summary.
  *
  * Two options add rows the plain turns never produce, for visual checks:
- * --image sends one more prompt with a small PNG attached, and --compact
+ * --image sends one more prompt with a small PNG attached inline and by
+ * path and a text file, and --compact
  * compacts the session once the turns are in. Without them a seed is
  * unchanged.
  */
@@ -145,11 +146,17 @@ const main = async () => {
     const file = join(options.dir, ATTACHMENT_FILE)
     mkdirSync(dirname(file), { recursive: true })
     writeFileSync(file, ATTACHMENT_PNG)
-    // The prompt runs on the model the last turn selected.
+    // The prompt runs on the model the last turn selected. The image goes
+    // inline and by path, so both ways a client receives it show, and a
+    // text file adds a file chip.
     await sessionOperation(options.port, sessionId, "prompt", {
       id: messageId(),
-      text: "What does the attached image show?",
-      files: [{ uri: `file://${file}`, name: "gradient.png" }],
+      text: "What do the attached files show?",
+      files: [
+        { uri: `data:image/png;base64,${ATTACHMENT_PNG.toString("base64")}`, name: "inline.png" },
+        { uri: `file://${file}`, name: "gradient.png" },
+        { uri: `data:text/plain;base64,${Buffer.from("notes\n").toString("base64")}`, name: "notes.txt" },
+      ],
     })
     await waitIdle(base, sessionId)
   }

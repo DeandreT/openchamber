@@ -39,7 +39,8 @@ SESSIONS = [
     ("transcript: reasoning", "perf/reasoning-20000cps", []),
     ("transcript: failing tool", "perf/failtool-20000cps", []),
     ("transcript: diff", "perf/diff-20000cps", []),
-    ("transcript: media", "perf/stream-20000cps", ["--image", "--compact"]),
+    ("transcript: rich", "perf/rich-20000cps", ["--image"]),
+    ("transcript: compaction", "perf/stream-20000cps", ["--compact"]),
 ]
 
 
@@ -239,8 +240,17 @@ def qualify(args) -> int:
                 wait_until(lambda: f"tool:{call['id']}:copy" in ids(client), 15, "the left-out result to load")
                 client.screenshot(args.output / "tool-elided-hydrated.png")
 
-            def media_and_compaction():
-                open_session(client, "transcript: media")
+            def rich_content():
+                open_session(client, "transcript: rich")
+                present = ids(client)
+                for name in ("inline.png", "gradient.png"):
+                    assert f"attachment:{name}" in present, f"the {name} thumbnail"
+                # Diagrams lay out off the main thread; give the first one a moment.
+                time.sleep(1.5)
+                client.screenshot(args.output / "rich-content.png")
+
+            def compaction():
+                open_session(client, "transcript: compaction")
                 toggle = next(i for i in ids(client) if i.startswith("compaction:") and i.endswith(":toggle"))
                 client.screenshot(args.output / "compaction-collapsed.png")
                 client.click(toggle)
@@ -248,7 +258,8 @@ def qualify(args) -> int:
                 client.screenshot(args.output / "compaction-expanded.png")
 
             for name, run in (("failing-tool", failing_tool), ("reasoning", reasoning), ("diff", diff),
-                              ("elided-result", elided_result), ("media-compaction", media_and_compaction)):
+                              ("elided-result", elided_result), ("rich-content", rich_content),
+                              ("compaction", compaction)):
                 if not args.only or name in args.only:
                     check(name, run)
     finally:

@@ -40,7 +40,8 @@
  * Feature models seed the transcript's rarer rows for visual checks:
  * `reasoning-300cps` thinks aloud before it answers, `failtool-300cps` lists
  * files and then edits one that does not exist, so its second call fails, and
- * `diff-300cps` writes a
+ * `rich-300cps` answers with math, a Mermaid diagram and a diff fence that fit
+ * one screen, and `diff-300cps` writes a
  * file and then edits it, so the turn carries both diffs.
  */
 
@@ -64,7 +65,7 @@ const FIXTURE_AGENT_PARALLEL = [{ calls: 100, parallel: 5 }]
 const FIXTURE_AGENT_RATES = [300, FIXTURE_SEED_RATE]
 const THINK_ANSWER = "Done."
 const FIXTURE_FEATURE_RATES = [300, FIXTURE_SEED_RATE]
-const FIXTURE_FEATURES = ["reasoning", "failtool", "diff"]
+const FIXTURE_FEATURES = ["reasoning", "failtool", "diff", "rich"]
 const CHUNK_CHARACTERS = 4
 
 export const INTERACTION_SHELL_COMMAND = "printf 'native-permission-ok\\n'"
@@ -332,6 +333,22 @@ const FEATURE_ANSWER = {
   reasoning: "The plan above names the parts; this answer follows it.",
   failtool: "The file does not exist, so the edit failed and the answer stops here.",
   diff: "The file now holds the renamed function.",
+  rich: [
+    "Inline math $E = mc^2$ beside money that stays text: $5 and $10.",
+    "",
+    "$$\\int_0^1 x^2\\,dx = \\frac{1}{3}$$",
+    "",
+    "```mermaid",
+    "graph LR",
+    "  A[Start] --> B{Check}",
+    "  B -->|yes| C[Done]",
+    "```",
+    "",
+    "```diff",
+    "-const name = 'old'",
+    "+const name = 'new'",
+    "```",
+  ].join("\n"),
 }
 export const FEATURE_DIFF_FILE = "perf-diff/sample.ts"
 const FEATURE_DIFF_CONTENT = "export function greet(name: string): string {\n  return `Hello, ${name}`\n}\n"
@@ -390,7 +407,7 @@ const isCompactionRequest = (messages) => messages.some((message) => {
 })
 
 const parseModel = (model) => {
-  const feature = /(reasoning|failtool|diff)-(\d+)cps/.exec(String(model ?? ""))
+  const feature = /(reasoning|failtool|diff|rich)-(\d+)cps/.exec(String(model ?? ""))
   if (feature) {
     return { delayMs: 0, charactersPerSecond: Math.max(1, Number(feature[2])), document: FEATURE_ANSWER[feature[1]], toolSteps: 0, feature: feature[1] }
   }

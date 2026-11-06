@@ -229,7 +229,9 @@ impl Workspace {
                     .flex_col()
                     .child(text_part_view::user_message(
                         message,
+                        &open.parts,
                         &palette,
+                        direction,
                         open.selection.read(cx),
                         cx,
                     ))

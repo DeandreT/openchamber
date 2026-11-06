@@ -73,6 +73,8 @@ pub enum PartContent {
     File {
         filename: String,
         mime: String,
+        /// Where the file loads from: a URI or a `data:` URL.
+        url: Option<String>,
     },
     /// An `@agent` mention in a user prompt.
     Agent {

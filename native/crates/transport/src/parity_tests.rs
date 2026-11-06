@@ -181,7 +181,7 @@ fn normalize_message(message: &Message) -> Value {
                 "elided": elided,
                 "time": part_time(part),
             }),
-            PartContent::File { filename, mime } => {
+            PartContent::File { filename, mime, .. } => {
                 json!({"id": part.id.as_str(), "type": "file", "filename": filename, "mime": mime})
             }
             PartContent::Agent { name } => {

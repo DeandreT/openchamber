@@ -166,8 +166,9 @@ fn read_metadata(metadata: &Value) -> ToolMetadata {
 /// Every field of the input, one per line: what `formatToolInput` prints
 /// for a tool without a field of its own (`tool_shells::input_text`).
 ///
-/// `serde_json` keeps object keys sorted, so fields print in key order where
-/// the web prints them in the order the model wrote them.
+/// Fields print in the input's own order where `serde_json` keeps it (its
+/// `preserve_order` feature, which the desktop build enables), as the web
+/// prints them; a build without it sorts them by key.
 fn list_input(input: &Map<String, Value>) -> String {
     let lines: Vec<String> = input
         .iter()
@@ -237,12 +238,12 @@ mod tests {
     #[test]
     fn lists_every_field_for_tools_without_one_of_their_own() {
         let generic = json!({"maxResults": 5, "fileName": "a", "recursive": true, "empty": ""});
-        assert_eq!(
-            tool_facts(Some(&generic), None, None)
-                .listed_input
-                .as_deref(),
-            Some("File name: a\nMax results: 5\nRecursive: Yes")
-        );
+        let listed = tool_facts(Some(&generic), None, None)
+            .listed_input
+            .expect("fields to list");
+        let mut lines: Vec<&str> = listed.lines().collect();
+        lines.sort_unstable();
+        assert_eq!(lines, ["File name: a", "Max results: 5", "Recursive: Yes"]);
     }
 
     #[test]
