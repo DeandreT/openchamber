@@ -140,6 +140,13 @@ crate owns wire parsing and authority checks, and hands the core records and
   (`Starting`, `Running`, `Exited`, `StartFailed`, `Ended`). It adopts the
   server's interactive terminals from an authoritative list. The server owns
   the terminals; tabs live for the window's lifetime and are not persisted.
+- `shortcuts.rs` ports `packages/ui/src/lib/shortcuts` (`config.ts`,
+  `schema.ts`, `bindings.ts`) and the recording rules of
+  `ShortcutRecordingDialog.tsx`: the declared actions in Settings order, the
+  binding spelling (`mod`, at most two chords), display per platform,
+  conflicts, effective bindings from the settings document's
+  `shortcutOverrides`, and the recorder's state and verdict. It decides no
+  dispatch; the desktop binds what it has commands for.
 
 ## Invariants
 
@@ -299,6 +306,11 @@ crate owns wire parsing and authority checks, and hands the core records and
   starting. A create that completes after its tab closed is refused by
   `started`, so the caller closes the orphaned terminal. Default labels number
   one above the highest open "Terminal N", so they stay unique after closes.
+
+- Shortcut overrides keep the reference's `Record<string, string>` shape.
+  An override that does not parse falls back to the default; the unassigned
+  value removes a binding; internal actions ignore overrides. Every declared
+  default is valid and no two defaults collide (`shortcuts::tests`).
 
 ## Decisions
 

@@ -40,6 +40,7 @@ pub mod send_config;
 pub mod session;
 pub mod session_actions;
 pub mod session_index;
+pub mod shortcuts;
 pub mod sidebar_collection;
 pub mod sidebar_rows;
 pub mod sidebar_work;

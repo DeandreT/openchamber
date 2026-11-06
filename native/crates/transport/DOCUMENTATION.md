@@ -15,10 +15,11 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `endpoint.rs` | The user-selected base URL, its path prefix and the `ws`/`wss` form of a route. |
 | `identity.rs` | `/health` parsing, API compatibility and capabilities. |
 | `system.rs` | Independent OpenChamber and OpenCode version readouts from the host's system and upgrade-status routes. |
+| `compatibility.rs` | The host's OpenCode compatibility (`GET /api/opencode/compatibility`) and its recovery requests: install v2 (`POST /api/opencode/install-v2`) and reload (`POST /api/config/reload`). |
 | `credential.rs` | The credential a client sends; its `Debug` output is redacted. |
 | `authentication.rs` | Exact bearer status at `/auth/session`, password exchange with explicit session/device trust, bounded response parsing and login rate limits. |
 | `request.rs` | The private authenticated request builder, preserving reqwest serialization and publishing a content-free signal on HTTP 401. |
-| `client.rs` | `ServerClient`: identity probe, password login, session pages, message pages, whole messages, running status, settings reads and writes, Chats roots, projects and worktrees. |
+| `client.rs` | `ServerClient`: identity probe, password login, session pages, message pages, whole messages, running status, settings reads and writes (including the whole `shortcutOverrides` map), Chats roots, projects and worktrees. |
 | `catalog.rs` | Routing readiness (Auto and the safety net) and the composer's catalogs in one directory: agents, the flat model catalog with OpenCode's default model, folded config defaults, the skill count and the connected MCP count. |
 | `project.rs` | A directory's Git status (`GET /api/git/status`) and a project's configured actions (`GET /api/projects/:projectId/config`, the path-derived ID). |
 | `files.rs` | The Files surface's filesystem routes: folder listings, OpenCode's fuzzy file search (`/api/fs/find`), ripgrep content search, stat, text and bounded raw reads, writes and renames, scoped to the workspace by the directory header. |
