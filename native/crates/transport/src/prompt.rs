@@ -723,7 +723,7 @@ fn valid_selection(model: Option<&ModelChoice>, agent: Option<&str>) -> bool {
         })
 }
 
-async fn send_checked(
+pub(crate) async fn send_checked(
     request: RequestBuilder,
     expected: StatusCode,
 ) -> Result<Response, TransportError> {

@@ -3,6 +3,7 @@
 use crate::ids::{MessageId, OpenCodeProjectId, SessionId};
 use crate::path;
 use crate::send_config::ModelChoice;
+use crate::session_goal::SessionGoal;
 
 /// What kind of conversation a session is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -71,6 +72,8 @@ pub struct SessionRecord {
     /// hidden until the next prompt commits the revert or Restore clears it.
     pub revert: Option<MessageId>,
     pub btw: BtwMetadata,
+    /// `metadata.openchamber.goal`, when it holds a valid goal.
+    pub goal: Option<SessionGoal>,
 }
 
 /// The `/btw` links in a session's `metadata.openchamber`, as
@@ -93,6 +96,7 @@ pub struct MetadataFacts {
     pub overlay: SessionOverlay,
     pub kind: SessionKind,
     pub btw: BtwMetadata,
+    pub goal: Option<SessionGoal>,
 }
 
 /// A change to fields of one session record, as live events report it.
@@ -210,6 +214,7 @@ impl SessionRecord {
             next.overlay = facts.overlay;
             next.kind = facts.kind;
             next.btw.clone_from(&facts.btw);
+            next.goal.clone_from(&facts.goal);
         }
         if let Some(revert) = &patch.revert {
             next.revert.clone_from(revert);

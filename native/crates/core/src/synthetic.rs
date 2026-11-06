@@ -202,6 +202,7 @@ impl SyntheticWorkspace {
                 agent: None,
                 revert: None,
                 btw: Default::default(),
+                goal: None,
             });
         }
 

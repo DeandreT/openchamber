@@ -12,6 +12,7 @@ use openchamber_native_core::message_time::ClockPreference;
 use openchamber_native_core::ownership::{self, ConfiguredProject, WorktreeInfo};
 use openchamber_native_core::permission_mode::PermissionMode;
 use openchamber_native_core::session::{LiveStatus, SessionRecord};
+use openchamber_native_core::session_goal::{DEFAULT_TOKEN_BUDGET, GoalChecker};
 use openchamber_native_core::sidebar_rows::SidebarViewMode;
 use openchamber_native_core::transcript::Message;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
@@ -220,6 +221,13 @@ pub struct ServerSettings {
     pub keep_work_in_place: Option<bool>,
     pub work_enabled: Option<bool>,
     pub prompt_navigator_enabled: Option<bool>,
+    /// `sessionGoalEnabled`: absent shows the goal controls.
+    pub goal_enabled: Option<bool>,
+    /// `sessionGoalChecker`: who checks a goal's progress.
+    pub goal_checker: Option<GoalChecker>,
+    /// `sessionGoalDefaultBudget` while `sessionGoalDefaultBudgetEnabled`:
+    /// the budget an armed send's goal gets.
+    pub goal_default_budget: Option<u64>,
     /// `showDeletionDialog`: archive and delete ask first; absent means yes.
     pub show_deletion_dialog: Option<bool>,
     /// `permissionDefaultMode`: the mode the server writes onto each new
@@ -413,6 +421,32 @@ impl ServerSettings {
                 .prompt_navigator_enabled
                 .as_ref()
                 .and_then(Value::as_bool),
+            goal_enabled: settings
+                .session_goal_enabled
+                .as_ref()
+                .and_then(Value::as_bool),
+            goal_checker: match settings
+                .session_goal_checker
+                .as_ref()
+                .and_then(Value::as_str)
+            {
+                Some("classifier") => Some(GoalChecker::Classifier),
+                Some("small-model") => Some(GoalChecker::SmallModel),
+                _ => None,
+            },
+            goal_default_budget: (settings
+                .session_goal_default_budget_enabled
+                .as_ref()
+                .and_then(Value::as_bool)
+                == Some(true))
+            .then(|| {
+                settings
+                    .session_goal_default_budget
+                    .as_ref()
+                    .and_then(Value::as_f64)
+                    .filter(|budget| budget.is_finite() && *budget > 0.0)
+                    .map_or(DEFAULT_TOKEN_BUDGET, |budget| budget.floor() as u64)
+            }),
             show_deletion_dialog: settings
                 .show_deletion_dialog
                 .as_ref()
