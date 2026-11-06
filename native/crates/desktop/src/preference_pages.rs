@@ -124,6 +124,17 @@ struct Chip {
     choice: Choice,
 }
 
+/// One boolean setting: its search target, text keys, value and writer.
+struct CheckboxRow {
+    item: &'static str,
+    label: &'static str,
+    aria: &'static str,
+    info: Option<&'static str>,
+    checked: bool,
+    enabled: bool,
+    on_change: fn(&mut PreferencePage, bool, &mut Context<PreferencePage>),
+}
+
 pub(crate) struct PreferencePage {
     owner: WeakEntity<Workspace>,
     general: Entity<GeneralSettings>,
@@ -255,17 +266,16 @@ impl PreferencePage {
         cx.notify();
     }
 
-    fn checkbox(
-        &mut self,
-        item: &'static str,
-        label: &'static str,
-        aria: &'static str,
-        info: Option<&'static str>,
-        checked: bool,
-        enabled: bool,
-        on_change: fn(&mut Self, bool, &mut Context<Self>),
-        cx: &mut Context<Self>,
-    ) -> AnyElement {
+    fn checkbox(&mut self, row: CheckboxRow, cx: &mut Context<Self>) -> AnyElement {
+        let CheckboxRow {
+            item,
+            label,
+            aria,
+            info,
+            checked,
+            enabled,
+            on_change,
+        } = row;
         let strings = locale::strings(cx).clone();
         let palette = cx.global::<Palette>().clone();
         let focus = self.focus_handle(&item.into(), cx);
@@ -458,13 +468,17 @@ impl PreferencePage {
         match self.tab {
             ChatTab::Messages => {
                 let navigator = self.checkbox(
-                    "chat.prompt-navigator",
-                    "settings.openchamber.visual.field.promptNavigatorEnabled",
-                    "settings.openchamber.visual.field.promptNavigatorEnabledAria",
-                    None,
-                    prompt_navigator,
-                    enabled,
-                    |this, value, cx| this.change(PROMPT_NAVIGATOR, Choice::Boolean(value), cx),
+                    CheckboxRow {
+                        item: "chat.prompt-navigator",
+                        label: "settings.openchamber.visual.field.promptNavigatorEnabled",
+                        aria: "settings.openchamber.visual.field.promptNavigatorEnabledAria",
+                        info: None,
+                        checked: prompt_navigator,
+                        enabled,
+                        on_change: |this, value, cx| {
+                            this.change(PROMPT_NAVIGATOR, Choice::Boolean(value), cx)
+                        },
+                    },
                     cx,
                 );
                 sections.push(section(
@@ -474,13 +488,15 @@ impl PreferencePage {
                     cx,
                 ));
                 let wrap = self.checkbox(
-                    "chat.code-block-line-wrap",
-                    "settings.openchamber.visual.field.codeBlockLineWrap",
-                    "settings.openchamber.visual.field.codeBlockLineWrapAria",
-                    None,
-                    wrap,
-                    wrap_enabled,
-                    |this, value, cx| this.set_code_wrap(value, cx),
+                    CheckboxRow {
+                        item: "chat.code-block-line-wrap",
+                        label: "settings.openchamber.visual.field.codeBlockLineWrap",
+                        aria: "settings.openchamber.visual.field.codeBlockLineWrapAria",
+                        info: None,
+                        checked: wrap,
+                        enabled: wrap_enabled,
+                        on_change: |this, value, cx| this.set_code_wrap(value, cx),
+                    },
                     cx,
                 );
                 sections.push(section(
@@ -521,13 +537,17 @@ impl PreferencePage {
             }
             ChatTab::Assistance => {
                 let row = self.checkbox(
-                    "chat.draft-starters-visible",
-                    "settings.openchamber.visual.field.draftStartersVisible",
-                    "settings.openchamber.visual.field.draftStartersVisibleAria",
-                    None,
-                    starters,
-                    enabled,
-                    |this, value, cx| this.change(DRAFT_STARTERS, Choice::Boolean(value), cx),
+                    CheckboxRow {
+                        item: "chat.draft-starters-visible",
+                        label: "settings.openchamber.visual.field.draftStartersVisible",
+                        aria: "settings.openchamber.visual.field.draftStartersVisibleAria",
+                        info: None,
+                        checked: starters,
+                        enabled,
+                        on_change: |this, value, cx| {
+                            this.change(DRAFT_STARTERS, Choice::Boolean(value), cx)
+                        },
+                    },
                     cx,
                 );
                 sections.push(section(
@@ -593,33 +613,41 @@ impl PreferencePage {
             cx,
         );
         let show_chats = self.checkbox(
-            "sessions.show-chats",
-            "settings.openchamber.defaults.field.showChats",
-            "settings.openchamber.defaults.field.showChats",
-            None,
-            show_chats,
-            enabled,
-            |this, value, cx| this.change(SHOW_CHATS, Choice::Boolean(value), cx),
+            CheckboxRow {
+                item: "sessions.show-chats",
+                label: "settings.openchamber.defaults.field.showChats",
+                aria: "settings.openchamber.defaults.field.showChats",
+                info: None,
+                checked: show_chats,
+                enabled,
+                on_change: |this, value, cx| this.change(SHOW_CHATS, Choice::Boolean(value), cx),
+            },
             cx,
         );
         let work = self.checkbox(
-            "sessions.work-enabled",
-            "settings.openchamber.sessionWork.field.enabled",
-            "settings.openchamber.sessionWork.field.enabled",
-            Some("settings.openchamber.sessionWork.info"),
-            work,
-            enabled,
-            |this, value, cx| this.change(WORK_ENABLED, Choice::Boolean(value), cx),
+            CheckboxRow {
+                item: "sessions.work-enabled",
+                label: "settings.openchamber.sessionWork.field.enabled",
+                aria: "settings.openchamber.sessionWork.field.enabled",
+                info: Some("settings.openchamber.sessionWork.info"),
+                checked: work,
+                enabled,
+                on_change: |this, value, cx| this.change(WORK_ENABLED, Choice::Boolean(value), cx),
+            },
             cx,
         );
         let deletion = self.checkbox(
-            "sessions.deletion-dialog",
-            "settings.openchamber.defaults.field.showDeletionDialog",
-            "settings.openchamber.defaults.field.showDeletionDialogAria",
-            None,
-            deletion,
-            enabled,
-            |this, value, cx| this.change(DELETION_DIALOG, Choice::Boolean(value), cx),
+            CheckboxRow {
+                item: "sessions.deletion-dialog",
+                label: "settings.openchamber.defaults.field.showDeletionDialog",
+                aria: "settings.openchamber.defaults.field.showDeletionDialogAria",
+                info: None,
+                checked: deletion,
+                enabled,
+                on_change: |this, value, cx| {
+                    this.change(DELETION_DIALOG, Choice::Boolean(value), cx)
+                },
+            },
             cx,
         );
         vec![
@@ -1270,5 +1298,29 @@ mod tests {
         click(window, "chat-retry", cx);
         assert_eq!(server.saved("codeBlockLineWrap"), Some(json!(!before)));
         assert!(cx.read(|cx| !workspace.read(cx).code_wrap_save_failed()));
+    }
+
+    #[gpui_kit::test]
+    fn a_newer_never_ask_toggle_wins_over_a_failed_settings_choice(cx: &mut TestAppContext) {
+        let server = Server::new(json!({"showDeletionDialog": true}));
+        let (window, workspace) = open(&server, Page::Sessions, false, cx);
+        server.fail_writes.store(true, Ordering::Release);
+        click(window, "sessions-deletion-dialog", cx);
+        assert_eq!(settings(&workspace, cx).show_deletion_dialog, Some(false));
+
+        server.fail_writes.store(false, Ordering::Release);
+        cx.update_window(window, |_, window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.toggle_deletion_dialog(window, cx)
+            });
+        })
+        .expect("test window");
+        settle(window, cx);
+        assert_eq!(server.saved("showDeletionDialog"), Some(json!(true)));
+        assert_eq!(
+            settings(&workspace, cx).show_deletion_dialog,
+            Some(true),
+            "the dialog's confirmed choice is newer than the failed one"
+        );
     }
 }
