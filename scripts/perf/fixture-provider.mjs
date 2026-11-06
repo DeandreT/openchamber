@@ -130,10 +130,14 @@ export const planWorkflow = (messages) => {
       : "Finding (non-blocker): the greeting test does not cover the empty name."
   }
   if (last.includes(FEEDBACK_MARKER)) return "Fixed the finding: the test now covers the empty name."
-  if (all.includes(GOAL_INTRO_MARKER) || all.includes(GOAL_CONTINUATION_MARKER)) {
-    if (all.includes("[blocked]")) return goalReport({ done: "the first step", remaining: "nothing", needs: "an API key for the fixture service" })
-    const turns = Math.max(1, Number(/\[turns:(\d+)\]/.exec(all)?.[1] ?? 2))
-    const turn = users.filter((text) => text.includes(GOAL_CONTINUATION_MARKER)).length + 1
+  // A session can hold several goals in turn: only the latest one counts.
+  const goalStart = users.findLastIndex((text) => text.includes(GOAL_INTRO_MARKER))
+  const goal = users.slice(Math.max(0, goalStart))
+  if (goal.some((text) => text.includes(GOAL_INTRO_MARKER) || text.includes(GOAL_CONTINUATION_MARKER))) {
+    const text = goal.join("\n")
+    if (text.includes("[blocked]")) return goalReport({ done: "the first step", remaining: "nothing", needs: "an API key for the fixture service" })
+    const turns = Math.max(1, Number(/\[turns:(\d+)\]/.exec(text)?.[1] ?? 2))
+    const turn = goal.filter((item) => item.includes(GOAL_CONTINUATION_MARKER)).length + 1
     return turn >= turns
       ? goalReport({ done: `all ${turns} steps`, remaining: "nothing", needs: "nothing" })
       : goalReport({ done: `step ${turn} of ${turns}`, remaining: `steps ${turn + 1} to ${turns}`, needs: "nothing" })
