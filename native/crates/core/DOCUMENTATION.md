@@ -121,6 +121,13 @@ rendering asks for a projection and dispatches an action.
   setting. `draft_starters.rs` ports the starter lists of
   `draftStarters.ts` and `useDraftStarters.ts`; `magic_prompt.rs` ports the
   prompt-pair commands' parsing, variables and template rendering.
+- `session_goal.rs` ports the goal's validation, presentation and first-turn
+  reminder (`sessionGoalMetadata.ts`, `sessionGoalPresentation.ts`,
+  `sessionGoalActions.ts`); objective lengths count UTF-16 units as the web
+  does. `auto_review.rs` ports the auto-review projection of
+  `useAutoReviewStore.ts`: runs keyed by owner and reviewed session, never
+  going back to an older revision, a full snapshot replacing only its owner's
+  runs older than itself, and a space never answering for a host chat.
 - `draft.rs` and `scroll_memory.rs` hold client-owned state keyed by the
   runtime and the session or draft identity captured when it was created.
 - `draft_content.rs` holds semantic attachments, agent mentions, skills, opaque
