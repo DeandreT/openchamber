@@ -121,6 +121,10 @@ mod settings_navigation;
 mod settings_view;
 mod sidebar_item;
 mod sidebar_view;
+mod source_board;
+#[cfg(test)]
+mod source_board_tests;
+mod source_board_view;
 mod starter_capture;
 mod starters;
 mod startup_view;

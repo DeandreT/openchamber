@@ -144,8 +144,17 @@ impl Render for Workspace {
         self.ensure_project_starters(cx);
         let palette = cx.global::<Palette>().clone();
         let direction = locale::strings(cx).direction();
+        let source_board = if self.source_board_open {
+            self.render_source_board(cx)
+        } else {
+            None
+        };
+        // A full-page surface hides the work status card with the chat.
+        let chat_covered = source_board.is_some();
         let chat = if self.archive_open {
             self.render_archive_page(&palette, direction, window, cx)
+        } else if let Some(board) = source_board {
+            board
         } else if self.selected.is_some() {
             div()
                 .id("conversation")
@@ -164,7 +173,7 @@ impl Render for Workspace {
         let side_panel = self
             .render_side_panel(&palette, direction, window, cx)
             .or_else(|| self.render_terminal_panel(window, cx));
-        let work_status = side_panel.is_none();
+        let work_status = side_panel.is_none() && !chat_covered;
         div()
             .id("workspace")
             .role(Role::Group)

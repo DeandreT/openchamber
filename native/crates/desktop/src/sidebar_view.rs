@@ -238,11 +238,21 @@ impl Workspace {
                 div()
                     .flex_row_from(direction)
                     .gap(px(6.0))
-                    .child(button(
-                        "source-board",
-                        "git-pull-request",
-                        "sourceBoard.title",
-                    ))
+                    .child(
+                        IconButton::new(
+                            "source-board",
+                            "git-pull-request",
+                            strings.get("sourceBoard.title"),
+                        )
+                        .tone(if self.source_board_open {
+                            ButtonTone::Active
+                        } else {
+                            ButtonTone::Quiet
+                        })
+                        .render(palette, cx, |this, window, cx| {
+                            this.toggle_source_board(window, cx)
+                        }),
+                    )
                     .child(button(
                         "scheduled-tasks",
                         "calendar-schedule",

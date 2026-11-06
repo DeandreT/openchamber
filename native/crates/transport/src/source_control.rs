@@ -621,6 +621,36 @@ impl ServerClient {
             .collect())
     }
 
+    /// Makes the server forget its short-lived provider answers: the lists
+    /// and their statuses, or everything read about one item, so a change
+    /// made on the host's own site shows on the next read.
+    pub async fn source_control_refresh_reads(
+        &self,
+        identity: &Identity,
+        item: Option<&WriteTarget>,
+    ) -> Result<(), SourceControlError> {
+        let number = item.map(|item| item.number.to_string());
+        let mut pairs = vec![("instance", identity.instance.as_str())];
+        match (item, number.as_deref()) {
+            (Some(item), Some(number)) => pairs.extend([
+                ("scope", "item"),
+                ("owner", item.owner.as_str()),
+                ("repo", item.repo.as_str()),
+                ("number", number),
+            ]),
+            _ => pairs.push(("scope", "lists")),
+        }
+        let url = self.source_url(
+            &format!(
+                "api/source-control/{}/read-cache/refresh",
+                identity.provider
+            ),
+            &pairs,
+        );
+        let _: Value = provider_json(self.authorized(Method::POST, url)).await?;
+        Ok(())
+    }
+
     /// Comments on an issue or change request.
     pub async fn source_control_comment(
         &self,
