@@ -344,6 +344,8 @@ impl Workspace {
                         )),
                 )
             })
+            .children(self.render_goal_row(palette, direction, cx))
+            .children(self.render_auto_review_strip(palette, direction, cx))
             .children(queue_strip)
             .children(self.render_composer_attachments(palette, direction, cx))
             .children(self.render_revert_strip(palette, direction, cx))
@@ -402,11 +404,8 @@ impl Workspace {
                             .gap(px(START_GAP))
                             .child(self.render_attachment_menu(palette, direction, cx))
                             .child(self.render_permission_mode(palette, cx))
-                            .child(action(
-                                "composer-goal",
-                                "target",
-                                "chat.goal.button.armAria",
-                            )),
+                            .children(self.render_goal_button(palette, cx))
+                            .children(self.render_goal_counter(palette, cx)),
                     )
                     .child(
                         div()

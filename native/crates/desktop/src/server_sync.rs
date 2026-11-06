@@ -236,6 +236,11 @@ impl Workspace {
         self.invalidate_terminal_client(cx);
         self.reset_queue_runtime(&previous);
         self.starters.reset();
+        if self.goals.dialog.take().is_some() || self.reviews.dialog.take().is_some() {
+            gpui_kit::component::WindowExt::close_dialog(window, cx);
+        }
+        self.goals.switch_runtime();
+        self.reviews.switch_runtime();
         self.abort_primed = None;
         self.sessions = SessionIndex::new();
         self.topology = Topology::default();
@@ -374,6 +379,8 @@ impl Workspace {
                 self.load_permission_policy(cx);
                 // Queue broadcasts are not replayed either.
                 self.load_message_queue(cx);
+                // Nor are auto-review broadcasts.
+                self.load_auto_reviews(cx);
             }
             StreamItem::Disconnected(error) => {
                 tracing::warn!(%error, "the event stream dropped");
@@ -1157,6 +1164,7 @@ impl Workspace {
                 ServerEvent::MessageQueueUpdated { update, space } => {
                     self.apply_queue_broadcast(update, space)
                 }
+                ServerEvent::AutoReviewUpdated(update) => self.apply_auto_review_update(update),
                 ServerEvent::Transcript { session_id, event } => {
                     if self.finishes_git_changing_call(&session_id, &event)
                         && !git_changed.contains(&session_id)

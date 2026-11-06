@@ -199,6 +199,8 @@ pub struct Workspace {
     pub(crate) queue: crate::message_queue::QueueState,
     pub(crate) queue_storage: crate::queue_storage::QueueStorage,
     pub(crate) starters: crate::starters::Starters,
+    pub(crate) goals: crate::session_goal::Goals,
+    pub(crate) reviews: crate::review_flow::Reviews,
     /// The session a first Escape armed a stop for, until when.
     pub(crate) abort_primed: Option<(SessionId, Instant)>,
     pub(crate) recovery: crate::send_recovery::RecoveryState,
@@ -356,6 +358,8 @@ impl Workspace {
             queue: Default::default(),
             queue_storage: Default::default(),
             starters: Default::default(),
+            goals: Default::default(),
+            reviews: Default::default(),
             abort_primed: None,
             recovery: crate::send_recovery::RecoveryState::default(),
             persistence: crate::state_persistence::StatePersistence::default(),
@@ -1051,8 +1055,9 @@ impl Workspace {
     /// Sends to a selected session or durably creates the selected project draft.
     pub fn submit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.is_synthetic() {
-            // `/fork`, `/btw` and an open side conversation take the text.
-            if self.run_branch_command(window, cx) {
+            // `/handoff-review`, `/fork`, `/btw` and an open side
+            // conversation take the text.
+            if self.run_review_command(window, cx) || self.run_branch_command(window, cx) {
                 return;
             }
             if self.btw_takes_composer() {
