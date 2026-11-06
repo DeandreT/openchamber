@@ -17,6 +17,8 @@ passes only when there is none. See scripts/parity/DOCUMENTATION.md.
 from __future__ import annotations
 
 import argparse
+import base64
+import contextlib
 import hashlib
 import json
 import os
@@ -25,6 +27,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -33,6 +36,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import compare  # noqa: E402
 from electron_adapter import ElectronClient  # noqa: E402
 import native_adapter  # noqa: E402
+import steps as scenario_steps  # noqa: E402
 from native_adapter import NativeClient  # noqa: E402
 import virtual_display  # noqa: E402
 
@@ -175,16 +179,17 @@ def seed(args: argparse.Namespace) -> int:
     return 0
 
 
-def copy_seed(root: Path, target: Path, theme: str, settings: dict | None = None) -> Path:
+def copy_seed(root: Path, target: Path, theme: str, settings: dict | None = None, model: str | None = None) -> Path:
     """An independent copy of the seed with the theme pinned. The web reads
     `useSystemTheme: false` together with the derived `themeVariant`, so the
-    variant and that variant's theme are pinned too."""
+    variant and that variant's theme are pinned too. A scenario's `model` is
+    the profile's `defaultModel` preference, which new sessions start on."""
     state = target / "state"
     shutil.copytree(root / "seed", state, symlinks=True)
     preferences = state / "oc-data" / "preferences.json"
     document = json.loads(preferences.read_text()) if preferences.exists() else {"version": 1, "fields": {}}
     now = int(time.time() * 1000)
-    for key, value in (settings or {}).items():
+    for key, value in {**(settings or {}), **({"defaultModel": model} if model else {})}.items():
         document["fields"][key] = {"value": value, "updatedAt": now}
     variant = theme_variant(theme)
     pinned = (("useSystemTheme", False), ("themeId", theme), ("themeVariant", variant), (f"{variant}ThemeId", theme))
@@ -195,6 +200,42 @@ def copy_seed(root: Path, target: Path, theme: str, settings: dict | None = None
     (state / "home").mkdir(parents=True, exist_ok=True)
     (state / "home" / ".zshrc").write_text("")
     return state
+
+
+def fixture_project(root: Path, kind: str) -> Path:
+    """The scenario fixture's project path. It is the same for both clients,
+    so project IDs and row keys match; each client gets a fresh copy there
+    before it starts, and runs are serial."""
+    return root / "fixtures" / kind / "fixture-repo"
+
+
+def prepare_fixture(root: Path, kind: str, state: Path) -> Path:
+    """Recreates the fixture project and registers it as the copy's active
+    project. `git` is `isolated-server.mjs --git-fixture`'s repository, with
+    its bare remote beside it."""
+    project = fixture_project(root, kind)
+    shutil.rmtree(project.parent, ignore_errors=True)
+    project.parent.mkdir(parents=True)
+    # The isolated server's own order for --git-fixture.
+    script = (
+        f"import {{ ensureGitFixture, ensureProject }} from {json.dumps(ISOLATED_SERVER.as_uri())};"
+        f"ensureProject({json.dumps(str(project))});"
+        f"ensureGitFixture({json.dumps(str(project.parent))}, {json.dumps(str(project))})"
+    )
+    project.mkdir()
+    subprocess.run(["node", "--input-type=module", "-e", script], cwd=REPO_ROOT, check=True, capture_output=True,
+                   env={key: os.environ[key] for key in ("PATH", "LANG") if key in os.environ})
+    server_settings = state / "oc-data" / "settings.json"
+    document = json.loads(server_settings.read_text())
+    identifier = "path_" + base64.urlsafe_b64encode(str(project).encode()).decode().rstrip("=")
+    now = int(time.time() * 1000)
+    document["projects"] = [entry for entry in document.get("projects", []) if entry.get("path") != str(project)]
+    document["projects"].append({"id": identifier, "path": str(project), "label": project.name,
+                                 "addedAt": now, "lastOpenedAt": now, "sidebarCollapsed": False})
+    document["activeProjectId"] = identifier
+    document["lastDirectory"] = str(project)
+    server_settings.write_text(json.dumps(document, indent=2))
+    return project
 
 
 def theme_variant(theme: str) -> str:
@@ -295,10 +336,113 @@ def wait_selected(client, key: str, timeout_s: float = 15.0) -> bool:
     return False
 
 
-def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], directory: Path, args: argparse.Namespace) -> dict:
+class StepContext:
+    """What steps beyond pointer and keyboard input need for one client:
+    path placeholders, the private clipboard, where step input files go, and
+    the last composition."""
+
+    def __init__(self, places: dict[str, str] | None = None, clipboard=None, inputs: Path | None = None):
+        self.places = places or {}
+        self.clipboard = clipboard
+        self.inputs = inputs
+        self.composed: str | None = None
+        self.restarts: list[dict] = []
+        self.waits: list[dict] = []
+        self._files = 0
+
+    def write_files(self, files: list[dict]) -> list[Path]:
+        """Each step's synthetic files in a new directory of their own."""
+        self._files += 1
+        folder = self.inputs / str(self._files)
+        folder.mkdir(parents=True)
+        paths = []
+        for entry in files:
+            path = folder / entry["name"]
+            path.write_text(entry["text"], encoding="utf-8", newline="")
+            paths.append(path)
+        return paths
+
+
+def require_settled(client, before: str) -> None:
+    if not settle(client):
+        pending = getattr(client, "pending_requests", lambda: [])()
+        raise TimeoutError(f"the client never settled before {before}; pending route prefixes: {pending}")
+
+
+def resolve_sessions(client, path: str) -> str:
+    """`{session:<title>}` -> the ID of the one session with that title."""
+    titles = scenario_steps.SESSION_PLACEHOLDER.findall(path)
+    if not titles:
+        return path
+    listing = client.api_get("/api/session?limit=200")
+    sessions = listing["body"].get("data", []) if isinstance(listing["body"], dict) else []
+    for title in titles:
+        matches = [entry["id"] for entry in sessions if entry.get("title") == title]
+        if len(matches) != 1:
+            raise LookupError(f"{len(matches)} sessions are titled {title!r}")
+        path = path.replace(f"{{session:{title}}}", urllib.parse.quote(matches[0], safe=""))
+    return path
+
+
+def observe(client, spec: dict, context: StepContext) -> tuple[bool, object]:
+    """Reads the expectation's authoritative source once: whether it holds,
+    and what was observed. A failed read never holds."""
+    if "api" in spec:
+        response = client.api_get(resolve_sessions(client, spec["api"]))
+        if not 200 <= response["status"] < 300:
+            return False, {"status": response["status"]}
+        value = scenario_steps.select(response["body"], spec.get("select", []))
+    elif "file" in spec:
+        path = Path(scenario_steps.substitute(spec["file"], context.places))
+        if not path.is_file():
+            value = None
+        elif spec.get("encoding", "utf-8") == "bytes":
+            data = path.read_bytes()
+            value = {"sha256": hashlib.sha256(data).hexdigest(), "size": len(data)}
+        else:
+            value = path.read_bytes().decode("utf-8")
+    elif "git" in spec:
+        cwd = scenario_steps.substitute(spec.get("cwd", "{fixture}"), context.places)
+        result = subprocess.run(
+            ["git", *spec["git"]], cwd=cwd, capture_output=True, timeout=15,
+            env={"PATH": os.environ.get("PATH", ""), "HOME": cwd, "GIT_CONFIG_NOSYSTEM": "1",
+                 "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_OPTIONAL_LOCKS": "0", "LANG": "C"},
+        )
+        if result.returncode != 0:
+            return False, {"exitCode": result.returncode, "stderr": result.stderr.decode(errors="replace")[:500]}
+        value = result.stdout.decode("utf-8")
+    else:
+        value = sum(hit["id"] == spec["fault"] for hit in client.fault_hits())
+        return value == spec["hits"], value
+    if "where" in spec and isinstance(value, list):
+        # Evidence keeps what the predicates judged.
+        value = [item for item in value if scenario_steps.subset(spec["where"], item)]
+    return scenario_steps.holds(spec, value), value
+
+
+def wait_text(client, predicate, timeout_s: float) -> str | None:
+    """The focused editable text once the predicate holds, else None."""
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        text = client.focused_text()
+        if text is not None and predicate(text):
+            return text
+        time.sleep(0.1)
+    return None
+
+
+def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], directory: Path, args: argparse.Namespace,
+            context: StepContext | None = None) -> dict:
     """Runs the steps and returns the evidence of every checkpoint."""
+    context = context or StepContext()
     checkpoints: dict[str, dict] = {}
-    waits: list[dict] = []
+    waits = context.waits
+
+    def unmet(condition: dict, problem: str, **evidence) -> None:
+        waits.append({"condition": condition, "met": False, **evidence})
+        client.screenshot(directory / "wait-failed.png")
+        raise TimeoutError(problem)
+
     for step in steps:
         if "wait" in step:
             condition = step["wait"]
@@ -327,8 +471,88 @@ def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], dire
                 pending = getattr(client, "pending_requests", lambda: [])()
                 raise TimeoutError(f"the client never settled before control activation; pending route prefixes: {pending}")
             client.click_target(targets[step["clickTarget"]][kind])
+        elif "clickNamed" in step:
+            require_settled(client, "named control activation")
+            client.click_named(scenario_steps.named_control(step["clickNamed"], kind))
+        elif "hover" in step:
+            require_settled(client, "hover")
+            client.hover(targets[step["hover"]][kind])
         elif "type" in step:
             client.type_text(step["type"])
+        elif "paste" in step:
+            value = step["paste"]
+            text = value if isinstance(value, str) else value["text"]
+            until = value.get("until") if isinstance(value, dict) else None
+
+            # The clipboard is served by the probe's loop while the client
+            # reads it, so the chord's completion is checked, never awaited.
+            handled = []
+
+            def pasted() -> bool:
+                if handled and not handled[0]():
+                    return False
+                if until is not None:
+                    return client.wait_for(until[kind], 0.05)
+                current = client.focused_text()
+                return current is not None and text in current
+
+            try:
+                context.clipboard.paste(text, lambda: handled.append(client.begin_key("ctrl+v")), pasted)
+            except TimeoutError:
+                unmet({"paste": until[kind] if until else "focused text contains the pasted text"},
+                      "the paste never produced its text")
+            waits.append({"condition": {"paste": until[kind] if until else "focused text contains the pasted text"}, "met": True})
+        elif "ime" in step:
+            value = step["ime"]
+            before = client.focused_text()
+            if "compose" in value:
+                # The engine's preedit, when given, is what both clients must
+                # show; otherwise any change of the text counts.
+                preedit = value.get("preedit")
+                context.composed = value["compose"]
+                client.compose(value["compose"], preedit)
+                condition = {"composing": value["compose"], **({"preedit": preedit} if preedit else {})}
+                text = wait_text(client, (lambda current: preedit in current) if preedit else (lambda current: current != before), 10)
+            else:
+                committed = value["text"] if value["commit"] == "candidate" else context.composed
+                client.commit_composition(value["commit"], committed)
+                condition = {"committed": committed}
+                text = wait_text(client, lambda current: committed in current, 10)
+            if text is None:
+                unmet(condition, f"the IME step never changed the focused text: {condition}", observed=client.focused_text())
+            waits.append({"condition": condition, "met": True, "observed": text})
+        elif "drop" in step:
+            value = step["drop"]
+            require_settled(client, "drop")
+            dropped = client.drop(targets[value["target"]][kind], context.write_files(value["files"]))
+            waits.append({"condition": {"dropped": [entry["name"] for entry in value["files"]]}, "met": True, "drop": dropped})
+        elif "pick" in step:
+            value = step["pick"]
+            picked = client.pick(context.write_files(value["files"]), float(value.get("timeout", 15)))
+            waits.append({"condition": {"picked": [entry["name"] for entry in value["files"]]}, "met": True, "chooser": picked})
+        elif "fault" in step:
+            rule = scenario_steps.fault_rule(step["fault"], kind)
+            client.add_fault({**rule, "path": resolve_sessions(client, rule["path"])})
+        elif "release" in step:
+            client.release_fault(step["release"])
+        elif "restart" in step:
+            value = step["restart"]
+            record = client.restart(value.get("after", "signal"), float(value.get("timeout", 30)))
+            context.restarts.append(record)
+            if record["closed"].get("signal") == "timeout":
+                raise TimeoutError(f"the client did not exit for the restart: {record['closed']}")
+            client.wait_ready(args.timeout, connected=True)
+        elif "expect" in step:
+            spec = step["expect"]
+            deadline = time.monotonic() + float(spec.get("timeout", 15))
+            while True:
+                met, observed = observe(client, spec, context)
+                if met or time.monotonic() >= deadline:
+                    break
+                time.sleep(0.25)
+            if not met:
+                unmet({"expect": spec}, f"expectation not met: {spec}", observed=scenario_steps.bounded(observed))
+            waits.append({"condition": {"expect": spec}, "met": True, "observed": scenario_steps.bounded(observed)})
         elif "settle" in step:
             time.sleep(float(step["settle"]))
         elif "capture" in step:
@@ -356,42 +580,85 @@ def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], dire
                 "waits": list(waits),
                 "substitutions": list(getattr(client, "substitutions", [])),
                 "unobservable": sorted(getattr(client, "unobservable", ())),
+                "faultHits": getattr(client, "fault_hits", list)(),
+                "restarts": list(context.restarts),
             }
         else:
             raise ValueError(f"unknown step {step}")
     return checkpoints
 
 
+def uses(scenario: dict, kind: str) -> bool:
+    return any(kind in step for step in scenario["steps"])
+
+
 def run_client(kind: str, scenario: dict, work: Path, args: argparse.Namespace) -> dict:
+    """One client through the scenario. Services exist only for scenarios
+    whose steps need them, so other scenarios launch exactly as before."""
     directory = work / kind
     directory.mkdir(parents=True)
-    state = copy_seed(args.root.resolve(), directory, args.theme, scenario.get("settings"))
-    server = None
-    fixture = None
+    root = args.root.resolve()
+    state = copy_seed(root, directory, args.theme, scenario.get("settings"), scenario.get("model"))
     started = time.monotonic()
-    try:
-        if kind == "native":
-            server = IsolatedServer(directory, args)
-            server.wait_ready(args.timeout)
-            client = NativeClient(args.native_binary, native_env(state, server.url, args.theme), args.scale, args.width, args.height)
-        else:
-            fixture = FixtureProvider(directory)
-            fixture.wait_ready(args.timeout)
-            client = ElectronClient(args.electron_app, electron_env(state, fixture.opencode_config), args.scale, args.width, args.height)
+    with contextlib.ExitStack() as services:
         try:
-            launched = client.launch()
-            client.wait_ready(args.timeout, connected=True)
-            checkpoints = perform(client, kind, scenario["steps"], args.targets, directory, args)
-        finally:
-            closed = client.close()
-        return {"launch": launched, "checkpoints": checkpoints, "close": closed, "seconds": round(time.monotonic() - started, 1)}
-    except (RuntimeError, TimeoutError, LookupError, OSError, subprocess.CalledProcessError) as error:
-        return {"error": str(error)}
-    finally:
-        if server is not None:
-            server.stop()
-        if fixture is not None:
-            fixture.stop()
+            places = {"project": str(root / "project")}
+            if "fixture" in scenario:
+                places["fixture"] = str(prepare_fixture(root, scenario["fixture"], state))
+            context = StepContext(places, inputs=directory / "inputs")
+            # GTK starts before the client so its initialization cannot take focus.
+            if uses(scenario, "paste"):
+                from clipboard_probe import ClipboardProbe
+
+                context.clipboard = ClipboardProbe()
+            if kind == "native":
+                server = IsolatedServer(directory, args)
+                services.callback(server.stop)
+                server.wait_ready(args.timeout)
+                env = native_env(state, server.url, args.theme)
+                client = NativeClient(args.native_binary, env, args.scale, args.width, args.height)
+                client.server_url = server.url
+                if uses(scenario, "fault"):
+                    from fault_proxy import RuleFaultProxy
+
+                    client.faults = RuleFaultProxy(server.url)
+                    services.callback(client.faults.stop)
+                    env["OPENCHAMBER_NATIVE_SERVER"] = client.faults.url
+                if uses(scenario, "ime"):
+                    from ime_fixture import IBusFixture
+
+                    client.ibus = IBusFixture(directory / "ibus")
+                    services.callback(client.ibus.close)
+                    env.update(client.ibus.start())
+                if uses(scenario, "drop"):
+                    from drop_source import DropSource
+
+                    client.drop_source = DropSource()
+                if uses(scenario, "pick"):
+                    from native_interactions import Interrupts
+                    from portal_fixture import PortalFixture
+
+                    interrupts = services.enter_context(Interrupts())
+                    client.portal = PortalFixture(directory / "portal", env, interrupts)
+                    services.callback(client.portal.close)
+                    client.portal.start()
+            else:
+                fixture = FixtureProvider(directory)
+                services.callback(fixture.stop)
+                fixture.wait_ready(args.timeout)
+                client = ElectronClient(args.electron_app, electron_env(state, fixture.opencode_config), args.scale, args.width, args.height)
+            try:
+                launched = client.launch()
+                client.wait_ready(args.timeout, connected=True)
+                if kind == "electron" and uses(scenario, "pick"):
+                    client.intercept_file_choosers()
+                checkpoints = perform(client, kind, scenario["steps"], args.targets, directory, args, context)
+            finally:
+                closed = client.close()
+            return {"launch": launched, "checkpoints": checkpoints, "close": closed, "seconds": round(time.monotonic() - started, 1),
+                    "waits": context.waits, "restarts": context.restarts}
+        except (RuntimeError, TimeoutError, LookupError, OSError, ValueError, subprocess.CalledProcessError) as error:
+            return {"error": str(error)}
 
 
 def comparable_rows(rows: list[dict]) -> list[dict]:
@@ -464,6 +731,11 @@ def artifact_identity(path: Path) -> dict:
     return {"path": str(path), "sha256": digest.hexdigest(), "algorithm": "sha256-tree-v1", "files": len(files)}
 
 
+def scenario_file(args: argparse.Namespace) -> Path:
+    """`scenarios.json`, or the runner's own step probes (`--scenarios-file`)."""
+    return getattr(args, "scenarios_file", None) or SCENARIOS
+
+
 def input_identities(args: argparse.Namespace) -> dict:
     electron_resources = args.electron_app.parent / "resources"
     electron_cli = "opencode.exe" if args.electron_app.suffix.lower() == ".exe" else "opencode"
@@ -476,7 +748,7 @@ def input_identities(args: argparse.Namespace) -> dict:
         "webAssets": args.dist,
         "opencode": args.opencode_binary,
         "seed": args.root / "seed",
-        "scenarios": SCENARIOS,
+        "scenarios": scenario_file(args),
         "inventory": INVENTORY,
         "exceptions": EXCEPTIONS,
     }.items()}
@@ -486,13 +758,16 @@ def run(args: argparse.Namespace) -> int:
     if not (args.root / "seed").exists():
         print(f"no seed under {args.root}; run the seed command first", file=sys.stderr)
         return 2
-    scenario_source = SCENARIOS.read_bytes()
+    scenario_source = scenario_file(args).read_bytes()
     inventory_source = INVENTORY.read_bytes()
     definitions = json.loads(scenario_source.decode("utf-8"))
     scenarios = definitions["scenarios"]
     args.targets = definitions.get("targets", {})
     features = json.loads(inventory_source.decode("utf-8"))["features"]
-    problems = check_contracts(scenarios, features, args.targets)
+    linked = frozenset()
+    if scenario_file(args) != SCENARIOS:
+        linked = frozenset(scenario["id"] for scenario in json.loads(SCENARIOS.read_text())["scenarios"])
+    problems = check_contracts(scenarios, features, args.targets, linked)
     if problems:
         for problem in problems:
             print(problem, file=sys.stderr)
@@ -552,11 +827,13 @@ def run(args: argparse.Namespace) -> int:
     return 1 if failed or inventory_refused else 0
 
 
-def check_contracts(scenarios: list[dict], features: list[dict], targets: dict[str, dict]) -> list[str]:
+def check_contracts(scenarios: list[dict], features: list[dict], targets: dict[str, dict], linked: set[str] = frozenset()) -> list[str]:
     """Validate targets and explicit proofs against the feature requirements.
 
     Missing proof is a coverage gap, not an invalid contract. Unknown or
-    unlinked proof cannot silently satisfy a requirement.
+    unlinked proof cannot silently satisfy a requirement. `linked` names the
+    `scenarios.json` IDs the inventory may list when another scenario file
+    runs; the inventory never links probes, so a probe's proof is rejected.
     """
     feature_ids = {feature["id"] for feature in features}
     scenario_ids = {scenario["id"] for scenario in scenarios}
@@ -567,15 +844,12 @@ def check_contracts(scenarios: list[dict], features: list[dict], targets: dict[s
         problems.append("duplicate scenario IDs")
     by_feature = {feature["id"]: feature for feature in features}
     for scenario in scenarios:
+        problems.extend(f"scenario {scenario['id']} {problem}" for problem in scenario_steps.check_scenario(scenario))
         for step in scenario["steps"]:
-            if "wait" in step and set(step["wait"]) - {"timeout"} != {"electron", "native"}:
-                problems.append(f"scenario {scenario['id']} has a wait without a condition for each client")
-            named_targets = list(step.get("targets", []))
-            if "clickTarget" in step:
-                named_targets.append(step["clickTarget"])
+            problems.extend(f"scenario {scenario['id']} {problem}" for problem in scenario_steps.check_step(step, targets))
             problems.extend(
-                f"scenario {scenario['id']} references undefined target {target}"
-                for target in named_targets
+                f"scenario {scenario['id']} capture references undefined target {target}"
+                for target in step.get("targets", [])
                 if set(targets.get(target, {})) != {"electron", "native"}
             )
         for feature_id, proof in scenario.get("proofs", {}).items():
@@ -607,7 +881,7 @@ def check_contracts(scenarios: list[dict], features: list[dict], targets: dict[s
             problems.append(f"feature {feature['id']} needs automated or manual coverage")
         if feature.get("coverage") == "manual" and not feature.get("manualCheck"):
             problems.append(f"feature {feature['id']} needs a manualCheck procedure")
-        problems.extend(f"feature {feature['id']} lists unknown scenario {scenario}" for scenario in feature["scenarios"] if scenario not in scenario_ids)
+        problems.extend(f"feature {feature['id']} lists unknown scenario {scenario}" for scenario in feature["scenarios"] if scenario not in scenario_ids | linked)
     return problems
 
 
@@ -810,6 +1084,7 @@ def main() -> int:
     commands.choices["seed"].add_argument("--force", action="store_true", help="rebuild an existing seed")
     runner = commands.choices["run"]
     runner.add_argument("--scenarios", help="comma-separated scenario IDs; all by default")
+    runner.add_argument("--scenarios-file", type=Path, help="scenario file other than scenarios.json, such as step_probes.json")
     runner.add_argument(
         "--require-complete-inventory", action="store_true",
         help="fail unless every inventory feature passes with complete behavior and state proofs",
