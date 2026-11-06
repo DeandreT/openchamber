@@ -13,8 +13,9 @@ use gpui_kit::{
     AnyWindowHandle, AppContext, Bounds, ElementId, Entity, ScrollDelta, SharedString,
     TestAppContext, WindowBounds, WindowOptions, point, px, size,
 };
-use openchamber_native_core::ids::SessionId;
+use openchamber_native_core::ids::{PartId, SessionId};
 use openchamber_native_core::synthetic::{ConversationShape, ResponseScript, WorkloadSize};
+use openchamber_native_core::transcript::{Part, PartContent, PartTime, Role, TranscriptEvent};
 
 use crate::locale::Strings;
 use crate::sidebar_item::SidebarItem;
@@ -1266,6 +1267,129 @@ fn returning_restores_the_exact_scroll_anchor(cx: &mut TestAppContext) {
     });
     assert_eq!(restored.item_ix, anchor.item_ix);
     assert_eq!(restored.offset_in_item, anchor.offset_in_item);
+}
+
+#[gpui_kit::test]
+fn opening_a_block_at_the_tail_keeps_its_row_in_place(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let rich = session_rows(&workspace, cx)
+        .into_iter()
+        .find(|(_, session)| ConversationShape::for_session(session) == ConversationShape::Rich)
+        .expect("a rich conversation");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id(&rich.0), cx);
+        window.render_frame(cx);
+    })
+    .expect("window is open");
+    // The last answer gains a reasoning block, so the row is on screen.
+    let block = PartId::from("tail-reasoning");
+    let (row, message) = cx
+        .update_window(window, |_, window, cx| {
+            let found = workspace.update(cx, |workspace, cx| {
+                let open = workspace
+                    .open_sessions
+                    .get_mut(&rich.1)
+                    .expect("session is open");
+                let (row, message) = open
+                    .transcript
+                    .messages()
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find(|(_, message)| message.info.role == Role::Assistant)
+                    .map(|(row, message)| (row, message.info.id.clone()))
+                    .expect("the rich conversation answers");
+                let change = open.transcript.apply(TranscriptEvent::PartUpdated {
+                    message_id: message.clone(),
+                    part: Part {
+                        id: block.clone(),
+                        content: PartContent::Reasoning {
+                            text: "Checking the order.\n\n".repeat(40),
+                        },
+                        time: PartTime::default(),
+                    },
+                });
+                crate::server_sync::apply_list_change(open, &change, cx);
+                cx.notify();
+                (row, message)
+            });
+            window.render_frame(cx);
+            found
+        })
+        .expect("window is open");
+    let top = cx.read(|cx| {
+        let open = &workspace.read(cx).open_sessions[&rich.1];
+        assert!(
+            open.list.is_following_tail(),
+            "a new session opens at its end"
+        );
+        open.list
+            .bounds_for_item(row)
+            .expect("the last answer is drawn at the end")
+            .top()
+    });
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.toggle_block(&rich.1, &message, &block, false, cx)
+        });
+        window.render_frame(cx);
+    })
+    .expect("window is open");
+    cx.read(|cx| {
+        let open = &workspace.read(cx).open_sessions[&rich.1];
+        assert!(open.parts.block_open(&block, false), "the block opened");
+        assert!(!open.list.is_following_tail(), "opening lets go of the end");
+        assert_eq!(
+            open.list.bounds_for_item(row).map(|bounds| bounds.top()),
+            Some(top),
+            "the opened row stays where the reader clicked it"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn resizing_keeps_the_reading_anchor(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let rich = session_rows(&workspace, cx)
+        .into_iter()
+        .find(|(_, session)| ConversationShape::for_session(session) == ConversationShape::Rich)
+        .expect("a rich conversation");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id(&rich.0), cx);
+        window.render_frame(cx);
+        window.scroll(
+            "transcript",
+            ScrollDelta::Pixels(point(px(0.0), px(1337.0))),
+            cx,
+        );
+        window.render_frame(cx);
+    })
+    .expect("window is open");
+    let anchor = |cx: &mut TestAppContext| {
+        cx.read(|cx| {
+            let open = &workspace.read(cx).open_sessions[&rich.1];
+            let top = open.list.logical_scroll_top();
+            (
+                open.transcript.messages()[top.item_ix].info.id.clone(),
+                top.offset_in_item,
+                open.list.is_following_tail(),
+            )
+        })
+    };
+    let before = anchor(cx);
+    assert!(!before.2, "the reader scrolled away from the end");
+    for width in [900.0, 1280.0] {
+        cx.simulate_window_resize(window, size(px(width), px(700.0)));
+        cx.update_window(window, |_, window, cx| window.render_frame(cx))
+            .expect("window is open");
+        assert_eq!(
+            anchor(cx),
+            before,
+            "a {width} px window keeps the message and offset"
+        );
+    }
 }
 
 #[gpui_kit::test]

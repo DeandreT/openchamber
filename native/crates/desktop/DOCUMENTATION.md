@@ -1409,6 +1409,16 @@ clock is marked by each frame that draws a live indicator and redraws only
 if the last frame drew one, so it stops on its own once no running row is on
 screen, without each row tracking its own timer or visibility.
 
+### Why opening a row lets go of the end
+
+A transcript following its end keeps the end in view as rows grow, so a tool
+row or reasoning block opened near the end would grow upward and push the
+header the reader clicked out of view. Opening one pauses following and pins
+the current top row and offset first (`dispatchRowExpand` on the web); the
+content opens below the header, and returning to the end resumes following.
+GPUI's own pause leaves the scroll anchored at the end, so the top is pinned
+explicitly.
+
 ### Why a left-out result fills in only shelled calls
 
 A whole-message read can return after live events changed the same message.

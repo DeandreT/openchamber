@@ -580,6 +580,9 @@ impl Workspace {
         let Some(open) = self.open_sessions.get_mut(session) else {
             return;
         };
+        if !open.parts.is_expanded(part) {
+            crate::transcript_view::hold_position_for_expand(&open.list);
+        }
         let opened = open.parts.toggle_tool(part);
         let elided = open
             .transcript
