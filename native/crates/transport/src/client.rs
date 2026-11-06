@@ -12,6 +12,7 @@ use openchamber_native_core::message_time::ClockPreference;
 use openchamber_native_core::ownership::{self, ConfiguredProject, WorktreeInfo};
 use openchamber_native_core::permission_mode::PermissionMode;
 use openchamber_native_core::session::{LiveStatus, SessionRecord};
+use openchamber_native_core::shortcuts::{self, Overrides};
 use openchamber_native_core::sidebar_rows::SidebarViewMode;
 use openchamber_native_core::transcript::Message;
 use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
@@ -71,6 +72,10 @@ pub struct SettingsChanges {
     pub draft_starters_craft_goal_added: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub draft_starters_schedule_task_added: Option<bool>,
+    /// The complete map of the user's shortcut bindings; it replaces the
+    /// saved one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shortcut_overrides: Option<Overrides>,
 }
 
 fn serialize_efforts<S: serde::Serializer>(
@@ -236,6 +241,8 @@ pub struct ServerSettings {
     pub draft_starters: Option<Vec<StarterRef>>,
     /// `draftStartersVisible`: absent shows the starters.
     pub draft_starters_visible: Option<bool>,
+    /// `shortcutOverrides`; absent or malformed leaves the defaults.
+    pub shortcut_overrides: Option<Overrides>,
 }
 
 /// A registered project's display label, trimmed.
@@ -450,6 +457,17 @@ impl ServerSettings {
                 .draft_starters_visible
                 .as_ref()
                 .and_then(Value::as_bool),
+            shortcut_overrides: settings
+                .shortcut_overrides
+                .as_ref()
+                .and_then(Value::as_object)
+                .map(|entries| {
+                    shortcuts::parse_overrides(
+                        entries
+                            .iter()
+                            .filter_map(|(key, value)| Some((key.as_str(), value.as_str()?))),
+                    )
+                }),
             permission_default_mode: match settings
                 .permission_default_mode
                 .as_ref()
