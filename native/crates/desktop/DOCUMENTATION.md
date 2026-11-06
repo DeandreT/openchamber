@@ -972,7 +972,12 @@ prompt. Attachments and worktree creation remain separate workflows.
   establishing that the selected prefix is unavailable. The captured native draft
   must return to its original owner before operation removal; newer input and
   source-document groups remain. Restoration conflicts preserve every original
-  owner and byte root. A reserved or uncertain reservation never uses this path.
+  owner and byte root. A reserved or uncertain reservation never uses this path,
+  with one exception: the server's `queue_prefix_stale` refusal, which it sends
+  only while the session holds no reservation, returns a previewed prefix the
+  same way. A capture with an exact rich edit, or an owner with an open compound
+  document, keeps the capture: that handback needs the compound owner's restore
+  hook, which does not exist yet. A retry then repeats the refused reservation.
 - Indexed payloads persist through the transport's sealed `body()` bytes.
   Native prefix comparison records contain typed identities and seals, so a
   display preview never becomes hash material. Preview and reservation compare
