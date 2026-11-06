@@ -11,6 +11,7 @@ use std::collections::{HashMap, HashSet};
 use crate::ids::{OpenCodeProjectId, ProjectId, SessionId, SpaceId};
 use crate::path;
 use crate::session::SessionRecord;
+use crate::sidebar_collection::SidebarCollection;
 
 /// The client surface whose ownership rules apply.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -230,10 +231,37 @@ impl<'a> SessionOwnershipIndex<'a> {
     /// The archive lists top-level sessions only: a subsession is restored with
     /// its parent, never alone.
     pub fn build(inputs: &OwnershipInputs<'a>) -> Self {
-        let mut resolver = OwnerResolver::new(inputs);
+        Self::build_selected(
+            inputs,
+            inputs.sessions.iter(),
+            inputs.archived_sessions.iter(),
+        )
+    }
+
+    /// Resolves ownership using only the production sidebar's visible inputs.
+    ///
+    /// Managed Chats never contribute active canonical-project metadata. The
+    /// complete global index remains available to non-sidebar consumers.
+    pub fn build_for_sidebar(
+        inputs: &OwnershipInputs<'a>,
+        collection: &SidebarCollection<'a>,
+    ) -> Self {
+        Self::build_selected(
+            inputs,
+            collection.project_sessions.iter().copied(),
+            collection.archived_sessions.iter().copied(),
+        )
+    }
+
+    fn build_selected(
+        inputs: &OwnershipInputs<'a>,
+        sessions: impl Iterator<Item = &'a SessionRecord> + Clone,
+        archived: impl Iterator<Item = &'a SessionRecord> + Clone,
+    ) -> Self {
+        let mut resolver = OwnerResolver::new(inputs, sessions.clone().chain(archived.clone()));
         let mut index = Self::default();
 
-        for session in inputs.sessions {
+        for session in sessions {
             let Some(owner) = resolver.owner_of_session(session) else {
                 continue;
             };
@@ -249,7 +277,7 @@ impl<'a> SessionOwnershipIndex<'a> {
                 .push(session);
             index.by_session.insert(&session.id, owner);
         }
-        for session in inputs.archived_sessions {
+        for session in archived {
             if !session.is_root() {
                 continue;
             }
@@ -316,7 +344,10 @@ struct OwnerResolver {
 }
 
 impl OwnerResolver {
-    fn new(inputs: &OwnershipInputs<'_>) -> Self {
+    fn new<'a>(
+        inputs: &OwnershipInputs<'_>,
+        all_sessions: impl Iterator<Item = &'a SessionRecord>,
+    ) -> Self {
         let mut by_directory: HashMap<String, DirectoryOwner> = HashMap::new();
         let mut project_by_root: HashMap<String, &ConfiguredProject> = HashMap::new();
         let desktop = inputs.surface == Surface::Desktop;
@@ -398,7 +429,6 @@ impl OwnerResolver {
             authoritative_ids.insert(&project.id);
             canonical.register(&project.id, project.worktree.as_deref());
         }
-        let all_sessions = inputs.sessions.iter().chain(inputs.archived_sessions);
         for session in all_sessions {
             let Some(project) = &session.project else {
                 continue;

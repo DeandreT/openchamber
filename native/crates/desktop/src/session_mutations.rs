@@ -12,6 +12,7 @@ use openchamber_native_core::draft::{Draft, DraftKey, DraftTarget};
 use openchamber_native_core::ids::{MessageId, PartId, SessionId};
 use openchamber_native_core::pending_requests::RequestKey;
 use openchamber_native_core::transcript::{Message, MessageInfo, Part, Role, TranscriptEvent};
+use openchamber_native_transport::client::ServerClient;
 use openchamber_native_transport::prompt::{
     AbortError, Delivery, Prompt, PromptAdmission, PromptReceipt, SendError, SendStage,
 };
@@ -69,6 +70,8 @@ pub(crate) struct Outgoing {
     pub supersedes: bool,
     /// A server-owned prefix keeps this identity across lost reservation replies.
     pub reserved_id: Option<(MessageId, crate::send_attempt::QueueReservation)>,
+    /// The user's composer effort, remembered once this send succeeds.
+    pub user_effort: Option<crate::effort_preferences::UserEffort>,
 }
 
 impl Workspace {
@@ -91,11 +94,14 @@ impl Workspace {
 
     pub(crate) fn can_send_connected(&self) -> bool {
         self.persistence_ready()
+            && !self.close_in_progress()
             && self
                 .send_selection()
                 .is_some_and(|(_, selection)| selection.model.is_some())
             && self.selected.as_ref().is_some_and(|session| {
                 self.prompt_allowed(&self.mutation_key(session))
+                    && !self.queue_preview_pending(session)
+                    && !self.payload_take_blocks_session(&self.runtime, session)
                     && self.send_attempts.can_send(&self.mutation_key(session))
                     && self.creations.get(&self.mutation_key(session)).is_none()
             })
@@ -136,7 +142,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.persistence_ready() {
+        if !self.persistence_ready() || self.close_in_progress() {
             return;
         }
         let Some(session) = self.selected.clone() else {
@@ -149,24 +155,69 @@ impl Workspace {
             _ => now || !busy || !self.requests_for_send(&key).is_empty(),
         };
         if !self.prompt_allowed(&key)
+            || self.queue_preview_pending(&session)
+            || self.payload_take_blocks_session(&key.runtime, &session)
             || !self.send_attempts.can_send(&key)
             || self.creations.get(&key).is_some()
             || !admitted_while_busy
         {
             return;
         }
-        let Some(owner) = self.composer_key.clone().filter(|owner| {
+        if !self.open_sessions.contains_key(&session) || !self.composer_has_sendable_content(cx) {
+            return;
+        }
+        if let Some(plain) = self.plain_composer_text(&key, cx) {
+            self.send_plain_composer(key, plain, delivery, window, cx);
+            return;
+        }
+        // This actor owns the complete rich capture and every failure. Falling
+        // back to Outgoing would send only the native draft's narrower content.
+        self.begin_local_send(delivery, window, cx);
+    }
+
+    /// The composer's draft when preparation would send it unchanged: text
+    /// only, with no files, context, references, mentions, skills or snippets.
+    /// Such a send keeps its optimistic message and attempt recovery.
+    fn plain_composer_text(&self, key: &SessionKey, cx: &Context<Self>) -> Option<Draft> {
+        let owner = self.composer_key.as_ref().filter(|owner| {
             owner.runtime() == &key.runtime
-                && owner.target() == &DraftTarget::Session(session.clone())
-        }) else {
+                && owner.target() == &DraftTarget::Session(key.session.clone())
+        })?;
+        if self.composer_documents.contains(owner)
+            || self.attachment_storage.has_pending(owner)
+            // Agents, skills and metadata travel only with the rich capture.
+            || self.drafts.get(owner).is_some_and(|draft| draft.content != Default::default())
+        {
+            return None;
+        }
+        let composer = self.composer.read(cx);
+        let draft = Draft {
+            text: composer.value().to_string(),
+            selection: composer.selected_range(),
+            ..Draft::default()
+        };
+        (!draft.text.trim().is_empty()
+            && !crate::composer_preparation::text_needs_preparation(&draft.text))
+        .then_some(draft)
+    }
+
+    fn send_plain_composer(
+        &mut self,
+        key: SessionKey,
+        draft: Draft,
+        delivery: Option<Delivery>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(owner) = self.composer_key.clone() else {
             return;
         };
         let Some((_, selection)) = self.send_selection() else {
             return;
         };
-        if selection.model.is_none() {
+        let Some(model) = selection.model.clone() else {
             return;
-        }
+        };
         let Some(connection) = self
             .connection
             .as_ref()
@@ -178,17 +229,7 @@ impl Workspace {
             return;
         };
         let executor = connection.network.handle();
-        if !self.open_sessions.contains_key(&session) {
-            return;
-        }
-        let composer = self.composer.read(cx);
-        let draft = Draft {
-            text: composer.value().to_string(),
-            selection: composer.selected_range(),
-        };
-        if draft.text.trim().is_empty() {
-            return;
-        }
+        let user_effort = Some(self.capture_user_effort(&model));
         self.send_outgoing(
             key,
             owner,
@@ -202,6 +243,7 @@ impl Workspace {
                 consumes_composer: true,
                 supersedes: true,
                 reserved_id: None,
+                user_effort,
             },
             (client, executor),
             window,
@@ -217,13 +259,17 @@ impl Workspace {
         key: SessionKey,
         owner: DraftKey,
         outgoing: Outgoing,
-        (client, executor): (
-            openchamber_native_transport::client::ServerClient,
-            tokio::runtime::Handle,
-        ),
+        (client, executor): (ServerClient, tokio::runtime::Handle),
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
+        if self.close_in_progress()
+            || self.payload_take_blocks_session(&key.runtime, &key.session)
+            || self.payload_prefix_blocks_session(&key.runtime, &key.session)
+            || self.payload_local_send_blocks_session(&key.runtime, &key.session)
+        {
+            return false;
+        }
         let Outgoing {
             draft,
             text,
@@ -234,6 +280,7 @@ impl Workspace {
             consumes_composer,
             supersedes,
             reserved_id,
+            user_effort,
         } = outgoing;
         let (fresh_id, created) = self.message_ids.next();
         let queue_owned = reserved_id.is_some();
@@ -268,6 +315,7 @@ impl Workspace {
         let attempt = SendAttempt {
             origin: SendOrigin::Existing,
             owner,
+            resources: crate::attachment_preparation::prepared_resources(&draft),
             draft,
             prompt: prompt.clone(),
             optimistic,
@@ -278,6 +326,23 @@ impl Workspace {
         };
         if !self.send_attempts.begin(key.clone(), attempt) {
             return false;
+        }
+        if let Some(effort) = user_effort {
+            self.effort_preferences
+                .retain_user_send(&key.runtime, &message_id, effort);
+        }
+        if queue_owned {
+            self.save_composer_draft(cx);
+            if self.validate_queue_intent_admission().is_err() {
+                // Preview has no side effects. This identity has never reserved
+                // or sent, so failure must not leave an unretryable large intent.
+                if let Some(attempt) = self.send_attempts.release_unreserved(&key, &message_id) {
+                    self.return_to_draft(&key, attempt, window, cx);
+                }
+                self.notify_mutation_failure("chat.queuedMessage.toast.takeFailed", window, cx);
+                cx.notify();
+                return false;
+            }
         }
         let prompt_allowed = self.prompt_allowed(&key);
         let captured = CapturedPrompt {
@@ -317,7 +382,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.persistence_ready() || !self.prompt_allowed(key) {
+        if !self.persistence_ready()
+            || !self.prompt_allowed(key)
+            || self.payload_local_send_blocks_session(&key.runtime, &key.session)
+        {
             return;
         }
         let Some(attempt) = self.send_attempts.attempt(key, id) else {
@@ -400,6 +468,7 @@ impl Workspace {
     ) {
         let (window, cx) = context;
         if self.persistence_ready()
+            && !self.payload_local_send_blocks_session(&key.runtime, &key.session)
             && self
                 .send_attempts
                 .begin_retry(&key, &prompt.prompt.message_id)
@@ -441,6 +510,9 @@ impl Workspace {
             supersedes,
         } = captured;
         let id = prompt.message_id.clone();
+        if matches!(kind, DispatchKind::Retry) {
+            self.effort_preferences.forget_user_send(&key.runtime, &id);
+        }
         let reservation = self
             .send_attempts
             .attempt(&key, &id)
@@ -450,6 +522,7 @@ impl Workspace {
             .attempt(&key, &id)
             .map(|attempt| attempt.owner.directory().to_owned());
         let Some((revision, saved)) = self.persistence_barrier(cx) else {
+            self.effort_preferences.forget_user_send(&key.runtime, &id);
             self.send_attempts.finish(
                 &key,
                 &id,
@@ -468,6 +541,9 @@ impl Workspace {
                 .unwrap_or(Err(crate::journal_worker::JournalFailure::WorkerStopped));
             let preparation = this.update_in(cx, |this, _, cx| {
                 if !this.record_persistence(revision, &saved, cx) || !this.persistence_ready()
+                    || this.payload_take_blocks_session(&key.runtime, &key.session)
+                     || this.payload_prefix_blocks_session(&key.runtime, &key.session)
+                     || this.payload_local_send_blocks_session(&key.runtime, &key.session)
                     || !allowed || (key.runtime == this.runtime && !this.prompt_allowed(&key))
                     || !this.send_attempts.attempt(&key, &id).is_some_and(|attempt| attempt.origin != SendOrigin::Deleted) {
                     return Err(());
@@ -513,14 +589,21 @@ impl Workspace {
                 // Switching runtimes invalidates the live authority needed to
                 // finish a supersession chain, even if its captured cards settled.
                 let supersession_current = superseded.is_empty() || key.runtime == this.runtime;
-                let refused = !durable || !current || deleted || !allowed || !cancelled || !supersession_current || (supersedes && !this.requests_for_send(&key).is_empty());
+                let refused = !durable || !current || deleted || !allowed || !cancelled || !supersession_current
+                    || this.payload_local_send_blocks_session(&key.runtime, &key.session)
+                    || (supersedes && !this.requests_for_send(&key).is_empty());
                 // Stop pressed during preparation or request rejection wins:
                 // nothing of this send leaves beside the interrupt.
                 let stopped = !refused && !this.send_attempts.dispatch(&key, &id);
                 if refused || stopped {
+                    this.effort_preferences.forget_user_send(&key.runtime, &id);
                     // Releases the chain even when the attempt is gone with its
                     // deleted session.
-                    let rejected = this.send_attempts.finish(
+                    let unreserved = matches!(kind, DispatchKind::New) && reservation.is_some();
+                    let rejected = if unreserved {
+                        // No reservation request has left this first chain.
+                        this.send_attempts.release_unreserved(&key, &id)
+                    } else { this.send_attempts.finish(
                         &key,
                         &id,
                         Err(match kind {
@@ -529,9 +612,9 @@ impl Workspace {
                                 PromptAdmission::Unknown
                             }
                         }),
-                    );
+                    ) };
                     if let Some(attempt) = rejected {
-                        this.return_to_draft(attempt, window, cx);
+                        this.return_to_draft(&key, attempt, window, cx);
                         if stopped {
                             this.notify_mutation_failure("chat.nativeRecovery.sendFailed", window, cx);
                         }
@@ -547,6 +630,7 @@ impl Workspace {
                 }
                 if matches!(kind, DispatchKind::New | DispatchKind::Created) {
                     if !this.send_attempts.prepared(&key, &id) {
+                        this.effort_preferences.forget_user_send(&key.runtime, &id);
                         this.mutation_tasks.remove(&key);
                         return false;
                     }
@@ -555,22 +639,10 @@ impl Workspace {
                         .attempt(&key, &id)
                         .expect("prepared attempt remains");
                     let owner = attempt.owner.clone();
-                    let text = attempt.draft.text.clone();
+                    let draft = attempt.draft.clone();
                     let optimistic = attempt.optimistic.clone();
-                    if consumes_composer
-                        && this
-                            .drafts
-                            .get(&owner)
-                            .is_some_and(|draft| draft.text == text)
-                    {
-                        this.drafts.take(&owner);
-                    }
-                    if consumes_composer
-                        && this.composer_key.as_ref() == Some(&owner)
-                        && this.composer.read(cx).value().as_ref() == text
-                    {
-                        this.composer
-                            .update(cx, |composer, cx| composer.set_value("", window, cx));
+                    if consumes_composer {
+                        this.consume_draft_capture(&owner, &draft, window, cx);
                     }
                     if key.runtime == this.runtime
                         && let Some(open) = this.open_sessions.get_mut(&key.session)
@@ -590,7 +662,7 @@ impl Workspace {
             let session = key.session.clone();
             let request = NetworkTask::spawn_on(&executor, async move {
                 if let Some(intent) = reservation {
-                    let result = crate::message_queue::reserve_captured_prefix(
+                    let result = crate::legacy_queue_reservation::reserve_captured_prefix(
                         &client, &session, directory.as_deref().unwrap_or_default(), &prompt, &intent,
                     ).await;
                     if let Err(source) = result {
@@ -623,6 +695,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let effort = self.effort_preferences.take_user_send(&key.runtime, id);
         if matches!(&result, Some(Err(error))
             if error.stage == SendStage::Reservation
                 && matches!(error.source, openchamber_native_transport::error::TransportError::QueuePrefixUnavailable))
@@ -632,7 +705,7 @@ impl Workspace {
                 openchamber_native_core::message_queue::queue_owner(attempt.owner.directory())
                     .map(str::to_owned);
             self.recovery.clear_finished(key, id);
-            self.return_to_draft(attempt, window, cx);
+            self.return_to_draft(key, attempt, window, cx);
             self.queue_persistence(cx);
             self.notify_mutation_failure("chat.queuedMessage.toast.takeFailed", window, cx);
             self.read_queue_owner(space, cx);
@@ -657,6 +730,16 @@ impl Workspace {
             .send_attempts
             .attempt(key, id)
             .is_some_and(|attempt| attempt.admission == Admission::Uncertain);
+        if !retried
+            && matches!(&result, Some(Ok(_)))
+            && self
+                .send_attempts
+                .attempt(key, id)
+                .is_some_and(|attempt| attempt.origin != SendOrigin::Deleted)
+            && let Some(effort) = effort
+        {
+            self.record_user_effort(effort, cx);
+        }
         // Only a definite refusal, or local validation, will repeat; a lost
         // selection or admission answer takes the unknown path below.
         let refused = matches!(
@@ -683,7 +766,7 @@ impl Workspace {
         }
         let failed = self.send_attempts.finish(key, id, admission);
         if let Some(attempt) = failed {
-            self.return_to_draft(attempt, window, cx);
+            self.return_to_draft(key, attempt, window, cx);
             self.notify_mutation_failure("chat.nativeRecovery.sendFailed", window, cx);
         } else if retried
             && refused
@@ -715,10 +798,29 @@ impl Workspace {
     /// newer text, and drops its optimistic message.
     pub(crate) fn return_to_draft(
         &mut self,
+        key: &SessionKey,
         attempt: SendAttempt,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.save_composer_draft(cx);
+        let Ok(draft) =
+            send_attempt::restore_failed(self.drafts.get(&attempt.owner), &attempt.draft)
+        else {
+            let id = attempt.prompt.message_id.clone();
+            // The caller removed this exact capture in the same foreground
+            // transition. No other unresolved identity can have started here.
+            assert!(
+                self.send_attempts
+                    .retain_failed(key.clone(), attempt)
+                    .is_ok(),
+                "a removed attempt retains its original recovery slot"
+            );
+            self.mark_refused(key, &id);
+            self.notify_mutation_failure("chat.nativeRecovery.contentConflict", window, cx);
+            self.queue_persistence(cx);
+            return;
+        };
         if self.runtime == *attempt.owner.runtime()
             && let DraftTarget::Session(session) = attempt.owner.target()
             && let Some(open) = self.open_sessions.get_mut(session)
@@ -728,8 +830,6 @@ impl Workspace {
             });
             apply_list_change(open, &change, cx);
         }
-        self.save_composer_draft(cx);
-        let draft = send_attempt::restore_failed(self.drafts.get(&attempt.owner), attempt.draft);
         self.drafts.save(attempt.owner.clone(), draft);
         if self.composer_key.as_ref() == Some(&attempt.owner) {
             self.restore_composer_draft(window, cx);
@@ -763,6 +863,21 @@ impl Workspace {
             return;
         };
         let key = self.mutation_key(&session);
+        let cancelled_local = self
+            .queue
+            .local_sends
+            .stop_before_dispatch(&key.runtime, &session);
+        if self
+            .queue
+            .local_sends
+            .dispatch_in_flight(&key.runtime, &session)
+            || (!cancelled_local && self.payload_local_send_blocks_session(&key.runtime, &session))
+            || self.payload_take_blocks_session(&key.runtime, &session)
+            || self.payload_prefix_blocks_session(&key.runtime, &session)
+        {
+            self.notify_mutation_failure("chat.nativeRecovery.stopWaits", window, cx);
+            return;
+        }
         let Some(connection) = self.connection.as_ref() else {
             return;
         };

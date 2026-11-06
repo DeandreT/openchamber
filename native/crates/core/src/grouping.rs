@@ -2,7 +2,7 @@
 //!
 //! Mirrors `buildGroupedSessions` in
 //! `packages/ui/src/components/session/sidebar/projects/useSessionGrouping.ts`
-//! and `buildSidebarChatGroup` in `sessionChatProjection.ts`. Labels stay as
+//! and the managed Chats grouping in `SessionProjectCollection.tsx`. Labels stay as
 //! data; the renderer resolves them through the locale resources.
 
 use std::cmp::Ordering;
@@ -16,6 +16,7 @@ use crate::ownership::{
 };
 use crate::path;
 use crate::session::SessionRecord;
+use crate::sidebar_collection::SidebarCollection;
 
 /// A session and its visible subsessions.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -295,13 +296,14 @@ pub fn build_project_section<'a>(
     ProjectSection { project, groups }
 }
 
-/// Builds the Chats group from Chats members.
+/// Builds managed Chats trees from the collection's shared admitted hierarchy.
 ///
 /// Returns `None` when no Chats root is known and there are no members.
 pub fn build_chat_group<'a>(
-    chat_sessions: &[&'a SessionRecord],
+    collection: &SidebarCollection<'a>,
     roots: Option<&ChatRoots>,
 ) -> Option<SessionGroup<'a>> {
+    let chat_sessions = &collection.chat_sessions;
     let chats_root = roots
         .map(|roots| roots.configured().to_owned())
         .or_else(|| {
@@ -316,7 +318,7 @@ pub fn build_chat_group<'a>(
         return None;
     }
     let mut children: HashMap<&SessionId, Vec<&'a SessionRecord>> = HashMap::new();
-    for session in chat_sessions {
+    for session in &collection.ordered_sessions {
         if let Some(parent_id) = &session.parent_id {
             children.entry(parent_id).or_default().push(session);
         }
@@ -510,6 +512,84 @@ mod tests {
         let mut session = SessionRecord::new(id, directory);
         session.parent_id = Some(SessionId::from(parent));
         session
+    }
+
+    #[test]
+    fn managed_chats_keep_admitted_descendants_across_project_directories() {
+        let chats = ChatRoots::from_home_info(Some("/home/test"), None, None, None)
+            .expect("synthetic home supplies managed Chats");
+        let sessions = [
+            SessionRecord::new("root", "/home/test/.config/openchamber/chats/thread"),
+            child("child", "root", "/app"),
+            child("grandchild", "child", "/app/src"),
+            child("unregistered", "root", "/tmp/scratch"),
+        ];
+        let projects = [ConfiguredProject {
+            id: ProjectId::from("app"),
+            path: "/app".into(),
+        }];
+        let collection = SidebarCollection::build(
+            &OwnershipInputs {
+                sessions: &sessions,
+                projects: &projects,
+                ..OwnershipInputs::default()
+            },
+            Some(&chats),
+            &mut SessionOrdering::new(),
+        );
+        let group = build_chat_group(&collection, Some(&chats)).expect("managed Chats group");
+        assert_eq!(
+            group.sessions.len(),
+            1,
+            "only the managed root owns a Chats row"
+        );
+        let root = &group.sessions[0];
+        assert_eq!(
+            root.children.len(),
+            1,
+            "admitted project child remains reachable"
+        );
+        assert_eq!(root.children[0].session.id.as_str(), "child");
+        assert_eq!(
+            root.children[0].children[0].session.id.as_str(),
+            "grandchild"
+        );
+    }
+
+    #[test]
+    fn chat_children_share_lifecycle_order_across_collection_partitions() {
+        let roots = ChatRoots::from_home_info(Some("/home/test"), None, None, None)
+            .expect("synthetic home supplies managed Chats");
+        let directory = "/home/test/.config/openchamber/chats/thread";
+        let mut newer = child("z-newer-chat", "root", directory);
+        newer.time.updated = 10;
+        let mut older = child("a-older-project", "root", "/app");
+        older.time.updated = 2;
+        let sessions = [SessionRecord::new("root", directory), older, newer];
+        let projects = [ConfiguredProject {
+            id: ProjectId::from("app"),
+            path: "/app".into(),
+        }];
+        let collection = SidebarCollection::build(
+            &OwnershipInputs {
+                sessions: &sessions,
+                projects: &projects,
+                ..OwnershipInputs::default()
+            },
+            Some(&roots),
+            &mut SessionOrdering::new(),
+        );
+        let group = build_chat_group(&collection, Some(&roots)).expect("managed Chats");
+        let children: Vec<&str> = group.sessions[0]
+            .children
+            .iter()
+            .map(|node| node.session.id.as_str())
+            .collect();
+        assert_eq!(
+            children,
+            ["z-newer-chat", "a-older-project"],
+            "partitioning cannot change sibling lifecycle order"
+        );
     }
 
     #[test]

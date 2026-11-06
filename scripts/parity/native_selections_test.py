@@ -6,9 +6,11 @@ from pathlib import Path
 import tempfile
 import unittest
 from types import SimpleNamespace
-from unittest.mock import Mock, patch
+from unittest.mock import MagicMock, Mock, patch
 
-from native_selections import AGENT, MODEL, PROMPT, SelectionFixture, Selections, require_clean_result, verify_turn
+from native_selections import (AGENT, EFFORT_KEY, EFFORT_SIBLING, MODEL, PROMPT,
+                               SelectionFixture, Selections, effort_matches, effort_memory,
+                               require_clean_result, verify_turn)
 from native_interactions import Fixture
 
 
@@ -113,7 +115,99 @@ class FixtureModeProof(unittest.TestCase):
                 self.assertTrue(fixture.log.closed)
 
 
+class EffortMemoryProof(unittest.TestCase):
+    def test_named_and_explicit_default_require_the_exact_model_and_sibling(self):
+        for variant in ("high", None):
+            settings = {"lastUsedEfforts": {EFFORT_KEY: variant, EFFORT_SIBLING: None}}
+            with self.subTest(variant=variant):
+                self.assertTrue(effort_matches(settings, variant))
+                self.assertFalse(effort_matches(settings, "low"))
+                self.assertFalse(effort_matches({"lastUsedEfforts": {EFFORT_KEY: variant}}, variant))
+                self.assertFalse(effort_matches({"lastUsedEfforts": {EFFORT_SIBLING: None}}, variant))
+                self.assertFalse(effort_matches({"lastUsedEfforts": {
+                    EFFORT_KEY: variant, EFFORT_SIBLING: "high"}}, variant))
+
+    def test_unknown_and_malformed_settings_never_look_like_default(self):
+        for settings in (None, [], {}, {"lastUsedEfforts": None}, {"lastUsedEfforts": []},
+                         {"lastUsedEfforts": {EFFORT_KEY: False}},
+                         {"lastUsedEfforts": {EFFORT_KEY: " "}},
+                         {"lastUsedEfforts": {"": None}}):
+            with self.subTest(settings=settings), self.assertRaises(ValueError):
+                effort_memory(settings)
+        self.assertEqual(effort_memory({"lastUsedEfforts": {}}), {})
+        self.assertFalse(effort_matches({"lastUsedEfforts": {}}, None))
+
+
 class SelectionWorkflowProof(unittest.TestCase):
+    def test_reopen_cannot_lose_profile_memory_then_repair_it_on_send(self):
+        for loss in ("key", "null", "sibling"):
+            with self.subTest(loss=loss):
+                probe = Selections.__new__(Selections)
+                probe.args = SimpleNamespace(timeout=1)
+                probe.env = {}
+                labels = {"model": MODEL, "agent": AGENT, "variant": "Default"}
+                state = {"draft": "", "memory": {EFFORT_KEY: "low", EFFORT_SIBLING: None}}
+                messages = []
+                node = Mock()
+                node.get_state_set.return_value.contains.return_value = True
+                probe.client = Mock()
+                probe.fixture = SimpleNamespace(
+                    create_session=Mock(return_value={"id": "ses_fixture"}),
+                    seed_efforts=Mock(), evidence=MagicMock(),
+                    get=lambda _path: {"lastUsedEfforts": state["memory"]},
+                )
+                probe.start = Mock()
+                probe.click = Mock()
+                probe.pointer = Mock()
+                probe.named = Mock(return_value=Mock())
+                probe.composer = Mock(return_value=node)
+                probe.labels = lambda: dict(labels)
+                probe.messages = lambda: messages
+                probe.paste = lambda target, text: state.__setitem__("draft", text) if target is node else None
+
+                def choose(kind, label, search=None):
+                    labels[kind] = label
+                    if kind == "variant":
+                        state["memory"][EFFORT_KEY] = None if label == "Default" else label
+
+                def reopen(label):
+                    if label != "default":
+                        return
+                    if loss == "key":
+                        del state["memory"][EFFORT_KEY]
+                    elif loss == "null":
+                        state["memory"][EFFORT_KEY] = "low"
+                    else:
+                        del state["memory"][EFFORT_SIBLING]
+
+                def send(text, variant):
+                    # A broken candidate could restore the map on its next send.
+                    state["memory"] = {EFFORT_KEY: variant, EFFORT_SIBLING: None}
+                    messages.append({"type": "user", "text": text})
+                    return {"model": MODEL, "variant": variant}
+
+                def command(_env, *argv):
+                    if argv == ("xdotool", "key", "ctrl+a", "BackSpace"):
+                        state["draft"] = ""
+
+                def once(label, read, timeout):
+                    if not read():
+                        raise TimeoutError(label)
+
+                probe.choose = choose
+                probe.reopen = Mock(side_effect=reopen)
+                probe.send_selection = Mock(side_effect=send)
+                api = SimpleNamespace(StateType=SimpleNamespace(FOCUSED="focused"))
+                with patch("native_selections.editable_text", side_effect=lambda _node: state["draft"]), \
+                        patch("native_selections._atspi", return_value=api), \
+                        patch("native_selections.command", side_effect=command), \
+                        patch("native_selections.until", side_effect=once), \
+                        self.assertRaisesRegex(TimeoutError, "model effort did not persist"):
+                    probe.run()
+                self.assertEqual(probe.send_selection.call_count, 1,
+                                 "the Default send must not hide a failed restart observation")
+                self.assertEqual(probe.reopen.call_args.args, ("default",))
+
     def test_agent_default_step_fails_despite_reopened_chosen_toolbar(self):
         # Simulate a broken model picker that changes and persists its label,
         # while the real send continues to use beta's configured default.
@@ -122,7 +216,9 @@ class SelectionWorkflowProof(unittest.TestCase):
         probe.env = {}
         probe.prompts = 0
         probe.fixture = SimpleNamespace(create_session=Mock(return_value={"id": "ses_fixture"}),
+                                        seed_efforts=Mock(),
                                         evidence=Path("unused"))
+        probe.observe_effort = Mock()
         labels = {"model": "stream-20000cps", "agent": "Build", "variant": "Default"}
         draft = [""]
         messages = []

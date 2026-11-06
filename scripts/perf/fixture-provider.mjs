@@ -470,7 +470,7 @@ export const startFixtureProvider = (port, { interactions = false } = {}) => new
     if (request.url === "/__fixture/turn-gate") {
       if (request.method === "PUT") {
         const body = await readBody(request)
-        if (typeof body?.held !== "boolean") {
+        if (body?.held !== true && body?.held !== false) {
           response.writeHead(400).end()
           return
         }

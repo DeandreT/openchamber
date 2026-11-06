@@ -879,6 +879,195 @@
       }
     },
     {
+      "name": "configured model inherits matching agent effort",
+      "input": {
+        "agents": [
+          {
+            "name": "build",
+            "model": {
+              "providerId": "p",
+              "modelId": "catalog",
+              "variant": "high"
+            }
+          }
+        ],
+        "providers": [
+          {
+            "id": "p",
+            "name": "Provider",
+            "models": [
+              {
+                "id": "catalog",
+                "name": " Catalog model ",
+                "variants": [
+                  "high",
+                  "low"
+                ]
+              },
+              {
+                "id": "other"
+              }
+            ]
+          },
+          {
+            "id": "opencode",
+            "models": [
+              {
+                "id": "big-pickle",
+                "name": "Big Pickle"
+              }
+            ]
+          }
+        ],
+        "defaults": {
+          "allowFallback": true,
+          "settingsDefaultModel": "p/catalog"
+        }
+      },
+      "expected": {
+        "agentName": "build",
+        "model": {
+          "providerId": "p",
+          "modelId": "catalog",
+          "variant": "high"
+        }
+      }
+    },
+    {
+      "name": "configured model inherits remembered effort",
+      "input": {
+        "agents": [
+          {
+            "name": "plan",
+            "mode": "primary"
+          },
+          {
+            "name": "build",
+            "mode": "primary"
+          },
+          {
+            "name": "helper",
+            "mode": "subagent"
+          },
+          {
+            "name": "secret",
+            "mode": "primary",
+            "hidden": true
+          }
+        ],
+        "providers": [
+          {
+            "id": "p",
+            "name": "Provider",
+            "models": [
+              {
+                "id": "catalog",
+                "name": " Catalog model ",
+                "variants": [
+                  "high",
+                  "low"
+                ]
+              },
+              {
+                "id": "other"
+              }
+            ]
+          },
+          {
+            "id": "opencode",
+            "models": [
+              {
+                "id": "big-pickle",
+                "name": "Big Pickle"
+              }
+            ]
+          }
+        ],
+        "defaults": {
+          "allowFallback": true,
+          "settingsDefaultModel": "p/catalog",
+          "lastUsedEfforts": {
+            "p/catalog": "low"
+          }
+        }
+      },
+      "expected": {
+        "agentName": "build",
+        "model": {
+          "providerId": "p",
+          "modelId": "catalog",
+          "variant": "low"
+        }
+      }
+    },
+    {
+      "name": "configured model preserves remembered Default",
+      "input": {
+        "agents": [
+          {
+            "name": "plan",
+            "mode": "primary"
+          },
+          {
+            "name": "build",
+            "mode": "primary"
+          },
+          {
+            "name": "helper",
+            "mode": "subagent"
+          },
+          {
+            "name": "secret",
+            "mode": "primary",
+            "hidden": true
+          }
+        ],
+        "providers": [
+          {
+            "id": "p",
+            "name": "Provider",
+            "models": [
+              {
+                "id": "catalog",
+                "name": " Catalog model ",
+                "variants": [
+                  "high",
+                  "low"
+                ]
+              },
+              {
+                "id": "other"
+              }
+            ]
+          },
+          {
+            "id": "opencode",
+            "models": [
+              {
+                "id": "big-pickle",
+                "name": "Big Pickle"
+              }
+            ]
+          }
+        ],
+        "defaults": {
+          "allowFallback": true,
+          "settingsDefaultModel": "p/catalog",
+          "lastUsedEfforts": {
+            "p/catalog": null
+          }
+        }
+      },
+      "expected": {
+        "agentName": "build",
+        "model": {
+          "providerId": "p",
+          "modelId": "catalog",
+          "variant": null
+        }
+      }
+    },
+    {
       "name": "agent pin missing catalog keeps effort",
       "input": {
         "agents": [

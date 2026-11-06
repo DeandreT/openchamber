@@ -1,7 +1,7 @@
 //! Sidebar previews of client-owned new-session drafts.
 
-use gpui_kit::{Context, SharedString, Window};
-use openchamber_native_core::draft::{DraftKey, DraftTarget};
+use gpui_kit::{App, Context, SharedString, Window};
+use openchamber_native_core::draft::{Draft, DraftKey, DraftTarget};
 use openchamber_native_core::sidebar_rows::SectionSpacing;
 
 use crate::sidebar_item::SidebarItem;
@@ -14,25 +14,69 @@ fn preview(text: &str) -> Option<SharedString> {
         .map(Into::into)
 }
 
+fn content_preview(draft: &Draft, cx: &App) -> Option<SharedString> {
+    preview(&draft.text)
+        .or_else(|| {
+            draft
+                .content
+                .files
+                .iter()
+                .find_map(|file| file.name.as_deref().and_then(preview))
+        })
+        .or_else(|| {
+            draft.content.context.iter().find_map(|item| {
+                item.description
+                    .as_deref()
+                    .and_then(preview)
+                    .or_else(|| preview(&item.text))
+            })
+        })
+        .or_else(|| {
+            (!draft.is_empty())
+                .then(|| crate::locale::strings(cx).get("sessions.sidebar.session.untitled"))
+        })
+}
+
 fn is_project_draft(key: &DraftKey) -> bool {
     matches!(key.target(), DraftTarget::NewSession(id) if id.as_str() == PROJECT_DRAFT_ID)
 }
 
 impl Workspace {
-    pub(crate) fn restore_draft_previews(&mut self) {
+    pub(crate) fn restore_draft_previews(&mut self, cx: &App) {
         self.draft_previews = self
             .drafts
             .iter()
             .filter(|(key, _)| is_project_draft(key))
-            .filter_map(|(key, draft)| preview(&draft.text).map(|label| (key.clone(), label)))
+            .filter_map(|(key, draft)| content_preview(draft, cx).map(|label| (key.clone(), label)))
             .collect();
+        for capture in self
+            .starters
+            .captures
+            .iter()
+            .filter(|capture| is_project_draft(&capture.owner))
+        {
+            if let Some(label) = content_preview(&capture.draft, cx) {
+                self.draft_previews
+                    .entry(capture.owner.clone())
+                    .or_insert(label);
+            }
+        }
         self.rebuild_sidebar();
     }
-    pub(crate) fn save_draft_preview(&mut self, key: &DraftKey, text: &str) {
+    pub(crate) fn save_draft_preview(&mut self, key: &DraftKey, draft: &Draft, cx: &App) {
         if !is_project_draft(key) {
             return;
         }
-        self.set_draft_preview(key, preview(text));
+        let label = content_preview(draft, cx).or_else(|| self.starter_draft_preview(key, cx));
+        self.set_draft_preview(key, label);
+    }
+
+    fn starter_draft_preview(&self, key: &DraftKey, cx: &App) -> Option<SharedString> {
+        self.starters
+            .captures
+            .iter()
+            .find(|capture| &capture.owner == key)
+            .and_then(|capture| content_preview(&capture.draft, cx))
     }
 
     /// A changed first line updates one row. Only adding/removing a draft
@@ -41,7 +85,11 @@ impl Workspace {
         let Some(key) = self.composer_key.clone().filter(is_project_draft) else {
             return;
         };
-        let label = preview(&self.composer.read(cx).value());
+        let label = self
+            .drafts
+            .get(&key)
+            .and_then(|draft| content_preview(draft, cx))
+            .or_else(|| self.starter_draft_preview(&key, cx));
         if self.set_draft_preview(&key, label) {
             cx.notify();
         }
@@ -152,10 +200,36 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if key.runtime() != &self.runtime || !is_project_draft(key) {
+        if key.runtime() != &self.runtime || !is_project_draft(key) || self.close_in_progress() {
             return;
         }
         self.navigation_revision = self.navigation_revision.wrapping_add(1);
+        let resources: Vec<_> = self
+            .drafts
+            .get(key)
+            .into_iter()
+            .flat_map(|draft| &draft.content.files)
+            .chain(
+                self.starters
+                    .captures
+                    .iter()
+                    .filter(|capture| &capture.owner == key)
+                    .flat_map(|capture| &capture.draft.content.files),
+            )
+            .map(|file| file.id.clone())
+            .collect();
+        let tickets: Vec<_> = self
+            .attachment_storage
+            .rows(key)
+            .map(|row| row.ticket)
+            .collect();
+        self.attachment_input.cancel(key);
+        self.cancel_attachment_inputs(key);
+        self.invalidate_attachment_staging(key, None, cx);
+        for ticket in tickets {
+            self.cancel_attachment_input(ticket, window, cx);
+        }
+        self.starters.discard_captures(key);
         let _ = self.drafts.take(key);
         self.draft_previews.remove(key);
         if self.composer_key.as_ref() == Some(key) {
@@ -164,6 +238,10 @@ impl Workspace {
             self.focus_composer(window, cx);
         }
         self.rebuild_sidebar();
+        self.queue_persistence(cx);
+        for id in resources {
+            self.retire_attachment(id, window, cx);
+        }
         cx.notify();
     }
 }

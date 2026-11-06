@@ -10,6 +10,7 @@ from contextlib import ExitStack
 import os
 import re
 import secrets
+import select
 import shlex
 import shutil
 import signal
@@ -86,6 +87,17 @@ def child_environment(source: dict[str, str]) -> dict[str, str]:
 
 
 def available() -> str | None:
+    if not callable(getattr(os, "pidfd_open", None)) or not callable(getattr(signal, "pidfd_send_signal", None)):
+        return "pidfd process ownership is unavailable"
+    descriptor = None
+    try:
+        descriptor = os.pidfd_open(os.getpid())
+        signal.pidfd_send_signal(descriptor, 0)
+    except OSError:
+        return "pidfd process ownership is unavailable"
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
     for tool in ("Xvfb", "xauth", "xdpyinfo", "dbus-run-session", "busctl", "fc-match", "xsettingsd"):
         if shutil.which(tool) is None:
             return f"{tool} is not installed"
@@ -107,6 +119,8 @@ def stop_process(process: subprocess.Popen) -> None:
 
 
 def run_inside(command: list[str], width: int, height: int) -> int:
+    if problem := available():
+        raise RuntimeError(f"cannot start a private display: {problem}")
     stopping = False
     def request_stop(_signal, _frame):
         nonlocal stopping
@@ -203,11 +217,13 @@ def _run_inside(command: list[str], width: int, height: int, stopping) -> int:
                         pass
                 return 128 + signal.SIGTERM
             finally:
-                if bus_record.exists():
-                    stop_attached(bus_record.read_text())
-                if session is not None:
-                    stop_process(session)
-                stop_process(xvfb)
+                try:
+                    if bus_record.exists():
+                        stop_attached(bus_record.read_text())
+                finally:
+                    if session is not None:
+                        stop_process(session)
+                    stop_process(xvfb)
 
 
 def system_ui_family() -> str:
@@ -218,45 +234,61 @@ def system_ui_family() -> str:
     return family
 
 
+def _attached_start_ticks(entry: Path, wanted: bytes) -> int | None:
+    try:
+        if entry.stat().st_uid != os.getuid() or wanted not in (entry / "environ").read_bytes().split(b"\0"):
+            return None
+        fields = (entry / "stat").read_text().rsplit(") ", 1)[1].split()
+        return int(fields[19])
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 def stop_attached(bus_address: str) -> None:
     if not bus_address:
         return
     wanted = f"DBUS_SESSION_BUS_ADDRESS={bus_address}".encode()
-    attached_pids = []
-    for entry in Path("/proc").iterdir():
-        if not re.fullmatch(r"\d+", entry.name):
-            continue
-        try:
-            if entry.stat().st_uid != os.getuid():
+    with ExitStack() as cleanup:
+        attached = []
+        for entry in Path("/proc").iterdir():
+            if not re.fullmatch(r"\d+", entry.name) or int(entry.name) <= 0:
                 continue
-            attached = wanted in (entry / "environ").read_bytes().split(b"\0")
-            if attached:
-                pid = int(entry.name)
-                attached_pids.append(pid)
-                os.kill(pid, signal.SIGTERM)
-        except (OSError, ProcessLookupError):
-            pass
-    deadline = time.monotonic() + SHUTDOWN_GRACE_S
-    while attached_pids:
-        remaining = []
-        for pid in attached_pids:
+            start = _attached_start_ticks(entry, wanted)
+            if start is None:
+                continue
             try:
-                entry = Path(f"/proc/{pid}")
-                if entry.stat().st_uid == os.getuid() and wanted in (entry / "environ").read_bytes().split(b"\0"):
-                    remaining.append(pid)
-            except OSError:
+                descriptor = os.pidfd_open(int(entry.name))
+            except ProcessLookupError:
+                continue
+            if _attached_start_ticks(entry, wanted) != start:
+                os.close(descriptor)
+                continue
+            cleanup.callback(os.close, descriptor)
+            try:
+                signal.pidfd_send_signal(descriptor, signal.SIGTERM)
+                attached.append(descriptor)
+            except ProcessLookupError:
                 pass
-        attached_pids = remaining
-        if not attached_pids:
-            break
-        if time.monotonic() >= deadline:
-            for pid in attached_pids:
-                try:
-                    os.kill(pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-            break
-        time.sleep(0.05)
+        poller = select.poll()
+        for descriptor in attached:
+            poller.register(descriptor, select.POLLIN)
+        deadline = time.monotonic() + SHUTDOWN_GRACE_S
+        while attached:
+            exited = {descriptor for descriptor, _ in poller.poll(0)}
+            for descriptor in exited:
+                poller.unregister(descriptor)
+            attached = [descriptor for descriptor in attached if descriptor not in exited]
+            if not attached:
+                break
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                for descriptor in attached:
+                    try:
+                        signal.pidfd_send_signal(descriptor, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                break
+            poller.poll(max(1, int(remaining * 1000)))
 
 
 def main() -> int:

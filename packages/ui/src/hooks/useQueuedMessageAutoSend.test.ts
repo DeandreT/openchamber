@@ -3,6 +3,7 @@ import type { Agent, Message, Session } from '@/lib/opencode/model';
 import type { QueuedMessage } from '../stores/messageQueueStore';
 import { ChildStoreManager } from '@/sync/child-store';
 import { setSyncRefs } from '@/sync/sync-refs';
+import { materializeFileReference } from '@/lib/messages/fileReferences';
 
 let visibleAgents: Agent[] = [];
 const sendMessageCalls: unknown[][] = [];
@@ -251,6 +252,16 @@ describe('buildQueuedAutoSendPayload', () => {
     expect(payload?.queuedMessageId).toBe('queued-1');
     expect(payload?.primaryText).toBe('first queued message');
     expect(payload?.primaryAttachments).toEqual([]);
+  });
+
+  test('foreground delivery preserves reference metadata after that source\'s prepared bytes', () => {
+    const reference = materializeFileReference({ uri: 'file:///server/report.pdf', name: '/server/report.pdf',
+      description: 'PDF source', mention: { start: 0, end: 4, text: '@pdf' } }, 'reference');
+    const bytes = { ...reference, id: 'bytes', fileReference: undefined, dataUrl: 'data:text/plain;base64,YQ==' };
+    const payload = buildQueuedAutoSendPayload([{ id: 'queued-reference', content: '', text: '', createdAt: 1,
+      attachments: [reference, bytes, reference] }]);
+    expect(payload?.primaryAttachments.map((file) => file.id)).toEqual(['bytes', 'reference', 'reference']);
+    expect(payload?.primaryAttachments[1].fileReference).toEqual(reference.fileReference);
   });
 
   test('delivers the captured mention and context instead of re-parsing the content', () => {

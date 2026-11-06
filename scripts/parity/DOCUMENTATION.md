@@ -8,6 +8,7 @@ against the packaged Electron desktop (the reference) and the native desktop
 bun run parity seed                       # build tmp/parity/seed once
 bun run parity run                        # every scenario
 bun run parity run --scenarios shell.startup --output /tmp/parity-run
+bun run parity run --require-complete-inventory --output /tmp/parity-replacement
 ```
 
 `run` needs the packaged Electron build (`packages/electron/dist/...`), the
@@ -34,6 +35,7 @@ PyGObject with AT-SPI, `busctl`, `dbus-run-session`, `xsettingsd` and fontconfig
 | `native_files.py` | Connected Files checks on the Git fixture project: tree and gitignored entries, keyboard navigation, name and content search with an invalid pattern, CRLF edit and save, autosave, external changes to clean and dirty files, a deleted open file, a rename conflict and a large file, each checked on disk. |
 | `native_git.py`, `git_http_remote.py` | Connected Git and Diff checks: staged and unstaged scopes, stage, unstage, confirmed discard, a stage failing on `index.lock`, commit, branches, push, fetch and pull as planned operations and a cancelled push. The fixture's bare remote is served through `git http-backend` on loopback, because the server plans network operations only for http, https and ssh remotes. |
 | `native_session_management.py` | Connected rename, pin, archive, restore and delete through the native session menu, with one injected write failure. |
+| `native_selections.py` | Real-pointer model, agent and effort selection, unsent restart persistence and exact completed-turn configuration. Server settings reads verify named effort and explicit Default while retaining another model's entry. |
 | `native_authentication.py`, `secret_service_fixture.py` | Password sign-in, secret accessibility, session-only and trusted restart, HTTP token revocation and retained drafts, against a protected real server and a private encrypted KDE Secret Service. |
 | `native_hosts.py` | Two isolated direct servers, saved profiles, default-host startup, runtime switching and per-server draft restoration. |
 | `native_host_recovery.py` | Invalid and unreadable host files, preserved bytes, explicit retry and restored composer focus on the recovered default server. |
@@ -43,6 +45,8 @@ PyGObject with AT-SPI, `busctl`, `dbus-run-session`, `xsettingsd` and fontconfig
 | `native_general_settings.py` | General's server-backed Files autosave and terminal controls, independent failed edits, explicit retry and captured-runtime writes. |
 | `native_terminal_appearance.py` | Live theme and code-font changes on an existing terminal, with painted output, exact copied selection, process/socket identity and continued input. |
 | `native_terminal.py` | Connected terminal checks behind a proxy that records terminal commands and severs the terminal socket: create and close, Unicode and IBus input, keys, resize, bracketed and large paste, scrollback, reconnect pacing, exit, lifetime and cleanup. Capture programs in the terminal record the exact bytes the PTY received. |
+| `native_attachments.py` | Native Attach-menu and clipboard-file checks, exact byte staging, failure/retry, removal and normal-restart capture. Reads unchanged attachment ownership in journal versions 7 and 8; queue metadata supplies no attachment-byte authority. Picker, drop, conversion and paired Electron parity require separate checks. |
+| `portal_fixture.py` | Direct GTK backend and portal frontend on the wrapper's private bus. Atomic glibc `pidfd_spawn` retains child custody through startup failure. Requires an active `Interrupts` scope through `close()`. Missing Documents or PermissionStore dependencies prevent readiness; no desktop activation or additional helpers are started. Service readiness alone does not qualify chooser interaction. |
 | `compare.py` | Pixel, row and geometry comparison. |
 | `png.py` | PNG reading and writing with the standard library. |
 
@@ -119,7 +123,8 @@ activates no desktop services. The session starts the accessibility bus and regi
 `xsettingsd` publishes fontconfig's `system-ui` family as the GTK font, which
 Chromium's `system-ui` follows on a desktop. When the run ends, every process
 attached to the private bus is stopped. The session's work directory lives in
-`XDG_RUNTIME_DIR` (else `/tmp`): the bus socket inside it must stay within
+`/tmp/opencode` when available, otherwise the system temporary directory. The
+bus socket inside it must stay within
 the 108-byte socket path limit whatever `TMPDIR` is. Xvfb has no window manager:
 OS-level minimize, maximize and window-decoration behavior requires separate
 isolated desktop checks.
@@ -127,6 +132,14 @@ isolated desktop checks.
 Xvfb readiness requires a successful `xdpyinfo` probe inside the 10-second
 startup budget. An individual timed-out probe can retry within that budget;
 timeout alone never marks the display ready.
+
+Cleanup binds each matching same-user private-bus process to a Linux pidfd,
+then rechecks its start time and membership before signalling it. Both graceful
+and forced signals use that descriptor, so PID reuse cannot redirect them to
+a replacement process. The wrapper refuses startup when pidfd creation or
+signalling is unavailable, including calls through `run_inside`. Cleanup closes
+every bound descriptor and preserves session and Xvfb shutdown if bus cleanup
+fails.
 
 Isolated Electron launches set `GTK_IM_MODULE=gtk-im-context-simple`. GTK's
 automatic IBus selection can deadlock startup even after inherited input-method
@@ -196,8 +209,10 @@ screenshots and difference images go to `--output`, by default
 `artifacts/parity-<time>`; they are run evidence and never part of the source.
 An existing output directory is refused so another run cannot overwrite its
 evidence. The report fingerprints the native and Electron executables, Electron
-package, web assets, OpenCode binary, seed, scenarios and exceptions. If these
-inputs change before the run ends, every result is blocked.
+package, web assets, OpenCode binary, seed, scenarios, inventory and exceptions.
+The validated scenario and inventory snapshots must match their initial byte
+fingerprints before clients start. If any input changes before the final check,
+every result is blocked and grants no proof.
 File digests are standard SHA-256. The `sha256-tree-v1` directory digest hashes
 each sorted relative POSIX path, a zero byte, then that file's raw SHA-256 digest.
 
@@ -271,6 +286,24 @@ With some passed evidence but uncovered requirements, a feature is `incomplete`.
 With no executed evidence it is `not run`, including a feature with no scenarios.
 A failed or blocked linked scenario keeps the feature failed even when other
 scenarios cover its requirements.
+
+`run --require-complete-inventory` adds a full-inventory exit gate. It returns
+1 unless every feature has status `passed` under this protocol, with all required
+behaviors and states covered by passed, validated scenario proofs. An empty
+inventory fails too. `--scenarios` still selects what runs; omitted scenarios
+remain unproved and the gate still checks the whole inventory. Failed, blocked,
+incomplete, skipped and substituted-input scenarios grant no proof. Manual entries
+remain `manual` and cannot pass this automated gate.
+
+Without the flag, a focused run keeps its existing exit contract: 0 when its
+executed scenarios pass and its inputs stay unchanged, even when inventory
+coverage is incomplete; 1 for a scenario or input-integrity failure. Invalid
+contracts and unknown scenario names return 2 before client execution in either
+mode. Gate failures print a bounded list of feature IDs, statuses and missing
+behaviors/states; `report.json` retains every missing requirement. Coverage uses
+the executed declaration snapshots, so replacing files after fingerprinting
+cannot add proofs or remove requirements from that report. Deterministic gate
+regressions live in `runner_test.py`.
 
 `coverage: "automated"` describes the intended evidence method. It does not claim
 that scenarios exist. Use `coverage: "manual"` only for a real manual procedure,

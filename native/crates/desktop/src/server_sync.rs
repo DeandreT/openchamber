@@ -22,6 +22,7 @@ use openchamber_native_core::transcript::{
     PartContent, ToolStatus, TranscriptChange, TranscriptEvent,
 };
 use openchamber_native_transport::client::{MessagePage, SettingsChanges};
+use openchamber_native_transport::control_stream::{ControlEvent, ControlItem, ControlStream};
 use openchamber_native_transport::error::TransportError;
 use openchamber_native_transport::event::ServerEvent;
 use openchamber_native_transport::stream::{EventStream, StreamItem};
@@ -42,6 +43,12 @@ const RETRY_DELAY: Duration = Duration::from_secs(5);
 /// Global session pages a read may hold before the desktop takes them.
 const PAGE_QUEUE: usize = 4;
 
+#[derive(Clone, Copy)]
+enum SessionDeletionCleanup {
+    CurrentSubtree,
+    CapturedSession,
+}
+
 struct HistoryRead {
     session: SessionId,
     runtime: RuntimeId,
@@ -54,6 +61,7 @@ struct HistoryRead {
 impl Workspace {
     /// Starts a connection attempt, cancelling the previous one's work.
     pub(crate) fn connect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reset_session_admission(window, cx);
         for open in self.open_sessions.values_mut() {
             open.earlier = EarlierHistory::Idle;
         }
@@ -146,6 +154,7 @@ impl Workspace {
                 self.invalidate_terminal_client(cx);
                 self.watch_authentication(generation, auth_failures, window, cx);
                 self.subscribe(generation, window, cx);
+                self.subscribe_control(generation, window, cx);
                 self.save_code_wrap(cx);
                 if focus_composer {
                     self.focus_composer(window, cx);
@@ -193,6 +202,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.effort_preferences.activate(&runtime);
+        self.reset_session_admission(window, cx);
         self.navigation_revision = self.navigation_revision.wrapping_add(1);
         self.save_composer_draft(cx);
         self.save_scroll_position();
@@ -263,6 +274,58 @@ impl Workspace {
         }));
     }
 
+    fn subscribe_control(&mut self, generation: u64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(connection) = self.connection.as_mut() else {
+            return;
+        };
+        let Some(client) = connection.client.clone() else {
+            return;
+        };
+        let mut stream = {
+            let _runtime = connection.network.enter();
+            ControlStream::subscribe(client)
+        };
+        connection.control_task = Some(cx.spawn_in(window, async move |this, cx| {
+            while let Some(item) = stream.next().await {
+                if this
+                    .update_in(cx, |this, window, cx| {
+                        if this
+                            .connection
+                            .as_ref()
+                            .is_none_or(|connection| connection.generation != generation)
+                        {
+                            return;
+                        }
+                        match item {
+                            ControlItem::Event(ControlEvent::Connected) => {
+                                this.load_topology(window, cx)
+                            }
+                            ControlItem::Event(
+                                ControlEvent::WorktreeChanged { .. } | ControlEvent::SessionCreated,
+                            ) => this.refresh_topology_soon(window, cx),
+                            ControlItem::Disconnected(error) => {
+                                tracing::warn!(%error, "the topology control stream dropped")
+                            }
+                        }
+                    })
+                    .is_err()
+                {
+                    return;
+                }
+            }
+        }));
+    }
+
+    fn refresh_topology_soon(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.session_admission.topology_refresh =
+            Some(cx.spawn_in(window, async move |this, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(500))
+                    .await;
+                let _ = this.update_in(cx, |this, window, cx| this.load_topology(window, cx));
+            }));
+    }
+
     pub(crate) fn apply_stream_item(
         &mut self,
         generation: u64,
@@ -299,6 +362,9 @@ impl Workspace {
                 } else if stale && !resumed {
                     // Events were missed and not replayed: reread what they changed.
                     self.reconcile(window, cx);
+                } else {
+                    // Topology controls have no replay, independently of OpenCode's cursor.
+                    self.load_topology(window, cx);
                 }
                 // Routing and permission modes are server reads outside the
                 // OpenCode event replay, and their broadcasts are not
@@ -322,6 +388,7 @@ impl Workspace {
                     connection.restart();
                     connection.retry_task = None;
                     connection.state = ConnectionState::Failed(failure);
+                    self.reset_session_admission(window, cx);
                     self.show_authentication(failure, None, window, cx);
                     self.invalidate_terminal_client(cx);
                     cx.notify();
@@ -361,10 +428,12 @@ impl Workspace {
             "reading sessions, topology and visited transcripts"
         );
         self.load_sessions(window, cx);
-        self.load_topology(cx);
+        self.load_topology(window, cx);
         let open: Vec<SessionId> = self.open_sessions.keys().cloned().collect();
         for id in open {
-            self.load_history(&id, cx);
+            if self.session_admitted(&id) {
+                self.load_history(&id, cx);
+            }
         }
     }
 
@@ -377,6 +446,7 @@ impl Workspace {
         };
         let generation = connection.generation;
         let ticket = self.sessions.begin_load();
+        let runtime = self.runtime.clone();
         let (sender, mut receiver) = tokio::sync::mpsc::channel(PAGE_QUEUE);
         let statuses_client = client.clone();
         let pages = connection.network.run(async move {
@@ -404,6 +474,13 @@ impl Workspace {
                         if std::mem::take(&mut first) {
                             let early = page.clone();
                             let _ = this.update_in(cx, |this, window, cx| {
+                                if this.runtime != runtime
+                                    || this.connection.as_ref().is_none_or(|connection| {
+                                        connection.generation != generation
+                                    })
+                                {
+                                    return;
+                                }
                                 let update = this.sessions.merge_page(ticket, early);
                                 this.after_index_update(update, window, cx);
                             });
@@ -412,6 +489,14 @@ impl Workspace {
                     }
                     Err(error) => {
                         let _ = this.update(cx, |this, cx| {
+                            if this.runtime != runtime
+                                || this
+                                    .connection
+                                    .as_ref()
+                                    .is_none_or(|connection| connection.generation != generation)
+                            {
+                                return;
+                            }
                             tracing::warn!(%error, "the session list could not be read");
                             this.sessions.fail_load(ticket);
                             this.note_failure(generation, &error);
@@ -424,6 +509,14 @@ impl Workspace {
             let complete = pages.await.is_some();
             let statuses = statuses.await.and_then(Result::ok);
             let _ = this.update_in(cx, |this, window, cx| {
+                if this.runtime != runtime
+                    || this
+                        .connection
+                        .as_ref()
+                        .is_none_or(|connection| connection.generation != generation)
+                {
+                    return;
+                }
                 if !complete {
                     this.sessions.fail_load(ticket);
                     cx.notify();
@@ -536,7 +629,8 @@ impl Workspace {
             }));
     }
 
-    fn load_topology(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn load_topology(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let effort_read = self.begin_effort_settings_read();
         let Some(connection) = self.connection.as_mut() else {
             return;
         };
@@ -544,87 +638,171 @@ impl Workspace {
             return;
         };
         let generation = connection.generation;
+        let runtime = self.runtime.clone();
+        self.session_admission.topology_ticket =
+            self.session_admission.topology_ticket.wrapping_add(1);
+        let ticket = self.session_admission.topology_ticket;
+        let baseline = self.session_admission.topology_revision;
         if self.send_catalog.settings.is_none() {
             self.send_catalog.settings_load = crate::send_catalog::Load::Loading;
         }
         let wrap_revision = self.code_wrap_state.revision();
-        let task = connection.network.run(async move {
-            let roots = client.chat_roots().await;
-            let settings = client.settings().await;
-            let worktrees = match &settings {
-                Ok(settings) => {
+        let handle = connection.network.handle();
+        let initial_paths: Vec<String> = self
+            .topology
+            .projects
+            .iter()
+            .map(|project| project.path.clone())
+            .collect();
+        connection.topology_task = Some(cx.spawn_in(window, async move |this, cx| {
+            let mut need_roots = true;
+            let mut need_settings = true;
+            let mut paths = initial_paths;
+            for attempt in 0..4 {
+                if attempt > 0 {
+                    cx.background_executor()
+                        .timer(Duration::from_secs(1 << (attempt - 1)))
+                        .await;
+                }
+                let client = client.clone();
+                let requested_paths = paths.clone();
+                let task = crate::network::NetworkTask::spawn_on(&handle, async move {
+                    let roots = if need_roots {
+                        Some(client.chat_roots().await)
+                    } else {
+                        None
+                    };
+                    let settings = if need_settings {
+                        Some(client.settings().await)
+                    } else {
+                        None
+                    };
                     let paths: Vec<String> = settings
-                        .projects
-                        .iter()
-                        .map(|project| project.path.clone())
-                        .collect();
-                    Some(client.project_worktrees(&paths).await)
-                }
-                Err(_) => None,
-            };
-            (roots, settings, worktrees)
-        });
-        connection.topology_task = Some(cx.spawn(async move |this, cx| {
-            let Some((roots, settings, worktrees)) = task.await else {
-                return;
-            };
-            let _ = this.update(cx, |this, cx| {
-                if !this
-                    .connection
-                    .as_ref()
-                    .is_some_and(|connection| connection.generation == generation)
-                {
-                    return;
-                }
-                // Each part fails alone and keeps what it held, so a failed
-                // discovery leaves sessions reachable through their fallback.
-                match roots {
-                    Ok(roots) => this.topology.chat_roots = roots,
-                    Err(error) => tracing::warn!(%error, "the Chats roots could not be read"),
-                }
-                this.send_catalog
-                    .settings_load
-                    .settle(settings.as_ref().ok().map(|_| ()));
-                match settings {
-                    Ok(mut settings) => {
-                        if let Some(previous) = &this.send_catalog.settings {
-                            settings.sidebar_view = settings.sidebar_view.or(previous.sidebar_view);
-                            settings.show_chats = settings.show_chats.or(previous.show_chats);
-                            settings.show_pinned = settings.show_pinned.or(previous.show_pinned);
-                            settings.show_work = settings.show_work.or(previous.show_work);
-                            settings.keep_work_in_place =
-                                settings.keep_work_in_place.or(previous.keep_work_in_place);
-                            settings.work_enabled = settings.work_enabled.or(previous.work_enabled);
-                            settings.prompt_navigator_enabled = settings
-                                .prompt_navigator_enabled
-                                .or(previous.prompt_navigator_enabled);
-                        }
-                        this.topology.worktrees.retain(|entry| {
+                        .as_ref()
+                        .and_then(|result| result.as_ref().ok())
+                        .map(|settings| {
                             settings
                                 .projects
                                 .iter()
-                                .any(|project| project.path == entry.project_path)
-                        });
-                        this.topology.projects = settings.projects.clone();
-                        if this.code_wrap_state.can_adopt(wrap_revision) {
-                            if let Some(wrap) = settings.code_block_line_wrap {
-                                this.show_code_wrap(wrap, cx);
+                                .map(|project| project.path.clone())
+                                .collect()
+                        })
+                        .unwrap_or(requested_paths);
+                    let mut reads = Vec::new();
+                    for batch in paths.chunks(200) {
+                        match client.project_worktrees(batch).await {
+                            Ok(batch) => reads.extend(batch),
+                            Err(error) => {
+                                tracing::warn!(%error, "a worktree batch could not be read");
+                                reads.extend(batch.iter().map(|path| {
+                                    openchamber_native_transport::client::WorktreeRead {
+                                        project_path: path.clone(),
+                                        worktrees: None,
+                                    }
+                                }));
                             }
-                        } else {
-                            settings.code_block_line_wrap =
-                                Some(cx.try_global::<CodeWrap>().copied().unwrap_or_default().0);
                         }
-                        this.send_catalog.settings = Some(settings);
                     }
-                    Err(error) => tracing::warn!(%error, "the settings could not be read"),
-                }
-                match worktrees {
-                    Some(Ok(reads)) => {
-                        for read in reads {
+                    (roots, settings, reads)
+                });
+                let Some((roots, settings, worktrees)) = task.await else {
+                    return;
+                };
+                let pending = this
+                    .update_in(cx, |this, window, cx| {
+                        if !this
+                            .connection
+                            .as_ref()
+                            .is_some_and(|connection| connection.generation == generation)
+                            || this.runtime != runtime
+                            || this.session_admission.topology_ticket != ticket
+                        {
+                            return None;
+                        }
+                        let mut failed_roots = false;
+                        let mut failed_settings = false;
+                        // Each successful component commits independently of failed siblings.
+                        match roots {
+                            Some(Ok(roots)) => {
+                                this.topology.chat_roots = roots;
+                                this.session_admission.roots_ready = true;
+                            }
+                            Some(Err(error)) => {
+                                failed_roots = true;
+                                tracing::warn!(%error, "the Chats roots could not be read");
+                            }
+                            None => {}
+                        }
+                        if let Some(settings) = &settings {
+                            this.send_catalog
+                                .settings_load
+                                .settle(settings.as_ref().ok().map(|_| ()));
+                        }
+                        match settings {
+                            Some(Ok(mut settings)) => {
+                                // A registry read started before admission owns no removal of
+                                // that confirmed append. A later fresh read can remove it.
+                                this.session_admission
+                                    .reconcile_projects(baseline, &mut settings.projects);
+                                if let Some(previous) = &this.send_catalog.settings {
+                                    settings.sidebar_view =
+                                        settings.sidebar_view.or(previous.sidebar_view);
+                                    settings.show_chats =
+                                        settings.show_chats.or(previous.show_chats);
+                                    settings.show_pinned =
+                                        settings.show_pinned.or(previous.show_pinned);
+                                    settings.show_work = settings.show_work.or(previous.show_work);
+                                    settings.keep_work_in_place =
+                                        settings.keep_work_in_place.or(previous.keep_work_in_place);
+                                    settings.work_enabled =
+                                        settings.work_enabled.or(previous.work_enabled);
+                                    settings.prompt_navigator_enabled = settings
+                                        .prompt_navigator_enabled
+                                        .or(previous.prompt_navigator_enabled);
+                                }
+                                this.topology.worktrees.retain(|entry| {
+                                    settings
+                                        .projects
+                                        .iter()
+                                        .any(|project| project.path == entry.project_path)
+                                });
+                                this.topology.projects = settings.projects.clone();
+                                if this.code_wrap_state.can_adopt(wrap_revision) {
+                                    if let Some(wrap) = settings.code_block_line_wrap {
+                                        this.show_code_wrap(wrap, cx);
+                                    }
+                                } else {
+                                    settings.code_block_line_wrap = Some(
+                                        cx.try_global::<CodeWrap>().copied().unwrap_or_default().0,
+                                    );
+                                }
+                                this.reconcile_effort_settings(&effort_read, &mut settings);
+                                this.send_catalog.settings = Some(settings);
+                                this.session_admission
+                                    .confirmed_projects
+                                    .retain(|(revision, _)| *revision > baseline);
+                            }
+                            Some(Err(error)) => {
+                                failed_settings = true;
+                                tracing::warn!(%error, "the settings could not be read");
+                            }
+                            None => {}
+                        }
+                        let mut failed_paths = Vec::new();
+                        for read in worktrees {
                             let Some(worktrees) = read.worktrees else {
                                 tracing::warn!("a project's worktrees could not be listed");
+                                failed_paths.push(read.project_path);
                                 continue;
                             };
+                            if !this
+                                .topology
+                                .projects
+                                .iter()
+                                .any(|project| project.path == read.project_path)
+                            {
+                                continue;
+                            }
                             let entry = ProjectWorktrees {
                                 project_path: read.project_path,
                                 worktrees,
@@ -639,18 +817,31 @@ impl Workspace {
                                 None => this.topology.worktrees.push(entry),
                             }
                         }
-                    }
-                    Some(Err(error)) => tracing::warn!(%error, "the worktrees could not be read"),
-                    None => {}
+                        this.rebuild_sidebar();
+                        this.reconcile_session_admission(window, cx);
+                        cx.notify();
+                        Some((failed_roots, failed_settings, failed_paths))
+                    })
+                    .ok()
+                    .flatten();
+                let Some((roots, settings, failed_paths)) = pending else {
+                    return;
+                };
+                need_roots = roots;
+                need_settings = settings;
+                paths = failed_paths;
+                if !need_roots && !need_settings && paths.is_empty() {
+                    return;
                 }
-                this.rebuild_sidebar();
-                cx.notify();
-            });
+            }
         }));
     }
 
     /// Reads a visited session's newest messages and merges them.
     pub(crate) fn load_history(&mut self, id: &SessionId, cx: &mut Context<Self>) {
+        if !self.session_admitted(id) {
+            return;
+        }
         let Some(connection) = self.connection.as_ref() else {
             return;
         };
@@ -842,6 +1033,43 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.apply_server_events_with_deletion_cleanup(
+            events,
+            SessionDeletionCleanup::CurrentSubtree,
+            window,
+            cx,
+        );
+    }
+
+    /// DELETE completions already contain their captured subtree. Keep the live
+    /// reducer's index revisions and side effects within those exact identities.
+    pub(crate) fn apply_confirmed_session_deletions(
+        &mut self,
+        sessions: &[SessionId],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let events = sessions
+            .iter()
+            .map(|id| ServerEvent::SessionDeleted {
+                session_id: id.clone(),
+            })
+            .collect();
+        self.apply_server_events_with_deletion_cleanup(
+            events,
+            SessionDeletionCleanup::CapturedSession,
+            window,
+            cx,
+        );
+    }
+
+    fn apply_server_events_with_deletion_cleanup(
+        &mut self,
+        events: Vec<ServerEvent>,
+        deletion_cleanup: SessionDeletionCleanup,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let mut changes = Vec::new();
         let mut update = IndexUpdate::default();
         let mut ordering = Vec::new();
@@ -891,7 +1119,17 @@ impl Workspace {
                         .remove(&self.mutation_key(&session_id));
                     self.forget_session_queue(&session_id);
                     self.remove_session_requests(&session_id);
-                    self.forget_deleted_session(&session_id, cx);
+                    match deletion_cleanup {
+                        SessionDeletionCleanup::CurrentSubtree => {
+                            self.forget_deleted_session(&session_id, window, cx)
+                        }
+                        SessionDeletionCleanup::CapturedSession => self.forget_deleted_sessions(
+                            &self.runtime.clone(),
+                            std::slice::from_ref(&session_id),
+                            window,
+                            cx,
+                        ),
+                    }
                     self.live_status.remove(&session_id);
                     ordering.push(OrderingMutation::Remove { session_id });
                 }
@@ -1045,11 +1283,13 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.reconcile_session_admission(window, cx);
         if !update.moves.is_empty() {
             self.invalidate_blocking(None);
             self.refresh_blocking_requests(window, cx);
             // A move can land in a worktree this client has not discovered.
-            self.load_topology(cx);
+            self.load_topology(window, cx);
+            self.observe_session_moves(&update.moves, window, cx);
         }
         if !update.changed {
             return;

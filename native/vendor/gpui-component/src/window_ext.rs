@@ -1,12 +1,13 @@
 use crate::root::WindowState;
 use crate::{
-    Placement,
+    DialogLayerHandle, Placement,
     dialog::{AlertDialog, Dialog},
     input::AnyInputState,
     notification::Notification,
     sheet::Sheet,
 };
-use gpui::{App, ElementId, Entity, Window};
+use gpui::{App, ElementId, Entity, Subscription, Window};
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 /// Extension trait for [`Window`] to add dialog, sheet .. functionality.
@@ -76,6 +77,15 @@ pub trait WindowExt: Sized {
     where
         F: Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static;
 
+    /// Opens a dialog whose lifetime can be ended by its exact layer handle.
+    ///
+    /// The builder follows [`Self::open_dialog`]'s rendering contract. Its normal
+    /// dismissal actions close this opening even if a callback opens another
+    /// dialog. Targeted dismissal restores focus immediately when topmost.
+    fn open_dialog_with_handle<F>(&mut self, cx: &mut App, build: F) -> DialogLayerHandle
+    where
+        F: Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static;
+
     /// Opens an AlertDialog.
     ///
     /// This is a convenience method for opening an alert dialog with opinionated defaults.
@@ -108,8 +118,32 @@ pub trait WindowExt: Sized {
     /// Closes the last active Dialog.
     fn close_dialog(&mut self, cx: &mut App);
 
+    /// Closes only the named layer and returns whether it was still open here.
+    ///
+    /// Closed handles and handles from another root are no-ops. Removing a
+    /// covered layer preserves the top dialog's focus and selection and repairs
+    /// its focus-return chain. Like [`Self::close_dialog`], this does not call
+    /// the dialog's confirmation, cancellation or close callbacks.
+    fn close_dialog_by_handle(&mut self, handle: &DialogLayerHandle, cx: &mut App) -> bool;
+
     /// Closes all active Dialogs.
     fn close_all_dialogs(&mut self, cx: &mut App);
+
+    /// Observes changes in whether any Kit dialog or sheet covers this window.
+    ///
+    /// The callback receives `true` while covered and `false` once uncovered.
+    /// There is no initial callback. Notifications with unchanged coverage,
+    /// including toast updates, are ignored. Delivery reads the authoritative
+    /// state after changes, so a close followed by an open in one update stays
+    /// covered. The subscription belongs to the current window root; replaced
+    /// roots cannot deliver callbacks. A one-shot reconciliation after observer
+    /// activation catches changes coalesced before activation. Dropping the
+    /// subscription cancels both observation and that reconciliation.
+    fn observe_modal_state(
+        &mut self,
+        cx: &mut App,
+        callback: impl FnMut(bool, &mut Window, &mut App) + 'static,
+    ) -> Subscription;
 
     /// Pushes a notification to the notification list.
     fn push_notification(&mut self, note: impl Into<Notification>, cx: &mut App);
@@ -190,6 +224,16 @@ impl WindowExt for Window {
     }
 
     #[inline]
+    fn open_dialog_with_handle<F>(&mut self, cx: &mut App, build: F) -> DialogLayerHandle
+    where
+        F: Fn(Dialog, &mut Window, &mut App) -> Dialog + 'static,
+    {
+        WindowState::update(self, cx, move |root, window, cx| {
+            root.open_dialog_with_handle(build, window, cx)
+        })
+    }
+
+    #[inline]
     fn has_active_dialog(&mut self, cx: &mut App) -> bool {
         !WindowState::read(self, cx).active_dialogs.is_empty()
     }
@@ -206,6 +250,54 @@ impl WindowExt for Window {
         WindowState::update(self, cx, |root, window, cx| {
             root.close_all_dialogs(window, cx);
         })
+    }
+
+    #[inline]
+    fn close_dialog_by_handle(&mut self, handle: &DialogLayerHandle, cx: &mut App) -> bool {
+        WindowState::try_update(self, cx, |root, window, cx| {
+            root.close_dialog_by_handle(handle, window, cx)
+        })
+        .unwrap_or(false)
+    }
+
+    fn observe_modal_state(
+        &mut self,
+        cx: &mut App,
+        mut callback: impl FnMut(bool, &mut Window, &mut App) + 'static,
+    ) -> Subscription {
+        let root = WindowState::update(self, cx, |_, _, cx| cx.entity());
+        let mut covered = {
+            let state = root.read(cx);
+            state.active_sheet.is_some() || !state.active_dialogs.is_empty()
+        };
+        let active = Rc::new(Cell::new(true));
+        let live = active.clone();
+        let reconcile = Rc::new(RefCell::new(move |root: Entity<WindowState>, window: &mut Window, cx: &mut App| {
+            if !live.get() || WindowState::entity(window, cx).as_ref() != Some(&root) {
+                return;
+            }
+            let current = {
+                let state = root.read(cx);
+                state.active_sheet.is_some() || !state.active_dialogs.is_empty()
+            };
+            if current != covered {
+                covered = current;
+                callback(current, window, cx);
+            }
+        }));
+        let notify = reconcile.clone();
+        let observation = self.observe(&root, cx, move |root, window, cx| {
+            notify.borrow_mut()(root, window, cx);
+        });
+        let root = root.downgrade();
+        // Window::observe queues activation first. Re-read after it so an earlier
+        // coalesced notification cannot strand a continuation waiting for uncover.
+        self.defer(cx, move |window, cx| {
+            if let Some(root) = root.upgrade() {
+                reconcile.borrow_mut()(root, window, cx);
+            }
+        });
+        Subscription::join(Subscription::new(move || active.set(false)), observation)
     }
 
     #[inline]

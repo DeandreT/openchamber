@@ -416,8 +416,17 @@ export const registerConfigEntityRoutes = (app, dependencies) => {
       }
       // `content` asks for a snippet body's preview, `text` for a prompt's expansion.
       const content = req.body?.content;
+      if (req.body?.sourceMap === true) {
+        if (content !== undefined || typeof req.body?.text !== 'string') {
+          return res.status(400).json({ error: 'Source mapping requires prompt text', code: 'snippet_source_map_invalid_request' });
+        }
+        return res.json(expandSnippets(req.body.text, directory, { sourceMap: true }));
+      }
       res.json({ text: content !== undefined ? previewSnippet(String(content), directory) : expandSnippets(req.body?.text ?? '', directory) });
     } catch (error) {
+      if (error?.code === 'snippet_source_map_limit') {
+        return res.status(413).json({ error: 'Snippet source map exceeds its limit', code: error.code });
+      }
       console.error('[API:POST /api/config/snippets/expand] Failed:', error);
       res.status(500).json({ error: error.message || 'Failed to expand snippets' });
     }

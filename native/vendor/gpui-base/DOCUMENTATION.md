@@ -113,8 +113,20 @@ member rejects updates through the document and cannot participate in selection.
   a member resynchronizes its ordinary background parser before future updates.
 - Painting resolves only the current member's range and uses the existing
   ordered leaf index. It does not walk the transcript or draw offscreen content.
+- `Dialog::layer_id` and `AlertDialog::layer_id` opt a modal host into a retained
+  element and focus-trap identity. Stack position still sets draw priority.
+  Removing a lower Kit dialog therefore preserves the newer dialog's keyed
+  controls. Hosts without an explicit id keep their existing layer-index keys.
 
 ## Decisions
+
+### Why modal render identity is separate from stack position
+
+Targeted Kit dismissal can remove a lower layer while a newer dialog owns
+keyboard focus. Kit supplies its retained focus identity to keep that dialog's
+controls stable across the stack-position change; index-based keys would replace
+their focus state. Base's default keys and dismissal behavior stay unchanged.
+The native admission tests cover this through the public Kit window API.
 
 ### Why selection has a separate logical owner
 

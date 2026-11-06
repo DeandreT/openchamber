@@ -5,10 +5,10 @@ use std::{
 };
 
 use gpui::{
-    AnyElement, App, ClickEvent, FocusHandle, InteractiveElement as _, IntoElement, KeyBinding,
-    MouseButton, ParentElement, Pixels, RenderOnce, Role, StatefulInteractiveElement as _,
-    StyleRefinement, Styled, Window, anchored, deferred, div, point, prelude::FluentBuilder as _,
-    px,
+    AnyElement, App, ClickEvent, ElementId, FocusHandle, InteractiveElement as _, IntoElement,
+    KeyBinding, MouseButton, ParentElement, Pixels, RenderOnce, Role,
+    StatefulInteractiveElement as _, StyleRefinement, Styled, Window, anchored, deferred, div,
+    point, prelude::FluentBuilder as _, px,
 };
 use smallvec::SmallVec;
 
@@ -124,6 +124,7 @@ impl Dialog {
 pub struct Dialog {
     style: StyleRefinement,
     focus: FocusHandle,
+    layer_id: Option<ElementId>,
     role: Role,
     layer: usize,
     keyboard: bool,
@@ -425,6 +426,7 @@ impl Dialog {
         Self {
             style: StyleRefinement::default(),
             focus: cx.focus_handle(),
+            layer_id: None,
             role: Role::Dialog,
             layer: 0,
             keyboard: true,
@@ -496,6 +498,14 @@ impl Dialog {
         self.topmost = topmost;
         self
     }
+    /// Sets a stable render identity for one opening independently of stack position.
+    ///
+    /// Retain the id while this layer is open so keyed child controls keep focus
+    /// when a lower layer closes. Without an id, the layer index remains the key.
+    pub fn layer_id(mut self, id: ElementId) -> Self {
+        self.layer_id = Some(id);
+        self
+    }
     #[doc(hidden)]
     pub fn focus_handle(mut self, value: FocusHandle) -> Self {
         self.focus = value;
@@ -544,11 +554,18 @@ impl RenderOnce for Dialog {
         let confirm_change = self.on_open_change.clone();
         let backdrop_change = self.on_open_change.clone();
         let viewport = window.viewport_size();
+        let host_id = self
+            .layer_id
+            .clone()
+            .unwrap_or_else(|| ("dialog-host", self.layer).into());
+        let trap_id = self
+            .layer_id
+            .unwrap_or_else(|| format!("dialog-{}", self.layer).into());
 
         deferred(
             anchored().position(point(px(0.), px(0.))).child(
                 div()
-                    .id(("dialog-host", self.layer))
+                    .id(host_id)
                     .test_support()
                     .absolute()
                     .top_0()
@@ -562,7 +579,7 @@ impl RenderOnce for Dialog {
                     .justify_center()
                     .role(self.role)
                     .track_focus(&self.focus)
-                    .focus_trap(format!("dialog-{}", self.layer), &self.focus)
+                    .focus_trap(trap_id, &self.focus)
                     .when(self.keyboard, |this| this.key_context(CONTEXT))
                     .map(|this| {
                         let request_cancel = request_close.clone();

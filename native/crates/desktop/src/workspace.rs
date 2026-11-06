@@ -15,7 +15,6 @@ use gpui_kit::{
     App, AppContext, Context, Entity, FocusHandle, FollowMode, ListAlignment, ListOffset,
     ListState, SharedString, Subscription, Task, Window, px,
 };
-use openchamber_native_core::chat_projection;
 use openchamber_native_core::chat_roots::ChatRoots;
 use openchamber_native_core::draft::{Draft, DraftKey, DraftStore, DraftTarget};
 use openchamber_native_core::grouping::{self, GroupingContext, WorktreeSortOrder};
@@ -27,6 +26,7 @@ use openchamber_native_core::ownership::{
 use openchamber_native_core::scroll_memory::{ScrollKey, ScrollMemory, ScrollPosition};
 use openchamber_native_core::session::{LiveStatus, SessionRecord};
 use openchamber_native_core::session_index::SessionIndex;
+use openchamber_native_core::sidebar_collection::SidebarCollection;
 use openchamber_native_core::sidebar_rows::{self, SectionSpacing, SidebarInputs, SidebarState};
 use openchamber_native_core::synthetic::{
     self, ConversationShape, ResponseScript, SyntheticWorkspace, WorkloadSize,
@@ -147,8 +147,17 @@ pub struct Workspace {
     pub(crate) selected: Option<SessionId>,
     pub(crate) open_sessions: HashMap<SessionId, OpenSession>,
     pub(crate) drafts: DraftStore,
+    pub(crate) attachments: crate::attachment_catalog::AttachmentCatalog,
+    pub(crate) attachment_preparations: Vec<crate::attachment_catalog::PreparationHold>,
+    pub(crate) attachment_staging: crate::attachment_staging::AttachmentStaging,
+    pub(crate) attachment_retirement: crate::attachment_retirement::AttachmentRetirement,
+    pub(crate) attachment_storage: crate::attachment_storage::AttachmentStorage,
+    pub(crate) attachment_storage_close: Option<Task<()>>,
+    pub(crate) retired_attachment_blobs: Vec<crate::attachment_spool::BlobId>,
     pub(crate) scroll_memory: ScrollMemory,
     pub(crate) composer: Entity<TextareaState>,
+    pub(crate) composer_documents: crate::composer_document::ComposerDocuments,
+    pub(crate) attachment_input: crate::composer_attachment_input::ComposerAttachmentInput,
     pub(crate) composer_key: Option<DraftKey>,
     pub(crate) draft_previews: HashMap<DraftKey, SharedString>,
     pub(crate) draft_rows: HashMap<DraftKey, usize>,
@@ -178,6 +187,8 @@ pub struct Workspace {
     pub(crate) general_close: Option<Task<()>>,
     /// The composer's catalogs and defaults; empty for synthetic data.
     pub(crate) send_catalog: SendCatalog,
+    pub(crate) effort_preferences: crate::effort_preferences::EffortPreferences,
+    pub(crate) effort_close: Option<Task<()>>,
     pub(crate) composer_selections: openchamber_native_core::composer_selection::ComposerSelections,
     pub(crate) model_picker: crate::composer_picker::Picker,
     pub(crate) agent_picker: crate::composer_picker::Picker,
@@ -186,6 +197,7 @@ pub struct Workspace {
     pub(crate) blocking: crate::blocking_requests::BlockingRequests,
     pub(crate) permission_modes: crate::permission_modes::PermissionModes,
     pub(crate) queue: crate::message_queue::QueueState,
+    pub(crate) queue_storage: crate::queue_storage::QueueStorage,
     pub(crate) starters: crate::starters::Starters,
     /// The session a first Escape armed a stop for, until when.
     pub(crate) abort_primed: Option<(SessionId, Instant)>,
@@ -200,6 +212,7 @@ pub struct Workspace {
     pub(crate) creations: crate::create_attempt::CreateAttempts,
     pub(crate) creation_tasks: HashMap<crate::send_attempt::SessionKey, Task<()>>,
     pub(crate) navigation_revision: u64,
+    pub(crate) session_admission: crate::session_admission::SessionAdmission,
     pub(crate) code_wrap_state: CodeWrapState,
     pub(crate) code_wrap_save_task: Option<Task<()>>,
     pub(crate) provider_logos: ProviderLogos,
@@ -252,11 +265,14 @@ impl Workspace {
         let placeholder = locale::strings(cx).get("chat.chatInput.placeholder.chat");
         let composer = cx.new(|cx| {
             TextareaState::new(window, cx)
+                .observe_committed_edits()
                 .auto_grow(1, 10)
                 .submit_on_enter(true)
                 .placeholder(placeholder)
         });
         let subscription = cx.subscribe_in(&composer, window, Self::on_composer_event);
+        let committed_subscription =
+            cx.subscribe_in(&composer, window, Self::on_committed_composer_edit);
 
         let mut workspace = Self {
             topology,
@@ -281,8 +297,17 @@ impl Workspace {
             selected: None,
             open_sessions: HashMap::new(),
             drafts: DraftStore::new(),
+            attachments: Default::default(),
+            attachment_preparations: Vec::new(),
+            attachment_staging: Default::default(),
+            attachment_retirement: Default::default(),
+            attachment_storage: Default::default(),
+            attachment_storage_close: None,
+            retired_attachment_blobs: Vec::new(),
             scroll_memory: ScrollMemory::new(),
             composer,
+            composer_documents: Default::default(),
+            attachment_input: Default::default(),
             composer_key: None,
             draft_previews: HashMap::new(),
             draft_rows: HashMap::new(),
@@ -306,6 +331,8 @@ impl Workspace {
             appearance_close: None,
             general_close: None,
             send_catalog: SendCatalog::default(),
+            effort_preferences: Default::default(),
+            effort_close: None,
             composer_selections:
                 openchamber_native_core::composer_selection::ComposerSelections::default(),
             model_picker: crate::composer_picker::Picker::new(
@@ -327,6 +354,7 @@ impl Workspace {
             blocking: crate::blocking_requests::BlockingRequests::default(),
             permission_modes: crate::permission_modes::PermissionModes::default(),
             queue: Default::default(),
+            queue_storage: Default::default(),
             starters: Default::default(),
             abort_primed: None,
             recovery: crate::send_recovery::RecoveryState::default(),
@@ -338,6 +366,7 @@ impl Workspace {
             creations: crate::create_attempt::CreateAttempts::default(),
             creation_tasks: HashMap::new(),
             navigation_revision: 0,
+            session_admission: crate::session_admission::SessionAdmission::default(),
             code_wrap_state: CodeWrapState::default(),
             code_wrap_save_task: None,
             provider_logos: ProviderLogos::default(),
@@ -353,7 +382,7 @@ impl Workspace {
             startup_recorded: false,
             composer_usable_recorded: false,
             sessions_shown: false,
-            _subscriptions: vec![subscription],
+            _subscriptions: vec![subscription, committed_subscription],
         };
         workspace.rebuild_sidebar();
         if let Some(appearance) = cx.try_global::<crate::appearance_view::AppearanceOwner>() {
@@ -397,11 +426,20 @@ impl Workspace {
         let window_handle = window.window_handle();
         workspace
             ._subscriptions
+            .push(cx.on_request_quit_in(window, |workspace, window, cx| {
+                workspace.request_close(window, cx);
+                false
+            }));
+        workspace
+            ._subscriptions
             .push(cx.on_app_quit(move |workspace, cx| {
                 let general = workspace.take_general_flush(cx);
                 let appearance = workspace.take_appearance_flush(window_handle, cx);
                 let hosts = workspace.take_profile_quit_flush(cx);
+                let efforts = workspace.take_effort_quit_flush(cx);
                 let flushed = workspace.flush_before_quit(cx);
+                let active_network = workspace.connection.take().map(Connection::into_network);
+                let retired_networks = std::mem::take(&mut workspace.retired_networks);
                 async move {
                     if let Some(general) = general {
                         general.await;
@@ -412,9 +450,14 @@ impl Workspace {
                     if let Some(hosts) = hosts {
                         hosts.await;
                     }
+                    if let Some(efforts) = efforts {
+                        efforts.await;
+                    }
                     if let Some(flushed) = flushed {
                         let _ = flushed.await;
                     }
+                    drop(active_network);
+                    drop(retired_networks);
                 }
             }));
         let owner = cx.weak_entity();
@@ -632,6 +675,22 @@ impl Workspace {
     /// captured identities, then restores the incoming ones before paint.
     pub fn select_session(&mut self, id: SessionId, window: &mut Window, cx: &mut Context<Self>) {
         self.navigation_revision = self.navigation_revision.wrapping_add(1);
+        if !self.gate_session_open(&id, window, cx) {
+            return;
+        }
+        self.select_admitted_session(id, window, cx);
+    }
+
+    /// Completes navigation only after the destination has authoritative admission.
+    pub(crate) fn select_admitted_session(
+        &mut self,
+        id: SessionId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.session_admitted(&id) {
+            return;
+        }
         // Selecting a session always leaves a full-page surface.
         self.archive_open = false;
         self.prompt_panel = None;
@@ -766,6 +825,9 @@ impl Workspace {
     }
 
     pub(crate) fn ensure_open(&mut self, id: &SessionId, cx: &mut Context<Self>) {
+        if !self.session_admitted(id) {
+            return;
+        }
         if self.open_sessions.contains_key(id) {
             return;
         }
@@ -867,30 +929,93 @@ impl Workspace {
     }
 
     pub(crate) fn save_composer_draft(&mut self, cx: &App) {
+        if self.save_compound_composer(cx) {
+            return;
+        }
         let Some(key) = self.composer_key.clone() else {
             return;
         };
+        // Keep potentially large context payloads with their existing owner while
+        // rebasing text anchors and recording the editor's selection.
+        let mut draft = self.drafts.take(&key).unwrap_or_default();
         let composer = self.composer.read(cx);
-        let draft = Draft {
-            text: composer.value().to_string(),
-            selection: composer.selected_range(),
-        };
-        let draft = self.starters.persisted_draft(&key, draft);
-        self.save_draft_preview(&key, &draft.text);
+        let (text, selection) = composer.committed_snapshot();
+        let text = text.to_string();
+        let changed = draft.text != text;
+        draft.edit_text(text, selection);
+        if changed {
+            self.record_native_composer_change(&key);
+        }
+        self.save_draft_preview(&key, &draft, cx);
         self.drafts.save(key, draft);
     }
 
+    /// Text widgets own only text and caret state; semantic content stays with
+    /// the captured draft even while an asynchronous preparation updates it.
+    pub(crate) fn composer_draft(&self, cx: &App) -> Draft {
+        let composer = self.composer.read(cx);
+        let mut draft = self
+            .composer_key
+            .as_ref()
+            .and_then(|key| self.drafts.get(key))
+            .cloned()
+            .unwrap_or_default();
+        if self
+            .composer_key
+            .as_ref()
+            .is_some_and(|owner| self.composer_documents.contains(owner))
+        {
+            return draft;
+        }
+        let (text, selection) = composer.committed_snapshot();
+        draft.edit_text(text.to_string(), selection);
+        draft
+    }
+
+    pub(crate) fn composer_has_sendable_content(&self, cx: &App) -> bool {
+        if let Some(sendable) = self.compound_composer_sendable() {
+            return sendable;
+        }
+        !self.composer.read(cx).value().trim().is_empty()
+            || self
+                .composer_key
+                .as_ref()
+                .and_then(|key| self.drafts.get(key))
+                .is_some_and(|draft| {
+                    !draft.content.files.is_empty() || !draft.content.context.is_empty()
+                })
+    }
+
+    pub(crate) fn consume_draft_capture(
+        &mut self,
+        owner: &DraftKey,
+        captured: &Draft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.save_composer_draft(cx);
+        let Some(mut current) = self.drafts.get(owner).cloned() else {
+            return;
+        };
+        if !current.consume_captured(captured) {
+            return;
+        }
+        self.drafts.save(owner.clone(), current);
+        if self.composer_key.as_ref() == Some(owner) {
+            self.restore_composer_draft(window, cx);
+        }
+    }
+
     pub(crate) fn restore_composer_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.restore_compound_composer(window, cx) {
+            return;
+        }
         let draft = self
             .composer_key
             .as_ref()
             .and_then(|key| self.drafts.get(key))
             .cloned()
             .unwrap_or_default();
-        let draft = match &self.composer_key {
-            Some(owner) => self.starters.visible_draft(owner, draft),
-            None => draft,
-        };
         self.composer.update(cx, |composer, cx| {
             composer.set_value(draft.text.clone(), window, cx);
             composer.set_selected_range(draft.selection.clone(), cx);
@@ -910,12 +1035,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if matches!(event, InputEvent::Change) && self.composer_editable() {
-            self.save_composer_draft(cx);
-            self.queue_persistence(cx);
-            cx.notify();
-        }
-        if let InputEvent::PressEnter {
+        // CommittedInputEdit owns persistence. IME preedit and a batched undo
+        // must never be captured through an intermediate Change notification.
+        if matches!(event, InputEvent::CompositionEnded) {
+            self.on_composer_composition_ended(window, cx);
+        } else if let InputEvent::PressEnter {
             shift: false,
             secondary,
         } = event
@@ -1174,20 +1298,16 @@ fn build_sidebar_items(
     ordering: &mut SessionOrdering,
     settings: Option<&ServerSettings>,
 ) -> (Vec<SidebarItem>, Vec<Option<SectionSpacing>>) {
-    let ownership = SessionOwnershipIndex::build(&OwnershipInputs {
+    let inputs = OwnershipInputs {
         sessions: active,
         archived_sessions: archived,
         projects: &topology.projects,
         worktrees: &topology.worktrees,
         surface: Surface::Desktop,
         ..OwnershipInputs::default()
-    });
-    let chats = chat_projection::project(
-        active,
-        &ownership,
-        topology.chat_roots.as_ref(),
-        Surface::Desktop,
-    );
+    };
+    let collection = SidebarCollection::build(&inputs, topology.chat_roots.as_ref(), ordering);
+    let ownership = SessionOwnershipIndex::build_for_sidebar(&inputs, &collection);
     let branches = HashMap::new();
     let context = GroupingContext {
         ownership: &ownership,
@@ -1199,8 +1319,8 @@ fn build_sidebar_items(
     let mut sections = Vec::with_capacity(topology.projects.len());
     for project in &topology.projects {
         // `partitionSidebarSessions`: a `/btw` fork never reaches a project.
-        let mut sessions: Vec<&SessionRecord> = chats
-            .project_sessions_by_project
+        let mut sessions: Vec<&SessionRecord> = ownership
+            .sessions_by_project()
             .get(&project.id)
             .map(|bucket| {
                 bucket
@@ -1228,7 +1348,7 @@ fn build_sidebar_items(
             project, &sessions, worktrees, &context, ordering,
         ));
     }
-    let chat_group = grouping::build_chat_group(&chats.chat_sessions, topology.chat_roots.as_ref());
+    let chat_group = grouping::build_chat_group(&collection, topology.chat_roots.as_ref());
     let (pinned, work) = sidebar_rows::zone_items(&sections, chat_group.as_ref(), ordering);
     let timeline = sidebar_rows::timeline_items(&sections, ordering);
     let group_status = HashMap::new();

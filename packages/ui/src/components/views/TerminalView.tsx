@@ -4,10 +4,11 @@ import { useSessionUIStore } from '@/sync/session-ui-store';
 import { ACTIVE_PROJECT_ACTION_LIFECYCLES, useTerminalStore } from '@/stores/useTerminalStore';
 import { Spinner } from '@/components/ui/spinner';
 import { useEffectiveDirectory } from '@/hooks/useEffectiveDirectory';
+import { readComposerDraftTarget } from '@/hooks/useComposerAddress';
 import { useDraftSpaceTarget } from '@/lib/spaces/useDraftSpaceTarget';
 import { panelContentDirectory } from '@/lib/spaces/space-creation-requests';
 import { SpacePreparing } from '@/components/session/spaces/SpacePreparing';
-import { type TerminalStreamEvent } from '@/lib/api/types';
+import { type RuntimeAPIs, type TerminalStreamEvent } from '@/lib/api/types';
 import { useThemeSystem } from '@/contexts/useThemeSystem';
 import { useFontPreferences } from '@/hooks/useFontPreferences';
 import { CODE_FONT_OPTION_MAP, DEFAULT_MONO_FONT } from '@/lib/fontOptions';
@@ -54,6 +55,10 @@ type TerminalViewProps = {
 };
 
 const FALLBACK_TERMINAL_SIZE = { cols: 80, rows: 24 } as const;
+// The terminal socket retries forever with a growing delay (0.5 s doubling to
+// 8 s). Five failed attempts in a row take about 8 s: a server restart is back
+// by then, so only a connection that stays down shows the error.
+const RECONNECT_ATTEMPTS_BEFORE_ERROR = 5;
 
 type TerminalTabViewportProps = {
     directory: string;
@@ -69,6 +74,7 @@ type TerminalTabViewportProps = {
     fontFamily: string;
     fontSize: number;
     enableTouchScroll: boolean;
+    clipboard: RuntimeAPIs['clipboard'];
 };
 
 /**
@@ -79,7 +85,7 @@ type TerminalTabViewportProps = {
  */
 const TerminalTabViewport: React.FC<TerminalTabViewportProps> = ({
     directory, tabId, isActive, isTerminalVisible, registerController,
-    onInput, onResize, onProvisionalSize, theme, monoFont, fontFamily, fontSize, enableTouchScroll,
+    onInput, onResize, onProvisionalSize, theme, monoFont, fontFamily, fontSize, enableTouchScroll, clipboard,
 }) => {
     // Scrollback is a leaf subscription: streaming output must not rerender the tab strip.
     const chunks = useTerminalStore((s) => s.getBuffer(directory, tabId).chunks);
@@ -98,6 +104,7 @@ const TerminalTabViewport: React.FC<TerminalTabViewportProps> = ({
                 fontFamily={fontFamily}
                 fontSize={fontSize}
                 enableTouchScroll={enableTouchScroll}
+                clipboard={clipboard}
                 autoFocus={isTerminalVisible && isActive}
                 isVisible={isTerminalVisible && isActive}
             />
@@ -117,7 +124,7 @@ const TerminalTabIcon: React.FC<{ iconName: IconName; active: boolean }> = ({ ic
 
 export const TerminalView: React.FC<TerminalViewProps> = ({ visible, directory, onLastTabClosed }) => {
     const { t } = useI18n();
-    const { terminal, runtime } = useRuntimeAPIs();
+    const { terminal, runtime, clipboard } = useRuntimeAPIs();
     const { currentTheme } = useThemeSystem();
     const pageBackground = usePageColors().background;
     const terminalAppearanceRef = React.useRef<{ themeMode: 'light' | 'dark'; terminalBackground: string; terminalForeground: string }>({ themeMode: 'dark', terminalBackground: '', terminalForeground: '' });
@@ -208,6 +215,11 @@ export const TerminalView: React.FC<TerminalViewProps> = ({ visible, directory, 
     const [connectionError, setConnectionError] = React.useState<string | null>(null);
     const [isFatalError, setIsFatalError] = React.useState(false);
     const [isReconnectPending, setIsReconnectPending] = React.useState(false);
+    // The terminal whose reconnect kept failing. It stays set through "Try
+    // again" until a snapshot shows the stream is back, so a retry that fails
+    // does not blank the pane while the attempt count starts over.
+    const [unreachableTerminalId, setUnreachableTerminalId] = React.useState<string | null>(null);
+    const [isRetryingConnection, setIsRetryingConnection] = React.useState(false);
     const [activeModifier, setActiveModifier] = React.useState<Modifier | null>(null);
     const [isRestarting, setIsRestarting] = React.useState(false);
 
@@ -458,6 +470,8 @@ export const TerminalView: React.FC<TerminalViewProps> = ({ visible, directory, 
                                 setConnectionError(null);
                                 setIsFatalError(false);
                                 setIsReconnectPending(false);
+                                setUnreachableTerminalId(null);
+                                setIsRetryingConnection(false);
                                 focusTerminalWhenWindowActive();
 
                                 replaceBuffer(directory, tabId, event.data ?? '', event.sequence ?? 0, terminalSnapshotSize(event));
@@ -472,10 +486,13 @@ export const TerminalView: React.FC<TerminalViewProps> = ({ visible, directory, 
                                 break;
                             }
                             case 'reconnecting': {
-                                void event;
                                 setConnectionError(null);
                                 setIsFatalError(false);
                                 setIsReconnectPending(true);
+                                setIsRetryingConnection(false);
+                                if ((event.attempt ?? 0) >= RECONNECT_ATTEMPTS_BEFORE_ERROR) {
+                                    setUnreachableTerminalId(terminalId);
+                                }
                                 break;
                             }
                             case 'data': {
@@ -542,6 +559,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({ visible, directory, 
                         if (!fatal) {
                             setConnectionError(null);
                             setIsFatalError(false);
+                            setIsRetryingConnection(false);
                             return;
                         }
 
@@ -847,6 +865,18 @@ export const TerminalView: React.FC<TerminalViewProps> = ({ visible, directory, 
         await handleRestart();
     }, [handleRestart]);
 
+    // A fresh subscription dials at once instead of waiting out the backoff.
+    // When an action runner still holds the session, subscribing replays its
+    // cached snapshot at once; the error stays until the socket itself answers.
+    const handleRetryConnection = React.useCallback(() => {
+        if (!terminalDirectory || !activeTabId || !terminalSessionId) return;
+        disconnectStream();
+        startStream(terminalDirectory, activeTabId, terminalSessionId);
+        setIsRetryingConnection(true);
+        setIsReconnectPending(true);
+        setUnreachableTerminalId(terminalSessionId);
+    }, [activeTabId, disconnectStream, startStream, terminalDirectory, terminalSessionId]);
+
     const handleCreateTab = React.useCallback(() => {
         if (!terminalDirectory) return;
         const tabId = createTab(terminalDirectory);
@@ -859,9 +889,9 @@ export const TerminalView: React.FC<TerminalViewProps> = ({ visible, directory, 
 
     const handleAttachSelection = React.useCallback(() => {
         const selection = terminalControllerRef.current?.getSelection();
-        const sessionKey = currentSessionId ?? (newSessionDraft?.open ? 'draft' : null);
-        if (!selection || !sessionKey || !activeTab || !contextDirectory) return;
-        addContextDraft({ directory: contextDirectory, sessionKey }, {
+        const target = readComposerDraftTarget(contextDirectory);
+        if (!selection || !target || !activeTab) return;
+        addContextDraft(target, {
             source: 'terminal',
             fileLabel: activeTab.label,
             startLine: selection.startLine,
@@ -872,7 +902,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({ visible, directory, 
             text: '',
         });
         queueMicrotask(focusChatInput);
-    }, [activeTab, addContextDraft, contextDirectory, currentSessionId, newSessionDraft?.open]);
+    }, [activeTab, addContextDraft, contextDirectory]);
 
     // Touch hosts have no keyboard shortcut for copy, so the toolbar offers the
     // same action the desktop gets from Cmd/Ctrl+C on a selection.
@@ -1459,9 +1489,33 @@ export const TerminalView: React.FC<TerminalViewProps> = ({ visible, directory, 
                             fontFamily={resolvedFontStack}
                             fontSize={terminalFontSize}
                             enableTouchScroll={useTouchTerminalInput}
+                            clipboard={clipboard}
                         />
                     )) : null}
                 </div>
+                {isReconnectPending && terminalSessionId !== null && unreachableTerminalId === terminalSessionId ? (
+                    <div
+                        className="absolute inset-0 flex items-center justify-center px-6"
+                        style={{ backgroundColor: xtermTheme.background }}
+                    >
+                        {/* The pane is forced left to right for terminal output; this text follows its own language. */}
+                        <div dir="auto" className="max-w-sm text-center">
+                            <p role="alert" className="typography-ui-label font-medium text-[var(--status-error)]">
+                                {t('terminalView.error.cannotConnect')}
+                            </p>
+                            <Button
+                                type="button"
+                                variant="outline"
+                                size="sm"
+                                className="mt-4"
+                                onClick={handleRetryConnection}
+                                disabled={isRetryingConnection}
+                            >
+                                {t('terminalView.actions.tryAgain')}
+                            </Button>
+                        </div>
+                    </div>
+                ) : null}
                 {!isReconnectPending && connectionError && (
                     <div className="absolute inset-x-0 bottom-0 bg-[var(--status-error-background)] px-3 py-2 text-xs text-[var(--status-error-text)] flex items-center justify-between gap-2">
                         <span>{connectionError}</span>
@@ -1482,7 +1536,7 @@ export const TerminalView: React.FC<TerminalViewProps> = ({ visible, directory, 
                 )}
             </div>
             {isTouchTerminal && showQuickKeys ? (
-                <div className="shrink-0 overflow-x-auto border-t border-border/40 bg-[var(--surface-background)] px-2 pt-1.5 pb-[max(0.375rem,calc(var(--oc-app-bottom-safe,0px)-var(--oc-keyboard-inset,0px)))] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                <div data-keyboard-inset-reader="" data-keyboard-rider="" className="shrink-0 overflow-x-auto border-t border-edge-muted bg-[var(--surface-background)] px-2 pt-1.5 pb-[max(0.375rem,calc(var(--oc-app-bottom-safe,0px)-var(--oc-keyboard-inset,0px)))] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
                     {/* Keys are physical: arrows keep pointing where the key does. */}
                     <div dir="ltr" className="flex min-w-max items-center gap-1.5">
                         {quickKeysControls}

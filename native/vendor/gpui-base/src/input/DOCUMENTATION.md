@@ -11,6 +11,10 @@ render. The engine supplies default text-input semantics to unstyled callers.
 
 - Each editor has one accessible input node attached to its existing keyboard
   focus handle. Frames and suffix controls keep their own dispatch nodes.
+- `CommittedInputEdit` excludes provisional IME text. `InputEvent::CompositionEnded`
+  separately reports release of the marked range after commit or cancellation,
+  including a canceled preedit that produces no committed edit. Deferred document
+  appends resume from that event without treating cancellation as authored text.
 - Styled presentation carries the resolved role, label, placeholder and author
   ID. A missing role deliberately suppresses the editor's accessible node.
 - Values come from the current rope only when accessibility is active or test

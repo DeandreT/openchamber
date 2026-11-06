@@ -52,6 +52,8 @@ pub enum SessionChange {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionMove {
     pub session_id: SessionId,
+    /// The normalized directory held before this live patch.
+    pub from: Option<String>,
     pub directory: String,
 }
 
@@ -220,6 +222,7 @@ impl SessionIndex {
                 let moves = moved
                     .map(|directory| SessionMove {
                         session_id: session_id.clone(),
+                        from: current.resolved_directory(),
                         directory: directory.clone(),
                     })
                     .into_iter()
@@ -561,6 +564,7 @@ mod tests {
             update.moves,
             [SessionMove {
                 session_id: SessionId::from("b"),
+                from: Some("/p".to_owned()),
                 directory: "/q".to_owned(),
             }]
         );
@@ -583,6 +587,74 @@ mod tests {
         let _ = index.apply([SessionChange::Deleted(SessionId::from("late"))]);
         let _ = index.complete_load(ticket, vec![session("late", "/p", 1)]);
         assert!(index.active().is_empty());
+    }
+
+    #[test]
+    fn only_live_directory_patches_report_moves_with_their_original_source() {
+        let mut index = SessionIndex::new();
+        let load = index.begin_load();
+        assert!(
+            index
+                .complete_load(load, vec![session("a", "/unknown", 1)])
+                .moves
+                .is_empty()
+        );
+        assert!(
+            index
+                .apply([SessionChange::Created(session("a", "/other", 2))])
+                .moves
+                .is_empty()
+        );
+        let load = index.begin_load();
+        assert!(
+            index
+                .complete_load(load, vec![session("a", "/snapshot", 3)])
+                .moves
+                .is_empty()
+        );
+        let update = index.apply([SessionChange::Patched {
+            session_id: SessionId::from("a"),
+            patch: SessionPatch {
+                directory: Some("/live".into()),
+                updated: Some(4),
+                ..SessionPatch::default()
+            },
+        }]);
+        assert_eq!(
+            update.moves,
+            [SessionMove {
+                session_id: SessionId::from("a"),
+                from: Some("/snapshot".into()),
+                directory: "/live".into(),
+            }]
+        );
+        assert!(
+            index
+                .apply([SessionChange::Patched {
+                    session_id: SessionId::from("a"),
+                    patch: SessionPatch {
+                        directory: Some("/live/".into()),
+                        ..SessionPatch::default()
+                    },
+                }])
+                .moves
+                .is_empty(),
+            "equivalent directories do not admit anything"
+        );
+        assert!(
+            index
+                .apply([SessionChange::Patched {
+                    session_id: SessionId::from("a"),
+                    patch: SessionPatch {
+                        directory: Some("/stale".into()),
+                        updated: Some(1),
+                        ..SessionPatch::default()
+                    },
+                }])
+                .moves
+                .is_empty(),
+            "stale patches cannot authorize admission"
+        );
     }
 
     #[test]

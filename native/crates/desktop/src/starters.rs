@@ -19,26 +19,31 @@ use openchamber_native_core::draft::{Draft, DraftKey, DraftTarget};
 use openchamber_native_core::draft_starters::{
     self, Available, ProjectStarter, ResolvedStarter, StarterGroup, StarterRef, StarterSource,
 };
+use openchamber_native_core::ids::MessageId;
 use openchamber_native_core::magic_prompt::{
     self, CommandVariable, MagicCommand, MagicPrompts, PromptSide,
 };
 use openchamber_native_transport::client::SettingsChanges;
-use openchamber_native_transport::prompt_parts::{PromptParts, SyntheticContext};
+use openchamber_native_transport::prompt_parts::PromptParts;
 use serde::Deserialize;
 
 use crate::locale;
+use crate::starter_capture::{StarterCapture, StarterCaptures};
 use crate::workspace::Workspace;
 
 const MAGIC_PROMPTS_JSON: &str = include_str!("../resources/magic-prompts.json");
 
 /// A starter's first prompt for a new session.
 pub(crate) struct StarterPrompt {
-    /// What the chip submitted, the composer's text included
-    /// (`presetText`): what a definite failure gives back to the composer.
-    pub draft_text: String,
+    /// The retained owner transferred atomically into creation.
+    pub capture_id: MessageId,
+    /// Full preset rollback content, independent of the current composer.
+    pub draft: Draft,
     /// The rendered prompt the session receives.
     pub prompt_text: String,
     pub parts: PromptParts,
+    /// Memory-only user intent from activation, before template preparation.
+    pub effort: Option<crate::effort_preferences::UserEffort>,
 }
 
 #[derive(Deserialize)]
@@ -175,52 +180,33 @@ pub(crate) struct Starters {
     project_pending: HashMap<String, (Vec<StarterRef>, Option<Vec<StarterRef>>)>,
     /// Consecutive failed reads per project, for the retry backoff.
     project_failures: HashMap<String, u32>,
-    /// A chip whose overrides read is in flight; others wait.
-    activating: bool,
-    /// The persisted draft remains owned here until creation takes it.
-    captured: Option<(DraftKey, Draft)>,
+    /// Each pending activation owns its complete source independently of typing.
+    pub(crate) captures: StarterCaptures,
+    /// Override reads survive runtime reset so completion restores the old owner.
+    capture_tasks: HashMap<MessageId, Task<()>>,
     generation: u64,
     tasks: HashMap<u64, Task<()>>,
     next_task: u64,
 }
 
 impl Starters {
-    pub(crate) fn persisted_draft(&self, owner: &DraftKey, current: Draft) -> Draft {
-        match &self.captured {
-            Some((key, captured)) if key == owner => {
-                if current.text.is_empty() {
-                    captured.clone()
-                } else if captured.text.is_empty() {
-                    current
-                } else {
-                    Draft::new(format!("{}\n\n{}", current.text, captured.text))
-                }
-            }
-            _ => current,
+    pub(crate) fn capture_pending(&self, id: &MessageId) -> bool {
+        self.capture_tasks.contains_key(id)
+    }
+
+    pub(crate) fn discard_captures(&mut self, owner: &DraftKey) {
+        for capture in self.captures.discard_owner(owner) {
+            self.capture_tasks.remove(&capture.id);
         }
     }
 
-    pub(crate) fn visible_draft(&self, owner: &DraftKey, stored: Draft) -> Draft {
-        let Some((key, captured)) = &self.captured else {
-            return stored;
-        };
-        if key != owner || captured.text.is_empty() {
-            return stored;
-        }
-        if stored.text == captured.text {
-            return Draft::default();
-        }
-        let suffix = format!("\n\n{}", captured.text);
-        match stored.text.strip_suffix(&suffix) {
-            Some(text) => Draft::new(text),
-            None => stored,
-        }
-    }
-
-    /// Forgets everything of the previous runtime.
+    /// Invalidates old runtime projections while retaining all captured ownership.
     pub(crate) fn reset(&mut self) {
         *self = Self {
             generation: self.generation + 1,
+            captures: std::mem::take(&mut self.captures),
+            capture_tasks: std::mem::take(&mut self.capture_tasks),
+            next_task: self.next_task,
             ..Self::default()
         };
     }
@@ -399,7 +385,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.starters.activating || !self.can_create_connected() {
+        if !self.can_create_connected() {
             return;
         }
         let Some(chip) = self.chip(id) else {
@@ -411,8 +397,11 @@ impl Workspace {
         let Some(source) = self.composer_key.clone() else {
             return;
         };
-        let typed = self.composer.read(cx).value().to_string();
-        let text = draft_starters::submission(&chip, &typed);
+        if !self.starters.captures.can_begin(&source) {
+            return;
+        }
+        let draft = self.composer_draft(cx);
+        let text = draft_starters::submission(&chip, &draft.text);
         let catalog = MagicCatalog::get();
         let Some((command, error_key)) = magic_prompt::parse_slash_command(&text)
             .and_then(|parsed| catalog.command(&parsed.name).map(|found| (parsed, found)))
@@ -422,88 +411,165 @@ impl Workspace {
             // Only built-ins resolve here, and each is a prompt pair.
             return;
         };
+        let Some(project) = self
+            .topology
+            .projects
+            .iter()
+            .find(|project| project.path == directory)
+            .map(|project| project.id.to_string())
+        else {
+            return;
+        };
+        let Some((_, selection)) = self.send_selection() else {
+            return;
+        };
+        let effort = selection
+            .model
+            .as_ref()
+            .map(|model| self.capture_user_effort(model));
+        // Mint every admission identity and resolve every staged file before the
+        // read starts. Later typing, attachment preparation and choices are separate.
+        let (capture_id, _) = self.message_ids.next();
+        let Ok(parts) = self.capture_draft_parts(&source, &draft) else {
+            self.notify_mutation_failure("chat.nativeRecovery.sendFailed", window, cx);
+            return;
+        };
         let Some(connection) = self.connection.as_ref() else {
             return;
         };
         let Some(client) = connection.client.clone() else {
             return;
         };
-        let read_directory = directory.clone();
-        let read = connection
-            .network
-            .run(async move { client.magic_prompt_overrides(Some(&read_directory)).await });
-        self.starters.activating = true;
+        let executor = connection.network.handle();
         self.save_composer_draft(cx);
-        self.starters.captured = Some((source.clone(), Draft::new(typed.clone())));
-        // The text the chip carries leaves the composer now; typing while the
-        // prompts load stays, and a failure gives the carried text back.
-        if !typed.is_empty() {
-            self.composer
-                .update(cx, |composer, cx| composer.set_value("", window, cx));
-            self.queue_persistence(cx);
+        let capture = StarterCapture {
+            id: capture_id.clone(),
+            owner: source.clone(),
+            project,
+            draft,
+            preset_text: text,
+            selection,
+            parts,
+            permission_mode: self.permission_modes.drafts.get(source.runtime()).copied(),
+        };
+        if !self.starters.captures.begin(capture, &mut self.drafts) {
+            return;
         }
+        self.permission_modes.drafts.remove(source.runtime());
+        self.composer
+            .update(cx, |composer, cx| composer.set_value("", window, cx));
+        self.save_draft_preview(&source, &Draft::default(), cx);
+        self.queue_persistence(cx);
+        let read_directory = directory.clone();
+        let read = crate::network::NetworkTask::spawn_on(&executor, async move {
+            client.magic_prompt_overrides(Some(&read_directory)).await
+        });
         let generation = self.starters.generation;
-        self.starters.task(|task_id| {
-            cx.spawn_in(window, async move |this, cx| {
-                let result = read.await;
-                let _ = this.update_in(cx, |this, window, cx| {
-                    this.starters.tasks.remove(&task_id);
-                    if generation != this.starters.generation {
-                        // The captured draft remains in storage after reset.
-                        return;
+        let task_id = capture_id.clone();
+        let task = cx.spawn_in(window, async move |this, cx| {
+            let result = read.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.starters.capture_tasks.remove(&capture_id);
+                if this.starters.captures.get(&capture_id).is_none() {
+                    return;
+                }
+                let (command, argument) = command;
+                let rendered = match result {
+                    Some(Ok(overrides)) => catalog.render(&command, &argument, &overrides),
+                    failure => {
+                        tracing::warn!(error = ?failure.and_then(Result::err), "the magic prompts could not be read");
+                        None
                     }
-                    this.starters.activating = false;
-                    this.starters.captured = None;
-                    let (command, argument) = command;
-                    let rendered = match result {
-                        Some(Ok(overrides)) => catalog.render(&command, &argument, &overrides),
-                        failure => {
-                            tracing::warn!(error = ?failure.and_then(Result::err), "the magic prompts could not be read");
-                            None
-                        }
-                    };
-                    // The view may have moved on while the overrides were read.
-                    let Some((visible, instructions)) = rendered
-                        .filter(|_| this.starter_project().as_deref() == Some(directory.as_str()))
-                        .filter(|_| this.composer_key.as_ref() == Some(&source))
-                    else {
-                        if this.composer_key.as_ref() == Some(&source) {
-                            this.give_back_text(&source, typed, window, cx);
-                        }
+                };
+                // The view may have moved on while the overrides were read.
+                let Some((visible, instructions)) = rendered
+                    .filter(|_| generation == this.starters.generation)
+                    .filter(|_| this.starter_project().as_deref() == Some(directory.as_str()))
+                    .filter(|_| this.composer_key.as_ref() == Some(&source))
+                else {
+                    this.restore_starter_capture(&capture_id, window, cx);
+                    if source.runtime() == &this.runtime {
                         window.push_notification(
                             Notification::error(locale::strings(cx).get(&error_key)),
                             cx,
                         );
-                        cx.notify();
-                        return;
-                    };
-                    let (id, _) = this.message_ids.next();
-                    let parts = PromptParts {
-                        context: vec![SyntheticContext {
-                            id,
-                            text: instructions,
-                            description: None,
-                            metadata: None,
-                        }],
-                        ..PromptParts::default()
-                    };
-                    let created = this.submit_new_session_with(
-                        Some(StarterPrompt {
-                            draft_text: text,
-                            prompt_text: visible,
-                            parts,
-                        }),
-                        window,
-                        cx,
-                    );
-                    if !created {
-                        this.give_back_text(&source, typed, window, cx);
                     }
                     cx.notify();
-                });
-            })
+                    return;
+                };
+                let capture = this
+                    .starters
+                    .captures
+                    .get(&capture_id)
+                    .expect("the completing read retains its capture");
+                let Ok(draft) = capture.rollback_draft() else {
+                    this.restore_starter_capture(&capture_id, window, cx);
+                    this.notify_mutation_failure("chat.nativeRecovery.sendFailed", window, cx);
+                    return;
+                };
+                let parts = capture.rendered_parts(instructions);
+                let created = this.submit_new_session_with(
+                    Some(StarterPrompt {
+                        capture_id: capture_id.clone(),
+                        draft,
+                        prompt_text: visible,
+                        parts,
+                        effort,
+                    }),
+                    window,
+                    cx,
+                );
+                if !created {
+                    this.restore_starter_capture(&capture_id, window, cx);
+                }
+                cx.notify();
+            });
         });
+        self.starters.capture_tasks.insert(task_id, task);
         cx.notify();
+    }
+
+    /// Explicit recovery and late reads use the original complete draft owner.
+    /// Conflicting metadata or identities keep their capture available to retry.
+    pub(crate) fn restore_starter_capture(
+        &mut self,
+        id: &MessageId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.persistence_loaded()
+            || self.close_in_progress()
+            || self.starters.capture_pending(id)
+        {
+            return false;
+        }
+        self.save_composer_draft(cx);
+        let restored = self.starters.captures.restore_draft(id, &mut self.drafts);
+        match restored {
+            Ok(Some(capture)) => {
+                capture.restore_selection(&mut self.composer_selections);
+                if let Some(mode) = capture.permission_mode {
+                    self.permission_modes
+                        .drafts
+                        .entry(capture.owner.runtime().clone())
+                        .or_insert(mode);
+                }
+                if let Some(draft) = self.drafts.get(&capture.owner).cloned() {
+                    self.save_draft_preview(&capture.owner, &draft, cx);
+                }
+                if self.composer_key.as_ref() == Some(&capture.owner) {
+                    self.restore_composer_draft(window, cx);
+                }
+                self.queue_persistence(cx);
+                true
+            }
+            Ok(None) => false,
+            Err(_) => {
+                self.notify_mutation_failure("chat.nativeRecovery.contentConflict", window, cx);
+                self.queue_persistence(cx);
+                false
+            }
+        }
     }
 
     /// Pins a built-in to the global list.

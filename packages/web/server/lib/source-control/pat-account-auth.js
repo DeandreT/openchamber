@@ -9,12 +9,15 @@ import { ownedOriginInstance } from './origin-instance.js';
  * - `verify(origin, token)` answers the token's user (`{ id, login, ... }`)
  *   or throws; `classifyFailure(error) === 'invalid-token'` means the forge
  *   refused the token, which writes the account off.
- * - `probe(origin, token?)` answers `{ supported, version?, message? }`:
+ * - `probe(origin, token?)` answers `{ supported, version?, edition?, message? }`:
  *   whether the instance is one this provider can serve. Capabilities call
  *   it without a token; connect passes the token being connected, for an
- *   instance that refuses anonymous reads.
- * - `ownerElsewhere({ origin, version })`, optional, answers another
+ *   instance that refuses anonymous reads. `edition` is the server the
+ *   instance's own API namespace named, when it reports one.
+ * - `ownerElsewhere({ origin, version, edition })`, optional, answers another
  *   provider (`{ id, label }`) whose card the instance belongs on, or null.
+ *   `edition` is what the probe learned from the instance's own API
+ *   namespace, when it reports one; `version` is the fallback signal.
  *   Connect refuses such an instance before anything is stored.
  *
  * A provider whose settings declare a `username` field signs in with HTTP
@@ -24,15 +27,39 @@ import { ownedOriginInstance } from './origin-instance.js';
  * The typed username is stored as the account's `user.login`, so every later
  * re-verify, `loginFor(session)` and Git transport use exactly what Basic auth
  * accepted. Other providers are called with `(origin, token)` for both.
+ *
+ * A provider whose settings declare an `sshUrl` field keeps an optional
+ * instance-level SSH address beside its accounts. `setSshUrl` stores the
+ * normalized address, `listSshHosts`/`readSshUrl` expose it to remote matching,
+ * and `ownsHost` accepts a remote on it; `sshUrlFor` gives the session's
+ * address to the provider's own remote parser.
  */
 
 const UNSUPPORTED_METHOD = Object.freeze({ available: false, reason: 'unsupported' });
 
+/** The instance whose configured SSH address a remote lives on, or null. */
+const ownedSshInstance = ({ host, port, sshPort, knownSshHosts, parseSshUrl }) => {
+  if (port !== undefined || sshPort === undefined || !Array.isArray(knownSshHosts) || !(parseSshUrl instanceof Function)) return null;
+  const name = String(host ?? '').toLowerCase().replace(/\.$/, '');
+  for (const entry of knownSshHosts) {
+    const parsed = parseSshUrl(entry?.sshUrl);
+    if (parsed && parsed.host === name && parsed.port === sshPort) return entry.instance;
+  }
+  return null;
+};
+
 /** An error the shell answers with exactly this status and body. */
 const responseError = (status, body) => Object.assign(new Error(body.error), { sourceControlResponse: { status, body } });
 
-export function createPatAccountAuth({ descriptor, store, events, verify, probe, classifyFailure, ownerElsewhere = null }) {
+export function createPatAccountAuth({
+  descriptor, store, events, verify, probe, classifyFailure, ownerElsewhere = null,
+  normalizeSshUrl = null, parseSshUrl = null,
+}) {
   const takesUsername = descriptor.settings?.some((field) => field.type === 'username') === true;
+  const takesSshUrl = descriptor.settings?.some((field) => field.key === 'sshUrl') === true;
+  if (takesSshUrl && (!(normalizeSshUrl instanceof Function) || !(parseSshUrl instanceof Function))) {
+    throw new TypeError(`${descriptor.label} SSH URL requires a normalizer and a parser`);
+  }
   const loginOf = (account) => account.user?.login ?? account.user?.username ?? '';
   const verifyAccount = (origin, account) => (takesUsername
     ? verify(origin, account.token, { username: loginOf(account) })
@@ -101,17 +128,15 @@ export function createPatAccountAuth({ descriptor, store, events, verify, probe,
   // in the session object, so serializing a session can never leak it.
   const tokens = new WeakMap();
   const logins = new WeakMap();
+  const sshUrls = new WeakMap();
 
   /** The exact account asked for, else the instance's current one. */
   const resolveAccount = async ({ instance: origin, accountId: requestedAccountId = '' }) => {
-    let account;
-    if (requestedAccountId) {
-      account = await store.readAccount(origin, requestedAccountId);
-    } else {
-      const instance = await store.readInstance(origin);
-      account = instance.accounts.find((candidate) => candidate.id === instance.activeAccountId && candidate.status !== 'invalid') ?? null;
-    }
-    if (!account?.token) {
+    const instance = await store.readInstance(origin);
+    const account = requestedAccountId
+      ? instance.accounts.find((candidate) => candidate.id === requestedAccountId)
+      : instance.accounts.find((candidate) => candidate.id === instance.activeAccountId && candidate.status !== 'invalid') ?? null;
+    if (!account?.token || account.status === 'invalid') {
       const error = new Error(`${descriptor.label} is not connected`);
       error.status = 401;
       error.sourceControlAccountUnavailable = true;
@@ -128,6 +153,7 @@ export function createPatAccountAuth({ descriptor, store, events, verify, probe,
     });
     tokens.set(session, account.token);
     logins.set(session, loginOf(account));
+    sshUrls.set(session, takesSshUrl ? instance.sshUrl ?? null : null);
     return session;
   };
 
@@ -156,14 +182,14 @@ export function createPatAccountAuth({ descriptor, store, events, verify, probe,
       // A Basic-auth host's stored login is the username the user typed, the
       // one Basic auth accepted, whatever name the host reports for the account.
       const user = takesUsername ? { ...(await verify(origin, token, credentials)), login: username } : await verify(origin, token);
-      const { version, supported, message } = takesUsername ? await probe(origin, token, credentials) : await probe(origin, token);
+      const { version, supported, message, edition } = takesUsername ? await probe(origin, token, credentials) : await probe(origin, token);
       if (!supported) {
         throw responseError(400, {
           error: message || (version ? `${descriptor.label} ${version} is not supported` : `${descriptor.label} is not supported`),
           code: 'UNSUPPORTED_PROVIDER_VERSION',
         });
       }
-      const owner = ownerElsewhere ? await ownerElsewhere({ origin, version }) : null;
+      const owner = ownerElsewhere ? await ownerElsewhere({ origin, version, edition }) : null;
       if (owner) {
         throw responseError(409, {
           error: `${origin} belongs on the ${owner.label} card`,
@@ -193,6 +219,33 @@ export function createPatAccountAuth({ descriptor, store, events, verify, probe,
       return instance.accounts.find((account) => account.id === instance.activeAccountId && account.status !== 'invalid')?.id ?? null;
     },
     listInstances: async () => (await store.listInstances?.()) ?? [],
+    /** The instance's separate SSH address, when it has one. */
+    readSshUrl: async ({ instance: origin }) => {
+      if (!takesSshUrl) return null;
+      return (await store.readInstance(origin)).sshUrl ?? null;
+    },
+    /** Every instance with a separate SSH address, for recognising remotes on it. */
+    listSshHosts: async () => {
+      if (!takesSshUrl) return [];
+      if (store.listSshUrls instanceof Function) {
+        return Object.entries(await store.listSshUrls()).map(([instance, sshUrl]) => ({ instance, sshUrl }));
+      }
+      const hosts = [];
+      for (const origin of (await store.listInstances?.()) ?? []) {
+        const sshUrl = (await store.readInstance(origin)).sshUrl;
+        if (sshUrl) hosts.push({ instance: origin, sshUrl });
+      }
+      return hosts;
+    },
+    /** Stores the instance's separate SSH address; an empty value removes it. */
+    setSshUrl: async ({ instance: origin, sshUrl }) => {
+      if (!takesSshUrl) throw responseError(400, { error: `${descriptor.label} does not take an SSH URL` });
+      let normalized;
+      try { normalized = normalizeSshUrl(sshUrl); }
+      catch (error) { throw responseError(400, { error: error?.message || 'Invalid SSH URL', code: 'INVALID_SSH_URL' }); }
+      await store.setSshUrl(origin, normalized);
+      return { sshUrl: normalized };
+    },
     /** Every valid stored account, for identity backfill and binding repair at start. */
     listConnectedAccounts: async () => {
       const connected = [];
@@ -209,7 +262,8 @@ export function createPatAccountAuth({ descriptor, store, events, verify, probe,
       return connected;
     },
     /** The known instance a host belongs to; a provider is never inferred from an unknown host. */
-    ownsHost: ownedOriginInstance,
+    ownsHost: (input) => ownedOriginInstance(input)
+      ?? ownedSshInstance({ ...input, parseSshUrl }),
   });
 
   return Object.freeze({
@@ -218,6 +272,8 @@ export function createPatAccountAuth({ descriptor, store, events, verify, probe,
     tokenFor: (session) => tokens.get(session),
     /** The stored login of that session's account (a Basic-auth host's username); undefined for any other object. */
     loginFor: (session) => logins.get(session),
+    /** The instance's separate SSH address for that session's instance; null when it has none. */
+    sshUrlFor: (session) => sshUrls.get(session) ?? null,
     /** Git transport's view of an exact stored credential, or null. */
     readCredential: async ({ instance, credentialId, credentialRevision }) => {
       const account = await store.readAccount(instance, credentialId, credentialRevision);

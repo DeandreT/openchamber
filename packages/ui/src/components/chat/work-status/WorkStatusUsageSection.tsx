@@ -5,14 +5,13 @@ import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { ProviderLogo } from '@/components/ui/ProviderLogo';
 import { preloadProviderLogos } from '@/hooks/useProviderLogo';
-import { formatQuotaResetLabel, formatQuotaValueLabel } from '@/lib/quota';
+import { formatQuotaResetLabel, formatQuotaWindowValueLabel } from '@/lib/quota';
 import { useQuotaAutoRefresh, useQuotaStore } from '@/stores/useQuotaStore';
 import { useUIStore } from '@/stores/useUIStore';
 import { useUsageProviderGroups } from '@/components/usage/usageGroups';
 import { UsageGiftResetButton } from '@/components/usage/UsageGiftResetButton';
 import { useConfigStore } from '@/stores/useConfigStore';
 import { pickUsageHeadline } from './usageHeadline';
-import { runBackgroundNetworkTask } from '@/lib/background-network';
 import { WorkStatusRow, WorkStatusCollapsibleSection, WorkStatusValue } from './WorkStatusPrimitives';
 import { useReportWorkStatusPresence } from './presenceContext';
 import type { UsageWindow } from '@/types';
@@ -39,30 +38,20 @@ const windowTone = (window: UsageWindow): 'default' | 'warning' | 'error' => {
   return 'default';
 };
 
-export const WorkStatusUsageSection: React.FC = () => {
+export const WorkStatusUsageSection: React.FC<{ visible?: boolean }> = ({ visible = true }) => {
   const { t } = useI18n();
   const groups = useUsageProviderGroups();
   const displayMode = useQuotaStore((state) => state.displayMode);
   const isLoading = useQuotaStore((state) => state.isLoading);
+  const loadedRuntimeKey = useQuotaStore((state) => state.loadedRuntimeKey);
   const dropdownProviderIds = useQuotaStore((state) => state.dropdownProviderIds);
   const fetchQuotas = useQuotaStore((state) => state.fetchQuotas);
-  const ensureQuotasLoadedForRuntime = useQuotaStore((state) => state.ensureLoadedForRuntime);
-  const isInitialized = useConfigStore((state) => state.isInitialized);
   const timeFormatPreference = useUIStore((state) => state.timeFormatPreference);
   const currentProviderId = useConfigStore((state) => state.currentProviderId);
 
-  // Keeps the periodic refresh running while the panel is mounted.
-  useQuotaAutoRefresh();
-
-  // `useQuotaAutoRefresh` only schedules an interval — it never performs the
-  // first fetch. That was owned by the header dropdown's open handler, so the
-  // panel stayed empty until the user opened it. `ensureLoadedForRuntime` owns
-  // the once-per-instance load and its readiness rule; asking again is a no-op,
-  // so this is safe to run on every connection change.
-  React.useEffect(() => {
-    if (!isInitialized) return;
-    void runBackgroundNetworkTask(() => ensureQuotasLoadedForRuntime(), 'active-session');
-  }, [ensureQuotasLoadedForRuntime, isInitialized]);
+  // Bootstrap once to discover providers. Confirmed absence renders no readout
+  // and creates no ongoing refresh demand; credential changes invalidate it.
+  useQuotaAutoRefresh(visible && (groups.length > 0 || loadedRuntimeKey === null));
 
   React.useEffect(() => {
     if (groups.length === 0) return;
@@ -83,9 +72,10 @@ export const WorkStatusUsageSection: React.FC = () => {
   // showing some other provider's quota as if it were the active one.
   const headline = pickUsageHeadline(groups, currentProviderId);
   const headlineMetric = headline
-    ? formatQuotaValueLabel(
-      headline.row.window.valueLabel,
+    ? formatQuotaWindowValueLabel(
+      headline.row.window,
       displayMode === 'remaining' ? headline.row.window.remainingPercent : headline.row.window.usedPercent,
+      t,
     )
     : null;
 
@@ -138,7 +128,7 @@ export const WorkStatusUsageSection: React.FC = () => {
             const displayPercent = displayMode === 'remaining'
               ? row.window.remainingPercent
               : row.window.usedPercent;
-            const metricLabel = formatQuotaValueLabel(row.window.valueLabel, displayPercent);
+            const metricLabel = formatQuotaWindowValueLabel(row.window, displayPercent, t);
             const resetLabel = formatQuotaResetLabel(
               row.window.resetAt,
               row.window.resetAfterFormatted ?? row.window.resetAtFormatted,

@@ -377,8 +377,9 @@ export const startIsolatedServer = async ({ repo, dist, state, project, port, fi
     writeFileSync(settingsFile, JSON.stringify(settings, null, 2))
   }
   const config = isolatedOpencodeConfig(fixturePort, { interactions, selections })
+  // An undefined `inherited` takes the default, process.env.
   const env = isolatedServerEnv({ state, dist, config, opencodeBinary, authentication,
-    ...(interactions ? { inherited: { PATH: process.env.PATH, LANG: "C.UTF-8", SHELL: "/bin/sh", TMPDIR: join(state, "tmp") } } : {}),
+    inherited: interactions ? { PATH: process.env.PATH, LANG: "C.UTF-8", SHELL: "/bin/sh", TMPDIR: join(state, "tmp") } : undefined,
   })
   const child = spawn(process.execPath, [join(repo, "packages/web/bin/cli.js"), "serve", "--port", String(port), "--foreground"], {
     cwd: project,

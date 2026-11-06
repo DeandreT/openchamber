@@ -299,6 +299,33 @@ impl ComposerSelections {
         store
     }
 
+    /// Restores a recovered draft's exact captured choice when it has no newer
+    /// retained choice. Captured omission of effort remains explicit.
+    pub fn restore_if_absent(&mut self, owner: SelectionOwner, selection: Selection) -> bool {
+        if self.owners.contains_key(&owner) || self.staged.contains_key(&owner) {
+            return false;
+        }
+        let effort = selection
+            .model
+            .as_ref()
+            .and_then(|model| model.variant.clone())
+            .map(Effort::Named)
+            .unwrap_or(Effort::Default);
+        self.owners.insert(
+            owner,
+            ComposerSelection::restore(SelectionSnapshot {
+                inherited: selection,
+                effort,
+                manual: ManualSelection {
+                    agent: true,
+                    model: true,
+                },
+                ..SelectionSnapshot::default()
+            }),
+        );
+        true
+    }
+
     /// Captures choice memory with a creation attempt without exposing a session.
     pub fn stage_creation(&mut self, from: &SelectionOwner, to: SelectionOwner) -> bool {
         if from.is_session()
@@ -771,6 +798,56 @@ impl ComposerSelection {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recovered_choices_preserve_captured_effort_and_never_replace_newer_choices() {
+        use crate::ids::{DraftId, RuntimeId};
+
+        let owner = SelectionOwner {
+            draft: DraftKey::new(
+                RuntimeId::from("runtime"),
+                "/project",
+                DraftTarget::NewSession(DraftId::from("draft")),
+            )
+            .expect("valid draft owner"),
+            project: Some(ProjectId::from("project")),
+        };
+        let captured = Selection {
+            model: Some(ModelChoice {
+                provider_id: "provider".to_owned(),
+                model_id: "captured-model".to_owned(),
+                variant: Some("high".to_owned()),
+            }),
+            agent_name: Some("captured-agent".to_owned()),
+        };
+        let mut selections = ComposerSelections::default();
+        assert!(selections.restore_if_absent(owner.clone(), captured.clone()));
+        assert_eq!(
+            selections
+                .get(&owner)
+                .expect("recovered choice")
+                .selection(),
+            captured
+        );
+        assert!(!selections.restore_if_absent(owner.clone(), Selection::default()));
+        assert_eq!(
+            selections
+                .get(&owner)
+                .expect("original choice remains")
+                .selection(),
+            captured
+        );
+        let mut omitted = owner.clone();
+        omitted.project = Some(ProjectId::from("another-project"));
+        assert!(selections.restore_if_absent(omitted.clone(), Selection::default()));
+        assert_eq!(
+            selections
+                .get(&omitted)
+                .expect("recovered omission")
+                .effort(),
+            &Effort::Default
+        );
+    }
     use crate::ids::{DraftId, RuntimeId, SessionId};
     use crate::send_config::CatalogModel;
 

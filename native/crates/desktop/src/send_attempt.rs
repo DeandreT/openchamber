@@ -2,8 +2,9 @@
 
 use std::collections::{HashMap, HashSet};
 
+pub(crate) use openchamber_native_core::draft::restore_failed;
 use openchamber_native_core::draft::{Draft, DraftKey};
-use openchamber_native_core::ids::{MessageId, RuntimeId, SessionId};
+use openchamber_native_core::ids::{AttachmentId, MessageId, RuntimeId, SessionId};
 use openchamber_native_core::transcript::{
     Message, Role, Transcript, TranscriptChange, TranscriptEvent,
 };
@@ -36,6 +37,8 @@ pub(crate) struct SendAttempt {
     pub origin: SendOrigin,
     pub owner: DraftKey,
     pub draft: Draft,
+    /// Prepared attachments retained by the outgoing payload, including queue parts.
+    pub resources: Vec<AttachmentId>,
     pub prompt: Prompt,
     pub optimistic: Message,
     pub admission: Admission,
@@ -153,6 +156,34 @@ impl SendAttempts {
         self.start(key.clone(), attempt.id().clone());
         self.attempts.entry(key).or_default().push(attempt);
         true
+    }
+
+    /// Retains an already-removed refusal when its rollback conflicts with a
+    /// newer draft. This starts no chain and works while an abort owns the key.
+    /// The UI calls it in the same sequential transition that removed the send.
+    /// An invariant conflict returns ownership of the incoming capture unchanged;
+    /// the caller must retain it and report the conflict, never discard the Err.
+    pub(crate) fn retain_failed(
+        &mut self,
+        key: SessionKey,
+        mut attempt: SendAttempt,
+    ) -> Result<(), Box<SendAttempt>> {
+        use openchamber_native_core::draft::DraftTarget;
+
+        if attempt.owner.runtime() != &key.runtime
+            || attempt.owner.target() != &DraftTarget::Session(key.session.clone())
+            || attempt.acknowledged()
+            || attempt.origin == SendOrigin::Deleted
+            || self.session(&key).any(|held| !held.acknowledged())
+            || self.iter().any(|(held_key, held)| {
+                held_key.runtime == key.runtime && held.id() == attempt.id()
+            })
+        {
+            return Err(Box::new(attempt));
+        }
+        attempt.admission = Admission::Uncertain;
+        self.attempts.entry(key).or_default().push(attempt);
+        Ok(())
     }
 
     fn start(&mut self, key: SessionKey, id: MessageId) {
@@ -533,19 +564,6 @@ impl SendAttempts {
     }
 }
 
-/// Web useComposerDraft.restoreDraft semantics, retaining the newer selection
-/// when appending failed text to a draft that was edited after dispatch.
-pub(crate) fn restore_failed(current: Option<&Draft>, failed: Draft) -> Draft {
-    match current {
-        Some(current) if !current.text.is_empty() && current.text != failed.text => Draft {
-            text: format!("{}\n\n{}", current.text, failed.text),
-            selection: current.selection.clone(),
-        },
-        Some(current) if current.text == failed.text => current.clone(),
-        _ => failed,
-    }
-}
-
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -602,6 +620,7 @@ pub(crate) mod tests {
         let draft = Draft {
             text: "submitted text".to_owned(),
             selection: 2..6,
+            ..Draft::default()
         };
         let message_id = sent_id();
         SendAttempt {
@@ -626,6 +645,7 @@ pub(crate) mod tests {
                 parts: vec![Part::text(PartId::from("local-part"), draft.text.clone())],
             },
             draft: draft.clone(),
+            resources: Vec::new(),
             prompt: Prompt {
                 message_id,
                 text: draft.text,
@@ -1233,16 +1253,102 @@ pub(crate) mod tests {
         let newer = Draft {
             text: "newer".to_owned(),
             selection: 1..3,
+            ..Draft::default()
         };
         let failed = Draft {
             text: "failed".to_owned(),
             selection: 2..5,
+            ..Draft::default()
         };
-        let restored = restore_failed(Some(&newer), failed.clone());
+        let restored = restore_failed(Some(&newer), &failed).expect("compatible content");
         assert_eq!(restored.text, "newer\n\nfailed");
         assert_eq!(restored.selection, newer.selection);
-        assert_eq!(restore_failed(None, failed.clone()), failed);
-        assert_eq!(restore_failed(Some(&failed), failed.clone()), failed);
+        assert_eq!(restore_failed(None, &failed), Ok(failed.clone()));
+        assert_eq!(restore_failed(Some(&failed), &failed), Ok(failed.clone()));
+    }
+
+    #[test]
+    fn resource_roots_survive_uncertain_restore_and_same_identity_retry() {
+        let key = key("runtime", "session");
+        let mut captured = attempt(&key);
+        captured.resources = vec![AttachmentId::from("prepared-resource")];
+        let expected = captured.resources.clone();
+        let id = captured.prompt.message_id.clone();
+        let mut attempts = SendAttempts::default();
+        assert!(attempts.begin(key.clone(), captured));
+        assert!(
+            attempts
+                .finish(&key, &id, Err(PromptAdmission::Unknown))
+                .is_none()
+        );
+        let mut restored = SendAttempts::from_snapshot(attempts.snapshot()).expect("restore");
+        assert_eq!(
+            restored.attempt(&key, &id).expect("owned").resources,
+            expected
+        );
+        assert!(restored.begin_retry(&key, &id));
+        assert!(
+            restored
+                .finish(&key, &id, Err(PromptAdmission::Rejected))
+                .is_none()
+        );
+        let moved = restored
+            .discard(&key, &id)
+            .expect("explicit recovery handoff");
+        assert_eq!(moved.resources, expected);
+        assert!(restored.snapshot().is_empty());
+    }
+
+    #[test]
+    fn failed_content_conflicts_leave_both_captures_available() {
+        let mut newer = Draft::new("newer");
+        newer.content.metadata_json = Some("{\"value\":1}".into());
+        let mut failed = Draft::new("failed");
+        failed.content.metadata_json = Some("{\"value\":2}".into());
+        let before = failed.clone();
+        assert!(restore_failed(Some(&newer), &failed).is_err());
+        assert_eq!(
+            failed, before,
+            "conflicts retain the original capture for recovery"
+        );
+        assert_eq!(newer.text, "newer");
+    }
+
+    #[test]
+    fn retain_failed_returns_conflicting_ownership_without_replacing_held_payloads() {
+        let key = key("runtime", "session");
+        let mut held = attempt(&key);
+        held.admission = Admission::Uncertain;
+        let mut incoming = held.clone();
+        incoming.draft.content.metadata_json = Some("{\"different\":true}".into());
+        incoming
+            .resources
+            .push(AttachmentId::from("incoming-resource"));
+        let expected = incoming.clone();
+        let mut attempts =
+            SendAttempts::from_snapshot(vec![(key.clone(), held.clone())]).expect("held attempt");
+        let returned = attempts
+            .retain_failed(key.clone(), incoming)
+            .expect_err("a colliding ID returns the incoming owner");
+        assert_eq!(returned.draft, expected.draft);
+        assert_eq!(returned.resources, expected.resources);
+        assert_eq!(returned.prompt.message_id, expected.prompt.message_id);
+        assert_eq!(
+            attempts
+                .attempt(&key, &held.prompt.message_id)
+                .expect("original owner")
+                .draft,
+            held.draft
+        );
+        let mut other = attempt(&key);
+        other.prompt.message_id = MessageId::from("msg_other_refusal");
+        other.optimistic.info.id = other.prompt.message_id.clone();
+        let returned = attempts
+            .retain_failed(key.clone(), other)
+            .expect_err("another unacknowledged owner returns the capture");
+        assert_eq!(returned.prompt.message_id.as_str(), "msg_other_refusal");
+        assert_eq!(attempts.snapshot().len(), 1);
+        assert!(!attempts.is_active(&key));
     }
 
     #[test]

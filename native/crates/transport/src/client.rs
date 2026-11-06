@@ -41,6 +41,13 @@ const PART_SHELLS_VERSION: &str = "v1";
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsChanges {
+    /// The profile's complete effort map, oldest choice first. Each null value
+    /// is explicit Default. Omission leaves server memory unchanged.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_efforts"
+    )]
+    pub last_used_efforts: Option<Vec<(String, Option<String>)>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub auto_save_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -64,6 +71,22 @@ pub struct SettingsChanges {
     pub draft_starters_craft_goal_added: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub draft_starters_schedule_task_added: Option<bool>,
+}
+
+fn serialize_efforts<S: serde::Serializer>(
+    efforts: &Option<Vec<(String, Option<String>)>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeMap;
+
+    let Some(efforts) = efforts else {
+        return serializer.serialize_none();
+    };
+    let mut map = serializer.serialize_map(Some(efforts.len()))?;
+    for (key, effort) in efforts {
+        map.serialize_entry(key, effort)?;
+    }
+    map.end()
 }
 
 fn serialize_starters<S: serde::Serializer>(
@@ -177,6 +200,11 @@ pub struct ServerSettings {
     pub default_variant: Option<String>,
     pub default_agent: Option<String>,
     pub last_selected_model: Option<String>,
+    /// Profile effort memory by `provider/model`. A present `None` value is
+    /// explicit Default; an absent map or key supplies no effort choice.
+    pub last_used_efforts: Option<HashMap<String, Option<String>>>,
+    /// Encounter order of validated effort entries, oldest choice first.
+    pub last_used_effort_order: Vec<String>,
     /// `(providerID, modelID)` pairs hidden from the picker.
     pub hidden_models: Vec<(String, String)>,
     pub routing_feature_available: Option<bool>,
@@ -278,6 +306,13 @@ impl ServerSettings {
         project_defaults.retain(|defaults| {
             defaults.agent.is_some() || defaults.model.is_some() || defaults.variant.is_some()
         });
+        let (last_used_efforts, last_used_effort_order) = settings
+            .last_used_efforts
+            .as_deref()
+            .and_then(last_used_efforts)
+            .map_or((None, Vec::new()), |memory| {
+                (Some(memory.efforts), memory.order)
+            });
         Self {
             projects,
             project_defaults,
@@ -289,6 +324,8 @@ impl ServerSettings {
             default_variant: non_empty_string(settings.default_variant),
             default_agent: non_empty_string(settings.default_agent),
             last_selected_model: non_empty_string(settings.last_selected_model),
+            last_used_efforts,
+            last_used_effort_order,
             hidden_models: settings
                 .hidden_models
                 .as_ref()
@@ -442,6 +479,46 @@ fn non_empty_string(value: Option<Value>) -> Option<String> {
         Some(Value::String(text)) if !text.is_empty() => Some(text),
         _ => None,
     }
+}
+
+/// Valid remembered efforts with the order their keys first appeared.
+struct EffortMemory {
+    efforts: HashMap<String, Option<String>>,
+    order: Vec<String>,
+}
+
+/// `parseLastUsedEfforts`: invalid entries grant no authority, while null
+/// remains an explicit Default. A wholly invalid or empty map stays unknown.
+fn last_used_efforts(entries: &[(String, Value)]) -> Option<EffortMemory> {
+    let mut efforts = HashMap::new();
+    let mut order = Vec::new();
+    for (key, value) in entries {
+        let key = trim_effort_setting(key);
+        if key.is_empty() {
+            continue;
+        }
+        let effort = match value {
+            Value::Null => None,
+            Value::String(variant) => {
+                let variant = trim_effort_setting(variant);
+                if variant.is_empty() {
+                    continue;
+                }
+                Some(variant.to_owned())
+            }
+            _ => continue,
+        };
+        if !efforts.contains_key(key) {
+            order.push(key.to_owned());
+        }
+        efforts.insert(key.to_owned(), effort);
+    }
+    (!efforts.is_empty()).then_some(EffortMemory { efforts, order })
+}
+
+/// Settings parsers use ECMAScript `trim`, which includes BOM and excludes U+0085.
+fn trim_effort_setting(value: &str) -> &str {
+    value.trim_matches(|ch: char| (ch.is_whitespace() && ch != '\u{0085}') || ch == '\u{feff}')
 }
 
 /// `parseModelRefs(1024)`: trimmed, non-empty, first occurrence of each pair.
@@ -1113,6 +1190,128 @@ mod tests {
         assert_eq!(settings.routing_feature_available, None);
         assert_eq!(settings.clock, ClockPreference::TwentyFourHour);
         assert_eq!(settings.code_block_line_wrap, Some(false));
+    }
+
+    #[test]
+    fn settings_effort_memory_preserves_named_default_and_missing_choices() {
+        let wire: wire::Settings = serde_json::from_value(json!({
+            "lastUsedEfforts": {
+                "perf/stream": "high",
+                "perf/plain": null,
+                "perf/named-default": "default"
+            }
+        }))
+        .expect("effort memory decodes with the settings document");
+        let settings = ServerSettings::from_wire(wire);
+        let efforts = settings
+            .last_used_efforts
+            .expect("the map has valid entries");
+        assert_eq!(efforts.get("perf/stream"), Some(&Some("high".to_owned())));
+        assert_eq!(
+            efforts.get("perf/plain"),
+            Some(&None),
+            "null remains an explicit Default"
+        );
+        assert_eq!(
+            efforts.get("perf/named-default"),
+            Some(&Some("default".to_owned())),
+            "a named default variant remains a named effort"
+        );
+        assert_eq!(
+            efforts.get("perf/missing"),
+            None,
+            "missing grants no choice"
+        );
+    }
+
+    #[test]
+    fn settings_effort_memory_preserves_json_order_for_bounded_profile_writes() {
+        let wire: wire::Settings = serde_json::from_str(
+            r#"{"lastUsedEfforts":{"z/model":"high","a/model":null,"m/model":"low"}}"#,
+        )
+        .expect("the wire map decodes directly in JSON encounter order");
+        let settings = ServerSettings::from_wire(wire);
+        assert_eq!(
+            settings.last_used_effort_order,
+            ["z/model", "a/model", "m/model"]
+        );
+        let changes = SettingsChanges {
+            last_used_efforts: Some(vec![
+                ("z/model".to_owned(), Some("high".to_owned())),
+                ("a/model".to_owned(), None),
+                ("m/model".to_owned(), Some("low".to_owned())),
+            ]),
+            ..SettingsChanges::default()
+        };
+        assert_eq!(
+            serde_json::to_string(&changes).expect("the effort map serializes as an object"),
+            r#"{"lastUsedEfforts":{"z/model":"high","a/model":null,"m/model":"low"}}"#,
+            "a write preserves oldest-first retention order and explicit Default"
+        );
+        assert_eq!(
+            serde_json::to_string(&SettingsChanges::default()).expect("omission serializes"),
+            "{}",
+            "omitted effort memory is not a request to clear it"
+        );
+    }
+
+    #[test]
+    fn settings_effort_memory_rejects_bad_entries_without_losing_valid_siblings() {
+        let wire: wire::Settings = serde_json::from_value(json!({
+            "defaultModel": "perf/stream",
+            "lastUsedEfforts": {
+                " \u{feff}perf/stream ": "\u{feff} high \u{feff}",
+                "perf/plain": null,
+                "perf/number": 4,
+                "perf/bool": false,
+                "perf/list": ["low"],
+                "perf/object": {"variant": "high"},
+                "perf/empty": "",
+                "perf/blank": " \u{feff} ",
+                " \u{feff} ": "high",
+                "perf/unicode": "\u{0085}high\u{0085}"
+            }
+        }))
+        .expect("a malformed effort does not reject the settings document");
+        let settings = ServerSettings::from_wire(wire);
+        assert_eq!(settings.default_model.as_deref(), Some("perf/stream"));
+        assert_eq!(
+            settings.last_used_efforts,
+            Some(HashMap::from([
+                ("perf/stream".to_owned(), Some("high".to_owned())),
+                ("perf/plain".to_owned(), None),
+                (
+                    "perf/unicode".to_owned(),
+                    Some("\u{0085}high\u{0085}".to_owned())
+                ),
+            ])),
+            "the projection follows the profile parser's trimming and per-entry rejection"
+        );
+    }
+
+    #[test]
+    fn missing_or_invalid_settings_effort_memory_stays_unknown() {
+        for document in [
+            json!({}),
+            json!({"lastUsedEfforts": null}),
+            json!({"lastUsedEfforts": {}}),
+            json!({"lastUsedEfforts": []}),
+            json!({"lastUsedEfforts": "high"}),
+            json!({"lastUsedEfforts": 4}),
+            json!({"lastUsedEfforts": {"perf/stream": false, "perf/plain": " "}}),
+        ] {
+            let settings = ServerSettings::from_wire(
+                serde_json::from_value(document).expect("individual malformed fields still decode"),
+            );
+            assert_eq!(
+                settings.last_used_efforts, None,
+                "unknown effort memory must not become an authoritative empty map"
+            );
+        }
+        assert!(
+            serde_json::from_str::<wire::Settings>("{\"lastUsedEfforts\":").is_err(),
+            "a malformed document remains a failed decode"
+        );
     }
 
     #[test]

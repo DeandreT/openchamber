@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use openchamber_native_core::draft::{Draft, DraftKey};
+use openchamber_native_core::ids::AttachmentId;
 use openchamber_native_transport::prompt::Prompt;
 use openchamber_native_transport::session_create::CreateSession;
 
@@ -25,6 +26,8 @@ pub(crate) struct CreateAttempt {
     pub project: String,
     pub request: CreateSession,
     pub draft: Draft,
+    /// Prepared resources retained by the first-send payload, independent of rollback text.
+    pub resources: Vec<AttachmentId>,
     /// Original configuration, including Auto, independent of creation defaults.
     pub prompt: Prompt,
     pub created: i64,

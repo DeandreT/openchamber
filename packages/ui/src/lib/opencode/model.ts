@@ -217,6 +217,8 @@ export type SyntheticMessage = MessageBase & {
   time: { created: number }
   text: string
   description?: string
+  /** Still in OpenCode's inbox: the agent reads it at its next step. Delivery removes this. */
+  pending?: true
 }
 
 /** Text OpenCode itself added (instruction updates, notices). */
@@ -334,6 +336,8 @@ export type FilePart = PartBase & {
   mime: string
   filename?: string
   url: string
+  description?: string
+  mention?: { start: number; end: number; text: string }
 }
 
 type AgentPart = PartBase & {
@@ -372,6 +376,10 @@ type ToolStateError = {
   status: "error"
   input: ToolInput
   error: string
+  /** Structured failure kind, retained for question recovery. */
+  errorType?: string
+  /** A local interrupted-turn mark yields to later server transitions. */
+  errorSource?: "local"
   /** Partial text content the tool produced before failing, if any. */
   output?: string
   metadata?: Metadata

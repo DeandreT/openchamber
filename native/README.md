@@ -126,8 +126,10 @@ New-session text submission uses the selected registered project's root director
 The client saves one session ID before creation, verifies its returned location,
 then durably binds the first message before sending. Check status never submits
 the saved message. Retry same message uses the original identities and captured
-configuration. An observed deletion never triggers recreation. Journal version 6
-reads versions 1 through 5; malformed or future formats remain untouched.
+configuration. An observed deletion never triggers recreation. Journal version 8
+reads versions 1 through 7 and retains pending queue operations with compact spool
+references. Hydration never replays them automatically. Malformed or future
+formats remain untouched.
 
 `native:fixtures` runs the TypeScript sidebar projection and rewrites
 `crates/core/tests/fixtures/sidebar-projection.json`. `native:resources`

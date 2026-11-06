@@ -733,7 +733,10 @@ mod tests {
                 "Escape preserves the committed choice"
             )
         });
-        crate::recovery_tests::close(cx, window, &workspace);
+        // Without a server the remembered effort cannot save, and a normal
+        // close keeps the window open for that failure.
+        cx.update_window(window, |_, window, _| window.remove_window())
+            .expect("close only this fixture window");
     }
 
     fn assert_search_focus(window: &Window, name: &str) {

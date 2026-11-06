@@ -6,7 +6,7 @@
 //! writes never reorder a list on their own.
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::ids::SessionId;
 use crate::session::SessionRecord;
@@ -176,6 +176,48 @@ impl SessionOrdering {
             .then_with(|| left.id.cmp(&right.id))
     }
 
+    /// Orders roots and each sibling scope, then emits each hierarchy in depth-first order.
+    ///
+    /// Missing parents leave roots. Cycles emit each member once after ordinary
+    /// roots, matching the global sidebar collection's lifecycle boundary.
+    pub fn order_scopes<'a>(&mut self, sessions: &[&'a SessionRecord]) -> Vec<&'a SessionRecord> {
+        let ids: HashSet<&SessionId> = sessions.iter().map(|session| &session.id).collect();
+        let mut roots = Vec::new();
+        let mut children: HashMap<&SessionId, Vec<&SessionRecord>> = HashMap::new();
+        for &session in sessions {
+            if let Some(parent) = &session.parent_id
+                && ids.contains(parent)
+            {
+                children.entry(parent).or_default().push(session);
+            } else {
+                roots.push(session);
+            }
+        }
+        let mut compare = |left: &&SessionRecord, right: &&SessionRecord| {
+            self.compare(
+                left,
+                right,
+                left.overlay.pinned_at.is_some(),
+                right.overlay.pinned_at.is_some(),
+            )
+        };
+        roots.sort_by(&mut compare);
+        for siblings in children.values_mut() {
+            siblings.sort_by(&mut compare);
+        }
+        let mut ordered = Vec::with_capacity(sessions.len());
+        let mut visited = HashSet::new();
+        append_hierarchies(&roots, &children, &mut visited, &mut ordered);
+        let mut remaining: Vec<&SessionRecord> = sessions
+            .iter()
+            .copied()
+            .filter(|session| !visited.contains(&session.id))
+            .collect();
+        remaining.sort_by(compare);
+        append_hierarchies(&remaining, &children, &mut visited, &mut ordered);
+        ordered
+    }
+
     fn baseline(&mut self, session: &SessionRecord, pinned: bool) -> i64 {
         let baseline = self.baseline_by_id.entry(session.id.clone()).or_default();
         let slot = if pinned {
@@ -195,6 +237,24 @@ impl SessionOrdering {
     fn next_rank(&mut self, now_ms: i64) -> i64 {
         self.last_rank = (self.last_rank + 1).max(now_ms);
         self.last_rank
+    }
+}
+
+fn append_hierarchies<'a>(
+    roots: &[&'a SessionRecord],
+    children: &HashMap<&SessionId, Vec<&'a SessionRecord>>,
+    visited: &mut HashSet<&'a SessionId>,
+    ordered: &mut Vec<&'a SessionRecord>,
+) {
+    let mut pending: Vec<&SessionRecord> = roots.iter().rev().copied().collect();
+    while let Some(session) = pending.pop() {
+        if !visited.insert(&session.id) {
+            continue;
+        }
+        ordered.push(session);
+        if let Some(siblings) = children.get(&session.id) {
+            pending.extend(siblings.iter().rev().copied());
+        }
     }
 }
 

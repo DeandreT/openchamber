@@ -10,6 +10,7 @@ import {
 } from '@/lib/inputHistoryScope';
 import { normalizePath } from '@/lib/pathNormalization';
 import type { AttachedFile } from '@/stores/types/sessionTypes';
+import { fileReferenceSchema, type FileReference } from '@/lib/messages/fileReferences';
 
 export type InputHistoryIdentity = {
   runtimeKey: string;
@@ -24,6 +25,7 @@ export type InputHistoryAttachment = {
   mimeType: string;
   size: number;
   reference: string;
+  fileReference?: FileReference;
 };
 
 export type InputHistorySubmission = {
@@ -123,7 +125,9 @@ const attachmentSchema = z.object({
   mimeType: z.string().min(1),
   size: z.number().finite().nonnegative(),
   reference: z.string().min(1),
-});
+  fileReference: fileReferenceSchema.optional(),
+}).refine((attachment) => !attachment.fileReference
+  || (attachment.source === 'file-url' && attachment.reference === attachment.fileReference.uri));
 
 const entrySchema = z.object({
   text: z.string(),
@@ -380,6 +384,7 @@ export const createInputHistoryIdentity = (
 };
 
 const getAttachmentReference = (attachment: AttachedFile): string | null => {
+  if (attachment.fileReference) return attachment.fileReference.uri;
   if (attachment.source === 'vscode' && attachment.vscodeSource === 'file') {
     return normalizePath(attachment.vscodePath ?? null);
   }
@@ -418,7 +423,7 @@ const toRestorableAttachment = (attachment: AttachedFile): InputHistoryAttachmen
       reference,
     };
   }
-  return {
+  const restorable: InputHistoryAttachment = {
     key: buildAttachmentKey(attachment),
     source: 'file-url',
     filename: attachment.filename,
@@ -426,6 +431,9 @@ const toRestorableAttachment = (attachment: AttachedFile): InputHistoryAttachmen
     size: attachment.size,
     reference,
   };
+  // Persisted history: an attachment without a file reference has no such key.
+  if (attachment.fileReference) restorable.fileReference = fileReferenceSchema.parse(attachment.fileReference);
+  return restorable;
 };
 
 export const createInputHistorySubmission = (
@@ -452,7 +460,13 @@ const areAttachmentsEqual = (
       && attachment.filename === candidate.filename
       && attachment.mimeType === candidate.mimeType
       && attachment.size === candidate.size
-      && attachment.reference === candidate.reference;
+      && attachment.reference === candidate.reference
+      && attachment.fileReference?.uri === candidate.fileReference?.uri
+      && attachment.fileReference?.name === candidate.fileReference?.name
+      && attachment.fileReference?.description === candidate.fileReference?.description
+      && attachment.fileReference?.mention?.start === candidate.fileReference?.mention?.start
+      && attachment.fileReference?.mention?.end === candidate.fileReference?.mention?.end
+      && attachment.fileReference?.mention?.text === candidate.fileReference?.mention?.text;
   })
 );
 
@@ -477,7 +491,11 @@ const appendToNamespace = (
     entries.push({
       text: submission.text,
       attachmentKeys: [...submission.attachmentKeys],
-      restorableAttachments: submission.restorableAttachments.map((attachment) => ({ ...attachment })),
+      restorableAttachments: submission.restorableAttachments.map((attachment) => {
+        const restorable = { ...attachment };
+        if (attachment.fileReference) restorable.fileReference = structuredClone(attachment.fileReference);
+        return restorable;
+      }),
       submittedAt: getNextTimestamp(),
     });
   }

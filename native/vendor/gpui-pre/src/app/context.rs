@@ -195,8 +195,38 @@ impl<'a, T: 'static> Context<'a, T> {
         })
     }
 
+    /// Register a quit veto for this entity in the given window.
+    ///
+    /// Returning `false` keeps the event loop alive so the callback can use the
+    /// window's normal asynchronous close path. Request quit again after close
+    /// completes. A closed window or released entity no longer vetoes quit, even
+    /// if the subscription remains alive. An existing window being updated vetoes
+    /// the request until it can be accessed safely.
+    pub fn on_request_quit_in(
+        &self,
+        window: &Window,
+        mut on_request_quit: impl FnMut(&mut T, &mut Window, &mut Context<T>) -> bool + 'static,
+    ) -> Subscription {
+        let entity = self.weak_entity();
+        let window_id = window.handle.id;
+        self.app.on_request_quit(move |cx| {
+            let Some(entity) = entity.upgrade() else {
+                return true;
+            };
+            if !cx.windows.contains_key(window_id) {
+                return true;
+            }
+            cx.update_window_id(window_id, |_, window, cx| {
+                entity.update(cx, |entity, cx| on_request_quit(entity, window, cx))
+            })
+            .unwrap_or(false)
+        })
+    }
+
     /// Arrange for the given function to be invoked whenever the application is quit.
     /// The future returned from this callback will be polled for up to [crate::SHUTDOWN_TIMEOUT] until the app fully quits.
+    /// The future must not depend on live windows or foreground entity updates.
+    /// Use [`Self::on_request_quit_in`] to prepare while the window is still live.
     pub fn on_app_quit<Fut>(
         &self,
         mut on_quit: impl FnMut(&mut T, &mut Context<T>) -> Fut + 'static,

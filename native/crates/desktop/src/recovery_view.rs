@@ -10,6 +10,7 @@ use crate::activation::on_activate;
 use crate::baseline::CssTextExt;
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
+use crate::queue_storage::{QueueAction, QueueSendPhase};
 use crate::send_attempt::SessionKey;
 use crate::theme::Palette;
 use crate::workspace::Workspace;
@@ -50,6 +51,30 @@ pub(crate) struct RecoveryRow {
     pub can_restore: bool,
 }
 
+pub(crate) struct EnqueueRecoveryRow {
+    pub id: crate::queue_capture::QueueOperationId,
+    pub session_label: SharedString,
+    pub status: crate::queue_enqueue::EnqueueCheck,
+    pub can_check: bool,
+    pub can_retry: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TransferKind {
+    Take,
+    Prefix,
+    LocalSend,
+}
+
+pub(crate) struct TransferRecoveryRow {
+    pub id: crate::queue_capture::QueueOperationId,
+    pub kind: TransferKind,
+    pub session_label: SharedString,
+    pub status: &'static str,
+    pub can_check: bool,
+    pub can_retry: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StorageNotice {
     Loading,
@@ -71,8 +96,18 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let rows = self.recovery_items(cx);
+        let starter_rows = self.render_starter_recovery(palette, direction, window, cx);
+        let enqueue_rows = self.render_enqueue_recovery(palette, direction, window, cx);
+        let transfer_rows = self.render_transfer_recovery(palette, direction, window, cx);
+        let composer_read = self.render_composer_read_recovery(palette, direction, window, cx);
         let notice = self.persistence_notice();
-        if rows.is_empty() && notice.is_none() {
+        if rows.is_empty()
+            && starter_rows.is_empty()
+            && enqueue_rows.is_empty()
+            && transfer_rows.is_empty()
+            && notice.is_none()
+            && composer_read.is_none()
+        {
             return div().into_any_element();
         }
         let mut region = div()
@@ -85,7 +120,11 @@ impl Workspace {
             .max_h(px(180.0))
             .overflow_y_scroll()
             .flex()
-            .flex_col();
+            .flex_col()
+            .children(starter_rows)
+            .children(enqueue_rows)
+            .children(transfer_rows)
+            .children(composer_read);
 
         if let Some(notice) = notice {
             let strings = locale::strings(cx);
@@ -297,6 +336,412 @@ impl Workspace {
             );
         }
         region.into_any_element()
+    }
+
+    fn render_enqueue_recovery(
+        &self,
+        palette: &Palette,
+        direction: Direction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        use crate::queue_enqueue::EnqueueCheck;
+
+        let mut elements = Vec::new();
+        for row in self.enqueue_recovery_items() {
+            let id = format!("queue-enqueue-{}", row.id.as_str());
+            let strings = locale::strings(cx);
+            let status = strings.get(match row.status {
+                EnqueueCheck::Preparing => "chat.nativeRecovery.preparing",
+                EnqueueCheck::Checking => "chat.nativeRecovery.checking",
+                EnqueueCheck::Failed => "chat.nativeRecovery.checkFailed",
+                EnqueueCheck::NotObserved => "chat.nativeRecovery.notObserved",
+                EnqueueCheck::Unknown => "chat.nativeRecovery.unknown",
+                EnqueueCheck::Queued => "chat.queuedMessage.title",
+            });
+            let label: SharedString = format!("{}: {status}", row.session_label).into();
+            let check_id = row.id.clone();
+            let check_label = strings.get("chat.nativeRecovery.check");
+            let retry_label = strings.get("chat.nativeRecovery.retry");
+            let check = recovery_action(
+                RecoveryAction {
+                    id: format!("{id}-check").into(),
+                    label: check_label.clone(),
+                    accessible_label: format!("{check_label}: {label}").into(),
+                    enabled: row.can_check,
+                },
+                palette,
+                window,
+                cx,
+                move |this, window, cx| this.check_payload_enqueue(&check_id, window, cx),
+            );
+            let retry = recovery_action(
+                RecoveryAction {
+                    id: format!("{id}-retry").into(),
+                    label: retry_label.clone(),
+                    accessible_label: format!("{retry_label}: {label}").into(),
+                    enabled: row.can_retry,
+                },
+                palette,
+                window,
+                cx,
+                move |this, window, cx| this.retry_payload_enqueue(&row.id, window, cx),
+            );
+            elements.push(
+                div()
+                    .id(SharedString::from(id.clone()))
+                    .accessibility_id(id)
+                    .role(Role::Group)
+                    .aria_label(label.clone())
+                    .min_w_0()
+                    .padding_start(direction, px(12.0))
+                    .padding_end(direction, px(6.0))
+                    .py(px(4.0))
+                    .flex_row_from(direction)
+                    .items_center()
+                    .gap(px(8.0))
+                    .bg(palette.subtle)
+                    .text_color(palette.foreground)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .css_text(0.75, 1.0, cx)
+                            .child(label),
+                    )
+                    .child(check)
+                    .child(retry)
+                    .test_support()
+                    .into_any_element(),
+            );
+        }
+        let mut cleanups = self
+            .queue_storage
+            .local_send_retirements()
+            .iter()
+            .map(|job| (job.operation.clone(), &job.owner))
+            .collect::<Vec<_>>();
+        cleanups.extend(
+            self.queue_storage
+                .operations()
+                .iter()
+                .filter(|operation| {
+                    matches!(
+                        operation.action(),
+                        QueueAction::Send {
+                            phase: QueueSendPhase::Deleted,
+                            ..
+                        }
+                    ) && self
+                        .queue_storage
+                        .local_send_retirement(operation.id())
+                        .is_none()
+                })
+                .map(|operation| (operation.id().clone(), operation.owner())),
+        );
+        for (operation, owner) in cleanups {
+            if owner.runtime() != self.runtime.as_str() {
+                continue;
+            }
+            let session = openchamber_native_core::ids::SessionId::from(owner.session());
+            let session_label = self
+                .sessions
+                .get(&session)
+                .map_or_else(|| session.to_string(), |session| session.title.clone());
+            let label = locale::strings(cx).get("chat.nativeRecovery.retryStorage");
+            elements.push(recovery_action(
+                RecoveryAction {
+                    id: format!("queue-local-send-{}-cleanup", operation.as_str()).into(),
+                    label: label.clone(),
+                    accessible_label: format!("{label}: {session_label}").into(),
+                    enabled: self.persistence_ready()
+                        && !self.close_in_progress()
+                        && !self.queue.any_payload_busy(),
+                },
+                palette,
+                window,
+                cx,
+                move |this, window, cx| this.retry_local_send_retirement(&operation, window, cx),
+            ));
+        }
+        if self
+            .queue_storage
+            .retired_blobs()
+            .is_ok_and(|blobs| !blobs.is_empty())
+            || !self.retired_attachment_blobs.is_empty()
+            || self.has_pending_attachment_retirements()
+        {
+            let label = locale::strings(cx).get("chat.nativeRecovery.retryStorage");
+            elements.push(recovery_action(
+                RecoveryAction {
+                    id: "queue-enqueue-release".into(),
+                    label: label.clone(),
+                    accessible_label: label,
+                    enabled: self.persistence_loaded()
+                        && !self.close_in_progress()
+                        && !self.queue.any_payload_busy(),
+                },
+                palette,
+                window,
+                cx,
+                |this, window, cx| {
+                    this.retry_attachment_retirements(window, cx);
+                    this.retry_enqueue_retirement(window, cx);
+                },
+            ));
+        }
+        elements
+    }
+
+    fn render_transfer_recovery(
+        &self,
+        palette: &Palette,
+        direction: Direction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let mut elements = Vec::new();
+        for row in self.transfer_recovery_items() {
+            let prefix = match row.kind {
+                TransferKind::Take => "queue-take",
+                TransferKind::Prefix => "queue-prefix",
+                TransferKind::LocalSend => "queue-local-send",
+            };
+            let id = format!("{prefix}-{}", row.id.as_str());
+            let strings = locale::strings(cx);
+            let label: SharedString =
+                format!("{}: {}", row.session_label, strings.get(row.status)).into();
+            let check_label = strings.get("chat.nativeRecovery.check");
+            let retry_label = strings.get(match row.kind {
+                TransferKind::LocalSend => "chat.nativeRecovery.retry",
+                _ => "chat.nativeRecovery.retryTransfer",
+            });
+            let check_id = row.id.clone();
+            let kind = row.kind;
+            let check = recovery_action(
+                RecoveryAction {
+                    id: format!("{id}-check").into(),
+                    label: check_label.clone(),
+                    accessible_label: format!("{check_label}: {label}").into(),
+                    enabled: row.can_check,
+                },
+                palette,
+                window,
+                cx,
+                move |this, window, cx| match kind {
+                    TransferKind::Take => this.check_payload_take(&check_id, window, cx),
+                    TransferKind::Prefix => this.check_payload_prefix(&check_id, window, cx),
+                    TransferKind::LocalSend => this.check_local_send(&check_id, window, cx),
+                },
+            );
+            let retry = recovery_action(
+                RecoveryAction {
+                    id: format!("{id}-retry").into(),
+                    label: retry_label.clone(),
+                    accessible_label: format!("{retry_label}: {label}").into(),
+                    enabled: row.can_retry,
+                },
+                palette,
+                window,
+                cx,
+                move |this, window, cx| match kind {
+                    TransferKind::Take => this.retry_payload_take(&row.id, window, cx),
+                    TransferKind::Prefix => this.retry_payload_prefix(&row.id, window, cx),
+                    TransferKind::LocalSend => this.retry_local_send(&row.id, window, cx),
+                },
+            );
+            elements.push(
+                div()
+                    .id(SharedString::from(id.clone()))
+                    .accessibility_id(id)
+                    .role(Role::Group)
+                    .aria_label(label.clone())
+                    .min_w_0()
+                    .padding_start(direction, px(12.0))
+                    .padding_end(direction, px(6.0))
+                    .py(px(4.0))
+                    .flex_row_from(direction)
+                    .items_center()
+                    .gap(px(8.0))
+                    .bg(palette.subtle)
+                    .text_color(palette.foreground)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .css_text(0.75, 1.0, cx)
+                            .child(label),
+                    )
+                    .child(check)
+                    .child(retry)
+                    .test_support()
+                    .into_any_element(),
+            );
+        }
+        elements
+    }
+
+    fn render_composer_read_recovery(
+        &self,
+        palette: &Palette,
+        direction: Direction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let owner = self
+            .composer_key
+            .as_ref()
+            .filter(|owner| {
+                self.composer_document_failed(owner) || self.composer_document_save_failed(owner)
+            })?
+            .clone();
+        let id = format!("composer-local-read:{owner:?}");
+        let strings = locale::strings(cx);
+        let save_failed = self.composer_document_save_failed(&owner);
+        let status = strings.get(if save_failed {
+            "chat.nativeRecovery.storageFailed"
+        } else {
+            "chat.nativeRecovery.localReadFailed"
+        });
+        let retry_label = strings.get(if save_failed {
+            "chat.nativeRecovery.retryStorage"
+        } else {
+            "chat.nativeRecovery.retryRead"
+        });
+        let retry = recovery_action(
+            RecoveryAction {
+                id: format!("{id}-retry").into(),
+                label: retry_label.clone(),
+                accessible_label: format!("{retry_label}: {status}").into(),
+                enabled: self.persistence_loaded() && !self.close_in_progress(),
+            },
+            palette,
+            window,
+            cx,
+            move |this, window, cx| {
+                this.retry_composer_document(&owner, window, cx);
+            },
+        );
+        Some(
+            div()
+                .id(SharedString::from(id.clone()))
+                .accessibility_id(id)
+                .role(Role::Group)
+                .aria_label(status.clone())
+                .min_w_0()
+                .padding_start(direction, px(12.0))
+                .padding_end(direction, px(6.0))
+                .py(px(4.0))
+                .flex_row_from(direction)
+                .items_center()
+                .gap(px(8.0))
+                .bg(palette.subtle)
+                .text_color(palette.foreground)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .truncate()
+                        .css_text(0.75, 1.0, cx)
+                        .child(status),
+                )
+                .child(retry)
+                .test_support()
+                .into_any_element(),
+        )
+    }
+
+    fn render_starter_recovery(
+        &self,
+        palette: &Palette,
+        direction: Direction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let mut captures: Vec<_> = self
+            .starters
+            .captures
+            .iter()
+            .filter(|capture| self.composer_key.as_ref() == Some(&capture.owner))
+            .collect();
+        captures.sort_by(|left, right| left.id.cmp(&right.id));
+        captures
+            .into_iter()
+            .map(|capture| {
+                let pending = self.starters.capture_pending(&capture.id);
+                let status = locale::strings(cx).get(if pending {
+                    "chat.nativeRecovery.preparing"
+                } else {
+                    "chat.nativeRecovery.title"
+                });
+                let label = locale::strings(cx).get("chat.nativeRecovery.restore");
+                let preview: String = capture
+                    .preset_text
+                    .chars()
+                    .take(240)
+                    .map(|character| {
+                        if character.is_whitespace() {
+                            ' '
+                        } else {
+                            character
+                        }
+                    })
+                    .collect();
+                let identity = capture.id.clone();
+                let id = format!(
+                    "starter-recovery-{}:{}",
+                    capture.owner.runtime().as_str().len(),
+                    identity
+                );
+                let action = recovery_action(
+                    RecoveryAction {
+                        id: format!("{id}-restore").into(),
+                        label: label.clone(),
+                        accessible_label: format!("{label}: {preview}").into(),
+                        enabled: !pending && self.persistence_loaded() && !self.close_in_progress(),
+                    },
+                    palette,
+                    window,
+                    cx,
+                    move |this, window, cx| {
+                        this.restore_starter_capture(&identity, window, cx);
+                    },
+                );
+                div()
+                    .id(ElementId::Name(id.clone().into()))
+                    .accessibility_id(id)
+                    .role(Role::Group)
+                    .aria_label(format!("{preview}. {status}"))
+                    .min_w_0()
+                    .min_h(px(36.0))
+                    .padding_start(direction, px(12.0))
+                    .padding_end(direction, px(6.0))
+                    .py(px(4.0))
+                    .flex_row_from(direction)
+                    .items_center()
+                    .gap(px(8.0))
+                    .bg(if pending {
+                        palette.subtle
+                    } else {
+                        palette.status_warning_background
+                    })
+                    .text_color(palette.foreground)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .child(div().truncate().css_text(0.75, 1.0, cx).child(preview))
+                            .child(div().css_text(0.75, 1.0, cx).child(status)),
+                    )
+                    .child(action)
+                    .test_support()
+                    .into_any_element()
+            })
+            .collect()
     }
 }
 

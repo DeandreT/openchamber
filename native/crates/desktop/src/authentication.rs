@@ -220,6 +220,7 @@ impl Workspace {
                         connection.retry_task = None;
                         connection.state =
                             ConnectionState::Failed(ConnectionFailure::AuthenticationRequired);
+                        this.reset_session_admission(window, cx);
                         this.show_authentication(
                             ConnectionFailure::AuthenticationRequired,
                             None,

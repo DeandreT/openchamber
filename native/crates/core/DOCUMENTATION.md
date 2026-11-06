@@ -21,6 +21,9 @@ rendering asks for a projection and dispatches an action.
   requests the server may answer itself (`AutoAnswerHolds`). It answers nothing.
 
 - `send_config.rs` ports default agent/model selection, an existing session's selection from its record, catalog grouping, composer labels and agent color allocation from the web client.
+- Default effort follows the configured choice, a supported matching agent pin,
+  then the model's remembered choice from server settings. A remembered explicit
+  Default stays distinct from an absent entry when restoring session effort.
 - `composer_selection.rs` retains owner-scoped choices and their creation handoff.
   Sessions opened before catalogs arrive fill only missing choices from later
   defaults. Catalog gaps leave restoration pending and preserve explicit picks.
@@ -50,13 +53,19 @@ rendering asks for a projection and dispatches an action.
   archive page's list and the pending pin overlay. Track and Done belong to
   root work rows outside archives and Chats; `SidebarRow::Session::owns_work`
   is false inside worktree and space works.
-- `ownership.rs` and `chat_projection.rs` port `sessionOwnership.ts` and
-  `sessionChatProjection.ts`. `sidebar_rows.rs` builds the normal Works view
+- `ownership.rs` and `sidebar_collection.rs` own directory ownership and sidebar
+  membership. Their reference is `sessionOwnership.ts` and the production
+  collection in `sessionCollection.ts`. `sidebar_rows.rs` builds the normal Works view
    of `sessionSidebarRowModel.ts`, grouping worktree, space and session works under
   projects, with the section gaps of
   `sessionSidebarVirtualization.ts`; `grouping.rs` ports
   `buildGroupedSessions` and `buildSidebarChatGroup`; `ordering.rs` ports
   `session-ordering.ts`; `relative_time.rs` ports the sidebar's compact ages.
+- The sidebar collection filters registered project/worktree and valid space
+  directories before ownership. Only active managed Chats enter Chats; active
+  temporary forks are excluded. Archived inputs retain the production archive
+  selector's scoped records. Ownership receives project sessions and scoped
+  archives, so active Chats cannot contribute canonical-project metadata.
 - `transcript.rs` holds one session's messages in server order and reports the
   rows each mutation touched. An assistant message carries its step's
   agent, model, finish, error and token usage, and each assistant row knows
@@ -114,6 +123,11 @@ rendering asks for a projection and dispatches an action.
   prompt-pair commands' parsing, variables and template rendering.
 - `draft.rs` and `scroll_memory.rs` hold client-owned state keyed by the
   runtime and the session or draft identity captured when it was created.
+- `draft_content.rs` holds semantic attachments, agent mentions, skills, opaque
+  metadata JSON and context items. Attachment bytes, source paths, spool records
+  and materialization into wire requests belong to the desktop and transport.
+  Transport reexports the core's mention and skill records through its existing
+  `prompt_parts` module and serializes them with private wire adapters.
 - `synthetic.rs` produces the documented offline workloads. It is part of the
   core so the desktop, tests and measurement tools share one definition.
 
@@ -200,9 +214,9 @@ crate owns wire parsing and authority checks, and hands the core records and
   identity and drafts use `SessionRecord::directory`.
 - OpenCode's `global` project ID never bridges to a configured root, and
   conflicting canonical metadata stays unresolved.
-- Chats keeps unowned root conversations and their active descendants. Missing,
-  archived and `/btw` parents never promote children; rootless cycles are never
-  reached.
+- Chats lists managed roots and builds their descendants from the same admitted
+  hierarchy as projects. Project descendants remain reachable across directories.
+  Lifecycle ordering precedes ownership buckets, and cycles emit each record once.
 - Server order is transcript order. Identifier spelling never reorders rows.
   An unchanged event returns `TranscriptChange::Unchanged`, and an event for an
   unknown message returns `NeedsReconcile`.
@@ -248,6 +262,23 @@ crate owns wire parsing and authority checks, and hands the core records and
 - A failed load keeps its retained snapshot; only `LoadState::Complete` grants
   full-scope authority.
 - A non-empty draft leaves the store only by an explicit send or clear.
+- Files, context, agent references, skills and metadata all make a draft retained.
+  Only trimmed non-empty text, files or context make it sendable. Caret selection
+  uses UTF-8 byte offsets; agent mention ranges use UTF-16 code units.
+- Captured-content consumption requires unchanged text and removes only complete
+  matching values. New or changed files and context remain, including changed
+  payloads under the same stable identity. A new textual mention refuses the
+  consumption because its range still needs the retained text.
+- Failed restoration preserves newer typing, selection and independent content.
+  Different non-empty texts join with a blank line; equal texts remain single.
+  Appended mention ranges move by the prefix's checked UTF-16 length. Conflicting
+  top-level metadata, changed files or context with the same identity, and offset
+  overflow refuse the merge without changing either input. The caller keeps the
+  retained attempt until that conflict is resolved.
+- Materialization preserves full draft content and retains the existing
+  destination-wins rule when a session draft already exists.
+- Draft diagnostics expose stable attachment/context identities and counts while
+  hiding text, references, filenames, agent/skill names and metadata values.
 - A queue projection never goes back to an older revision: per queue, and
   per runtime and owner for complete snapshots. A snapshot replaces only its
   owner's queues and keeps those a newer answer changed. An owner speaks only
@@ -270,6 +301,18 @@ crate owns wire parsing and authority checks, and hands the core records and
   one above the highest open "Terminal N", so they stay unique after closes.
 
 ## Decisions
+
+### Why draft metadata stays opaque
+
+The core depends on the standard library alone. Transport and persistence adapters
+own JSON validation and serialization; the core compares retained JSON strings
+exactly and refuses conflicting values without inventing a merge of their keys.
+
+### Why failed content can remain owned by its attempt
+
+A stable attachment or context identity can carry an edited payload by the time a
+send fails. Choosing either value would discard content, so restoration returns a
+typed conflict and leaves the retained attempt and current draft unchanged.
 
 ### Why blocking requests are kept outside the send journal
 

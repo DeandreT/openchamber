@@ -11,6 +11,7 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 
 | Module | Owns |
 | --- | --- |
+| `attachment.rs` | Planning and explicit byte writes under the selected OpenCode server's temporary directory, with retained targets and scoped response validation. |
 | `endpoint.rs` | The user-selected base URL, its path prefix and the `ws`/`wss` form of a route. |
 | `identity.rs` | `/health` parsing, API compatibility and capabilities. |
 | `system.rs` | Independent OpenChamber and OpenCode version readouts from the host's system and upgrade-status routes. |
@@ -20,7 +21,7 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `client.rs` | `ServerClient`: identity probe, password login, session pages, message pages, whole messages, running status, settings reads and writes, Chats roots, projects and worktrees. |
 | `catalog.rs` | Routing readiness (Auto and the safety net) and the composer's catalogs in one directory: agents, the flat model catalog with OpenCode's default model, folded config defaults, the skill count and the connected MCP count. |
 | `project.rs` | A directory's Git status (`GET /api/git/status`) and a project's configured actions (`GET /api/projects/:projectId/config`, the path-derived ID). |
-| `files.rs` | The Files surface's filesystem routes: folder listings, OpenCode's fuzzy file search (`/api/fs/find`), ripgrep content search, stat, text reads, writes and renames, scoped to the workspace by the directory header. |
+| `files.rs` | The Files surface's filesystem routes: folder listings, OpenCode's fuzzy file search (`/api/fs/find`), ripgrep content search, stat, text and bounded raw reads, writes and renames, scoped to the workspace by the directory header. |
 | `git.rs` | The Git surface's routes: the full status, path and batch diffs, stage, unstage, discard, commit, branches, the repository's transport binding and planned network operations. |
 | `prompt.rs` | Prompt submission with its synthetic context, resumption of an uncertain send, slash commands, ordered session model/agent selection, inbox admission receipts, observation and interruption of one named session. |
 | `prompt_parts.rs` | What a prompt carries besides text (file references, agent and skill references, metadata, synthetic context), the command request, and their private request bodies. |
@@ -28,6 +29,8 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `session_create.rs` | Immutable root-session requests, exact-ID observation and identity/location verification before exposing a session record. |
 | `requests.rs`, `request_wire.rs` | Explicit blocking-request lists, exact reads, permission replies, form answers/cancellation and private pinned-2.2 wire decoding. |
 | `message_queue.rs` | The server-owned queue (`/api/message-queue`): snapshots, enqueue, remove, reorder and take, routed to an isolated space's own server by the directory header, and the `openchamber:message-queue.updated` broadcast. |
+| `queue_manifest.rs` | Captured opt-in manifest and payload queue requests, immutable attachment uploads, bounded downloads and retained enqueue/take/prefix identities. Payload parsing verifies capture and index hashes through the destination's SHA-256 callback. Individual attachment downloads require caller SHA-256 verification before use. |
+| `queue_frozen_send.rs` | Immutable bounded outgoing bodies for strict sealed queue sends and ordinary rich local sends, captured transport dispatch and exact-ID observation. |
 | `starters.rs` | A project's starters in its setup (personal and shared writes) and the magic-prompt overrides a directory resolves. |
 | `permission_policy.rs` | Per-session permission modes: `GET /api/permission-auto-accept` and `PUT /api/permission-auto-accept/sessions/:id`, both answering the whole policy. |
 | `public_asset.rs` | `PublicAssetClient`: public assets the web client loads from third-party hosts, such as models.dev's provider logos. |
@@ -45,6 +48,15 @@ counts and identifiers only.
 
 ## Invariants
 
+- Attachment planning reads the captured server's `/api/info` and allocates an
+  app-owned target without writing a file. The caller durably retains that target
+  and immutable prepared bytes before an explicit write. Restoring a plan keeps
+  the original target; a changed server temporary root is a refusal.
+  Writes use raw bytes through the authenticated request builder and require the
+  returned location and path to match. Failures do not choose a replacement URI,
+  retry, delete server files or fall back to workspace writes. Each file owns its
+  outcome independently. The prepared-representation ceiling is 20 MiB; raw input
+  limits belong to preparation, and server limits remain a separate contract.
 - Authentication checks use the same bearer as subsequent API requests. A
   validated 401 with `locked: true` identifies a password or pairing challenge;
   failed reads and inconsistent bodies grant no authority. Password exchange
@@ -74,6 +86,14 @@ counts and identifiers only.
 - `stat_file` asks with `optional=true`, so a missing file is
   `StatRead::Missing` and a failed stat is an error; the open-file poll needs
   that difference. `read_file` accepts only a `text/plain` body.
+- `read_raw_file` reads the captured server's existing `/api/fs/raw` route with
+  exact path and directory query values and the encoded directory headers. It
+  requests no outside-workspace access or byte range. Only a complete 200 without
+  `Content-Range` can return bytes. Advertised and streamed bytes share the
+  caller's limit; a truncated body fails. MIME is bounded advisory metadata,
+  including `application/octet-stream` for Office and HEIC preparation. Raw-read
+  errors discard server response content. Authentication signals, cancellation,
+  no redirects and no retries come from the existing authenticated client.
 - Content search declares `invalid-pattern` and `search-unavailable` as
   outcomes, not errors. Dropping the search future closes the request, which
   ends ripgrep on the server.
@@ -257,6 +277,153 @@ counts and identifiers only.
   or unsupported reservation is an error; there is no fallback to destructive
   per-item or unbounded takes. Host and isolated-space routing use the same
   authenticated queue transport as existing mutations.
+- Payload queue APIs are additive to the legacy and `manifest-v1` adapters.
+  `QueuePayloadDocument` validates the strict inner manifest/legacy capture union
+  and exact directory. Its original UTF-8 JSON remains immutable. Complete
+  captures are at most 50 MiB; non-empty ordered chunks are at most 20 MiB each,
+  with at most 4096 distinct blob identities. Declared sizes must sum exactly
+  before bytes are read or allocated. Malformed UTF-8, BOMs, unknown typed fields,
+  invalid inline data URLs and mismatched digests grant no ownership authority.
+- `QueuePayloadPointer` contains input fields only. `QueueIndexedPayload`
+  contains a server-returned pointer and its frozen root index. Parsing an input
+  pointer or restoring enqueue/prefix input refuses returned `payloadIndex` and
+  `payloadIndexHash`. A new edited capture re-encodes its materialized identities
+  through `QueuePayloadDocument::from_item` and uses a new operation identity.
+  Explicit recovery retains the original request body and upload identities.
+- Payload index hashing uses the backend's schema-normalized JSON field order,
+  including attachment descriptor order. `QueueSha256` is a required callback
+  supplied by the destination's existing SHA-256 implementation. Index parsing
+  checks the digest, owner, safe size counters, identity uniqueness and entry
+  bounds. Materialization checks every chunk and whole-capture digest, captured
+  configuration, preview, context sequence, entry count and hidden attachment
+  roots before exposing the expanded item. Official contexts receive frozen IDs;
+  legacy context/instruction IDs remain in the index in send order. Short legacy
+  attachment IDs come from verified root bindings; null bindings retain long IDs
+  from the capture. Legacy `agentPath` remains the model-facing source identity
+  through materialization and editing. Neither it nor server paths authorize
+  file reads.
+- Manifest uses retain optional `agentPath` independently of the immutable upload
+  descriptor's safe `filename`. Local conversion and frozen sends use
+  `agentPath ?? filename` for each model-facing occurrence. Present values must be
+  nonempty strings; explicit null and other types are malformed. Existing prepared
+  names retain relative identities, Windows and UNC paths, literal POSIX
+  backslashes, tabs and long strings under the same aggregate limits. No trimming,
+  URI decoding or path normalization occurs. Omitted fields remain absent in new
+  encoding, and restoration retains original capture, index and frame bytes.
+  Different uses of one blob may carry different names; original sealed captures
+  bind that metadata while file proofs retain only their existing byte authority.
+  The field grants no filesystem read, upload, root or acknowledgement capability.
+- Only a sealed materialization grants `QueuePayloadFilesProof`. It binds the
+  original capture and index digests to manifest attachment descriptors or the
+  actual decoded length and digest of each legacy attachment. Freshly parsed or
+  edited captures grant no proof. The native file owner compares these bindings
+  with committed local descriptors and rereads local bytes before acknowledging
+  a take. Proofs retain compact metadata and have no serialized constructor.
+- `QueueLocalCapture` owns complete native local fields and caller-captured context
+  IDs without queue upload descriptors. Its `native-local-v1` source bytes retain
+  separate display/delivered text, full prompt parts and ordinal file descriptors
+  containing actual prepared length and SHA-256. File names may be original
+  model-facing paths; they grant no file reads and are separate from safe queue
+  upload basenames. Local capture, restoration and explicit conversion of an
+  edited queue document grant no queue file proof or acknowledgement capability.
+  Local display content shares the existing 50 MiB whole-capture bound. Queue
+  manifest and legacy display content retain their 200,000 UTF-16-unit limit.
+- `QueueLocalCapture::rebind_context_ids` consumes only a working local capture.
+  The caller supplies the occurrence ledger's admitted IDs in exact context order,
+  with the existing count, including zero. The constructor validates unique,
+  well-formed IDs. Rebinding preserves every other local field and recaptures typed
+  source bytes and their digest. Identical IDs return the capture unchanged,
+  preserving exact restored bytes and earlier numeric spellings. Original
+  materialized payloads, indexes and file proofs remain with their upstream owner.
+  Rebinding performs no I/O and grants no ledger claim, queue transfer,
+  acknowledgement, upload or path-read authority.
+- `QueuePromptParts.file_references` retains ordered explicit server-file
+  references as optional `promptParts.fileReferences`. Manifest and typed legacy
+  captures accept reference-only empty-text items. Legacy prompt parts contain
+  only these references; empty agent, skill and context defaults normalize away,
+  while nonempty official parts and any metadata are refused. Absent or empty
+  reference lists encode without the new field, preserving existing default bodies
+  and index hashes. URI values are at
+  most 65,536 UTF-8 bytes and use literal `file:///` absolute paths without an
+  authority, query, fragment, backslash, control character or malformed percent
+  escape. Names are nonempty, control-free and at most 4,096 UTF-8 bytes. Every
+  occurrence counts toward the existing entry and structured-content limits.
+  References add no attachment roots, byte descriptors, file proof or
+  acknowledgement capability. No reference is fetched or converted to bytes.
+- `QueueFrozenSend::capture` remains sealed-queue-only. `capture_local` shares its
+  encoder and accepts ordered `Queued` companions and `Local` captures, including
+  an ordinary send with no queued items. Every source retains its configuration;
+  the caller explicitly selects which one controls the outgoing send. Context
+  IDs remain unique in original order, and conflicting top-level metadata keys
+  refuse merging before reservation or admission. Local file ordinals and queue
+  file identities use separate prepared-binding variants and cannot substitute
+  for one another. The caller verifies staged targets against held prepared bytes.
+  Each source's explicit references follow its byte-bound files in the actual
+  outgoing `files` array, preserving occurrences, descriptions and mentions.
+  Frozen bodies include reference bytes in their actual prompt/frame size and
+  validate retained file URIs and names again on restoration.
+- Frozen send frames retain original JSON bodies in the existing private spool.
+  Their metadata is bounded to 4 MiB, the complete frame to 128 MiB, each source
+  capture to 50 MiB and combined structured content to 50 MiB. Existing spool
+  owners retain their 20 MiB chunk bound. New frame metadata distinguishes queue
+  seals from local sources without fake index hashes; older frames remain readable
+  as legacy provenance and gain no new ownership capability. Reconstruction and
+  explicit retry retain exact original bytes, including earlier numeric spellings.
+  Restoration checks metadata structure and the actual retained byte lengths;
+  current number notation never changes an older frame's size authority.
+  Dispatch and observation perform no uploads, reservations, acknowledgements or
+  automatic retries, and never resolve IDs or configuration from mutable UI state.
+- `dispatch_step` makes one captured selection or admission request. The caller
+  supplies its observed or receipted leading context IDs and can recheck foreground
+  gates between requests. Context steps require the next exact ordinal; the prompt
+  requires the complete context run. Invalid steps make no request. The whole-send
+  `dispatch` method uses the same step implementation and receipt validation.
+- New frozen frames tag explicit file-reference ordinals. Strict reference URI
+  and name limits apply to those occurrences; prepared-file names retain their
+  original contract, including legacy model-facing paths. Earlier frames without
+  the optional tag retain their original validation and exact bytes.
+- A payload index preview follows the backend's 100 UTF-16-unit slice and may
+  contain an escaped unpaired surrogate. The adapter retains those exact units
+  privately for index hashing, persistence and capture comparison. The public
+  `index().preview` and `index().context_preview` are display-only UTF-8 with replacement characters where
+  needed. Persist an indexed payload through `body()` and restore through
+  `from_body()`; rebuilding it from the display preview changes its seal.
+  Payload prefix composers decode directly into their typed pointer, avoiding
+  a `serde_json::Value` intermediate that cannot represent lone surrogates.
+  Literal malformed UTF-8, unescaped JSON string controls, array previews and
+  previews beyond 103 UTF-16 units remain refusals.
+  Captured manifest and legacy context previews use `PayloadPreview`, retaining
+  UTF-16 units through parsing and edited capture encoding. Only those display
+  fields accept escaped split surrogates; authoritative text and metadata keep
+  strict Unicode. Call `display()` for UI text and retain the typed value for edits.
+- Edited typed legacy captures omit empty content, text equal to content, empty
+  arrays, zero file sizes and the default local source. Every materialized file
+  ID remains explicit in a new edited capture. Numeric JSON uses the shorter
+  round-tripping decimal or exponential spelling and encodes negative zero as
+  zero, preserving JavaScript Number semantics without redundant `.0` suffixes.
+  The complete encoded length is counted before allocating the output, with
+  equality accepted at 50 MiB. Manifest capture encoding remains unchanged.
+  Typed metadata is validated before numeric formatting. Rust integers outside
+  JavaScript's safe integer range are refused before conversion; existing finite
+  floating-point values keep their JavaScript Number meaning.
+- `QueuePayloadTake` keeps transferring and acknowledged states distinct. Its
+  own lookup parses compact payload receipts; the original manifest lookup does
+  not accept this different handoff shape. `QueueAcknowledge` accepts the shared
+  take receipt only after the caller durably owns every part and verified file.
+  `QueuePayloadPrefixCapture` checks the exact owner, ordered item IDs, composer
+  pointer, delivery and concatenated frozen context IDs. The combined prefix has
+  at most 4096 entries and 50 MiB of structured content. Preview and reservation
+  retain the same admission barrier and never fall back to destructive take.
+- Expanded payload documents belong only to an active operation and the private
+  local spool. The native journal stores compact descriptors with byte length and
+  SHA-256, original request bodies, pointers and indexes within its existing
+  16 MiB limit. Transport defines no new desktop journal schema and performs no
+  automatic uploads, downloads, acknowledgement, retries or releases. The caller
+  verifies downloaded attachments separately and keeps each original upload
+  owner until explicit release is safe. The index's prompt/admission counters
+  describe the queue server's encoded requests. Native staged-file sends measure
+  their actual outgoing JSON against 128 MiB before any admission; oversized
+  server counters do not prevent a complete edit/take handoff.
 - Project starters fail as a whole on any malformed entry, and a failed read
   is an error, so a caller never writes back a list built on a failed read.
   Magic-prompt overrides require version 1.
@@ -375,6 +542,78 @@ counts and identifiers only.
   while malformed entries are left out.
 
 ## Decisions
+
+### Why manifest model identities belong to each use
+
+Local edits and frozen sends need the original model-facing identity while byte
+handling retains its immutable safe upload descriptor. A per-use optional field
+preserves both and keeps duplicate file occurrences independent without adding
+path-read or acknowledgement authority.
+
+### Why explicit references have no prepared-file descriptor
+
+PDF and path-only mentions name server files that OpenCode reads when processing
+the prompt. Retaining those references preserves their original meaning without
+inventing upload identities, byte digests or take acknowledgement evidence.
+
+### Why local captures have a separate source kind
+
+Ordinary rich sends can start without a server queue or upload receipt. Native
+prepared descriptors and explicit context IDs validate that local source directly;
+the separate type prevents it from acquiring queue-transfer authority by encoding
+or mixing with sealed companions.
+
+### Why context rebinding consumes a working local capture
+
+Read-only consumers can need fresh context IDs while the original materialized
+capture and proof retain their original identities. The local capture owns this
+change so callers preserve rich fields without rebuilding partial copies. An
+unchanged binding retains the original bytes because re-encoding can change older
+numeric spellings and their digest.
+
+### Why request digits use Serde's supported float formatter
+
+The pinned serde_json formatter uses zmij's shortest nearest-even digits, including
+the `2^-25` midpoint where Rust Display chooses a different last digit. Request
+serialization adjusts decimal-point placement to ECMAScript notation and uses
+the same writer for counting and emission. Compact capture formatting keeps its
+existing spelling, and restored frozen bodies remain byte-identical.
+
+The transport enables the existing `serde_json/float_roundtrip` feature so decimal
+parsing preserves the exact JavaScript Number across source-spool restoration and
+freezing. Cargo unifies that parser feature for consumers of the same serde_json
+version in the native dependency graph. It changes parsing precision without
+adding a dependency, changing the pinned version or weakening capture limits.
+
+### Why payload captures have separate input and indexed types
+
+The backend derives root indexes after verifying a capture. Separate types keep
+returned ownership metadata out of strict enqueue/composer input and let the
+existing manifest callers retain their original contract.
+
+### Why payload hashing is supplied by the destination
+
+The desktop already owns SHA-256 for its attachment spool. A required callback
+verifies exact payload bytes and schema-ordered index JSON without adding a
+second cryptographic implementation or a transport dependency.
+
+### Why payload previews retain UTF-16 separately from display text
+
+The backend's display slice can split an emoji's surrogate pair while its full
+capture remains valid. Retaining the original units preserves the sealed index
+and full handoff; the UTF-8 display string carries no hash or ownership authority.
+
+### Why edited legacy captures keep compact JSON encoding
+
+Legacy captures can already fill the original 50 MiB budget. Omitting defaults
+and using short round-tripping number spellings preserves capacity for a smaller
+edit without weakening the capture limit or discarding metadata and identities.
+
+### Why attachment targets are planned before writing
+
+An unresolved prompt must keep its original file URI and bytes. Planning gives
+the durable content owner that exact target before a write can reach the server,
+including when its reply is lost.
 
 ### Why the Files and Git errors have their own enums
 

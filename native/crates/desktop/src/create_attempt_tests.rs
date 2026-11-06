@@ -22,6 +22,7 @@ pub(crate) fn sample() -> (SessionKey, CreateAttempt) {
     let draft = Draft {
         text: "saved text λ".into(),
         selection: 2..4,
+        ..Draft::default()
     };
     let request = CreateSession::new(
         key.session.clone(),
@@ -37,6 +38,7 @@ pub(crate) fn sample() -> (SessionKey, CreateAttempt) {
             project: "registered-project".into(),
             request,
             draft: draft.clone(),
+            resources: Vec::new(),
             prompt: Prompt {
                 message_id: MessageId::from("msg_creation123"),
                 text: draft.text,

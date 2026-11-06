@@ -15,6 +15,7 @@ import signal
 import sys
 import traceback
 import urllib.parse
+import urllib.request
 import uuid
 
 from native_adapter import _atspi, accessibility_enabled, set_accessibility
@@ -26,12 +27,42 @@ import virtual_display
 MODEL = "stream-1200cps"
 AGENT = "fixture-beta"
 PROMPT = "Selection fixture 你好 👩‍💻 café"
+EFFORT_KEY = f"perf/{MODEL}"
+EFFORT_SIBLING = "perf/stream-20000cps"
+SETTINGS = "/api/config/settings"
 
 
 class SelectionFixture(Fixture):
     """Use the same owned server and cleanup, with its opt-in selection config."""
 
     MODE = "--selections"
+
+    def seed_efforts(self):
+        values = {EFFORT_SIBLING: None, EFFORT_KEY: "low"}
+        request = urllib.request.Request(self.url + SETTINGS,
+                                         data=json.dumps({"lastUsedEfforts": values}).encode(),
+                                         headers={"Content-Type": "application/json"}, method="PUT")
+        with urllib.request.urlopen(request, timeout=10) as response:
+            if effort_memory(json.load(response)) != values:
+                raise RuntimeError("fixture effort settings did not round-trip")
+
+
+def effort_memory(settings):
+    """Absent, malformed and explicit Default remain distinct observations."""
+    if not isinstance(settings, dict) or not isinstance(settings.get("lastUsedEfforts"), dict):
+        raise ValueError("missing model effort memory")
+    values = settings["lastUsedEfforts"]
+    if any(not isinstance(key, str) or not key.strip()
+           or (value is not None and (not isinstance(value, str) or not value.strip()))
+           for key, value in values.items()):
+        raise ValueError("malformed model effort memory")
+    return values
+
+
+def effort_matches(settings, variant):
+    values = effort_memory(settings)
+    return (EFFORT_KEY in values and values[EFFORT_KEY] == variant
+            and EFFORT_SIBLING in values and values[EFFORT_SIBLING] is None)
 
 
 def verify_turn(messages, prompt, model, agent, variant):
@@ -69,6 +100,10 @@ def require_clean_result(clients):
 
 
 class Selections(Interaction):
+    def observe_effort(self, variant):
+        until("model effort did not persist with its unrelated Default entry", lambda:
+              effort_matches(self.fixture.get(SETTINGS), variant), self.args.timeout)
+
     def messages(self):
         # Pinned 2.2 returns newest-first; turn boundaries need chronological order.
         return list(reversed(super().messages()))
@@ -124,6 +159,7 @@ class Selections(Interaction):
 
     def run(self):
         session = self.fixture.create_session("stream-20000cps")
+        self.fixture.seed_efforts()
         self.session_id = urllib.parse.quote(session["id"], safe="")
         self.start("first")
         self.choose("agent", "fixture-alpha", "Search agents")
@@ -133,6 +169,7 @@ class Selections(Interaction):
         self.choose("model", MODEL, "Search models")
         self.choose("variant", "Default")
         self.choose("variant", "high")
+        self.observe_effort("high")
         expected = self.labels()
         if expected != {"model": MODEL, "agent": "fixture-beta", "variant": "high"}:
             raise RuntimeError("toolbar did not retain the selected model, agent and high effort")
@@ -140,6 +177,7 @@ class Selections(Interaction):
         self.reopen("unsent")
         if self.labels() != expected or editable_text(self.composer()) != PROMPT:
             raise RuntimeError("unsent selection or Unicode draft did not survive reopen")
+        self.observe_effort("high")
         if any(item.get("type") == "user" for item in self.messages()):
             raise RuntimeError("reopening submitted an unsent draft")
         self.client.screenshot(self.fixture.evidence / "unsent.png")
@@ -161,21 +199,26 @@ class Selections(Interaction):
         command(self.env, "xdotool", "key", "ctrl+a", "BackSpace")
         until("native clear did not empty the draft", lambda: editable_text(self.composer()) == "", self.args.timeout)
         high = self.send_selection(PROMPT, "high")
+        self.observe_effort("high")
         self.choose("variant", "Default")
+        self.observe_effort(None)
         default_labels = self.labels()
         self.reopen("default")
         if self.labels() != default_labels or default_labels["variant"] != "Default":
             raise RuntimeError("explicit Default did not survive reopen")
+        self.observe_effort(None)
         if len([item for item in self.messages() if item.get("type") == "user"]) != 1:
             raise RuntimeError("reopen duplicated a send")
         default = self.send_selection(PROMPT + " Default", None)
+        self.observe_effort(None)
         messages = self.messages()
         if len([item for item in messages if item.get("type") == "user"]) != 2:
             raise RuntimeError("selection run duplicated or lost a prompt")
         (self.fixture.evidence / "messages.json").write_text(json.dumps(messages, indent=2, ensure_ascii=False))
         self.client.screenshot(self.fixture.evidence / "completed.png")
         return {"sessionID": session["id"], "high": high, "default": default,
-                "unsentReopen": True, "cancelFocus": True, "defaultReopen": True}
+                "unsentReopen": True, "cancelFocus": True, "defaultReopen": True,
+                "serverEffortMemory": effort_memory(self.fixture.get(SETTINGS))}
 
 
 def qualify(args):

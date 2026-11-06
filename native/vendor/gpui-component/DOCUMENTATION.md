@@ -30,8 +30,46 @@ the pinned `gpui-kit` dependency.
   searchable lists can hide the clear button. Defaults retain the package's
   existing appearance; the native project chooser supplies the web client's
   popup dimensions and controls.
+- `WindowExt::open_dialog_with_handle` returns a weak, root-scoped
+  `DialogLayerHandle`. Targeted close removes exactly that opening; closed,
+  replaced-root and cross-window handles change nothing. Removing a covered
+  dialog preserves the top dialog's focus, input registration and selection,
+  and bypasses the removed dialog in surviving focus-return chains.
+- Handled dialogs keep that identity through their normal dismissal callbacks,
+  including a callback that opens a newer modal. Targeted closes restore focus
+  immediately when topmost. Imperative close invokes no dialog callbacks.
+  Existing `open_dialog`, `close_dialog` and deferred top-close behavior remain
+  unchanged for callers that do not request a handle.
+- Kit dialog wrappers, Base hosts and focus traps use their retained focus
+  identity for render keys. Visual stack offsets and draw priorities still use
+  the current layer position, so closing a lower layer preserves keyed controls
+  in the surviving dialogs.
+- Deferred focus returns require their current cancellation token and the
+  surviving target dialog. Opening another dialog consumes that return, and
+  removing the target cancels it. An older timer cannot focus a removed layer
+  or clear a newer pending return. Valid legacy returns keep their existing delay.
+- `WindowExt::observe_modal_state` reports subsequent covered/uncovered
+  transitions from the actual window's dialog and sheet state. It sends no
+  initial callback, ignores unchanged coverage and toast notifications, and
+  rejects notifications from a replaced root. The returned `Subscription` owns
+  observation; dropping it stops callbacks. Close/open changes in one update
+  deliver only the resulting authoritative coverage.
 
 ## Decisions
+
+### Why targeted dialog handles belong to the window root
+
+Native folder-trust admission can finish or reset under a newer modal. Its
+handle pairs the owning root with the opening's retained focus identity, so
+completion removes its own layer and cannot close another modal. Base's
+`DialogHandle` controls open state without identifying a registered Kit layer.
+The native admission tests exercise this contract through real Kit windows.
+
+### Why modal coverage is observed on the root
+
+Admission navigation must wait until every dialog and sheet releases interaction.
+Observing the owning `WindowState` gives that continuation an authoritative
+uncovered transition without polling or exposing the private modal stack.
 
 ### Why an opt-in confirmation option
 

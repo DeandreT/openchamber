@@ -105,6 +105,9 @@ pub struct SelectionDefaults {
     pub opencode_default_model: Option<String>,
     /// The last composer model identifier.
     pub last_selected_model: Option<String>,
+    /// Profile-level effort choices keyed by `provider/model`. A present `None`
+    /// is explicit Default; a missing key supplies no choice.
+    pub last_used_efforts: HashMap<String, Option<String>>,
     /// Provider and model identifier pairs hidden in the picker.
     pub hidden_models: Vec<(String, String)>,
     /// False until settings load: stops before the agent's and OpenCode's models.
@@ -269,6 +272,49 @@ fn validate_variant(
     choice
 }
 
+fn remembered_variant(
+    choice: &ModelChoice,
+    model: &CatalogModel,
+    defaults: &SelectionDefaults,
+) -> Option<Option<String>> {
+    if model.variants.is_empty() {
+        return None;
+    }
+    defaults
+        .last_used_efforts
+        .get(&format!("{}/{}", choice.provider_id, choice.model_id))
+        .filter(|variant| {
+            variant
+                .as_ref()
+                .is_none_or(|variant| model.variants.contains(variant))
+        })
+        .cloned()
+}
+
+fn inherit_default_variant(
+    mut choice: ModelChoice,
+    agent: Option<&AgentEntry>,
+    providers: &[CatalogProvider],
+    defaults: &SelectionDefaults,
+) -> ModelChoice {
+    if choice.variant.is_some() {
+        return choice;
+    }
+    let Some(model) = find_model(providers, &choice) else {
+        return choice;
+    };
+    choice.variant = agent
+        .and_then(|agent| agent.model.as_ref())
+        .filter(|pinned| {
+            pinned.provider_id == choice.provider_id && pinned.model_id == choice.model_id
+        })
+        .and_then(|pinned| pinned.variant.as_ref())
+        .filter(|variant| model.variants.contains(variant))
+        .cloned()
+        .or_else(|| remembered_variant(&choice, model, defaults).flatten());
+    choice
+}
+
 fn hidden(defaults: &SelectionDefaults, provider: &str, model: &str) -> bool {
     defaults
         .hidden_models
@@ -361,7 +407,8 @@ pub fn resolve_default_selection(
             } else {
                 defaults.settings_default_variant.clone()
             };
-            validate_variant(choice, providers, defaults.auto_routing)
+            let choice = validate_variant(choice, providers, defaults.auto_routing);
+            inherit_default_variant(choice, agent, providers, defaults)
         });
     if model.is_some() || !defaults.allow_fallback {
         return Selection {
@@ -377,7 +424,8 @@ pub fn resolve_default_selection(
         .filter(|choice| !choice.provider_id.is_empty() && !choice.model_id.is_empty())
         .or_else(|| nonempty(&defaults.opencode_default_model).and_then(parse_selection))
         .map(|choice| validate_variant(choice, providers, defaults.auto_routing))
-        .or_else(|| fallback_model(providers, defaults));
+        .or_else(|| fallback_model(providers, defaults))
+        .map(|choice| inherit_default_variant(choice, agent, providers, defaults));
     Selection {
         agent_name: agent.map(|agent| agent.name.clone()),
         model,
@@ -399,9 +447,10 @@ pub struct SessionRecordChoice<'a> {
 /// model the catalog lacks leaves the default selection. Its effort is the
 /// record's when the model offers it, else the effort an existing session
 /// inherits (`resolveInheritedVariantForModel`): the agent's pinned effort for
-/// that model, the configured default for that model, then the default
-/// selection's effort when it names the same model. The record's agent
-/// replaces the default one when the agents include it.
+/// that model, the configured default for that model, its remembered effort,
+/// then the default selection's effort when it names the same model. A remembered
+/// explicit Default stops inheritance. The record's agent replaces the default
+/// one when the agents include it.
 #[must_use]
 pub fn resolve_session_selection(
     default: &Selection,
@@ -415,18 +464,16 @@ pub fn resolve_session_selection(
         .filter(|name| agents.iter().any(|agent| agent.name == *name))
         .map(str::to_owned)
         .or_else(|| default.agent_name.clone());
-    let Some(recorded) = record
+    let Some((recorded, model)) = record
         .model
-        .filter(|choice| find_model(providers, choice).is_some())
+        .and_then(|choice| find_model(providers, choice).map(|model| (choice, model)))
     else {
         return Selection {
             agent_name,
             model: default.model.clone(),
         };
     };
-    let offered: &[String] = find_model(providers, recorded)
-        .map(|model| model.variants.as_slice())
-        .unwrap_or_default();
+    let offered = &model.variants;
     let same_model = |choice: &ModelChoice| {
         choice.provider_id == recorded.provider_id && choice.model_id == recorded.model_id
     };
@@ -458,15 +505,13 @@ pub fn resolve_session_selection(
         .as_ref()
         .filter(|choice| same_model(choice))
         .and_then(|choice| choice.variant.clone());
-    let variant = [
-        recorded.variant.clone(),
-        agent_variant,
-        configured_variant,
-        inherited_variant,
-    ]
-    .into_iter()
-    .flatten()
-    .find(|variant| offered.contains(variant));
+    let variant = [recorded.variant.clone(), agent_variant, configured_variant]
+        .into_iter()
+        .flatten()
+        .find(|variant| offered.contains(variant))
+        .map(Some)
+        .or_else(|| remembered_variant(recorded, model, defaults))
+        .unwrap_or_else(|| inherited_variant.filter(|variant| offered.contains(variant)));
     Selection {
         agent_name,
         model: Some(ModelChoice {
@@ -946,6 +991,237 @@ mod tests {
         Selection {
             agent_name: Some("build".to_owned()),
             model: Some(choice("perf", "stream", Some("high"))),
+        }
+    }
+
+    #[test]
+    fn default_effort_sources_follow_upstream_precedence() {
+        let cases = [
+            (Some("low"), Some("high"), Some(Some("high")), Some("low")),
+            (None, Some("high"), Some(Some("low")), Some("high")),
+            (
+                Some("retired"),
+                Some("high"),
+                Some(Some("low")),
+                Some("high"),
+            ),
+            (None, Some("retired"), Some(Some("low")), Some("low")),
+            (None, None, Some(Some("low")), Some("low")),
+            (None, None, Some(None), None),
+            (None, None, Some(Some("retired")), None),
+            (None, None, None, None),
+        ];
+        for (configured, pinned, remembered, expected) in cases {
+            let agents = [agent("build", Some(choice("perf", "stream", pinned)))];
+            let mut defaults = SelectionDefaults {
+                settings_default_model: Some("perf/stream".to_owned()),
+                settings_default_variant: configured.map(str::to_owned),
+                allow_fallback: true,
+                ..SelectionDefaults::default()
+            };
+            if let Some(remembered) = remembered {
+                defaults
+                    .last_used_efforts
+                    .insert("perf/stream".to_owned(), remembered.map(str::to_owned));
+            }
+            assert_eq!(
+                resolve_default_selection(&agents, &catalog(), &defaults).model,
+                Some(choice("perf", "stream", expected)),
+                "configured {configured:?}, pinned {pinned:?}, remembered {remembered:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_default_model_source_uses_remembered_effort() {
+        let cases = [
+            (
+                "project",
+                SelectionDefaults {
+                    project_default_model: Some("perf/stream".to_owned()),
+                    ..SelectionDefaults::default()
+                },
+                None,
+            ),
+            (
+                "settings",
+                SelectionDefaults {
+                    settings_default_model: Some("perf/stream".to_owned()),
+                    ..SelectionDefaults::default()
+                },
+                None,
+            ),
+            (
+                "agent",
+                SelectionDefaults::default(),
+                Some(choice("perf", "stream", None)),
+            ),
+            (
+                "OpenCode",
+                SelectionDefaults {
+                    opencode_default_model: Some("perf/stream#retired".to_owned()),
+                    ..SelectionDefaults::default()
+                },
+                None,
+            ),
+            (
+                "last selected",
+                SelectionDefaults {
+                    last_selected_model: Some("perf/stream".to_owned()),
+                    ..SelectionDefaults::default()
+                },
+                None,
+            ),
+            ("automatic", SelectionDefaults::default(), None),
+        ];
+        for (source, mut defaults, pin) in cases {
+            defaults.allow_fallback = true;
+            defaults
+                .last_used_efforts
+                .insert("perf/stream".to_owned(), Some("low".to_owned()));
+            assert_eq!(
+                resolve_default_selection(&[agent("build", pin)], &catalog(), &defaults).model,
+                Some(choice("perf", "stream", Some("low"))),
+                "the {source} model source must use the model's remembered effort"
+            );
+        }
+    }
+
+    #[test]
+    fn default_effort_inheritance_requires_matching_model_identity_and_catalog() {
+        let agents = [agent(
+            "build",
+            Some(choice("perf", "unicode", Some("high"))),
+        )];
+        for (identifier, configured, expected) in [
+            ("perf/stream", None, Some("low")),
+            ("perf/plain", None, None),
+            ("late/stream", None, None),
+            ("late/stream", Some("high"), Some("high")),
+        ] {
+            let defaults = SelectionDefaults {
+                settings_default_model: Some(identifier.to_owned()),
+                settings_default_variant: configured.map(str::to_owned),
+                last_used_efforts: HashMap::from([
+                    ("perf/stream".to_owned(), Some("low".to_owned())),
+                    ("perf/plain".to_owned(), Some("high".to_owned())),
+                    ("late/stream".to_owned(), Some("low".to_owned())),
+                ]),
+                ..SelectionDefaults::default()
+            };
+            let selected = resolve_default_selection(&agents, &catalog(), &defaults)
+                .model
+                .expect("the configured identifier survives catalog gaps");
+            assert_eq!(
+                selected.variant.as_deref(),
+                expected,
+                "model {identifier} with configured effort {configured:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn remembered_default_stops_session_effort_inheritance() {
+        let recorded = choice("perf", "stream", None);
+        for (remembered, expected) in [
+            (None, Some("high")),
+            (Some(None), None),
+            (Some(Some("low")), Some("low")),
+            (Some(Some("retired")), Some("high")),
+        ] {
+            let mut defaults = SelectionDefaults::default();
+            if let Some(remembered) = remembered {
+                defaults
+                    .last_used_efforts
+                    .insert("perf/stream".to_owned(), remembered.map(str::to_owned));
+            }
+            let selected = resolve_session_selection(
+                &default_selection(),
+                SessionRecordChoice {
+                    model: Some(&recorded),
+                    agent: None,
+                },
+                &[agent("build", None)],
+                &catalog(),
+                &defaults,
+            );
+            assert_eq!(
+                selected.model,
+                Some(choice("perf", "stream", expected)),
+                "remembered choice {remembered:?} must retain Default versus absence"
+            );
+        }
+    }
+
+    #[test]
+    fn a_supported_named_default_effort_stays_distinct_from_explicit_default() {
+        let mut providers = catalog();
+        providers[0].models[0].variants.push("default".to_owned());
+        for remembered in [Some("default"), None] {
+            let defaults = SelectionDefaults {
+                settings_default_model: Some("perf/stream".to_owned()),
+                last_used_efforts: HashMap::from([(
+                    "perf/stream".to_owned(),
+                    remembered.map(str::to_owned),
+                )]),
+                ..SelectionDefaults::default()
+            };
+            assert_eq!(
+                resolve_default_selection(&[agent("build", None)], &providers, &defaults).model,
+                Some(choice("perf", "stream", remembered)),
+                "an offered named variant must not be converted to explicit Default"
+            );
+        }
+    }
+
+    #[test]
+    fn default_efforts_reach_composer_send_snapshots() {
+        use crate::composer_selection::{ComposerSelections, SelectionContext, SelectionOwner};
+        use crate::draft::{DraftKey, DraftTarget};
+        use crate::ids::{DraftId, RuntimeId};
+
+        let owner = SelectionOwner {
+            draft: DraftKey::new(
+                RuntimeId::from("runtime"),
+                "/project",
+                DraftTarget::NewSession(DraftId::from("draft")),
+            )
+            .expect("the draft has an absolute directory"),
+            project: None,
+        };
+        let providers = catalog();
+        for (pinned, remembered, expected) in [
+            (Some("high"), Some("low"), Some("high")),
+            (None, Some("low"), Some("low")),
+            (None, None, None),
+        ] {
+            let agents = [agent("build", Some(choice("perf", "stream", pinned)))];
+            let defaults = SelectionDefaults {
+                settings_default_model: Some("perf/stream".to_owned()),
+                last_used_efforts: HashMap::from([(
+                    "perf/stream".to_owned(),
+                    remembered.map(str::to_owned),
+                )]),
+                ..SelectionDefaults::default()
+            };
+            let context = SelectionContext {
+                agents: &agents,
+                providers: &providers,
+                defaults: &defaults,
+                catalog_authoritative: true,
+            };
+            let mut selections = ComposerSelections::default();
+            selections.open(owner.clone(), &context);
+            selections.refresh_defaults(&owner, &context);
+            assert_eq!(
+                selections
+                    .get(&owner)
+                    .expect("the composer was opened")
+                    .selection()
+                    .model,
+                Some(choice("perf", "stream", expected)),
+                "composer snapshots must carry pinned {pinned:?} and remembered {remembered:?}"
+            );
         }
     }
 

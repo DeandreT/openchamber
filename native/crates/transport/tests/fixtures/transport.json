@@ -1,5 +1,5 @@
 {
-  "client": "@opencode/client@2.2.0",
+  "client": "@opencode/client@2.2.5",
   "baseUrl": "http://127.0.0.1:4799",
   "scopedDirectory": "/home/synthetic/my project/ünï",
   "requests": [
@@ -204,6 +204,36 @@
       "partShellsHeader": null,
       "contentType": null,
       "body": null
+    },
+    {
+      "name": "attachment temporary directory",
+      "method": "GET",
+      "path": "/api/info",
+      "query": [],
+      "directoryHeader": "%2Fhome%2Fsynthetic%2Fmy%20project%2F%C3%BCn%C3%AF",
+      "partShellsHeader": null,
+      "contentType": null,
+      "body": null
+    },
+    {
+      "name": "write attachment bytes",
+      "method": "POST",
+      "path": "/api/experimental/fs/write",
+      "query": [
+        [
+          "path",
+          "/tmp/opencode/openchamber/0123456789abcdef/diagram ü.png"
+        ]
+      ],
+      "directoryHeader": "%2Fhome%2Fsynthetic%2Fmy%20project%2F%C3%BCn%C3%AF",
+      "partShellsHeader": null,
+      "contentType": "application/octet-stream",
+      "body": null,
+      "bodyBytes": [
+        0,
+        255,
+        7
+      ]
     },
     {
       "name": "create root session",
@@ -1914,7 +1944,8 @@
             "type": "form.settled",
             "properties": {
               "sessionID": "ses_native_fixture",
-              "formID": "frm_native_fixture"
+              "formID": "frm_native_fixture",
+              "disposition": "replied"
             }
           }
         ]
@@ -1937,7 +1968,8 @@
             "type": "form.settled",
             "properties": {
               "sessionID": "global",
-              "formID": "frm_native_fixture"
+              "formID": "frm_native_fixture",
+              "disposition": "cancelled"
             }
           }
         ]

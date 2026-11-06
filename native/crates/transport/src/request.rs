@@ -32,6 +32,17 @@ impl RequestBuilder {
         self
     }
 
+    pub(crate) fn body(mut self, body: Vec<u8>) -> Self {
+        self.inner = self.inner.body(body);
+        self
+    }
+
+    /// Overrides the ordinary request deadline for a bounded streaming read.
+    pub(crate) fn timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.inner = self.inner.timeout(timeout);
+        self
+    }
+
     pub(crate) async fn send(self) -> reqwest::Result<Response> {
         let response = self.inner.send().await?;
         if response.status() == StatusCode::UNAUTHORIZED {

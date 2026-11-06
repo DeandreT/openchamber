@@ -24,7 +24,7 @@
       }
     },
     {
-      "name": "managed chat and unowned root fall back to Chats",
+      "name": "managed chat remains in Chats and unregistered roots await admission",
       "input": {
         "surface": "desktop",
         "sessions": [
@@ -76,10 +76,9 @@
             "owned"
           ]
         },
-        "directoryResolutions": 11,
+        "directoryResolutions": 1,
         "chatSessions": [
-          "managed",
-          "unowned"
+          "managed"
         ],
         "projectSessions": [
           "owned"
@@ -92,7 +91,7 @@
       }
     },
     {
-      "name": "fallback root keeps descendants across directories",
+      "name": "registered descendants retain scope while an unregistered root awaits admission",
       "input": {
         "surface": "desktop",
         "sessions": [
@@ -163,13 +162,8 @@
             "grandchild"
           ]
         },
-        "directoryResolutions": 7,
-        "chatSessions": [
-          "root",
-          "child-owned",
-          "child-unowned",
-          "grandchild"
-        ],
+        "directoryResolutions": 3,
+        "chatSessions": [],
         "projectSessions": [
           "child-owned",
           "grandchild"
@@ -241,13 +235,9 @@
         "sessionsByProject": {},
         "archivedSessionsByProject": {},
         "sessionsByScope": {},
-        "directoryResolutions": 3,
+        "directoryResolutions": 0,
         "chatSessions": [],
-        "projectSessions": [
-          "orphan",
-          "archived-child",
-          "btw-child"
-        ],
+        "projectSessions": [],
         "projectSessionsByProject": {}
       }
     },
@@ -283,13 +273,9 @@
         "sessionsByProject": {},
         "archivedSessionsByProject": {},
         "sessionsByScope": {},
-        "directoryResolutions": 3,
+        "directoryResolutions": 0,
         "chatSessions": [],
-        "projectSessions": [
-          "a",
-          "b",
-          "self"
-        ],
+        "projectSessions": [],
         "projectSessionsByProject": {}
       }
     },
@@ -355,10 +341,8 @@
             "in-worktree"
           ]
         },
-        "directoryResolutions": 5,
-        "chatSessions": [
-          "unknown-worktree"
-        ],
+        "directoryResolutions": 2,
+        "chatSessions": [],
         "projectSessions": [
           "in-worktree"
         ],
@@ -431,54 +415,14 @@
         "spaces": []
       },
       "expected": {
-        "owners": {
-          "bridged": {
-            "projectId": "app",
-            "projectRoot": "/projects/app",
-            "scopeDirectory": "/projects/app",
-            "kind": "project"
-          },
-          "session-metadata": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
-          }
-        },
-        "sessionsByProject": {
-          "app": [
-            "bridged"
-          ],
-          "lib": [
-            "session-metadata"
-          ]
-        },
+        "owners": {},
+        "sessionsByProject": {},
         "archivedSessionsByProject": {},
-        "sessionsByScope": {
-          "/projects/app": [
-            "bridged"
-          ],
-          "/projects/lib": [
-            "session-metadata"
-          ]
-        },
-        "directoryResolutions": 6,
-        "chatSessions": [
-          "global",
-          "unconfigured"
-        ],
-        "projectSessions": [
-          "bridged",
-          "session-metadata"
-        ],
-        "projectSessionsByProject": {
-          "app": [
-            "bridged"
-          ],
-          "lib": [
-            "session-metadata"
-          ]
-        }
+        "sessionsByScope": {},
+        "directoryResolutions": 0,
+        "chatSessions": [],
+        "projectSessions": [],
+        "projectSessionsByProject": {}
       }
     },
     {
@@ -521,10 +465,8 @@
         "sessionsByProject": {},
         "archivedSessionsByProject": {},
         "sessionsByScope": {},
-        "directoryResolutions": 3,
-        "chatSessions": [
-          "conflict"
-        ],
+        "directoryResolutions": 0,
+        "chatSessions": [],
         "projectSessions": [],
         "projectSessionsByProject": {}
       }
@@ -669,8 +611,8 @@
         "directoryResolutions": 4,
         "chatSessions": [],
         "projectSessions": [
-          "outer",
-          "inner"
+          "inner",
+          "outer"
         ],
         "projectSessionsByProject": {
           "mono": [
@@ -689,11 +631,11 @@
         "sessions": [
           {
             "id": "in-space",
-            "directory": "/spaces/one/app"
+            "directory": "/spaces/000000000001/app"
           },
           {
             "id": "lost-space",
-            "directory": "/spaces/two/app"
+            "directory": "/spaces/000000000002/app"
           }
         ],
         "archivedSessions": [],
@@ -711,13 +653,13 @@
         "authoritativeProjects": [],
         "spaces": [
           {
-            "id": "one",
-            "directory": "/spaces/one/app",
+            "id": "000000000001",
+            "directory": "/spaces/000000000001/app",
             "projectDirectory": "/projects/app"
           },
           {
-            "id": "two",
-            "directory": "/spaces/two/app",
+            "id": "000000000002",
+            "directory": "/spaces/000000000002/app",
             "projectDirectory": "/projects/gone"
           },
           {
@@ -732,9 +674,9 @@
           "in-space": {
             "projectId": "app",
             "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
+            "scopeDirectory": "/spaces/000000000001/app",
             "kind": "space",
-            "spaceId": "one"
+            "spaceId": "000000000001"
           }
         },
         "sessionsByProject": {
@@ -744,16 +686,15 @@
         },
         "archivedSessionsByProject": {},
         "sessionsByScope": {
-          "/spaces/one/app": [
+          "/spaces/000000000001/app": [
             "in-space"
           ]
         },
         "directoryResolutions": 5,
-        "chatSessions": [
-          "lost-space"
-        ],
+        "chatSessions": [],
         "projectSessions": [
-          "in-space"
+          "in-space",
+          "lost-space"
         ],
         "projectSessionsByProject": {
           "app": [
@@ -827,10 +768,8 @@
             "drive"
           ]
         },
-        "directoryResolutions": 5,
-        "chatSessions": [
-          "drive-root"
-        ],
+        "directoryResolutions": 4,
+        "chatSessions": [],
         "projectSessions": [
           "drive",
           "unc"
@@ -1051,12 +990,10 @@
             "exact"
           ]
         },
-        "directoryResolutions": 4,
+        "directoryResolutions": 1,
         "chatSessions": [],
         "projectSessions": [
-          "exact",
-          "nested",
-          "bridged"
+          "exact"
         ],
         "projectSessionsByProject": {
           "app": [
@@ -1134,8 +1071,8 @@
         "directoryResolutions": 2,
         "chatSessions": [],
         "projectSessions": [
-          "no-directory",
-          "blank-directory"
+          "blank-directory",
+          "no-directory"
         ],
         "projectSessionsByProject": {
           "app": [
@@ -1202,7 +1139,7 @@
           },
           {
             "id": "s0009",
-            "directory": "/spaces/one/app"
+            "directory": "/spaces/000000000001/app"
           },
           {
             "id": "s0010",
@@ -1357,7 +1294,7 @@
           },
           {
             "id": "s0033",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "parentID": "s0099"
           },
           {
@@ -1383,7 +1320,7 @@
           },
           {
             "id": "s0037",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "parentID": "s0201",
             "projectID": "global",
             "project": {
@@ -1431,7 +1368,7 @@
           },
           {
             "id": "s0043",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "parentID": "s0200",
             "projectID": "oc-lib",
             "project": {
@@ -1479,7 +1416,7 @@
           },
           {
             "id": "s0050",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "parentID": "s0137"
           },
           {
@@ -1490,7 +1427,7 @@
           },
           {
             "id": "s0052",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "projectID": "oc-lib"
           },
           {
@@ -1730,7 +1667,7 @@
           },
           {
             "id": "s0088",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "projectID": "global"
           },
           {
@@ -1982,7 +1919,7 @@
           },
           {
             "id": "s0126",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "btw": true
           },
           {
@@ -2151,7 +2088,7 @@
           },
           {
             "id": "s0155",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "parentID": "s0172",
             "projectID": "global",
             "project": {
@@ -2361,7 +2298,7 @@
           },
           {
             "id": "s0190",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "projectID": "global"
           },
           {
@@ -2489,13 +2426,13 @@
           },
           {
             "id": "s0210",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "parentID": "s0182",
             "archived": true
           },
           {
             "id": "s0211",
-            "directory": "/spaces/one/app"
+            "directory": "/spaces/000000000001/app"
           },
           {
             "id": "s0212",
@@ -2869,7 +2806,7 @@
           },
           {
             "id": "s0210",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "parentID": "s0182",
             "archived": true
           },
@@ -2915,20 +2852,14 @@
         ],
         "spaces": [
           {
-            "id": "space-1",
-            "directory": "/spaces/one/app",
+            "id": "000000000001",
+            "directory": "/spaces/000000000001/app",
             "projectDirectory": "/projects/app"
           }
         ]
       },
       "expected": {
         "owners": {
-          "s0000": {
-            "projectId": "app",
-            "projectRoot": "/projects/app",
-            "scopeDirectory": "/worktrees/app-feature",
-            "kind": "worktree"
-          },
           "s0002": {
             "projectId": "win",
             "projectRoot": "C:/work/app",
@@ -2941,12 +2872,6 @@
             "scopeDirectory": "C:/work/app",
             "kind": "project"
           },
-          "s0007": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
-          },
           "s0008": {
             "projectId": "win",
             "projectRoot": "C:/work/app",
@@ -2956,9 +2881,9 @@
           "s0009": {
             "projectId": "app",
             "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
+            "scopeDirectory": "/spaces/000000000001/app",
             "kind": "space",
-            "spaceId": "space-1"
+            "spaceId": "000000000001"
           },
           "s0011": {
             "projectId": "app",
@@ -2990,12 +2915,6 @@
             "scopeDirectory": "/worktrees/app-feature",
             "kind": "worktree"
           },
-          "s0018": {
-            "projectId": "app",
-            "projectRoot": "/projects/app",
-            "scopeDirectory": "/worktrees/app-feature",
-            "kind": "worktree"
-          },
           "s0020": {
             "projectId": "app",
             "projectRoot": "/projects/app",
@@ -3007,18 +2926,6 @@
             "projectRoot": "/projects/app",
             "scopeDirectory": "/worktrees/app-feature",
             "kind": "worktree"
-          },
-          "s0023": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
-          },
-          "s0024": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
           },
           "s0025": {
             "projectId": "win",
@@ -3044,36 +2951,18 @@
             "scopeDirectory": "/projects/lib",
             "kind": "project"
           },
-          "s0030": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
-          },
           "s0031": {
             "projectId": "app",
             "projectRoot": "/projects/app",
             "scopeDirectory": "/worktrees/app-feature",
             "kind": "worktree"
           },
-          "s0032": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
-          },
           "s0033": {
             "projectId": "app",
             "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
+            "scopeDirectory": "/spaces/000000000001/app",
             "kind": "space",
-            "spaceId": "space-1"
-          },
-          "s0034": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
+            "spaceId": "000000000001"
           },
           "s0035": {
             "projectId": "app",
@@ -3084,27 +2973,15 @@
           "s0037": {
             "projectId": "app",
             "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
+            "scopeDirectory": "/spaces/000000000001/app",
             "kind": "space",
-            "spaceId": "space-1"
+            "spaceId": "000000000001"
           },
           "s0038": {
             "projectId": "app",
             "projectRoot": "/projects/app",
             "scopeDirectory": "/worktrees/app-feature",
             "kind": "worktree"
-          },
-          "s0040": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
-          },
-          "s0041": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
           },
           "s0042": {
             "projectId": "win",
@@ -3115,9 +2992,9 @@
           "s0043": {
             "projectId": "app",
             "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
+            "scopeDirectory": "/spaces/000000000001/app",
             "kind": "space",
-            "spaceId": "space-1"
+            "spaceId": "000000000001"
           },
           "s0044": {
             "projectId": "app",
@@ -3158,9 +3035,9 @@
           "s0050": {
             "projectId": "app",
             "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
+            "scopeDirectory": "/spaces/000000000001/app",
             "kind": "space",
-            "spaceId": "space-1"
+            "spaceId": "000000000001"
           },
           "s0051": {
             "projectId": "app",
@@ -3171,15 +3048,9 @@
           "s0052": {
             "projectId": "app",
             "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
+            "scopeDirectory": "/spaces/000000000001/app",
             "kind": "space",
-            "spaceId": "space-1"
-          },
-          "s0053": {
-            "projectId": "win",
-            "projectRoot": "C:/work/app",
-            "scopeDirectory": "C:/work/app",
-            "kind": "project"
+            "spaceId": "000000000001"
           },
           "s0056": {
             "projectId": "app",
@@ -3205,12 +3076,6 @@
             "scopeDirectory": "C:/work/app",
             "kind": "project"
           },
-          "s0066": {
-            "projectId": "app",
-            "projectRoot": "/projects/app",
-            "scopeDirectory": "/projects/app",
-            "kind": "project"
-          },
           "s0067": {
             "projectId": "lib",
             "projectRoot": "/projects/lib",
@@ -3227,12 +3092,6 @@
             "projectId": "app",
             "projectRoot": "/projects/app",
             "scopeDirectory": "/projects/app",
-            "kind": "project"
-          },
-          "s0071": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
             "kind": "project"
           },
           "s0072": {
@@ -3277,18 +3136,6 @@
             "scopeDirectory": "/projects/app",
             "kind": "project"
           },
-          "s0082": {
-            "projectId": "app",
-            "projectRoot": "/projects/app",
-            "scopeDirectory": "/projects/app",
-            "kind": "project"
-          },
-          "s0084": {
-            "projectId": "win",
-            "projectRoot": "C:/work/app",
-            "scopeDirectory": "C:/work/app",
-            "kind": "project"
-          },
           "s0086": {
             "projectId": "win",
             "projectRoot": "C:/work/app",
@@ -3304,9 +3151,9 @@
           "s0088": {
             "projectId": "app",
             "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
+            "scopeDirectory": "/spaces/000000000001/app",
             "kind": "space",
-            "spaceId": "space-1"
+            "spaceId": "000000000001"
           },
           "s0089": {
             "projectId": "app",
@@ -3326,12 +3173,6 @@
             "scopeDirectory": "/worktrees/app-feature",
             "kind": "worktree"
           },
-          "s0094": {
-            "projectId": "win",
-            "projectRoot": "C:/work/app",
-            "scopeDirectory": "C:/work/app",
-            "kind": "project"
-          },
           "s0098": {
             "projectId": "app",
             "projectRoot": "/projects/app",
@@ -3350,22 +3191,10 @@
             "scopeDirectory": "/worktrees/app-feature",
             "kind": "worktree"
           },
-          "s0104": {
-            "projectId": "app",
-            "projectRoot": "/projects/app",
-            "scopeDirectory": "/projects/app",
-            "kind": "project"
-          },
           "s0105": {
             "projectId": "app",
             "projectRoot": "/projects/app",
             "scopeDirectory": "/projects/app",
-            "kind": "project"
-          },
-          "s0107": {
-            "projectId": "win",
-            "projectRoot": "C:/work/app",
-            "scopeDirectory": "C:/work/app",
             "kind": "project"
           },
           "s0108": {
@@ -3428,24 +3257,11 @@
             "scopeDirectory": "/projects/app",
             "kind": "project"
           },
-          "s0123": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
-          },
           "s0124": {
             "projectId": "app",
             "projectRoot": "/projects/app",
             "scopeDirectory": "/worktrees/app-feature",
             "kind": "worktree"
-          },
-          "s0126": {
-            "projectId": "app",
-            "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
-            "kind": "space",
-            "spaceId": "space-1"
           },
           "s0127": {
             "projectId": "lib",
@@ -3463,12 +3279,6 @@
             "projectId": "app",
             "projectRoot": "/projects/app",
             "scopeDirectory": "/projects/app",
-            "kind": "project"
-          },
-          "s0131": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
             "kind": "project"
           },
           "s0132": {
@@ -3501,12 +3311,6 @@
             "scopeDirectory": "C:/work/app",
             "kind": "project"
           },
-          "s0138": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
-          },
           "s0139": {
             "projectId": "app",
             "projectRoot": "/projects/app",
@@ -3535,12 +3339,6 @@
             "projectId": "win",
             "projectRoot": "C:/work/app",
             "scopeDirectory": "C:/work/app",
-            "kind": "project"
-          },
-          "s0145": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
             "kind": "project"
           },
           "s0146": {
@@ -3594,26 +3392,14 @@
           "s0155": {
             "projectId": "app",
             "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
+            "scopeDirectory": "/spaces/000000000001/app",
             "kind": "space",
-            "spaceId": "space-1"
+            "spaceId": "000000000001"
           },
           "s0156": {
             "projectId": "win",
             "projectRoot": "C:/work/app",
             "scopeDirectory": "C:/work/app",
-            "kind": "project"
-          },
-          "s0157": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
-          },
-          "s0158": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
             "kind": "project"
           },
           "s0159": {
@@ -3628,31 +3414,13 @@
             "scopeDirectory": "/projects/app",
             "kind": "project"
           },
-          "s0162": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
-          },
           "s0163": {
             "projectId": "app",
             "projectRoot": "/projects/app",
             "scopeDirectory": "/worktrees/app-feature",
             "kind": "worktree"
           },
-          "s0164": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
-          },
           "s0165": {
-            "projectId": "app",
-            "projectRoot": "/projects/app",
-            "scopeDirectory": "/worktrees/app-feature",
-            "kind": "worktree"
-          },
-          "s0167": {
             "projectId": "app",
             "projectRoot": "/projects/app",
             "scopeDirectory": "/worktrees/app-feature",
@@ -3712,12 +3480,6 @@
             "scopeDirectory": "/projects/lib",
             "kind": "project"
           },
-          "s0182": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
-          },
           "s0183": {
             "projectId": "win",
             "projectRoot": "C:/work/app",
@@ -3736,12 +3498,6 @@
             "scopeDirectory": "/worktrees/app-feature",
             "kind": "worktree"
           },
-          "s0187": {
-            "projectId": "win",
-            "projectRoot": "C:/work/app",
-            "scopeDirectory": "C:/work/app",
-            "kind": "project"
-          },
           "s0188": {
             "projectId": "lib",
             "projectRoot": "/projects/lib",
@@ -3751,9 +3507,9 @@
           "s0190": {
             "projectId": "app",
             "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
+            "scopeDirectory": "/spaces/000000000001/app",
             "kind": "space",
-            "spaceId": "space-1"
+            "spaceId": "000000000001"
           },
           "s0191": {
             "projectId": "app",
@@ -3772,12 +3528,6 @@
             "projectRoot": "/projects/app",
             "scopeDirectory": "/worktrees/app-feature",
             "kind": "worktree"
-          },
-          "s0194": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
           },
           "s0195": {
             "projectId": "win",
@@ -3851,19 +3601,12 @@
             "scopeDirectory": "/projects/lib",
             "kind": "project"
           },
-          "s0210": {
-            "projectId": "app",
-            "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
-            "kind": "space",
-            "spaceId": "space-1"
-          },
           "s0211": {
             "projectId": "app",
             "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
+            "scopeDirectory": "/spaces/000000000001/app",
             "kind": "space",
-            "spaceId": "space-1"
+            "spaceId": "000000000001"
           },
           "s0212": {
             "projectId": "win",
@@ -3872,12 +3615,6 @@
             "kind": "project"
           },
           "s0213": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
-          },
-          "s0214": {
             "projectId": "lib",
             "projectRoot": "/projects/lib",
             "scopeDirectory": "/projects/lib",
@@ -3912,12 +3649,6 @@
             "projectRoot": "C:/work/app",
             "scopeDirectory": "C:/work/app",
             "kind": "project"
-          },
-          "s0220": {
-            "projectId": "app",
-            "projectRoot": "/projects/app",
-            "scopeDirectory": "/worktrees/app-feature",
-            "kind": "worktree"
           },
           "s0221": {
             "projectId": "app",
@@ -3955,23 +3686,11 @@
             "scopeDirectory": "C:/work/app",
             "kind": "project"
           },
-          "s0232": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
-          },
           "s0233": {
             "projectId": "win",
             "projectRoot": "C:/work/app",
             "scopeDirectory": "C:/work/app",
             "kind": "project"
-          },
-          "s0234": {
-            "projectId": "app",
-            "projectRoot": "/projects/app",
-            "scopeDirectory": "/worktrees/app-feature",
-            "kind": "worktree"
           },
           "s0236": {
             "projectId": "app",
@@ -3984,68 +3703,47 @@
             "projectRoot": "C:/work/app",
             "scopeDirectory": "C:/work/app",
             "kind": "project"
-          },
-          "s0238": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
           }
         },
         "sessionsByProject": {
           "app": [
-            "s0000",
             "s0009",
             "s0011",
-            "s0012",
             "s0015",
             "s0017",
-            "s0018",
             "s0020",
-            "s0022",
             "s0031",
             "s0033",
-            "s0035",
+            "s0130",
             "s0037",
-            "s0038",
-            "s0043",
             "s0044",
+            "s0113",
             "s0049",
-            "s0050",
-            "s0051",
+            "s0012",
             "s0052",
             "s0056",
             "s0059",
-            "s0066",
+            "s0193",
             "s0068",
-            "s0070",
-            "s0075",
+            "s0022",
             "s0080",
             "s0081",
-            "s0082",
             "s0087",
             "s0088",
-            "s0089",
             "s0090",
-            "s0091",
             "s0098",
+            "s0191",
             "s0103",
-            "s0104",
             "s0105",
             "s0110",
-            "s0113",
             "s0122",
+            "s0179",
             "s0124",
-            "s0126",
-            "s0130",
             "s0132",
-            "s0134",
             "s0135",
-            "s0139",
             "s0140",
             "s0143",
             "s0146",
-            "s0148",
             "s0149",
             "s0150",
             "s0151",
@@ -4054,75 +3752,49 @@
             "s0160",
             "s0163",
             "s0165",
-            "s0167",
+            "s0148",
+            "s0091",
             "s0169",
             "s0170",
-            "s0174",
-            "s0179",
             "s0185",
             "s0190",
-            "s0191",
+            "s0205",
             "s0192",
-            "s0193",
             "s0198",
             "s0200",
-            "s0201",
+            "s0043",
             "s0203",
-            "s0205",
             "s0207",
-            "s0210",
+            "s0038",
             "s0211",
+            "s0050",
             "s0217",
-            "s0220",
             "s0221",
+            "s0134",
             "s0225",
             "s0228",
-            "s0234",
-            "s0236"
+            "s0236",
+            "s0070",
+            "s0075"
           ],
           "lib": [
-            "s0007",
-            "s0023",
-            "s0024",
             "s0028",
             "s0029",
-            "s0030",
-            "s0032",
-            "s0034",
-            "s0040",
-            "s0041",
             "s0045",
             "s0046",
-            "s0067",
-            "s0071",
-            "s0074",
-            "s0079",
-            "s0114",
-            "s0123",
-            "s0127",
-            "s0131",
-            "s0136",
-            "s0138",
-            "s0145",
-            "s0157",
-            "s0158",
-            "s0162",
-            "s0164",
-            "s0180",
-            "s0181",
-            "s0182",
             "s0184",
             "s0188",
-            "s0194",
+            "s0079",
+            "s0127",
+            "s0136",
+            "s0180",
             "s0206",
             "s0208",
-            "s0213",
-            "s0214",
             "s0215",
             "s0218",
+            "s0213",
             "s0229",
-            "s0232",
-            "s0238"
+            "s0067"
           ],
           "win": [
             "s0002",
@@ -4130,50 +3802,42 @@
             "s0008",
             "s0014",
             "s0025",
-            "s0027",
             "s0042",
             "s0047",
             "s0048",
-            "s0053",
-            "s0062",
             "s0064",
             "s0072",
-            "s0078",
-            "s0084",
             "s0086",
-            "s0094",
             "s0101",
-            "s0107",
             "s0108",
-            "s0109",
-            "s0117",
             "s0119",
             "s0120",
             "s0121",
             "s0129",
-            "s0137",
             "s0141",
-            "s0144",
+            "s0062",
             "s0147",
-            "s0152",
             "s0154",
             "s0156",
             "s0168",
             "s0173",
             "s0176",
             "s0183",
-            "s0187",
             "s0195",
             "s0196",
             "s0202",
             "s0204",
             "s0212",
+            "s0137",
+            "s0226",
             "s0216",
             "s0219",
-            "s0226",
+            "s0078",
+            "s0144",
             "s0231",
+            "s0109",
             "s0233",
-            "s0237"
+            "s0117"
           ]
         },
         "archivedSessionsByProject": {
@@ -4200,28 +3864,22 @@
           "/projects/app": [
             "s0015",
             "s0020",
-            "s0035",
             "s0044",
             "s0049",
             "s0059",
-            "s0066",
             "s0068",
             "s0070",
             "s0075",
             "s0080",
             "s0081",
-            "s0082",
             "s0087",
-            "s0089",
             "s0090",
             "s0098",
-            "s0104",
             "s0105",
             "s0113",
             "s0122",
             "s0130",
             "s0132",
-            "s0139",
             "s0143",
             "s0148",
             "s0151",
@@ -4236,50 +3894,25 @@
             "s0236"
           ],
           "/projects/lib": [
-            "s0007",
-            "s0023",
-            "s0024",
             "s0028",
             "s0029",
-            "s0030",
-            "s0032",
-            "s0034",
-            "s0040",
-            "s0041",
             "s0045",
             "s0046",
             "s0067",
-            "s0071",
-            "s0074",
             "s0079",
-            "s0114",
-            "s0123",
             "s0127",
-            "s0131",
             "s0136",
-            "s0138",
-            "s0145",
-            "s0157",
-            "s0158",
-            "s0162",
-            "s0164",
             "s0180",
-            "s0181",
-            "s0182",
             "s0184",
             "s0188",
-            "s0194",
             "s0206",
             "s0208",
             "s0213",
-            "s0214",
             "s0215",
             "s0218",
-            "s0229",
-            "s0232",
-            "s0238"
+            "s0229"
           ],
-          "/spaces/one/app": [
+          "/spaces/000000000001/app": [
             "s0009",
             "s0033",
             "s0037",
@@ -4287,22 +3920,17 @@
             "s0050",
             "s0052",
             "s0088",
-            "s0126",
             "s0155",
             "s0190",
-            "s0210",
             "s0211"
           ],
           "/worktrees/app-feature": [
-            "s0000",
             "s0011",
             "s0012",
             "s0017",
-            "s0018",
             "s0022",
             "s0031",
             "s0038",
-            "s0051",
             "s0056",
             "s0091",
             "s0103",
@@ -4316,21 +3944,16 @@
             "s0150",
             "s0163",
             "s0165",
-            "s0167",
-            "s0174",
             "s0179",
             "s0185",
             "s0191",
             "s0192",
             "s0193",
             "s0200",
-            "s0201",
             "s0203",
             "s0217",
-            "s0220",
             "s0225",
-            "s0228",
-            "s0234"
+            "s0228"
           ],
           "C:/work/app": [
             "s0002",
@@ -4338,20 +3961,15 @@
             "s0008",
             "s0014",
             "s0025",
-            "s0027",
             "s0042",
             "s0047",
             "s0048",
-            "s0053",
             "s0062",
             "s0064",
             "s0072",
             "s0078",
-            "s0084",
             "s0086",
-            "s0094",
             "s0101",
-            "s0107",
             "s0108",
             "s0109",
             "s0117",
@@ -4363,14 +3981,12 @@
             "s0141",
             "s0144",
             "s0147",
-            "s0152",
             "s0154",
             "s0156",
             "s0168",
             "s0173",
             "s0176",
             "s0183",
-            "s0187",
             "s0195",
             "s0196",
             "s0202",
@@ -4380,105 +3996,74 @@
             "s0219",
             "s0226",
             "s0231",
-            "s0233",
-            "s0237"
+            "s0233"
           ]
         },
-        "directoryResolutions": 20,
+        "directoryResolutions": 18,
         "chatSessions": [
-          "s0004",
-          "s0019",
-          "s0026",
+          "s0006",
+          "s0194",
           "s0032",
-          "s0033",
           "s0034",
+          "s0111",
           "s0039",
           "s0040",
-          "s0055",
           "s0057",
           "s0061",
-          "s0062",
-          "s0067",
-          "s0071",
-          "s0073",
-          "s0083",
-          "s0085",
+          "s0063",
+          "s0069",
+          "s0093",
+          "s0230",
+          "s0092",
           "s0095",
           "s0096",
           "s0097",
-          "s0099",
-          "s0109",
-          "s0111",
-          "s0112",
+          "s0118",
           "s0115",
-          "s0116",
-          "s0121",
-          "s0125",
-          "s0128",
-          "s0130",
           "s0145",
-          "s0153",
-          "s0161",
-          "s0166",
-          "s0177",
-          "s0182",
+          "s0224",
+          "s0178",
           "s0199",
-          "s0223",
           "s0227",
           "s0232",
-          "s0235",
-          "s0239"
+          "s0085"
         ],
         "projectSessions": [
-          "s0001",
           "s0002",
-          "s0003",
           "s0005",
           "s0008",
           "s0009",
-          "s0010",
           "s0011",
-          "s0012",
-          "s0013",
           "s0014",
           "s0015",
           "s0017",
           "s0020",
-          "s0021",
-          "s0022",
-          "s0024",
           "s0025",
           "s0028",
           "s0029",
-          "s0030",
           "s0031",
           "s0033",
+          "s0130",
           "s0037",
-          "s0038",
-          "s0041",
           "s0042",
-          "s0043",
           "s0044",
           "s0045",
           "s0046",
           "s0047",
+          "s0113",
           "s0048",
           "s0049",
-          "s0050",
+          "s0012",
+          "s0184",
           "s0052",
           "s0056",
           "s0059",
-          "s0060",
-          "s0062",
+          "s0188",
+          "s0193",
           "s0064",
-          "s0067",
           "s0068",
-          "s0070",
-          "s0071",
           "s0072",
-          "s0075",
-          "s0076",
-          "s0078",
+          "s0022",
           "s0079",
           "s0080",
           "s0081",
@@ -4486,155 +4071,131 @@
           "s0087",
           "s0088",
           "s0090",
-          "s0091",
           "s0098",
           "s0101",
+          "s0191",
           "s0103",
           "s0105",
-          "s0106",
           "s0108",
-          "s0109",
           "s0110",
-          "s0113",
-          "s0117",
           "s0119",
           "s0120",
           "s0121",
           "s0122",
+          "s0179",
           "s0124",
           "s0127",
           "s0129",
-          "s0130",
           "s0132",
-          "s0133",
-          "s0134",
           "s0135",
           "s0136",
-          "s0137",
-          "s0138",
           "s0140",
           "s0141",
           "s0143",
-          "s0144",
+          "s0062",
           "s0146",
           "s0147",
-          "s0148",
           "s0149",
           "s0150",
           "s0151",
           "s0154",
           "s0155",
           "s0156",
-          "s0157",
           "s0159",
           "s0160",
           "s0163",
-          "s0164",
           "s0165",
           "s0168",
+          "s0148",
+          "s0091",
           "s0169",
           "s0170",
-          "s0172",
           "s0173",
-          "s0175",
           "s0176",
-          "s0179",
           "s0180",
-          "s0182",
           "s0183",
-          "s0184",
           "s0185",
-          "s0186",
-          "s0188",
-          "s0189",
           "s0190",
-          "s0191",
+          "s0205",
           "s0192",
-          "s0193",
           "s0195",
           "s0196",
-          "s0197",
           "s0198",
           "s0200",
+          "s0043",
           "s0202",
           "s0203",
           "s0204",
-          "s0205",
           "s0206",
           "s0207",
           "s0208",
+          "s0038",
           "s0211",
           "s0212",
-          "s0213",
-          "s0214",
           "s0215",
-          "s0216",
+          "s0137",
+          "s0050",
+          "s0226",
           "s0217",
+          "s0216",
           "s0218",
           "s0219",
           "s0221",
+          "s0078",
+          "s0134",
+          "s0144",
+          "s0213",
           "s0225",
-          "s0226",
           "s0228",
           "s0229",
           "s0231",
+          "s0067",
+          "s0109",
           "s0233",
-          "s0236"
+          "s0236",
+          "s0070",
+          "s0075",
+          "s0117"
         ],
         "projectSessionsByProject": {
           "app": [
-            "s0000",
             "s0009",
             "s0011",
-            "s0012",
             "s0015",
             "s0017",
-            "s0018",
             "s0020",
-            "s0022",
             "s0031",
             "s0033",
-            "s0035",
+            "s0130",
             "s0037",
-            "s0038",
-            "s0043",
             "s0044",
+            "s0113",
             "s0049",
-            "s0050",
-            "s0051",
+            "s0012",
             "s0052",
             "s0056",
             "s0059",
-            "s0066",
+            "s0193",
             "s0068",
-            "s0070",
-            "s0075",
+            "s0022",
             "s0080",
             "s0081",
-            "s0082",
             "s0087",
             "s0088",
-            "s0089",
             "s0090",
-            "s0091",
             "s0098",
+            "s0191",
             "s0103",
-            "s0104",
             "s0105",
             "s0110",
-            "s0113",
             "s0122",
+            "s0179",
             "s0124",
-            "s0126",
-            "s0130",
             "s0132",
-            "s0134",
             "s0135",
-            "s0139",
             "s0140",
             "s0143",
             "s0146",
-            "s0148",
             "s0149",
             "s0150",
             "s0151",
@@ -4643,70 +4204,49 @@
             "s0160",
             "s0163",
             "s0165",
-            "s0167",
+            "s0148",
+            "s0091",
             "s0169",
             "s0170",
-            "s0174",
-            "s0179",
             "s0185",
             "s0190",
-            "s0191",
+            "s0205",
             "s0192",
-            "s0193",
             "s0198",
             "s0200",
-            "s0201",
+            "s0043",
             "s0203",
-            "s0205",
             "s0207",
-            "s0210",
+            "s0038",
             "s0211",
+            "s0050",
             "s0217",
-            "s0220",
             "s0221",
+            "s0134",
             "s0225",
             "s0228",
-            "s0234",
-            "s0236"
+            "s0236",
+            "s0070",
+            "s0075"
           ],
           "lib": [
-            "s0007",
-            "s0023",
-            "s0024",
             "s0028",
             "s0029",
-            "s0030",
-            "s0041",
             "s0045",
             "s0046",
-            "s0067",
-            "s0071",
-            "s0074",
-            "s0079",
-            "s0114",
-            "s0123",
-            "s0127",
-            "s0131",
-            "s0136",
-            "s0138",
-            "s0157",
-            "s0158",
-            "s0162",
-            "s0164",
-            "s0180",
-            "s0181",
-            "s0182",
             "s0184",
             "s0188",
-            "s0194",
+            "s0079",
+            "s0127",
+            "s0136",
+            "s0180",
             "s0206",
             "s0208",
-            "s0213",
-            "s0214",
             "s0215",
             "s0218",
+            "s0213",
             "s0229",
-            "s0238"
+            "s0067"
           ],
           "win": [
             "s0002",
@@ -4714,50 +4254,42 @@
             "s0008",
             "s0014",
             "s0025",
-            "s0027",
             "s0042",
             "s0047",
             "s0048",
-            "s0053",
-            "s0062",
             "s0064",
             "s0072",
-            "s0078",
-            "s0084",
             "s0086",
-            "s0094",
             "s0101",
-            "s0107",
             "s0108",
-            "s0109",
-            "s0117",
             "s0119",
             "s0120",
             "s0121",
             "s0129",
-            "s0137",
             "s0141",
-            "s0144",
+            "s0062",
             "s0147",
-            "s0152",
             "s0154",
             "s0156",
             "s0168",
             "s0173",
             "s0176",
             "s0183",
-            "s0187",
             "s0195",
             "s0196",
             "s0202",
             "s0204",
             "s0212",
+            "s0137",
+            "s0226",
             "s0216",
             "s0219",
-            "s0226",
+            "s0078",
+            "s0144",
             "s0231",
+            "s0109",
             "s0233",
-            "s0237"
+            "s0117"
           ]
         }
       }
@@ -4808,7 +4340,7 @@
           },
           {
             "id": "s0005",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "projectID": "oc-lib"
           },
           {
@@ -4939,7 +4471,7 @@
           },
           {
             "id": "s0028",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "projectID": "oc-lib",
             "project": {
               "id": "oc-app",
@@ -5089,7 +4621,7 @@
           },
           {
             "id": "s0053",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "parentID": "missing-53",
             "projectID": "oc-app"
           },
@@ -5301,7 +4833,7 @@
           },
           {
             "id": "s0085",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "project": {
               "id": "oc-unknown",
               "worktree": "/projects/lib"
@@ -5377,7 +4909,7 @@
           },
           {
             "id": "s0095",
-            "directory": "/spaces/one/app"
+            "directory": "/spaces/000000000001/app"
           },
           {
             "id": "s0096",
@@ -5492,7 +5024,7 @@
           },
           {
             "id": "s0113",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "parentID": "s0082",
             "projectID": "oc-unknown",
             "archived": true
@@ -5655,7 +5187,7 @@
           },
           {
             "id": "s0139",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "projectID": "oc-lib"
           },
           {
@@ -5683,7 +5215,7 @@
           },
           {
             "id": "s0143",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "projectID": "oc-unknown"
           },
           {
@@ -5702,13 +5234,13 @@
           },
           {
             "id": "s0146",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "projectID": "oc-app",
             "archived": true
           },
           {
             "id": "s0147",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "parentID": "s0013",
             "projectID": "oc-lib"
           },
@@ -5732,7 +5264,7 @@
           },
           {
             "id": "s0150",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "parentID": "s0060",
             "projectID": "oc-lib",
             "project": {
@@ -5999,7 +5531,7 @@
           },
           {
             "id": "s0189",
-            "directory": "/spaces/one/app"
+            "directory": "/spaces/000000000001/app"
           },
           {
             "id": "s0190",
@@ -6022,7 +5554,7 @@
           },
           {
             "id": "s0193",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "parentID": "s0201",
             "project": {
               "id": "oc-app",
@@ -6412,7 +5944,7 @@
           },
           {
             "id": "s0113",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "parentID": "s0082",
             "projectID": "oc-unknown",
             "archived": true
@@ -6458,13 +5990,13 @@
           },
           {
             "id": "s0146",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "projectID": "oc-app",
             "archived": true
           },
           {
             "id": "s0150",
-            "directory": "/spaces/one/app",
+            "directory": "/spaces/000000000001/app",
             "parentID": "s0060",
             "projectID": "oc-lib",
             "project": {
@@ -6621,8 +6153,8 @@
         ],
         "spaces": [
           {
-            "id": "space-1",
-            "directory": "/spaces/one/app",
+            "id": "000000000001",
+            "directory": "/spaces/000000000001/app",
             "projectDirectory": "/projects/app"
           }
         ]
@@ -6641,12 +6173,6 @@
             "scopeDirectory": "C:/work/app",
             "kind": "project"
           },
-          "s0002": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
-          },
           "s0004": {
             "projectId": "lib",
             "projectRoot": "/projects/lib",
@@ -6656,9 +6182,9 @@
           "s0005": {
             "projectId": "app",
             "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
+            "scopeDirectory": "/spaces/000000000001/app",
             "kind": "space",
-            "spaceId": "space-1"
+            "spaceId": "000000000001"
           },
           "s0008": {
             "projectId": "app",
@@ -6732,12 +6258,6 @@
             "scopeDirectory": "/projects/app",
             "kind": "project"
           },
-          "s0026": {
-            "projectId": "win",
-            "projectRoot": "C:/work/app",
-            "scopeDirectory": "C:/work/app",
-            "kind": "project"
-          },
           "s0027": {
             "projectId": "win",
             "projectRoot": "C:/work/app",
@@ -6747,9 +6267,9 @@
           "s0028": {
             "projectId": "app",
             "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
+            "scopeDirectory": "/spaces/000000000001/app",
             "kind": "space",
-            "spaceId": "space-1"
+            "spaceId": "000000000001"
           },
           "s0030": {
             "projectId": "app",
@@ -6832,9 +6352,9 @@
           "s0053": {
             "projectId": "app",
             "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
+            "scopeDirectory": "/spaces/000000000001/app",
             "kind": "space",
-            "spaceId": "space-1"
+            "spaceId": "000000000001"
           },
           "s0055": {
             "projectId": "lib",
@@ -6843,12 +6363,6 @@
             "kind": "project"
           },
           "s0056": {
-            "projectId": "app",
-            "projectRoot": "/projects/app",
-            "scopeDirectory": "/projects/app",
-            "kind": "project"
-          },
-          "s0057": {
             "projectId": "app",
             "projectRoot": "/projects/app",
             "scopeDirectory": "/projects/app",
@@ -6901,18 +6415,6 @@
             "projectRoot": "/projects/app",
             "scopeDirectory": "/worktrees/app-feature",
             "kind": "worktree"
-          },
-          "s0070": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
-          },
-          "s0071": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
           },
           "s0073": {
             "projectId": "win",
@@ -6983,9 +6485,9 @@
           "s0085": {
             "projectId": "app",
             "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
+            "scopeDirectory": "/spaces/000000000001/app",
             "kind": "space",
-            "spaceId": "space-1"
+            "spaceId": "000000000001"
           },
           "s0086": {
             "projectId": "win",
@@ -7011,12 +6513,6 @@
             "scopeDirectory": "/projects/lib",
             "kind": "project"
           },
-          "s0093": {
-            "projectId": "win",
-            "projectRoot": "C:/work/app",
-            "scopeDirectory": "C:/work/app",
-            "kind": "project"
-          },
           "s0094": {
             "projectId": "app",
             "projectRoot": "/projects/app",
@@ -7026,27 +6522,15 @@
           "s0095": {
             "projectId": "app",
             "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
+            "scopeDirectory": "/spaces/000000000001/app",
             "kind": "space",
-            "spaceId": "space-1"
-          },
-          "s0097": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
+            "spaceId": "000000000001"
           },
           "s0098": {
             "projectId": "app",
             "projectRoot": "/projects/app",
             "scopeDirectory": "/worktrees/app-feature",
             "kind": "worktree"
-          },
-          "s0099": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
           },
           "s0100": {
             "projectId": "win",
@@ -7064,12 +6548,6 @@
             "projectId": "win",
             "projectRoot": "C:/work/app",
             "scopeDirectory": "C:/work/app",
-            "kind": "project"
-          },
-          "s0103": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
             "kind": "project"
           },
           "s0104": {
@@ -7107,13 +6585,6 @@
             "projectRoot": "/projects/app",
             "scopeDirectory": "/worktrees/app-feature",
             "kind": "worktree"
-          },
-          "s0113": {
-            "projectId": "app",
-            "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
-            "kind": "space",
-            "spaceId": "space-1"
           },
           "s0115": {
             "projectId": "win",
@@ -7187,12 +6658,6 @@
             "scopeDirectory": "C:/work/app",
             "kind": "project"
           },
-          "s0131": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
-          },
           "s0132": {
             "projectId": "win",
             "projectRoot": "C:/work/app",
@@ -7203,12 +6668,6 @@
             "projectId": "win",
             "projectRoot": "C:/work/app",
             "scopeDirectory": "C:/work/app",
-            "kind": "project"
-          },
-          "s0136": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
             "kind": "project"
           },
           "s0137": {
@@ -7226,9 +6685,9 @@
           "s0139": {
             "projectId": "app",
             "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
+            "scopeDirectory": "/spaces/000000000001/app",
             "kind": "space",
-            "spaceId": "space-1"
+            "spaceId": "000000000001"
           },
           "s0140": {
             "projectId": "win",
@@ -7251,15 +6710,9 @@
           "s0143": {
             "projectId": "app",
             "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
+            "scopeDirectory": "/spaces/000000000001/app",
             "kind": "space",
-            "spaceId": "space-1"
-          },
-          "s0144": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
+            "spaceId": "000000000001"
           },
           "s0145": {
             "projectId": "app",
@@ -7270,35 +6723,22 @@
           "s0146": {
             "projectId": "app",
             "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
+            "scopeDirectory": "/spaces/000000000001/app",
             "kind": "space",
-            "spaceId": "space-1"
+            "spaceId": "000000000001"
           },
           "s0147": {
             "projectId": "app",
             "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
+            "scopeDirectory": "/spaces/000000000001/app",
             "kind": "space",
-            "spaceId": "space-1"
+            "spaceId": "000000000001"
           },
           "s0148": {
             "projectId": "lib",
             "projectRoot": "/projects/lib",
             "scopeDirectory": "/projects/lib",
             "kind": "project"
-          },
-          "s0149": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
-          },
-          "s0150": {
-            "projectId": "app",
-            "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
-            "kind": "space",
-            "spaceId": "space-1"
           },
           "s0151": {
             "projectId": "lib",
@@ -7354,12 +6794,6 @@
             "scopeDirectory": "/worktrees/app-feature",
             "kind": "worktree"
           },
-          "s0169": {
-            "projectId": "win",
-            "projectRoot": "C:/work/app",
-            "scopeDirectory": "C:/work/app",
-            "kind": "project"
-          },
           "s0170": {
             "projectId": "app",
             "projectRoot": "/projects/app",
@@ -7378,31 +6812,7 @@
             "scopeDirectory": "/worktrees/app-feature",
             "kind": "worktree"
           },
-          "s0173": {
-            "projectId": "app",
-            "projectRoot": "/projects/app",
-            "scopeDirectory": "/worktrees/app-feature",
-            "kind": "worktree"
-          },
-          "s0174": {
-            "projectId": "app",
-            "projectRoot": "/projects/app",
-            "scopeDirectory": "/worktrees/app-feature",
-            "kind": "worktree"
-          },
           "s0175": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
-          },
-          "s0176": {
-            "projectId": "win",
-            "projectRoot": "C:/work/app",
-            "scopeDirectory": "C:/work/app",
-            "kind": "project"
-          },
-          "s0177": {
             "projectId": "lib",
             "projectRoot": "/projects/lib",
             "scopeDirectory": "/projects/lib",
@@ -7419,12 +6829,6 @@
             "projectRoot": "/projects/app",
             "scopeDirectory": "/worktrees/app-feature",
             "kind": "worktree"
-          },
-          "s0180": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
           },
           "s0182": {
             "projectId": "app",
@@ -7459,9 +6863,9 @@
           "s0189": {
             "projectId": "app",
             "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
+            "scopeDirectory": "/spaces/000000000001/app",
             "kind": "space",
-            "spaceId": "space-1"
+            "spaceId": "000000000001"
           },
           "s0191": {
             "projectId": "app",
@@ -7478,26 +6882,14 @@
           "s0193": {
             "projectId": "app",
             "projectRoot": "/projects/app",
-            "scopeDirectory": "/spaces/one/app",
+            "scopeDirectory": "/spaces/000000000001/app",
             "kind": "space",
-            "spaceId": "space-1"
+            "spaceId": "000000000001"
           },
           "s0194": {
             "projectId": "win",
             "projectRoot": "C:/work/app",
             "scopeDirectory": "C:/work/app",
-            "kind": "project"
-          },
-          "s0195": {
-            "projectId": "win",
-            "projectRoot": "C:/work/app",
-            "scopeDirectory": "C:/work/app",
-            "kind": "project"
-          },
-          "s0196": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
             "kind": "project"
           },
           "s0197": {
@@ -7602,23 +6994,11 @@
             "scopeDirectory": "/projects/lib",
             "kind": "project"
           },
-          "s0227": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
-          },
           "s0229": {
             "projectId": "app",
             "projectRoot": "/projects/app",
             "scopeDirectory": "/worktrees/app-feature",
             "kind": "worktree"
-          },
-          "s0230": {
-            "projectId": "lib",
-            "projectRoot": "/projects/lib",
-            "scopeDirectory": "/projects/lib",
-            "kind": "project"
           },
           "s0231": {
             "projectId": "app",
@@ -7638,12 +7018,6 @@
             "scopeDirectory": "/worktrees/app-feature",
             "kind": "worktree"
           },
-          "s0235": {
-            "projectId": "app",
-            "projectRoot": "/projects/app",
-            "scopeDirectory": "/worktrees/app-feature",
-            "kind": "worktree"
-          },
           "s0236": {
             "projectId": "app",
             "projectRoot": "/projects/app",
@@ -7655,12 +7029,6 @@
             "projectRoot": "C:/work/app",
             "scopeDirectory": "C:/work/app",
             "kind": "project"
-          },
-          "s0239": {
-            "projectId": "app",
-            "projectRoot": "/projects/app",
-            "scopeDirectory": "/worktrees/app-feature",
-            "kind": "worktree"
           }
         },
         "sessionsByProject": {
@@ -7669,11 +7037,12 @@
             "s0005",
             "s0008",
             "s0011",
+            "s0229",
+            "s0147",
             "s0014",
             "s0016",
             "s0017",
             "s0018",
-            "s0019",
             "s0024",
             "s0025",
             "s0028",
@@ -7681,164 +7050,123 @@
             "s0034",
             "s0035",
             "s0038",
-            "s0039",
             "s0042",
             "s0043",
-            "s0045",
             "s0047",
-            "s0049",
+            "s0179",
             "s0051",
             "s0053",
             "s0056",
-            "s0057",
             "s0059",
             "s0062",
             "s0064",
-            "s0065",
-            "s0066",
-            "s0067",
             "s0069",
             "s0075",
-            "s0078",
             "s0082",
             "s0083",
             "s0085",
-            "s0088",
             "s0090",
-            "s0094",
             "s0095",
             "s0098",
             "s0107",
             "s0108",
-            "s0111",
             "s0112",
-            "s0113",
             "s0118",
             "s0119",
-            "s0121",
             "s0122",
+            "s0121",
+            "s0197",
             "s0123",
             "s0125",
-            "s0126",
+            "s0066",
+            "s0142",
+            "s0065",
             "s0137",
             "s0139",
             "s0141",
-            "s0142",
             "s0143",
             "s0145",
-            "s0146",
-            "s0147",
-            "s0150",
+            "s0166",
             "s0153",
             "s0159",
             "s0160",
-            "s0166",
             "s0168",
             "s0170",
             "s0171",
+            "s0067",
             "s0172",
-            "s0173",
-            "s0174",
-            "s0179",
             "s0182",
             "s0183",
             "s0184",
+            "s0039",
+            "s0094",
+            "s0216",
             "s0189",
             "s0191",
-            "s0193",
-            "s0197",
             "s0201",
-            "s0202",
-            "s0208",
+            "s0193",
+            "s0019",
             "s0209",
             "s0211",
             "s0212",
-            "s0216",
             "s0219",
             "s0221",
             "s0222",
             "s0224",
-            "s0229",
             "s0231",
             "s0232",
             "s0234",
-            "s0235",
-            "s0236",
-            "s0239"
+            "s0236"
           ],
           "lib": [
-            "s0002",
             "s0004",
             "s0020",
             "s0032",
-            "s0040",
-            "s0055",
-            "s0070",
-            "s0071",
-            "s0079",
+            "s0162",
             "s0081",
             "s0092",
-            "s0097",
-            "s0099",
+            "s0055",
             "s0101",
-            "s0103",
-            "s0131",
-            "s0136",
-            "s0144",
-            "s0148",
-            "s0149",
-            "s0151",
-            "s0162",
-            "s0175",
-            "s0177",
-            "s0180",
-            "s0196",
             "s0200",
-            "s0214",
-            "s0225",
-            "s0227",
-            "s0230"
+            "s0175",
+            "s0151",
+            "s0079",
+            "s0148",
+            "s0225"
           ],
           "win": [
             "s0001",
             "s0012",
             "s0013",
-            "s0026",
-            "s0027",
+            "s0165",
             "s0061",
-            "s0073",
+            "s0132",
             "s0074",
             "s0076",
             "s0077",
             "s0084",
             "s0086",
-            "s0093",
             "s0100",
             "s0102",
-            "s0104",
-            "s0109",
+            "s0073",
             "s0115",
             "s0117",
             "s0120",
-            "s0127",
+            "s0220",
+            "s0109",
             "s0128",
-            "s0132",
+            "s0104",
             "s0135",
             "s0138",
             "s0140",
+            "s0127",
             "s0161",
-            "s0165",
-            "s0169",
-            "s0176",
+            "s0027",
             "s0178",
             "s0185",
             "s0188",
-            "s0192",
             "s0194",
-            "s0195",
-            "s0203",
-            "s0220",
-            "s0238"
+            "s0203"
           ]
         },
         "archivedSessionsByProject": {
@@ -7855,10 +7183,7 @@
           ],
           "lib": [
             "s0040",
-            "s0071",
-            "s0131",
-            "s0214",
-            "s0230"
+            "s0214"
           ],
           "win": [
             "s0192",
@@ -7877,21 +7202,15 @@
             "s0034",
             "s0039",
             "s0043",
-            "s0045",
-            "s0049",
             "s0056",
-            "s0057",
             "s0062",
             "s0064",
             "s0066",
             "s0067",
             "s0075",
-            "s0078",
             "s0082",
             "s0083",
-            "s0088",
             "s0107",
-            "s0111",
             "s0118",
             "s0122",
             "s0123",
@@ -7906,7 +7225,6 @@
             "s0184",
             "s0197",
             "s0201",
-            "s0208",
             "s0209",
             "s0211",
             "s0212",
@@ -7918,50 +7236,30 @@
             "s0232"
           ],
           "/projects/lib": [
-            "s0002",
             "s0004",
             "s0020",
             "s0032",
-            "s0040",
             "s0055",
-            "s0070",
-            "s0071",
             "s0079",
             "s0081",
             "s0092",
-            "s0097",
-            "s0099",
             "s0101",
-            "s0103",
-            "s0131",
-            "s0136",
-            "s0144",
             "s0148",
-            "s0149",
             "s0151",
             "s0162",
             "s0175",
-            "s0177",
-            "s0180",
-            "s0196",
             "s0200",
-            "s0214",
-            "s0225",
-            "s0227",
-            "s0230"
+            "s0225"
           ],
-          "/spaces/one/app": [
+          "/spaces/000000000001/app": [
             "s0005",
             "s0028",
             "s0053",
             "s0085",
             "s0095",
-            "s0113",
             "s0139",
             "s0143",
-            "s0146",
             "s0147",
-            "s0150",
             "s0189",
             "s0193"
           ],
@@ -7986,30 +7284,23 @@
             "s0119",
             "s0121",
             "s0125",
-            "s0126",
             "s0141",
             "s0168",
             "s0170",
             "s0171",
             "s0172",
-            "s0173",
-            "s0174",
             "s0179",
             "s0182",
             "s0191",
-            "s0202",
             "s0229",
             "s0231",
             "s0234",
-            "s0235",
-            "s0236",
-            "s0239"
+            "s0236"
           ],
           "C:/work/app": [
             "s0001",
             "s0012",
             "s0013",
-            "s0026",
             "s0027",
             "s0061",
             "s0073",
@@ -8018,7 +7309,6 @@
             "s0077",
             "s0084",
             "s0086",
-            "s0093",
             "s0100",
             "s0102",
             "s0104",
@@ -8034,219 +7324,182 @@
             "s0140",
             "s0161",
             "s0165",
-            "s0169",
-            "s0176",
             "s0178",
             "s0185",
             "s0188",
-            "s0192",
             "s0194",
-            "s0195",
             "s0203",
-            "s0220",
-            "s0238"
+            "s0220"
           ]
         },
-        "directoryResolutions": 20,
+        "directoryResolutions": 18,
         "chatSessions": [
+          "s0103",
           "s0002",
-          "s0007",
-          "s0010",
-          "s0017",
+          "s0006",
+          "s0015",
+          "s0021",
           "s0022",
-          "s0029",
-          "s0030",
-          "s0031",
-          "s0042",
-          "s0043",
-          "s0044",
-          "s0046",
+          "s0223",
           "s0048",
-          "s0055",
-          "s0056",
-          "s0058",
+          "s0009",
           "s0060",
-          "s0065",
-          "s0068",
-          "s0072",
-          "s0079",
-          "s0080",
-          "s0087",
+          "s0070",
+          "s0157",
+          "s0052",
+          "s0091",
           "s0099",
-          "s0105",
-          "s0106",
+          "s0023",
           "s0110",
-          "s0112",
           "s0114",
-          "s0127",
-          "s0129",
-          "s0130",
+          "s0155",
+          "s0196",
           "s0133",
           "s0134",
-          "s0148",
-          "s0151",
+          "s0089",
           "s0152",
-          "s0154",
-          "s0156",
           "s0164",
-          "s0166",
           "s0167",
+          "s0213",
           "s0180",
-          "s0181",
-          "s0186",
+          "s0096",
           "s0190",
-          "s0199",
-          "s0204",
-          "s0205",
-          "s0206",
-          "s0207",
           "s0210",
-          "s0215",
-          "s0217"
+          "s0199",
+          "s0205",
+          "s0063"
         ],
         "projectSessions": [
           "s0000",
           "s0001",
-          "s0004",
           "s0005",
+          "s0004",
           "s0008",
           "s0011",
+          "s0229",
           "s0012",
           "s0013",
+          "s0147",
           "s0014",
           "s0016",
           "s0017",
           "s0018",
-          "s0019",
-          "s0020",
           "s0024",
+          "s0020",
           "s0025",
-          "s0027",
           "s0028",
           "s0030",
           "s0032",
           "s0034",
           "s0035",
-          "s0036",
-          "s0037",
           "s0038",
-          "s0039",
           "s0042",
           "s0043",
           "s0047",
-          "s0050",
+          "s0179",
+          "s0165",
           "s0051",
           "s0053",
-          "s0055",
           "s0056",
           "s0059",
           "s0061",
           "s0062",
           "s0064",
-          "s0065",
-          "s0066",
-          "s0067",
+          "s0162",
           "s0069",
-          "s0073",
+          "s0132",
           "s0074",
           "s0075",
           "s0076",
           "s0077",
-          "s0079",
           "s0081",
           "s0082",
+          "s0092",
           "s0083",
           "s0084",
           "s0085",
           "s0086",
           "s0090",
-          "s0092",
-          "s0094",
           "s0095",
-          "s0097",
           "s0098",
+          "s0055",
           "s0100",
           "s0101",
           "s0102",
-          "s0104",
           "s0107",
           "s0108",
-          "s0109",
+          "s0073",
+          "s0200",
           "s0112",
           "s0115",
           "s0117",
           "s0118",
           "s0119",
           "s0120",
-          "s0121",
           "s0122",
+          "s0220",
+          "s0121",
+          "s0197",
+          "s0175",
           "s0123",
           "s0125",
-          "s0127",
+          "s0109",
+          "s0066",
           "s0128",
-          "s0132",
+          "s0142",
+          "s0104",
+          "s0065",
           "s0135",
           "s0137",
           "s0138",
           "s0139",
           "s0140",
           "s0141",
-          "s0142",
           "s0143",
-          "s0144",
           "s0145",
-          "s0147",
-          "s0148",
-          "s0149",
           "s0151",
+          "s0166",
+          "s0127",
           "s0153",
           "s0159",
           "s0160",
           "s0161",
-          "s0162",
-          "s0165",
-          "s0166",
           "s0168",
           "s0170",
+          "s0027",
           "s0171",
+          "s0067",
           "s0172",
-          "s0175",
           "s0178",
-          "s0179",
+          "s0079",
+          "s0148",
           "s0182",
           "s0183",
           "s0184",
           "s0185",
-          "s0187",
           "s0188",
+          "s0039",
+          "s0094",
+          "s0216",
           "s0189",
           "s0191",
-          "s0193",
           "s0194",
-          "s0197",
-          "s0198",
-          "s0200",
           "s0201",
+          "s0193",
+          "s0019",
           "s0203",
           "s0209",
           "s0211",
           "s0212",
-          "s0216",
           "s0219",
-          "s0220",
           "s0221",
           "s0222",
           "s0224",
           "s0225",
-          "s0227",
-          "s0228",
-          "s0229",
           "s0231",
           "s0232",
-          "s0233",
           "s0234",
-          "s0236",
-          "s0237"
+          "s0236"
         ],
         "projectSessionsByProject": {
           "app": [
@@ -8254,11 +7507,12 @@
             "s0005",
             "s0008",
             "s0011",
+            "s0229",
+            "s0147",
             "s0014",
             "s0016",
             "s0017",
             "s0018",
-            "s0019",
             "s0024",
             "s0025",
             "s0028",
@@ -8266,161 +7520,123 @@
             "s0034",
             "s0035",
             "s0038",
-            "s0039",
             "s0042",
             "s0043",
-            "s0045",
             "s0047",
-            "s0049",
+            "s0179",
             "s0051",
             "s0053",
             "s0056",
-            "s0057",
             "s0059",
             "s0062",
             "s0064",
-            "s0065",
-            "s0066",
-            "s0067",
             "s0069",
             "s0075",
-            "s0078",
             "s0082",
             "s0083",
             "s0085",
-            "s0088",
             "s0090",
-            "s0094",
             "s0095",
             "s0098",
             "s0107",
             "s0108",
-            "s0111",
             "s0112",
-            "s0113",
             "s0118",
             "s0119",
-            "s0121",
             "s0122",
+            "s0121",
+            "s0197",
             "s0123",
             "s0125",
-            "s0126",
+            "s0066",
+            "s0142",
+            "s0065",
             "s0137",
             "s0139",
             "s0141",
-            "s0142",
             "s0143",
             "s0145",
-            "s0146",
-            "s0147",
-            "s0150",
+            "s0166",
             "s0153",
             "s0159",
             "s0160",
-            "s0166",
             "s0168",
             "s0170",
             "s0171",
+            "s0067",
             "s0172",
-            "s0173",
-            "s0174",
-            "s0179",
             "s0182",
             "s0183",
             "s0184",
+            "s0039",
+            "s0094",
+            "s0216",
             "s0189",
             "s0191",
-            "s0193",
-            "s0197",
             "s0201",
-            "s0202",
-            "s0208",
+            "s0193",
+            "s0019",
             "s0209",
             "s0211",
             "s0212",
-            "s0216",
             "s0219",
             "s0221",
             "s0222",
             "s0224",
-            "s0229",
             "s0231",
             "s0232",
             "s0234",
-            "s0235",
-            "s0236",
-            "s0239"
+            "s0236"
           ],
           "lib": [
             "s0004",
             "s0020",
             "s0032",
-            "s0040",
-            "s0055",
-            "s0070",
-            "s0071",
-            "s0079",
+            "s0162",
             "s0081",
             "s0092",
-            "s0097",
+            "s0055",
             "s0101",
-            "s0103",
-            "s0131",
-            "s0136",
-            "s0144",
-            "s0148",
-            "s0149",
-            "s0151",
-            "s0162",
-            "s0175",
-            "s0177",
-            "s0196",
             "s0200",
-            "s0214",
-            "s0225",
-            "s0227",
-            "s0230"
+            "s0175",
+            "s0151",
+            "s0079",
+            "s0148",
+            "s0225"
           ],
           "win": [
             "s0001",
             "s0012",
             "s0013",
-            "s0026",
-            "s0027",
+            "s0165",
             "s0061",
-            "s0073",
+            "s0132",
             "s0074",
             "s0076",
             "s0077",
             "s0084",
             "s0086",
-            "s0093",
             "s0100",
             "s0102",
-            "s0104",
-            "s0109",
+            "s0073",
             "s0115",
             "s0117",
             "s0120",
-            "s0127",
+            "s0220",
+            "s0109",
             "s0128",
-            "s0132",
+            "s0104",
             "s0135",
             "s0138",
             "s0140",
+            "s0127",
             "s0161",
-            "s0165",
-            "s0169",
-            "s0176",
+            "s0027",
             "s0178",
             "s0185",
             "s0188",
-            "s0192",
             "s0194",
-            "s0195",
-            "s0203",
-            "s0220",
-            "s0238"
+            "s0203"
           ]
         }
       }

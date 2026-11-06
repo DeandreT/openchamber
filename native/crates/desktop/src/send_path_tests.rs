@@ -177,6 +177,16 @@ fn answer(request: &Request, script: &Script) -> (&'static str, String) {
             .to_string(),
         );
     }
+    if path.starts_with("/api/config/settings") {
+        // Remembered efforts reread the settings and save them; the answer
+        // echoes the saved merge.
+        let body = if request.method == "PUT" {
+            String::from_utf8_lossy(&request.body).into_owned()
+        } else {
+            "{}".to_owned()
+        };
+        return ("200 OK", body);
+    }
     match request.method.as_str() {
         "POST" if path.ends_with("/synthetic") => ("200 OK", receipt("synthetic")),
         "POST" if path.ends_with("/prompt") => ("200 OK", receipt("user")),
@@ -390,6 +400,7 @@ fn seed_steps_from(
             attempts: vec![(key.clone(), attempt)],
             creations: Vec::new(),
             selections: Vec::new(),
+            ..JournalSnapshot::default()
         })
         .expect("attempt saves");
     (tests::sent_id(), context)
@@ -701,6 +712,7 @@ fn seed_journal(
             attempts,
             creations,
             selections: Vec::new(),
+            ..JournalSnapshot::default()
         })
         .expect("journal saves");
 }

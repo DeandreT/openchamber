@@ -12,7 +12,7 @@ use crate::request::RequestBuilder;
 use openchamber_native_core::file_draft::FileStat;
 use openchamber_native_core::file_tree::{DirectoryEntry, EntryKind, ListingFailure};
 use openchamber_native_core::path;
-use reqwest::header::CONTENT_TYPE;
+use reqwest::header::{CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE};
 use reqwest::{Method, Response, StatusCode};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -28,6 +28,10 @@ pub const CONTENT_SEARCH_LIMIT: usize = 500;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum FilesError {
+    #[error("the raw file exceeds its size limit")]
+    RawFileTooLarge,
+    #[error("the raw file answer is incomplete or malformed")]
+    InvalidRawFile,
     #[error("the path does not exist")]
     NotFound,
     #[error("the path is not a folder")]
@@ -62,8 +66,41 @@ impl FilesError {
             Self::NotDirectory => ListingFailure::NotDirectory,
             Self::PermissionDenied => ListingFailure::PermissionDenied,
             Self::Refused { message, .. } => ListingFailure::Failed(message),
-            Self::AlreadyExists | Self::Transport(_) => ListingFailure::Failed(None),
+            Self::AlreadyExists
+            | Self::RawFileTooLarge
+            | Self::InvalidRawFile
+            | Self::Transport(_) => ListingFailure::Failed(None),
         }
+    }
+}
+
+/// Complete raw server-file bytes. Content type is advisory; attachment
+/// preparation validates the actual format. Debug output omits both fields.
+pub struct RawFileBytes {
+    bytes: Vec<u8>,
+    content_type: Option<String>,
+}
+
+impl RawFileBytes {
+    /// Complete bytes from the captured server, without text decoding.
+    pub fn bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+    /// Transfer the complete buffer to attachment preparation.
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+    /// Bounded advisory MIME header, including generic binary MIME types.
+    pub fn content_type(&self) -> Option<&str> {
+        self.content_type.as_deref()
+    }
+}
+
+impl std::fmt::Debug for RawFileBytes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RawFileBytes")
+            .field("byte_len", &self.bytes.len())
+            .finish_non_exhaustive()
     }
 }
 
@@ -380,6 +417,92 @@ impl ServerClient {
             }
             Err(refusal) => Err(files_error(refusal)),
         }
+    }
+
+    /// Read complete bytes for an explicitly selected server path. The caller
+    /// captures directory, path and byte limit before awaiting. No outside-
+    /// workspace permission, range, redirect or retry is requested. Dropping
+    /// the future cancels the read; errors retain no response content.
+    pub async fn read_raw_file(
+        &self,
+        directory: &str,
+        path: &str,
+        max_bytes: usize,
+    ) -> Result<RawFileBytes, FilesError> {
+        if directory.is_empty() || path.is_empty() {
+            return Err(FilesError::InvalidRawFile);
+        }
+        let request = self.files_request(
+            Method::GET,
+            "api/fs/raw",
+            directory,
+            &[("path", path), ("directory", directory)],
+        );
+        let mut response = request.send().await.map_err(TransportError::from_request)?;
+        let status = response.status();
+        if status.is_redirection() {
+            return Err(TransportError::Redirected.into());
+        }
+        if status == StatusCode::UNAUTHORIZED {
+            return Err(TransportError::AuthenticationRequired.into());
+        }
+        if status == StatusCode::NOT_FOUND {
+            return Err(FilesError::NotFound);
+        }
+        if status != StatusCode::OK {
+            return Err(if status.is_success() {
+                FilesError::InvalidRawFile
+            } else {
+                FilesError::Refused {
+                    status: status.as_u16(),
+                    message: None,
+                }
+            });
+        }
+        if response.headers().contains_key(CONTENT_RANGE) {
+            return Err(FilesError::InvalidRawFile);
+        }
+        let advertised = response
+            .headers()
+            .get(CONTENT_LENGTH)
+            .map(|value| {
+                value
+                    .to_str()
+                    .ok()
+                    .filter(|value| {
+                        !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit())
+                    })
+                    .and_then(|value| value.parse::<u64>().ok())
+                    .ok_or(FilesError::InvalidRawFile)
+            })
+            .transpose()?;
+        if advertised.is_some_and(|size| size > max_bytes as u64) {
+            return Err(FilesError::RawFileTooLarge);
+        }
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .filter(|value| value.as_bytes().len() <= 1024)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
+        let mut bytes = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(TransportError::from_request)?
+        {
+            if chunk.len() > max_bytes - bytes.len() {
+                return Err(FilesError::RawFileTooLarge);
+            }
+            bytes.extend_from_slice(&chunk);
+        }
+        if advertised.is_some_and(|size| size != bytes.len() as u64) {
+            return Err(FilesError::InvalidRawFile);
+        }
+        Ok(RawFileBytes {
+            bytes,
+            content_type,
+        })
     }
 
     /// Writes `content` to `path`, replacing the file atomically.

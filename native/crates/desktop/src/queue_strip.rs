@@ -196,8 +196,8 @@ impl Workspace {
             .as_ref()
             .and_then(|config| config.agent.clone())
             .filter(|agent| Some(agent) != self.composer_agent_name().as_ref());
-        // Goal, scheduled and unjournalable messages stay for the server.
-        let editable = message.takeable(crate::mutation_journal::MAX_URI);
+        // Goal and scheduled items retain their server-owned workflow.
+        let editable = message.payload_takeable();
         let lead = if sortable {
             div()
                 .id(SharedString::from(format!("queued-handle-{key}")))
@@ -295,20 +295,18 @@ impl Workspace {
                 let send_id = id.clone();
                 let edit_label = strings.get("chat.queuedMessage.edit");
                 let send_label = strings.get("chat.queuedMessage.send");
-                this.when(message.editable_as_text(), |this| {
-                    this.child(
-                        on_activate(
-                            action("edit", "edit", edit_label.clone(), palette).child(
-                                div()
-                                    .css_text(ACTION_SIZE, ACTION_LINE, cx)
-                                    .child(edit_label),
-                            ),
-                            cx,
-                            move |this, window, cx| this.edit_queued(&edit_id, window, cx),
-                        )
-                        .test_support(),
+                this.child(
+                    on_activate(
+                        action("edit", "edit", edit_label.clone(), palette).child(
+                            div()
+                                .css_text(ACTION_SIZE, ACTION_LINE, cx)
+                                .child(edit_label),
+                        ),
+                        cx,
+                        move |this, window, cx| this.edit_queued(&edit_id, window, cx),
                     )
-                })
+                    .test_support(),
+                )
                 .child(
                     on_activate(
                         action("send", "send-plane", send_label.clone(), palette).child(

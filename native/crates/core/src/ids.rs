@@ -92,6 +92,14 @@ string_id!(
     DraftId
 );
 string_id!(
+    /// A client-owned attachment identity, independent of its prepared representation.
+    AttachmentId
+);
+string_id!(
+    /// A client-owned context item identity, independent of its eventual message ID.
+    ContextItemId
+);
+string_id!(
     /// The verified server identity and endpoint path prefix of a runtime.
     ///
     /// Client-owned records such as drafts and scroll anchors keep the runtime

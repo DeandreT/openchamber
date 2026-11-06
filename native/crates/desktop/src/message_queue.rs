@@ -6,38 +6,26 @@
 //! The server delivers the queue when the session goes idle; nothing here
 //! sends a queued message on its own. A queued message the user sends or
 //! edits is taken out of the queue first, so it can never go out twice.
-//! Sending goes through the ordinary send path (`send_outgoing`) as one
-//! durable attempt, which gives the text back to the composer on a definite
-//! failure.
+//! Payload-backed takes and explicit queued sends live in queue_take. Their
+//! original seals and local destinations survive uncertain outcomes.
 
 use std::collections::{HashMap, HashSet};
 
-use gpui_kit::component::WindowExt;
-use gpui_kit::component::notification::Notification;
 use gpui_kit::{Context, Task, Window};
-use openchamber_native_core::draft::{Draft, DraftKey, DraftTarget};
-use openchamber_native_core::ids::{MessageId, SessionId};
+use openchamber_native_core::ids::SessionId;
 use openchamber_native_core::message_queue::{
-    FollowUpBehavior, MessageQueue, QueueKey, QueuedItemId, QueuedMessage, QueuedSendConfig,
+    FollowUpBehavior, MessageQueue, QueueKey, QueuedItemId, QueuedMessage,
 };
-use openchamber_native_core::send_config::ModelChoice;
 use openchamber_native_transport::error::TransportError;
-use openchamber_native_transport::message_queue::{
-    QueueItemInput, QueueUpdate, ReservedPrefix, TakenMessage,
-};
+use openchamber_native_transport::message_queue::QueueUpdate;
 use openchamber_native_transport::prompt::Delivery;
-use openchamber_native_transport::prompt_parts::{AgentMention, PromptParts};
 
 use crate::connection::ConnectionState;
-use crate::locale;
-use crate::mutation_journal::MAX_URI;
-use crate::send_attempt;
-use crate::session_mutations::Outgoing;
 use crate::workspace::Workspace;
 
 /// The queue projection and the work in flight on it. Runtime-scoped: a
-/// runtime switch drops the old runtime's projection and every completion
-/// started before it.
+/// runtime switch drops obsolete projection completions. Durable enqueue
+/// chains retain their captured owners independently of that projection.
 #[derive(Default)]
 pub(crate) struct QueueState {
     pub(crate) projection: MessageQueue,
@@ -51,12 +39,24 @@ pub(crate) struct QueueState {
     space_reads: HashSet<String>,
     tasks: HashMap<u64, Task<()>>,
     next_task: u64,
-    /// Queues a take is changing; a second take waits for it.
-    taking: HashSet<QueueKey>,
+    /// Durable enqueue chains retain their original host across disk waits.
+    pub(crate) enqueues: crate::queue_enqueue::EnqueueState,
+    pub(crate) takes: crate::queue_take::TakeState,
+    pub(crate) prefixes: crate::queue_prefix::PrefixState,
+    pub(crate) local_sends: crate::queue_local_send::LocalSendState,
+}
+
+impl QueueState {
+    pub(crate) fn any_payload_busy(&self) -> bool {
+        self.enqueues.any_busy()
+            || self.takes.any_busy()
+            || self.prefixes.any_busy()
+            || self.local_sends.any_busy()
+    }
 }
 
 /// What a take is for once the server answered with the message.
-enum TakePurpose {
+pub(crate) enum TakePurpose {
     Edit,
     Send,
 }
@@ -203,7 +203,6 @@ impl Workspace {
         self.queue.projection.reset_runtime(previous);
         self.queue.read_connection = None;
         self.queue.space_reads.clear();
-        self.queue.taking.clear();
     }
 
     /// Applies a mutation's answer, or after a failure rereads the owner's
@@ -232,44 +231,6 @@ impl Workspace {
         cx.notify();
     }
 
-    /// The draft owner of a session's composer.
-    fn session_draft_key(&self, key: &QueueKey) -> Option<DraftKey> {
-        DraftKey::new(
-            key.runtime.clone(),
-            &key.directory,
-            DraftTarget::Session(key.session.clone()),
-        )
-    }
-
-    /// Puts `text` back into `owner`'s draft after anything typed since,
-    /// and into the composer when it shows that draft.
-    pub(crate) fn give_back_text(
-        &mut self,
-        owner: &DraftKey,
-        text: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if text.is_empty() {
-            return;
-        }
-        self.save_composer_draft(cx);
-        let failed = Draft {
-            selection: text.len()..text.len(),
-            text,
-        };
-        let draft = send_attempt::restore_failed(self.drafts.get(owner), failed);
-        self.drafts.save(owner.clone(), draft);
-        if self.composer_key.as_ref() == Some(owner) {
-            self.restore_composer_draft(window, cx);
-        }
-        self.queue_persistence(cx);
-    }
-
-    fn notify_queue_failure(&self, key: &'static str, window: &mut Window, cx: &mut Context<Self>) {
-        window.push_notification(Notification::error(locale::strings(cx).get(key)), cx);
-    }
-
     /// Enter on a follow-up, as the composer's `onKeyDown` routes it.
     /// `/fork`, `/btw` and an open side conversation take the text first, as
     /// the web plans local commands and checks BTW before queueing. Then,
@@ -290,6 +251,13 @@ impl Workspace {
         if !self.can_start_send(&session) || self.queue_preview_pending(&session) {
             return;
         }
+        if self
+            .composer_key
+            .as_ref()
+            .is_some_and(|owner| self.attachment_storage.has_pending(owner))
+        {
+            return;
+        }
         if self.run_branch_command(window, cx) {
             return;
         }
@@ -297,8 +265,8 @@ impl Workspace {
             self.send_btw_follow_up(window, cx);
             return;
         }
-        let has_text = !self.composer.read(cx).value().trim().is_empty();
-        let can_queue = has_text && self.is_streaming(&session);
+        let has_content = self.composer_has_sendable_content(cx);
+        let can_queue = has_content && self.is_streaming(&session);
         match (can_queue, secondary, self.follow_up_behavior()) {
             (true, false, FollowUpBehavior::Queue) => self.queue_composer(window, cx),
             (true, false, FollowUpBehavior::Steer) => {
@@ -312,101 +280,52 @@ impl Workspace {
     fn can_start_send(&self, session: &SessionId) -> bool {
         let key = self.mutation_key(session);
         self.persistence_ready()
+            && !self.payload_take_blocks_session(&self.runtime, session)
+            && !self.payload_prefix_blocks_session(&self.runtime, session)
+            && !self.payload_local_send_blocks_session(&self.runtime, session)
             && self.prompt_allowed(&key)
             && self.send_attempts.can_send(&key)
             && self.creations.get(&key).is_none()
     }
 
     pub(crate) fn queue_preview_pending(&self, session: &SessionId) -> bool {
-        self.queue
-            .taking
-            .iter()
-            .any(|key| key.runtime == self.runtime && &key.session == session)
+        self.payload_take_blocks_session(&self.runtime, session)
+            || self.payload_prefix_blocks_session(&self.runtime, session)
+            || self.payload_local_send_blocks_session(&self.runtime, session)
+            || self.payload_enqueue_blocks_session(&self.runtime, session)
     }
 
-    /// Queues the composer's text with the selection it would send with
-    /// (`handleQueueMessage`). The composer clears at once; a failure gives
-    /// the text back after anything typed since.
-    pub(crate) fn queue_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(key) = self.selected_queue_key() else {
-            return;
-        };
-        if !self.can_start_send(&key.session) || self.queue_preview_pending(&key.session) {
-            return;
-        }
-        let Some(owner) = self.composer_key.clone().filter(|owner| {
-            owner.runtime() == &key.runtime
-                && owner.target() == &DraftTarget::Session(key.session.clone())
-        }) else {
-            return;
-        };
-        let Some(model) = self.send_selection().and_then(|(_, selection)| {
-            selection
-                .model
-                .clone()
-                .map(|model| (model, selection.agent_name.clone()))
-        }) else {
-            return;
-        };
-        let Some((client, _)) = self.queue_client() else {
-            return;
-        };
-        let text = self.composer.read(cx).value().trim_matches('\n').to_owned();
-        if text.trim().is_empty() {
-            return;
-        }
-        let (model, agent) = model;
-        let item = QueueItemInput {
-            content: text.clone(),
-            text: text.clone(),
-            send_config: QueuedSendConfig {
-                provider_id: model.provider_id,
-                model_id: model.model_id,
-                agent,
-                variant: model.variant,
-            },
-        };
-        self.composer
-            .update(cx, |composer, cx| composer.set_value("", window, cx));
-        self.save_composer_draft(cx);
-        self.queue_persistence(cx);
-        let request = {
-            let session = key.session.clone();
-            let directory = key.directory.clone();
-            let connection = self
-                .connection
-                .as_ref()
-                .expect("a client implies a connection");
-            connection
-                .network
-                .run(async move { client.enqueue_message(&session, &directory, &item).await })
-        };
-        let generation = self.queue.generation;
-        self.queue_task(|id| {
-            cx.spawn_in(window, async move |this, cx| {
-                let result = request.await;
-                let _ = this.update_in(cx, |this, window, cx| {
-                    this.queue.tasks.remove(&id);
-                    if generation != this.queue.generation {
-                        // The text still belongs to its draft owner.
-                        if !matches!(result, Some(Ok(_))) {
-                            this.give_back_text(&owner, text, window, cx);
+    /// Enqueue-only gate for actors that must exclude their own send operation.
+    pub(crate) fn payload_enqueue_blocks_session(
+        &self,
+        runtime: &openchamber_native_core::ids::RuntimeId,
+        session: &SessionId,
+    ) -> bool {
+        self.queue.enqueues.blocks_session(runtime, session)
+            || self.queue_storage.operations().iter().any(|operation| {
+                operation.owner().runtime() == runtime.as_str()
+                    && operation.owner().session() == session.as_str()
+                    && matches!(
+                        operation.action(),
+                        crate::queue_storage::QueueAction::Enqueue {
+                            phase: crate::queue_storage::QueueEnqueuePhase::Capturing
+                                | crate::queue_storage::QueueEnqueuePhase::Ready { .. }
+                                | crate::queue_storage::QueueEnqueuePhase::Unknown { .. },
+                            ..
                         }
-                        return;
-                    }
-                    match result {
-                        Some(Ok(update)) => this.settle_queue_mutation(&key, Some(Ok(update)), cx),
-                        failure => {
-                            tracing::warn!(error = ?failure.and_then(Result::err), "queueing failed");
-                            this.give_back_text(&owner, text, window, cx);
-                            this.notify_queue_failure("chat.queuedMessage.toast.queueFailed", window, cx);
-                            cx.notify();
-                        }
-                    }
-                });
+                    )
             })
-        });
-        cx.notify();
+    }
+
+    /// Captures the complete composer before the payload-backed enqueue starts.
+    pub(crate) fn queue_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|session| self.can_start_send(session))
+        {
+            self.begin_payload_enqueue(window, cx);
+        }
     }
 
     /// Removes a queued message (`removeFromQueue`): at once on screen, then
@@ -488,7 +407,14 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.take_queued(id, TakePurpose::Edit, window, cx);
+        if self
+            .selected
+            .as_ref()
+            .is_some_and(|session| self.payload_local_send_blocks_session(&self.runtime, session))
+        {
+            return;
+        }
+        self.begin_payload_take(id, TakePurpose::Edit, window, cx);
     }
 
     /// Sends one queued message now, steering it in while the session works
@@ -505,108 +431,15 @@ impl Workspace {
         if !self.can_start_send(&session) {
             return;
         }
-        self.take_queued(id, TakePurpose::Send, window, cx);
+        self.begin_payload_take(id, TakePurpose::Send, window, cx);
     }
 
     /// The newest queued message, for ArrowUp in an empty composer.
     pub(crate) fn newest_editable_queued(&self) -> Option<QueuedItemId> {
         self.selected_queue()
             .last()
-            .filter(|message| message.editable_as_text())
+            .filter(|message| message.payload_takeable())
             .map(|message| message.id.clone())
-    }
-
-    fn take_queued(
-        &mut self,
-        id: &QueuedItemId,
-        purpose: TakePurpose,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let Some(key) = self.selected_queue_key() else {
-            return;
-        };
-        let Some(message) = self
-            .queue
-            .projection
-            .queue(&key)
-            .iter()
-            .find(|message| &message.id == id)
-        else {
-            return;
-        };
-        if !message.takeable(MAX_URI)
-            || matches!(purpose, TakePurpose::Edit) && !message.editable_as_text()
-            || self.queue.projection.sending(&key) == Some(id)
-        {
-            return;
-        }
-        let Some(owner) = self.session_draft_key(&key) else {
-            return;
-        };
-        let Some((client, executor)) = self.queue_client() else {
-            return;
-        };
-        if !self.queue.taking.insert(key.clone()) {
-            return;
-        }
-        let (session, directory, item) = (key.session.clone(), key.directory.clone(), id.clone());
-        let request = self
-            .connection
-            .as_ref()
-            .expect("a client implies a connection")
-            .network
-            .run(async move { client.take_queued(&session, &directory, &item).await });
-        let generation = self.queue.generation;
-        self.queue_task(|task_id| {
-            cx.spawn_in(window, async move |this, cx| {
-                let result = request.await;
-                let _ = this.update_in(cx, |this, window, cx| {
-                    this.queue.tasks.remove(&task_id);
-                    if generation != this.queue.generation {
-                        // A taken message still belongs to its draft owner.
-                        if let Some(Ok((_, taken))) = result {
-                            this.give_back_text(&owner, taken.message.content, window, cx);
-                        }
-                        return;
-                    }
-                    this.queue.taking.remove(&key);
-                    let taken = match result {
-                        Some(Ok((update, taken))) => {
-                            this.settle_queue_mutation(&key, Some(Ok(update)), cx);
-                            taken
-                        }
-                        failure => {
-                            tracing::warn!(error = ?failure.and_then(Result::err), "taking a queued message failed");
-                            this.read_queue_owner(key.owner().map(str::to_owned), cx);
-                            this.notify_queue_failure("chat.queuedMessage.toast.takeFailed", window, cx);
-                            cx.notify();
-                            return;
-                        }
-                    };
-                    match purpose {
-                        TakePurpose::Edit => {
-                            this.give_back_text(&owner, taken.message.content, window, cx);
-                            this.focus_composer(window, cx);
-                        }
-                        TakePurpose::Send => {
-                            let busy = this.is_streaming(&key.session);
-                            // A queued-only send leaves open requests alone.
-                            let outgoing = this.outgoing_from(
-                                vec![taken],
-                                None,
-                                None,
-                                busy.then_some(Delivery::Steer),
-                                false,
-                            );
-                            this.send_taken(&key, owner, outgoing, (client_of(this), executor), window, cx);
-                        }
-                    }
-                    cx.notify();
-                });
-            })
-        });
-        cx.notify();
     }
 
     /// Sends what the composer holds now together with the queued messages
@@ -626,6 +459,9 @@ impl Workspace {
         let Some(session) = self.selected.clone() else {
             return;
         };
+        if self.payload_local_send_blocks_session(&self.runtime, &session) {
+            return;
+        }
         let composer = self.composer.read(cx).value().to_string();
         let Some(key) = self
             .selected_queue_key()
@@ -634,7 +470,7 @@ impl Workspace {
             self.submit(window, cx);
             return;
         };
-        let ids = take_prefix(
+        let ids = crate::queue_prefix::leading_ids(
             self.queue.projection.queue(&key),
             self.queue.projection.sending(&key),
         );
@@ -644,7 +480,9 @@ impl Workspace {
                 Some(Delivery::Steer) => {
                     self.submit_connected_with(Some(Delivery::Steer), window, cx)
                 }
-                _ if busy && !composer.trim().is_empty() => self.submit_connected_now(window, cx),
+                _ if busy && self.composer_has_sendable_content(cx) => {
+                    self.submit_connected_now(window, cx)
+                }
                 _ => self.submit(window, cx),
             }
             return;
@@ -652,380 +490,6 @@ impl Workspace {
         if !self.can_start_send(&session) {
             return;
         }
-        let Some(owner) = self.composer_key.clone().filter(|owner| {
-            owner.runtime() == &key.runtime
-                && owner.target() == &DraftTarget::Session(session.clone())
-        }) else {
-            return;
-        };
-        let Some(selection) = self.send_selection().map(|(_, selection)| selection) else {
-            return;
-        };
-        let Some(model) = selection.model else {
-            return;
-        };
-        let input = QueueItemInput {
-            content: composer.clone(),
-            text: composer.clone(),
-            send_config: QueuedSendConfig {
-                provider_id: model.provider_id,
-                model_id: model.model_id,
-                variant: model.variant,
-                agent: selection.agent_name,
-            },
-        };
-        let requested_id = self.message_ids.next().0;
-        let Some((client, executor)) = self.queue_client() else {
-            return;
-        };
-        if !self.queue.taking.insert(key.clone()) {
-            return;
-        }
-        let (session_id, directory) = (key.session.clone(), key.directory.clone());
-        let request = self
-            .connection
-            .as_ref()
-            .expect("a client implies a connection")
-            .network
-            .run(async move {
-                client
-                    .preview_queued_prefix(
-                        &session_id,
-                        &directory,
-                        &requested_id,
-                        &ids,
-                        &input,
-                        delivery == Some(Delivery::Steer),
-                    )
-                    .await
-            });
-        let generation = self.queue.generation;
-        self.queue_task(|task_id| {
-            cx.spawn_in(window, async move |this, cx| {
-                let result = request.await;
-                let _ = this.update_in(cx, |this, window, cx| {
-                    this.queue.tasks.remove(&task_id);
-                    if generation != this.queue.generation {
-                        // The captured owner's persisted reservation retains all payloads.
-                        return;
-                    }
-                    this.queue.taking.remove(&key);
-                    let Ok(receipt) = reservation_result(result) else {
-                        // None is an unknown outcome. A later reserve recovers the
-                        // same receipt; no message has left the server's queue.
-                        this.read_queue_owner(key.owner().map(str::to_owned), cx);
-                        this.notify_queue_failure(
-                            "chat.queuedMessage.toast.takeFailed",
-                            window,
-                            cx,
-                        );
-                        cx.notify();
-                        return;
-                    };
-                    let prompt = receipt.prompt();
-                    this.settle_queue_mutation(&key, Some(Ok(receipt.update)), cx);
-                    if receipt.items.is_empty() {
-                        return;
-                    }
-                    let intent = crate::send_attempt::QueueReservation {
-                        items: receipt
-                            .items
-                            .iter()
-                            .map(|item| item.message.id.to_string())
-                            .collect(),
-                        composer: receipt.composer.clone(),
-                    };
-                    // The capture is distinct from merged prompt text. The
-                    // ordinary durable-send barrier clears only this capture,
-                    // preserving anything typed during preview or persistence.
-                    let outgoing = Outgoing {
-                        draft: Draft {
-                            text: composer.clone(),
-                            selection: composer.len()..composer.len(),
-                        },
-                        text: prompt.text,
-                        parts: prompt.parts,
-                        model: prompt.model,
-                        agent: prompt.agent,
-                        delivery: prompt.delivery,
-                        consumes_composer: composer == intent.composer,
-                        supersedes: true,
-                        reserved_id: Some((receipt.id, intent)),
-                    };
-                    this.send_taken(
-                        &key,
-                        owner,
-                        outgoing,
-                        (client_of(this), executor),
-                        window,
-                        cx,
-                    );
-                    cx.notify();
-                });
-            })
-        });
-        cx.notify();
-    }
-
-    /// One prompt from taken messages and an optional composer text
-    /// (`buildOutgoingMessage`): their texts joined by a blank line, their
-    /// files, the first agent mention, and their context in order. Without a
-    /// `selection`, the first message's captured selection is used.
-    fn outgoing_from(
-        &mut self,
-        taken: Vec<TakenMessage>,
-        composer: Option<String>,
-        selection: Option<(Option<ModelChoice>, Option<String>)>,
-        delivery: Option<Delivery>,
-        supersedes: bool,
-    ) -> Outgoing {
-        let mut parts = PromptParts::default();
-        let mut texts: Vec<String> = Vec::new();
-        for message in &taken {
-            if let Some(name) = message.message.agent_mention.as_ref()
-                && parts.agents.is_empty()
-            {
-                parts.agents.push(AgentMention {
-                    name: name.clone(),
-                    mention: None,
-                });
-            }
-            if !message.message.text.trim().is_empty() {
-                texts.push(message.message.text.clone());
-            }
-            parts.files.extend(message.files.iter().cloned());
-            let ids = &mut self.message_ids;
-            parts
-                .context
-                .extend(message.synthetic_context(|| -> MessageId { ids.next().0 }));
-        }
-        if let Some(composer) = composer {
-            texts.push(composer);
-        }
-        let (model, agent) = selection.unwrap_or_else(|| {
-            let config = taken
-                .first()
-                .and_then(|message| message.message.send_config.clone());
-            (
-                config.as_ref().map(|config| ModelChoice {
-                    provider_id: config.provider_id.clone(),
-                    model_id: config.model_id.clone(),
-                    variant: config.variant.clone(),
-                }),
-                config.and_then(|config| config.agent),
-            )
-        });
-        // A queue merge retains delivered text for recovery. Reserved merges
-        // keep their server ownership and stable identity after any failure.
-        let text = texts.join("\n\n");
-        Outgoing {
-            draft: Draft {
-                selection: text.len()..text.len(),
-                text: text.clone(),
-            },
-            text,
-            parts,
-            model,
-            agent,
-            delivery,
-            consumes_composer: false,
-            supersedes,
-            reserved_id: None,
-        }
-    }
-
-    /// Sends taken messages, or gives their text back to the composer when
-    /// the session cannot take a send now.
-    fn send_taken(
-        &mut self,
-        key: &QueueKey,
-        owner: DraftKey,
-        outgoing: Outgoing,
-        client: (
-            Option<openchamber_native_transport::client::ServerClient>,
-            tokio::runtime::Handle,
-        ),
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // Nothing to say: no request, and nothing to give back.
-        if outgoing.text.trim().is_empty()
-            && outgoing.parts.files.is_empty()
-            && outgoing.parts.context.is_empty()
-        {
-            return;
-        }
-        let session_key = self.mutation_key(&key.session);
-        let text = outgoing.draft.text.clone();
-        let reserved = outgoing.reserved_id.is_some();
-        // The projection bounded every reference; a take that disagrees is
-        // not journaled and its text goes back.
-        if outgoing
-            .parts
-            .files
-            .iter()
-            .any(|file| file.uri.len() > MAX_URI)
-        {
-            if !reserved {
-                self.give_back_text(&owner, text, window, cx);
-            }
-            self.notify_mutation_failure("chat.nativeRecovery.sendFailed", window, cx);
-            return;
-        }
-        let sent = match client {
-            (Some(client), executor)
-                if key.runtime == self.runtime && self.can_start_send(&key.session) =>
-            {
-                self.send_outgoing(
-                    session_key,
-                    owner.clone(),
-                    outgoing,
-                    (client, executor),
-                    window,
-                    cx,
-                )
-            }
-            _ => false,
-        };
-        if !sent {
-            if !reserved {
-                self.give_back_text(&owner, text, window, cx);
-            }
-            self.notify_mutation_failure("chat.nativeRecovery.sendFailed", window, cx);
-        }
-    }
-}
-
-/// The leading journalable prefix. An in-flight item or any unsupported
-/// item ends it. The server checks these identities atomically at reservation.
-fn take_prefix(queue: &[QueuedMessage], sending: Option<&QueuedItemId>) -> Vec<QueuedItemId> {
-    if sending.is_some() {
-        return Vec::new();
-    }
-    queue
-        .iter()
-        .take_while(|message| message.takeable(MAX_URI))
-        .map(|message| message.id.clone())
-        .collect()
-}
-
-fn reservation_result(
-    result: Option<Result<ReservedPrefix, TransportError>>,
-) -> Result<ReservedPrefix, TransportError> {
-    result.unwrap_or(Err(TransportError::Cancelled))
-}
-
-/// Acquires the server prefix only after the complete request is journaled.
-/// A mismatched receipt cannot change a previously captured submission.
-pub(crate) async fn reserve_captured_prefix(
-    client: &openchamber_native_transport::client::ServerClient,
-    session: &SessionId,
-    directory: &str,
-    prompt: &openchamber_native_transport::prompt::Prompt,
-    intent: &crate::send_attempt::QueueReservation,
-) -> Result<(), TransportError> {
-    let model = prompt.model.as_ref().ok_or_else(|| {
-        TransportError::Malformed("a queue reservation has no captured model".into())
-    })?;
-    let input = QueueItemInput {
-        content: intent.composer.clone(),
-        text: intent.composer.clone(),
-        send_config: QueuedSendConfig {
-            provider_id: model.provider_id.clone(),
-            model_id: model.model_id.clone(),
-            variant: model.variant.clone(),
-            agent: prompt.agent.clone(),
-        },
-    };
-    let ids: Vec<_> = intent
-        .items
-        .iter()
-        .cloned()
-        .map(QueuedItemId::new)
-        .collect();
-    let receipt = client
-        .reserve_queued_prefix(
-            session,
-            directory,
-            &prompt.message_id,
-            &ids,
-            &input,
-            prompt.delivery == Some(Delivery::Steer),
-        )
-        .await?;
-    let observed = receipt.prompt();
-    if receipt.composer != intent.composer
-        || observed.message_id != prompt.message_id
-        || observed.text != prompt.text
-        || observed.parts != prompt.parts
-        || observed.model != prompt.model
-        || observed.agent != prompt.agent
-        || observed.delivery != prompt.delivery
-    {
-        return Err(TransportError::Malformed(
-            "queue reservation changed the captured prompt".into(),
-        ));
-    }
-    Ok(())
-}
-
-fn client_of(workspace: &Workspace) -> Option<openchamber_native_transport::client::ServerClient> {
-    workspace
-        .connection
-        .as_ref()
-        .filter(|connection| matches!(connection.state, ConnectionState::Connected))
-        .and_then(|connection| connection.client.clone())
-}
-
-#[cfg(test)]
-mod reservation_tests {
-    use super::*;
-
-    #[test]
-    fn a_cancelled_reservation_is_unknown_not_empty_success() {
-        assert!(matches!(
-            reservation_result(None),
-            Err(TransportError::Cancelled)
-        ));
-        for status in [404, 409, 500] {
-            assert!(
-                matches!(reservation_result(Some(Err(TransportError::Http { status }))), Err(TransportError::Http { status: actual }) if actual == status)
-            );
-        }
-    }
-
-    #[test]
-    fn reservation_stops_at_every_ineligible_barrier() {
-        let make = |id: &str| QueuedMessage {
-            id: QueuedItemId::new(id),
-            content: id.into(),
-            text: id.into(),
-            agent_mention: None,
-            attachments: Vec::new(),
-            has_context: false,
-            context_preview: None,
-            created_at: 1,
-            send_config: None,
-            goal: false,
-            scheduled: false,
-        };
-        for barrier in 0..3 {
-            let mut middle = make("B");
-            match barrier {
-                0 => middle.goal = true,
-                1 => middle.scheduled = true,
-                _ => middle.attachments.push(
-                    openchamber_native_core::message_queue::QueuedAttachment {
-                        filename: "large".into(),
-                        source: openchamber_native_core::message_queue::AttachmentSource::Local,
-                        size: 100_000,
-                        server_path: None,
-                    },
-                ),
-            }
-            let queue = [make("A"), middle, make("C")];
-            assert_eq!(take_prefix(&queue, None), [QueuedItemId::new("A")]);
-            assert!(take_prefix(&queue, Some(&queue[0].id)).is_empty());
-        }
+        self.begin_payload_prefix(key, ids, delivery, window, cx);
     }
 }

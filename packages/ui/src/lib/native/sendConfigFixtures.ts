@@ -12,9 +12,9 @@ import { createAgentColorResolver } from '@/lib/agentColors';
 import { agentColorPalette } from '@/lib/agentColorPalette';
 import { getDefaultTheme, getThemeById } from '@/lib/theme/themes';
 import { filterVisibleAgents, isAgentHidden } from '@/stores/useAgentsStore';
-import { groupProviderCatalog, resolveDefaultAgentModelSelection } from '@/stores/configModelSelection';
-import { isStaleAutoSelection, useConfigStore } from '@/stores/useConfigStore';
-import { selectAutoReady, useRoutingStore } from '@/stores/useRoutingStore';
+// Relative: knip analyses this generator from the root workspace, where `@/` does not resolve.
+import { groupProviderCatalog, resolveDefaultAgentModelSelection, useConfigStore } from '../../stores/useConfigStore';
+import { useRoutingStore } from '@/stores/useRoutingStore';
 import { useUIStore } from '@/stores/useUIStore';
 
 export const SEND_CONFIG_FIXTURE_PATH = 'native/crates/core/tests/fixtures/send_config.json';
@@ -33,6 +33,7 @@ type Defaults = {
   opencodeDefaultAgent?: string; opencodeDefaultModel?: string;
   lastSelectedModel?: string; hiddenModels?: [string, string][]; allowFallback?: boolean;
   autoRouting?: 'unknown' | 'unavailable' | 'ready' | 'notReady';
+  lastUsedEfforts?: Record<string, string | null>;
 };
 type SelectionInput = { agents: FixtureAgent[]; providers: FixtureProvider[]; defaults: Defaults; settingsLoaded?: boolean };
 
@@ -84,6 +85,9 @@ const selectionScenarios = [
   scenario('unknown configured agent absent after fallback', { settingsDefaultAgent: 'not-loaded' }, { agents: [] }),
   scenario('empty project agent retains nullish precedence', { projectDefaultAgent: '', settingsDefaultAgent: 'missing', allowFallback: false }, { agents: [] }),
   scenario('agent pin supported effort', { opencodeDefaultModel: 'p/other' }, { agents: [{ name: 'build', model: { providerId: 'p', modelId: 'catalog', variant: 'high' } }] }),
+  scenario('configured model inherits matching agent effort', { settingsDefaultModel: 'p/catalog' }, { agents: [{ name: 'build', model: { providerId: 'p', modelId: 'catalog', variant: 'high' } }] }),
+  scenario('configured model inherits remembered effort', { settingsDefaultModel: 'p/catalog', lastUsedEfforts: { 'p/catalog': 'low' } }),
+  scenario('configured model preserves remembered Default', { settingsDefaultModel: 'p/catalog', lastUsedEfforts: { 'p/catalog': null } }),
   scenario('agent pin missing catalog keeps effort', {}, { agents: [{ name: 'build', model: { providerId: 'late', modelId: 'nested/model', variant: 'high' } }] }),
   scenario('agent pin unsupported effort drops', {}, { agents: [{ name: 'build', model: { providerId: 'p', modelId: 'catalog', variant: 'xhigh' } }] }),
   scenario('OpenCode config model with effort', { opencodeDefaultModel: configModelIdentifier({ providerID: 'p', model: 'catalog', variant: 'low' }) }),
@@ -123,12 +127,10 @@ const selectionScenarios = [
 const runSelection = ({ agents: entries, providers: catalog, defaults, settingsLoaded = true }: SelectionInput) => {
   const routing = defaults.autoRouting ?? 'unknown';
   useConfigStore.setState({ settingsDefaultsLoaded: settingsLoaded });
-  useUIStore.setState({ routingFeatureAvailable: routing !== 'unavailable' });
+  useUIStore.setState({ routingFeatureAvailable: routing !== 'unavailable', lastUsedEfforts: defaults.lastUsedEfforts ?? {} });
   useRoutingStore.setState({ loaded: routing !== 'unknown', available: routing === 'ready', autoReady: routing === 'ready' });
   const selected = resolveDefaultAgentModelSelection({
     ...defaults, agents: entries.map(toAgent), providers: catalog.map(toProvider),
-    autoReady: selectAutoReady(useRoutingStore.getState()),
-    staleAuto: isStaleAutoSelection('openchamber', 'auto'),
     fallbackPrefs: {
       lastSelectedModel: defaults.lastSelectedModel,
       hiddenModels: (defaults.hiddenModels ?? []).map(([providerID, modelID]) => ({ providerID, modelID })),
@@ -168,7 +170,7 @@ export const renderSendConfigFixtures = (): string => {
     const grouping = groupingInputs.map((input) => {
       const entries: Provider[] = input.providers.map((entry) => ({ id: entry.id, name: entry.name ?? '', package: entry.id, activation: entry.enabled ? 'enabled' : 'disabled' }));
       const models = input.models.map((entry) => ({ ...toModel(entry.providerId, entry), enabled: entry.enabled }));
-      return { name: input.name, input, expected: groupProviderCatalog(entries, models).map((provider) => ({ id: provider.id, name: provider.name || null, models: provider.models.map(normalizeModel) })) };
+      return { name: input.name, input, expected: groupProviderCatalog(entries, models).providers.map((provider) => ({ id: provider.id, name: provider.name || null, models: provider.models.map(normalizeModel) })) };
     });
     const labelInputs = [
       { name: 'catalog name', providers, choice: { providerId: 'p', modelId: 'catalog' } },
@@ -215,7 +217,7 @@ export const renderSendConfigFixtures = (): string => {
     return `${JSON.stringify({ selections, grouping, modelLabels, agentLabels, colors }, null, 2)}\n`;
   } finally {
     useConfigStore.setState({ settingsDefaultsLoaded: config.settingsDefaultsLoaded });
-    useUIStore.setState({ routingFeatureAvailable: ui.routingFeatureAvailable });
+    useUIStore.setState({ routingFeatureAvailable: ui.routingFeatureAvailable, lastUsedEfforts: ui.lastUsedEfforts });
     useRoutingStore.setState({ loaded: routing.loaded, available: routing.available, autoReady: routing.autoReady });
   }
 };

@@ -1,8 +1,8 @@
 /**
  * Differential fixtures for the native desktop's sidebar membership port.
  *
- * Each scenario runs the reference `createSessionOwnershipIndex` and
- * `projectSidebarChats` and records their ordered results next to the inputs.
+ * Each scenario runs the production collection and `createSessionOwnershipIndex`
+ * and records their ordered results next to the inputs.
  * The Rust core replays the same inputs in
  * `native/crates/core/tests/sidebar_parity.rs`. The fixture is checked in;
  * `sidebarParityFixtures.test.ts` fails when it is stale.
@@ -17,7 +17,10 @@ import { opencodeClient } from '@/lib/opencode/client';
 import type { Session } from '@/lib/opencode/model';
 import { ensureChatsRootDirectory } from '@/lib/chatDirectories';
 import type { SpaceMark } from '@/lib/spaces/spaces-store';
-import { projectSidebarChats } from '@/components/session/sidebar/sessions/sessionChatProjection';
+// Relative: knip analyses this generator from the root workspace, where `@/` does not resolve.
+import { buildSidebarSessionProjection, projectSidebarArchivedSessions } from '../../components/session/sidebar/list/sessionCollection';
+import { buildKnownSessionDirectories } from '@/components/session/sidebar/list/sessionListDirectories';
+import { isSpaceDirectory } from '@/lib/spaces/space-route';
 import { sidebarWorkFixtures } from './sidebarWorkFixtures';
 import {
   createSessionOwnershipIndex,
@@ -98,7 +101,7 @@ const generatedScenario = (name: string, seed: number, count: number): Scenario 
     '/projects/lib',
     '/worktrees/app-feature',
     '/worktrees/app-feature/nested',
-    '/spaces/one/app',
+    '/spaces/000000000001/app',
     '/tmp/scratch',
     'C:/work/app',
     'c:\\work\\app\\sub\\',
@@ -133,13 +136,13 @@ const generatedScenario = (name: string, seed: number, count: number): Scenario 
     projects: [...appProjects, { id: 'win', path: 'C:\\work\\app' }],
     worktrees: [{ projectPath: '/projects/app', worktreePaths: ['/worktrees/app-feature'] }],
     authoritativeProjects: [{ id: 'oc-lib', worktree: '/projects/lib' }],
-    spaces: [{ id: 'space-1', directory: '/spaces/one/app', projectDirectory: '/projects/app' }],
+    spaces: [{ id: '000000000001', directory: '/spaces/000000000001/app', projectDirectory: '/projects/app' }],
   });
 };
 
 export const SIDEBAR_PARITY_SCENARIOS: readonly Scenario[] = [
   scenario('empty inputs', {}),
-  scenario('managed chat and unowned root fall back to Chats', {
+  scenario('managed chat remains in Chats and unregistered roots await admission', {
     sessions: [
       { id: 'managed', directory: `${CHATS_ROOT}/2026-10-01/session-x` },
       { id: 'unowned', directory: '/tmp/elsewhere' },
@@ -147,7 +150,7 @@ export const SIDEBAR_PARITY_SCENARIOS: readonly Scenario[] = [
     ],
     projects: appProjects,
   }),
-  scenario('fallback root keeps descendants across directories', {
+  scenario('registered descendants retain scope while an unregistered root awaits admission', {
     sessions: [
       { id: 'root', directory: '/tmp/root' },
       { id: 'child-owned', parentID: 'root', directory: '/projects/app/src' },
@@ -226,13 +229,13 @@ export const SIDEBAR_PARITY_SCENARIOS: readonly Scenario[] = [
   }),
   scenario('spaces belong to registered projects only', {
     sessions: [
-      { id: 'in-space', directory: '/spaces/one/app' },
-      { id: 'lost-space', directory: '/spaces/two/app' },
+      { id: 'in-space', directory: '/spaces/000000000001/app' },
+      { id: 'lost-space', directory: '/spaces/000000000002/app' },
     ],
     projects: appProjects,
     spaces: [
-      { id: 'one', directory: '/spaces/one/app', projectDirectory: '/projects/app' },
-      { id: 'two', directory: '/spaces/two/app', projectDirectory: '/projects/gone' },
+      { id: '000000000001', directory: '/spaces/000000000001/app', projectDirectory: '/projects/app' },
+      { id: '000000000002', directory: '/spaces/000000000002/app', projectDirectory: '/projects/gone' },
       { id: 'three', directory: null, projectDirectory: null },
     ],
   }),
@@ -324,16 +327,27 @@ const runScenario = ({ input }: Scenario) => {
   const sessions = input.sessions.map(toSession);
   const archivedSessions = input.archivedSessions.map(toSession);
   const isVSCode = input.surface === 'vscode';
+  if (input.spaces.some((space) => space.directory && !isSpaceDirectory(space.directory))) {
+    throw new Error('Space fixtures require production-valid /spaces/<12-hex-id>/ directories');
+  }
+  const worktrees = new Map(input.worktrees.map((entry) => [entry.projectPath, entry.worktreePaths.map((path) => ({
+    path, projectDirectory: entry.projectPath, branch: 'fixture', label: path,
+  }))]));
+  const knownDirectories = buildKnownSessionDirectories(input.projects, worktrees, { includeWorktrees: !isVSCode });
+  const collection = buildSidebarSessionProjection({
+    globalActiveSessions: sessions.filter((session) => !session.time.archived), liveSessions: [],
+    knownDirectories, isVSCode, pinnedSessionIds: new Set(), sessionOrderRanks: new Map(),
+  });
+  const scopedArchivedSessions = projectSidebarArchivedSessions(archivedSessions, knownDirectories, isVSCode);
   const ownership = createSessionOwnershipIndex(
-    sessions,
+    collection.projectSessions,
     input.projects.map((project) => ({ id: project.id, normalizedPath: project.path })),
-    new Map(input.worktrees.map((entry) => [entry.projectPath, entry.worktreePaths.map((path) => ({ path }))])),
+    worktrees,
     isVSCode,
-    archivedSessions,
+    scopedArchivedSessions,
     input.authoritativeProjects,
     input.spaces.map(toSpace),
   );
-  const chats = projectSidebarChats(sessions, ownership, isVSCode);
   return {
     owners: sortedRecord([...ownership.bySessionId].map(([id, owner]) => [id, describeOwner(owner)])),
     sessionsByProject: sortedRecord([...ownership.sessionsByProject].map(([id, bucket]) => [id, sessionIds(bucket)])),
@@ -342,10 +356,10 @@ const runScenario = ({ input }: Scenario) => {
     ),
     sessionsByScope: sortedRecord([...ownership.sessionsByScope].map(([scope, ids]) => [scope, [...ids].sort()])),
     directoryResolutions: ownership.directoryResolutions,
-    chatSessions: sessionIds(chats.chatSessions),
-    projectSessions: sessionIds(chats.projectSessions),
+    chatSessions: sessionIds(collection.chatSessions),
+    projectSessions: sessionIds(collection.projectSessions),
     projectSessionsByProject: sortedRecord(
-      [...chats.projectSessionsByProject].map(([id, bucket]) => [id, sessionIds(bucket)]),
+      [...ownership.sessionsByProject].map(([id, bucket]) => [id, sessionIds(bucket)]),
     ),
   };
 };

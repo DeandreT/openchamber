@@ -5,9 +5,12 @@
 //! receive core records and domain events. See
 //! `docs/rust-desktop/OPENCODE_ADAPTER.md` for the contract.
 
+pub mod attachment;
 pub mod authentication;
 pub mod catalog;
 pub mod client;
+pub mod composer_preparation;
+pub mod control_stream;
 pub mod credential;
 pub mod endpoint;
 pub mod error;
@@ -20,10 +23,13 @@ pub mod message_queue;
 mod parity_tests;
 pub mod permission_policy;
 pub mod project;
+pub mod project_admission;
 mod projection;
 pub mod prompt;
 pub mod prompt_parts;
 pub mod public_asset;
+pub mod queue_frozen_send;
+pub mod queue_manifest;
 mod request;
 mod request_wire;
 pub mod requests;

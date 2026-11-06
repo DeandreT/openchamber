@@ -6,11 +6,11 @@
 //! owned values, stable identifiers or borrowed views.
 
 pub mod branching;
-pub mod chat_projection;
 pub mod chat_roots;
 pub mod composer_selection;
 pub mod context_usage;
 pub mod draft;
+pub mod draft_content;
 pub mod draft_starters;
 pub mod file_draft;
 pub mod file_tree;
@@ -40,6 +40,7 @@ pub mod send_config;
 pub mod session;
 pub mod session_actions;
 pub mod session_index;
+pub mod sidebar_collection;
 pub mod sidebar_rows;
 pub mod sidebar_work;
 pub mod synthetic;

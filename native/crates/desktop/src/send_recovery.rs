@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use gpui_kit::{Context, Task, Window};
 use openchamber_native_core::draft::DraftTarget;
-use openchamber_native_core::ids::{MessageId, SessionId};
+use openchamber_native_core::ids::{MessageId, RuntimeId, SessionId};
 use openchamber_native_core::pending_requests::RequestKey;
 use openchamber_native_transport::error::TransportError;
 use openchamber_native_transport::prompt::SendObservation;
@@ -64,6 +64,163 @@ impl RecoveryState {
 }
 
 impl Workspace {
+    /// Queue request recovery uses operation identities, never prompt identities.
+    /// Inspecting this projection performs no spool read or network request.
+    pub(crate) fn enqueue_recovery_items(&self) -> Vec<crate::recovery_view::EnqueueRecoveryRow> {
+        use crate::queue_storage::{QueueAction, QueueEnqueuePhase};
+
+        let connected = self.connection.as_ref().is_some_and(|connection| {
+            connection.state == ConnectionState::Connected && connection.client.is_some()
+        });
+        let mut rows: Vec<_> = self.queue_storage.operations().iter().filter_map(|operation| {
+            if operation.owner().runtime() != self.runtime.as_str() { return None; }
+            let QueueAction::Enqueue { phase, .. } = operation.action() else { return None; };
+            let busy = self.queue.enqueues.busy(operation.id());
+            let session = SessionId::from(operation.owner().session());
+            let accepted_state = self.queue.enqueues.delivery(operation.id());
+            let check = self.queue.enqueues.check(operation.id());
+            let status = if check == crate::queue_enqueue::EnqueueCheck::Unknown
+                && accepted_state == Some(openchamber_native_transport::queue_manifest::QueueEnqueueState::Queued) {
+                crate::queue_enqueue::EnqueueCheck::Queued
+            } else { check };
+            Some(crate::recovery_view::EnqueueRecoveryRow {
+                id: operation.id().clone(),
+                session_label: self.sessions.get(&session).map_or_else(
+                    || session.to_string().into(), |session| session.title.clone().into()),
+                status,
+                can_check: connected && !busy && self.persistence_ready() && !self.close_in_progress()
+                    && !matches!(phase, QueueEnqueuePhase::Capturing),
+                can_retry: connected && !busy && self.persistence_ready() && !self.close_in_progress()
+                    && (!matches!(phase, QueueEnqueuePhase::Accepted { .. }) || accepted_state == Some(openchamber_native_transport::queue_manifest::QueueEnqueueState::Uncertain)),
+            })
+        }).collect();
+        rows.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
+        rows
+    }
+
+    /// Retained transfers are explicit recovery actions, including after restart.
+    /// Building these rows grants no byte, acknowledgement or dispatch authority.
+    pub(crate) fn transfer_recovery_items(&self) -> Vec<crate::recovery_view::TransferRecoveryRow> {
+        use crate::queue_local_send::LocalSendCheck;
+        use crate::queue_prefix::PrefixCheck;
+        use crate::queue_storage::{
+            QueueAction, QueuePrefixPhase, QueueSendPhase, QueueTakePhase, QueueTakePurpose,
+            QueueTakeSendState,
+        };
+        use crate::queue_take::TakeCheck;
+        use crate::recovery_view::{TransferKind, TransferRecoveryRow};
+
+        let connected = self.connection.as_ref().is_some_and(|connection| {
+            connection.state == ConnectionState::Connected && connection.client.is_some()
+        });
+        let ready = connected && self.persistence_ready() && !self.close_in_progress();
+        let mut rows = Vec::new();
+        for operation in self.queue_storage.operations() {
+            if operation.owner().runtime() != self.runtime.as_str() {
+                continue;
+            }
+            let (kind, status, busy, can_check, can_retry) = match operation.action() {
+                QueueAction::Take { purpose, phase, .. } => {
+                    let busy = self.queue.takes.busy(operation.id());
+                    if matches!(purpose, QueueTakePurpose::Edit)
+                        && matches!(phase, QueueTakePhase::Acknowledged { .. })
+                        && !busy
+                    {
+                        continue;
+                    }
+                    let status = match self.queue.takes.check(operation.id()) {
+                        TakeCheck::Working => "chat.nativeRecovery.transferWorking",
+                        TakeCheck::Failed => "chat.nativeRecovery.transferFailed",
+                        TakeCheck::NotObserved | TakeCheck::Missing => {
+                            "chat.nativeRecovery.notObserved"
+                        }
+                        TakeCheck::Admitted => "chat.nativeRecovery.queued",
+                        TakeCheck::Unknown
+                            if matches!(phase, QueueTakePhase::Acknowledged { local, .. }
+                            if local.send == QueueTakeSendState::Admitted) =>
+                        {
+                            "chat.nativeRecovery.queued"
+                        }
+                        TakeCheck::Unknown | TakeCheck::LocalOwned => {
+                            "chat.nativeRecovery.transferUnknown"
+                        }
+                    };
+                    (TransferKind::Take, status, busy, true, true)
+                }
+                QueueAction::Prefix { phase, .. } => {
+                    let busy = self.queue.prefixes.busy(operation.id());
+                    let check = self.queue.prefixes.check(operation.id());
+                    let status = match check {
+                        PrefixCheck::Working => "chat.nativeRecovery.transferWorking",
+                        PrefixCheck::Missing => "chat.nativeRecovery.notObserved",
+                        PrefixCheck::Admitted => "chat.nativeRecovery.queued",
+                        PrefixCheck::OutOfOrder => "chat.nativeRecovery.outOfOrder",
+                        PrefixCheck::Failed => "chat.nativeRecovery.transferFailed",
+                        PrefixCheck::Unknown => match phase {
+                            QueuePrefixPhase::Admitted(_) => "chat.nativeRecovery.queued",
+                            QueuePrefixPhase::Capturing => "chat.nativeRecovery.preparing",
+                            _ => "chat.nativeRecovery.transferUnknown",
+                        },
+                    };
+                    (
+                        TransferKind::Prefix,
+                        status,
+                        busy,
+                        !matches!(phase, QueuePrefixPhase::Capturing),
+                        check != PrefixCheck::OutOfOrder,
+                    )
+                }
+                QueueAction::Send {
+                    phase: QueueSendPhase::Deleted,
+                    ..
+                } => continue,
+                QueueAction::Send { phase, .. } => {
+                    let busy = self.queue.local_sends.busy(operation.id());
+                    let check = self.queue.local_sends.check(operation.id());
+                    let status = match check {
+                        LocalSendCheck::Working => "chat.nativeRecovery.transferWorking",
+                        LocalSendCheck::Missing => "chat.nativeRecovery.notObserved",
+                        LocalSendCheck::Admitted => "chat.nativeRecovery.queued",
+                        LocalSendCheck::OutOfOrder => "chat.nativeRecovery.outOfOrder",
+                        LocalSendCheck::PreparationUnavailable => "chat.nativeRecovery.sendFailed",
+                        LocalSendCheck::Failed => "chat.nativeRecovery.transferFailed",
+                        LocalSendCheck::Unknown => match phase {
+                            QueueSendPhase::Capturing => "chat.nativeRecovery.preparing",
+                            QueueSendPhase::Admitted { .. } => "chat.nativeRecovery.queued",
+                            _ => "chat.nativeRecovery.transferUnknown",
+                        },
+                    };
+                    (
+                        TransferKind::LocalSend,
+                        status,
+                        busy,
+                        !matches!(phase, QueueSendPhase::Capturing),
+                        check != LocalSendCheck::OutOfOrder,
+                    )
+                }
+                _ => continue,
+            };
+            let session = SessionId::from(operation.owner().session());
+            rows.push(TransferRecoveryRow {
+                id: operation.id().clone(),
+                kind,
+                status,
+                session_label: self.sessions.get(&session).map_or_else(
+                    || session.to_string().into(),
+                    |session| session.title.clone().into(),
+                ),
+                can_check: ready && !busy && can_check,
+                can_retry: ready
+                    && !busy
+                    && can_retry
+                    && (kind == TransferKind::LocalSend
+                        || !self.payload_local_send_blocks_session(&self.runtime, &session)),
+            });
+        }
+        rows.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
+        rows
+    }
+
     pub(crate) fn recovery_items(&self, _cx: &gpui_kit::App) -> Vec<RecoveryRow> {
         let mut rows: Vec<_> = self
             .send_attempts
@@ -142,6 +299,7 @@ impl Workspace {
                         && attempt.admission != Admission::Preparing,
                     can_retry: connected
                         && self.prompt_allowed(key)
+                        && !self.payload_local_send_blocks_session(&key.runtime, &key.session)
                         && !busy
                         && self.persistence_ready()
                         && attempt.admission == Admission::Uncertain
@@ -200,6 +358,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.payload_local_send_blocks_session(&key.runtime, &key.session) {
+            return;
+        }
         if self.creations.get(key).is_some() {
             self.check_creation(key, true, window, cx);
             return;
@@ -272,17 +433,13 @@ impl Workspace {
         if self.send_attempts.created_attempt(key).is_none() {
             self.creations.checks.remove(key);
         }
-        self.return_to_draft(attempt, window, cx);
+        self.return_to_draft(key, attempt, window, cx);
         self.start_background_save(cx);
         cx.notify();
     }
 
-    /// Drops what this client holds for a session the server deleted, and for
-    /// its descendants, which go with it: every send attempt and its checks,
-    /// the creation and its checks, and the drafts, in one journal save. The
-    /// web client clears the same state on a confirmed deletion. A chain still
-    /// running for one of them finds its attempt gone and changes nothing.
-    pub(crate) fn forget_deleted_session(&mut self, deleted: &SessionId, cx: &mut Context<Self>) {
+    /// Capture the current runtime's subtree before its root leaves the index.
+    pub(crate) fn deleted_session_subtree(&self, deleted: &SessionId) -> Vec<SessionId> {
         let mut sessions = vec![deleted.clone()];
         let records: Vec<_> = self
             .sessions
@@ -299,43 +456,103 @@ impl Workspace {
             }
             next += 1;
         }
-        let mut changed = false;
-        for session in &sessions {
-            let key = self.mutation_key(session);
+        sessions
+    }
+
+    pub(crate) fn forget_deleted_session(
+        &mut self,
+        deleted: &SessionId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let sessions = self.deleted_session_subtree(deleted);
+        self.forget_deleted_sessions(&self.runtime.clone(), &sessions, window, cx);
+    }
+
+    /// Explicit IDs belong to the runtime that confirmed deletion. A completion
+    /// after a host switch never consults the replacement runtime's session index.
+    pub(crate) fn forget_deleted_sessions(
+        &mut self,
+        runtime: &RuntimeId,
+        sessions: &[SessionId],
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if sessions.is_empty() {
+            return;
+        }
+        let operations = match self.change_queue_storage(|queue, workspace| {
+            queue.delete_local_sends(runtime, sessions, |candidate| {
+                workspace.validate_queue_candidate(candidate)
+            })
+        }) {
+            Ok(operations) => operations,
+            Err(_) => {
+                // Original drafts and ledger roots remain authoritative on refusal.
+                // Cancel HTTP actors without discarding any durable byte obligation.
+                let roots = self
+                    .queue
+                    .local_sends
+                    .forget_deleted_sessions(runtime, sessions, &[]);
+                self.retire_released_native_roots(roots, window, cx);
+                self.notify_mutation_failure("chat.nativeRecovery.storageFailed", window, cx);
+                self.resume_native_root_close(window, cx);
+                return;
+            }
+        };
+        let mut released =
+            self.queue
+                .local_sends
+                .forget_deleted_sessions(runtime, sessions, &operations);
+        released.extend(
+            self.composer_documents
+                .forget_deleted_sessions(runtime, sessions),
+        );
+        for session in sessions {
+            let key = SessionKey {
+                runtime: runtime.clone(),
+                session: session.clone(),
+            };
             self.permission_modes.creating.remove(&key);
-            changed |= !self.send_attempts.forget_session(&key).is_empty();
+            self.send_attempts.forget_session(&key);
             self.recovery.checks.retain(|(owner, _), _| *owner != key);
             self.recovery.tasks.retain(|(owner, _), _| *owner != key);
-            changed |= self.creations.remove(&key).is_some();
-            changed |= self.creations.checks.remove(&key).is_some();
+            self.creations.remove(&key);
+            self.creations.checks.remove(&key);
             let target = DraftTarget::Session(session.clone());
             let owners: Vec<_> = self
                 .drafts
                 .iter()
                 .map(|(owner, _)| owner)
-                .filter(|owner| *owner.runtime() == self.runtime && *owner.target() == target)
+                .filter(|owner| owner.runtime() == runtime && *owner.target() == target)
                 .cloned()
                 .collect();
             for owner in owners {
-                self.drafts.take(&owner);
+                if let Some(draft) = self.drafts.take(&owner) {
+                    released.extend(
+                        draft.content.files.into_iter().flat_map(|file| {
+                            std::iter::once(file.id).chain(file.source_document_id)
+                        }),
+                    );
+                }
                 self.draft_previews.remove(&owner);
-                changed = true;
             }
             // The composer may still show its text; leaving the session must
             // not save it back.
             if self
                 .composer_key
                 .as_ref()
-                .is_some_and(|owner| *owner.runtime() == self.runtime && *owner.target() == target)
+                .is_some_and(|owner| owner.runtime() == runtime && *owner.target() == target)
             {
                 self.composer_key = None;
-                changed = true;
             }
         }
-        if changed {
-            self.start_background_save(cx);
-            cx.notify();
-        }
+        // Terminal operations still own their bytes. The shared named-root owner
+        // retires only independent roots after its durable save barrier.
+        self.start_background_save(cx);
+        self.retire_released_native_roots(released, window, cx);
+        cx.notify();
+        self.resume_native_root_close(window, cx);
     }
 
     /// Forgets recovery state for the attempts in `before` that exact
@@ -397,6 +614,8 @@ impl Workspace {
         let attempt_key = (key.clone(), id.clone());
         if self.persistence_closing()
             || key.runtime != self.runtime
+            || (matches!(&action, CheckAction::RetryIfMissing(_))
+                && self.payload_local_send_blocks_session(&key.runtime, &key.session))
             || self.send_attempts.is_active(key)
             || self.recovery.tasks.contains_key(&attempt_key)
             || self.creation_tasks.contains_key(key)

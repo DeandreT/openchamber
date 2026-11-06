@@ -38,8 +38,8 @@ use x11rb::{
     protocol::{
         Event,
         xproto::{
-            Atom, AtomEnum, ConnectionExt as _, CreateWindowAux, EventMask, PropMode, Property,
-            PropertyNotifyEvent, SELECTION_NOTIFY_EVENT, SelectionNotifyEvent,
+            Atom, AtomEnum, ConnectionExt as _, CreateWindowAux, EventMask, GetPropertyReply, PropMode,
+            Property, PropertyNotifyEvent, SELECTION_NOTIFY_EVENT, SelectionNotifyEvent,
             SelectionRequestEvent, Time, WindowClass,
         },
     },
@@ -47,7 +47,10 @@ use x11rb::{
     wrapper::ConnectionExt as _,
 };
 
-use gpui::{ClipboardItem, Image, ImageFormat, hash};
+use crate::linux::clipboard_files::{
+    GNOME_COPIED_FILES_MIME_TYPE, MAX_FILE_LIST_BYTES, URI_LIST_MIME_TYPE, parse_file_list,
+};
+use gpui::{ClipboardEntry, ClipboardItem, Image, ImageFormat, hash};
 use strum::IntoEnumIterator;
 
 type Result<T, E = Error> = std::result::Result<T, E>;
@@ -78,7 +81,8 @@ x11rb::atom_manager! {
         TEXT_MIME_UNKNOWN: b"text/plain",
 
         // HTML: b"text/html",
-        // URI_LIST: b"text/uri-list",
+        URI_LIST: URI_LIST_MIME_TYPE.as_bytes(),
+        GNOME_COPIED_FILES: GNOME_COPIED_FILES_MIME_TYPE.as_bytes(),
 
         PNG__MIME: ImageFormat::mime_type(ImageFormat::Png ).as_bytes(),
         JPEG_MIME: ImageFormat::mime_type(ImageFormat::Jpeg).as_bytes(),
@@ -203,6 +207,21 @@ struct ClipboardData {
     format: Atom,
 }
 
+fn validate_file_list_reply(
+    reply: &GetPropertyReply,
+    target_format: Atom,
+    buffered: usize,
+) -> Result<()> {
+    if reply.type_ != target_format
+        || reply.format != 8
+        || reply.bytes_after != 0
+        || reply.value.len() > MAX_FILE_LIST_BYTES.saturating_sub(buffered)
+    {
+        return Err(Error::ConversionFailure);
+    }
+    Ok(())
+}
+
 enum ReadSelNotifyResult {
     GotData(ClipboardData),
     IncrStarted,
@@ -290,8 +309,8 @@ impl Inner {
         if self.is_owner(selection)? {
             let data = self.selection_of(selection).data.read();
             if let Some(data_list) = &*data {
-                for data in data_list {
-                    for format in formats {
+                for format in formats {
+                    for data in data_list {
                         if *format == data.format {
                             return Ok(data.clone());
                         }
@@ -326,7 +345,11 @@ impl Inner {
 
         if let Some(&format) = highest_precedence_format {
             let data = self.read_single(&reader, selection, format)?;
-            if !formats.contains(&data.format) {
+            if !formats.contains(&data.format)
+                || ((self.file_list_mime_type(format).is_some()
+                    || self.file_list_mime_type(data.format).is_some())
+                    && data.format != format)
+            {
                 // This shouldn't happen since the format is from the TARGETS list.
                 log::trace!(
                     "Conversion to {} responded with {} which is not supported",
@@ -340,9 +363,16 @@ impl Inner {
 
         log::trace!("Falling back on attempting to convert clipboard to each format.");
         for format in formats {
+            // File lists require an advertised target. Probing these on ordinary
+            // text owners adds synchronous requests and can wait for timeouts.
+            if self.file_list_mime_type(*format).is_some() {
+                continue;
+            }
             match self.read_single(&reader, selection, *format) {
                 Ok(data) => {
-                    if formats.contains(&data.format) {
+                    if formats.contains(&data.format)
+                        && self.file_list_mime_type(data.format).is_none()
+                    {
                         return Ok(data);
                     } else {
                         log::trace!(
@@ -371,6 +401,16 @@ impl Inner {
             .chunks_exact(4)
             .map(|chunk| u32::from_le_bytes([chunk[0], chunk[1], chunk[2], chunk[3]]))
             .collect()
+    }
+
+    fn file_list_mime_type(&self, format: Atom) -> Option<&'static str> {
+        if format == self.atoms.URI_LIST {
+            Some(URI_LIST_MIME_TYPE)
+        } else if format == self.atoms.GNOME_COPIED_FILES {
+            Some(GNOME_COPIED_FILES_MIME_TYPE)
+        } else {
+            None
+        }
     }
 
     fn read_single(
@@ -566,6 +606,7 @@ impl Inner {
         // `reply.type_` will have format information, but `bytes` will only be non-empty if `ANY`
         // is provided.
         let property_type = AtomEnum::ANY;
+        let is_file_list = self.file_list_mime_type(target_format).is_some();
         // request the selection
         let mut reply = reader
             .conn
@@ -575,7 +616,11 @@ impl Inner {
                 event.property,
                 property_type,
                 0,
-                u32::MAX / 4,
+                if is_file_list {
+                    (MAX_FILE_LIST_BYTES / 4) as u32
+                } else {
+                    u32::MAX / 4
+                },
             )
             .map_err(into_unknown)?
             .reply()
@@ -583,6 +628,18 @@ impl Inner {
 
         // we found something
         if reply.type_ == self.atoms.INCR {
+            if is_file_list {
+                if reply.format != 32 || reply.bytes_after != 0 {
+                    return Err(Error::ConversionFailure);
+                }
+                let minimum = reply
+                    .value32()
+                    .and_then(|mut values| values.next())
+                    .ok_or(Error::ConversionFailure)?;
+                if minimum as usize > MAX_FILE_LIST_BYTES {
+                    return Err(Error::ConversionFailure);
+                }
+            }
             // Note that we call the get_property again because we are
             // indicating that we are ready to receive the data by deleting the
             // property, however deleting only works if the type matches the
@@ -595,14 +652,14 @@ impl Inner {
                     event.property,
                     self.atoms.INCR,
                     0,
-                    u32::MAX / 4,
+                    if is_file_list { 1 } else { u32::MAX / 4 },
                 )
                 .map_err(into_unknown)?
                 .reply()
                 .map_err(into_unknown)?;
             log::trace!("Receiving INCR segments");
             *using_incr = true;
-            if reply.value_len == 4 {
+            if !is_file_list && reply.value_len == 4 {
                 let min_data_len = reply
                     .value32()
                     .and_then(|mut vals| vals.next())
@@ -611,6 +668,9 @@ impl Inner {
             }
             Ok(ReadSelNotifyResult::IncrStarted)
         } else {
+            if is_file_list {
+                validate_file_list_reply(&reply, target_format, 0)?;
+            }
             Ok(ReadSelNotifyResult::GotData(ClipboardData {
                 bytes: reply.value,
                 format: reply.type_,
@@ -636,6 +696,7 @@ impl Inner {
             // now preparing the data
             return Ok(false);
         }
+        let is_file_list = self.file_list_mime_type(target_format).is_some();
         let reply = reader
             .conn
             .get_property(
@@ -648,11 +709,19 @@ impl Inner {
                     target_format
                 },
                 0,
-                u32::MAX / 4,
+                if is_file_list {
+                    MAX_FILE_LIST_BYTES.saturating_sub(incr_data.len()).div_ceil(4) as u32
+                } else {
+                    u32::MAX / 4
+                },
             )
             .map_err(into_unknown)?
             .reply()
             .map_err(into_unknown)?;
+
+        if is_file_list {
+            validate_file_list_reply(&reply, target_format, incr_data.len())?;
+        }
 
         // log::trace!("Received segment. value_len {}", reply.value_len,);
         if reply.value_len == 0 {
@@ -1037,9 +1106,13 @@ impl Clipboard {
             self.inner.atoms.TEXT_MIME_UNKNOWN,
         ];
 
-        // image formats first, as they are more specific, and read will return the first
-        // format that the contents can be converted to
-        let mut format_atoms = Vec::with_capacity(image_entries.len() + text_format_atoms.len());
+        // Explicit copied files take precedence over image previews and filenames
+        // offered as text. PRIMARY and SECONDARY retain their existing behavior.
+        let mut format_atoms = Vec::with_capacity(image_entries.len() + text_format_atoms.len() + 2);
+        if matches!(selection, ClipboardKind::Clipboard) {
+            format_atoms.push(self.inner.atoms.URI_LIST);
+            format_atoms.push(self.inner.atoms.GNOME_COPIED_FILES);
+        }
         format_atoms.extend(image_entries.iter().map(|(atom, _)| *atom));
         format_atoms.extend_from_slice(text_format_atoms);
 
@@ -1049,6 +1122,13 @@ impl Clipboard {
             "read clipboard as format {:?}",
             self.inner.atom_name(result.format)
         );
+
+        if let Some(mime_type) = self.inner.file_list_mime_type(result.format) {
+            let paths = parse_file_list(mime_type, &result.bytes).ok_or(Error::ConversionFailure)?;
+            return Ok(ClipboardItem {
+                entries: vec![ClipboardEntry::ExternalPaths(paths)],
+            });
+        }
 
         for (format_atom, image_format) in image_entries {
             if result.format == format_atom {
@@ -1284,5 +1364,59 @@ impl Error {
         Error::Unknown {
             description: message.into(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file_list_reply() -> GetPropertyReply {
+        GetPropertyReply {
+            type_: 17,
+            format: 8,
+            value_len: 1,
+            value: vec![b'a'],
+            ..GetPropertyReply::default()
+        }
+    }
+
+    #[test]
+    fn file_list_properties_require_the_requested_mime_and_byte_encoding() {
+        let reply = file_list_reply();
+        assert!(validate_file_list_reply(&reply, 17, 0).is_ok());
+        assert!(matches!(
+            validate_file_list_reply(&reply, 18, 0),
+            Err(Error::ConversionFailure)
+        ));
+        let mut wrong_width = file_list_reply();
+        wrong_width.format = 32;
+        assert!(matches!(
+            validate_file_list_reply(&wrong_width, 17, 0),
+            Err(Error::ConversionFailure)
+        ));
+        let mut partial = file_list_reply();
+        partial.bytes_after = 1;
+        assert!(matches!(
+            validate_file_list_reply(&partial, 17, 0),
+            Err(Error::ConversionFailure)
+        ));
+    }
+
+    #[test]
+    fn incremental_file_list_properties_enforce_the_cumulative_bound() {
+        let reply = file_list_reply();
+        assert!(validate_file_list_reply(&reply, 17, MAX_FILE_LIST_BYTES - 1).is_ok());
+        assert!(matches!(
+            validate_file_list_reply(&reply, 17, MAX_FILE_LIST_BYTES),
+            Err(Error::ConversionFailure)
+        ));
+        let mut end = file_list_reply();
+        end.value.clear();
+        end.value_len = 0;
+        assert!(
+            validate_file_list_reply(&end, 17, MAX_FILE_LIST_BYTES).is_ok(),
+            "an INCR terminator must remain readable at the byte bound"
+        );
     }
 }

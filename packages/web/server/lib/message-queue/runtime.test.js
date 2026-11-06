@@ -1,8 +1,9 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { createHash } from 'node:crypto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createMessageQueueRuntime, parseQueuedItemInput } from './runtime.js';
+import { createMessageQueueRuntime, parseQueuedItemInput, registerMessageQueueRoutes } from './runtime.js';
 
 const SESSION = 'ses_queue_test_1';
 const DIRECTORY = '/repo';
@@ -86,7 +87,7 @@ const createOpenCode = () => {
   return { state, fetchImpl };
 };
 
-const createRuntime = ({ dataDir = makeDataDir(), openCode = createOpenCode(), knowledge = null, retryDelayMs, resolveAutoSelection, now, beforeScheduledTaskSend, onScheduledTaskResult, persistSessionGoal, isDeliveryHeld, deliveryHoldReady } = {}) => {
+const createRuntime = ({ dataDir = makeDataDir(), openCode = createOpenCode(), knowledge = null, retryDelayMs, resolveAutoSelection, now, beforeScheduledTaskSend, onScheduledTaskResult, persistSessionGoal, isDeliveryHeld, deliveryHoldReady, onBroadcast } = {}) => {
   let eventHandler = () => {};
   let statusHandler = () => {};
   const broadcasts = [];
@@ -99,7 +100,7 @@ const createRuntime = ({ dataDir = makeDataDir(), openCode = createOpenCode(), k
     buildOpenCodeUrl: (fetchPath) => `http://opencode.test${fetchPath}`,
     getOpenCodeAuthHeaders: () => ({}),
     sessionKnowledgeRuntime: knowledge,
-    broadcastGlobalUiEvent: (event) => broadcasts.push(event),
+    broadcastGlobalUiEvent: (event) => { broadcasts.push(event); onBroadcast?.(event); },
     onPromptSent: (sessionId) => promptSent.push(sessionId),
     dataDir,
     fetchImpl: openCode.fetchImpl,
@@ -130,6 +131,603 @@ const createRuntime = ({ dataDir = makeDataDir(), openCode = createOpenCode(), k
 const settle = async (ms = 30) => {
   await new Promise((resolve) => setTimeout(resolve, ms));
 };
+
+describe('transferred context ownership', () => {
+  const capture = () => ({ directory: DIRECTORY, item: {
+    format: 'manifest-v1', content: 'editable draft', text: 'editable draft', attachmentManifest: [],
+    context: [{ kind: 'context', text: 'attached context', instructions: 'read this first', metadata: { retained: true } }],
+    sendConfig: item().sendConfig,
+    promptParts: { context: [{ id: 'msg_transfer_explicit_context', text: 'official context', metadata: { original: true } }] },
+  } });
+  // Use the same real upload and capture protocol as receipts.test.mjs. The
+  // runtime creates and verifies every root index; tests never supply one.
+  const uploadCapture = async (runtime, requestId, value, sessionId = SESSION) => {
+    const bytes = Buffer.from(JSON.stringify(value));
+    const sha256 = createHash('sha256').update(bytes).digest('hex');
+    const { attachment } = await runtime.uploadAttachment(sessionId, requestId, 'capture', {
+      directory: value.directory, filename: 'capture.json', mimeType: 'application/json', size: bytes.length, sha256,
+    }, bytes);
+    return { format: 'payload-v1', payloadManifest: { version: 1, encoding: 'utf-8-json', totalBytes: bytes.length,
+      sha256, chunks: [{ ordinal: 0, ...attachment }] } };
+  };
+  const editCapture = async (runtime, transferred) => {
+    const buffers = [];
+    for (const descriptor of transferred.payloadManifest.chunks) {
+      const { bytes } = await runtime.getAttachment(SESSION, descriptor.requestId, descriptor.attachmentId, DIRECTORY);
+      expect(createHash('sha256').update(bytes).digest('hex')).toBe(descriptor.sha256);
+      buffers.push(bytes);
+    }
+    const bytes = Buffer.concat(buffers);
+    expect(bytes.length).toBe(transferred.payloadManifest.totalBytes);
+    expect(createHash('sha256').update(bytes).digest('hex')).toBe(transferred.payloadManifest.sha256);
+    const original = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes));
+    const contexts = original.item.context.flatMap((entry) => {
+      const part = { text: entry.text };
+      if (entry.metadata) part.metadata = entry.metadata;
+      return [...(entry.instructions ? [{ text: entry.instructions }] : []), part];
+    }).concat(original.item.promptParts.context);
+    return { directory: DIRECTORY, item: { ...original.item, text: 'edited draft', content: 'edited draft', context: [],
+      promptParts: { ...original.item.promptParts, context: contexts.map((entry, index) => ({ ...entry, id: transferred.payloadIndex.contextIds[index] })) },
+    } };
+  };
+  const takeOriginal = async (runtime, prefix) => {
+    const pointer = await uploadCapture(runtime, `${prefix}-upload`, capture());
+    const accepted = await runtime.enqueueRequest(SESSION, `${prefix}-enqueue`, { directory: DIRECTORY, item: pointer });
+    const transfer = await runtime.takeRequest(SESSION, `${prefix}-take`, {
+      directory: DIRECTORY, itemIds: [accepted.receipt.itemId], format: 'payload-v1',
+    });
+    return { accepted, transfer, edited: await editCapture(runtime, transfer.items[0]) };
+  };
+
+  it('retains acknowledged Take context IDs in a composer prefix across restart', async () => {
+    vi.useFakeTimers();
+    const first = createRuntime({ isDeliveryHeld: () => true });
+    const pointer = await uploadCapture(first.runtime, 'context-original-upload', capture());
+    const accepted = await first.runtime.enqueueRequest(SESSION, 'context-original-enqueue', { directory: DIRECTORY, item: pointer });
+    const transfer = await first.runtime.takeRequest(SESSION, 'context-original-take', {
+      directory: DIRECTORY, itemIds: [accepted.receipt.itemId], format: 'payload-v1',
+    });
+    expect(transfer.items[0].payloadIndex.contextIds).toEqual(accepted.receipt.contextIds);
+    const edited = await editCapture(first.runtime, transfer.items[0]);
+    await first.runtime.acknowledgeTake(SESSION, 'context-original-take', DIRECTORY);
+    first.runtime.stop();
+    await first.runtime.flush();
+
+    const restored = createRuntime({ dataDir: first.dataDir, isDeliveryHeld: () => true });
+    const successor = await restored.runtime.enqueue(SESSION, DIRECTORY, item({ text: 'queued successor' }));
+    const composer = await uploadCapture(restored.runtime, 'context-composer-upload', edited);
+    const request = { format: 'payload-v1', directory: DIRECTORY, id: 'msg_transferred_composer_prefix',
+      itemIds: [successor.itemId], composer };
+    const preview = await restored.runtime.previewPrefix(SESSION, request);
+    expect(preview.contextIds).toEqual(accepted.receipt.contextIds);
+    const reserved = await restored.runtime.reservePrefix(SESSION, request);
+    expect(reserved.contextIds).toEqual(accepted.receipt.contextIds);
+    expect(reserved.reservation.composer.payloadIndex.contextIds).toEqual(accepted.receipt.contextIds);
+    restored.runtime.stop();
+    await restored.runtime.flush();
+
+    const recovered = createRuntime({ dataDir: first.dataDir, isDeliveryHeld: () => true });
+    expect((await recovered.runtime.reservePrefix(SESSION, request)).contextIds).toEqual(accepted.receipt.contextIds);
+    recovered.runtime.stop();
+    await recovered.runtime.flush();
+  });
+
+  it('re-enqueues an acknowledged edit with its original IDs and prevents competing ownership after restart', async () => {
+    vi.useFakeTimers();
+    const first = createRuntime({ isDeliveryHeld: () => true });
+    const pointer = await uploadCapture(first.runtime, 'reenqueue-original-upload', capture());
+    const original = await first.runtime.enqueueRequest(SESSION, 'reenqueue-original-request', { directory: DIRECTORY, item: pointer });
+    const transfer = await first.runtime.takeRequest(SESSION, 'reenqueue-original-take', {
+      directory: DIRECTORY, itemIds: [original.receipt.itemId], format: 'payload-v1',
+    });
+    const edited = await editCapture(first.runtime, transfer.items[0]);
+    await first.runtime.acknowledgeTake(SESSION, 'reenqueue-original-take', DIRECTORY);
+    const editedPointer = await uploadCapture(first.runtime, 'reenqueue-edited-upload', edited);
+    const input = { directory: DIRECTORY, item: editedPointer };
+    const accepted = await first.runtime.enqueueRequest(SESSION, 'reenqueue-edited-request', input);
+    expect(accepted.receipt.contextIds).toEqual(original.receipt.contextIds);
+    expect(accepted.receipt.messageId).not.toBe(original.receipt.messageId);
+    await expect(first.runtime.enqueueRequest(SESSION, 'reenqueue-competing-request', input)).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    first.runtime.stop();
+    await first.runtime.flush();
+
+    const restored = createRuntime({ dataDir: first.dataDir, isDeliveryHeld: () => true });
+    expect((await restored.runtime.enqueueRequest(SESSION, 'reenqueue-edited-request', input)).receipt).toEqual(accepted.receipt);
+    await expect(restored.runtime.enqueueRequest(SESSION, 'reenqueue-competing-request', input)).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    // The selected queue already owns these IDs. A composer cannot alias them.
+    await expect(restored.runtime.previewPrefix(SESSION, { format: 'payload-v1', directory: DIRECTORY,
+      id: 'msg_duplicate_selected_context', itemIds: [accepted.receipt.itemId], composer: editedPointer })).rejects.toBeDefined();
+    restored.runtime.stop();
+    await restored.runtime.flush();
+  });
+
+  it('refuses active and unacknowledged context custody without changing queue ownership', async () => {
+    vi.useFakeTimers();
+    const { runtime } = createRuntime({ isDeliveryHeld: () => true });
+    const original = await runtime.enqueueRequest(SESSION, 'active-context-original', { directory: DIRECTORY, item: capture().item });
+    const explicit = { directory: DIRECTORY, item: { ...capture().item, context: [],
+      promptParts: { context: original.receipt.contextIds.map((id) => ({ id, text: 'captured context' })) } } };
+    const composer = await uploadCapture(runtime, 'active-context-composer', explicit);
+    const successor = await runtime.enqueue(SESSION, DIRECTORY, item());
+    const request = { format: 'payload-v1', directory: DIRECTORY, id: 'msg_unacknowledged_context_prefix', itemIds: [successor.itemId], composer };
+    await expect(runtime.enqueueRequest(SESSION, 'active-context-competing', { directory: DIRECTORY, item: composer })).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    // A prefix can own the selected original, but its composer cannot reuse the
+    // same identities as another queued item outside that selected prefix.
+    await runtime.reorder(SESSION, [successor.itemId, original.receipt.itemId]);
+    await expect(runtime.previewPrefix(SESSION, request)).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    const transfer = await runtime.takeRequest(SESSION, 'active-context-take', {
+      directory: DIRECTORY, itemIds: [original.receipt.itemId], format: 'payload-v1',
+    });
+    expect(transfer.state).toBe('transferring');
+    await expect(runtime.previewPrefix(SESSION, request)).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    await expect(runtime.enqueueRequest(SESSION, 'unack-context-competing', { directory: DIRECTORY, item: composer })).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    expect(runtime.sessionSnapshot(SESSION).items.map((entry) => entry.id)).toEqual([successor.itemId]);
+    expect((await runtime.getRequest(SESSION, 'active-context-take', DIRECTORY)).items).toEqual(transfer.items);
+    runtime.stop();
+    await runtime.flush();
+  });
+
+  it('rejects foreign owners and original prompt aliases after durable acknowledgement', async () => {
+    vi.useFakeTimers();
+    const { runtime } = createRuntime({ isDeliveryHeld: () => true });
+    const { accepted, edited } = await takeOriginal(runtime, 'foreign-context');
+    await runtime.acknowledgeTake(SESSION, 'foreign-context-take', DIRECTORY);
+    for (const [index, sessionId, directory] of [[0, 'ses_foreign_context', DIRECTORY], [1, SESSION, '/other']]) {
+      // These bytes really belong to the competing owner, so blob validation
+      // cannot hide a missing context-ownership check.
+      const pointer = await uploadCapture(runtime, `foreign-context-upload-${index}`, { ...edited, directory }, sessionId);
+      await expect(runtime.enqueueRequest(sessionId, `foreign-context-request-${index}`, { directory, item: pointer })).rejects.toMatchObject({ code: 'queue_request_conflict' });
+      const successor = await runtime.enqueue(sessionId, directory, item());
+      await expect(runtime.previewPrefix(sessionId, { format: 'payload-v1', directory,
+        id: `msg_foreign_context_prefix_${index}`, itemIds: [successor.itemId], composer: pointer })).rejects.toMatchObject({ code: 'queue_request_conflict' });
+      await runtime.clear(sessionId);
+    }
+    const alias = { ...edited, item: { ...edited.item,
+      promptParts: { context: [{ id: accepted.receipt.messageId, text: 'prompt cannot become context' }] } } };
+    const pointer = await uploadCapture(runtime, 'prompt-alias-upload', alias);
+    await expect(runtime.enqueueRequest(SESSION, 'prompt-alias-enqueue', { directory: DIRECTORY, item: pointer })).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    const successor = await runtime.enqueue(SESSION, DIRECTORY, item());
+    await expect(runtime.previewPrefix(SESSION, { format: 'payload-v1', directory: DIRECTORY,
+      id: 'msg_prompt_alias_prefix', itemIds: [successor.itemId], composer: pointer })).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    const valid = await uploadCapture(runtime, 'context-alias-upload', edited);
+    await expect(runtime.previewPrefix(SESSION, { format: 'payload-v1', directory: DIRECTORY,
+      id: accepted.receipt.contextIds[0], itemIds: [successor.itemId], composer: valid })).rejects.toBeDefined();
+    runtime.stop();
+    await runtime.flush();
+  });
+
+  it('keeps uncertain contexts excluded through restart and refuses transfer', async () => {
+    vi.useFakeTimers();
+    let held = true;
+    let observed;
+    const completed = new Promise((resolve) => { observed = resolve; });
+    const first = createRuntime({ isDeliveryHeld: () => held, onBroadcast: (event) => {
+      const session = event.properties.session;
+      if (session.sendingId === null && session.items[0]?.queueDelivery?.state === 'uncertain') observed();
+    } });
+    const value = capture();
+    const accepted = await first.runtime.enqueueRequest(SESSION, 'uncertain-context-original', value);
+    held = false;
+    first.runtime.release(SESSION);
+    await vi.advanceTimersByTimeAsync(0);
+    await completed;
+    expect((await first.runtime.getRequest(SESSION, 'uncertain-context-original', DIRECTORY)).state).toBe('uncertain');
+    await expect(first.runtime.takeRequest(SESSION, 'uncertain-context-take', {
+      directory: DIRECTORY, itemIds: [accepted.receipt.itemId], format: 'payload-v1',
+    })).rejects.toMatchObject({ status: 409 });
+    first.runtime.stop();
+    await first.runtime.flush();
+    const restored = createRuntime({ dataDir: first.dataDir, isDeliveryHeld: () => true });
+    const successor = await restored.runtime.enqueue(SESSION, DIRECTORY, item());
+    await restored.runtime.reorder(SESSION, [successor.itemId, accepted.receipt.itemId]);
+    const composer = await uploadCapture(restored.runtime, 'uncertain-context-upload', { directory: DIRECTORY,
+      item: { ...value.item, context: [], promptParts: { context: accepted.receipt.contextIds.map((id) => ({ id, text: 'same identity' })) } } });
+    await expect(restored.runtime.enqueueRequest(SESSION, 'uncertain-context-competing', { directory: DIRECTORY, item: composer })).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    await expect(restored.runtime.previewPrefix(SESSION, { format: 'payload-v1', directory: DIRECTORY,
+      id: 'msg_uncertain_context_prefix', itemIds: [successor.itemId], composer })).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    restored.runtime.stop();
+    await restored.runtime.flush();
+  });
+
+  it('holds context custody when acknowledgement persistence fails until exact recovery', async () => {
+    vi.useFakeTimers();
+    const { runtime, dataDir } = createRuntime({ isDeliveryHeld: () => true });
+    const { edited } = await takeOriginal(runtime, 'pending-context');
+    const composer = await uploadCapture(runtime, 'pending-context-composer', edited);
+    const successor = await runtime.enqueue(SESSION, DIRECTORY, item());
+    await runtime.flush();
+    const file = path.join(dataDir, 'message-queue.json');
+    fs.renameSync(file, `${file}.retained`);
+    fs.mkdirSync(file);
+    const request = { format: 'payload-v1', directory: DIRECTORY, id: 'msg_pending_context_prefix', itemIds: [successor.itemId], composer };
+    await expect(runtime.acknowledgeTake(SESSION, 'pending-context-take', DIRECTORY)).rejects.toBeDefined();
+    await expect(runtime.previewPrefix(SESSION, request)).rejects.toMatchObject({ status: 409 });
+    await expect(runtime.enqueueRequest(SESSION, 'pending-context-competing', { directory: DIRECTORY, item: composer })).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    await expect(runtime.getRequest(SESSION, 'pending-context-take', DIRECTORY)).rejects.toMatchObject({ code: 'queue_request_pending' });
+    fs.rmdirSync(file);
+    fs.renameSync(`${file}.retained`, file);
+    expect((await runtime.getRequest(SESSION, 'pending-context-take', DIRECTORY)).state).toBe('acknowledged');
+    const reserved = await runtime.reservePrefix(SESSION, request);
+    expect(reserved.contextIds).toEqual(edited.item.promptParts.context.map((entry) => entry.id));
+    runtime.stop();
+    await runtime.flush();
+  });
+
+  it('retains consumed prefix context fencing after admission and restart', async () => {
+    vi.useFakeTimers();
+    let admitted = null;
+    let observed;
+    const completed = new Promise((resolve) => { observed = resolve; });
+    const openCode = createOpenCode();
+    const fetch = openCode.fetchImpl;
+    openCode.fetchImpl = vi.fn((url, init) => new URL(url).pathname.endsWith('/inbox')
+      ? Promise.resolve(Response.json({ data: admitted ? [admitted] : [] })) : fetch(url, init));
+    const first = createRuntime({ openCode, isDeliveryHeld: () => true,
+      onBroadcast: (event) => { if (event.properties.session.items.length === 0 && admitted) observed(); } });
+    const { edited } = await takeOriginal(first.runtime, 'consumed-context');
+    await first.runtime.acknowledgeTake(SESSION, 'consumed-context-take', DIRECTORY);
+    const composer = await uploadCapture(first.runtime, 'consumed-context-composer', edited);
+    const successor = await first.runtime.enqueue(SESSION, DIRECTORY, item());
+    const request = { format: 'payload-v1', directory: DIRECTORY, id: 'msg_consumed_context_prefix', itemIds: [successor.itemId], composer };
+    await first.runtime.reservePrefix(SESSION, request);
+    admitted = { id: request.id, type: 'user', sessionID: SESSION, delivery: 'queue', time: { created: 1 } };
+    first.runtime.release(SESSION);
+    await vi.advanceTimersByTimeAsync(0);
+    await completed;
+    first.runtime.stop();
+    await first.runtime.flush();
+    const restored = createRuntime({ dataDir: first.dataDir, isDeliveryHeld: () => true });
+    await expect(restored.runtime.enqueueRequest(SESSION, 'consumed-context-reenqueue', { directory: DIRECTORY, item: composer })).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    const later = await restored.runtime.enqueue(SESSION, DIRECTORY, item());
+    await expect(restored.runtime.reservePrefix(SESSION, { ...request, id: 'msg_competing_consumed_prefix', itemIds: [later.itemId] })).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    // Replaying an old acknowledgement cannot return custody to the journal.
+    await restored.runtime.acknowledgeTake(SESSION, 'consumed-context-take', DIRECTORY);
+    await expect(restored.runtime.enqueueRequest(SESSION, 'consumed-context-reenqueue', { directory: DIRECTORY, item: composer })).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    restored.runtime.stop();
+    await restored.runtime.flush();
+  });
+
+  it('keeps a second acknowledged edit chain and selected prefix stable across restart', async () => {
+    vi.useFakeTimers();
+    const first = createRuntime({ isDeliveryHeld: () => true });
+    const { accepted: original, edited } = await takeOriginal(first.runtime, 'chain-context');
+    await first.runtime.acknowledgeTake(SESSION, 'chain-context-take', DIRECTORY);
+    const pointer = await uploadCapture(first.runtime, 'chain-context-edited', edited);
+    const second = await first.runtime.enqueueRequest(SESSION, 'chain-context-second-enqueue', { directory: DIRECTORY, item: pointer });
+    const transfer = await first.runtime.takeRequest(SESSION, 'chain-context-second-take', {
+      directory: DIRECTORY, itemIds: [second.receipt.itemId], format: 'payload-v1',
+    });
+    expect(transfer.items[0].payloadIndex.contextIds).toEqual(original.receipt.contextIds);
+    await first.runtime.acknowledgeTake(SESSION, 'chain-context-second-take', DIRECTORY);
+    const third = await first.runtime.enqueueRequest(SESSION, 'chain-context-third-enqueue', { directory: DIRECTORY, item: pointer });
+    const emptyComposer = await uploadCapture(first.runtime, 'chain-context-empty-composer', { directory: DIRECTORY,
+      item: { ...edited.item, content: '', text: '', context: [], promptParts: { context: [] } } });
+    const request = { format: 'payload-v1', directory: DIRECTORY, id: 'msg_chain_context_prefix',
+      itemIds: [third.receipt.itemId], composer: emptyComposer };
+    expect((await first.runtime.reservePrefix(SESSION, request)).contextIds).toEqual(original.receipt.contextIds);
+    first.runtime.stop();
+    await first.runtime.flush();
+    const restored = createRuntime({ dataDir: first.dataDir, isDeliveryHeld: () => true });
+    expect((await restored.runtime.reservePrefix(SESSION, request)).contextIds).toEqual(original.receipt.contextIds);
+    // Replaying older request receipts and acknowledgements never rewinds custody.
+    expect((await restored.runtime.getRequest(SESSION, 'chain-context-enqueue', DIRECTORY)).receipt).toEqual(original.receipt);
+    await restored.runtime.acknowledgeTake(SESSION, 'chain-context-take', DIRECTORY);
+    await expect(restored.runtime.enqueueRequest(SESSION, 'chain-context-competing', { directory: DIRECTORY, item: pointer })).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    restored.runtime.stop();
+    await restored.runtime.flush();
+  });
+
+  it.each(['enqueue', 'prefix'])('keeps a failed %s custody checkpoint excluded until the exact operation recovers', async (operation) => {
+    vi.useFakeTimers();
+    const { runtime, dataDir, openCode } = createRuntime({ isDeliveryHeld: () => true });
+    const { accepted, edited } = await takeOriginal(runtime, `failed-${operation}-context`);
+    await runtime.acknowledgeTake(SESSION, `failed-${operation}-context-take`, DIRECTORY);
+    const composer = await uploadCapture(runtime, `failed-${operation}-composer`, edited);
+    // Pre-capture the successor so reservation reaches its custody checkpoint.
+    // Converting a legacy item would write its new blob before acquiring any
+    // context ownership and fail earlier on the deliberately blocked rename.
+    const successorPointer = await uploadCapture(runtime, `failed-${operation}-successor-upload`, { directory: DIRECTORY,
+      item: { ...capture().item, context: [], promptParts: { context: [] } } });
+    const successor = await runtime.enqueueRequest(SESSION, `failed-${operation}-successor-enqueue`, { directory: DIRECTORY, item: successorPointer });
+    const request = { format: 'payload-v1', directory: DIRECTORY, id: `msg_failed_${operation}_prefix`, itemIds: [successor.receipt.itemId], composer };
+    const acquire = () => operation === 'enqueue'
+      ? runtime.enqueueRequest(SESSION, 'failed-acquisition-enqueue', { directory: DIRECTORY, item: composer })
+      : runtime.reservePrefix(SESSION, request);
+    await runtime.flush();
+    const file = path.join(dataDir, 'message-queue.json');
+    const retained = fs.readFileSync(file, 'utf8');
+    fs.renameSync(file, `${file}.retained`);
+    fs.mkdirSync(file);
+    await expect(acquire()).rejects.toBeDefined();
+    await expect(runtime.enqueueRequest(SESSION, 'failed-acquisition-competing', { directory: DIRECTORY, item: composer })).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    await expect(runtime.getRequest(SESSION, 'failed-acquisition-competing', DIRECTORY)).rejects.toMatchObject({ code: 'queue_request_unknown' });
+    await expect(runtime.previewPrefix(SESSION, { ...request, id: 'msg_failed_competing_prefix' })).rejects.toMatchObject({ status: 409 });
+    expect(runtime.sessionSnapshot(SESSION).items).toHaveLength(operation === 'enqueue' ? 2 : 1);
+    if (operation === 'prefix') await expect(runtime.takeRequest(SESSION, 'failed-prefix-competing-take', {
+      directory: DIRECTORY, itemIds: [successor.receipt.itemId], format: 'payload-v1',
+    })).rejects.toMatchObject({ status: 409 });
+    expect(fs.readFileSync(`${file}.retained`, 'utf8')).toBe(retained);
+    expect(openCode.state.sent).toEqual([]);
+    fs.rmdirSync(file);
+    fs.renameSync(`${file}.retained`, file);
+    const recovered = await acquire();
+    expect(operation === 'enqueue' ? recovered.receipt.contextIds : recovered.contextIds).toEqual(accepted.receipt.contextIds);
+    runtime.stop();
+    await runtime.flush();
+    const restored = createRuntime({ dataDir, isDeliveryHeld: () => true });
+    await restored.runtime.load();
+    await expect(restored.runtime.enqueueRequest(SESSION, 'failed-acquisition-competing', { directory: DIRECTORY, item: composer })).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    restored.runtime.stop();
+    await restored.runtime.flush();
+  });
+
+  it('derives only proven old custody while keeping an old acknowledged legacy take scoped', async () => {
+    vi.useFakeTimers();
+    const first = createRuntime({ isDeliveryHeld: () => true });
+    const { accepted, edited } = await takeOriginal(first.runtime, 'migrated-context');
+    await first.runtime.acknowledgeTake(SESSION, 'migrated-context-take', DIRECTORY);
+    const legacy = await first.runtime.enqueue(SESSION, DIRECTORY, item({ context: [{ kind: 'synthetic', text: 'legacy context' }] }));
+    const transfer = await first.runtime.takeRequest(SESSION, 'migrated-legacy-take', {
+      directory: DIRECTORY, itemIds: [legacy.itemId], format: 'payload-v1',
+    });
+    const legacyId = transfer.items[0].payloadIndex.contextIds[0];
+    await first.runtime.acknowledgeTake(SESSION, 'migrated-legacy-take', DIRECTORY);
+    first.runtime.stop();
+    await first.runtime.flush();
+    const file = path.join(first.dataDir, 'message-queue.json');
+    const old = JSON.parse(fs.readFileSync(file, 'utf8'));
+    delete old.contextOwners;
+    fs.writeFileSync(file, JSON.stringify(old));
+    const restored = createRuntime({ dataDir: first.dataDir, isDeliveryHeld: () => true });
+    await restored.runtime.load();
+    const pointer = await uploadCapture(restored.runtime, 'migrated-context-edited', edited);
+    const next = await restored.runtime.enqueueRequest(SESSION, 'migrated-context-reenqueue', { directory: DIRECTORY, item: pointer });
+    expect(next.receipt.contextIds).toEqual(accepted.receipt.contextIds);
+    await expect(restored.runtime.enqueueRequest(SESSION, 'migrated-legacy-unproven', { directory: DIRECTORY,
+      item: { ...capture().item, context: [], promptParts: { context: [{ id: legacyId, text: 'unproven old custody' }] } } })).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    expect((await restored.runtime.getRequest(SESSION, 'migrated-legacy-take', DIRECTORY)).state).toBe('acknowledged');
+    // Unrelated fresh contexts and queue owners still work.
+    await restored.runtime.enqueueRequest('ses_unrelated_migration', 'migrated-unrelated-enqueue', { directory: DIRECTORY,
+      item: { ...capture().item, context: [], promptParts: { context: [{ id: 'msg_migrated_unrelated_context', text: 'unrelated' }] } } });
+    restored.runtime.stop();
+    await restored.runtime.flush();
+  });
+
+  it('grants no load or overwrite authority to missing or inconsistent transfer provenance', async () => {
+    vi.useFakeTimers();
+    const first = createRuntime({ isDeliveryHeld: () => true });
+    const { edited } = await takeOriginal(first.runtime, 'malformed-context');
+    await first.runtime.acknowledgeTake(SESSION, 'malformed-context-take', DIRECTORY);
+    const pointer = await uploadCapture(first.runtime, 'malformed-context-edited', edited);
+    await first.runtime.enqueueRequest(SESSION, 'malformed-context-reenqueue', { directory: DIRECTORY, item: pointer });
+    first.runtime.stop();
+    await first.runtime.flush();
+    const file = path.join(first.dataDir, 'message-queue.json');
+    const valid = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const id = edited.item.promptParts.context[0].id;
+    for (const mutate of [
+      (root) => { root.contextOwners = null; },
+      (root) => { delete root.contextOwners; },
+      (root) => { root.contextOwners[id].directory = '/foreign'; },
+      (root) => { root.contextOwners[id].claims.splice(1, 1); },
+      (root) => { root.contextOwners[id].claims[1].requestId = 'missing-take-evidence'; },
+      (root) => { root.requests['malformed-context-take'].state = 'transferring'; root.requests['malformed-context-take'].items = []; },
+    ]) {
+      const broken = structuredClone(valid);
+      mutate(broken);
+      const bytes = JSON.stringify(broken);
+      fs.writeFileSync(file, bytes);
+      const restored = createRuntime({ dataDir: first.dataDir, isDeliveryHeld: () => true });
+      await expect(restored.runtime.load()).rejects.toBeDefined();
+      await expect(restored.runtime.enqueueRequest(SESSION, 'malformed-context-new-request', { directory: DIRECTORY, item: item() })).rejects.toBeDefined();
+      expect(fs.readFileSync(file, 'utf8')).toBe(bytes);
+      expect(restored.openCode.state.sent).toEqual([]);
+      restored.runtime.stop();
+    }
+  });
+
+  it.each(['transferring', 'acknowledged'])('rejects a forged initial legacy Take context claim while %s', async (state) => {
+    vi.useFakeTimers();
+    const first = createRuntime({ isDeliveryHeld: () => true });
+    const queued = await first.runtime.enqueue(SESSION, DIRECTORY, item({ context: [{ kind: 'synthetic', text: 'one actual context' }] }));
+    const transfer = await first.runtime.takeRequest(SESSION, 'reverse-membership-take', {
+      directory: DIRECTORY, itemIds: [queued.itemId], format: 'payload-v1',
+    });
+    const actualId = transfer.items[0].payloadIndex.contextIds[0];
+    expect(actualId.endsWith('_000000')).toBe(true);
+    if (state === 'acknowledged') await first.runtime.acknowledgeTake(SESSION, 'reverse-membership-take', DIRECTORY);
+    first.runtime.stop();
+    await first.runtime.flush();
+    const file = path.join(first.dataDir, 'message-queue.json');
+    const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+    // The pending forgery even has the right deterministic namespace, but its
+    // ordinal is absent from the real retained one-context payload index.
+    const forgedId = state === 'transferring' ? actualId.replace(/000000$/, '000001') : 'msg_foreign_initial_take_claim';
+    stored.contextOwners[forgedId] = { sessionId: SESSION, directory: DIRECTORY,
+      claims: [{ kind: 'take', requestId: 'reverse-membership-take', itemId: queued.itemId }] };
+    const bytes = JSON.stringify(stored);
+    fs.writeFileSync(file, bytes);
+    const restored = createRuntime({ dataDir: first.dataDir, isDeliveryHeld: () => true });
+    await expect(restored.runtime.load()).rejects.toBeDefined();
+    await expect(restored.runtime.acknowledgeTake(SESSION, 'reverse-membership-take', DIRECTORY)).rejects.toBeDefined();
+    expect(fs.readFileSync(file, 'utf8')).toBe(bytes);
+    expect(restored.openCode.state.sent).toEqual([]);
+    restored.runtime.stop();
+  });
+
+  it('loads a genuine multi-edit history within a linear membership-read budget', async () => {
+    vi.useFakeTimers();
+    const first = createRuntime({ isDeliveryHeld: () => true });
+    const contextCount = 256;
+    const cycles = 4;
+    const value = { directory: DIRECTORY, item: { ...capture().item, context: [], promptParts: {
+      context: Array.from({ length: contextCount }, (_, index) => ({ id: `msg_loader_budget_ctx_${index}`, text: 'context' })),
+    } } };
+    const pointer = await uploadCapture(first.runtime, 'loader-budget-upload', value);
+    for (let cycle = 0; cycle < cycles; cycle += 1) {
+      const accepted = await first.runtime.enqueueRequest(SESSION, `loader-budget-enqueue-${cycle}`, { directory: DIRECTORY, item: pointer });
+      await first.runtime.takeRequest(SESSION, `loader-budget-take-${cycle}`, {
+        directory: DIRECTORY, itemIds: [accepted.receipt.itemId], format: 'payload-v1',
+      });
+      await first.runtime.acknowledgeTake(SESSION, `loader-budget-take-${cycle}`, DIRECTORY);
+    }
+    first.runtime.stop();
+    await first.runtime.flush();
+    const restored = createRuntime({ dataDir: first.dataDir, isDeliveryHeld: () => true });
+    const originalIncludes = Array.prototype.includes;
+    const originalFilter = Array.prototype.filter;
+    const reads = { receipt: 0, claims: 0 };
+    // Array elements and length are data properties, so plain access forwards them.
+    const counted = (array, kind) => new Proxy(array, { get(target, key) {
+      if (/^\d+$/.test(String(key))) reads[kind] += 1;
+      return target[key];
+    } });
+    // Count the indexed reads performed by the real native array methods in
+    // the loader. This measures operations, not elapsed startup time.
+    Array.prototype.includes = function (...args) {
+      const tracked = typeof this[0] === 'string' && this[0].startsWith('msg_loader_budget_ctx_');
+      return originalIncludes.apply(tracked ? counted(this, 'receipt') : this, args);
+    };
+    Array.prototype.filter = function (...args) {
+      const tracked = this[0]?.kind === 'enqueue' && this[0].requestId?.startsWith('loader-budget-');
+      return originalFilter.apply(tracked ? counted(this, 'claims') : this, args);
+    };
+    try {
+      ['msg_loader_budget_ctx_control'].includes('msg_loader_budget_ctx_control');
+      [{ kind: 'enqueue', requestId: 'loader-budget-control' }].filter(() => true);
+      expect(reads).toEqual({ receipt: 1, claims: 1 });
+      reads.receipt = 0;
+      reads.claims = 0;
+      await restored.runtime.load();
+    } finally {
+      Array.prototype.includes = originalIncludes;
+      Array.prototype.filter = originalFilter;
+      restored.runtime.stop();
+    }
+    expect(reads.receipt + reads.claims).toBeLessThanOrEqual(contextCount * cycles * 8);
+    expect((await restored.runtime.getRequest(SESSION, 'loader-budget-take-3', DIRECTORY)).state).toBe('acknowledged');
+  });
+
+  it.each(['manifest-v1', 'payload-v1'])('fences an admitted zero-context %s prefix prompt through restart', async (format) => {
+    vi.useFakeTimers();
+    let admitted = null;
+    let observed;
+    const completed = new Promise((resolve) => { observed = resolve; });
+    const openCode = createOpenCode();
+    const fetch = openCode.fetchImpl;
+    openCode.fetchImpl = vi.fn((url, init) => new URL(url).pathname.endsWith('/inbox')
+      ? Promise.resolve(Response.json({ data: admitted ? [admitted] : [] })) : fetch(url, init));
+    const first = createRuntime({ openCode, isDeliveryHeld: () => true,
+      onBroadcast: (event) => { if (event.properties.session.items.length === 0 && admitted) observed(); } });
+    const queued = await first.runtime.enqueue(SESSION, DIRECTORY, item());
+    const composer = format === 'payload-v1' ? await uploadCapture(first.runtime, 'zero-context-composer-upload', { directory: DIRECTORY,
+      item: { ...capture().item, context: [], promptParts: { context: [] } } }) : 'typed text';
+    const request = { format, directory: DIRECTORY, id: 'msg_zero_context_consumed_prefix', itemIds: [queued.itemId], composer };
+    if (format === 'manifest-v1') request.sendConfig = item().sendConfig;
+    expect((await first.runtime.reservePrefix(SESSION, request)).contextIds).toEqual([]);
+    admitted = { id: request.id, type: 'user', sessionID: SESSION, delivery: 'queue', time: { created: 1 } };
+    first.runtime.release(SESSION);
+    await vi.advanceTimersByTimeAsync(0);
+    await completed;
+    first.runtime.stop();
+    await first.runtime.flush();
+    const restored = createRuntime({ dataDir: first.dataDir, isDeliveryHeld: () => true });
+    const alias = { directory: DIRECTORY, item: { ...capture().item, context: [],
+      promptParts: { context: [{ id: request.id, text: 'prompt cannot become context' }] } } };
+    await expect(restored.runtime.enqueueRequest(SESSION, 'zero-context-prompt-alias', alias)).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    await expect(restored.runtime.enqueueRequest('ses_zero_context_foreign', 'zero-context-foreign-alias', alias)).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    const later = await restored.runtime.enqueue(SESSION, DIRECTORY, item());
+    await expect(restored.runtime.reservePrefix(SESSION, { ...request, itemIds: [later.itemId] })).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    await expect(restored.runtime.reservePrefix(SESSION, { id: request.id, itemIds: [later.itemId],
+      composer: 'legacy alias', sendConfig: item().sendConfig })).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    await expect(restored.runtime.getRequest(SESSION, 'zero-context-prompt-alias', DIRECTORY)).rejects.toMatchObject({ code: 'queue_request_unknown' });
+    expect(restored.openCode.state.sent).toEqual([]);
+    restored.runtime.stop();
+    await restored.runtime.flush();
+  });
+
+  it('retains a genuine acknowledged initial legacy Take namespace through re-enqueue and restart', async () => {
+    vi.useFakeTimers();
+    const first = createRuntime({ isDeliveryHeld: () => true });
+    const queued = await first.runtime.enqueue(SESSION, DIRECTORY, item({ context: [{ kind: 'synthetic', text: 'original legacy context' }] }));
+    const transfer = await first.runtime.takeRequest(SESSION, 'legacy-namespace-take', {
+      directory: DIRECTORY, itemIds: [queued.itemId], format: 'payload-v1',
+    });
+    const contextId = transfer.items[0].payloadIndex.contextIds[0];
+    await first.runtime.acknowledgeTake(SESSION, 'legacy-namespace-take', DIRECTORY);
+    first.runtime.stop();
+    await first.runtime.flush();
+    const restored = createRuntime({ dataDir: first.dataDir, isDeliveryHeld: () => true });
+    const input = { directory: DIRECTORY, item: { ...capture().item, context: [],
+      promptParts: { context: [{ id: contextId, text: 'original legacy context' }] } } };
+    expect((await restored.runtime.enqueueRequest(SESSION, 'legacy-namespace-reenqueue', input)).receipt.contextIds).toEqual([contextId]);
+    restored.runtime.stop();
+    await restored.runtime.flush();
+    const recovered = createRuntime({ dataDir: first.dataDir, isDeliveryHeld: () => true });
+    expect((await recovered.runtime.getRequest(SESSION, 'legacy-namespace-reenqueue', DIRECTORY)).receipt.contextIds).toEqual([contextId]);
+    recovered.runtime.stop();
+    await recovered.runtime.flush();
+  });
+
+  it('keeps zero-context prompt fences through failed reserve, exact recovery, migration and session deletion', async () => {
+    vi.useFakeTimers();
+    const first = createRuntime({ isDeliveryHeld: () => true });
+    const pointer = await uploadCapture(first.runtime, 'zero-fence-capture-upload', { directory: DIRECTORY,
+      item: { ...capture().item, context: [], promptParts: { context: [] } } });
+    const queued = await first.runtime.enqueueRequest(SESSION, 'zero-fence-captured-enqueue', { directory: DIRECTORY, item: pointer });
+    const request = { format: 'payload-v1', directory: DIRECTORY, id: 'msg_zero_context_checkpoint', itemIds: [queued.receipt.itemId], composer: pointer };
+    await first.runtime.flush();
+    const file = path.join(first.dataDir, 'message-queue.json');
+    const retained = fs.readFileSync(file, 'utf8');
+    fs.renameSync(file, `${file}.retained`);
+    fs.mkdirSync(file);
+    await expect(first.runtime.reservePrefix(SESSION, request)).rejects.toBeDefined();
+    const alias = { directory: DIRECTORY, item: { ...capture().item, context: [],
+      promptParts: { context: [{ id: request.id, text: 'cannot acquire a pending prompt identity' }] } } };
+    await expect(first.runtime.enqueueRequest(SESSION, 'zero-fence-pending-alias', alias)).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    await expect(first.runtime.takeRequest(SESSION, 'zero-fence-pending-take', {
+      directory: DIRECTORY, itemIds: [queued.receipt.itemId], format: 'payload-v1',
+    })).rejects.toMatchObject({ status: 409 });
+    expect(fs.readFileSync(`${file}.retained`, 'utf8')).toBe(retained);
+    fs.rmdirSync(file);
+    fs.renameSync(`${file}.retained`, file);
+    expect((await first.runtime.reservePrefix(SESSION, request)).contextIds).toEqual([]);
+    first.runtime.stop();
+    await first.runtime.flush();
+    const valid = JSON.parse(fs.readFileSync(file, 'utf8'));
+    expect(valid.prefixPromptOwners[request.id]).toEqual({ sessionId: SESSION, directory: DIRECTORY, state: 'reserved' });
+    for (const mutate of [
+      (root) => { root.prefixPromptOwners = null; },
+      (root) => { root.prefixPromptOwners[request.id].directory = '/foreign'; },
+      (root) => { root.prefixPromptOwners[request.id].state = 'consumed'; },
+      (root) => { delete root.prefixPromptOwners[request.id]; },
+    ]) {
+      const broken = structuredClone(valid);
+      mutate(broken);
+      const bytes = JSON.stringify(broken);
+      fs.writeFileSync(file, bytes);
+      const runtime = createRuntime({ dataDir: first.dataDir, isDeliveryHeld: () => true }).runtime;
+      await expect(runtime.load()).rejects.toBeDefined();
+      expect(fs.readFileSync(file, 'utf8')).toBe(bytes);
+      runtime.stop();
+    }
+    // An absent old field derives this still-active reservation's exact owner.
+    // No completed zero-context history can be invented from an empty queue.
+    delete valid.prefixPromptOwners;
+    fs.writeFileSync(file, JSON.stringify(valid));
+    const migrated = createRuntime({ dataDir: first.dataDir, isDeliveryHeld: () => true });
+    expect((await migrated.runtime.reservePrefix(SESSION, request)).contextIds).toEqual([]);
+    migrated.runtime.processPayload({ type: 'session.deleted', properties: { sessionID: SESSION } });
+    migrated.runtime.stop();
+    await migrated.runtime.flush();
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')).prefixPromptOwners[request.id].state).toBe('consumed');
+    const recovered = createRuntime({ dataDir: first.dataDir, isDeliveryHeld: () => true });
+    await expect(recovered.runtime.enqueueRequest(SESSION, 'zero-fence-deleted-alias', alias)).rejects.toMatchObject({ code: 'queue_request_conflict' });
+    expect(recovered.openCode.state.sent).toEqual([]);
+    recovered.runtime.stop();
+    await recovered.runtime.flush();
+  });
+});
 
 describe('recoverable prefix reservation', () => {
   const request = (ids, id = 'msg_reserved_prefix') => ({
@@ -178,6 +776,57 @@ describe('recoverable prefix reservation', () => {
     await expect(runtime.reservePrefix(SESSION, request([a.itemId]))).rejects.toMatchObject({ status: 409 });
     expect(runtime.sessionSnapshot(SESSION).items.map((entry) => entry.id)).toEqual([goal.itemId, b.itemId]);
     runtime.stop();
+  });
+
+  it('marks a stale manifest prefix without a reservation as a definite refusal', async () => {
+    const { runtime } = createRuntime({ isDeliveryHeld: () => true });
+    const manifest = (ids) => ({ ...request(ids), format: 'manifest-v1', directory: DIRECTORY });
+    const a = await runtime.enqueue(SESSION, DIRECTORY, item());
+    const goal = await runtime.enqueue(SESSION, DIRECTORY, item({ goal: { tokenBudget: null } }));
+    const b = await runtime.enqueue(SESSION, DIRECTORY, item());
+    const stale = { status: 409, code: 'queue_prefix_stale' };
+    await expect(runtime.reservePrefix(SESSION, manifest([a.itemId, b.itemId]))).rejects.toMatchObject(stale);
+    await expect(runtime.reservePrefix(SESSION, manifest([a.itemId, goal.itemId]))).rejects.toMatchObject(stale);
+    await expect(runtime.reservePrefix('ses_queue_without_items', manifest([a.itemId]))).rejects.toMatchObject(stale);
+
+    const routes = new Map();
+    registerMessageQueueRoutes(Object.fromEntries(['get', 'post', 'put', 'delete']
+      .map((method) => [method, (route, handler) => routes.set(`${method} ${route}`, handler)])), runtime);
+    const response = { statusCode: 200, setHeader() {}, status(code) { this.statusCode = code; return this; }, json(data) { this.data = data; } };
+    await routes.get('post /api/message-queue/sessions/:sessionId/reserve-prefix')(
+      { params: { sessionId: SESSION }, body: manifest([a.itemId, b.itemId]), query: {} }, response);
+    expect(response).toMatchObject({ statusCode: 409, data: { code: 'queue_prefix_stale' } });
+    expect(runtime.sessionSnapshot(SESSION).items.map((entry) => entry.id)).toEqual([a.itemId, goal.itemId, b.itemId]);
+    runtime.stop();
+    await runtime.flush();
+  });
+
+  it('keeps the plain 409 for a prefix blocked by an in-flight send', async () => {
+    const openCode = createOpenCode();
+    const originalFetch = openCode.fetchImpl;
+    let promptStarted;
+    let releasePrompt;
+    const started = new Promise((resolve) => { promptStarted = resolve; });
+    const held = new Promise((resolve) => { releasePrompt = resolve; });
+    openCode.fetchImpl = vi.fn(async (url, init) => {
+      if (new URL(url).pathname.endsWith('/prompt')) {
+        promptStarted();
+        await held;
+      }
+      return originalFetch(url, init);
+    });
+    const { runtime } = createRuntime({ openCode });
+    const a = await runtime.enqueue(SESSION, DIRECTORY, item({ text: 'A' }));
+    runtime.start();
+    await started;
+    const refused = await runtime.reservePrefix(SESSION, { ...request([a.itemId]), format: 'manifest-v1', directory: DIRECTORY })
+      .then(() => null, (error) => error);
+    expect(refused).toMatchObject({ status: 409, message: 'queue prefix changed or cannot be captured' });
+    expect(refused.code).toBeUndefined();
+    releasePrompt();
+    await settle();
+    runtime.stop();
+    await runtime.flush();
   });
 
   it('rechecks exclusion after an already-running idle probe and releases only the exact admitted ID', async () => {
@@ -666,9 +1315,13 @@ describe('a message queued as a goal', () => {
     runtime.start();
     await runtime.enqueue(SESSION, DIRECTORY, item({ content: 'Implement this plan: X', text: 'Implement this plan: X', goal: { objective: 'the whole plan', tokenBudget: null } }));
     emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
-    await settle();
-    expect(persisted).toHaveLength(1);
+    await vi.waitFor(() => {
+      expect(runtime.sessionSnapshot(SESSION).items).toEqual([]);
+      expect(persisted).toHaveLength(1);
+    });
     expect(fs.readFileSync(path.join(process.env.OPENCHAMBER_DATA_DIR, 'goals', `${SESSION}.md`), 'utf8')).toBe('the whole plan');
+    runtime.stop();
+    await runtime.flush();
   });
 });
 
@@ -1123,6 +1776,23 @@ describe('message queue runtime', () => {
     });
   });
 
+  it('hands the model an attachment\'s resolved on-disk path as its name', async () => {
+    const { runtime, openCode, emit } = createRuntime();
+    runtime.start();
+    await runtime.enqueue(SESSION, DIRECTORY, item({
+      attachments: [{
+        id: 'a', filename: 'report.txt', mimeType: 'text/plain', size: 1, source: 'local',
+        dataUrl: 'data:text/plain,hi', agentPath: '/Users/me/Documents/report.txt',
+      }],
+    }));
+    emit({ type: 'session.status', properties: { sessionID: SESSION, status: { type: 'idle' } } });
+    await settle();
+    expect(openCode.state.sent.at(-1).body).toEqual({
+      text: 'follow up',
+      files: [{ uri: 'data:text/plain,hi', name: '/Users/me/Documents/report.txt' }],
+    });
+  });
+
   it('admits captured context as synthetic messages and still runs a queued command through the command route', async () => {
     // The command route takes attachments only, so the context goes ahead as
     // synthetic messages; the command itself keeps its route, because sending
@@ -1150,7 +1820,9 @@ describe('message queue runtime', () => {
   it('writes the project knowledge into the session before a queued command', async () => {
     const openCode = createOpenCode();
     const knowledge = {
-      sync: async (sessionId, directory) => { openCode.state.sent.push({ path: 'knowledge', body: { sessionId, directory } }); },
+      sync: async (sessionId, directory, responseStyleInstruction) => {
+        openCode.state.sent.push({ path: 'knowledge', body: { sessionId, directory, responseStyleInstruction } });
+      },
     };
     const { runtime, emit } = createRuntime({ openCode, knowledge });
     runtime.start();
@@ -1197,7 +1869,10 @@ describe('message queue runtime', () => {
     const openCode = createOpenCode();
     const knowledge = {
       // `sync` reports failure by resolving false; it never throws.
-      sync: async (sessionId, directory) => { openCode.state.sent.push({ path: 'knowledge', body: { sessionId, directory } }); return false; },
+      sync: async (sessionId, directory, responseStyleInstruction) => {
+        openCode.state.sent.push({ path: 'knowledge', body: { sessionId, directory, responseStyleInstruction } });
+        return false;
+      },
     };
     const { runtime, emit } = createRuntime({ openCode, knowledge });
     runtime.start();

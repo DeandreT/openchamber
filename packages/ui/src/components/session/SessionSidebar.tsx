@@ -1,4 +1,6 @@
 import React from 'react';
+import { MobilePinToSheet } from '@/apps/mobileSidebar/MobilePinToSheet';
+import { NewPinListDialog } from './sidebar/sections/NewPinListDialog';
 import { toast } from '@/components/ui';
 import { useI18n } from '@/lib/i18n';
 import { useDeviceInfo } from '@/lib/device';
@@ -32,13 +34,13 @@ import {
   worktreeMapsEqual,
   type ProjectRef,
 } from '@/lib/worktrees/worktreeManager';
-import { resolveProjectsForSessionDirectories, resolveProjectsForWorktreeChange } from '@/lib/worktrees/worktreeTopologyRefresh';
+import { resolveProjectForCreatedSession, resolveProjectsForWorktreeChange } from '@/lib/worktrees/worktreeTopologyRefresh';
 import type { WorktreeMetadata } from '@/types/worktree';
 import { checkIsGitRepository } from '@/lib/gitApi';
 import { useSessionDisplayStore } from '@/stores/useSessionDisplayStore';
 import { normalizePath } from './sidebar/utils';
 import { recordWorktreesSeen } from './sidebar/projects/worktreeFirstSeen';
-import { getRuntimeKey } from '@/lib/runtime-switch';
+import { captureRuntimeInstance, getRuntimeKey } from '@/lib/runtime-switch';
 import { streamPerfCount, streamPerfMark } from '@/stores/utils/streamDebug';
 import { runBackgroundNetworkTask } from '@/lib/background-network';
 import { buildKnownSessionDirectories } from './sidebar/list/sessionListDirectories';
@@ -147,8 +149,6 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
   const reorderProjects = useProjectsStore((state) => state.reorderProjects);
 
   const setSettingsDialogOpen = useUIStore((state) => state.setSettingsDialogOpen);
-  const toggleHelpDialog = useUIStore((state) => state.toggleHelpDialog);
-  const setAboutDialogOpen = useUIStore((state) => state.setAboutDialogOpen);
   const setSessionSwitcherOpen = useUIStore((state) => state.setSessionSwitcherOpen);
   const setWorktreesPageProjectId = useUIStore((state) => state.setWorktreesPageProjectId);
 
@@ -236,6 +236,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
 
     const discoverWorktrees = async () => {
       const discoveryRuntimeKey = runtimeKey;
+      const isCurrent = captureRuntimeInstance();
       const connectedAtStart = useConfigStore.getState().isConnected;
       const projectEntries = useProjectsStore.getState().projects;
       useSessionUIStore.setState({ worktreeDiscoveryByProject: new Map(projectEntries.map((project) => [normalizePath(project.path) ?? project.path, 'loading'])) });
@@ -274,12 +275,13 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
           // check for projects the Git store hasn't seen yet.
           const cachedIsGitRepo = useGitStore.getState().directories.get(projectPath)?.isGitRepo;
           const isGitRepo = cachedIsGitRepo ?? await checkIsGitRepository(projectPath);
+          if (cancelled || !isCurrent()) return;
           if (!isGitRepo) {
             worktreesByProject.delete(projectPath);
             return;
           }
           const worktrees = await listProjectWorktrees({ id: project.id, path: projectPath });
-          if (cancelled) return;
+          if (cancelled || !isCurrent()) return;
           if (worktrees.length === 0) {
             worktreesByProject.delete(projectPath);
           } else {
@@ -291,7 +293,7 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
         }
       })));
 
-      if (cancelled || getRuntimeKey() !== discoveryRuntimeKey) return;
+      if (cancelled || !isCurrent() || getRuntimeKey() !== discoveryRuntimeKey) return;
 
       const activeProjectPaths = new Set(projectEntries.map((project) => normalizePath(project.path)).filter(Boolean));
       for (const projectPath of worktreesByProject.keys()) {
@@ -608,17 +610,16 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
       }
     };
 
-    const refreshSessionDirectories = (directories: readonly string[]) => {
-      const registeredProjects = useProjectsStore.getState().projects;
-      const affectedProjects = resolveProjectsForSessionDirectories(directories, registeredProjects);
-      // A move can follow worktree creation before the normal listing expires.
-      // This path force-lists even when the destination has no known owner yet.
-      refreshProjects(affectedProjects ?? registeredProjects);
-    };
-    const unsubscribeMoves = sessionEvents.onMoved(refreshSessionDirectories);
-    const unsubscribeControl = subscribeOpenchamberEvents((event) => {
+    return subscribeOpenchamberEvents((event) => {
       if (event.type === 'session-created') {
-        refreshSessionDirectories([event.directory]);
+        // A new session can only have changed its own project's worktrees.
+        // When its project is not certain, every project is discovered.
+        const project = resolveProjectForCreatedSession(event.directory, useProjectsStore.getState().projects);
+        if (!project) {
+          requestWorktreeDiscovery();
+          return;
+        }
+        refreshProjects([project]);
         return;
       }
       if (event.type !== 'worktree-changed') return;
@@ -627,10 +628,6 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
       // has seen; refresh each registered project among them exactly once.
       refreshProjects(resolveProjectsForWorktreeChange(event.directories));
     });
-    return () => {
-      unsubscribeMoves();
-      unsubscribeControl();
-    };
   }, [isVSCode, worktreeRefreshDependencies]);
 
   const collection = (
@@ -729,14 +726,13 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
         searchMatchCount={searchMatchCount}
         collapseAll={projectView.actions.collapseAll}
         expandAll={projectView.actions.expandAll}
+        showStats={!isVSCode}
       />
 
       {collection}
 
       <SidebarFooter
         onOpenSettings={handleOpenSettings}
-        onOpenShortcuts={toggleHelpDialog}
-        onOpenAbout={() => setAboutDialogOpen(true)}
         onOpenUpdate={handleOpenUpdateDialog}
         showRuntimeButtons={!isVSCode}
         showUpdateButton={showSidebarUpdateButton}
@@ -778,6 +774,9 @@ const SessionSidebarComponent: React.FC<SessionSidebarProps> = ({
           openNewSessionDraft({ directoryOverride: worktreePath, preserveDirectoryOverride: true });
         }}
       />
+
+      <NewPinListDialog />
+      {mobileVariant ? <MobilePinToSheet /> : null}
 
     </div>
     </TooltipProvider>

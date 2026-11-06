@@ -10,6 +10,7 @@ import {
 import type { AttachedFile } from '@/stores/types/sessionTypes';
 import type { TranscriptPrompt } from '@/sync/user-message-history';
 import { toServerFileUrl } from './composer/attachments/filePaths';
+import { materializeFileReference } from '@/lib/messages/fileReferences';
 
 type HistoryQueuedMessage = {
   content: string;
@@ -44,9 +45,12 @@ export function buildChatInputHistorySubmissions({
   return submissions.length > 0 ? submissions : undefined;
 }
 
-function materializeHistoryAttachment(attachment: InputHistoryAttachment): AttachedFile | null {
+function materializeHistoryAttachment(attachment: InputHistoryAttachment, occurrence: number): AttachedFile | null {
   if (attachment.source === 'file-url') {
     if (!attachment.reference || attachment.reference.startsWith('data:')) return null;
+    if (attachment.fileReference) {
+      return materializeFileReference(attachment.fileReference, `history-${occurrence}-${attachment.key}`, attachment.mimeType);
+    }
     return {
       id: `history-${attachment.key}`,
       file: new File([], attachment.filename, { type: attachment.mimeType }),

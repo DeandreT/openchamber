@@ -43,7 +43,7 @@ describe('Gitea provider authentication', () => {
 
     await expect(impl.auth.connectToken({ instance: ORIGIN, token: 'pat-1' })).resolves.toMatchObject({ connected: true, user: { id: 1, login: 'alice' } });
 
-    expect(calls.map((call) => call.url.pathname)).toEqual(['/api/v1/user', '/api/v1/version']);
+    expect(calls.map((call) => call.url.pathname)).toEqual(['/api/v1/user', '/api/v1/version', '/api/forgejo/v1/version']);
     expect(calls[1].headers.authorization).toBeUndefined();
     expect(events.connected).toHaveBeenCalledWith(expect.objectContaining({
       account: expect.objectContaining({ provider: 'gitea', instance: ORIGIN }),
@@ -61,6 +61,23 @@ describe('Gitea provider authentication', () => {
     expect(await store.listInstances()).toEqual([]);
   });
 
+  it.each([
+    ['JSON null', () => Response.json(null)],
+    ['HTTP 204', () => new Response(null, { status: 204 })],
+  ])('refuses %s from `/version` and stores nothing even with a valid token', async (_label, response) => {
+    for (const status of [null, 401, 403]) {
+      const { impl, store, events } = await setup(forkNetworkRoutes({
+        'GET /version': (call) => (status && !call.headers.authorization
+          ? new Response('{}', { status })
+          : response()),
+      }));
+
+      await expect(impl.auth.connectToken({ instance: ORIGIN, token: 'pat-1' })).rejects.toBeDefined();
+      expect(await store.listInstances()).toEqual([]);
+      expect(events.connected).not.toHaveBeenCalled();
+    }
+  });
+
   it('sends a Forgejo server to the Forgejo card', async () => {
     const forgejo = forkNetworkRoutes({ 'GET /version': { version: '9.0.3+gitea-1.22.0' } });
     const { impl, store } = await setup(forgejo);
@@ -72,6 +89,21 @@ describe('Gitea provider authentication', () => {
     await expect(impl.auth.connectToken({ instance: ORIGIN, token: 'pat-1' })).rejects.toMatchObject({
       sourceControlResponse: { status: 409, body: { code: 'SOURCE_CONTROL_INSTANCE_OTHER_PROVIDER', provider: 'forgejo' } },
     });
+    expect(await store.listInstances()).toEqual([]);
+  });
+
+  it('sends a Forgejo that drops the suffix from `/version` to the Forgejo card', async () => {
+    // Forgejo 16 answers its Gitea-compatible `/version` with its own version
+    // alone; the namespace it serves beside it still names both.
+    const { impl, store, calls } = await setup(forkNetworkRoutes({
+      'GET /version': { version: '16.0.6' },
+      'GET /forgejo/version': { version: '16.0.6+gitea-1.22.0' },
+    }));
+
+    await expect(impl.auth.connectToken({ instance: ORIGIN, token: 'pat-1' })).rejects.toMatchObject({
+      sourceControlResponse: { status: 409, body: { code: 'SOURCE_CONTROL_INSTANCE_OTHER_PROVIDER', provider: 'forgejo' } },
+    });
+    expect(calls.map((call) => call.url.pathname)).toContain('/api/forgejo/v1/version');
     expect(await store.listInstances()).toEqual([]);
   });
 
@@ -94,6 +126,7 @@ describe('Gitea provider authentication', () => {
         ['/api/v1/user', 'token pat-1'],
         ['/api/v1/version', undefined],
         ['/api/v1/version', 'token pat-1'],
+        ['/api/forgejo/v1/version', undefined],
       ]);
     });
 
@@ -140,6 +173,38 @@ describe('Gitea provider authentication', () => {
     expect(Object.isFrozen(session)).toBe(true);
     expect(JSON.stringify(session)).not.toContain('pat-1');
     expect(session).toMatchObject({ instance: ORIGIN, providerUserId: `${ORIGIN}#1`, secretKind: 'pat' });
+  });
+
+  it('stores the instance\'s separate SSH address and recognises remotes there', async () => {
+    const { impl, store } = await setup();
+
+    await expect(impl.auth.setSshUrl({ instance: ORIGIN, sshUrl: 'ssh://git@giteassh.example.com:2222' }))
+      .resolves.toEqual({ sshUrl: 'ssh://giteassh.example.com:2222' });
+    expect(await store.readInstance(ORIGIN)).toMatchObject({ sshUrl: 'ssh://giteassh.example.com:2222' });
+    await expect(impl.auth.readSshUrl({ instance: ORIGIN })).resolves.toBe('ssh://giteassh.example.com:2222');
+    await expect(impl.auth.listSshHosts()).resolves.toEqual([{ instance: ORIGIN, sshUrl: 'ssh://giteassh.example.com:2222' }]);
+    expect(impl.auth.ownsHost({
+      host: 'giteassh.example.com', sshPort: 2222, knownInstances: [ORIGIN],
+      knownSshHosts: [{ instance: ORIGIN, sshUrl: 'ssh://giteassh.example.com:2222' }],
+    })).toBe(ORIGIN);
+    expect(impl.auth.ownsHost({
+      host: 'giteassh.example.com', sshPort: 2200, knownInstances: [ORIGIN],
+      knownSshHosts: [{ instance: ORIGIN, sshUrl: 'ssh://giteassh.example.com:2222' }],
+    })).toBeNull();
+
+    await expect(impl.auth.setSshUrl({ instance: ORIGIN, sshUrl: 'https://giteassh.example.com' }))
+      .rejects.toMatchObject({ sourceControlResponse: { status: 400 } });
+  });
+
+  it('never uses an HTTP port or an unknown transport to claim a separate SSH host', async () => {
+    const { impl } = await setup();
+    for (const sshPort of [22, 443, 2222]) {
+      const knownSshHosts = [{ instance: ORIGIN, sshUrl: `ssh://giteassh.example.com:${sshPort}` }];
+      const input = { host: 'giteassh.example.com', knownInstances: [ORIGIN], knownSshHosts };
+      expect(impl.auth.ownsHost({ ...input, sshPort })).toBe(ORIGIN);
+      expect(impl.auth.ownsHost({ ...input, port: sshPort })).toBeNull();
+      expect(impl.auth.ownsHost(input)).toBeNull();
+    }
   });
 
   it('owns only hosts of instances it knows', async () => {
@@ -231,6 +296,20 @@ describe('Gitea in the registry (smoke)', () => {
 
     const instances = await request(app).get('/api/source-control/instances');
     expect(instances.body.instances.filter((entry) => entry.provider === 'gitea')).toEqual([]);
+
+    const saved = await request(app).post('/api/source-control/gitea/auth/ssh-url')
+      .query({ instance: 'https://gitea.example.com' })
+      .send({ sshUrl: 'ssh://git@giteassh.example.com:2222' });
+    expect(saved.status).toBe(200);
+    expect(saved.body).toEqual({ sshUrl: 'ssh://giteassh.example.com:2222' });
+    const withSsh = await request(app).get('/api/source-control/instances');
+    expect(withSsh.body.instances).toContainEqual({
+      provider: 'gitea', instance: 'https://gitea.example.com', instanceSshUrl: 'ssh://giteassh.example.com:2222',
+    });
+    const refused = await request(app).post('/api/source-control/gitea/auth/ssh-url')
+      .query({ instance: 'https://gitea.example.com' })
+      .send({ sshUrl: 'https://giteassh.example.com' });
+    expect(refused.status).toBe(400);
   });
 });
 

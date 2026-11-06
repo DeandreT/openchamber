@@ -13,6 +13,8 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { dropdownTriggerVariants } from '@/components/ui/dropdown-trigger';
 import { dropdownMenuPopupClass } from '@/components/ui/dropdown-menu.styles';
+import { ReviewSubmitButton } from '@/components/review/ReviewSubmitButton';
+import { ChangeRequestReviewContext, useComparisonReview } from '@/components/review/useChangeRequestReview';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { isRightToLeft, useI18n } from '@/lib/i18n';
 import { changeRequestCopy } from '@/lib/source-control/changeRequestCopy';
@@ -108,10 +110,9 @@ export const WalkthroughView = ({ directory: rootDirectory, visible = true }: Wa
   const inPanelHeader = useInContextPanelHeader();
   const [panelWidth, setPanelWidth] = useState(0);
 
-  // The walkthrough documents one repository. When the root is not itself a
-  // repository, that is the resolved nested repository; everything below keys
-  // off `directory`.
-  const { rootIsGitRepo, gitDirectory, nestedRepos, repositoryOptions } = useNestedGitDirectory(rootDirectory || null, { enabled: visible });
+  // The walkthrough documents one repository: the one picked from the picker,
+  // or the root when nothing is picked. Everything below keys off `directory`.
+  const { rootIsGitRepo, gitDirectory, nestedRepos, repositoryOptions } = useNestedGitDirectory(rootDirectory || null, { enabled: visible, recheckOnOpen: true });
   const directory = gitDirectory ?? rootDirectory;
 
   // Panel width, not viewport width: this surface is resizable independently of
@@ -270,6 +271,7 @@ export const WalkthroughView = ({ directory: rootDirectory, visible = true }: Wa
   );
   const source = target.source;
   const commentOrigin = useMemo(() => diffCommentOriginFromTarget(target), [target]);
+  const { review: changeRequestReview, provider: reviewProvider } = useComparisonReview(prComparison, directory, visible && isPrScope);
   // A scope the person picked before its subject exists: the base of a branch
   // comparison, or which commit to read. Nothing loads until they say.
   const choosingBranchBase = pendingSourceSelection?.directory === directory
@@ -367,13 +369,14 @@ export const WalkthroughView = ({ directory: rootDirectory, visible = true }: Wa
   }
 
   return (
+    <ChangeRequestReviewContext.Provider value={changeRequestReview}>
     <div ref={rootRef} data-find-surface="" className="flex h-full min-h-0 flex-col">
       <ContextPanelHeaderToolbar>
       <header
         ref={headerRef}
         className={cn(
           'walkthrough-header flex min-w-0 flex-nowrap items-center gap-2 overflow-hidden',
-          inPanelHeader ? 'flex-1 py-1 pe-1' : 'shrink-0 border-b border-border/60 px-3 py-2'
+          inPanelHeader ? 'flex-1 py-1 pe-1' : 'shrink-0 border-b border-edge px-3 py-2'
         )}
       >
         {repositoryOptions ? (
@@ -564,6 +567,9 @@ export const WalkthroughView = ({ directory: rootDirectory, visible = true }: Wa
             </>
           )}
 
+          {changeRequestReview && reviewProvider ? (
+            <ReviewSubmitButton review={changeRequestReview} provider={reviewProvider} labelClassName="walkthrough-header__label" />
+          ) : null}
           {!prDiffUnavailable && (headerOffersGeneration || review.isGenerating) && (
             <WalkthroughGenerateButton
               review={review}
@@ -709,5 +715,6 @@ export const WalkthroughView = ({ directory: rootDirectory, visible = true }: Wa
         )}
       </div>
     </div>
+    </ChangeRequestReviewContext.Provider>
   );
 };

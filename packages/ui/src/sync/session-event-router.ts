@@ -4,6 +4,7 @@ import { compact } from "@/lib/opencode/model"
 import {
   isGlobalSessionRecencyOnlyUpdate,
   mergeSessionDirectoryMetadata,
+  resolveGlobalSessionDirectory,
   useGlobalSessionsStore,
   type GlobalSessionMutation,
 } from "@/stores/useGlobalSessionsStore"
@@ -11,7 +12,7 @@ import { getRuntimeKey, subscribeRuntimeEndpointWillChange } from "@/lib/runtime
 import { streamPerfCount, streamPerfMark } from "@/stores/utils/streamDebug"
 import { stripSessionDiffSnapshots } from "./sanitize"
 import { shouldSkipStaleSessionEvent } from "./session-event-freshness"
-import { sessionEvents } from "@/lib/sessionEvents"
+import { publishGlobalSessionMoves, type GlobalSessionMove } from "./session-moves"
 
 const pendingGlobalSessionUpdates = new Map<string, { runtimeKey: string; session: Session }>()
 
@@ -65,7 +66,7 @@ export const applySessionEventsToGlobalSessions = (payloads: readonly SyncEvent[
   const store = useGlobalSessionsStore.getState()
   const overlay = new Map(store.entityById)
   const mutations: GlobalSessionMutation[] = []
-  let movedSessions: Map<string, string> | undefined
+  const moves: GlobalSessionMove[] = []
   let flushedRecency = false
 
   const appendUpsert = (session: Session): void => {
@@ -107,15 +108,14 @@ export const applySessionEventsToGlobalSessions = (payloads: readonly SyncEvent[
       if (!currentSession) continue
       const session = stripSessionDiffSnapshots(applyPatch(currentSession, patch))
       if (shouldSkipStaleSessionEvent(currentSession, session)) continue
+      const from = patch.directory === undefined ? null : resolveGlobalSessionDirectory(currentSession)
+      const to = patch.directory === undefined ? null : resolveGlobalSessionDirectory(session)
+      if (from && to && from !== to) moves.push({ sessionId: sessionID, from, to })
       if (isGlobalSessionRecencyOnlyUpdate(currentSession, session)) {
         scheduleGlobalSessionUpdate(session)
       } else {
         pendingGlobalSessionUpdates.delete(sessionID)
         appendUpsert(session)
-        if (patch.directory && patch.directory !== currentSession.directory) {
-          movedSessions ??= new Map()
-          movedSessions.set(sessionID, patch.directory)
-        }
         streamPerfCount("ui.global_sessions.event_update_immediate")
       }
       continue
@@ -125,7 +125,6 @@ export const applySessionEventsToGlobalSessions = (payloads: readonly SyncEvent[
       const { sessionID } = payload.properties
       pendingGlobalSessionUpdates.delete(sessionID)
       overlay.delete(sessionID)
-      movedSessions?.delete(sessionID)
       mutations.push({ type: "remove", sessionId: sessionID })
     }
   }
@@ -134,11 +133,7 @@ export const applySessionEventsToGlobalSessions = (payloads: readonly SyncEvent[
   if (flushedRecency) streamPerfMark("global_sessions.event_update_flush")
   store.applySessionMutations(mutations)
   streamPerfCount("ui.global_sessions.event_update_publication")
-  if (!movedSessions?.size) return
-  // Native agent moves bypass OpenChamber's creation/worktree control events.
-  // Publish only accepted directory changes, after the global list owns them.
-  if (runtimeKey !== getRuntimeKey()) return
-  sessionEvents.notifyMoved([...new Set(movedSessions.values())])
+  publishGlobalSessionMoves(moves)
 }
 
 export const applySessionEventToGlobalSessions = (payload: SyncEvent): void => {

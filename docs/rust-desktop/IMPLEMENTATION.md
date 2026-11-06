@@ -7,9 +7,9 @@ dependencies when their first behavior needs them.
 ## 0. Reference capture and parity tooling
 
 Apply the [desktop UI parity method](PARITY.md) before migrating user-facing
-features. Inventory current desktop controls and workflows, including the
-compact-sidebar and session-visibility repairs, and pin a reproducible Electron
-reference with synthetic data.
+features. Inventory desktop controls and workflows from the selected upstream
+revision, including sidebar membership and session visibility, and pin a
+reproducible Electron reference with synthetic data.
 
 Build shared scenarios with a Python runner, an Electron/CDP adapter and a
 Linux AT-SPI adapter for GPUI, followed by Windows UI Automation when that
@@ -63,8 +63,9 @@ receipts.
 Acceptance checks:
 
 1. The core builds and tests without GPUI or network dependencies. Its projection
-   matches ordered TypeScript results for empty inputs, fallback roots, owned
-   children, missing/archived/temporary parents, cycles and ownership changes.
+   matches the selected upstream TypeScript results for empty inputs, managed
+   Chats, project and worktree ownership, child trees, archives, temporary parents,
+   cycles and ownership changes.
 2. The release executable opens on native Linux. Session selection changes the
    correct transcript. Repeated selection preserves unsent drafts and focuses
    the intended control.

@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test';
 
 import type { AttachedFile } from '@/stores/types/sessionTypes';
 import { createInputHistorySubmission, type InputHistoryAttachment, type InputHistoryEntry } from '@/stores/useInputHistoryStore';
+import { materializeFileReference } from '@/lib/messages/fileReferences';
+import { useInputStore } from '@/sync/input-store';
 
 import {
   buildChatInputHistorySubmissions,
@@ -55,6 +57,25 @@ describe('buildChatInputHistorySubmissions', () => {
 });
 
 describe('mapInputHistoryEntriesToValues', () => {
+  test('recalled equal reference occurrences remain independently removable', () => {
+    const reference = { uri: 'file:///repo/report.pdf', name: 'report.pdf' };
+    const submission = createInputHistorySubmission('inspect', [
+      materializeFileReference(reference, 'first', 'application/pdf'),
+      materializeFileReference(reference, 'second', 'application/pdf'),
+    ]);
+    const recalled = mapInputHistoryEntriesToValues([{ ...submission, submittedAt: 1 }])[0]!.attachments;
+    const previous = useInputStore.getState().attachedFiles;
+    try {
+      useInputStore.getState().setAttachedFiles([...recalled]);
+      useInputStore.getState().removeAttachedFile(recalled[0]!.id);
+      expect(useInputStore.getState().attachedFiles).toHaveLength(1);
+      expect(useInputStore.getState().attachedFiles[0]!.fileReference).toEqual(reference);
+      expect(recalled[0]!.id).not.toBe(recalled[1]!.id);
+    } finally {
+      useInputStore.getState().setAttachedFiles(previous);
+    }
+  });
+
   test('keeps chronological order and materializes supported attachments', () => {
     const entries: InputHistoryEntry[] = [
       {

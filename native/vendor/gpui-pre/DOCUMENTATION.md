@@ -1,4 +1,4 @@
-# Fractional logical layout and shaped-text wrapping
+# Local GPUI layout, text and quit contracts
 
 ## Ownership
 
@@ -9,8 +9,10 @@ resources and `LICENSE-APACHE` are retained. The package's upstream repository
 is recorded in `Cargo.toml`.
 
 The local patch owns an opt-in window layout policy, invalidation of GPUI's
-retained virtual-list measurements, and ASCII-space overflow handling in shaped
-text. Application startup owns selecting the layout policy. The accessibility
+retained virtual-list measurements, ASCII-space overflow handling in shaped
+text, and cancellable quit preparation before the platform stops its event loop.
+Application startup owns selecting the layout policy. Application views own
+their close, persistence and retry behavior. The accessibility
 bridge also supports explicit active-descendant
 relationships between a focused search editor and sibling options, documented
 in `src/window/a11y.rs`. Toolkit editing, transport and application row models
@@ -55,7 +57,70 @@ remain outside this patch.
   Non-ASCII whitespace, tabs, candidate tracking and line-clamp limits retain
   their existing rules. The editor's separate `LineWrapper` is unchanged.
 
+- `App::on_request_quit` runs every active callback before an application quit
+  can reach `Platform::quit`. A `false` return vetoes that request and retains
+  the subscription. The event loop, windows and foreground tasks stay live.
+- `App::quit(&self)` schedules one foreground preflight after the current
+  update returns. Repeated queued requests are coalesced. A veto can start a
+  normal asynchronous window close; the application reissues quit after close.
+  Closing a window synchronously during preflight schedules a fresh check after
+  the callbacks return. A veto without a closed window never retries itself.
+- `Context::on_request_quit_in` captures a weak entity and the supplied window's
+  identity. Released entities and closed windows permit quit even when another
+  owner retains the subscription or entity. A busy live window vetoes the check.
+- Consent records a revision that changes only when a window is successfully
+  opened or a quit guard is registered. After deferred effects drain, the
+  application checks that revision before calling `Platform::quit`. Stale consent
+  queues a fresh foreground preflight; a veto never retries for a revision change
+  alone. Unrelated effects and window removal preserve accepted consent.
+- Accepted application quit commits immediately before `Platform::quit`, with
+  the app borrow released before the platform call. Remaining platform idle work
+  can open windows or register guards, but cannot revoke committed quit or request
+  another platform stop. The final platform callback bypasses preflight and
+  reaches shutdown when the app can be borrowed.
+- An OS-requested platform callback without committed application quit runs the
+  same preflight and revision check before committing to `App::shutdown`.
+  Failure to borrow the app still returns `false`, including after commitment.
+  Cancellation requires a live platform loop; external fatal loop termination
+  cannot be recovered here.
+- `on_app_quit` remains final, uncancellable cleanup. Its futures cannot rely
+  on live windows or foreground entity updates. Shutdown removes those observers
+  once and retains the existing shutdown timeout and error reporting.
+
 ## Decisions
+
+### Why quit preparation precedes the platform quit call
+
+Linux stops its event loop before invoking the final quit callback. Shutdown
+then removes windows and blocks while polling final cleanup futures. Window and
+foreground-dependent preparation must veto quit first and use the application's
+normal close path while that loop is still running.
+
+### Why preflight runs after the current update
+
+A quit action can run inside the same window and entity that must prepare for
+close. A foreground preflight releases those update borrows before invoking the
+guard and preserves the existing shared-reference `App::quit` API. The platform
+quit call also runs outside the app borrow so a synchronous platform callback
+can complete shutdown. A veto is automatically rechecked only after a decreased
+window count, which handles reentrant last-window close without looping on a
+persistent veto.
+
+### Why consent tracks new windows and quit guards
+
+Preflight callbacks can defer opening a window or registering another guard.
+The outer update drains those effects after the callbacks return. Consent must
+cover the resulting windows and guards before the platform can stop. A revision
+captured before callbacks and checked after effect draining detects these new
+obligations without invalidating consent for unrelated notifications or defers.
+
+### Why quit commits at the platform call
+
+Linux signals an irreversible loop stop in `Platform::quit`, then can drain
+remaining idle callbacks before its final quit callback. Rechecking consent
+after that stop can skip shutdown with no live loop available to retry it.
+Committing after the last revision check preserves cancellable preparation and
+makes final cleanup independent of changes made by that remaining idle work.
 
 ### Why ASCII-space overflow waits for the next character
 
@@ -107,9 +172,28 @@ The `text_wrap` public-API tests use `WindowTextSystem::shape_text` with
 spaces, unchanged non-ASCII whitespace and tabs, byte indices and line clamps.
 They exercise the real wrap implementation with deterministic glyph advances.
 
+The `app::quit_tests` unit tests use deterministic platform windows, gated
+foreground drains and an instrumented quit callback. They cover default consent,
+persistent vetoes, subscription release, repeated requests, failed-close retry,
+synchronous last-window close, OS-requested quit and borrowed-app rejection.
+They also cover deferred new-window consent invalidation without a new guard,
+and OS consent invalidation after a guard is registered by a deferred effect.
+They do not certify an operating system's event loop or clipboard handover.
+
+The public quit tests use `TestAppContext::platform_quit_count` to observe
+accepted platform requests and `simulate_platform_quit` to deliver the registered
+callback separately. These controls preserve the live test scheduler and allow
+late idle window creation and guard registration before final cleanup. The tests
+check exactly-once final cleanup, default consent, OS vetoes and borrowed-app
+rejection through the real app callback without upstream unit-test font assets.
+
 These are local fork patches. Remove the logical-layout changes when the pinned
 upstream toolkit supplies equivalent opt-in logical geometry, translation and
 list-invalidation behavior. Remove the ASCII-space guard when the pinned
 upstream shaped-text wrapper preserves fitting words across trailing-space
 overflow with the same text, index and line-clamp guarantees. Keep the focused
 regressions when evaluating either replacement.
+
+Remove the quit patch when the pinned upstream toolkit supplies cancellable
+preflight before platform loop termination and preserves window-dependent
+asynchronous close, repeated-request and synchronous-close behavior.

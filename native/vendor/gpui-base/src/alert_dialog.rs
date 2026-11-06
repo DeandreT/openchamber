@@ -1,8 +1,8 @@
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    App, ClickEvent, FocusHandle, InteractiveElement as _, IntoElement, MouseButton, ParentElement,
-    Pixels, RenderOnce, Role, StatefulInteractiveElement as _, StyleRefinement, Styled, Window,
-    div,
+    App, ClickEvent, ElementId, FocusHandle, InteractiveElement as _, IntoElement, MouseButton,
+    ParentElement, Pixels, RenderOnce, Role, StatefulInteractiveElement as _, StyleRefinement,
+    Styled, Window, div,
 };
 use smallvec::SmallVec;
 
@@ -255,6 +255,11 @@ impl AlertDialog {
     #[doc(hidden)]
     pub fn layer(mut self, index: usize, topmost: bool) -> Self {
         self.0 = self.0.layer(index, topmost);
+        self
+    }
+    /// Sets the stable render identity of this opening. See [`Dialog::layer_id`].
+    pub fn layer_id(mut self, id: ElementId) -> Self {
+        self.0 = self.0.layer_id(id);
         self
     }
     #[doc(hidden)]
