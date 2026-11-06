@@ -23,6 +23,8 @@ pub struct CreateSession {
     directory: String,
     model: Option<ModelChoice>,
     agent: Option<String>,
+    title: Option<String>,
+    metadata: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl CreateSession {
@@ -53,7 +55,21 @@ impl CreateSession {
             model: model
                 .filter(|model| model.provider_id != "openchamber" || model.model_id != "auto"),
             agent,
+            title: None,
+            metadata: None,
         })
+    }
+
+    /// The same request with a title and the metadata OpenCode accepts only
+    /// at creation, as a review session is made.
+    pub fn with_title_and_metadata(
+        mut self,
+        title: String,
+        metadata: serde_json::Map<String, serde_json::Value>,
+    ) -> Self {
+        self.title = Some(title);
+        self.metadata = Some(metadata);
+        self
     }
 
     /// The saved identity to use for every observation and explicit retry.
@@ -126,6 +142,10 @@ struct CreateBody<'a> {
     model: Option<ModelRef<'a>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     agent: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    title: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<&'a serde_json::Map<String, serde_json::Value>>,
 }
 
 #[derive(Serialize)]
@@ -161,6 +181,8 @@ impl ServerClient {
                     variant: model.variant.as_deref(),
                 }),
                 agent: request.agent.as_deref(),
+                title: request.title.as_deref(),
+                metadata: request.metadata.as_ref(),
             })
     }
 

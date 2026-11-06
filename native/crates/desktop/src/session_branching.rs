@@ -943,6 +943,7 @@ impl Workspace {
                             overlay: fork.overlay,
                             kind: fork.kind,
                             btw: fork.btw.clone(),
+                            goal: fork.goal.clone(),
                         }),
                         ..SessionPatch::default()
                     },

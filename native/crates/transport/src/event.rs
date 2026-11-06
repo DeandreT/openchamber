@@ -108,6 +108,8 @@ pub enum ServerEvent {
         update: crate::message_queue::QueueUpdate,
         space: Option<String>,
     },
+    /// One auto-review run after a change, from its owner.
+    AutoReviewUpdated(crate::review::AutoReviewUpdate),
     Heartbeat,
     /// The server is shedding load; reconcile after it recovers.
     Backpressure,
@@ -451,6 +453,7 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                     .map(str::to_owned),
                 revert: None,
                 btw: facts.btw,
+                goal: facts.goal,
             })]
         }
         "session.deleted" => vec![ServerEvent::SessionDeleted { session_id }],
@@ -897,6 +900,15 @@ fn translate_openchamber(kind: &str, payload: &Value) -> Option<Vec<ServerEvent>
                 |(update, space)| ServerEvent::MessageQueueUpdated { update, space },
             ),
         ]);
+    }
+    if kind == "openchamber:auto-review.updated" {
+        // A malformed broadcast changes nothing; the next read corrects it.
+        return Some(vec![crate::review::decode_update(properties).map_or_else(
+            || ServerEvent::Unsupported {
+                kind: kind.to_owned(),
+            },
+            ServerEvent::AutoReviewUpdated,
+        )]);
     }
     let session_id = properties
         .get("sessionID")

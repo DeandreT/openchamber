@@ -87,7 +87,7 @@ struct MetadataResponse {
 }
 
 impl ServerClient {
-    fn session_url(&self, id: &SessionId) -> Url {
+    pub(crate) fn session_url(&self, id: &SessionId) -> Url {
         let mut url = self.endpoint().url("api/session/");
         url.path_segments_mut()
             .expect("HTTP URLs have path segments")
@@ -96,7 +96,7 @@ impl ServerClient {
         url
     }
 
-    fn openchamber_sessions_url(&self, segments: &[&str]) -> Url {
+    pub(crate) fn openchamber_sessions_url(&self, segments: &[&str]) -> Url {
         let mut url = self.endpoint().url("api/openchamber/sessions/");
         url.path_segments_mut()
             .expect("HTTP URLs have path segments")
@@ -152,7 +152,10 @@ impl ServerClient {
         Ok(projection::session(self.raw_session(id).await?))
     }
 
-    async fn raw_session(&self, id: &SessionId) -> Result<wire::Session, TransportError> {
+    pub(crate) async fn raw_session(
+        &self,
+        id: &SessionId,
+    ) -> Result<wire::Session, TransportError> {
         let response = self
             .authorized(Method::GET, self.session_url(id))
             .send()
@@ -504,7 +507,7 @@ impl ServerClient {
 
     /// `patchSessionMetadata`: reads the record, applies `update` and sends
     /// the difference as a merge patch, so keys other features own stay.
-    async fn patch_metadata(
+    pub(crate) async fn patch_metadata(
         &self,
         id: &SessionId,
         update: impl FnOnce(&Map<String, Value>) -> Map<String, Value>,
@@ -516,7 +519,7 @@ impl ServerClient {
         Ok(projection::metadata_facts(Some(&Value::Object(metadata))))
     }
 
-    async fn update_metadata(
+    pub(crate) async fn update_metadata(
         &self,
         id: &SessionId,
         current: &Map<String, Value>,
@@ -536,7 +539,7 @@ impl ServerClient {
     }
 }
 
-fn expect_status(
+pub(crate) fn expect_status(
     sent: Result<reqwest::Response, reqwest::Error>,
     expected: StatusCode,
 ) -> Result<(), TransportError> {
@@ -555,7 +558,7 @@ fn expect_status(
     Ok(())
 }
 
-fn receipt_error(error: TransportError) -> TransportError {
+pub(crate) fn receipt_error(error: TransportError) -> TransportError {
     match error {
         // Serde errors can quote the payload. Keep it out of diagnostics.
         TransportError::Malformed(_) => {
@@ -565,7 +568,7 @@ fn receipt_error(error: TransportError) -> TransportError {
     }
 }
 
-fn metadata_object(metadata: Option<&Value>) -> Map<String, Value> {
+pub(crate) fn metadata_object(metadata: Option<&Value>) -> Map<String, Value> {
     metadata
         .and_then(Value::as_object)
         .cloned()
@@ -574,7 +577,7 @@ fn metadata_object(metadata: Option<&Value>) -> Map<String, Value> {
 
 /// The `openchamber` namespace of a metadata record, empty when absent or
 /// not an object.
-fn namespace(metadata: &Map<String, Value>) -> Map<String, Value> {
+pub(crate) fn namespace(metadata: &Map<String, Value>) -> Map<String, Value> {
     metadata
         .get("openchamber")
         .and_then(Value::as_object)
@@ -582,7 +585,7 @@ fn namespace(metadata: &Map<String, Value>) -> Map<String, Value> {
         .unwrap_or_default()
 }
 
-fn with_namespace(
+pub(crate) fn with_namespace(
     metadata: &Map<String, Value>,
     namespace: Map<String, Value>,
 ) -> Map<String, Value> {
@@ -751,7 +754,10 @@ fn with_user_work_title(metadata: &Map<String, Value>, title: &str) -> Map<Strin
 /// `buildMetadataMergePatch`: the RFC 7386 merge patch that turns `current`
 /// into `next`. Changed keys carry their value, removed keys `null`, and
 /// nested records recurse so sibling keys stay untouched.
-fn merge_patch(current: &Map<String, Value>, next: &Map<String, Value>) -> Map<String, Value> {
+pub(crate) fn merge_patch(
+    current: &Map<String, Value>,
+    next: &Map<String, Value>,
+) -> Map<String, Value> {
     let mut patch = Map::new();
     for key in current.keys() {
         if !next.contains_key(key) {
