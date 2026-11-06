@@ -288,6 +288,34 @@ prompt. Attachments and worktree creation remain separate workflows.
   `composer_view.rs`, `model_controls.rs` and `context_panel.rs` render their
   parts. They dispatch
   to `Workspace` methods and never interpret records themselves.
+- `transcript_view.rs` owns the transcript list and each row's frame and
+  dispatches a message's parts to one module per kind: `text_part_view.rs`
+  (the prompt bubble and assistant Markdown), `reasoning_view.rs`,
+  `tool_part_view.rs` and `attachment_part_view.rs` (file and agent-mention
+  parts). Compaction records draw as a reasoning-style block whose body is
+  the summary; `!command` records draw as the shell tool row.
+- `tool_part_view.rs` draws tool rows as `ToolPart.tsx` does: icon (a chevron
+  under the pointer), display name, description or justification, failure
+  reason while folded, diff and line counts, a live or final duration for
+  shell and subagent rows, and the background label of a shell call
+  OpenCode moved to the background. Navigation tools (`read`, `skill`) stay
+  one static line. Opened, a row shows the call's input, result (subagent
+  Markdown, file diffs as plain colored lines, text output with Copy),
+  truncation note and error beside the block line. Opening a row whose result
+  a history page left out reads the whole message; the row says so after
+  500 ms and offers Retry after a failure. Background shells' live output and
+  Stop, file open actions, question cards, web search results, LSP
+  diagnostics, guest tool presentations and pages drawn in place are not
+  ported.
+- `reasoning_view.rs` draws reasoning blocks (`ReasoningTimelineBlock`):
+  folded to a line with the title, busy dots while streaming and a one-line
+  preview once settled; opened to the text in a 320 px scroll box.
+  `expandReasoningWhileStreaming` keeps its web default, off, so a streaming
+  block stays folded until the reader opens it.
+- `part_state.rs` keeps per open session what the reader opened (tool rows,
+  hand-toggled blocks), the whole-message reads for left-out results and the
+  folded reasoning previews. `transcript_clock.rs` is the once-a-second clock
+  of live durations and busy dots.
 - `markdown_view.rs` renders message Markdown through Kit's text view with
   the web's body color and block spacing. Headings (`markdown_view.rs`),
   lists (`markdown_list.rs`) and fenced code (`code_card.rs`) are custom
@@ -1329,6 +1357,21 @@ Reqwest and tokio-tungstenite need Tokio. Network work runs on two Tokio
 workers; GPUI tasks await the results without blocking either executor. Tokio
 channels and join handles complete from any executor, so the bridge is a join
 handle that aborts on drop and nothing more.
+
+### Why one transcript clock that stops itself
+
+The web runs live durations and busy dots on one shared clock
+(`useDurationTicker`) so a page pays for one redraw a second. The native
+clock is marked by each frame that draws a live indicator and redraws only
+if the last frame drew one, so it stops on its own once no running row is on
+screen, without each row tracking its own timer or visibility.
+
+### Why a left-out result fills in only shelled calls
+
+A whole-message read can return after live events changed the same message.
+Pushing the read would roll those changes back, so `complete_elided` copies
+only the calls still held as shells, and only from a whole result of the same
+status; the rest of the message stays as the live channel left it.
 
 ### Why the transcript skips most notice roles
 

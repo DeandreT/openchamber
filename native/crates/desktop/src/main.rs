@@ -87,6 +87,7 @@ mod network;
 mod open_in_app;
 #[cfg(test)]
 mod panel_tests;
+mod part_state;
 mod permission_modes;
 mod project_chooser;
 mod project_section;
@@ -134,6 +135,7 @@ mod text_part_view;
 mod theme;
 mod tool_part_view;
 mod tracked_text;
+mod transcript_clock;
 mod transcript_selection;
 mod transcript_view;
 mod turn_footer;

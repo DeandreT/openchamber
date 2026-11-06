@@ -806,6 +806,7 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                         output: None,
                         elided: None,
                         child: None,
+                        facts: Box::default(),
                     },
                     time: PartTime::default(),
                 },
@@ -817,6 +818,7 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                 return Vec::new();
             };
             let content_text = tool_text(data.get("content"));
+            let mut failure = None;
             let (status, output) = match kind {
                 "session.tool.called" => (ToolStatus::Running, None),
                 "session.tool.success" => (ToolStatus::Completed, Some(content_text)),
@@ -828,6 +830,7 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                         .or_else(|| data.pointer("/error/type").and_then(Value::as_str))
                         .unwrap_or_default()
                         .to_owned();
+                    failure = Some(error.clone()).filter(|error| !error.is_empty());
                     (
                         ToolStatus::Error,
                         Some(if content_text.is_empty() {
@@ -839,11 +842,14 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                 }
             };
             let child = projection::tool_child(data.get("metadata"), data.get("input"));
+            let facts =
+                crate::tool_facts::tool_facts(data.get("input"), data.get("metadata"), failure);
             let mut events = vec![transcript(TranscriptEvent::ToolTransition {
                 message_id: message_id.clone(),
                 part_id: PartId::from(call_id),
                 status,
                 output,
+                facts: Some(Box::new(facts)),
                 at: created,
             })];
             if let Some(child) = child {

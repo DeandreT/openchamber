@@ -117,6 +117,8 @@ pub struct OpenSession {
     pub rail_current: Option<usize>,
     /// The statistics the Turn stats section last committed while idle.
     pub turn_stats: Cell<Option<TurnStats>>,
+    /// Rows and blocks the reader opened, and whole-message reads.
+    pub(crate) parts: crate::part_state::PartState,
 }
 
 pub struct Workspace {
@@ -175,6 +177,7 @@ pub struct Workspace {
     playback: HashMap<SessionId, Task<()>>,
     /// Running state per session, from the live channel only.
     pub(crate) live_status: HashMap<SessionId, LiveStatus>,
+    pub(crate) transcript_clock: crate::transcript_clock::TranscriptClock,
     /// Present when the source is a server.
     pub(crate) connection: Option<Connection>,
     pub(crate) retired_networks: Vec<(RuntimeId, crate::network::Network)>,
@@ -321,6 +324,7 @@ impl Workspace {
             composer_placeholder_compact: None,
             playback: HashMap::new(),
             live_status: HashMap::new(),
+            transcript_clock: Default::default(),
             connection,
             retired_networks: Vec::new(),
             authentication: crate::authentication::Authentication::new(window, cx),
@@ -893,6 +897,7 @@ impl Workspace {
                 earlier: EarlierHistory::Idle,
                 rail_current: None,
                 turn_stats: Cell::new(None),
+                parts: crate::part_state::PartState::default(),
             },
         );
         if !self.is_synthetic() {

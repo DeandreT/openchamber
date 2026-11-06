@@ -478,13 +478,21 @@ pub(crate) fn tool_part(tool: &wire::ToolItem) -> Part {
             .collect();
         texts.join("\n")
     };
-    let (status, output, elided, child) = match &tool.state {
-        wire::ToolState::Streaming => (ToolStatus::Pending, None, None, None),
+    let facts = |input: &Option<Value>, metadata: &Option<Value>, error: Option<String>| {
+        Box::new(crate::tool_facts::tool_facts(
+            input.as_ref(),
+            metadata.as_ref(),
+            error,
+        ))
+    };
+    let (status, output, elided, child, facts) = match &tool.state {
+        wire::ToolState::Streaming => (ToolStatus::Pending, None, None, None, Box::default()),
         wire::ToolState::Running { input, metadata } => (
             ToolStatus::Running,
             None,
             None,
             tool_child(metadata.as_ref(), input.as_ref()),
+            facts(input, metadata, None),
         ),
         wire::ToolState::Completed {
             content,
@@ -495,6 +503,7 @@ pub(crate) fn tool_part(tool: &wire::ToolItem) -> Part {
             Some(text(content)),
             elided_chars(metadata.as_ref()),
             tool_child(metadata.as_ref(), input.as_ref()),
+            facts(input, metadata, None),
         ),
         wire::ToolState::Error {
             error,
@@ -510,9 +519,18 @@ pub(crate) fn tool_part(tool: &wire::ToolItem) -> Part {
             };
             (
                 ToolStatus::Error,
-                Some(if output.is_empty() { message } else { output }),
+                Some(if output.is_empty() {
+                    message.clone()
+                } else {
+                    output
+                }),
                 elided_chars(metadata.as_ref()),
                 tool_child(metadata.as_ref(), input.as_ref()),
+                facts(
+                    input,
+                    metadata,
+                    Some(message).filter(|message| !message.is_empty()),
+                ),
             )
         }
     };
@@ -539,6 +557,7 @@ pub(crate) fn tool_part(tool: &wire::ToolItem) -> Part {
             output,
             elided,
             child,
+            facts,
         },
         time,
     }
