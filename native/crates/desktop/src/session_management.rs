@@ -633,7 +633,10 @@ impl Workspace {
                 let stored = match result {
                     Some(Ok(mut settings)) => {
                         this.reconcile_effort_settings(&effort_read, &mut settings);
+                        // This toggle is newer than an unconfirmed Settings choice.
+                        let confirmed = settings.show_deletion_dialog;
                         this.overlay_unsettled_settings(&mut settings, cx);
+                        settings.show_deletion_dialog = confirmed;
                         this.send_catalog.settings = Some(settings);
                         Some(this.stored_deletion_dialog())
                     }
