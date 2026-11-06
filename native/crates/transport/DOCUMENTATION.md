@@ -23,6 +23,7 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `project.rs` | A directory's Git status (`GET /api/git/status`) and a project's configured actions (`GET /api/projects/:projectId/config`, the path-derived ID). |
 | `files.rs` | The Files surface's filesystem routes: folder listings, OpenCode's fuzzy file search (`/api/fs/find`), ripgrep content search, stat, text and bounded raw reads, writes and renames, scoped to the workspace by the directory header. |
 | `git.rs` | The Git surface's routes: the full status, path and batch diffs, stage, unstage, discard, commit, branches, the repository's transport binding and planned network operations. |
+| `source_control.rs` | The source board's routes (`/api/source-control/*`): providers, instances, a host's auth status, the binding with its provider associations, reference pages, an item's detail, listed change requests' statuses, read-cache refresh, and comment, state and review mutations with their receipt checks. |
 | `prompt.rs` | Prompt submission with its synthetic context, resumption of an uncertain send, slash commands, ordered session model/agent selection, inbox admission receipts, observation and interruption of one named session. |
 | `prompt_parts.rs` | What a prompt carries besides text (file references, agent and skill references, metadata, synthetic context), the command request, and their private request bodies. |
 | `session_actions.rs` | Rename (`PATCH /api/session/:id`, then a read back and a best-effort user-title note), delete (`DELETE`, 404 is already gone), archive and restore (`POST /api/openchamber/sessions/archive` and `/unarchive`), and pin and work state as merge patches to `/api/openchamber/sessions/:id/metadata` computed from a fresh read; fork (`POST /api/session/:id/fork`) and the fork's source-owned link cleanup, revert stage and clear (`POST .../revert/stage`, `DELETE .../revert`), the `/btw` marker, link, unlink and promotion, and stopping a subagent (a non-resuming synthetic note, then the child's interrupt). |
@@ -614,6 +615,16 @@ edit without weakening the capture limit or discarding metadata and identities.
 An unresolved prompt must keep its original file URI and bytes. Planning gives
 the durable content owner that exact target before a write can reach the server,
 including when its reply is lost.
+
+### Why a provider's 401 is not the server's sign-in failing
+
+Source-control routes answer 401 when the provider refused the account
+(`SOURCE_CONTROL_ACCOUNT_UNAVAILABLE`, a revoked GitHub token). Every other
+authenticated route reports 401 as the server's own sign-in failing, which
+locks the window. `source_control.rs` sends through
+`RequestBuilder::send_for_provider`, which reads the body first and reports
+a credential failure only for the server's refusal (`locked: true`, or no
+JSON reason); a provider's 401 reaches the board as that route's refusal.
 
 ### Why the Files and Git errors have their own enums
 

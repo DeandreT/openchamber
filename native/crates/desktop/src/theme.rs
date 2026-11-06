@@ -145,6 +145,12 @@ pub struct Palette {
     pub status_warning: Hsla,
     pub status_warning_background: Hsla,
     pub status_info: Hsla,
+    /// Issue and change request state colours (`--pr-*`).
+    pub pr_open: Hsla,
+    pub pr_draft: Hsla,
+    pub pr_blocked: Hsla,
+    pub pr_merged: Hsla,
+    pub pr_closed: Hsla,
     pub cursor: Hsla,
     /// `syntax.base.*` in `AGENT_SYNTAX_ROLES` order.
     pub agent_syntax: [Hsla; AGENT_SYNTAX_ROLES.len()],
@@ -244,6 +250,11 @@ impl Palette {
             status_warning: color("status.warning"),
             status_warning_background: color("status.warningBackground"),
             status_info: color("status.info"),
+            pr_open: color("pr.open"),
+            pr_draft: color("pr.draft"),
+            pr_blocked: color("pr.blocked"),
+            pr_merged: color("pr.merged"),
+            pr_closed: color("pr.closed"),
             cursor: color("interactive.cursor"),
             agent_syntax: AGENT_SYNTAX_ROLES.map(|role| color(&format!("syntax.base.{role}"))),
             agent_palette: entry

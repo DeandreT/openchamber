@@ -129,6 +129,21 @@ prompt. Attachments and worktree creation remain separate workflows.
   Copy ID, AI rename, export, worktree moves, folders, keep-warm, side panel
   and run overview are not ported, nor the archive page's project buckets,
   search, dates and archived worktrees.
+- `source_board.rs` is the issues and pull requests board the sidebar's
+  Issues and PRs button opens in place of the chat (the work status card
+  hides with the chat); it and the archive page close each other, and
+  selecting a session or a new draft closes it. One entity per runtime keeps
+  the project, list, preview and a half-typed reply while closed. It picks
+  the account through the binding and the hosts' current accounts, lists
+  issues or change requests with search and the state and people filter,
+  previews the highlighted item with its comments, and comments, closes or
+  reopens, approves and requests changes. `source_board_view.rs` draws it.
+  Trackers, discussions, a folder's several repositories, links other
+  surfaces ask to show, label and reviewer editing, merge and ready for
+  review, review threads and drafts, check runs, stacks, comment
+  attachments, starting a session or a worktree (checkout) on an item, the
+  narrow layout and the list's resize handle are not ported, nor the pull
+  request rows of the Git surface and the work status card.
 - `legacy_queue_reservation.rs` preserves exact text-only reservation recovery
   for retained journal attempts. It compares the original composer, ordered item
   identities and complete prompt configuration before allowing dispatch.
@@ -1151,6 +1166,14 @@ whole workspace if their state lived in `Workspace`. Separate entities
 re-render only themselves, and keeping one per runtime and directory brings a
 dirty draft back after a session switch, as the web's retained views do. The
 activation helper and `IconButton` are generic over the owning view for this.
+
+### Why the source board resolves after the workspace update
+
+The sidebar button opens the board inside the workspace's own update, and
+the board reads the workspace's connection for every request so a reconnect
+or runtime switch is picked up. Reading it there would panic on the
+re-entrant read, so opening a project defers its first resolution until the
+update ends; the board shows its loading state meanwhile.
 
 ### Why the Files surface polls and does not watch
 

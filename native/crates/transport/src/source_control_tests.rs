@@ -433,10 +433,27 @@ async fn detail_and_statuses_parse_the_preview_fields() {
         statuses[0].checks.map(|checks| checks.state),
         Some(ChecksState::Failure)
     );
+    client
+        .source_control_refresh_reads(&context().identity, Some(&WriteTarget::of(&items[0])))
+        .await
+        .expect("item refresh");
+    client
+        .source_control_refresh_reads(&context().identity, None)
+        .await
+        .expect("list refresh");
     let recorded = recorded.lock().expect("log");
     assert_eq!(recorded[0].param("owner"), Some("acme"));
     assert_eq!(recorded[0].param("number"), Some("7"));
     assert_eq!(recorded[1].param("pulls"), Some("acme/app#7"));
+    assert_eq!(recorded[2].method, "POST");
+    assert_eq!(
+        recorded[2].path,
+        "/api/source-control/github/read-cache/refresh"
+    );
+    assert_eq!(recorded[2].param("scope"), Some("item"));
+    assert_eq!(recorded[2].param("number"), Some("7"));
+    assert_eq!(recorded[3].param("scope"), Some("lists"));
+    assert_eq!(recorded[3].param("owner"), None);
 }
 
 #[tokio::test]

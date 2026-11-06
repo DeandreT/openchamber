@@ -111,3 +111,13 @@ eye-off
 folder-open
 refresh
 save-3
+record-circle
+close-circle
+git-merge
+git-pr-draft
+git-close-pull-request
+chat-1
+filter-3
+link
+file-list-2
+arrow-right
