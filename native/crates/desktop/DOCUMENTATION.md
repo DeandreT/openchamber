@@ -17,6 +17,16 @@ prompt. Attachments and worktree creation remain separate workflows.
   mutation tasks. `request_dock.rs` draws one nonmodal permission-priority panel
   above the composer. `form_input.rs` owns retained typed drafts and field widgets;
   `form_copy.rs` exports the form's content through explicit clipboard actions.
+- `session_goal.rs` owns the composer's goal arm, the goal writes (arm on
+  send, Pause, Resume, the dialog's Start, Save and Remove goal) and the reads
+  the goal controls need; `session_goal_view.rs` draws the target button, the
+  objective counter, the goal row and the dialog. The goal itself is the
+  server's: `metadata.openchamber.goal` on the session record, parsed by the
+  transport's projection and replaced by every metadata patch.
+- `review_flow.rs` owns the review dialog's state, both review starts and the
+  projection of the server's auto-review runs; `review_view.rs` draws the
+  loop's row and the dialog. The dialog shows the composer's model, variant
+  and agent as the reviewer and has no pickers of its own.
 - `permission_modes.rs` owns the composer's permission shield: the server's
   policy projection, a new-session draft's own choice, mode writes and the
   presentation holds around `BlockingRequests`. The server's
@@ -771,6 +781,26 @@ prompt. Attachments and worktree creation remain separate workflows.
   the attempt is retired and only its captured composer text is restored.
   Row-send retries retain `supersedes: false` through restart and never
   reject open permissions or forms.
+- An armed send saves its goal before its prompt. To an existing session, the
+  objective file, the goal metadata and the first-turn reminder go first while
+  the composer is read-only; the composer's send follows only if the same
+  runtime, session and composer are still current, and otherwise the goal is
+  removed again and the arm comes back. A new session's first prompt carries
+  its goal in memory by prompt ID; its send chain saves the goal and the
+  reminder after creation and before any admission, and a failed save returns
+  the prompt to its draft with the arm. Queueing never consumes the arm. The
+  arm is memory only, and a goal on the server comes back with its session
+  record after a restart or a runtime switch.
+- Goal status changes and dialog writes complete against the session and
+  runtime they captured; a failure changes nothing on screen until the server
+  reports the goal. Pause also stops the running turn, and removing a running
+  goal stops it too.
+- Auto-review runs are a projection of the server's, keyed by the owner of the
+  session's directory (the host or an isolated space) and ordered by that
+  owner's revision. Every event-stream connection rereads the host's runs and,
+  once, the selected session's space; a failed read keeps what was shown. Stop
+  and Dismiss remove the row at once and put it back with a reread when the
+  server keeps the run. A runtime switch drops the projection.
 - Goals and scheduled messages stay for the server to deliver through their own
   protocols. Ordinary rich messages use bounded payload transfers for Edit and
   Send. Their original captures, indexes, file descriptors and independent prompt
@@ -1242,10 +1272,35 @@ The durable claim keeps original IDs spent even after that first consumer retire
 
 ### Why goal messages are left to the server
 
-Taking a goal message and sending it as an ordinary prompt would drop its
-goal, since native has no goal arming or goal route. The web carries the goal
-through its own send; native leaves such a message queued, and the server
-starts the goal when it delivers it.
+Taking a queued goal message and sending it as an ordinary prompt would drop
+its goal: the queue's payload transfer and durable enqueue routes refuse goal
+items. Native leaves such a message queued, and the server starts the goal
+when it delivers it. For the same reason a native enqueue never consumes the
+composer's arm; the arm waits for the next direct send.
+
+### Why an existing session's goal is saved before the send starts
+
+The web awaits the goal write between its optimistic message and the prompt.
+Native sends from two pipelines, the plain attempt and the journaled rich
+actor, and neither can wait on a network step before its durable preparation.
+Saving the goal and its reminder first, with the composer read-only, keeps both
+pipelines unchanged and keeps the order the server's loop relies on: goal,
+reminder, prompt. A send that cannot follow its goal removes the goal, since a
+goal without its prompt would be audited against the previous turn.
+
+### Why the small model is read when a goal is about to start
+
+The web reads the small model's availability when the composer mounts.
+Native reads it when the target button arms a goal or the create dialog opens,
+so an idle composer costs no request and the startup reads stay those the
+recovery contracts list. An unknown answer allows a goal, as on the web; an
+answer that arrives unavailable disarms the button.
+
+### Why Open selects the review session
+
+The web opens the review session in a read-only context panel tab. Native has
+no chat tab in the context panel, so Open and a finished manual review select
+the review session in the chat area, which the sidebar lists like any session.
 
 ### Why Edit appends to the composer instead of replacing it
 

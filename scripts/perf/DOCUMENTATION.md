@@ -27,6 +27,19 @@ named default effort so an explicit Default selection must clear that choice.
 Tools are denied. The provider's existing stream responses make no tool calls.
 The default performance and `--interactions` configurations retain their behavior.
 
+`--workflows` uses the same fresh-root owner for the session goal and review
+loops. It registers `workflow` and `workflow-1s` (each turn starts after one
+second) as the only chat models, with `workflow-1s` the default. The workflow
+model answers from what the conversation says: a goal's objective takes
+`[turns:n]` turns (two by default) or, with `[blocked]`, stops on something only
+the user can give; a review gets a finding first and a clean final line on the
+re-review, `[clean]` makes the first review clean and `[dispute]` ends the
+re-review disputed. Only the latest goal of a session counts. The goal's
+progress check, whichever model it reaches, gets the JSON answer the turn's
+report lines call for. The provider gives none of these answers without
+`--workflows`, so the other modes keep their behavior.
+`python3 scripts/parity/native_goals_review.py` qualifies the native client on it.
+
 `--git-fixture` turns a fresh root's project into the Files and Git fixture
 repository (`ensureGitFixture`): two commits on `main` tracking `origin/main`
 in a bare remote at `<root>/remote.git`, a CRLF file, a gitignored folder, an
