@@ -35,8 +35,6 @@ use crate::terminal_emulator::TerminalColors;
 use crate::terminal_surface::{self, SurfaceEvent, TerminalSurface};
 use crate::theme::{Appearance, Palette};
 
-/// Width of the docked terminal panel.
-pub(crate) const PANEL_WIDTH: f32 = 560.0;
 const HEADER_HEIGHT: f32 = 36.0;
 const TAB_HEIGHT: f32 = 28.0;
 /// Open clients keep their terminals from the idle sweep
@@ -1125,9 +1123,7 @@ impl Render for TerminalPanel {
             .accessibility_id("terminal-panel")
             .aria_label(strings.get("layout.mainTab.terminal"))
             .track_focus(&self.focus)
-            .w(px(PANEL_WIDTH))
-            .flex_shrink_0()
-            .h_full()
+            .size_full()
             .flex()
             .flex_col()
             .bg(palette.background)
@@ -1268,9 +1264,26 @@ impl crate::workspace::Workspace {
             return None;
         }
         self.sync_terminal(false, window, cx);
-        self.terminal_panel
-            .clone()
-            .map(|panel| panel.into_any_element())
+        let panel = self.terminal_panel.clone()?;
+        let palette = cx.global::<crate::theme::Palette>().clone();
+        let strings = locale::strings(cx).clone();
+        // The right zone's width, which every surface in it shares.
+        Some(
+            div()
+                .relative()
+                .w(px(self.fitted_panel_width(window)))
+                .flex_shrink_0()
+                .h_full()
+                .child(panel)
+                .child(self.render_resize_handle(
+                    crate::pane_resize::Pane::Panel,
+                    strings.get("contextPanel.actions.resizePanelAria"),
+                    &palette,
+                    strings.direction(),
+                    cx,
+                ))
+                .into_any_element(),
+        )
     }
 }
 

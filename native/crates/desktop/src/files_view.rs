@@ -1,7 +1,7 @@
 //! The context panel's server surfaces and the Files surface.
 //!
 //! The rail's Files, Git and Diff buttons open a panel in place of the work
-//! status card (`ContextPanel.tsx`), 640 px wide while the chat keeps 320 px.
+//! status card (`ContextPanel.tsx`), 640 px wide until resized, while the chat keeps 320 px.
 //! Each surface is its own view, retained per runtime and directory, so a
 //! session switch and a return bring back a dirty draft as it was.
 //!
@@ -39,7 +39,7 @@ use openchamber_native_transport::files::{
 use crate::activation::on_activate;
 use crate::baseline::CssTextExt;
 use crate::chrome::{ButtonTone, CONTROL_RADIUS, IconButton, glyph};
-use crate::context_panel::{RAIL_WIDTH, ROW_LINE, ROW_SIZE, XS_LINE, XS_SIZE};
+use crate::context_panel::{ROW_LINE, ROW_SIZE, XS_LINE, XS_SIZE};
 use crate::diff_view::DiffView;
 use crate::elevation;
 use crate::git_view::GitView;
@@ -49,11 +49,6 @@ use crate::network::NetworkTask;
 use crate::theme::Palette;
 use crate::workspace::Workspace;
 
-/// `CONTEXT_ZONE_DEFAULT_WIDTH`.
-const PANEL_WIDTH: f32 = 640.0;
-/// `CONTEXT_PANEL_MIN_WIDTH` and `CONTEXT_CHAT_MIN_WIDTH`.
-const PANEL_MIN_WIDTH: f32 = 320.0;
-const CHAT_MIN_WIDTH: f32 = 320.0;
 const HEADER_HEIGHT: f32 = 40.0;
 /// The tree column beside the editor.
 const TREE_WIDTH: f32 = 220.0;
@@ -266,19 +261,6 @@ impl Workspace {
         })
     }
 
-    /// The open surface's width beside a chat of at least 320 px.
-    fn panel_width(&self, window: &Window) -> f32 {
-        let sidebar = if self.sidebar_open {
-            crate::sidebar_view::SIDEBAR_WIDTH
-        } else {
-            0.0
-        };
-        let available = f32::from(crate::chrome::content_size(window).width) - sidebar - RAIL_WIDTH;
-        PANEL_WIDTH
-            .min(available - CHAT_MIN_WIDTH)
-            .max(PANEL_MIN_WIDTH)
-    }
-
     /// The open surface for the panel's directory, created on first use.
     pub(crate) fn render_side_panel(
         &mut self,
@@ -345,7 +327,8 @@ impl Workspace {
                 .accessibility_id("side-panel")
                 .test_support()
                 .aria_label(strings.get(surface.label_key()))
-                .w(px(self.panel_width(window)))
+                .relative()
+                .w(px(self.fitted_panel_width(window)))
                 .flex_shrink_0()
                 .h_full()
                 .py(px(8.0))
@@ -360,6 +343,13 @@ impl Workspace {
                         .shadow(elevation::panel_edge(palette))
                         .child(body),
                 )
+                .child(self.render_resize_handle(
+                    crate::pane_resize::Pane::Panel,
+                    strings.get("contextPanel.actions.resizePanelAria"),
+                    palette,
+                    direction,
+                    cx,
+                ))
                 .into_any_element(),
         )
     }

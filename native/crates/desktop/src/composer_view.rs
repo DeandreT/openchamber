@@ -18,12 +18,12 @@ use openchamber_native_core::permission_mode::PermissionMode;
 
 use crate::activation::on_activate;
 use crate::chrome::{self, ButtonTone, IconButton, glyph};
+use crate::context_panel;
 use crate::elevation;
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
 use crate::theme::Palette;
 use crate::workspace::Workspace;
-use crate::{context_panel, sidebar_view};
 
 const BOX_RADIUS: f32 = 12.0;
 const EDITOR_MIN_HEIGHT: f32 = 52.0;
@@ -104,7 +104,7 @@ impl Workspace {
     pub(crate) fn chat_area_width(&self, window: &Window) -> f32 {
         let mut area = f32::from(chrome::content_size(window).width) - context_panel::RAIL_WIDTH;
         if self.sidebar_open {
-            area -= sidebar_view::SIDEBAR_WIDTH;
+            area -= self.pane_sizes.sidebar_width();
         }
         if self.work_status_inline(window) {
             area -= context_panel::PANEL_WIDTH;

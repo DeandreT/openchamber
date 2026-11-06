@@ -1400,3 +1400,100 @@ async fn closing_during_playback_releases_the_workspace(cx: &mut TestAppContext)
         "the workspace and its playback task were released"
     );
 }
+
+#[gpui_kit::test]
+fn dragging_the_sidebar_edge_resizes_and_saves_the_layout(cx: &mut TestAppContext) {
+    use crate::pane_resize::{LayoutStore, PaneLayout, SIDEBAR_MAX_WIDTH};
+
+    let directory = std::env::temp_dir().join(format!(
+        "openchamber-layout-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    let store = LayoutStore::new(&directory);
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, _, cx| {
+        workspace.update(cx, |workspace, _| {
+            workspace.restore_layout(store.clone(), PaneLayout::default());
+        });
+    })
+    .expect("window is open");
+    cx.update_window(window, |_, window, cx| {
+        window.drag(point(px(279.0), px(300.0)), point(px(359.0), px(300.0)), cx);
+        window.render_frame(cx);
+    })
+    .expect("window is open");
+    let width = cx.read(|cx| workspace.read(cx).pane_sizes.sidebar_width());
+    assert!(
+        (width - 360.0).abs() < 1.5,
+        "the edge follows the pointer: {width}"
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.drag(
+            point(px(359.0), px(300.0)),
+            point(px(1100.0), px(300.0)),
+            cx,
+        );
+    })
+    .expect("window is open");
+    assert_eq!(
+        cx.read(|cx| workspace.read(cx).pane_sizes.sidebar_width()),
+        SIDEBAR_MAX_WIDTH
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.click(ElementId::Name("sidebar-toggle".into()), cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    let started = std::time::Instant::now();
+    loop {
+        let saved = store.load();
+        if !saved.sidebar_open {
+            assert_eq!(saved.sidebar_width, SIDEBAR_MAX_WIDTH);
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "the layout is written"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+        cx.run_until_parked();
+    }
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[gpui_kit::test]
+fn the_side_panel_leaves_the_chat_its_minimum(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, _| {
+            workspace.pane_sizes.panel_width = Some(5000.0);
+        });
+        let area = workspace.read(cx).panel_area(window);
+        assert_eq!(
+            workspace.read(cx).fitted_panel_width(window),
+            area - crate::pane_resize::CHAT_MIN_WIDTH
+        );
+    })
+    .expect("window is open");
+}
+
+#[gpui_kit::test]
+fn the_menu_button_opens_and_closes_the_app_menu(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(ElementId::Name("app-menu".into()), cx);
+        window.render_frame(cx);
+    })
+    .expect("window is open");
+    assert!(cx.read(|cx| workspace.read(cx).app_menu.is_open()));
+    cx.update_window(window, |_, window, cx| {
+        window.click(ElementId::Name("app-menu".into()), cx);
+    })
+    .expect("window is open");
+    assert!(cx.read(|cx| !workspace.read(cx).app_menu.is_open()));
+}
