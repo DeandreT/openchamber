@@ -111,3 +111,5 @@ eye-off
 folder-open
 refresh
 save-3
+chat-ai-3
+chat-history

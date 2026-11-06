@@ -633,6 +633,7 @@ impl Workspace {
                 let stored = match result {
                     Some(Ok(mut settings)) => {
                         this.reconcile_effort_settings(&effort_read, &mut settings);
+                        this.overlay_unsettled_settings(&mut settings, cx);
                         this.send_catalog.settings = Some(settings);
                         Some(this.stored_deletion_dialog())
                     }

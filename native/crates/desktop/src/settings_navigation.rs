@@ -7,16 +7,27 @@ pub(crate) enum Page {
     #[default]
     General,
     Appearance,
+    Chat,
+    Sessions,
     Hosts,
 }
 
 impl Page {
-    pub(crate) const ALL: [Self; 3] = [Self::General, Self::Appearance, Self::Hosts];
+    /// `pageOrder` in `SettingsView.tsx`, limited to implemented pages.
+    pub(crate) const ALL: [Self; 5] = [
+        Self::General,
+        Self::Appearance,
+        Self::Chat,
+        Self::Sessions,
+        Self::Hosts,
+    ];
 
     pub(crate) fn id(self) -> &'static str {
         match self {
             Self::General => "general",
             Self::Appearance => "appearance",
+            Self::Chat => "chat",
+            Self::Sessions => "sessions",
             Self::Hosts => "remote-instances",
         }
     }
@@ -25,13 +36,17 @@ impl Page {
         match self {
             Self::General => "settings.page.general.title",
             Self::Appearance => "settings.page.appearance.title",
+            Self::Chat => "settings.page.chat.title",
+            Self::Sessions => "settings.page.sessions.title",
             Self::Hosts => "settings.page.remoteInstances.title",
         }
     }
 
     pub(crate) fn group(self) -> &'static str {
         match self {
-            Self::General | Self::Appearance => "settings.view.nav.group.general",
+            Self::General | Self::Appearance | Self::Chat | Self::Sessions => {
+                "settings.view.nav.group.general"
+            }
             Self::Hosts => "settings.view.nav.group.projects",
         }
     }
@@ -40,6 +55,8 @@ impl Page {
         match self {
             Self::General => "settings.page.general.description",
             Self::Appearance => "settings.page.appearance.description",
+            Self::Chat => "settings.page.chat.description",
+            Self::Sessions => "settings.page.sessions.description",
             Self::Hosts => "settings.remoteInstances.direct.description",
         }
     }
@@ -48,6 +65,8 @@ impl Page {
         match self {
             Self::General => "settings-3",
             Self::Appearance => "palette",
+            Self::Chat => "chat-ai-3",
+            Self::Sessions => "chat-history",
             Self::Hosts => "computer",
         }
     }
@@ -128,6 +147,62 @@ pub(crate) const SEARCH_ITEMS: &[SearchItem] = &[
         keywords: "terminal shell bash zsh fish pwsh powershell",
     },
     SearchItem {
+        id: "chat.prompt-navigator",
+        page: Page::Chat,
+        title: "settings.openchamber.visual.field.promptNavigatorEnabled",
+        description: None,
+        keywords: "prompt navigator navigation timeline scroll",
+    },
+    SearchItem {
+        id: "chat.code-block-line-wrap",
+        page: Page::Chat,
+        title: "settings.openchamber.visual.field.codeBlockLineWrap",
+        description: None,
+        keywords: "code wrap line wrap markdown",
+    },
+    SearchItem {
+        id: "chat.draft-starters-visible",
+        page: Page::Chat,
+        title: "settings.openchamber.visual.field.draftStartersVisible",
+        description: None,
+        keywords: "starter starters new session welcome suggestions",
+    },
+    SearchItem {
+        id: "chat.follow-up-behavior",
+        page: Page::Chat,
+        title: "settings.openchamber.visual.section.followUpBehavior",
+        description: Some("settings.openchamber.visual.field.followUpBehaviorDescription"),
+        keywords: "follow up queue steer send immediately",
+    },
+    SearchItem {
+        id: "sessions.deletion-dialog",
+        page: Page::Sessions,
+        title: "settings.openchamber.defaults.field.showDeletionDialog",
+        description: None,
+        keywords: "delete confirmation",
+    },
+    SearchItem {
+        id: "sessions.permission-default",
+        page: Page::Sessions,
+        title: "settings.sessions.permissions.defaultMode",
+        description: Some("settings.sessions.permissions.defaultModeInfo"),
+        keywords: "permissions auto-accept accept safety net ask shield approval new session",
+    },
+    SearchItem {
+        id: "sessions.show-chats",
+        page: Page::Sessions,
+        title: "settings.openchamber.defaults.field.showChats",
+        description: None,
+        keywords: "chats sidebar hide show section",
+    },
+    SearchItem {
+        id: "sessions.work-enabled",
+        page: Page::Sessions,
+        title: "settings.openchamber.sessionWork.field.enabled",
+        description: None,
+        keywords: "in work in progress track done sidebar",
+    },
+    SearchItem {
         id: "remote-instances.direct-hosts",
         page: Page::Hosts,
         title: "settings.remoteInstances.direct.title",
@@ -173,6 +248,8 @@ mod tests {
         );
         assert_eq!(search("auto-save files", &en)[0].page, Page::General);
         assert!(search("font nonexistent", &en).is_empty());
+        assert_eq!(search("steer", &en)[0].id, "chat.follow-up-behavior");
+        assert_eq!(search("safety net", &en)[0].page, Page::Sessions);
         for locale in ["ar", "he", "de"] {
             let strings = Strings::load(locale);
             let label = strings.get("settings.appearance.language.label");
@@ -195,5 +272,14 @@ mod tests {
             );
         }
         assert_eq!(Page::default(), Page::General);
+        let groups: Vec<_> = Page::ALL.iter().map(|page| page.group()).collect();
+        assert!(
+            groups.windows(2).filter(|pair| pair[0] != pair[1]).count() + 1
+                == groups
+                    .iter()
+                    .collect::<std::collections::HashSet<_>>()
+                    .len(),
+            "each navigation group is contiguous"
+        );
     }
 }

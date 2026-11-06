@@ -17,6 +17,7 @@ pub(crate) struct CodeWrapState {
     revision: u64,
     pending: Option<bool>,
     in_flight: Option<Save>,
+    failed: bool,
 }
 
 impl CodeWrapState {
@@ -27,6 +28,12 @@ impl CodeWrapState {
     pub(crate) fn change(&mut self, value: bool) {
         self.revision += 1;
         self.pending = Some(value);
+        self.failed = false;
+    }
+
+    /// Whether the newest choice's save failed; a newer change clears it.
+    pub(crate) fn failed(&self) -> bool {
+        self.failed
     }
 
     pub(crate) fn begin_save(&mut self) -> Option<Save> {
@@ -48,6 +55,11 @@ impl CodeWrapState {
         }
         self.in_flight = None;
         self.revision == save.revision
+    }
+
+    /// Records the outcome of the newest choice's write.
+    pub(crate) fn settle(&mut self, saved: bool) {
+        self.failed = !saved;
     }
 
     pub(crate) fn can_adopt(&self, read_revision: u64) -> bool {
@@ -120,5 +132,21 @@ mod tests {
             "duplicate completion is ignored"
         );
         assert!(state.begin_save().is_none());
+    }
+
+    #[test]
+    fn a_failed_save_is_reported_until_a_newer_choice_or_success() {
+        let mut state = CodeWrapState::default();
+        state.change(true);
+        let save = state.begin_save().expect("queued");
+        assert!(state.finish_save(save));
+        state.settle(false);
+        assert!(state.failed());
+        state.change(false);
+        assert!(!state.failed(), "a newer choice replaces the failed one");
+        let save = state.begin_save().expect("queued");
+        assert!(state.finish_save(save));
+        state.settle(true);
+        assert!(!state.failed());
     }
 }
