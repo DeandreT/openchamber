@@ -8,8 +8,9 @@
 use gpui_kit::SharedString;
 use gpui_kit::{
     AnyElement, Bounds, Context, ElementId, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Role, StatefulInteractiveElement, Styled, TestSupportExt, Window, canvas, div,
-    fill, linear_color_stop, linear_gradient, list, point, prelude::FluentBuilder, px, rems, size,
+    ListOffset, ListState, ParentElement, Role, StatefulInteractiveElement, Styled, TestSupportExt,
+    Window, canvas, div, fill, linear_color_stop, linear_gradient, list, point,
+    prelude::FluentBuilder, px, rems, size,
 };
 use openchamber_native_core::ids::{MessageId, PartId, SessionId};
 use openchamber_native_core::session::LiveStatus;
@@ -614,9 +615,33 @@ impl Workspace {
         let Some(open) = self.open_sessions.get_mut(session) else {
             return;
         };
+        if !open.parts.block_open(block, default) {
+            hold_position_for_expand(&open.list);
+        }
         open.parts.toggle_block(block, default);
         self.remeasure_message(session, message);
         cx.notify();
+    }
+}
+
+/// The reader opened a row (`dispatchRowExpand`): a transcript following its
+/// end lets go first and keeps the row where it is, so the row opens below
+/// the header the reader clicked instead of the end pulling the header up.
+pub(crate) fn hold_position_for_expand(list: &ListState) {
+    if !list.is_following_tail() {
+        return;
+    }
+    let viewport = list.viewport_bounds();
+    let top = (0..list.item_count()).find_map(|item_ix| {
+        let bounds = list.bounds_for_item(item_ix)?;
+        (bounds.bottom() > viewport.top()).then(|| ListOffset {
+            item_ix,
+            offset_in_item: viewport.top() - bounds.top(),
+        })
+    });
+    list.pause_following_tail();
+    if let Some(top) = top {
+        list.scroll_to(top);
     }
 }
 
