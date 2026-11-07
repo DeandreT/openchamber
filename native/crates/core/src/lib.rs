@@ -12,6 +12,7 @@ pub mod chat_roots;
 pub mod composer_selection;
 pub mod context_usage;
 pub mod data_url;
+pub mod dictation;
 pub mod draft;
 pub mod draft_content;
 pub mod draft_starters;

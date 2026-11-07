@@ -26,6 +26,8 @@ pub(crate) struct Settings {
     appearance: Entity<crate::appearance_view::AppearanceView>,
     pub(crate) chat: Entity<PreferencePage>,
     pub(crate) sessions: Entity<PreferencePage>,
+    notifications: Entity<PreferencePage>,
+    voice: Entity<PreferencePage>,
     shortcuts: Entity<crate::shortcuts_settings::ShortcutsPage>,
     page: Page,
     search: Entity<InputState>,
@@ -78,6 +80,10 @@ impl Settings {
         let sessions =
             cx.new(|cx| PreferencePage::new(owner.clone(), general.clone(), Page::Sessions, cx));
         let shortcuts = cx.new(|_| crate::shortcuts_settings::ShortcutsPage::new(owner.clone()));
+        let notifications = cx
+            .new(|cx| PreferencePage::new(owner.clone(), general.clone(), Page::Notifications, cx));
+        let voice =
+            cx.new(|cx| PreferencePage::new(owner.clone(), general.clone(), Page::Voice, cx));
         Self {
             shortcuts,
             owner,
@@ -86,6 +92,8 @@ impl Settings {
             appearance,
             chat,
             sessions,
+            notifications,
+            voice,
             page: Page::default(),
             search,
             active_result: 0,
@@ -108,7 +116,10 @@ impl Settings {
     fn select_page(&mut self, page: Page, cx: &mut Context<Self>) {
         self.page = page;
         // Chat and Sessions read the same server document as General.
-        if matches!(page, Page::General | Page::Chat | Page::Sessions) {
+        if matches!(
+            page,
+            Page::General | Page::Chat | Page::Sessions | Page::Notifications | Page::Voice
+        ) {
             let general = self.general.downgrade();
             cx.defer(move |cx| {
                 let _ = general.update(cx, |page, cx| page.refresh(cx));
@@ -131,6 +142,12 @@ impl Settings {
                 .update(cx, |page, cx| page.reveal(item.id, window, cx)),
             Page::Sessions => self
                 .sessions
+                .update(cx, |page, cx| page.reveal(item.id, window, cx)),
+            Page::Notifications => self
+                .notifications
+                .update(cx, |page, cx| page.reveal(item.id, window, cx)),
+            Page::Voice => self
+                .voice
                 .update(cx, |page, cx| page.reveal(item.id, window, cx)),
             Page::Shortcuts => {}
             Page::Hosts => {
@@ -404,6 +421,8 @@ impl Render for Settings {
             Page::Chat => self.chat.clone().into_any_element(),
             Page::Sessions => self.sessions.clone().into_any_element(),
             Page::Shortcuts => self.shortcuts.clone().into_any_element(),
+            Page::Notifications => self.notifications.clone().into_any_element(),
+            Page::Voice => self.voice.clone().into_any_element(),
             Page::Hosts => {
                 let scroll = self.hosts.read(cx).settings_scroll.clone();
                 div()

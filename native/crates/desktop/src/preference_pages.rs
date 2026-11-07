@@ -114,36 +114,38 @@ const MODES: [(PermissionMode, &str, &str, &str); 3] = [
 ];
 
 /// One chip of a short exclusive choice.
-struct Chip {
-    id: SharedString,
-    label: SharedString,
-    icon: Option<(&'static str, gpui_kit::Hsla)>,
-    tooltip: Option<SharedString>,
-    selected: bool,
-    disabled: bool,
-    choice: Choice,
+pub(crate) struct Chip {
+    pub(crate) id: SharedString,
+    pub(crate) label: SharedString,
+    pub(crate) icon: Option<(&'static str, gpui_kit::Hsla)>,
+    pub(crate) tooltip: Option<SharedString>,
+    pub(crate) selected: bool,
+    pub(crate) disabled: bool,
+    pub(crate) choice: Choice,
 }
 
 /// One boolean setting: its search target, text keys, value and writer.
-struct CheckboxRow {
-    item: &'static str,
-    label: &'static str,
-    aria: &'static str,
-    info: Option<&'static str>,
-    checked: bool,
-    enabled: bool,
-    on_change: fn(&mut PreferencePage, bool, &mut Context<PreferencePage>),
+pub(crate) struct CheckboxRow {
+    pub(crate) item: &'static str,
+    pub(crate) label: &'static str,
+    pub(crate) aria: &'static str,
+    pub(crate) info: Option<&'static str>,
+    pub(crate) checked: bool,
+    pub(crate) enabled: bool,
+    pub(crate) on_change: fn(&mut PreferencePage, bool, &mut Context<PreferencePage>),
 }
 
 pub(crate) struct PreferencePage {
-    owner: WeakEntity<Workspace>,
-    general: Entity<GeneralSettings>,
+    pub(crate) owner: WeakEntity<Workspace>,
+    pub(crate) general: Entity<GeneralSettings>,
     page: Page,
     tab: ChatTab,
     scroll: ScrollHandle,
     anchors: HashMap<&'static str, ScrollAnchor>,
     focus: HashMap<SharedString, FocusHandle>,
-    _subscriptions: Vec<Subscription>,
+    /// The Notifications and Voice pages' text fields and model list.
+    pub(crate) extra: crate::notification_voice_pages::PageState,
+    pub(crate) _subscriptions: Vec<Subscription>,
 }
 
 impl PreferencePage {
@@ -160,6 +162,7 @@ impl PreferencePage {
         let scroll = ScrollHandle::new();
         let anchors = CONTROLS
             .iter()
+            .chain(crate::notification_voice_pages::CONTROLS.iter())
             .map(|item| (*item, ScrollAnchor::for_handle(scroll.clone())))
             .collect();
         Self {
@@ -170,11 +173,20 @@ impl PreferencePage {
             scroll,
             anchors,
             focus: HashMap::new(),
+            extra: Default::default(),
             _subscriptions: subscriptions,
         }
     }
 
-    fn focus_handle(&mut self, id: &SharedString, cx: &mut Context<Self>) -> FocusHandle {
+    pub(crate) fn anchor(&self, item: &str) -> Option<ScrollAnchor> {
+        self.anchors.get(item).cloned()
+    }
+
+    pub(crate) fn focus_handle(
+        &mut self,
+        id: &SharedString,
+        cx: &mut Context<Self>,
+    ) -> FocusHandle {
         self.focus
             .entry(id.clone())
             .or_insert_with(|| cx.focus_handle().tab_index(0).tab_stop(true))
@@ -183,7 +195,12 @@ impl PreferencePage {
 
     /// Opens a search target: its tab first, then scroll and focus once laid out.
     pub(crate) fn reveal(&mut self, item: &str, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(item) = CONTROLS.iter().copied().find(|control| *control == item) else {
+        let Some(item) = CONTROLS
+            .iter()
+            .chain(crate::notification_voice_pages::CONTROLS.iter())
+            .copied()
+            .find(|control| *control == item)
+        else {
             return;
         };
         if let Some(tab) = ChatTab::for_search_target(item) {
@@ -240,7 +257,7 @@ impl PreferencePage {
         mode.displayed(self.safety_available(cx))
     }
 
-    fn change(&mut self, field: usize, choice: Choice, cx: &mut Context<Self>) {
+    pub(crate) fn change(&mut self, field: usize, choice: Choice, cx: &mut Context<Self>) {
         self.general
             .update(cx, |general, cx| general.change(field, choice, cx));
     }
@@ -266,7 +283,7 @@ impl PreferencePage {
         cx.notify();
     }
 
-    fn checkbox(&mut self, row: CheckboxRow, cx: &mut Context<Self>) -> AnyElement {
+    pub(crate) fn checkbox(&mut self, row: CheckboxRow, cx: &mut Context<Self>) -> AnyElement {
         let CheckboxRow {
             item,
             label,
@@ -318,7 +335,7 @@ impl PreferencePage {
             .into_any_element()
     }
 
-    fn chips(
+    pub(crate) fn chips(
         &mut self,
         item: &'static str,
         label: &'static str,
@@ -778,10 +795,12 @@ impl PreferencePage {
 }
 
 impl Render for PreferencePage {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let enabled = self.general.read(cx).editable();
         let sections = match self.page {
             Page::Chat => self.chat(enabled, cx),
+            Page::Notifications => self.notifications(enabled, window, cx),
+            Page::Voice => self.voice(enabled, window, cx),
             _ => self.sessions(enabled, cx),
         };
         let status = self.status(cx);
@@ -812,7 +831,12 @@ impl Render for PreferencePage {
 }
 
 /// A titled block; sections after the first carry a divider.
-fn section(title: &'static str, first: bool, rows: Vec<AnyElement>, cx: &App) -> AnyElement {
+pub(crate) fn section(
+    title: &'static str,
+    first: bool,
+    rows: Vec<AnyElement>,
+    cx: &App,
+) -> AnyElement {
     let palette = cx.global::<Palette>();
     div()
         .when(!first, |section| {
@@ -835,7 +859,7 @@ fn section(title: &'static str, first: bool, rows: Vec<AnyElement>, cx: &App) ->
 }
 
 /// Label left, control right, wrapping when the pane is narrow.
-fn field_row(
+pub(crate) fn field_row(
     item: &'static str,
     label: SharedString,
     info: Option<SharedString>,
@@ -868,7 +892,7 @@ fn field_row(
 }
 
 /// Helper text behind an info icon, shown on hover.
-fn info_hint(item: &str, text: SharedString, cx: &App) -> AnyElement {
+pub(crate) fn info_hint(item: &str, text: SharedString, cx: &App) -> AnyElement {
     let id: SharedString = format!("{}-info", item.replace('.', "-")).into();
     div()
         .id(id.clone())
