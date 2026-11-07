@@ -541,7 +541,7 @@ mod tests {
     fn discovery_takes_the_named_bundle_or_the_binary_directory() {
         let root = temporary("discover");
         package(&root);
-        let canonical = fs::canonicalize(&root).unwrap();
+        let canonical = fs::canonicalize(&root).expect("test fixture");
         let named = discover(Some(root.clone()), None).expect("named bundle");
         assert_eq!(named.root, canonical);
         let beside = discover(None, Some(root.join("openchamber-native"))).expect("beside");
@@ -554,7 +554,7 @@ mod tests {
     fn an_incomplete_named_bundle_is_not_replaced_by_another() {
         let named = temporary("incomplete");
         package(&named);
-        fs::remove_file(named.join("resources/opencode-cli/opencode")).unwrap();
+        fs::remove_file(named.join("resources/opencode-cli/opencode")).expect("test fixture");
         let beside = temporary("complete");
         package(&beside);
         let found = discover(Some(named.clone()), Some(beside.join("openchamber-native")));
@@ -562,14 +562,15 @@ mod tests {
             found,
             Err(DiscoveryError::Missing(
                 fs::canonicalize(&named)
-                    .unwrap()
+                    .expect("test fixture")
                     .join("resources/opencode-cli/opencode")
             ))
         );
         // A runtime that cannot run is missing too.
         package(&named);
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(named.join("openchamber"), fs::Permissions::from_mode(0o644)).unwrap();
+        fs::set_permissions(named.join("openchamber"), fs::Permissions::from_mode(0o644))
+            .expect("test fixture");
         assert!(matches!(
             discover(Some(named.clone()), None),
             Err(DiscoveryError::Missing(path)) if path.ends_with("openchamber")
@@ -695,7 +696,7 @@ mod tests {
                 .expect("launch options")
                 .to_string_lossy(),
         )
-        .unwrap();
+        .expect("test fixture");
         assert_eq!(options["port"], 4321);
         assert_eq!(options["nonce"], "n0nce");
         assert_eq!(

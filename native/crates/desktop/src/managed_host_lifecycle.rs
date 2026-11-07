@@ -91,15 +91,6 @@ impl Lifecycle {
         (lifecycle, spawn_now())
     }
 
-    /// A host that cannot start, for example without a bundle.
-    pub(crate) fn failed(failure: HostFailure) -> Self {
-        Self {
-            state: HostState::Failed(failure),
-            crashes_in_a_row: 0,
-            last_crash: None,
-        }
-    }
-
     pub(crate) fn state(&self) -> HostState {
         self.state
     }
@@ -295,14 +286,5 @@ mod tests {
         let next = lifecycle.apply(Event::QuitRequested, now);
         assert_eq!(next.spawn_after, None);
         assert_eq!(lifecycle.state(), HostState::Quitting);
-    }
-
-    #[test]
-    fn a_failed_host_without_a_bundle_still_quits() {
-        let mut lifecycle = Lifecycle::failed(HostFailure::BundleMissing);
-        assert!(!lifecycle.awaits_ready());
-        lifecycle.apply(Event::QuitRequested, Instant::now());
-        lifecycle.apply(Event::Stopped, Instant::now());
-        assert_eq!(lifecycle.state(), HostState::Stopped);
     }
 }

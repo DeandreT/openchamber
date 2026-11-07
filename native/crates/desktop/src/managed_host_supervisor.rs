@@ -13,7 +13,7 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{ChildStdin, Command, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
@@ -252,7 +252,7 @@ impl Supervisor {
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
         let stderr = child.stderr.take();
-        let log = self.launch.log.as_ref().and_then(|path| open_log(path));
+        let log = self.launch.log.as_deref().and_then(open_log);
         // The reader says when the output ended, so an exit is reported only
         // after a readiness line written just before it.
         let (output_done, output_ended) = mpsc::channel::<()>();
@@ -304,7 +304,7 @@ impl Supervisor {
     }
 }
 
-fn open_log(path: &PathBuf) -> Option<File> {
+fn open_log(path: &Path) -> Option<File> {
     File::options().create(true).append(true).open(path).ok()
 }
 
@@ -566,9 +566,12 @@ mod tests {
         assert_eq!(seen.first(), Some(&HostState::Starting));
         let server = host.pid("server");
         host.quit();
-        assert_eq!(*host.stopped.lock().unwrap(), Some(StopOutcome::Graceful));
+        assert_eq!(
+            *host.stopped.lock().expect("stop outcome lock"),
+            Some(StopOutcome::Graceful)
+        );
         assert!(gone(server), "the owned server exited");
-        let log = std::fs::read_to_string(host.directory.join("server.log")).unwrap();
+        let log = std::fs::read_to_string(host.directory.join("server.log")).expect("server log");
         assert!(log.contains("noise"), "the server's output is logged");
         assert!(!log.contains(NONCE), "the readiness line is not logged");
     }
@@ -631,7 +634,10 @@ mod tests {
         let server = host.pid("server");
         let detached = host.pid("detached");
         host.quit();
-        assert_eq!(*host.stopped.lock().unwrap(), Some(StopOutcome::Forced));
+        assert_eq!(
+            *host.stopped.lock().expect("stop outcome lock"),
+            Some(StopOutcome::Forced)
+        );
         assert!(gone(server), "the forced server exited");
         assert!(gone(detached), "its detached child was stopped too");
     }
