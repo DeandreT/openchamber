@@ -157,3 +157,4 @@ expand-up-down
 file
 folder-3-fill
 chat-3
+apps

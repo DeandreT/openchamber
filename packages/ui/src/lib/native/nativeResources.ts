@@ -21,6 +21,7 @@ import { getLocaleDirection, LOCALES, type Locale } from '@/lib/i18n/runtime';
 import { getDefaultMagicPromptTemplate } from '@/lib/magicPrompts';
 import { MAGIC_PROMPT_COMMANDS } from '@/components/chat/composer/submit/slashCommands';
 import { getIntlLocale } from '@/lib/i18n/intl';
+import { buildHtmlRenderDocument, htmlRenderTheme, type HtmlRenderMetrics } from '@/components/chat/message/parts/htmlRender';
 import type { I18nDictionary } from '@/lib/i18n/store';
 import { dict as en } from '@/lib/i18n/messages/en';
 import { dict as de } from '@/lib/i18n/messages/de';
@@ -52,6 +53,8 @@ export const NATIVE_ICONS_PATH = `${resourcesDirectory}/icons.json`;
 export const NATIVE_PROVIDER_LOGOS_PATH = `${resourcesDirectory}/provider-logos.json`;
 export const NATIVE_DATE_FORMATS_PATH = `${resourcesDirectory}/date-formats.json`;
 export const NATIVE_MAGIC_PROMPTS_PATH = `${resourcesDirectory}/magic-prompts.json`;
+/** The bootstrap and theme variables of pages agents show with `openchamber_render`. */
+export const NATIVE_HTML_RENDER_PATH = `${resourcesDirectory}/html-render.json`;
 /** The Electron application menu's labels, which the native app menu shows. */
 export const NATIVE_MENU_LOCALES_PATH = `${resourcesDirectory}/menu-locales.json`;
 /** The Electron shell's own menu dictionaries, outside `@/lib/i18n`. */
@@ -267,6 +270,61 @@ export const renderNativeMagicPrompts = (): string => {
   return `${JSON.stringify({ commands, templates }, null, 2)}\n`;
 };
 
+/** The variables `htmlRenderTheme` derives from the app's metrics, filled in by the native client. */
+const HTML_RENDER_METRIC_VARIABLES = ['--oc-rem', '--oc-text', '--radius', '--font-sans', '--font-mono'];
+const HTML_RENDER_SAMPLE_METRICS: HtmlRenderMetrics = { rem: 16, text: 14, sans: '"Inter", sans-serif', mono: '"JetBrains Mono", monospace' };
+const HTML_RENDER_SAMPLES: Array<{ html: string; contained?: boolean; answerState?: { waiting: boolean; answer: null | Record<string, string> } }> = [
+  { html: '<p>Bare body</p>' },
+  { html: '<!doctype html><html lang="en"><head><title>T</title></head><body>x</body></html>' },
+  { html: '<html><body><script>var s = "<head>";</script></body></html>', contained: true },
+  { html: '<!DOCTYPE html>\n<body><!-- <head> --><meta charset="latin1"></body>', answerState: { waiting: true, answer: null } },
+  { html: '<head><meta name="viewport" content="width=400"></head><p>v</p>', answerState: { waiting: false, answer: { pick: '</script><b>' } } },
+];
+
+/**
+ * Exports what the native client needs to build the document of a page an
+ * agent shows: the bootstrap's style and scripts, cut out of the document
+ * `buildHtmlRenderDocument` produces, and each built-in theme's variables in
+ * their order, without the five metric variables. Samples carry complete
+ * documents for one theme so the native builder is checked against the web's.
+ */
+export const renderNativeHtmlRender = (): string => {
+  const probe = buildHtmlRenderDocument('<head></head>', { appearance: 'light', variables: {} });
+  const parts = /^<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style id="oc-html-render-theme">:root\{color-scheme:light;\}([\s\S]*?)<\/style><script>([\s\S]*?)<\/script><script type="application\/json" id="oc-html-render-answer">\{"waiting":false,"answer":null\}<\/script><script>([\s\S]*?)<\/script><\/head>$/.exec(probe);
+  if (!parts) throw new Error('buildHtmlRenderDocument no longer has the shape the native export reads');
+  const [, baseCss, bootstrapScript, answerScript] = parts;
+  const exportedThemes = themes.map((theme) => {
+    const rendered = htmlRenderTheme(theme, HTML_RENDER_SAMPLE_METRICS);
+    return {
+      id: theme.metadata.id,
+      appearance: rendered.appearance,
+      variables: Object.entries(rendered.variables).filter(([name]) => !HTML_RENDER_METRIC_VARIABLES.includes(name)),
+      order: Object.keys(rendered.variables),
+    };
+  });
+  const sampleTheme = themes.find((theme) => theme.metadata.id === 'openchamber-dark') ?? themes[0];
+  if (!sampleTheme) throw new Error('there is no built-in theme');
+  const samples = HTML_RENDER_SAMPLES.map((sample) => ({
+    ...sample,
+    contained: sample.contained ?? false,
+    answerState: sample.answerState ?? { waiting: false, answer: null },
+    document: buildHtmlRenderDocument(sample.html, htmlRenderTheme(sampleTheme, HTML_RENDER_SAMPLE_METRICS), {
+      contained: sample.contained ?? false,
+      answerState: sample.answerState ?? { waiting: false, answer: null },
+    }),
+  }));
+  return `${JSON.stringify({
+    baseCss,
+    bootstrapScript,
+    answerScript,
+    metricVariables: HTML_RENDER_METRIC_VARIABLES,
+    sampleTheme: sampleTheme.metadata.id,
+    sampleMetrics: HTML_RENDER_SAMPLE_METRICS,
+    themes: exportedThemes,
+    samples,
+  }, null, 2)}\n`;
+};
+
 const menuDictionaries = z.record(z.string(), z.record(z.string(), z.string()));
 const menuLocalesModule = z.object({ MENU_LOCALE_DICTIONARIES: menuDictionaries }).parse(
   await import(pathToFileURL(resolve(repoRoot, MENU_LOCALES_SOURCE)).href),
@@ -304,6 +362,7 @@ const writeNativeResources = (): string[] => {
     [NATIVE_PROVIDER_LOGOS_PATH, renderNativeProviderLogos()],
     [NATIVE_DATE_FORMATS_PATH, renderNativeDateFormats()],
     [NATIVE_MAGIC_PROMPTS_PATH, renderNativeMagicPrompts()],
+    [NATIVE_HTML_RENDER_PATH, renderNativeHtmlRender()],
     [NATIVE_MENU_LOCALES_PATH, renderNativeMenuLocales()],
   ];
   return outputs.map(([relativePath, content]) => {
