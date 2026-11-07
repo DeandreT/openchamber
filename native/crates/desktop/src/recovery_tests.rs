@@ -1193,9 +1193,9 @@ fn corrupt_and_locked_journals_gate_mutations(cx: &mut TestAppContext) {
                 .all(|request| request.method == "GET"
                     && matches!(
                         request.path.as_str(),
-                        "/api/routing" | "/api/permission-auto-accept"
+                        "/api/routing" | "/api/permission-auto-accept" | "/api/guests"
                     )),
-            "blocked storage permits only routing readiness and permission policy reads"
+            "blocked storage permits only routing readiness, permission policy and extension catalog reads"
         );
         if corrupt {
             assert_eq!(
@@ -1255,7 +1255,7 @@ fn normal_close_flushes_latest_dirty_draft_and_releases_lock(cx: &mut TestAppCon
             .all(|request| request.method == "GET"
                 && matches!(
                     request.path.as_str(),
-                    "/api/routing" | "/api/permission-auto-accept"
+                    "/api/routing" | "/api/permission-auto-accept" | "/api/guests"
                 )),
         "closing a draft sends no mutations or recovery requests"
     );
