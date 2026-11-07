@@ -11,17 +11,19 @@ pub(crate) enum Page {
     Sessions,
     Shortcuts,
     Hosts,
+    Behavior,
 }
 
 impl Page {
     /// `pageOrder` in `SettingsView.tsx`, limited to implemented pages.
-    pub(crate) const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 7] = [
         Self::General,
         Self::Appearance,
         Self::Chat,
         Self::Sessions,
         Self::Shortcuts,
         Self::Hosts,
+        Self::Behavior,
     ];
 
     pub(crate) fn id(self) -> &'static str {
@@ -32,6 +34,7 @@ impl Page {
             Self::Sessions => "sessions",
             Self::Shortcuts => "shortcuts",
             Self::Hosts => "remote-instances",
+            Self::Behavior => "behavior",
         }
     }
 
@@ -43,6 +46,7 @@ impl Page {
             Self::Sessions => "settings.page.sessions.title",
             Self::Shortcuts => "settings.page.shortcuts.title",
             Self::Hosts => "settings.page.remoteInstances.title",
+            Self::Behavior => "settings.page.behavior.title",
         }
     }
 
@@ -52,6 +56,7 @@ impl Page {
                 "settings.view.nav.group.general"
             }
             Self::Hosts => "settings.view.nav.group.projects",
+            Self::Behavior => "settings.view.nav.group.opencode",
         }
     }
 
@@ -63,6 +68,7 @@ impl Page {
             Self::Sessions => "settings.page.sessions.description",
             Self::Shortcuts => "settings.page.shortcuts.description",
             Self::Hosts => "settings.remoteInstances.direct.description",
+            Self::Behavior => "settings.page.behavior.description",
         }
     }
 
@@ -74,6 +80,7 @@ impl Page {
             Self::Sessions => "chat-history",
             Self::Shortcuts => "command",
             Self::Hosts => "computer",
+            Self::Behavior => "brain",
         }
     }
 }
@@ -214,6 +221,20 @@ pub(crate) const SEARCH_ITEMS: &[SearchItem] = &[
         title: "settings.openchamber.keyboardShortcuts.title",
         description: Some("settings.openchamber.keyboardShortcuts.tooltip"),
         keywords: "keyboard hotkeys bindings",
+    },
+    SearchItem {
+        id: "behavior.system-prompt",
+        page: Page::Behavior,
+        title: "settings.behavior.page.section.systemPrompt",
+        description: Some("settings.behavior.page.warning.title"),
+        keywords: "agents.md global instructions system prompt",
+    },
+    SearchItem {
+        id: "behavior.response-style",
+        page: Page::Behavior,
+        title: "settings.behavior.page.section.responseStyle",
+        description: Some("settings.behavior.page.responseStyle.tooltip"),
+        keywords: "tone concise detailed custom instructions",
     },
     SearchItem {
         id: "remote-instances.direct-hosts",
