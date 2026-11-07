@@ -76,14 +76,23 @@ fn the_more_button_opens_the_menu_in_reference_order(cx: &mut TestAppContext) {
         assert_eq!(menu.position, None, "the More button anchors the menu");
         let actions: Vec<_> = menu.entries.iter().map(|entry| entry.action()).collect();
         use openchamber_native_core::session_actions::SessionAction::*;
-        assert_eq!(actions[..2], [Some(Rename), Some(Pin)]);
+        assert_eq!(
+            actions[..4],
+            [Some(Rename), Some(AiRename), Some(CopyId), Some(PinTo)]
+        );
         assert_eq!(actions.last(), Some(&Some(Delete)));
         assert!(
             actions.contains(&None),
             "a separator sets archive and delete apart"
         );
+        let enabled = |action| {
+            menu.entries
+                .iter()
+                .any(|entry| entry.action() == Some(action) && entry.is_enabled())
+        };
+        assert!(enabled(Rename) && enabled(CopyId) && enabled(PinTo));
         assert!(
-            menu.entries.iter().skip(1).all(|entry| !entry.is_enabled()),
+            !enabled(Archive) && !enabled(Delete) && !enabled(ExportMarkdown),
             "synthetic data has no server to change"
         );
     });
@@ -158,7 +167,8 @@ fn the_keyboard_opens_navigates_and_returns_focus(cx: &mut TestAppContext) {
         assert_eq!(menu.highlighted, Some(0), "the keyboard highlights Rename");
     });
     cx.update_window(window, |_, window, cx| {
-        // Only Rename is enabled offline; arrows and Ctrl+N/P wrap to it.
+        // Only Rename and Copy ID are enabled offline; the arrows and
+        // Ctrl+N/P step between them and wrap.
         for key in ["down", "ctrl-n", "up", "ctrl-p", "end", "home"] {
             window.press(key, cx);
         }
@@ -713,4 +723,328 @@ fn a_pin_shows_at_once_and_a_failure_flips_it_back(cx: &mut TestAppContext) {
     });
     assert!(pinned_row(&workspace, cx));
     assert!(cx.read(|cx| workspace.read(cx).session_management.pins.is_empty()));
+}
+
+fn open_menu(window: AnyWindowHandle, key: &SharedString, cx: &mut TestAppContext) {
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.hover(name(format!("{key}:target")), cx);
+        window.render_frame(cx);
+        window.click(name(format!("{key}:menu")), cx);
+        window.render_frame(cx);
+    })
+    .expect("window is open");
+}
+
+fn highlighted(workspace: &Entity<Workspace>, cx: &mut TestAppContext) -> Option<usize> {
+    cx.read(|cx| {
+        workspace
+            .read(cx)
+            .session_menu
+            .as_ref()
+            .and_then(|menu| menu.highlighted)
+    })
+}
+
+#[gpui_kit::test]
+fn copy_id_writes_the_session_id_and_says_so(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let (key, session) = rows(&workspace, cx)[0].clone();
+    open_menu(window, &key, cx);
+    cx.update_window(window, |_, window, cx| {
+        window.click(name("session-menu-item:copy-id"), cx);
+        window.render_frame(cx);
+        assert!(window.try_find(name("session-menu")).is_none());
+    })
+    .expect("window is open");
+    let copied = cx.read(|cx| cx.read_from_clipboard().and_then(|item| item.text()));
+    assert_eq!(copied.as_deref(), Some(session.as_str()));
+    assert_eq!(notice(&workspace, cx).as_deref(), Some("Session ID copied"));
+}
+
+#[gpui_kit::test]
+fn hovering_pin_to_opens_its_submenu_beside_the_menu(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let (key, _) = rows(&workspace, cx)[0].clone();
+    open_menu(window, &key, cx);
+    cx.update_window(window, |_, window, cx| {
+        window.hover(name("session-menu-item:pin-to"), cx);
+        window.render_frame(cx);
+        assert!(window.try_find(name("session-submenu")).is_some());
+        assert!(
+            window.try_find(name("session-submenu-item:pin")).is_some(),
+            "Pinned is offered"
+        );
+        assert!(
+            window
+                .try_find(name("session-submenu-item:unpin"))
+                .is_none(),
+            "Unpin shows only while pinned"
+        );
+        window.hover(name("session-menu-item:rename"), cx);
+        window.render_frame(cx);
+        assert!(
+            window.try_find(name("session-submenu")).is_none(),
+            "another item closes the submenu"
+        );
+    })
+    .expect("window is open");
+}
+
+#[gpui_kit::test]
+fn the_arrow_toward_the_line_end_opens_a_submenu_and_back_closes_it(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let (key, session) = rows(&workspace, cx)[0].clone();
+    // A server-backed menu enables Pin to; the synthetic one is offline.
+    update(window, &workspace, cx, |state, window, cx| {
+        state.open_session_menu(key.clone(), session.clone(), None, true, window, cx);
+        use openchamber_native_core::session_actions::{MenuEntry, SessionAction};
+        let menu = state.session_menu.as_mut().expect("open");
+        let pin_to = menu
+            .entries
+            .iter()
+            .position(|entry| entry.action() == Some(SessionAction::PinTo))
+            .expect("listed");
+        menu.entries[pin_to] = MenuEntry::Item {
+            action: SessionAction::PinTo,
+            enabled: true,
+        };
+        menu.highlighted = Some(pin_to);
+    });
+    let pin_to = highlighted(&workspace, cx).expect("highlighted");
+    cx.update_window(window, |_, window, cx| {
+        window.press("right", cx);
+        window.render_frame(cx);
+        assert!(window.try_find(name("session-submenu")).is_some());
+    })
+    .expect("window is open");
+    cx.read(|cx| {
+        let menu = workspace.read(cx).session_menu.as_ref().expect("open");
+        let open = menu.submenu.as_ref().expect("the submenu opened");
+        assert!(open.keyboard, "the arrows now move inside it");
+        assert_eq!(
+            open.highlighted, None,
+            "offline, the pins cannot change, so nothing is highlighted"
+        );
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.press("left", cx);
+        window.render_frame(cx);
+        assert!(window.try_find(name("session-submenu")).is_none());
+    })
+    .expect("window is open");
+    assert_eq!(highlighted(&workspace, cx), Some(pin_to));
+    cx.update_window(window, |_, window, cx| {
+        window.press("right", cx);
+        window.press("escape", cx);
+        window.render_frame(cx);
+        assert!(window.try_find(name("session-submenu")).is_none());
+        assert!(
+            window.try_find(name("session-menu")).is_some(),
+            "Escape leaves the submenu first"
+        );
+    })
+    .expect("window is open");
+}
+
+#[gpui_kit::test]
+fn filing_in_a_new_folder_creates_it_and_opens_its_name(cx: &mut TestAppContext) {
+    use openchamber_native_core::folders;
+
+    let (window, workspace) = open(cx);
+    let (_, session) = rows(&workspace, cx)[0].clone();
+    let scope = cx.read(|cx| {
+        workspace
+            .read(cx)
+            .sessions
+            .get(&session)
+            .and_then(|record| record.resolved_directory())
+            .expect("a directory")
+    });
+    update(window, &workspace, cx, |state, window, cx| {
+        state.create_folder_for_session(&session, &scope, window, cx);
+    });
+    cx.read(|cx| {
+        let state = workspace.read(cx);
+        let folder = folders::session_folder(
+            &state.session_management.folders.map,
+            &scope,
+            session.as_str(),
+        )
+        .expect("the session is filed at once");
+        assert_eq!(folder.name, "New folder");
+        let rename = state
+            .session_management
+            .folder_rename
+            .as_ref()
+            .expect("the name opens for editing");
+        assert_eq!(rename.folder_id, folder.id);
+    });
+    update(window, &workspace, cx, |state, window, cx| {
+        let input = state
+            .session_management
+            .folder_rename
+            .as_ref()
+            .expect("editing")
+            .input
+            .clone();
+        input.update(cx, |input, cx| input.set_value("Docs", window, cx));
+        state.save_folder_rename(window, cx);
+    });
+    cx.read(|cx| {
+        let state = workspace.read(cx);
+        let folder = folders::session_folder(
+            &state.session_management.folders.map,
+            &scope,
+            session.as_str(),
+        )
+        .expect("still filed");
+        assert_eq!(folder.name, "Docs");
+        let entries = state.folder_submenu_entries(&session);
+        assert!(
+            entries.iter().any(|entry| matches!(
+                entry,
+                openchamber_native_core::session_actions::SubmenuEntry::Item(item) if item.checked
+            )),
+            "the submenu checks the folder"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn a_move_of_a_busy_tree_reports_the_running_turn(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let (_, session) = rows(&workspace, cx)[0].clone();
+    update(window, &workspace, cx, |state, window, cx| {
+        state.live_status.insert(
+            session.clone(),
+            openchamber_native_core::session::LiveStatus::Busy,
+        );
+        state.move_session_to_worktree(&session, "/elsewhere/wt", window, cx);
+    });
+    cx.read(|cx| {
+        let state = workspace.read(cx);
+        assert!(
+            !state.worktree_move_pending(&session),
+            "nothing is in flight"
+        );
+    });
+    assert_eq!(
+        notice(&workspace, cx).as_deref(),
+        Some("Failed to move session to worktree")
+    );
+}
+
+#[gpui_kit::test]
+fn a_search_narrows_the_list_and_escape_restores_it(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let all = rows(&workspace, cx);
+    let (_, wanted) = all[1].clone();
+    let title = cx.read(|cx| {
+        workspace
+            .read(cx)
+            .sessions
+            .get(&wanted)
+            .expect("listed")
+            .title
+            .clone()
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(name("search-sessions"), cx);
+        window.render_frame(cx);
+        assert!(window.try_find(name("sidebar-search")).is_some());
+    })
+    .expect("window is open");
+    cx.update_window(window, |_, window, cx| {
+        // The field took focus; typing reaches it.
+        window.input(&title, cx);
+        window.render_frame(cx);
+    })
+    .expect("window is open");
+    let found = rows(&workspace, cx);
+    assert!(found.iter().any(|(_, id)| *id == wanted));
+    assert!(
+        found.len() < all.len(),
+        "the other sessions leave the list: {found:?}"
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find(name("sidebar-search-count")).is_some());
+        window.press("escape", cx);
+        window.render_frame(cx);
+        assert!(window.try_find(name("sidebar-search")).is_none());
+    })
+    .expect("window is open");
+    assert_eq!(rows(&workspace, cx).len(), all.len());
+}
+
+#[gpui_kit::test]
+fn a_search_without_matches_says_so(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    update(window, &workspace, cx, |state, window, cx| {
+        state.toggle_sidebar_search(window, cx);
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.input("zzqx nothing", cx);
+        window.render_frame(cx);
+    })
+    .expect("window is open");
+    assert!(rows(&workspace, cx).is_empty());
+    let items = cx.read(|cx| workspace.read(cx).sidebar_items.clone());
+    assert!(
+        matches!(
+            items.as_slice(),
+            [SidebarItem::Empty {
+                kind: openchamber_native_core::sidebar_rows::EmptyKind::Sidebar,
+                ..
+            }]
+        ),
+        "only the no-match state shows: {items:?}"
+    );
+}
+
+#[gpui_kit::test]
+fn the_display_menu_switches_grouping_and_folds_everything(cx: &mut TestAppContext) {
+    use openchamber_native_core::sidebar_rows::SidebarViewMode;
+
+    let (window, workspace) = open(cx);
+    update(window, &workspace, cx, |state, _, _| {
+        state.send_catalog.settings = Some(Default::default());
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(name("display-mode"), cx);
+        window.render_frame(cx);
+        window.hover(name("display-menu-item:grouping"), cx);
+        window.render_frame(cx);
+        window.click(name("display-menu-grouping:time"), cx);
+        window.render_frame(cx);
+        assert!(
+            window.try_find(name("display-menu")).is_some(),
+            "a view setting keeps the menu open"
+        );
+    })
+    .expect("window is open");
+    let grouping = cx.read(|cx| {
+        workspace
+            .read(cx)
+            .send_catalog
+            .settings
+            .as_ref()
+            .and_then(|settings| settings.sidebar_view)
+    });
+    assert_eq!(grouping, Some(SidebarViewMode::WorksByTime));
+    update(window, &workspace, cx, |state, _, cx| {
+        if let Some(settings) = state.send_catalog.settings.as_mut() {
+            settings.sidebar_view = Some(SidebarViewMode::Works);
+        }
+        state.collapse_all(cx);
+    });
+    assert!(
+        rows(&workspace, cx).is_empty(),
+        "every project and zone folds"
+    );
+    update(window, &workspace, cx, |state, _, cx| state.expand_all(cx));
+    assert!(!rows(&workspace, cx).is_empty());
 }

@@ -193,6 +193,25 @@ impl ServerClient {
         Ok(projection::session(session))
     }
 
+    /// Whether the user named the session (`carriedWorkTitleOwner`), so a
+    /// worktree made for it keeps the name over the agent's.
+    pub async fn session_titled_by_user(&self, id: &SessionId) -> Result<bool, TransportError> {
+        let session = self.raw_session(id).await?;
+        let by = namespace(&metadata_object(session.metadata.as_ref()))
+            .get("workTitle")
+            .and_then(Value::as_object)
+            .filter(|title| {
+                title
+                    .get("title")
+                    .and_then(Value::as_str)
+                    .is_some_and(|text| !text.trim().is_empty())
+            })
+            .and_then(|title| title.get("by"))
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        Ok(by.as_deref() == Some("user"))
+    }
+
     /// Deletes one session. A 404 means the session is already gone, as when
     /// the server cascaded its parent's deletion.
     pub async fn delete_session(&self, id: &SessionId) -> Result<Deleted, TransportError> {

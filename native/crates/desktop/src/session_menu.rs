@@ -9,7 +9,9 @@
 use gpui_kit::component::WindowExt;
 use std::time::Duration;
 
-use gpui_kit::base::actions::{Cancel, Confirm, SelectDown, SelectFirst, SelectLast, SelectUp};
+use gpui_kit::base::actions::{
+    Cancel, Confirm, SelectDown, SelectFirst, SelectLast, SelectLeft, SelectRight, SelectUp,
+};
 use gpui_kit::component::input::{Escape, Input, InputEvent, InputState};
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
@@ -19,13 +21,15 @@ use gpui_kit::{
     Window, anchored, deferred, div, prelude::FluentBuilder, px,
 };
 use openchamber_native_core::ids::SessionId;
-use openchamber_native_core::session_actions::{self, MenuEntry, SessionAction};
+use openchamber_native_core::session_actions::{
+    self, MenuContext, MenuEntry, SessionAction, Submenu, SubmenuEntry, SubmenuLabel,
+};
 
 use crate::activation::on_activate;
 use crate::baseline::CssTextExt;
 use crate::chrome::glyph;
 use crate::elevation;
-use crate::locale::{self, Direction};
+use crate::locale::{self, Direction, Strings};
 use crate::logical::LogicalStyledExt;
 use crate::session_management::RemovalConfirm;
 use crate::theme::Palette;
@@ -41,18 +45,37 @@ const HINT_DELAY: Duration = Duration::from_millis(500);
 pub(crate) const MENU_CONTEXT: &str = "SessionMenu";
 /// Accessibility identity of the open menu.
 pub(crate) const MENU_ID: &str = "session-menu";
+/// Accessibility identity of the open submenu.
+pub(crate) const SUBMENU_ID: &str = "session-submenu";
+/// `typography-micro`.
+const MICRO_SIZE: f32 = 0.75;
+const MICRO_LINE: f32 = 1.333_333;
 
 /// An open row menu.
 pub(crate) struct SessionMenu {
     pub(crate) row_key: SharedString,
     pub(crate) session_id: SessionId,
     pub(crate) entries: Vec<MenuEntry>,
+    /// What the items were decided from; their hints read it too.
+    pub(crate) context: MenuContext,
     pub(crate) highlighted: Option<usize>,
     /// Where a secondary click opened it; `None` opens below the trigger.
     pub(crate) position: Option<Point<Pixels>>,
     pub(crate) focus: FocusHandle,
     /// What had focus before the menu opened.
     return_focus: Option<FocusHandle>,
+    pub(crate) submenu: Option<OpenSubmenu>,
+}
+
+/// The submenu beside an item of the open menu.
+pub(crate) struct OpenSubmenu {
+    pub(crate) kind: Submenu,
+    /// The index of the item that opened it.
+    pub(crate) trigger: usize,
+    pub(crate) entries: Vec<SubmenuEntry>,
+    pub(crate) highlighted: Option<usize>,
+    /// The arrow keys move through the submenu instead of the menu.
+    pub(crate) keyboard: bool,
 }
 
 /// An inline rename in progress.
@@ -106,12 +129,60 @@ impl Workspace {
                 .then(|| session_actions::edge_highlight(&entries, false))
                 .flatten(),
             row_key,
-            session_id,
+            session_id: session_id.clone(),
             entries,
+            context,
             position,
             focus,
             return_focus,
+            submenu: None,
         });
+        self.session_menu_opened(&session_id, cx);
+        cx.notify();
+    }
+
+    /// Rebuilds the open menu after what its items depend on changed, as
+    /// when the AI rename check answers. The highlight stays on its action.
+    pub(crate) fn refresh_session_menu(&mut self, cx: &mut Context<Self>) {
+        let Some(menu) = self.session_menu.as_ref() else {
+            return;
+        };
+        let Some(context) = self
+            .sidebar_items
+            .iter()
+            .find(|item| item.key() == menu.row_key.as_ref())
+            .and_then(|item| self.session_menu_context(item))
+        else {
+            return;
+        };
+        let entries = session_actions::menu_entries(context);
+        let Some(menu) = self.session_menu.as_mut() else {
+            return;
+        };
+        let at = |entries: &[MenuEntry], action: Option<SessionAction>| {
+            action.and_then(|action| {
+                entries
+                    .iter()
+                    .position(|entry| entry.action() == Some(action) && entry.is_enabled())
+            })
+        };
+        let highlighted = menu
+            .highlighted
+            .and_then(|index| menu.entries.get(index))
+            .and_then(|entry| entry.action());
+        menu.highlighted = at(&entries, highlighted);
+        if let Some(open) = menu.submenu.as_mut() {
+            let trigger = menu
+                .entries
+                .get(open.trigger)
+                .and_then(|entry| entry.action());
+            match at(&entries, trigger) {
+                Some(index) => open.trigger = index,
+                None => menu.submenu = None,
+            }
+        }
+        menu.context = context;
+        menu.entries = entries;
         cx.notify();
     }
 
@@ -124,16 +195,18 @@ impl Workspace {
         let Some(menu) = self.session_menu.take() else {
             return;
         };
+        self.session_menu_closed();
         if restore_focus && let Some(focus) = menu.return_focus {
             window.focus(&focus, cx);
         }
         cx.notify();
     }
 
-    /// Runs the item at `index` of the open menu.
+    /// Runs the item at `index` of the open menu, or opens its submenu.
     pub(crate) fn activate_session_menu_item(
         &mut self,
         index: usize,
+        keyboard: bool,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -147,6 +220,10 @@ impl Workspace {
         else {
             return;
         };
+        if let Some(kind) = action.submenu() {
+            self.open_session_submenu(index, kind, keyboard, cx);
+            return;
+        }
         let row_key = menu.row_key.clone();
         let session_id = menu.session_id.clone();
         // A rename takes focus into its field; anything else returns it.
@@ -154,25 +231,221 @@ impl Workspace {
         self.run_session_action(row_key, session_id, action, window, cx);
     }
 
-    fn step_session_menu(&mut self, step: isize, cx: &mut Context<Self>) {
+    /// Opens the submenu of the item at `trigger`. From the keyboard its
+    /// first enabled item is highlighted and the arrows move inside it.
+    pub(crate) fn open_session_submenu(
+        &mut self,
+        trigger: usize,
+        kind: Submenu,
+        keyboard: bool,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(menu) = self.session_menu.as_ref() else {
+            return;
+        };
+        if let Some(open) = &menu.submenu
+            && open.trigger == trigger
+        {
+            if keyboard
+                && let Some(open) = self
+                    .session_menu
+                    .as_mut()
+                    .and_then(|menu| menu.submenu.as_mut())
+            {
+                open.keyboard = true;
+                open.highlighted = open.highlighted.or_else(|| first_enabled(&open.entries));
+                cx.notify();
+            }
+            return;
+        }
+        let session_id = menu.session_id.clone();
+        let entries = self.session_submenu_entries(kind, &session_id, cx);
         if let Some(menu) = self.session_menu.as_mut() {
-            menu.highlighted =
-                session_actions::step_highlight(&menu.entries, menu.highlighted, step);
+            menu.highlighted = Some(trigger);
+            menu.submenu = Some(OpenSubmenu {
+                kind,
+                trigger,
+                highlighted: keyboard.then(|| first_enabled(&entries)).flatten(),
+                entries,
+                keyboard,
+            });
+        }
+        cx.notify();
+    }
+
+    /// Rebuilds an open submenu of `kind` after what it lists changed, as
+    /// when a worktree read answers. The highlight stays on the same item.
+    pub(crate) fn refresh_session_submenu(&mut self, kind: Submenu, cx: &mut Context<Self>) {
+        let Some(menu) = self.session_menu.as_ref() else {
+            return;
+        };
+        if menu.submenu.as_ref().is_none_or(|open| open.kind != kind) {
+            return;
+        }
+        let session_id = menu.session_id.clone();
+        let entries = self.session_submenu_entries(kind, &session_id, cx);
+        if let Some(open) = self
+            .session_menu
+            .as_mut()
+            .and_then(|menu| menu.submenu.as_mut())
+        {
+            let highlighted = open
+                .highlighted
+                .and_then(|index| open.entries.get(index))
+                .and_then(SubmenuEntry::action)
+                .cloned();
+            open.highlighted = highlighted
+                .and_then(|action| {
+                    entries
+                        .iter()
+                        .position(|entry| entry.action() == Some(&action) && entry.is_enabled())
+                })
+                .or_else(|| open.keyboard.then(|| first_enabled(&entries)).flatten());
+            open.entries = entries;
             cx.notify();
         }
     }
 
-    fn edge_session_menu(&mut self, last: bool, cx: &mut Context<Self>) {
-        if let Some(menu) = self.session_menu.as_mut() {
-            menu.highlighted = session_actions::edge_highlight(&menu.entries, last);
+    fn close_session_submenu(&mut self, cx: &mut Context<Self>) {
+        if let Some(menu) = self.session_menu.as_mut()
+            && let Some(open) = menu.submenu.take()
+        {
+            menu.highlighted = Some(open.trigger);
             cx.notify();
+        }
+    }
+
+    /// Runs the submenu item at `index`.
+    pub(crate) fn activate_session_submenu_item(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(menu) = self.session_menu.as_ref() else {
+            return;
+        };
+        let Some(SubmenuEntry::Item(item)) = menu
+            .submenu
+            .as_ref()
+            .and_then(|open| open.entries.get(index))
+        else {
+            return;
+        };
+        if !item.enabled {
+            return;
+        }
+        let action = item.action.clone();
+        let row_key = menu.row_key.clone();
+        let session_id = menu.session_id.clone();
+        self.close_session_menu(true, window, cx);
+        self.run_session_submenu_action(row_key, session_id, action, window, cx);
+    }
+
+    fn step_session_menu(&mut self, step: isize, cx: &mut Context<Self>) {
+        let Some(menu) = self.session_menu.as_mut() else {
+            return;
+        };
+        match menu.submenu.as_mut() {
+            Some(open) if open.keyboard => {
+                let entries = &open.entries;
+                open.highlighted = session_actions::step_highlight_by(
+                    entries.len(),
+                    |index| entries[index].is_enabled(),
+                    open.highlighted,
+                    step,
+                );
+            }
+            _ => {
+                menu.submenu = None;
+                menu.highlighted =
+                    session_actions::step_highlight(&menu.entries, menu.highlighted, step);
+            }
+        }
+        cx.notify();
+    }
+
+    fn edge_session_menu(&mut self, last: bool, cx: &mut Context<Self>) {
+        let Some(menu) = self.session_menu.as_mut() else {
+            return;
+        };
+        match menu.submenu.as_mut() {
+            Some(open) if open.keyboard => {
+                let enabled = |entry: &SubmenuEntry| entry.is_enabled();
+                open.highlighted = if last {
+                    open.entries.iter().rposition(enabled)
+                } else {
+                    open.entries.iter().position(enabled)
+                };
+            }
+            _ => {
+                menu.submenu = None;
+                menu.highlighted = session_actions::edge_highlight(&menu.entries, last);
+            }
+        }
+        cx.notify();
+    }
+
+    /// The arrow toward the line's end opens a submenu; the one toward its
+    /// start closes it. The layout direction decides which arrow is which.
+    fn horizontal_session_menu(
+        &mut self,
+        toward_end: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(menu) = self.session_menu.as_ref() else {
+            return;
+        };
+        let in_submenu = menu.submenu.as_ref().is_some_and(|open| open.keyboard);
+        if in_submenu {
+            if !toward_end {
+                self.close_session_submenu(cx);
+            }
+            return;
+        }
+        if toward_end && let Some(index) = menu.highlighted {
+            let opens = menu
+                .entries
+                .get(index)
+                .and_then(|entry| entry.action())
+                .is_some_and(|action| action.submenu().is_some());
+            if opens {
+                self.activate_session_menu_item(index, true, window, cx);
+            }
         }
     }
 
     fn confirm_session_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(index) = self.session_menu.as_ref().and_then(|menu| menu.highlighted) {
-            self.activate_session_menu_item(index, window, cx);
+        let Some(menu) = self.session_menu.as_ref() else {
+            return;
+        };
+        match menu.submenu.as_ref() {
+            Some(open) if open.keyboard => {
+                if let Some(index) = open.highlighted {
+                    self.activate_session_submenu_item(index, window, cx);
+                }
+            }
+            _ => {
+                if let Some(index) = menu.highlighted {
+                    self.activate_session_menu_item(index, true, window, cx);
+                }
+            }
         }
+    }
+
+    /// Escape leaves a keyboard submenu first, then the menu.
+    fn cancel_session_menu(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .session_menu
+            .as_ref()
+            .and_then(|menu| menu.submenu.as_ref())
+            .is_some_and(|open| open.keyboard)
+        {
+            self.close_session_submenu(cx);
+            return;
+        }
+        self.close_session_menu(true, window, cx);
     }
 
     /// A press outside the menu closes it. When that press lands on the
@@ -204,85 +477,79 @@ impl Workspace {
             .as_ref()
             .filter(|menu| menu.row_key.as_ref() == row_key)?;
         let strings = locale::strings(cx).clone();
-        let hover = palette.hover;
-        let items = menu.entries.iter().enumerate().map(|(index, entry)| {
-            let MenuEntry::Item { action, enabled } = *entry else {
-                return div()
-                    .mx(px(-4.0))
-                    .my(px(2.0))
-                    .h(px(1.0))
-                    .bg(palette.border)
-                    .into_any_element();
-            };
-            let highlighted = menu.highlighted == Some(index);
-            let (text, icon): (Hsla, Hsla) = if action.is_destructive() {
-                (palette.error, palette.error)
-            } else {
-                (palette.elevated_foreground, palette.muted_foreground)
-            };
-            let row = div()
-                .id(SharedString::from(format!(
-                    "session-menu-item:{}",
-                    action.id()
-                )))
-                .role(Role::MenuItem)
-                .accessibility_id(format!("session-menu-item:{}", action.id()))
-                .aria_label(strings.get(action.label_key()))
-                .aria_description(strings.get(action.hint_key()))
-                .when(!enabled, |row| {
-                    row.opacity(0.5)
-                        .a11y_synthetic_children(|builder| builder.parent_node().set_disabled())
-                })
-                .tooltip({
-                    let hint = strings.get(action.hint_key());
-                    move |window, cx| Tooltip::new(hint.clone()).build(window, cx)
-                })
-                .tooltip_show_delay(HINT_DELAY)
-                .h(px(28.0))
-                .px(px(8.0))
-                .rounded(px(8.0))
-                .flex_row_from(direction)
-                .items_center()
-                .gap(px(8.0))
-                .when(enabled, |row| row.cursor_pointer())
-                .when(highlighted, |row| {
-                    row.bg(if action.is_destructive() {
-                        palette.error.opacity(0.1)
-                    } else {
-                        hover
-                    })
-                })
-                .on_mouse_move(cx.listener(move |this, _, _, cx| {
-                    if let Some(menu) = this.session_menu.as_mut()
-                        && menu.highlighted != Some(index)
-                        && enabled
-                    {
-                        menu.highlighted = Some(index);
-                        cx.notify();
-                    }
-                }))
-                .child(
-                    div()
-                        .margin_end(direction, px(4.0))
-                        .child(glyph(action.icon(), 16.0, icon)),
+        let context = menu.context;
+        let items = menu
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                let MenuEntry::Item { action, enabled } = *entry else {
+                    return menu_separator(palette);
+                };
+                let highlighted = menu.highlighted == Some(index);
+                let opens = action.submenu();
+                let row = menu_row(
+                    MenuRow {
+                        id: format!("session-menu-item:{}", action.id()),
+                        label: strings.get(action.label_key()),
+                        hint: action.hint_key(&context).map(|key| strings.get(key)),
+                        icon: Some(action.icon()),
+                        enabled,
+                        highlighted,
+                        destructive: action.is_destructive(),
+                        checked: None,
+                        opens_submenu: opens.is_some(),
+                    },
+                    palette,
+                    direction,
+                    cx,
                 )
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .css_text(LABEL_SIZE, LABEL_LINE, cx)
-                        .text_color(text)
-                        .child(strings.get(action.label_key())),
-                );
-            if !enabled {
-                return row.test_support().into_any_element();
-            }
-            on_activate(row, cx, move |this, window, cx| {
-                this.activate_session_menu_item(index, window, cx);
+                .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                    let Some(menu) = this.session_menu.as_mut() else {
+                        return;
+                    };
+                    if !enabled {
+                        return;
+                    }
+                    let submenu_here = menu
+                        .submenu
+                        .as_ref()
+                        .is_some_and(|open| open.trigger == index);
+                    if menu.highlighted == Some(index) && (opens.is_none() || submenu_here) {
+                        return;
+                    }
+                    menu.highlighted = Some(index);
+                    match opens {
+                        Some(kind) => this.open_session_submenu(index, kind, false, cx),
+                        None => {
+                            menu.submenu = None;
+                            cx.notify();
+                        }
+                    }
+                }));
+                let submenu = menu
+                    .submenu
+                    .as_ref()
+                    .filter(|open| open.trigger == index)
+                    .map(|open| {
+                        self.render_session_submenu(open, palette, direction, &strings, cx)
+                    });
+                let row = if enabled {
+                    on_activate(row, cx, move |this, window, cx| {
+                        this.activate_session_menu_item(index, false, window, cx);
+                    })
+                    .test_support()
+                    .into_any_element()
+                } else {
+                    row.test_support().into_any_element()
+                };
+                div()
+                    .relative()
+                    .child(row)
+                    .children(submenu)
+                    .into_any_element()
             })
-            .test_support()
-            .into_any_element()
-        });
+            .collect::<Vec<_>>();
         let popup = div()
             .id(MENU_ID)
             .role(Role::Menu)
@@ -296,16 +563,33 @@ impl Workspace {
                 cx.listener(|this, _: &SelectFirst, _, cx| this.edge_session_menu(false, cx)),
             )
             .on_action(cx.listener(|this, _: &SelectLast, _, cx| this.edge_session_menu(true, cx)))
+            .on_action(cx.listener(move |this, _: &SelectRight, window, cx| {
+                this.horizontal_session_menu(direction == Direction::LeftToRight, window, cx)
+            }))
+            .on_action(cx.listener(move |this, _: &SelectLeft, window, cx| {
+                this.horizontal_session_menu(direction == Direction::RightToLeft, window, cx)
+            }))
             .on_action(
                 cx.listener(|this, _: &Confirm, window, cx| this.confirm_session_menu(window, cx)),
             )
             .on_action(
-                cx.listener(|this, _: &Cancel, window, cx| {
-                    this.close_session_menu(true, window, cx)
-                }),
+                cx.listener(|this, _: &Cancel, window, cx| this.cancel_session_menu(window, cx)),
             )
             .on_mouse_down_out(
                 cx.listener(|this, event: &gpui_kit::MouseDownEvent, window, cx| {
+                    // A press inside the open submenu is the submenu's.
+                    let submenu_open = this
+                        .session_menu
+                        .as_ref()
+                        .is_some_and(|menu| menu.submenu.is_some());
+                    if submenu_open
+                        && this
+                            .session_management
+                            .submenu_bounds
+                            .is_some_and(|bounds| bounds.contains(&event.position))
+                    {
+                        return;
+                    }
                     this.dismiss_session_menu(event.position, window, cx)
                 }),
             )
@@ -342,6 +626,129 @@ impl Workspace {
             .with_priority(1)
             .into_any_element(),
         )
+    }
+
+    /// The submenu beside its trigger's end edge, at the trigger's top.
+    fn render_session_submenu(
+        &self,
+        open: &OpenSubmenu,
+        palette: &Palette,
+        direction: Direction,
+        strings: &Strings,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let items = open
+            .entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| match entry {
+                SubmenuEntry::Separator => menu_separator(palette),
+                SubmenuEntry::Note(key) => div()
+                    .id(SharedString::from(format!("session-submenu-note:{key}")))
+                    .role(Role::MenuItem)
+                    .accessibility_id(format!("session-submenu-note:{key}"))
+                    .aria_label(strings.get(key))
+                    .a11y_synthetic_children(|builder| builder.parent_node().set_disabled())
+                    .px(px(8.0))
+                    .py(px(2.0))
+                    .css_text(MICRO_SIZE, MICRO_LINE, cx)
+                    .text_color(palette.muted_foreground)
+                    .child(strings.get(key))
+                    .into_any_element(),
+                SubmenuEntry::Item(item) => {
+                    let label = match &item.label {
+                        SubmenuLabel::Key(key) => strings.get(key),
+                        SubmenuLabel::Text(text) => SharedString::from(text.clone()),
+                    };
+                    let enabled = item.enabled;
+                    let row = menu_row(
+                        MenuRow {
+                            id: format!("session-submenu-item:{}", item.action.id()),
+                            label,
+                            hint: item.title.clone().map(SharedString::from),
+                            icon: item.icon,
+                            enabled,
+                            highlighted: open.highlighted == Some(index),
+                            destructive: item.destructive,
+                            checked: Some(item.checked),
+                            opens_submenu: false,
+                        },
+                        palette,
+                        direction,
+                        cx,
+                    )
+                    .on_mouse_move(cx.listener(move |this, _, _, cx| {
+                        if let Some(open) = this
+                            .session_menu
+                            .as_mut()
+                            .and_then(|menu| menu.submenu.as_mut())
+                            && enabled
+                            && open.highlighted != Some(index)
+                        {
+                            open.highlighted = Some(index);
+                            cx.notify();
+                        }
+                    }));
+                    if enabled {
+                        on_activate(row, cx, move |this, window, cx| {
+                            this.activate_session_submenu_item(index, window, cx);
+                        })
+                        .test_support()
+                        .into_any_element()
+                    } else {
+                        row.test_support().into_any_element()
+                    }
+                }
+            })
+            .collect::<Vec<_>>();
+        let workspace = cx.entity().downgrade();
+        let panel = div()
+            .id(SUBMENU_ID)
+            .role(Role::Menu)
+            .accessibility_id(SUBMENU_ID)
+            .occlude()
+            .min_w(px(submenu_min_width(open.kind)))
+            .p(px(4.0))
+            .rounded(px(12.0))
+            .bg(palette.elevated)
+            .shadow(elevation::floating(palette))
+            .flex()
+            .flex_col()
+            .children(items)
+            .child(
+                // Records the panel's bounds so a press inside it does not
+                // count as outside the menu.
+                gpui_kit::canvas(
+                    move |bounds, _, cx| {
+                        let _ = workspace.update(cx, |this, _| {
+                            this.session_management.submenu_bounds = Some(bounds);
+                        });
+                    },
+                    |_, _, _, _| {},
+                )
+                .absolute()
+                .size_full(),
+            )
+            .test_support();
+        let anchor = match direction {
+            Direction::LeftToRight => Anchor::TopLeft,
+            Direction::RightToLeft => Anchor::TopRight,
+        };
+        div()
+            .absolute()
+            .top(px(-4.0))
+            .inset_end(direction, px(0.0))
+            .size_0()
+            .child(
+                deferred(
+                    anchored()
+                        .anchor(anchor)
+                        .snap_to_window_with_margin(Edges::all(px(8.0)))
+                        .child(div().margin_start(direction, px(8.0)).child(panel)),
+                )
+                .with_priority(2),
+            )
+            .into_any_element()
     }
 
     /// The row's More button: shown on hover, on focus and while its menu is
@@ -809,4 +1216,119 @@ impl Workspace {
         });
         cx.notify();
     }
+}
+
+/// The minimum widths of `SubContent`: 220 px for worktrees, 180 px for
+/// pins and folders.
+fn submenu_min_width(kind: Submenu) -> f32 {
+    match kind {
+        Submenu::Worktree => 220.0,
+        Submenu::Pin | Submenu::Folder => 180.0,
+    }
+}
+
+fn first_enabled(entries: &[SubmenuEntry]) -> Option<usize> {
+    entries.iter().position(SubmenuEntry::is_enabled)
+}
+
+fn menu_separator(palette: &Palette) -> AnyElement {
+    div()
+        .mx(px(-4.0))
+        .my(px(2.0))
+        .h(px(1.0))
+        .bg(palette.border)
+        .into_any_element()
+}
+
+/// What one line of the menu or a submenu shows.
+pub(crate) struct MenuRow {
+    pub(crate) id: String,
+    pub(crate) label: SharedString,
+    pub(crate) hint: Option<SharedString>,
+    pub(crate) icon: Option<&'static str>,
+    pub(crate) enabled: bool,
+    pub(crate) highlighted: bool,
+    pub(crate) destructive: bool,
+    /// `Some` on a line that can carry the current choice's check.
+    pub(crate) checked: Option<bool>,
+    pub(crate) opens_submenu: bool,
+}
+
+/// One 28 px line: icon, label, then the check or the submenu chevron at
+/// the end.
+pub(crate) fn menu_row(
+    row: MenuRow,
+    palette: &Palette,
+    direction: Direction,
+    cx: &mut Context<Workspace>,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    let (text, icon): (Hsla, Hsla) = if row.destructive {
+        (palette.error, palette.error)
+    } else {
+        (palette.elevated_foreground, palette.muted_foreground)
+    };
+    let chevron = match direction {
+        Direction::LeftToRight => "arrow-right-s",
+        Direction::RightToLeft => "arrow-left-s",
+    };
+    div()
+        .id(SharedString::from(row.id.clone()))
+        .role(Role::MenuItem)
+        .accessibility_id(row.id)
+        .aria_label(row.label.clone())
+        .when_some(row.hint.clone(), |this, hint| this.aria_description(hint))
+        .when(row.opens_submenu, |this| {
+            this.aria_expanded(row.highlighted)
+        })
+        .when_some(row.checked, |this, checked| {
+            this.aria_toggled(if checked {
+                gpui_kit::Toggled::True
+            } else {
+                gpui_kit::Toggled::False
+            })
+        })
+        .when(!row.enabled, |this| {
+            this.opacity(0.5)
+                .a11y_synthetic_children(|builder| builder.parent_node().set_disabled())
+        })
+        .when_some(row.hint, |this, hint| {
+            this.tooltip(move |window, cx| Tooltip::new(hint.clone()).build(window, cx))
+                .tooltip_show_delay(HINT_DELAY)
+        })
+        .h(px(28.0))
+        .px(px(8.0))
+        .rounded(px(8.0))
+        .flex_row_from(direction)
+        .items_center()
+        .gap(px(8.0))
+        .when(row.enabled, |this| this.cursor_pointer())
+        .when(row.highlighted, |this| {
+            this.bg(if row.destructive {
+                palette.error.opacity(0.1)
+            } else {
+                palette.hover
+            })
+        })
+        .when_some(row.icon, |this, name| {
+            this.child(
+                div()
+                    .margin_end(direction, px(4.0))
+                    .child(glyph(name, 16.0, icon)),
+            )
+        })
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .truncate()
+                .css_text(LABEL_SIZE, LABEL_LINE, cx)
+                .text_color(text)
+                .child(row.label),
+        )
+        .when(row.checked == Some(true), |this| {
+            this.child(glyph("check", 14.0, palette.primary))
+        })
+        .when(row.opens_submenu, |this| {
+            this.child(glyph(chevron, 16.0, palette.muted_foreground))
+        })
 }

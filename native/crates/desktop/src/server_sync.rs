@@ -382,6 +382,9 @@ impl Workspace {
                 self.load_message_queue(cx);
                 // Nor are auto-review broadcasts.
                 self.load_auto_reviews(cx);
+                // Nor are warming and folder broadcasts.
+                self.load_session_warming(cx);
+                self.sync_session_folders(cx);
             }
             StreamItem::Disconnected(error) => {
                 tracing::warn!(%error, "the event stream dropped");
@@ -1184,6 +1187,10 @@ impl Workspace {
                     ..
                 } => self.permission_left_for_user(session_id, permission_id),
                 ServerEvent::RoutingUpdated => self.load_auto_routing(cx),
+                ServerEvent::SessionWarming(snapshot) => self.apply_session_warming(snapshot),
+                ServerEvent::SessionFoldersChanged { updated_at } => {
+                    self.session_folders_changed(updated_at, cx)
+                }
                 ServerEvent::MessageQueueUpdated { update, space } => {
                     self.apply_queue_broadcast(update, space)
                 }

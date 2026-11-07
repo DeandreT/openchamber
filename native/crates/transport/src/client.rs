@@ -73,6 +73,9 @@ pub struct SettingsChanges {
     pub sidebar_show_chats_section: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_work_enabled: Option<bool>,
+    /// `project` or `time`: how the sidebar lists sessions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidebar_grouping: Option<&'static str>,
     /// The global starters; written with both offered-starter markers set,
     /// so a removed built-in stays removed.
     #[serde(

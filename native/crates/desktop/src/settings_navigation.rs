@@ -207,6 +207,8 @@ pub(crate) const SEARCH_ITEMS: &[SearchItem] = &[
         title: "settings.openchamber.sessionWork.field.enabled",
         description: None,
         keywords: "in work in progress track done sidebar",
+    },
+    SearchItem {
         id: "shortcuts.keyboard-shortcuts",
         page: Page::Shortcuts,
         title: "settings.openchamber.keyboardShortcuts.title",
