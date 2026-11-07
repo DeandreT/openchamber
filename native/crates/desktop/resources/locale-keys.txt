@@ -1106,3 +1106,7 @@ settings.behavior.page.responseStyle.option.custom
 settings.behavior.page.responseStyle.customPlaceholder
 settings.behavior.page.toast.saveFailed
 settings.behavior.page.toast.agentsMdChangedOnDisk
+settings.openchamber.finishedWorktrees.title
+settings.openchamber.finishedWorktrees.info
+settings.openchamber.finishedWorktrees.field.archiveOnDone
+settings.openchamber.mergedWorktreeCleanup.field.enable

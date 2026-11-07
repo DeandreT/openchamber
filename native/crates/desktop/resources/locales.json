@@ -1107,7 +1107,11 @@
         "settings.behavior.page.responseStyle.option.custom": "Custom",
         "settings.behavior.page.responseStyle.customPlaceholder": "Write the instruction to add to the first message...",
         "settings.behavior.page.toast.saveFailed": "Failed to save behavior",
-        "settings.behavior.page.toast.agentsMdChangedOnDisk": "AGENTS.md was changed outside OpenChamber, so your edit wasn't saved. Copy it, then reopen this page to load the current file."
+        "settings.behavior.page.toast.agentsMdChangedOnDisk": "AGENTS.md was changed outside OpenChamber, so your edit wasn't saved. Copy it, then reopen this page to load the current file.",
+        "settings.openchamber.finishedWorktrees.title": "Finished worktrees",
+        "settings.openchamber.finishedWorktrees.info": "Archiving removes the worktree folder; its branch, changes and sessions wait in Archive, ready to restore. Nothing is archived while an agent is working there.",
+        "settings.openchamber.finishedWorktrees.field.archiveOnDone": "Archive a worktree when you mark it done",
+        "settings.openchamber.mergedWorktreeCleanup.field.enable": "Archive a worktree after its PR is merged"
       }
     },
     "de": {
@@ -2216,7 +2220,11 @@
         "settings.behavior.page.responseStyle.option.custom": "Benutzerdefiniert",
         "settings.behavior.page.responseStyle.customPlaceholder": "Schreiben Sie die Anweisung, die der ersten Nachricht hinzugefügt werden soll...",
         "settings.behavior.page.toast.saveFailed": "Verhalten konnte nicht gespeichert werden",
-        "settings.behavior.page.toast.agentsMdChangedOnDisk": "AGENTS.md wurde außerhalb von OpenChamber geändert, daher wurde deine Änderung nicht gespeichert. Kopiere sie und öffne diese Seite erneut, um die aktuelle Datei zu laden."
+        "settings.behavior.page.toast.agentsMdChangedOnDisk": "AGENTS.md wurde außerhalb von OpenChamber geändert, daher wurde deine Änderung nicht gespeichert. Kopiere sie und öffne diese Seite erneut, um die aktuelle Datei zu laden.",
+        "settings.openchamber.finishedWorktrees.title": "Abgeschlossene Worktrees",
+        "settings.openchamber.finishedWorktrees.info": "Beim Archivieren verschwindet der Worktree-Ordner; Branch, Änderungen und Sitzungen warten im Archiv und lassen sich wiederherstellen. Solange dort ein Agent arbeitet, wird nichts archiviert.",
+        "settings.openchamber.finishedWorktrees.field.archiveOnDone": "Worktree archivieren, wenn du ihn als erledigt markierst",
+        "settings.openchamber.mergedWorktreeCleanup.field.enable": "Worktree archivieren, nachdem sein PR gemergt wurde"
       }
     },
     "fr": {
@@ -3325,7 +3333,11 @@
         "settings.behavior.page.responseStyle.option.custom": "Personnalisé",
         "settings.behavior.page.responseStyle.customPlaceholder": "Écrivez l'instruction à ajouter au premier message...",
         "settings.behavior.page.toast.saveFailed": "Échec de l'enregistrement du comportement",
-        "settings.behavior.page.toast.agentsMdChangedOnDisk": "AGENTS.md a été modifié en dehors d'OpenChamber, votre modification n'a donc pas été enregistrée. Copiez-la, puis rouvrez cette page pour charger le fichier actuel."
+        "settings.behavior.page.toast.agentsMdChangedOnDisk": "AGENTS.md a été modifié en dehors d'OpenChamber, votre modification n'a donc pas été enregistrée. Copiez-la, puis rouvrez cette page pour charger le fichier actuel.",
+        "settings.openchamber.finishedWorktrees.title": "Worktrees terminés",
+        "settings.openchamber.finishedWorktrees.info": "L’archivage supprime le dossier du worktree ; sa branche, ses modifications et ses sessions attendent dans les Archives, prêtes à être restaurées. Rien n’est archivé tant qu’un agent y travaille.",
+        "settings.openchamber.finishedWorktrees.field.archiveOnDone": "Archiver un worktree quand vous le marquez comme terminé",
+        "settings.openchamber.mergedWorktreeCleanup.field.enable": "Archiver un worktree une fois sa PR fusionnée"
       }
     },
     "nl": {
@@ -4434,7 +4446,11 @@
         "settings.behavior.page.responseStyle.option.custom": "Aangepast",
         "settings.behavior.page.responseStyle.customPlaceholder": "Schrijf de instructie die aan het eerste bericht wordt toegevoegd...",
         "settings.behavior.page.toast.saveFailed": "Kan gedrag niet opslaan",
-        "settings.behavior.page.toast.agentsMdChangedOnDisk": "AGENTS.md is buiten OpenChamber gewijzigd, dus uw bewerking is niet opgeslagen. Kopieer die en open deze pagina opnieuw om het huidige bestand te laden."
+        "settings.behavior.page.toast.agentsMdChangedOnDisk": "AGENTS.md is buiten OpenChamber gewijzigd, dus uw bewerking is niet opgeslagen. Kopieer die en open deze pagina opnieuw om het huidige bestand te laden.",
+        "settings.openchamber.finishedWorktrees.title": "Afgeronde worktrees",
+        "settings.openchamber.finishedWorktrees.info": "Archiveren verwijdert de worktree-map; de branch, wijzigingen en sessies wachten in het Archief, klaar om te herstellen. Zolang er een agent in werkt, wordt niets gearchiveerd.",
+        "settings.openchamber.finishedWorktrees.field.archiveOnDone": "Worktree archiveren als u hem als afgerond markeert",
+        "settings.openchamber.mergedWorktreeCleanup.field.enable": "Worktree archiveren nadat zijn PR is gemerged"
       }
     },
     "zh-CN": {
@@ -5543,7 +5559,11 @@
         "settings.behavior.page.responseStyle.option.custom": "自定义",
         "settings.behavior.page.responseStyle.customPlaceholder": "编写要添加到第一条消息的说明...",
         "settings.behavior.page.toast.saveFailed": "行为保存失败",
-        "settings.behavior.page.toast.agentsMdChangedOnDisk": "AGENTS.md 已在 OpenChamber 之外被修改，因此你的编辑未保存。请先复制你的内容，然后重新打开此页面以加载当前文件。"
+        "settings.behavior.page.toast.agentsMdChangedOnDisk": "AGENTS.md 已在 OpenChamber 之外被修改，因此你的编辑未保存。请先复制你的内容，然后重新打开此页面以加载当前文件。",
+        "settings.openchamber.finishedWorktrees.title": "已完成的工作树",
+        "settings.openchamber.finishedWorktrees.info": "归档会移除工作树文件夹；其分支、更改和会话保留在归档中，随时可以还原。代理仍在其中工作时不会归档。",
+        "settings.openchamber.finishedWorktrees.field.archiveOnDone": "将工作树标记为完成时归档",
+        "settings.openchamber.mergedWorktreeCleanup.field.enable": "工作树的 PR 合并后归档"
       }
     },
     "zh-TW": {
@@ -6652,7 +6672,11 @@
         "settings.behavior.page.responseStyle.option.custom": "自訂",
         "settings.behavior.page.responseStyle.customPlaceholder": "編寫要新增到第一則訊息的說明...",
         "settings.behavior.page.toast.saveFailed": "行為儲存失敗",
-        "settings.behavior.page.toast.agentsMdChangedOnDisk": "AGENTS.md 已在 OpenChamber 之外被修改，因此你的編輯未儲存。請先複製你的內容，然後重新開啟此頁面以載入目前的檔案。"
+        "settings.behavior.page.toast.agentsMdChangedOnDisk": "AGENTS.md 已在 OpenChamber 之外被修改，因此你的編輯未儲存。請先複製你的內容，然後重新開啟此頁面以載入目前的檔案。",
+        "settings.openchamber.finishedWorktrees.title": "已完成的工作樹",
+        "settings.openchamber.finishedWorktrees.info": "封存會移除工作樹資料夾；其分支、變更與工作階段保留在封存中，隨時可以還原。代理仍在其中工作時不會封存。",
+        "settings.openchamber.finishedWorktrees.field.archiveOnDone": "將工作樹標記為完成時封存",
+        "settings.openchamber.mergedWorktreeCleanup.field.enable": "工作樹的 PR 合併後封存"
       }
     },
     "uk": {
@@ -7761,7 +7785,11 @@
         "settings.behavior.page.responseStyle.option.custom": "Власний",
         "settings.behavior.page.responseStyle.customPlaceholder": "Напишіть інструкцію, яку треба додати до першого повідомлення...",
         "settings.behavior.page.toast.saveFailed": "Не вдалося зберегти поведінку",
-        "settings.behavior.page.toast.agentsMdChangedOnDisk": "AGENTS.md змінили поза OpenChamber, тому твою правку не збережено. Скопіюй її, а потім знову відкрий цю сторінку, щоб завантажити актуальний файл."
+        "settings.behavior.page.toast.agentsMdChangedOnDisk": "AGENTS.md змінили поза OpenChamber, тому твою правку не збережено. Скопіюй її, а потім знову відкрий цю сторінку, щоб завантажити актуальний файл.",
+        "settings.openchamber.finishedWorktrees.title": "Завершені worktree",
+        "settings.openchamber.finishedWorktrees.info": "Архівування прибирає теку worktree, а його гілка, зміни й сесії чекають в «Архіві», готові до відновлення. Поки там працює агент, нічого не архівується.",
+        "settings.openchamber.finishedWorktrees.field.archiveOnDone": "Архівувати worktree, коли ви позначаєте його готовим",
+        "settings.openchamber.mergedWorktreeCleanup.field.enable": "Архівувати worktree після злиття його PR"
       }
     },
     "es": {
@@ -8870,7 +8898,11 @@
         "settings.behavior.page.responseStyle.option.custom": "Personalizado",
         "settings.behavior.page.responseStyle.customPlaceholder": "Escribe la instrucción que se agregará al primer mensaje...",
         "settings.behavior.page.toast.saveFailed": "Error al guardar el comportamiento",
-        "settings.behavior.page.toast.agentsMdChangedOnDisk": "AGENTS.md se modificó fuera de OpenChamber, así que tu cambio no se guardó. Cópialo y vuelve a abrir esta página para cargar el archivo actual."
+        "settings.behavior.page.toast.agentsMdChangedOnDisk": "AGENTS.md se modificó fuera de OpenChamber, así que tu cambio no se guardó. Cópialo y vuelve a abrir esta página para cargar el archivo actual.",
+        "settings.openchamber.finishedWorktrees.title": "Worktrees terminados",
+        "settings.openchamber.finishedWorktrees.info": "Archivar elimina la carpeta del worktree; su rama, sus cambios y sus sesiones esperan en Archivo, listos para restaurar. No se archiva nada mientras un agente trabaja allí.",
+        "settings.openchamber.finishedWorktrees.field.archiveOnDone": "Archivar un worktree al marcarlo como hecho",
+        "settings.openchamber.mergedWorktreeCleanup.field.enable": "Archivar un worktree cuando se fusione su PR"
       }
     },
     "pt-BR": {
@@ -9979,7 +10011,11 @@
         "settings.behavior.page.responseStyle.option.custom": "Personalizado",
         "settings.behavior.page.responseStyle.customPlaceholder": "Escreva a instrução para adicionar à primeira mensagem...",
         "settings.behavior.page.toast.saveFailed": "Falha ao salvar o comportamento",
-        "settings.behavior.page.toast.agentsMdChangedOnDisk": "O AGENTS.md foi alterado fora do OpenChamber, então sua edição não foi salva. Copie-a e reabra esta página para carregar o arquivo atual."
+        "settings.behavior.page.toast.agentsMdChangedOnDisk": "O AGENTS.md foi alterado fora do OpenChamber, então sua edição não foi salva. Copie-a e reabra esta página para carregar o arquivo atual.",
+        "settings.openchamber.finishedWorktrees.title": "Worktrees concluídos",
+        "settings.openchamber.finishedWorktrees.info": "Arquivar remove a pasta do worktree; a branch, as alterações e as sessões ficam no Arquivo, prontas para restaurar. Nada é arquivado enquanto um agente estiver trabalhando nele.",
+        "settings.openchamber.finishedWorktrees.field.archiveOnDone": "Arquivar o worktree ao marcá-lo como concluído",
+        "settings.openchamber.mergedWorktreeCleanup.field.enable": "Arquivar o worktree depois que o PR dele for mesclado"
       }
     },
     "ko": {
@@ -11088,7 +11124,11 @@
         "settings.behavior.page.responseStyle.option.custom": "사용자 정의",
         "settings.behavior.page.responseStyle.customPlaceholder": "첫 메시지에 추가할 지침을 작성하세요...",
         "settings.behavior.page.toast.saveFailed": "동작 저장에 실패했습니다",
-        "settings.behavior.page.toast.agentsMdChangedOnDisk": "AGENTS.md가 OpenChamber 외부에서 변경되어 편집 내용이 저장되지 않았습니다. 내용을 복사한 뒤 이 페이지를 다시 열어 현재 파일을 불러오세요."
+        "settings.behavior.page.toast.agentsMdChangedOnDisk": "AGENTS.md가 OpenChamber 외부에서 변경되어 편집 내용이 저장되지 않았습니다. 내용을 복사한 뒤 이 페이지를 다시 열어 현재 파일을 불러오세요.",
+        "settings.openchamber.finishedWorktrees.title": "완료된 워크트리",
+        "settings.openchamber.finishedWorktrees.info": "보관하면 워크트리 폴더는 사라지지만 브랜치, 변경 사항, 세션은 보관함에 남아 언제든 복원할 수 있습니다. 에이전트가 작업 중일 때는 보관하지 않습니다.",
+        "settings.openchamber.finishedWorktrees.field.archiveOnDone": "완료로 표시하면 워크트리 보관",
+        "settings.openchamber.mergedWorktreeCleanup.field.enable": "PR이 병합되면 워크트리 보관"
       }
     },
     "pl": {
@@ -12197,7 +12237,11 @@
         "settings.behavior.page.responseStyle.option.custom": "Własny",
         "settings.behavior.page.responseStyle.customPlaceholder": "Napisz instrukcję, którą chcesz dodać do pierwszej wiadomości...",
         "settings.behavior.page.toast.saveFailed": "Nie udało się zapisać zachowania",
-        "settings.behavior.page.toast.agentsMdChangedOnDisk": "Plik AGENTS.md został zmieniony poza OpenChamber, więc Twoja zmiana nie została zapisana. Skopiuj ją, a potem otwórz tę stronę ponownie, aby wczytać aktualny plik."
+        "settings.behavior.page.toast.agentsMdChangedOnDisk": "Plik AGENTS.md został zmieniony poza OpenChamber, więc Twoja zmiana nie została zapisana. Skopiuj ją, a potem otwórz tę stronę ponownie, aby wczytać aktualny plik.",
+        "settings.openchamber.finishedWorktrees.title": "Zakończone worktree",
+        "settings.openchamber.finishedWorktrees.info": "Archiwizacja usuwa folder worktree; gałąź, zmiany i sesje czekają w Archiwum, gotowe do przywrócenia. Nic nie jest archiwizowane, dopóki pracuje w nim agent.",
+        "settings.openchamber.finishedWorktrees.field.archiveOnDone": "Archiwizuj worktree po oznaczeniu go jako gotowy",
+        "settings.openchamber.mergedWorktreeCleanup.field.enable": "Archiwizuj worktree po scaleniu jego PR"
       }
     },
     "ja": {
@@ -13306,7 +13350,11 @@
         "settings.behavior.page.responseStyle.option.custom": "カスタム",
         "settings.behavior.page.responseStyle.customPlaceholder": "最初のメッセージに追加する指示を記述...",
         "settings.behavior.page.toast.saveFailed": "動作設定の保存に失敗しました",
-        "settings.behavior.page.toast.agentsMdChangedOnDisk": "AGENTS.md が OpenChamber の外部で変更されたため、編集内容は保存されませんでした。内容をコピーしてから、このページを開き直して現在のファイルを読み込んでください。"
+        "settings.behavior.page.toast.agentsMdChangedOnDisk": "AGENTS.md が OpenChamber の外部で変更されたため、編集内容は保存されませんでした。内容をコピーしてから、このページを開き直して現在のファイルを読み込んでください。",
+        "settings.openchamber.finishedWorktrees.title": "完了したワークツリー",
+        "settings.openchamber.finishedWorktrees.info": "アーカイブするとワークツリーのフォルダーは削除されますが、ブランチ・変更・セッションはアーカイブに残り、いつでも復元できます。エージェントが作業中の間はアーカイブしません。",
+        "settings.openchamber.finishedWorktrees.field.archiveOnDone": "完了にしたらワークツリーをアーカイブする",
+        "settings.openchamber.mergedWorktreeCleanup.field.enable": "PR がマージされたらワークツリーをアーカイブする"
       }
     },
     "tr": {
@@ -14415,7 +14463,11 @@
         "settings.behavior.page.responseStyle.option.custom": "Özel",
         "settings.behavior.page.responseStyle.customPlaceholder": "İlk mesaja eklenecek talimatı yazın...",
         "settings.behavior.page.toast.saveFailed": "Davranış kaydedilemedi",
-        "settings.behavior.page.toast.agentsMdChangedOnDisk": "AGENTS.md OpenChamber dışında değiştirildiği için düzenlemen kaydedilmedi. Düzenlemeni kopyala, ardından güncel dosyayı yüklemek için bu sayfayı yeniden aç."
+        "settings.behavior.page.toast.agentsMdChangedOnDisk": "AGENTS.md OpenChamber dışında değiştirildiği için düzenlemen kaydedilmedi. Düzenlemeni kopyala, ardından güncel dosyayı yüklemek için bu sayfayı yeniden aç.",
+        "settings.openchamber.finishedWorktrees.title": "Biten worktree’ler",
+        "settings.openchamber.finishedWorktrees.info": "Arşivleme worktree klasörünü kaldırır; dalı, değişiklikleri ve oturumları Arşiv’de bekler, geri yüklenmeye hazırdır. Orada bir ajan çalışırken hiçbir şey arşivlenmez.",
+        "settings.openchamber.finishedWorktrees.field.archiveOnDone": "Tamamlandı olarak işaretlediğinde worktree’yi arşivle",
+        "settings.openchamber.mergedWorktreeCleanup.field.enable": "PR’ı birleştirildikten sonra worktree’yi arşivle"
       }
     },
     "ar": {
@@ -15524,7 +15576,11 @@
         "settings.behavior.page.responseStyle.option.custom": "مخصص",
         "settings.behavior.page.responseStyle.customPlaceholder": "اكتب التعليمة التي تُضاف إلى الرسالة الأولى…",
         "settings.behavior.page.toast.saveFailed": "تعذّر حفظ السلوك",
-        "settings.behavior.page.toast.agentsMdChangedOnDisk": "تم تغيير AGENTS.md خارج OpenChamber، لذا لم يُحفظ تعديلك. انسخه، ثم أعد فتح هذه الصفحة لتحميل الملف الحالي."
+        "settings.behavior.page.toast.agentsMdChangedOnDisk": "تم تغيير AGENTS.md خارج OpenChamber، لذا لم يُحفظ تعديلك. انسخه، ثم أعد فتح هذه الصفحة لتحميل الملف الحالي.",
+        "settings.openchamber.finishedWorktrees.title": "أشجار العمل المنتهية",
+        "settings.openchamber.finishedWorktrees.info": "تزيل الأرشفة مجلد شجرة العمل، ويبقى فرعها وتغييراتها وجلساتها في الأرشيف جاهزة للاستعادة. لا يُؤرشف شيء ما دام وكيل يعمل فيها.",
+        "settings.openchamber.finishedWorktrees.field.archiveOnDone": "أرشفة شجرة العمل عند تعليمها كمنجزة",
+        "settings.openchamber.mergedWorktreeCleanup.field.enable": "أرشفة شجرة العمل بعد دمج طلب السحب (PR) الخاص بها"
       }
     },
     "he": {
@@ -16633,7 +16689,11 @@
         "settings.behavior.page.responseStyle.option.custom": "מותאם אישית",
         "settings.behavior.page.responseStyle.customPlaceholder": "יש לכתוב את ההוראה שתתווסף להודעה הראשונה…",
         "settings.behavior.page.toast.saveFailed": "שמירת ההתנהגות נכשלה",
-        "settings.behavior.page.toast.agentsMdChangedOnDisk": "הקובץ AGENTS.md שונה מחוץ ל-OpenChamber, ולכן העריכה לא נשמרה. יש להעתיק אותה ואז לפתוח מחדש את הדף כדי לטעון את הקובץ הנוכחי."
+        "settings.behavior.page.toast.agentsMdChangedOnDisk": "הקובץ AGENTS.md שונה מחוץ ל-OpenChamber, ולכן העריכה לא נשמרה. יש להעתיק אותה ואז לפתוח מחדש את הדף כדי לטעון את הקובץ הנוכחי.",
+        "settings.openchamber.finishedWorktrees.title": "עצי עבודה שהסתיימו",
+        "settings.openchamber.finishedWorktrees.info": "העברה לארכיון מסירה את תיקיית עץ העבודה; הענף, השינויים וההפעלות נשמרים בארכיון ומוכנים לשחזור. שום דבר לא מועבר לארכיון כל עוד סוכן עובד בו.",
+        "settings.openchamber.finishedWorktrees.field.archiveOnDone": "העברת עץ העבודה לארכיון כשמסמנים אותו כהושלם",
+        "settings.openchamber.mergedWorktreeCleanup.field.enable": "העברת עץ העבודה לארכיון אחרי מיזוג ה-PR שלו"
       }
     }
   }

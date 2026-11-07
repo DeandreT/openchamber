@@ -19,12 +19,12 @@ use crate::baseline::CssTextExt;
 use crate::chrome::glyph;
 use crate::code_card::CodeWrap;
 use crate::general_settings::{
-    Choice, DELETION_DIALOG, DRAFT_STARTERS, FOLLOW_UP, GeneralSettings, PERMISSION_DEFAULT,
+    ARCHIVE_ON_DONE, Choice, DELETION_DIALOG, DRAFT_STARTERS, MERGED_CLEANUP, FOLLOW_UP, GeneralSettings, PERMISSION_DEFAULT,
     PROMPT_NAVIGATOR, SHOW_CHATS, WORK_ENABLED,
 };
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
-use crate::settings_controls::{field_row, info_hint, section};
+use crate::settings_controls::{field_row, info_hint, section, section_with_info};
 use crate::settings_navigation::Page;
 use crate::theme::Palette;
 use crate::workspace::Workspace;
@@ -69,7 +69,7 @@ impl ChatTab {
 }
 
 /// The search target each control answers to, and its focus target.
-const CONTROLS: [&str; 8] = [
+const CONTROLS: [&str; 10] = [
     "chat.prompt-navigator",
     "chat.code-block-line-wrap",
     "chat.follow-up-behavior",
@@ -78,6 +78,8 @@ const CONTROLS: [&str; 8] = [
     "sessions.show-chats",
     "sessions.work-enabled",
     "sessions.deletion-dialog",
+    "sessions.worktree-archive-on-done",
+    "sessions.merged-worktree-cleanup",
 ];
 
 const FOLLOW_UPS: [(FollowUpBehavior, &str, &str); 2] = [
@@ -570,6 +572,8 @@ impl PreferencePage {
         let show_chats = boolean(SHOW_CHATS);
         let work = boolean(WORK_ENABLED);
         let deletion = boolean(DELETION_DIALOG);
+        let archive_on_done = boolean(ARCHIVE_ON_DONE);
+        let merged_cleanup = boolean(MERGED_CLEANUP);
         let safety = self.safety_available(cx);
         let shown = self.shown_mode(cx);
         let explain = |mode: PermissionMode| match mode {
@@ -651,6 +655,34 @@ impl PreferencePage {
             },
             cx,
         );
+        let archive_on_done = self.checkbox(
+            CheckboxRow {
+                item: "sessions.worktree-archive-on-done",
+                label: "settings.openchamber.finishedWorktrees.field.archiveOnDone",
+                aria: "settings.openchamber.finishedWorktrees.field.archiveOnDone",
+                info: None,
+                checked: archive_on_done,
+                enabled,
+                on_change: |this, value, cx| {
+                    this.change(ARCHIVE_ON_DONE, Choice::Boolean(value), cx)
+                },
+            },
+            cx,
+        );
+        let merged_cleanup = self.checkbox(
+            CheckboxRow {
+                item: "sessions.merged-worktree-cleanup",
+                label: "settings.openchamber.mergedWorktreeCleanup.field.enable",
+                aria: "settings.openchamber.mergedWorktreeCleanup.field.enable",
+                info: None,
+                checked: merged_cleanup,
+                enabled,
+                on_change: |this, value, cx| {
+                    this.change(MERGED_CLEANUP, Choice::Boolean(value), cx)
+                },
+            },
+            cx,
+        );
         vec![
             section(
                 "settings.openchamber.defaults.newSessionsTitle",
@@ -668,6 +700,14 @@ impl PreferencePage {
                 "settings.openchamber.sessionRetention.title",
                 false,
                 vec![deletion],
+                cx,
+            ),
+            section_with_info(
+                "settings.openchamber.finishedWorktrees.title",
+                Some(locale::strings(cx).get("settings.openchamber.finishedWorktrees.info")),
+                false,
+                vec![archive_on_done, merged_cleanup],
+                None,
                 cx,
             ),
         ]
@@ -1044,6 +1084,8 @@ mod tests {
         click(window, "sessions-show-chats", cx);
         click(window, "sessions-deletion-dialog", cx);
         click(window, "sessions.permission-default-ask", cx);
+        click(window, "sessions-worktree-archive-on-done", cx);
+        click(window, "sessions-merged-worktree-cleanup", cx);
         assert_eq!(
             server.writes(),
             vec![
@@ -1051,6 +1093,8 @@ mod tests {
                 json!({"sidebarShowChatsSection": true}),
                 json!({"showDeletionDialog": false}),
                 json!({"permissionDefaultMode": "ask"}),
+                json!({"worktreeArchiveOnDoneEnabled": true}),
+                json!({"mergedWorktreeCleanupEnabled": true}),
             ],
             "each choice writes only its own server field"
         );
@@ -1059,6 +1103,8 @@ mod tests {
         assert_eq!(applied.show_chats, Some(true));
         assert_eq!(applied.show_deletion_dialog, Some(false));
         assert_eq!(applied.permission_default_mode, Some(PermissionMode::Ask));
+        assert_eq!(applied.worktree_archive_on_done, Some(true));
+        assert_eq!(applied.merged_worktree_cleanup, Some(true));
         assert!(
             cx.read(|cx| !workspace.read(cx).shows_deletion_dialog()),
             "archive and delete follow the saved choice"
