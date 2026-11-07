@@ -180,8 +180,7 @@ impl Workspace {
                 tracing::warn!(%error, "the server connection failed");
                 connection.state = ConnectionState::Failed(failure);
                 if !connection.established {
-                    connection.recovery =
-                        crate::connection_recovery::RecoveryVariant::of(failure);
+                    connection.recovery = crate::connection_recovery::RecoveryVariant::of(failure);
                 }
                 if matches!(
                     failure,

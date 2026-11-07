@@ -60,9 +60,8 @@ impl PolicyBody {
 
 /// Decodes the route's answer; anything the schema refuses is malformed.
 fn decode(body: PolicyBody) -> Result<ServerPolicy, TransportError> {
-    body.into_policy().ok_or_else(|| {
-        TransportError::Malformed("unrecognized enterprise policy".to_owned())
-    })
+    body.into_policy()
+        .ok_or_else(|| TransportError::Malformed("unrecognized enterprise policy".to_owned()))
 }
 
 impl ServerClient {

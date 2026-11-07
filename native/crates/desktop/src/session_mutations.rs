@@ -515,7 +515,8 @@ impl Workspace {
                 key,
                 prompt,
                 SendDispatch {
-                    prompt_allowed: !session.prompt_read_only(self.allow_prompting_subagents(), false),
+                    prompt_allowed: !session
+                        .prompt_read_only(self.allow_prompting_subagents(), false),
                     client,
                     executor,
                     kind: DispatchKind::Retry,

@@ -780,7 +780,10 @@ mod tests {
                 let parent = workspace.sessions.active()[0].clone();
                 let mut child = SessionRecord::new(
                     child_id.clone(),
-                    parent.directory.clone().expect("synthetic sessions have a directory"),
+                    parent
+                        .directory
+                        .clone()
+                        .expect("synthetic sessions have a directory"),
                 );
                 child.parent_id = Some(parent.id.clone());
                 let _ = workspace.sessions.apply([SessionChange::Created(child)]);
@@ -816,7 +819,9 @@ mod tests {
                 "an idle subagent has no Stop"
             );
             workspace.update(cx, |workspace, _| {
-                workspace.live_status.insert(child_id.clone(), LiveStatus::Busy);
+                workspace
+                    .live_status
+                    .insert(child_id.clone(), LiveStatus::Busy);
             });
             window.render_frame(cx);
             assert!(

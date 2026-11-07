@@ -547,12 +547,18 @@ mod tests {
             ..PolicyMonitor::default()
         };
         let (one, two) = (RuntimeId::from("one"), RuntimeId::from("two"));
-        assert!(!monitor.withholds_public_requests(false), "no server, no wait");
+        assert!(
+            !monitor.withholds_public_requests(false),
+            "no server, no wait"
+        );
         assert!(
             monitor.withholds_public_requests(true),
             "an unanswered server policy withholds public requests"
         );
-        assert!(monitor.apply_server(&one, Some(None)), "a server from before the route");
+        assert!(
+            monitor.apply_server(&one, Some(None)),
+            "a server from before the route"
+        );
         assert!(!monitor.enterprise_mode() && !monitor.withholds_public_requests(true));
         let restricted = ServerPolicy {
             enterprise_mode: true,
@@ -560,10 +566,19 @@ mod tests {
             ..ServerPolicy::default()
         };
         assert!(monitor.apply_server(&one, Some(Some(restricted))));
-        assert!(monitor.enterprise_mode(), "the server's mode applies to native surfaces");
-        assert!(!monitor.apply_server(&one, None), "a failed read keeps what was known");
+        assert!(
+            monitor.enterprise_mode(),
+            "the server's mode applies to native surfaces"
+        );
+        assert!(
+            !monitor.apply_server(&one, None),
+            "a failed read keeps what was known"
+        );
         assert!(monitor.enterprise_mode());
-        assert!(monitor.apply_server(&two, None), "another runtime starts unknown");
+        assert!(
+            monitor.apply_server(&two, None),
+            "another runtime starts unknown"
+        );
         assert!(monitor.server.is_none() && !monitor.enterprise_mode());
         assert!(monitor.withholds_public_requests(true));
         assert!(monitor.apply_server(&two, Some(Some(ServerPolicy::default()))));
