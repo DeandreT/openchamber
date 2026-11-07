@@ -39,7 +39,8 @@ pub(crate) const PERMISSION_DEFAULT: usize = 6;
 pub(crate) const SHOW_CHATS: usize = 7;
 pub(crate) const WORK_ENABLED: usize = 8;
 pub(crate) const DELETION_DIALOG: usize = 9;
-const FIELDS: usize = 10;
+pub(crate) const SUBAGENT_PROMPTS: usize = 10;
+const FIELDS: usize = 11;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Choice {
@@ -83,6 +84,7 @@ impl Default for State {
                 Choice::Boolean(true),
                 Choice::Boolean(true),
                 Choice::Boolean(true),
+                Choice::Boolean(false),
             ],
             revisions: [0; FIELDS],
             known: [false; FIELDS],
@@ -213,6 +215,7 @@ impl State {
             show_chats: boolean(SHOW_CHATS),
             work_enabled: boolean(WORK_ENABLED),
             show_deletion_dialog: boolean(DELETION_DIALOG),
+            allow_prompting_subagent_sessions: boolean(SUBAGENT_PROMPTS),
         }
     }
 }
@@ -229,6 +232,9 @@ fn fields(settings: &ServerSettings) -> Values {
         settings.show_chats.map(Choice::Boolean),
         settings.work_enabled.map(Choice::Boolean),
         settings.show_deletion_dialog.map(Choice::Boolean),
+        settings
+            .allow_prompting_subagent_sessions
+            .map(Choice::Boolean),
     ]
 }
 
@@ -266,6 +272,7 @@ impl Write {
             sidebar_show_chats_section: boolean(SHOW_CHATS),
             session_work_enabled: boolean(WORK_ENABLED),
             show_deletion_dialog: boolean(DELETION_DIALOG),
+            allow_prompting_subagent_sessions: boolean(SUBAGENT_PROMPTS),
             ..SettingsChanges::default()
         }
     }
@@ -313,6 +320,7 @@ pub(crate) struct GeneralPreferences {
     pub(crate) show_chats: Option<bool>,
     pub(crate) work_enabled: Option<bool>,
     pub(crate) show_deletion_dialog: Option<bool>,
+    pub(crate) allow_prompting_subagent_sessions: Option<bool>,
 }
 
 impl GeneralPreferences {
@@ -347,6 +355,10 @@ impl GeneralPreferences {
         set(
             &mut settings.show_deletion_dialog,
             &self.show_deletion_dialog,
+        );
+        set(
+            &mut settings.allow_prompting_subagent_sessions,
+            &self.allow_prompting_subagent_sessions,
         );
     }
 }

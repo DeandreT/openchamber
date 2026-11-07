@@ -148,6 +148,8 @@ impl Workspace {
                 let auth_failures = verified.client.authentication_failures();
                 connection.client = Some(verified.client);
                 connection.state = ConnectionState::Connected;
+                connection.established = true;
+                connection.recovery = None;
                 if runtime != self.runtime {
                     self.switch_runtime(runtime, window, cx);
                 }
@@ -156,6 +158,7 @@ impl Workspace {
                 self.subscribe(generation, window, cx);
                 self.subscribe_control(generation, window, cx);
                 self.check_compatibility(generation, window, cx);
+                self.load_server_policy(cx);
                 self.save_code_wrap(cx);
                 if focus_composer {
                     self.focus_composer(window, cx);
@@ -176,6 +179,10 @@ impl Workspace {
                 let failure = ConnectionFailure::from_error(&error);
                 tracing::warn!(%error, "the server connection failed");
                 connection.state = ConnectionState::Failed(failure);
+                if !connection.established {
+                    connection.recovery =
+                        crate::connection_recovery::RecoveryVariant::of(failure);
+                }
                 if matches!(
                     failure,
                     ConnectionFailure::AuthenticationRequired
@@ -791,6 +798,9 @@ impl Workspace {
                                     settings.prompt_navigator_enabled = settings
                                         .prompt_navigator_enabled
                                         .or(previous.prompt_navigator_enabled);
+                                    settings.allow_prompting_subagent_sessions = settings
+                                        .allow_prompting_subagent_sessions
+                                        .or(previous.allow_prompting_subagent_sessions);
                                 }
                                 this.topology.worktrees.retain(|entry| {
                                     settings
