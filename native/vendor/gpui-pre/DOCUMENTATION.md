@@ -15,8 +15,9 @@ Application startup owns selecting the layout policy. Application views own
 their close, persistence and retry behavior. The accessibility
 bridge also supports explicit active-descendant
 relationships between a focused search editor and sibling options, documented
-in `src/window/a11y.rs`. Toolkit editing, transport and application row models
-remain outside this patch.
+in `src/window/a11y.rs`. `Window::hitbox_bounds_above` reports what the last
+frame drew above a hitbox, for the desktop's native WebKit child windows.
+Toolkit editing, transport and application row models remain outside this patch.
 
 ## Invariants
 
@@ -87,7 +88,22 @@ remain outside this patch.
   on live windows or foreground entity updates. Shutdown removes those observers
   once and retains the existing shutdown timeout and error reporting.
 
+- `Window::hitbox_bounds_above(id)` reads only the last rendered frame. It lists
+  the hitboxes inserted after `id`, in insertion order, each intersected with
+  its own content mask, and drops empty ones. A hitbox missing from that frame
+  yields `None`. It changes no hit testing, painting or frame state.
+
 ## Decisions
+
+### Why overlays are read from hitboxes
+
+A native child window always covers GPUI's drawing, so the desktop cuts the
+window's shape wherever GPUI draws above it. Menus, popovers and dialogs are
+deferred or later-painted and `occlude` their area, so the hitboxes inserted
+after the child's own are exactly what sits on top. Tracking every overlay in
+application code was the alternative; it delayed each overlay by 70 to 330 ms
+in the composition probe and missed overlays the application did not know of.
+
 
 ### Why quit preparation precedes the platform quit call
 
