@@ -205,6 +205,13 @@ prompt. Attachments and worktree creation remain separate workflows.
 - `connection.rs` holds the configured server, the connection state the views
   explain and the tasks of the current connection attempt. A dropped event
   stream shows nothing, as in the reference; the last valid state stays.
+- `connection_recovery.rs` is `DesktopConnectionRecovery.tsx` for a server the
+  current connection never reached: unreachable, not OpenChamber, or an
+  incompatible OpenChamber replace the window with title, description, server
+  address, Retry Connection (not for a wrong service) and Use Remote. Native
+  has no local host, so Use Local is left out as the reference does when local
+  is unavailable. The screen survives retries and the automatic retry timer;
+  once a connection was established, a later failure keeps the workspace.
 - `compatibility_view.rs` is `OpenCodeCompatibilityGate.tsx`: each ready
   connection checks the host's OpenCode, and only a confirmed incompatible
   answer replaces the window with the gate (Install or Update when the host
@@ -288,7 +295,17 @@ prompt. Attachments and worktree creation remain separate workflows.
   entries when policy changes. Bundled logos require no network access.
   Watch registration is renewed after directory moves/removal or a rescan
   notice, including replacement at the same pathname. Policy reads never log
-  document content or pinned credentials.
+  document content or pinned credentials. It also projects the connected
+  server's `GET /api/openchamber/enterprise-policy`, read once per connection
+  (404 means a server from before the route, no policy). A failed read keeps
+  what was known for that runtime; another runtime starts unknown. Native
+  surfaces are restricted when either the machine policy or the server says
+  so, and remote provider logos wait until the server's answer is known. The
+  sidebar hides the integrations catalog button in enterprise mode. Native
+  opens no listener, adds no provider entry and runs no relay, tunnel or
+  extension service, so no other native-owned crossing exists to gate; the
+  server enforces its own routes. The reference's "Managed by" notice sits on
+  the Providers page, which native does not have yet.
 - `project_chooser.rs` lists and searches registered projects for a new-session
   draft, using saved project labels. Choosing a project changes the draft's
   directory and catalog scope without creating a server session. Draft text
@@ -994,8 +1011,11 @@ prompt. Attachments and worktree creation remain separate workflows.
   restores its text and selection. Newer owner text remains first, followed by
   two newlines and the failed text.
 - Existing-session prompts use the explicit session metadata policy from
-  `chatPromptReadOnly.ts`. Children default to read-only because native does not
-  read the browser-local `allowPromptingSubagentSessions` preference. A review
+  `chatPromptReadOnly.ts`. Children are read-only unless the server's
+  `allowPromptingSubagentSessions` profile setting is on (Settings, Chat,
+  Composer); until settings are read they stay read-only. A read-only session
+  shows `ReadOnlyPromptBanner` in place of the composer, with Stop while its
+  turn runs; the request docks stay above it and the draft is kept. A review
   requires `metadata.openchamber.kind == "review"` and a nonblank
   `originalSessionID`; titles and agent names grant no exception. Fresh sends,
   explicit retries and editor presentation share the policy. Dispatch rechecks
@@ -1386,6 +1406,15 @@ Filesystem notifications can arrive late or require a rescan. The watched
 snapshot keeps the interface current, while the request worker reads the
 policy again before network I/O. This keeps a stale interface snapshot from
 authorizing a download after an administrator enables the restriction.
+
+### Why native also follows the server's policy
+
+The reference UI reads the policy from its server, which in Electron reads the
+same machine file. Native reads the machine file for its own requests and the
+server's answer too, taking whichever restricts. Reading only the machine file
+would let a native client fetch public assets for a server whose administrator
+enforces enterprise mode through its environment; waiting for the server's
+answer keeps an unknown policy from counting as "no policy".
 
 ### Why the panel surfaces are their own entities
 
