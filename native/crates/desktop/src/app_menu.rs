@@ -334,6 +334,7 @@ pub(crate) struct AppMenuState {
 }
 
 impl AppMenuState {
+    #[cfg(test)]
     pub(crate) fn is_open(&self) -> bool {
         self.open.is_some()
     }

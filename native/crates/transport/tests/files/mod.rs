@@ -249,6 +249,33 @@ async fn name_search_reads_opencode_hits_under_the_workspace() {
 }
 
 #[tokio::test]
+async fn folder_search_asks_for_directories() {
+    let server = Server::start(
+        |_| {
+            Reply::json(json!({
+                "location": { "directory": "/work/my app" },
+                "data": [{ "path": "src/", "type": "directory" }],
+            }))
+        },
+        vec![],
+    )
+    .await;
+    let hits = client(&server)
+        .find_folders(WORKSPACE, "src", 20)
+        .await
+        .expect("found");
+    assert_eq!(hits[0].relative_path, "src/");
+    assert_eq!(
+        query(&server.requests()[0]),
+        [
+            ("query".to_owned(), "src".to_owned()),
+            ("type".to_owned(), "directory".to_owned()),
+            ("limit".to_owned(), "20".to_owned())
+        ]
+    );
+}
+
+#[tokio::test]
 async fn content_search_reports_matches_invalid_patterns_and_a_missing_ripgrep() {
     let server = Server::start(
         |request| {

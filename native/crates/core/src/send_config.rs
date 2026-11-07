@@ -65,6 +65,8 @@ pub struct AgentEntry {
     pub model: Option<ModelChoice>,
     /// The configured color, validated by the color resolver.
     pub color: Option<String>,
+    /// What the agent is for, shown beside it in the `@` picker.
+    pub description: Option<String>,
 }
 
 /// Whether `openchamber/auto` can be honoured: unknown readiness keeps it.
@@ -978,6 +980,7 @@ mod tests {
 
     fn agent(name: &str, model: Option<ModelChoice>) -> AgentEntry {
         AgentEntry {
+            description: None,
             name: name.to_owned(),
             display_name: None,
             mode: Some(AgentMode::Primary),

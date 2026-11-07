@@ -487,9 +487,8 @@ const COMPACTION_SUMMARY = [
   "## Important Context",
   "- (none)",
 ].join("\n")
-const messageText = (content) => (Array.isArray(content) ? content.map((part) => part?.text ?? "").join("\n") : String(content ?? ""))
 const isCompactionRequest = (messages) => messages.some((message) => {
-  const content = messageText(message?.content)
+  const content = messageText(message)
   return content.includes("<template>") && content.includes("## Objective")
 })
 

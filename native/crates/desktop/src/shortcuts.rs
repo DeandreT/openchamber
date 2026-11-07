@@ -38,8 +38,10 @@ pub(crate) const NATIVE_ACTIONS: &[&str] = &[
     "toggle_prompt_navigator",
     "open_settings",
     "cycle_theme",
-    "find_in_file",
 ];
+
+/// Fixed actions this client has a command for; their binding cannot change.
+pub(crate) const FIXED_NATIVE_ACTIONS: &[&str] = &["find_in_file"];
 
 /// The bindings in effect and the state of saving them.
 #[derive(Debug, Default)]
@@ -123,6 +125,7 @@ pub(crate) fn keystrokes(combo: &str, platform: Platform) -> Option<String> {
 fn native_bindings(overrides: &Overrides, platform: Platform) -> Vec<KeyBinding> {
     NATIVE_ACTIONS
         .iter()
+        .chain(FIXED_NATIVE_ACTIONS)
         .filter_map(|id| {
             let combo = shortcuts::effective_combo(id, overrides);
             let keys = keystrokes(&combo, platform)?;
@@ -193,7 +196,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if NATIVE_ACTIONS.contains(&id) {
+        if NATIVE_ACTIONS.contains(&id) || FIXED_NATIVE_ACTIONS.contains(&id) {
             // A shortcut acts on the window, as a native menu closes when
             // anything else takes the keyboard.
             self.close_app_menu(window, cx);

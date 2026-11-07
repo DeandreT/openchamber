@@ -1303,6 +1303,7 @@ mod tests {
                 );
                 let mut catalog = DirectoryCatalog::default();
                 catalog.agents = Load::Ready(vec![AgentEntry {
+                    description: None,
                     name: "build".to_owned(),
                     display_name: None,
                     mode: None,

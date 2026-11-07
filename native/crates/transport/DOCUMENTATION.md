@@ -22,7 +22,8 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `client.rs` | `ServerClient`: identity probe, password login, session pages, message pages, whole messages, running status, settings reads and writes (including the whole `shortcutOverrides` map), Chats roots, projects and worktrees. |
 | `catalog.rs` | Routing readiness (Auto and the safety net) and the composer's catalogs in one directory: agents, the flat model catalog with OpenCode's default model, folded config defaults, the skill count and the connected MCP count. |
 | `project.rs` | A directory's Git status (`GET /api/git/status`) and a project's configured actions (`GET /api/projects/:projectId/config`, the path-derived ID). |
-| `files.rs` | The Files surface's filesystem routes: folder listings, OpenCode's fuzzy file search (`/api/fs/find`), ripgrep content search, stat, text and bounded raw reads, writes and renames, scoped to the workspace by the directory header. |
+| `composer_catalog.rs` | The composer pickers' catalogs no send reads: the commands of a directory (`/api/command`, then each command's `/api/config/commands/:name/config` for its scope) and its snippets (`/api/config/snippets`). The `$` picker's skills come from `composer_preparation.rs`'s `skill_choices`, the same available skills a send resolves. |
+| `files.rs` | The Files surface's filesystem routes: folder listings, OpenCode's fuzzy file and folder search (`/api/fs/find`), ripgrep content search, stat, text and bounded raw reads, writes and renames, scoped to the workspace by the directory header. |
 | `git.rs` | The Git surface's routes: the full status, path and batch diffs, stage, unstage, discard, commit, branches, the repository's transport binding and planned network operations. |
 | `source_control.rs` | The source board's routes (`/api/source-control/*`): providers, instances, a host's auth status, the binding with its provider associations, reference pages, an item's detail, listed change requests' statuses, read-cache refresh, and comment, state and review mutations with their receipt checks. |
 | `prompt.rs` | Prompt submission with its synthetic context, resumption of an uncertain send, slash commands, ordered session model/agent selection, inbox admission receipts, observation and interruption of one named session. |
@@ -47,6 +48,7 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `terminal.rs` | Server terminals: `TerminalApi` (shells, list, touch, create, restart, resize, close, terminal settings) and `TerminalSocket`, the reconnecting protocol v3 socket with its binary codec and input splitting. |
 | `parity_tests.rs` | Differential tests against the official client's fixture. |
 | `tests/server.rs` | The transport against a scripted loopback HTTP and WebSocket server: login fields, bearer use, failure classes, redirects, paging, cancellation, resume and reset cursors, fragmented frames and the `ready` timeout. |
+| `tests/composer_catalog/` | The command list with each config read (a failed read keeps the listed command), snippets and the folder search against the scripted server. |
 | `tests/terminal.rs` | The terminal socket and commands against scripted loopback servers: bearer upgrade, sequence handling, reconnect with snapshot replay, input under the frame limit, idle close, refused credentials, request fidelity and refusals. |
 
 `examples/probe.rs` exercises the crate against a running server and prints
@@ -548,6 +550,13 @@ counts and identifiers only.
   while malformed entries are left out.
 
 ## Decisions
+
+### Why a command keeps its listing when its config read fails
+
+The palette lists every command OpenCode names. A command's scope badge needs
+one more read per command, as `useCommandsStore.loadCommands` makes it; one
+failed read keeps that command as listed, without a badge, so one broken file
+cannot empty the palette. Only a failed list is an error.
 
 ### Why manifest model identities belong to each use
 

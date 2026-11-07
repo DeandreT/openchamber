@@ -29,8 +29,16 @@ actions!(
         StopGenerating,
         /// Turns line wrapping in code blocks on or off.
         ToggleCodeWrap,
+        /// Moves the open composer picker's selection down.
+        PickerNext,
+        /// Moves the open composer picker's selection up.
+        PickerPrevious,
     ]
 );
+
+/// The key context of the composer while its autocomplete picker is open.
+/// Deeper than the workspace's, so the picker's Ctrl+N/P win over shortcuts.
+pub(crate) const PICKER_CONTEXT: &str = "ComposerPicker";
 
 pub(crate) const KEY_CONTEXT: &str = "OpenChamberWorkspace";
 /// The header's session title: 14/17.5 px.
@@ -42,6 +50,8 @@ pub fn bind_keys(cx: &mut gpui_kit::App) {
     let menu = Some(crate::session_menu::MENU_CONTEXT);
     cx.bind_keys([
         KeyBinding::new("escape", StopGenerating, Some(KEY_CONTEXT)),
+        KeyBinding::new("ctrl-n", PickerNext, Some(PICKER_CONTEXT)),
+        KeyBinding::new("ctrl-p", PickerPrevious, Some(PICKER_CONTEXT)),
         KeyBinding::new(
             "ctrl-n",
             gpui_kit::base::actions::SelectDown,

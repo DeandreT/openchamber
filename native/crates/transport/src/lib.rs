@@ -10,6 +10,7 @@ pub mod authentication;
 pub mod catalog;
 pub mod client;
 pub mod compatibility;
+pub mod composer_catalog;
 pub mod composer_preparation;
 mod context_payload;
 pub mod control_stream;

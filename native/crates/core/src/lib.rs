@@ -6,6 +6,7 @@
 //! owned values, stable identifiers or borrowed views.
 
 pub mod auto_review;
+pub mod autocomplete;
 pub mod branching;
 pub mod chat_roots;
 pub mod composer_selection;
@@ -39,6 +40,7 @@ pub mod repository;
 pub mod request_list;
 pub mod request_owner;
 pub mod scroll_memory;
+pub mod search_rank;
 pub mod send_config;
 pub mod session;
 pub mod session_actions;
@@ -46,6 +48,7 @@ pub mod session_goal;
 pub mod session_index;
 pub mod session_markdown;
 pub mod session_moves;
+pub mod session_reference;
 pub mod session_search;
 pub mod shortcuts;
 pub mod sidebar_collection;
