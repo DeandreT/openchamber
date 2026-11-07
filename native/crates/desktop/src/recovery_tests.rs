@@ -379,6 +379,7 @@ fn configure_send(
     let _ = workspace.sessions.complete_load(load, vec![session]);
     let mut catalog = DirectoryCatalog::default();
     catalog.agents = Load::Ready(vec![AgentEntry {
+        description: None,
         name: "agent".to_owned(),
         display_name: None,
         mode: None,

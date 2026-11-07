@@ -154,3 +154,6 @@ arrow-left-s
 folders
 contract-up-down
 expand-up-down
+file
+folder-3-fill
+chat-3

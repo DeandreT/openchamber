@@ -159,6 +159,19 @@ pub(crate) struct Panels {
 }
 
 impl Workspace {
+    /// The file open in the Files view of `directory`, which `@` offers
+    /// before its search results.
+    pub(crate) fn open_file_path(&self, directory: &str, cx: &gpui_kit::App) -> Option<String> {
+        let (view, _) = self
+            .panels
+            .files
+            .get(&(self.runtime.clone(), directory.to_owned()))?;
+        view.read(cx)
+            .open
+            .as_ref()
+            .map(|open| open.file.path().to_owned())
+    }
+
     /// Applies Settings choices only to the runtime that dispatched them.
     pub(crate) fn apply_general_settings(
         &mut self,

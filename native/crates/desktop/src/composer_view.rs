@@ -18,6 +18,7 @@ use openchamber_native_core::permission_mode::PermissionMode;
 
 use crate::activation::on_activate;
 use crate::chrome::{self, ButtonTone, IconButton, glyph};
+use crate::composer_autocomplete::PickerKey;
 use crate::context_panel;
 use crate::elevation;
 use crate::locale::{self, Direction};
@@ -288,8 +289,12 @@ impl Workspace {
             },
         )
         .test_support();
+        let picker_open = self.autocomplete.open.is_some();
         div()
             .id("composer")
+            .when(picker_open, |this| {
+                this.key_context(crate::workspace_view::PICKER_CONTEXT)
+            })
             .can_drop(move |value, _, cx| {
                 value.is::<ExternalPaths>()
                     && drop_workspace
@@ -309,10 +314,54 @@ impl Workspace {
                     this.attach_selected_paths(owner, paths.paths().to_vec(), window, cx);
                 }
             }))
+            // An open picker takes Up, Down, Enter, Tab and Escape (and
+            // Ctrl+N/P) before the editor does.
+            .capture_action(cx.listener(
+                |this, _: &gpui_kit::component::input::MoveDown, window, cx| {
+                    if this.autocomplete_key(PickerKey::Down, window, cx) {
+                        cx.stop_propagation();
+                    }
+                },
+            ))
+            .capture_action(cx.listener(
+                |this, _: &gpui_kit::component::input::Enter, window, cx| {
+                    if this.autocomplete_key(PickerKey::Choose, window, cx) {
+                        cx.stop_propagation();
+                    }
+                },
+            ))
+            .capture_action(cx.listener(
+                |this, _: &gpui_kit::component::input::IndentInline, window, cx| {
+                    if this.autocomplete_key(PickerKey::Choose, window, cx) {
+                        cx.stop_propagation();
+                    }
+                },
+            ))
+            .capture_action(cx.listener(
+                |this, _: &gpui_kit::component::input::Escape, window, cx| {
+                    if this.autocomplete_key(PickerKey::Escape, window, cx) {
+                        cx.stop_propagation();
+                    }
+                },
+            ))
+            .on_action(
+                cx.listener(|this, _: &crate::workspace_view::PickerNext, window, cx| {
+                    this.autocomplete_key(PickerKey::Down, window, cx);
+                }),
+            )
+            .on_action(cx.listener(
+                |this, _: &crate::workspace_view::PickerPrevious, window, cx| {
+                    this.autocomplete_key(PickerKey::Up, window, cx);
+                },
+            ))
             // ArrowUp in an empty composer over a queue edits the newest
             // queued message, before the editor moves its caret.
             .capture_action(cx.listener(
                 |this, _: &gpui_kit::component::input::MoveUp, window, cx| {
+                    if this.autocomplete_key(PickerKey::Up, window, cx) {
+                        cx.stop_propagation();
+                        return;
+                    }
                     if this.composer.read(cx).value().is_empty()
                         && let Some(id) = this.newest_editable_queued()
                     {
@@ -366,7 +415,11 @@ impl Workspace {
                             .on_paste(move |item, window, cx| {
                                 paste_workspace
                                     .update(cx, |workspace, cx| {
-                                        workspace.paste_attachments(item, window, cx)
+                                        let handled = workspace.paste_attachments(item, window, cx);
+                                        if !handled {
+                                            workspace.autocomplete.note_paste();
+                                        }
+                                        handled
                                     })
                                     .unwrap_or_else(|_| {
                                         item.entries().iter().any(|entry| {
@@ -428,6 +481,8 @@ impl Workspace {
                             .child(send),
                     ),
             )
+            .children(self.render_autocomplete(palette, direction, cx))
+            .test_support()
             .into_any_element()
     }
 

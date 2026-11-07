@@ -724,6 +724,7 @@ mod tests {
                     directory.clone(),
                     DirectoryCatalog {
                         agents: Load::Ready(vec![AgentEntry {
+                            description: None,
                             name: "build".to_owned(),
                             display_name: None,
                             mode: None,

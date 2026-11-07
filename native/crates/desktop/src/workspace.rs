@@ -162,6 +162,8 @@ pub struct Workspace {
     pub(crate) composer: Entity<TextareaState>,
     pub(crate) composer_documents: crate::composer_document::ComposerDocuments,
     pub(crate) attachment_input: crate::composer_attachment_input::ComposerAttachmentInput,
+    pub(crate) autocomplete: crate::composer_autocomplete::ComposerAutocomplete,
+    pub(crate) session_references: crate::composer_references::SessionReferences,
     pub(crate) composer_key: Option<DraftKey>,
     pub(crate) draft_previews: HashMap<DraftKey, SharedString>,
     pub(crate) draft_rows: HashMap<DraftKey, usize>,
@@ -323,6 +325,8 @@ impl Workspace {
             composer,
             composer_documents: Default::default(),
             attachment_input: Default::default(),
+            autocomplete: Default::default(),
+            session_references: Default::default(),
             composer_key: None,
             draft_previews: HashMap::new(),
             draft_rows: HashMap::new(),
@@ -1037,6 +1041,7 @@ impl Workspace {
     }
 
     pub(crate) fn restore_composer_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reset_autocomplete(cx);
         if self.restore_compound_composer(window, cx) {
             return;
         }
@@ -1088,6 +1093,13 @@ impl Workspace {
             }
             if self.btw_takes_composer() {
                 self.send_btw_follow_up(window, cx);
+                return;
+            }
+            if !self.session_references_ready(
+                Box::new(|this, window, cx| this.submit(window, cx)),
+                window,
+                cx,
+            ) {
                 return;
             }
             if self.selected.is_some() {

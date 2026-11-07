@@ -7,6 +7,7 @@
 
 use gpui_kit::{App, FollowMode, Global, ListOffset, PromptLevel, Window, px};
 use openchamber_native_core::ids::{MessageId, SessionId};
+use openchamber_native_core::session_reference::SessionLinkTarget;
 use openchamber_native_transport::endpoint::Endpoint;
 
 use crate::locale;
@@ -78,6 +79,21 @@ fn session_link(session: &str, message: Option<String>) -> Link {
     Link::Session {
         session: session.to_owned(),
         message,
+    }
+}
+
+/// The session, and the message of it, a link in text points at: the deep
+/// link, or a web address of the connected server (`parseSessionLink`).
+pub(crate) fn session_link_target(
+    raw: &str,
+    endpoint: Option<&Endpoint>,
+) -> Option<SessionLinkTarget> {
+    match classify(raw, endpoint) {
+        Link::Session { session, message } => Some(SessionLinkTarget {
+            session_id: session,
+            message_id: message,
+        }),
+        _ => None,
     }
 }
 
