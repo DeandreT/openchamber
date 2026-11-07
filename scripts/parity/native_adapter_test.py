@@ -130,12 +130,22 @@ class NamedElementWaitTest(unittest.TestCase):
             ({"name": "Search projects...", "role": "button"}, False),
             ({"name": "Search projects...", "id": "other-search"}, False),
             ({"name": "A different field"}, False),
+            ({"name": "Search proj", "prefix": True}, True),
+            ({"name": "Search proj"}, False),
         ):
             ticks = itertools.count(step=0.1)
             with patch.object(client, "_walk", return_value=[node]), patch.object(client, "_read_marks"), patch("native_adapter.time.monotonic", side_effect=lambda: next(ticks)):
                 self.assertEqual(client.wait_for({"named": wanted}, 0.5), expected)
         with patch.object(client, "_walk", return_value=[]), patch.object(client, "_read_marks"):
             self.assertTrue(client.wait_for({"named": {"name": "Search projects..."}, "present": False}, 0.5))
+
+    def test_focused_text_wait_needs_the_exact_text(self):
+        client = NativeClient.__new__(NativeClient)
+        for text, expected in (("draft one", True), ("draft one\n", False), (None, False)):
+            ticks = itertools.count(step=0.1)
+            with patch.object(client, "focused_text", return_value=text), patch.object(client, "_read_marks"), \
+                    patch("native_adapter.time.monotonic", side_effect=lambda: next(ticks)):
+                self.assertEqual(client.wait_for({"focusedText": "draft one"}, 0.5), expected)
 
 
 class ComposerCoverageTest(unittest.TestCase):
@@ -175,6 +185,62 @@ class ComposerCoverageTest(unittest.TestCase):
             result = self.client([editor, extra]).paint_regions()
             self.assertTrue(result["composerGradientProtectionComplete"])
             self.assertIn(extra.rect, result["composerGradientProtected"])
+
+
+class InputClient(NativeClient):
+    def __init__(self, nodes=()):
+        self.nodes = list(nodes)
+        self.marks, self._input_mark, self.substitutions = [], 0, []
+        self.clicked = []
+
+    def _walk(self):
+        return iter(self.nodes)
+
+    def _activate(self):
+        pass
+
+    def _click_node(self, node, label):
+        self.clicked.append((node, label))
+
+
+class NativeStepInputTest(unittest.TestCase):
+    def test_bare_keys_keep_atspi_and_chords_use_xtest(self):
+        client = InputClient()
+        atspi = SimpleNamespace(generate_keyboard_event=lambda *arguments: atspi.sent.append(arguments),
+                                KeySynthType=SimpleNamespace(SYM="sym"), sent=[])
+        with patch("native_adapter._atspi", return_value=atspi), patch.object(NativeClient, "_xdotool") as xdotool:
+            client.key("Return")
+            client.key("ctrl+shift+z")
+            client.key("ctrl+Return")
+        self.assertEqual(len(atspi.sent), 1)
+        self.assertEqual(atspi.sent[0][1:], (None, "sym"))
+        self.assertEqual([entry.args for entry in xdotool.call_args_list], [("key", "ctrl+shift+z"), ("key", "ctrl+Return")])
+
+    def test_named_clicks_need_one_exact_name_and_role(self):
+        def node(name, role):
+            return SimpleNamespace(get_name=lambda: name, get_role_name=lambda: role)
+
+        send, other_send, label = node("Send", "push button"), node("Send", "menu item"), node("Send later", "push button")
+        client = InputClient([send, other_send, label])
+        client.click_named({"name": "Send", "roles": ["push button"]})
+        self.assertEqual(client.clicked, [(send, "named:Send")])
+        with self.assertRaises(LookupError):
+            client.click_named({"name": "Send"})
+        with self.assertRaises(LookupError):
+            client.click_named({"name": "Missing", "roles": ["push button"]})
+
+    def test_restart_signals_waits_and_clears_the_previous_process_state(self):
+        client = InputClient()
+        process = SimpleNamespace(pid=4242, returncode=0, stdout=SimpleNamespace(close=lambda: None), wait=lambda timeout: 0)
+        client.process = process
+        client.marks, client._buffer, client._input_mark, client._app = [{"marker": "old"}], "partial", 1, object()
+        client._selector = SimpleNamespace(unregister=lambda _stream: None)
+        with patch("native_adapter.os.kill") as kill, patch.object(NativeClient, "close", return_value={}), \
+                patch.object(NativeClient, "launch", return_value={"pid": 4343}):
+            record = client.restart("signal", 5)
+        kill.assert_called_once()
+        self.assertEqual(record, {"closed": {"exitCode": 0}, "launch": {"pid": 4343}})
+        self.assertEqual((client.marks, client._buffer, client._input_mark, client._app), ([], "", 0, None))
 
 
 if __name__ == "__main__":

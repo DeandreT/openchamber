@@ -4,6 +4,7 @@ Run from this directory with `python3 -m unittest runner_test`.
 """
 
 import argparse
+import base64
 import copy
 import hashlib
 import io
@@ -223,7 +224,163 @@ class RunnerInputTest(unittest.TestCase):
         self.assertEqual(inputs, [])
 
 
+class StepClient(Client):
+    """Records step calls; reads come from scripted values."""
+
+    def __init__(self, api=None, texts=()):
+        super().__init__()
+        self.calls = []
+        self.api = api or {}
+        self.texts = list(texts)
+        self.hits = []
+        self.screenshot = Mock()
+
+    def __getattr__(self, name):
+        if name in ("key", "hover", "click_named", "compose", "commit_composition", "drop", "add_fault",
+                    "release_fault", "wait_ready", "intercept_file_choosers"):
+            return lambda *arguments, **keywords: self.calls.append((name, *arguments))
+        raise AttributeError(name)
+
+    def api_get(self, path):
+        self.calls.append(("api_get", path))
+        return self.api[path].pop(0) if isinstance(self.api[path], list) else self.api[path]
+
+    def focused_text(self):
+        return self.texts.pop(0) if len(self.texts) > 1 else self.texts[0]
+
+    def fault_hits(self):
+        return self.hits
+
+    def begin_key(self, spec):
+        self.calls.append(("begin_key", spec))
+        return lambda: True
+
+    def pick(self, files, timeout):
+        self.calls.append(("pick", [path.read_text() for path in files], timeout))
+        return {"mode": "selectSingle"}
+
+    def restart(self, after, timeout):
+        self.calls.append(("restart", after, timeout))
+        return {"closed": {"exitCode": 0}, "launch": {"pid": 2}}
+
+
+class RunnerStepTest(unittest.TestCase):
+    setUp = RunnerInputTest.setUp
+    ARGS = argparse.Namespace(timeout=5)
+    SESSIONS = {"status": 200, "body": {"data": [{"id": "ses/1", "title": "parity: long"}, {"id": "ses_2", "title": "other"}]}}
+
+    def run_steps(self, client, steps, kind="native", targets=None, context=None):
+        return runner.perform(client, kind, steps, targets or {}, Path("unused"), self.ARGS, context)
+
+    def test_expectations_poll_the_server_and_resolve_session_titles(self):
+        messages = "/api/session/ses%2F1/message?limit=200"
+        client = StepClient({"/api/session?limit=200": self.SESSIONS, messages: [
+            {"status": 503, "body": "starting"},
+            {"status": 200, "body": {"data": [{"info": {"role": "user"}}]}},
+            {"status": 200, "body": {"data": [{"info": {"role": "user"}}, {"info": {"role": "user"}}]}},
+        ]})
+        self.run_steps(client, [{"expect": {"api": "/api/session/{session:parity: long}/message?limit=200",
+                                            "select": ["data"], "where": {"info": {"role": "user"}}, "length": 2}}])
+        self.assertEqual([call for call in client.calls if call[1] == messages], [("api_get", messages)] * 3)
+
+    def test_failed_reads_and_unmet_expectations_stop_later_input(self):
+        client = StepClient({"/api/x": {"status": 500, "body": {}}})
+        with self.assertRaisesRegex(TimeoutError, "expectation not met"):
+            self.run_steps(client, [{"expect": {"api": "/api/x", "exists": False, "timeout": 1}}, {"key": "Return"}])
+        client.screenshot.assert_called_once_with(Path("unused/wait-failed.png"))
+        self.assertNotIn(("key", "Return"), client.calls)
+
+    def test_disk_and_git_expectations_read_the_fixture(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            (Path(temporary) / "crlf.txt").write_bytes(b"a\r\nb\r\n")
+            context = runner.StepContext({"fixture": temporary})
+            self.run_steps(StepClient(), [
+                {"expect": {"file": "{fixture}/crlf.txt", "equals": "a\r\nb\r\n"}},
+                {"expect": {"file": "{fixture}/crlf.txt", "encoding": "bytes", "equals": {"sha256": hashlib.sha256(b"a\r\nb\r\n").hexdigest(), "size": 6}}},
+                {"expect": {"file": "{fixture}/missing.txt", "exists": False}},
+            ], context=context)
+            with self.assertRaisesRegex(TimeoutError, "expectation not met"):
+                self.run_steps(StepClient(), [{"expect": {"git": ["status"], "contains": "", "timeout": 0}}], context=context)
+
+    def test_fault_steps_build_per_client_rules_and_count_hits(self):
+        client = StepClient()
+        client.hits = [{"id": "f"}]
+        rule = {"id": "f", "method": "post", "path": {"electron": "/api/a", "native": "/api/b"}, "when": "before", "action": "hold"}
+        self.run_steps(client, [{"fault": rule}, {"expect": {"fault": "f", "hits": 1}}, {"release": "f"}])
+        self.assertEqual(client.calls[0][1]["path"], "/api/b")
+        self.assertEqual(client.calls[0][1]["method"], "POST")
+        self.assertEqual(client.calls[1], ("release_fault", "f"))
+
+    def test_paste_serves_the_clipboard_until_the_focused_text_has_it(self):
+        client = StepClient(texts=["before", "before 你好"])
+        probe = Mock()
+        probe.paste.side_effect = lambda text, dispatch, observed: (dispatch(), observed() or observed())
+        self.run_steps(client, [{"paste": "你好"}], context=runner.StepContext(clipboard=probe))
+        self.assertEqual(probe.paste.call_args.args[0], "你好")
+        self.assertIn(("begin_key", "ctrl+v"), client.calls)
+
+    def test_restart_waits_for_readiness_and_a_timed_out_exit_fails(self):
+        client = StepClient()
+        context = runner.StepContext()
+        self.run_steps(client, [{"restart": {"after": "exit", "timeout": 9}}], context=context)
+        self.assertEqual(client.calls, [("restart", "exit", 9.0), ("wait_ready", 5)])
+        self.assertEqual(len(context.restarts), 1)
+        client.restart = lambda after, timeout: {"closed": {"exitCode": None, "signal": "timeout"}, "launch": {}}
+        with self.assertRaisesRegex(TimeoutError, "did not exit"):
+            self.run_steps(client, [{"restart": {}}])
+
+    def test_ime_compose_then_commit_the_raw_keys_or_the_candidate(self):
+        client = StepClient(texts=["", "nihao", "nihao"])
+        self.run_steps(client, [{"ime": {"compose": "nihao"}}, {"ime": {"commit": "raw"}}])
+        self.assertEqual(client.calls, [("compose", "nihao", None), ("commit_composition", "raw", "nihao")])
+        client = StepClient(texts=["", "ni hao", "ni hao"])
+        with self.assertRaisesRegex(TimeoutError, "IME step"):
+            self.run_steps(client, [{"ime": {"compose": "nihao"}}, {"ime": {"commit": "candidate", "text": "你好"}}])
+
+    def test_drop_and_pick_write_each_steps_files_separately(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            client = StepClient()
+            context = runner.StepContext(inputs=Path(temporary))
+            targets = {"composer": {"electron": {"selector": ".c"}, "native": "composer"}}
+            self.run_steps(client, [
+                {"drop": {"target": "composer", "files": [{"name": "a.txt", "text": "A\r\n"}]}},
+                {"pick": {"files": [{"name": "a.txt", "text": "B"}]}},
+            ], targets=targets, context=context)
+            self.assertEqual(client.calls[0], ("drop", "composer", [Path(temporary) / "1" / "a.txt"]))
+            self.assertEqual((Path(temporary) / "1" / "a.txt").read_bytes(), b"A\r\n")
+            self.assertEqual(client.calls[1], ("pick", ["B"], 15.0))
+
+
 class ScenarioSettingsTest(unittest.TestCase):
+    def test_model_pin_sets_only_the_copys_default_model_preference(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            preferences = root / "seed" / "oc-data" / "preferences.json"
+            preferences.parent.mkdir(parents=True)
+            original = {"version": 1, "fields": {"defaultModel": {"value": "perf/stream-300cps", "updatedAt": 1}}}
+            preferences.write_text(json.dumps(original))
+            state = runner.copy_seed(root, root / "copy", "openchamber-dark", model="perf/think-30s")
+            self.assertEqual(json.loads((state / "oc-data" / "preferences.json").read_text())["fields"]["defaultModel"]["value"], "perf/think-30s")
+            self.assertEqual(json.loads(preferences.read_text()), original)
+
+    def test_git_fixture_is_recreated_and_registered_as_the_active_project(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            state = root / "state"
+            (state / "oc-data").mkdir(parents=True)
+            (state / "oc-data" / "settings.json").write_text(json.dumps({"projects": [{"id": "seed", "path": "/seed"}], "activeProjectId": "seed"}))
+            project = runner.fixture_project(root, "git")
+            project.mkdir(parents=True)
+            (project / "stale.txt").write_text("previous client")
+            with patch.object(runner.subprocess, "run") as run:
+                self.assertEqual(runner.prepare_fixture(root, "git", state), project)
+            self.assertFalse((project / "stale.txt").exists())
+            self.assertIn("ensureGitFixture", run.call_args.args[0][-1])
+            settings = json.loads((state / "oc-data" / "settings.json").read_text())
+            identifier = "path_" + base64.urlsafe_b64encode(str(project).encode()).decode().rstrip("=")
+            self.assertEqual([entry["id"] for entry in settings["projects"]], ["seed", identifier])
+            self.assertEqual((settings["activeProjectId"], settings["lastDirectory"]), (identifier, str(project)))
+
     def test_electron_uses_simple_gtk_without_changing_native_ime_setup(self):
         with patch.dict(os.environ, {"GTK_IM_MODULE": "ibus"}, clear=True):
             electron = runner.electron_env(Path("state"), "synthetic-config")
@@ -294,7 +451,7 @@ class ScenarioSettingsTest(unittest.TestCase):
         scenarios = [{"id": "check", "feature": "feature", "steps": [{"clickTarget": "missing"}]}]
         features = [{"id": "feature", "scenarios": ["check"], "coverage": "automated",
                      "requiredBehaviors": ["activation"], "states": ["open"]}]
-        self.assertEqual(runner.check_contracts(scenarios, features, {}), ["scenario check references undefined target missing"])
+        self.assertEqual(runner.check_contracts(scenarios, features, {}), ["scenario check step clickTarget references undefined target missing"])
 
     def test_only_client_generated_draft_ids_are_normalized(self):
         reference = [{"key": "project:root:draft:random-id", "label": "draft", "selected": False, "expanded": None}]
