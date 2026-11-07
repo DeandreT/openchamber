@@ -182,8 +182,20 @@ def qualify(args):
                     client.click(trigger)
                 wait_for("the session menu did not open", lambda: "session-menu" in ids())
 
+            # Pin and Unpin live in the Pin to submenu, as in the web menu.
+            in_pin_submenu = {"pin", "unpin"}
+
             def choose(action, accessible=False):
-                item = f"session-menu-item:{action}"
+                if action in in_pin_submenu:
+                    trigger = "session-menu-item:pin-to"
+                    wait_for("the Pin to item is missing", lambda: trigger in ids())
+                    if accessible:
+                        client.activate(trigger)
+                    else:
+                        client.click(trigger)
+                    item = f"session-submenu-item:{action}"
+                else:
+                    item = f"session-menu-item:{action}"
                 wait_for(f"menu item {action} is missing", lambda: item in ids())
                 if accessible:
                     client.activate(item)
@@ -237,9 +249,12 @@ def qualify(args):
                 if "pinned" not in openchamber(target):
                     raise RuntimeError("the server lost the pin")
                 open_menu(target)
-                if "session-menu-item:unpin" not in ids():
+                client.click("session-menu-item:pin-to")
+                wait_for("the Pin to submenu did not open", lambda: "session-submenu" in ids())
+                if "session-submenu-item:unpin" not in ids():
                     raise RuntimeError("the row did not return to pinned after the failure")
-                choose("unpin")
+                client.click("session-submenu-item:unpin")
+                wait_for("the session menu did not close", lambda: "session-menu" not in ids())
                 wait_for("the retried unpin did not reach the server", lambda: "pinned" not in openchamber(target), timeout=20)
 
             def undo():

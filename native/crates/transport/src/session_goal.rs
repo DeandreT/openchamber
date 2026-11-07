@@ -43,11 +43,6 @@ struct ObjectiveResponse {
     content: String,
 }
 
-#[derive(Deserialize)]
-struct SmallModelResponse {
-    available: Option<Value>,
-}
-
 impl ServerClient {
     fn objective_url(&self, session: &SessionId) -> Url {
         let mut url = self.endpoint().url("api/goals/objective/");
@@ -196,26 +191,6 @@ impl ServerClient {
                 status: status.as_u16(),
             }),
         }
-    }
-
-    /// `GET /api/small-model`: whether the background model can run for
-    /// `directory`. `Ok(None)` is an answer without a usable `available`,
-    /// which, like a failure, says nothing about the model.
-    pub async fn small_model_available(
-        &self,
-        directory: Option<&str>,
-    ) -> Result<Option<bool>, TransportError> {
-        let mut url = self.endpoint().url("api/small-model");
-        if let Some(directory) = directory.map(str::trim).filter(|value| !value.is_empty()) {
-            url.query_pairs_mut().append_pair("directory", directory);
-        }
-        let response = self
-            .authorized(Method::GET, url)
-            .send()
-            .await
-            .map_err(TransportError::from_request)?;
-        let reply: SmallModelResponse = read_json(response).await?;
-        Ok(reply.available.as_ref().and_then(Value::as_bool))
     }
 }
 

@@ -203,6 +203,8 @@ pub struct SyntheticFacts {
     /// `source: "openchamber-workflow"`: a workflow run's report
     /// (`readWorkflowReport`), naming the run.
     pub workflow_run: Option<String>,
+    /// `openchamberContext`: an item the user attached to the next prompt.
+    pub context: Option<crate::session_markdown::ContextPayload>,
 }
 
 /// A background subagent run as its report names it (`readSubagentRun`).

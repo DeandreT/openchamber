@@ -143,3 +143,14 @@ filter-3
 arrow-right
 chat-ai-3
 chat-history
+ai-generate-2
+fire
+fire-fill
+download
+folder-shared
+folder-received
+window
+arrow-left-s
+folders
+contract-up-down
+expand-up-down

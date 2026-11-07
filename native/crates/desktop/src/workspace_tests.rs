@@ -1393,7 +1393,6 @@ fn resizing_keeps_the_reading_anchor(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn alt_down_selects_the_next_session_row(cx: &mut TestAppContext) {
 fn next_session_selects_the_next_session_row(cx: &mut TestAppContext) {
     let (window, workspace) = open(cx);
     let rows = session_rows(&workspace, cx);
