@@ -620,10 +620,11 @@ clients must then contain the committed text. Electron's composition comes from
 CDP, not from an OS input method: its launch keeps `gtk-im-context-simple`
 because GTK's IBus selection can deadlock a private launch.
 
-A target's native half is an accessible ID, or `{"name", "role"?}` with an
-optional `"within": {"name", "role"?}` for controls whose IDs the server
-assigns, such as queued rows and permission cards: the one node with that
-name, inside the one ancestor with that name when `within` is given.
+A target's native half is an accessible ID, or `{"name", "role"?,
+"prefix"?}` with an optional `"within"` query of the same form, for controls
+whose IDs the server assigns, such as queued rows and permission cards: the
+one node with that name (or name prefix), inside the one ancestor matching
+`within` when it is given.
 Roles there are AT-SPI role names. The Electron half of such a target uses a
 positional selector, since the rows' order is part of the scenario.
 
