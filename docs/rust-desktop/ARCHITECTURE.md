@@ -50,10 +50,11 @@ uses an explicitly selected OpenChamber server. That server supplies projects,
 files, Git, settings, terminals, session metadata and the OpenCode proxy.
 Connecting to OpenChamber preserves its archive and metadata overlays.
 
-The server stays externally owned during client development. Disconnecting or
-closing the native client releases its requests and subscriptions. It does not
-stop the server or an agent turn. A local managed host is a later migration
-stage with its own process-lifetime contract.
+An external server stays externally owned. Disconnecting or closing the
+native client releases its requests and subscriptions. It does not stop the
+server or an agent turn. With no external host configured, the client starts
+the bundled server as an owned child (the managed local host) and stops it on
+quit.
 
 | Runtime | Behavior during the desktop migration |
 | --- | --- |
@@ -338,10 +339,13 @@ to the current `libghostty-vt` emulator before changing emulators. PTY creation,
 VT state, rendering, clipboard/paste, input/IME and resize are separate owners.
 Disconnecting a client follows the server's terminal lifetime rules.
 
-Before adding managed local services, define spawn ownership, shutdown order and
-failure cleanup for each child. Wait for owned children to exit and retain enough
-identity to avoid killing another process after PID reuse. Never infer ownership
-from executable name alone. External servers remain externally owned.
+Managed local services define spawn ownership, shutdown order and failure
+cleanup for each child. The managed host runs the packaged server under the
+bundled Electron executable in Node mode, in its own process group, on a
+loopback port. It records the server's PID and start time and, before a stop,
+the descendants it owns; it waits for the server's own 35 s shutdown before
+forcing only those processes. Ownership is never inferred from executable name.
+External servers remain externally owned.
 
 Server-owned enterprise policy continues to apply to native requests. Native
 features that load external assets, launch services, add providers or expose

@@ -51,7 +51,7 @@ Run these from the repository root:
 ```sh
 bun run native:test      # all workspace tests, including the sidebar parity fixtures
 bun run native:check     # rustfmt check and Clippy with warnings denied
-bun run native:dev       # debug build of the desktop, opened on synthetic data
+bun run native:dev       # debug build of the desktop, opened on the managed local server
 bun run native:build     # release build of the desktop
 bun run native:fixtures  # regenerate the TypeScript reference fixtures
 bun run native:resources # regenerate theme, locale and icon resources
@@ -69,6 +69,7 @@ The desktop reads these environment variables:
 | `OPENCHAMBER_NATIVE_LOG` | A `tracing` filter for stderr, `warn` by default |
 | `OPENCHAMBER_NATIVE_SERVER` | The base URL of an OpenChamber server to read instead of synthetic data, including any path prefix |
 | `OPENCHAMBER_NATIVE_PASSWORD` | The UI password of that server, exchanged once for a client token |
+| `OPENCHAMBER_NATIVE_BUNDLE` | The directory of an Electron package layout (`openchamber` beside `resources/`) to run the managed server from, instead of the binary's own directory |
 
 During development, connect only to an isolated server, such as
 `bun run profile:serve -- --root <dir> --port <port>`; see
@@ -77,7 +78,13 @@ During development, connect only to an isolated server, such as
 The instance control also selects saved direct-server profiles. An explicit
 `OPENCHAMBER_NATIVE_SERVER` takes precedence at startup, followed by a saved
 default profile. `OPENCHAMBER_NATIVE_WORKLOAD` explicitly selects synthetic
-data when no server environment variable is set. Host profiles contain labels
+data when no server environment variable is set. With none of these, the
+desktop starts the bundled OpenChamber server as an owned child on a loopback
+port (the managed local host) and connects once it is ready; without a bundle
+it opens on the Local OpenCode Unavailable screen. Quitting stops that server
+and every process it owns; external servers are never stopped. Its output goes
+to `logs/managed-host.log` and its port to `managed-host.json` in the native
+configuration directory. Host profiles contain labels
 and endpoints only; sign-in credentials remain in the OS store.
 Profiles live in `hosts.json` beside the native mutation journal. A versioned
 snapshot and a file lock prevent one window from overwriting another's newer

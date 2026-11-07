@@ -68,6 +68,11 @@ pub(crate) enum Source {
     Synthetic(WorkloadSize),
     /// One explicitly configured OpenChamber server, not yet connected.
     Server(Box<Connection>),
+    /// The managed local server; connected once it is ready.
+    Managed {
+        connection: Box<Connection>,
+        link: crate::managed_host_view::ManagedLink,
+    },
     /// A saved-host read failed. Keep the file intact and ask for recovery.
     HostRecovery {
         store: crate::host_profiles::ProfileStore,
@@ -196,6 +201,8 @@ pub struct Workspace {
     pub(crate) host_manager: Option<Entity<crate::host_manager::HostManager>>,
     pub(crate) settings: Option<Entity<crate::settings_view::Settings>>,
     pub(crate) host_recovery: Option<crate::host_recovery::HostRecovery>,
+    /// Present when this launch started the managed local server.
+    pub(crate) managed_host: Option<crate::managed_host_view::ManagedHostView>,
     pub(crate) host_close: Option<Task<()>>,
     pub(crate) appearance_close: Option<Task<()>>,
     pub(crate) general_close: Option<Task<()>>,
@@ -255,6 +262,7 @@ pub struct Workspace {
 impl Workspace {
     pub(crate) fn new(source: Source, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let mut sessions = SessionIndex::new();
+        let mut managed_link = None;
         let (topology, runtime, connection, host_recovery) = match source {
             Source::Synthetic(size) => {
                 let data = SyntheticWorkspace::new(size);
@@ -268,6 +276,11 @@ impl Workspace {
                 (topology, RuntimeId::from("synthetic"), None, None)
             }
             Source::Server(connection) => {
+                let runtime = RuntimeId::new(connection.config.endpoint.as_str().to_owned());
+                (Topology::default(), runtime, Some(*connection), None)
+            }
+            Source::Managed { connection, link } => {
+                managed_link = Some(link);
                 let runtime = RuntimeId::new(connection.config.endpoint.as_str().to_owned());
                 (Topology::default(), runtime, Some(*connection), None)
             }
@@ -352,6 +365,7 @@ impl Workspace {
             host_manager: None,
             settings: None,
             host_recovery,
+            managed_host: None,
             host_close: None,
             appearance_close: None,
             general_close: None,
@@ -498,7 +512,9 @@ impl Workspace {
         } else {
             workspace.focus_composer(window, cx);
         }
-        if workspace.connection.is_some() {
+        if let Some(link) = managed_link {
+            workspace.watch_managed_host(link, window, cx);
+        } else if workspace.connection.is_some() {
             workspace.connect(window, cx);
         }
         workspace

@@ -82,6 +82,10 @@ mod journal_worker;
 mod legacy_queue_reservation;
 mod locale;
 mod logical;
+mod managed_host;
+mod managed_host_lifecycle;
+mod managed_host_supervisor;
+mod managed_host_view;
 mod markdown_diagram;
 mod markdown_links;
 mod markdown_list;
@@ -95,6 +99,7 @@ mod move_session_dialog;
 mod mutation_journal;
 mod network;
 mod open_in_app;
+mod owned_process;
 mod pane_resize;
 #[cfg(test)]
 mod panel_tests;
@@ -183,6 +188,11 @@ use openchamber_native_core::synthetic::WorkloadSize;
 
 use tracing_subscriber::EnvFilter;
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use openchamber_native_transport::endpoint::Endpoint;
+
 use crate::assets::AppAssets;
 use crate::connection::{Connection, ServerConfig};
 use crate::diagnostics::Marker;
@@ -221,7 +231,8 @@ fn main() {
         )
         .with_writer(std::io::stderr)
         .init();
-    let Some(source) = requested_source() else {
+    let relaunch = Arc::new(AtomicBool::new(false));
+    let Some((source, mut managed)) = requested_source(&relaunch) else {
         std::process::exit(2);
     };
     let title = match &source {
@@ -232,7 +243,7 @@ fn main() {
                 connection.config.endpoint.authority()
             )
         }
-        Source::HostRecovery { .. } => "OpenChamber Native".to_owned(),
+        Source::Managed { .. } | Source::HostRecovery { .. } => "OpenChamber Native".to_owned(),
     };
 
     gpui_kit::application()
@@ -319,11 +330,40 @@ fn main() {
             .detach();
             cx.activate(true);
         });
+
+    // The window is gone; the owned server stops before the process exits.
+    // An external server is never stopped: no host owns it.
+    if let Some(host) = managed.as_mut() {
+        let outcome = host.shutdown();
+        tracing::info!(?outcome, "the managed host stopped");
+    }
+    if relaunch.load(Ordering::Acquire) {
+        relaunch_app();
+    }
 }
 
-/// A configured server, else synthetic data. `None` after reporting a
-/// configuration the client cannot use.
-fn requested_source() -> Option<Source> {
+/// Starts this binary again with the same arguments, after the managed host
+/// stopped, as the desktop relaunches from its recovery screen.
+fn relaunch_app() {
+    let Ok(executable) = std::env::current_exe() else {
+        tracing::error!("the app could not find itself to relaunch");
+        return;
+    };
+    let spawned = std::process::Command::new(executable)
+        .args(std::env::args_os().skip(1))
+        .stdin(std::process::Stdio::null())
+        .spawn();
+    if let Err(error) = spawned {
+        tracing::error!(%error, "the app could not relaunch");
+    }
+}
+
+/// A configured server, else the managed local server, else synthetic data
+/// when a workload is requested. `None` after reporting a configuration the
+/// client cannot use.
+fn requested_source(
+    relaunch: &Arc<AtomicBool>,
+) -> Option<(Source, Option<managed_host::ManagedHost>)> {
     let mut profile_label = None;
     let mut recovery = None;
     let config = ServerConfig::from_env().or_else(|| {
@@ -344,10 +384,14 @@ fn requested_source() -> Option<Source> {
         }
     });
     if let Some(recovery) = recovery {
-        return Some(recovery);
+        return Some((recovery, None));
     }
-    let Some(config) = config else {
-        return Some(Source::Synthetic(requested_workload()));
+    let config = match config {
+        Some(config) => config,
+        None if std::env::var_os("OPENCHAMBER_NATIVE_WORKLOAD").is_some() => {
+            return Some((Source::Synthetic(requested_workload()), None));
+        }
+        None => return managed_source(relaunch),
     };
     let config = match config {
         Ok(config) => config,
@@ -359,13 +403,39 @@ fn requested_source() -> Option<Source> {
     match Connection::new(config) {
         Ok(mut connection) => {
             connection.display_label = profile_label;
-            Some(Source::Server(Box::new(connection)))
+            Some((Source::Server(Box::new(connection)), None))
         }
         Err(error) => {
             tracing::error!(%error, "the network runtime could not start");
             None
         }
     }
+}
+
+/// Starts the managed local server, which the window connects to once it is
+/// ready. A host that cannot start still opens the window, on its failure.
+fn managed_source(
+    relaunch: &Arc<AtomicBool>,
+) -> Option<(Source, Option<managed_host::ManagedHost>)> {
+    let host = managed_host::ManagedHost::start(install_id::config_directory().as_deref());
+    let endpoint = Endpoint::parse(&format!("http://127.0.0.1:{}", host.port()))
+        .expect("a loopback URL parses");
+    let connection = match Connection::new(ServerConfig::for_endpoint(endpoint)) {
+        Ok(connection) => connection,
+        Err(error) => {
+            tracing::error!(%error, "the network runtime could not start");
+            return None;
+        }
+    };
+    let link = managed_host_view::ManagedLink {
+        state: host.subscribe(),
+        relaunch: relaunch.clone(),
+    };
+    let source = Source::Managed {
+        connection: Box::new(connection),
+        link,
+    };
+    Some((source, Some(host)))
 }
 
 /// `OPENCHAMBER_NATIVE_WORKLOAD`: `representative` (default), `stress` or `small`.
