@@ -30,6 +30,7 @@ mod authentication;
 mod authentication_tests;
 mod authentication_view;
 mod baseline;
+mod behavior_settings;
 mod blocking_requests;
 #[cfg(test)]
 mod branching_tests;
@@ -141,7 +142,10 @@ mod session_menu;
 mod session_menu_tests;
 mod session_mutations;
 mod session_warming;
+mod settings_controls;
 mod settings_navigation;
+#[cfg(test)]
+mod settings_test_server;
 mod settings_view;
 mod shortcuts;
 mod shortcuts_settings;

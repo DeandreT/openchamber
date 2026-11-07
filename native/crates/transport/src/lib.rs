@@ -7,6 +7,7 @@
 
 pub mod attachment;
 pub mod authentication;
+pub mod behavior;
 pub mod catalog;
 pub mod client;
 pub mod compatibility;
@@ -50,6 +51,8 @@ pub mod starters;
 pub mod stream;
 pub mod system;
 pub mod terminal;
+#[cfg(test)]
+mod test_server;
 mod tool_facts;
 mod wire;
 pub mod worktree;

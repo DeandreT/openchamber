@@ -27,6 +27,7 @@ pub(crate) struct Settings {
     pub(crate) chat: Entity<PreferencePage>,
     pub(crate) sessions: Entity<PreferencePage>,
     shortcuts: Entity<crate::shortcuts_settings::ShortcutsPage>,
+    pub(crate) behavior: Entity<crate::behavior_settings::BehaviorPage>,
     page: Page,
     search: Entity<InputState>,
     active_result: usize,
@@ -78,8 +79,11 @@ impl Settings {
         let sessions =
             cx.new(|cx| PreferencePage::new(owner.clone(), general.clone(), Page::Sessions, cx));
         let shortcuts = cx.new(|_| crate::shortcuts_settings::ShortcutsPage::new(owner.clone()));
+        let behavior =
+            cx.new(|cx| crate::behavior_settings::BehaviorPage::new(owner.clone(), window, cx));
         Self {
             shortcuts,
+            behavior,
             owner,
             hosts,
             general,
@@ -114,6 +118,13 @@ impl Settings {
                 let _ = general.update(cx, |page, cx| page.refresh(cx));
             });
         }
+        // OpenCode configuration pages read again on every visit.
+        if page == Page::Behavior {
+            let behavior = self.behavior.downgrade();
+            cx.defer(move |cx| {
+                let _ = behavior.update(cx, |page, cx| page.refresh(cx));
+            });
+        }
         cx.notify();
     }
 
@@ -133,6 +144,9 @@ impl Settings {
                 .sessions
                 .update(cx, |page, cx| page.reveal(item.id, window, cx)),
             Page::Shortcuts => {}
+            Page::Behavior => self
+                .behavior
+                .update(cx, |page, cx| page.reveal(item.id, window, cx)),
             Page::Hosts => {
                 self.hosts
                     .update(cx, |page, cx| page.focus_settings(window, cx));
@@ -404,6 +418,7 @@ impl Render for Settings {
             Page::Chat => self.chat.clone().into_any_element(),
             Page::Sessions => self.sessions.clone().into_any_element(),
             Page::Shortcuts => self.shortcuts.clone().into_any_element(),
+            Page::Behavior => self.behavior.clone().into_any_element(),
             Page::Hosts => {
                 let scroll = self.hosts.read(cx).settings_scroll.clone();
                 div()

@@ -24,6 +24,7 @@ use crate::general_settings::{
 };
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
+use crate::settings_controls::{field_row, info_hint, section};
 use crate::settings_navigation::Page;
 use crate::theme::Palette;
 use crate::workspace::Workspace;
@@ -809,80 +810,6 @@ impl Render for PreferencePage {
             .children(sections)
             .child(status)
     }
-}
-
-/// A titled block; sections after the first carry a divider.
-fn section(title: &'static str, first: bool, rows: Vec<AnyElement>, cx: &App) -> AnyElement {
-    let palette = cx.global::<Palette>();
-    div()
-        .when(!first, |section| {
-            section
-                .mt(px(32.0))
-                .pt(px(24.0))
-                .border_t_1()
-                .border_color(palette.border)
-        })
-        .child(
-            div()
-                .id(title)
-                .role(Role::Heading)
-                .font_weight(FontWeight::SEMIBOLD)
-                .mb(px(12.0))
-                .child(locale::strings(cx).get(title)),
-        )
-        .child(div().flex().flex_col().gap(px(6.0)).children(rows))
-        .into_any_element()
-}
-
-/// Label left, control right, wrapping when the pane is narrow.
-fn field_row(
-    item: &'static str,
-    label: SharedString,
-    info: Option<SharedString>,
-    control: AnyElement,
-    anchor: Option<ScrollAnchor>,
-    cx: &App,
-) -> AnyElement {
-    let direction = locale::strings(cx).direction();
-    div()
-        .id(SharedString::from(format!(
-            "{}-row",
-            item.replace('.', "-")
-        )))
-        .anchor_scroll(anchor)
-        .flex_row_from(direction)
-        .flex_wrap()
-        .items_center()
-        .gap(px(12.0))
-        .py(px(4.0))
-        .child(
-            div()
-                .flex_row_from(direction)
-                .items_center()
-                .gap(px(6.0))
-                .child(label)
-                .children(info.map(|info| info_hint(item, info, cx))),
-        )
-        .child(control)
-        .into_any_element()
-}
-
-/// Helper text behind an info icon, shown on hover.
-fn info_hint(item: &str, text: SharedString, cx: &App) -> AnyElement {
-    let id: SharedString = format!("{}-info", item.replace('.', "-")).into();
-    div()
-        .id(id.clone())
-        .accessibility_id(id)
-        .role(Role::Image)
-        .aria_label(text.clone())
-        .pt(px(2.0))
-        .child(glyph(
-            "information",
-            14.0,
-            cx.global::<Palette>().muted_foreground,
-        ))
-        .tooltip(move |window, cx| Tooltip::new(text.clone()).build(window, cx))
-        .into_any_element()
 }
 
 #[cfg(test)]
