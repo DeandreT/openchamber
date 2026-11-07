@@ -88,6 +88,20 @@ pub(crate) struct UserBody {
 pub(crate) struct FileAttachment {
     pub mime: String,
     pub name: Option<String>,
+    pub source: Option<FileSource>,
+    /// The bytes, base64, of a file the prompt carried inline.
+    pub data: Option<String>,
+}
+
+/// Where a prompt's file came from (`PromptFileAttachment.source`).
+#[derive(Debug, Deserialize)]
+#[serde(tag = "type", rename_all = "kebab-case")]
+pub(crate) enum FileSource {
+    Uri {
+        uri: String,
+    },
+    #[serde(other)]
+    Other,
 }
 
 #[derive(Debug, Deserialize)]
@@ -271,6 +285,7 @@ pub(crate) struct Settings {
     pub routing_feature_available: Option<Value>,
     pub time_format_preference: Option<Value>,
     pub code_block_line_wrap: Option<Value>,
+    pub message_search_enabled: Option<Value>,
     pub sidebar_grouping: Option<Value>,
     pub sidebar_view_mode: Option<Value>,
     pub sidebar_list_session_grouping: Option<Value>,

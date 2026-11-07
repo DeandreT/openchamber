@@ -10,6 +10,7 @@ use std::ops::Range;
 
 use crate::ids::{MessageId, PartId, SessionId};
 use crate::send_config::ModelChoice;
+use crate::tool_shells::ToolFacts;
 
 /// What a transcript record is.
 ///
@@ -66,10 +67,14 @@ pub enum PartContent {
         elided: Option<usize>,
         /// The child session a `subagent` call runs in, once the call names it.
         child: Option<SessionId>,
+        /// The call's input and metadata as the row reads them.
+        facts: Box<ToolFacts>,
     },
     File {
         filename: String,
         mime: String,
+        /// Where the file loads from: a URI or a `data:` URL.
+        url: Option<String>,
     },
     /// An `@agent` mention in a user prompt.
     Agent {
@@ -298,6 +303,9 @@ pub enum TranscriptEvent {
         part_id: PartId,
         status: ToolStatus,
         output: Option<String>,
+        /// What the transition reports about the call's input and metadata;
+        /// what it leaves out stays.
+        facts: Option<Box<ToolFacts>>,
         /// When the transition happened: a call's start, a result's end.
         at: i64,
     },
@@ -491,6 +499,66 @@ impl Transcript {
         self.push(message)
     }
 
+    /// The answer a turn's footer copies: the text parts of every assistant
+    /// message from the turn's prompt through `row`, in order, without tool
+    /// output or reasoning.
+    pub fn turn_answer_text(&self, row: usize) -> String {
+        let Some(end) = self.messages.get(..=row) else {
+            return String::new();
+        };
+        let start = end
+            .iter()
+            .rposition(|message| message.info.role == Role::User)
+            .map_or(0, |prompt| prompt + 1);
+        let texts: Vec<&str> = end[start..]
+            .iter()
+            .filter(|message| message.info.role == Role::Assistant)
+            .flat_map(|message| &message.parts)
+            .filter_map(|part| match &part.content {
+                PartContent::Text { text } if !text.trim().is_empty() => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        texts.join("\n\n")
+    }
+
+    /// Fills in the tool results a history page left out from a whole read
+    /// of the same message. Only calls still held as shells change, and only
+    /// with a whole result of the same status, so newer live changes to the
+    /// message survive a read that started before them.
+    pub fn complete_elided(&mut self, whole: &Message) -> TranscriptChange {
+        let Some(row) = self.row_of(&whole.info.id) else {
+            return TranscriptChange::Unchanged;
+        };
+        let mut changed = false;
+        for part in &mut self.messages[row].parts {
+            let PartContent::Tool {
+                status,
+                elided: Some(_),
+                ..
+            } = &part.content
+            else {
+                continue;
+            };
+            let complete = whole.parts.iter().find(|candidate| {
+                candidate.id == part.id
+                    && matches!(
+                        &candidate.content,
+                        PartContent::Tool { status: read, elided: None, .. } if read == status
+                    )
+            });
+            if let Some(complete) = complete {
+                part.content = complete.content.clone();
+                changed = true;
+            }
+        }
+        if !changed {
+            return TranscriptChange::Unchanged;
+        }
+        self.touch(row);
+        TranscriptChange::Updated { row }
+    }
+
     /// Appends a message, or updates it in place when already held.
     pub fn push(&mut self, mut message: Message) -> TranscriptChange {
         self.removed_at.remove(&message.info.id);
@@ -643,6 +711,7 @@ impl Transcript {
                 part_id,
                 status: next_status,
                 output: next_output,
+                facts: next_facts,
                 at,
             } => {
                 let Some(row) = self.row_of(&message_id) else {
@@ -658,6 +727,7 @@ impl Transcript {
                             status,
                             output,
                             elided,
+                            facts,
                             ..
                         },
                     time,
@@ -685,12 +755,23 @@ impl Transcript {
                     },
                     ToolStatus::Pending => *time,
                 };
+                let merged = next_facts.map(|next| {
+                    let mut merged = facts.as_ref().clone();
+                    merged.merge(*next);
+                    merged
+                });
                 if *status == next_status
                     && *output == next_output
                     && *elided == next_elided
                     && *time == next_time
+                    && merged
+                        .as_ref()
+                        .is_none_or(|merged| merged == facts.as_ref())
                 {
                     return TranscriptChange::Unchanged;
+                }
+                if let Some(merged) = merged {
+                    **facts = merged;
                 }
                 *status = next_status;
                 *output = next_output;
@@ -1385,6 +1466,7 @@ mod tests {
                     output: None,
                     elided: None,
                     child: None,
+                    facts: Box::default(),
                 },
                 time: PartTime::default(),
             }],
@@ -1395,6 +1477,7 @@ mod tests {
             status: ToolStatus::Completed,
             output: Some("ok".to_owned()),
             at: 8,
+            facts: None,
         });
         assert_eq!(change, TranscriptChange::Updated { row: 0 });
         let part = &transcript.message(0).expect("row exists").parts[0];
@@ -1414,6 +1497,179 @@ mod tests {
                 .message(0)
                 .and_then(|message| message.info.completed),
             Some(9)
+        );
+    }
+
+    #[test]
+    fn a_turn_answer_joins_its_assistant_text() {
+        let message = |id: &str, role: Role, parts: Vec<Part>| Message {
+            info: MessageInfo {
+                id: MessageId::from(id),
+                role,
+                created: 0,
+                completed: None,
+                notice: None,
+                assistant: None,
+                compaction: None,
+                synthetic: None,
+            },
+            parts,
+        };
+        let reasoning = Part {
+            id: PartId::from("r"),
+            content: PartContent::Reasoning {
+                text: "thinking".to_owned(),
+            },
+            time: PartTime::default(),
+        };
+        let transcript = Transcript::from_history(vec![
+            message("u1", Role::User, vec![Part::text("u1t", "first")]),
+            message("a1", Role::Assistant, vec![Part::text("a1t", "old answer")]),
+            message("u2", Role::User, vec![Part::text("u2t", "second")]),
+            message(
+                "a2",
+                Role::Assistant,
+                vec![reasoning, Part::text("a2t", "Step one.")],
+            ),
+            message("a3", Role::Assistant, vec![Part::text("a3t", "Done.")]),
+        ]);
+        assert_eq!(transcript.turn_answer_text(4), "Step one.\n\nDone.");
+        assert_eq!(transcript.turn_answer_text(1), "old answer");
+        assert_eq!(transcript.turn_answer_text(9), "");
+    }
+
+    #[test]
+    fn a_whole_read_completes_only_calls_still_shelled() {
+        let message = |parts: Vec<Part>| Message {
+            info: MessageInfo {
+                id: MessageId::from("m1"),
+                role: Role::Assistant,
+                created: 0,
+                completed: Some(1),
+                notice: None,
+                assistant: None,
+                compaction: None,
+                synthetic: None,
+            },
+            parts,
+        };
+        let call = |id: &str, status: ToolStatus, output: &str, elided: Option<usize>| Part {
+            id: PartId::from(id),
+            content: PartContent::Tool {
+                tool: "shell".to_owned(),
+                status,
+                title: None,
+                output: Some(output.to_owned()),
+                elided,
+                child: None,
+                facts: Box::default(),
+            },
+            time: PartTime::default(),
+        };
+        let mut transcript = Transcript::from_history(vec![message(vec![
+            call("a", ToolStatus::Completed, "", Some(3)),
+            call("b", ToolStatus::Error, "", Some(5)),
+            Part::text("t", "newer live text"),
+        ])]);
+        let whole = message(vec![
+            call("a", ToolStatus::Completed, "one", None),
+            call("b", ToolStatus::Completed, "two", None),
+            Part::text("t", "older"),
+        ]);
+        assert_eq!(
+            transcript.complete_elided(&whole),
+            TranscriptChange::Updated { row: 0 }
+        );
+        let parts = &transcript.message(0).expect("row exists").parts;
+        assert!(matches!(
+            &parts[0].content,
+            PartContent::Tool { output: Some(output), elided: None, .. } if output == "one"
+        ));
+        assert!(
+            matches!(
+                &parts[1].content,
+                PartContent::Tool {
+                    elided: Some(5),
+                    ..
+                }
+            ),
+            "a read of another status leaves the shell"
+        );
+        assert_eq!(
+            parts[2].content,
+            PartContent::Text {
+                text: "newer live text".to_owned()
+            }
+        );
+        assert_eq!(
+            transcript.complete_elided(&whole),
+            TranscriptChange::Unchanged
+        );
+    }
+
+    #[test]
+    fn a_transition_merges_the_facts_it_reports() {
+        use crate::tool_shells::{ToolFacts, ToolInput};
+
+        let mut transcript = Transcript::from_history(vec![Message {
+            info: MessageInfo {
+                id: MessageId::from("m1"),
+                role: Role::Assistant,
+                created: 0,
+                completed: None,
+                notice: None,
+                assistant: None,
+                compaction: None,
+                synthetic: None,
+            },
+            parts: vec![Part {
+                id: PartId::from("call_1"),
+                content: PartContent::Tool {
+                    tool: "shell".to_owned(),
+                    status: ToolStatus::Pending,
+                    title: None,
+                    output: None,
+                    elided: None,
+                    child: None,
+                    facts: Box::default(),
+                },
+                time: PartTime::default(),
+            }],
+        }]);
+        let transition = |status, facts: Option<ToolFacts>| TranscriptEvent::ToolTransition {
+            message_id: MessageId::from("m1"),
+            part_id: PartId::from("call_1"),
+            status,
+            output: None,
+            facts: facts.map(Box::new),
+            at: 5,
+        };
+        let called = ToolFacts {
+            input: ToolInput {
+                command: Some("ls".to_owned()),
+                ..ToolInput::default()
+            },
+            ..ToolFacts::default()
+        };
+        assert_eq!(
+            transcript.apply(transition(ToolStatus::Running, Some(called))),
+            TranscriptChange::Updated { row: 0 }
+        );
+        let failed = ToolFacts {
+            error: Some("exit 2".to_owned()),
+            ..ToolFacts::default()
+        };
+        let _ = transcript.apply(transition(ToolStatus::Error, Some(failed)));
+        let PartContent::Tool { facts, .. } = &transcript.message(0).expect("row").parts[0].content
+        else {
+            panic!("the call stays a tool part");
+        };
+        assert_eq!(facts.input.command.as_deref(), Some("ls"));
+        assert_eq!(facts.error.as_deref(), Some("exit 2"));
+        assert_eq!(
+            transcript.apply(transition(ToolStatus::Error, Some(ToolFacts::default()))),
+            TranscriptChange::Unchanged,
+            "facts that add nothing change nothing"
         );
     }
 
@@ -1439,6 +1695,7 @@ mod tests {
                     output: Some(output.to_owned()),
                     elided,
                     child: None,
+                    facts: Box::default(),
                 },
                 time: PartTime::default(),
             }],
@@ -1582,6 +1839,7 @@ mod tests {
                 output: None,
                 elided: None,
                 child: None,
+                facts: Box::default(),
             },
             time: PartTime::default(),
         };
@@ -1732,6 +1990,7 @@ mod tests {
                 output: None,
                 elided: None,
                 child: child.map(SessionId::from),
+                facts: Box::default(),
             },
             time: PartTime::default(),
         };

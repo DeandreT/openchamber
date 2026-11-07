@@ -23,6 +23,13 @@ notify = "=8.2.0"
 heic-rs = { version = "=0.1.4", default-features = false }
 image = { version = "=0.25.10", default-features = false, features = ["gif", "jpeg", "png", "webp"] }
 quick-xml = "=0.41.0"
+# Message math (KaTeX syntax) and Mermaid diagrams are laid out in Rust and
+# drawn as SVG images; the math fonts are KaTeX's, embedded.
+ratex-layout = "=0.1.15"
+ratex-parser = "=0.1.15"
+ratex-svg = { version = "=0.1.15", features = ["embed-fonts"] }
+ratex-types = "=0.1.15"
+mermaid-rs-renderer = { version = "=0.3.1", default-features = false }
 sha2 = { version = "=0.11.1", default-features = false }
 zip = { version = "=9.2.2", default-features = false, features = ["deflate"] }
 # Fenced code is highlighted with tree-sitter; the grammars cover the

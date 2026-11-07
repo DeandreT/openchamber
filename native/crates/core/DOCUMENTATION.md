@@ -34,6 +34,12 @@ rendering asks for a projection and dispatches an action.
   `project_actions.rs` which project action its row shows and with which
   glyph, and `tool_names.rs` OpenCode's tool name comparison, including
   which finished calls may change what Git reports.
+- `tool_shells.rs` decides what a tool row shows from the call's typed
+  `ToolFacts` (`lib/opencode/tools.ts`, `toolPresentation.tsx`,
+  `toolRenderUtils.ts` and `ToolPart.tsx`'s header helpers): the display
+  name, icon, description, justification, diff and line counts, duration,
+  which tools draw the compact static row, the input the expanded row prints,
+  and the folded reasoning preview.
 - `file_tree.rs` holds the Files surface's tree: one snapshot per listed
   folder, expanded and selected paths and the visible rows (folders first,
   then names in `localeCompare` order; dotfiles shown, `node_modules` left
@@ -256,7 +262,12 @@ crate owns wire parsing and authority checks, and hands the core records and
 - A tool result a history page left out (`PartContent::Tool::elided`) never
   replaces the whole result a transcript holds for the same call and status,
   through `replace` or `push`. A live transition with output, or the whole
-  message, completes it.
+  message, completes it. `complete_elided` fills in only calls still held as
+  shells, from a whole result of the same status, and leaves every other part
+  of the message as the transcript holds it.
+- A tool transition merges the facts it reports into the held ones: input,
+  metadata, error and listed input each change only when the transition
+  carries them, so a result without input keeps the call's input.
 - Lifecycle order changes only on live phase transitions or authoritative
   snapshots. Token arrivals and metadata writes never move a row.
 - A failed load keeps its retained snapshot; only `LoadState::Complete` grants
@@ -301,6 +312,15 @@ crate owns wire parsing and authority checks, and hands the core records and
   one above the highest open "Terminal N", so they stay unique after closes.
 
 ## Decisions
+
+### Why typed tool facts and not raw JSON in the core
+
+The web reads a call's input and metadata with zod schemas at render time.
+The core has no JSON dependency, so the transport reads the fields the rows
+use into `ToolFacts` once per record, each field on its own as the schemas
+do. Rows then compare and draw typed fields without parsing on every frame.
+The one JSON-shaped output, the generic field listing an unknown tool's
+expanded row prints, is made in the transport as `listed_input`.
 
 ### Why draft metadata stays opaque
 

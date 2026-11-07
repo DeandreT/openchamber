@@ -212,6 +212,9 @@ pub struct ServerSettings {
     pub clock: ClockPreference,
     /// `codeBlockLineWrap`, when the document carries it.
     pub code_block_line_wrap: Option<bool>,
+    /// `messageSearchEnabled`: whether Ctrl+F searches the conversation;
+    /// absent means off.
+    pub message_search_enabled: Option<bool>,
     /// Sidebar preferences; omitted values preserve the client's defaults.
     pub sidebar_view: Option<SidebarViewMode>,
     pub show_chats: Option<bool>,
@@ -344,6 +347,10 @@ impl ServerSettings {
                 .unwrap_or_default(),
             code_block_line_wrap: settings
                 .code_block_line_wrap
+                .as_ref()
+                .and_then(Value::as_bool),
+            message_search_enabled: settings
+                .message_search_enabled
                 .as_ref()
                 .and_then(Value::as_bool),
             auto_save_enabled: settings.auto_save_enabled.as_ref().and_then(Value::as_bool),
@@ -1190,6 +1197,7 @@ mod tests {
         assert_eq!(settings.routing_feature_available, None);
         assert_eq!(settings.clock, ClockPreference::TwentyFourHour);
         assert_eq!(settings.code_block_line_wrap, Some(false));
+        assert_eq!(settings.message_search_enabled, None, "absent means off");
     }
 
     #[test]

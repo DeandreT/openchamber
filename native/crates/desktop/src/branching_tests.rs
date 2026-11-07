@@ -1065,6 +1065,7 @@ fn a_subagent_report_and_call_open_the_child_and_return(cx: &mut TestAppContext)
                         output: None,
                         elided: None,
                         child: Some(child.clone()),
+                        facts: Box::default(),
                     },
                     time: PartTime::default(),
                 }],

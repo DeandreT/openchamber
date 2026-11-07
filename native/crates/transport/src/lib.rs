@@ -19,6 +19,7 @@ pub mod files;
 pub mod git;
 pub mod identity;
 pub mod message_queue;
+pub mod message_search;
 #[cfg(test)]
 mod parity_tests;
 pub mod permission_policy;
@@ -39,4 +40,5 @@ pub mod starters;
 pub mod stream;
 pub mod system;
 pub mod terminal;
+mod tool_facts;
 mod wire;

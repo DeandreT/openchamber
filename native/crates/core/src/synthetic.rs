@@ -357,6 +357,7 @@ fn assistant_parts(message_id: &MessageId, turn: usize, shape: ConversationShape
                         output: Some(format!("{} lines", 40 + turn)),
                         elided: None,
                         child: None,
+                        facts: Box::default(),
                     },
                 ));
             }
