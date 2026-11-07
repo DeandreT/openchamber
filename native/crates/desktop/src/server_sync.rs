@@ -304,7 +304,11 @@ impl Workspace {
                         }
                         match item {
                             ControlItem::Event(ControlEvent::Connected) => {
-                                this.load_topology(window, cx)
+                                this.load_topology(window, cx);
+                                this.refresh_terminal_sessions(cx);
+                            }
+                            ControlItem::Event(ControlEvent::TerminalSessionsChanged) => {
+                                this.refresh_terminal_sessions(cx)
                             }
                             ControlItem::Event(
                                 ControlEvent::WorktreeChanged { .. } | ControlEvent::SessionCreated,

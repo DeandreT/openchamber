@@ -5,6 +5,11 @@
 //! server terminal it shows and where that terminal's lifecycle stands. The
 //! server owns the terminals. Tabs live in memory for the window's lifetime
 //! and adopt the directory's server terminals on startup and reconnect.
+//!
+//! A project action runs in a tab of its own, one per action and directory:
+//! each run gets a fresh execution ID, which the server keeps as the
+//! terminal's purpose, so a run another client started is recognised and a
+//! late answer for an earlier run is told apart from the current one.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,6 +29,8 @@ pub enum Lifecycle {
     /// The create request is in flight.
     Starting,
     Running,
+    /// A project action's run was asked to stop and has not exited yet.
+    Stopping,
     /// The process ended; the terminal stays readable until the tab closes.
     Exited {
         exit_code: Option<i64>,
@@ -38,6 +45,18 @@ pub enum Lifecycle {
     Ended,
 }
 
+/// What a tab is for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TabPurpose {
+    Terminal,
+    /// A project action's tab. `execution` names the current run; `None`
+    /// once it ended or before it starts.
+    ProjectAction {
+        action: String,
+        execution: Option<String>,
+    },
+}
+
 /// One tab.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Tab {
@@ -46,6 +65,40 @@ pub struct Tab {
     pub session: Option<String>,
     pub lifecycle: Lifecycle,
     pub label: String,
+    pub purpose: TabPurpose,
+}
+
+impl Tab {
+    /// The action this tab runs, if it is an action's tab.
+    pub fn action(&self) -> Option<&str> {
+        match &self.purpose {
+            TabPurpose::ProjectAction { action, .. } => Some(action),
+            TabPurpose::Terminal => None,
+        }
+    }
+
+    fn execution(&self) -> Option<&str> {
+        match &self.purpose {
+            TabPurpose::ProjectAction { execution, .. } => execution.as_deref(),
+            TabPurpose::Terminal => None,
+        }
+    }
+
+    /// An action's run ended: the tab keeps its action, without a run.
+    fn end_run(&mut self) {
+        if let TabPurpose::ProjectAction { execution, .. } = &mut self.purpose {
+            *execution = None;
+        }
+    }
+}
+
+/// A project action's live run: its tab, terminal and execution.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActionRun {
+    pub tab: TabId,
+    pub session: String,
+    pub execution: String,
+    pub stopping: bool,
 }
 
 /// A server terminal offered for adoption, from an authoritative list.
@@ -53,9 +106,11 @@ pub struct Tab {
 pub struct ListedTerminal {
     pub session: String,
     pub running: bool,
-    /// Project-action terminals belong to the project action row and are
-    /// never adopted as tabs.
+    /// Interactive terminals become plain tabs.
     pub is_terminal: bool,
+    /// A project action's run, as `(action, execution)`: a running one
+    /// joins its action's tab, so a run another client started shows.
+    pub action: Option<(String, String)>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -123,9 +178,132 @@ impl TerminalTabs {
             session: None,
             lifecycle: Lifecycle::Starting,
             label,
+            purpose: TabPurpose::Terminal,
         });
         entry.active = Some(id);
         id
+    }
+
+    /// The tab of `action` in `directory`, made and labelled when missing,
+    /// and made active (`getOrCreateActionTab`).
+    pub fn open_action(&mut self, directory: &str, action: &str, label: &str) -> TabId {
+        if let Some(tab) = self.action_tab_mut(directory, action) {
+            tab.label = label.to_owned();
+            let id = tab.id;
+            self.select(directory, id);
+            return id;
+        }
+        self.next_id += 1;
+        let id = TabId(self.next_id);
+        let entry = self.directories.entry(directory.to_owned()).or_default();
+        entry.tabs.push(Tab {
+            id,
+            session: None,
+            lifecycle: Lifecycle::Ended,
+            label: label.to_owned(),
+            purpose: TabPurpose::ProjectAction {
+                action: action.to_owned(),
+                execution: None,
+            },
+        });
+        entry.active = Some(id);
+        id
+    }
+
+    /// The live run of `action` in `directory`.
+    pub fn action_run(&self, directory: &str, action: &str) -> Option<ActionRun> {
+        let tab = self
+            .tabs(directory)
+            .iter()
+            .find(|tab| tab.action() == Some(action))?;
+        let stopping = match tab.lifecycle {
+            Lifecycle::Running => false,
+            Lifecycle::Stopping => true,
+            _ => return None,
+        };
+        Some(ActionRun {
+            tab: tab.id,
+            session: tab.session.clone()?,
+            execution: tab.execution()?.to_owned(),
+            stopping,
+        })
+    }
+
+    /// Starts a new run in the action's tab (`allocateActionExecution`).
+    /// Answers the earlier run's terminal, which the caller stops showing;
+    /// the server retires an exited one when the new run starts.
+    pub fn begin_run(&mut self, directory: &str, id: TabId, execution: &str) -> Option<String> {
+        let tab = self.tab_mut(directory, id)?;
+        let TabPurpose::ProjectAction {
+            execution: current, ..
+        } = &mut tab.purpose
+        else {
+            return None;
+        };
+        *current = Some(execution.to_owned());
+        tab.lifecycle = Lifecycle::Starting;
+        tab.session.take()
+    }
+
+    /// Whether `execution` is still the tab's current run; an answer for an
+    /// earlier run, or one the user stopped meanwhile, is not.
+    pub fn is_current_run(&self, directory: &str, id: TabId, execution: &str) -> bool {
+        self.tab(directory, id)
+            .is_some_and(|tab| tab.execution() == Some(execution))
+    }
+
+    /// Binds a created action terminal to the run `requested` began. The
+    /// server may answer with a run another client started, whose execution
+    /// (`joined`) the tab takes. `false` when the requested run is no longer
+    /// current; the caller closes a terminal it created.
+    pub fn action_started(
+        &mut self,
+        directory: &str,
+        id: TabId,
+        requested: &str,
+        joined: &str,
+        session: &str,
+    ) -> bool {
+        if !self.is_current_run(directory, id, requested) || !self.started(directory, id, session) {
+            return false;
+        }
+        if let Some(tab) = self.tab_mut(directory, id)
+            && let TabPurpose::ProjectAction { execution, .. } = &mut tab.purpose
+        {
+            *execution = Some(joined.to_owned());
+        }
+        true
+    }
+
+    /// The run did not start: the tab keeps its action without a run.
+    pub fn run_failed(&mut self, directory: &str, id: TabId, execution: &str) {
+        if self.is_current_run(directory, id, execution)
+            && let Some(tab) = self.tab_mut(directory, id)
+        {
+            tab.end_run();
+            tab.lifecycle = Lifecycle::Ended;
+        }
+    }
+
+    /// Marks a run stopping, or running again after a failed stop.
+    pub fn set_stopping(&mut self, session: &str, stopping: bool) {
+        if let Some((_, tab)) = self.session_tab_mut(session)
+            && matches!(tab.lifecycle, Lifecycle::Running | Lifecycle::Stopping)
+        {
+            tab.lifecycle = if stopping {
+                Lifecycle::Stopping
+            } else {
+                Lifecycle::Running
+            };
+        }
+    }
+
+    fn action_tab_mut(&mut self, directory: &str, action: &str) -> Option<&mut Tab> {
+        self.directories
+            .get_mut(directory)?
+            .tabs
+            .iter_mut()
+            .find(|tab| tab.action() == Some(action))
     }
 
     pub fn select(&mut self, directory: &str, id: TabId) -> bool {
@@ -170,6 +348,7 @@ impl TerminalTabs {
     ) -> Option<(String, TabId)> {
         let (directory, tab) = self.session_tab_mut(session)?;
         tab.lifecycle = Lifecycle::Exited { exit_code, signal };
+        tab.end_run();
         Some((directory, tab.id))
     }
 
@@ -186,6 +365,7 @@ impl TerminalTabs {
             && !matches!(tab.lifecycle, Lifecycle::Exited { .. })
         {
             tab.lifecycle = Lifecycle::Ended;
+            tab.end_run();
         }
     }
 
@@ -216,7 +396,16 @@ impl TerminalTabs {
         let present: BTreeSet<&str> = listed.iter().map(|entry| entry.session.as_str()).collect();
         let mut adopted = Vec::new();
         for entry in listed {
-            if !entry.is_terminal || shown.contains(&entry.session) {
+            if shown.contains(&entry.session) {
+                continue;
+            }
+            if let Some((action, execution)) = &entry.action {
+                if entry.running && self.adopt_run(directory, action, execution, &entry.session) {
+                    adopted.push(entry.session.clone());
+                }
+                continue;
+            }
+            if !entry.is_terminal {
                 continue;
             }
             self.next_id += 1;
@@ -235,6 +424,7 @@ impl TerminalTabs {
                     }
                 },
                 label,
+                purpose: TabPurpose::Terminal,
             });
             tabs.active.get_or_insert(id);
             adopted.push(entry.session.clone());
@@ -245,12 +435,58 @@ impl TerminalTabs {
                     .session
                     .as_deref()
                     .is_some_and(|session| !present.contains(session));
-                if gone && matches!(tab.lifecycle, Lifecycle::Running) {
+                if gone && matches!(tab.lifecycle, Lifecycle::Running | Lifecycle::Stopping) {
                     tab.lifecycle = Lifecycle::Ended;
+                    tab.end_run();
                 }
             }
         }
         adopted
+    }
+
+    /// A running action terminal no tab shows joins its action's tab, made
+    /// when missing and labelled with the action's ID until the caller names
+    /// it. A tab whose own run is starting keeps it: that answer decides.
+    fn adopt_run(&mut self, directory: &str, action: &str, execution: &str, session: &str) -> bool {
+        if let Some(tab) = self.action_tab_mut(directory, action) {
+            if matches!(
+                tab.lifecycle,
+                Lifecycle::Starting | Lifecycle::Running | Lifecycle::Stopping
+            ) {
+                return false;
+            }
+            tab.session = Some(session.to_owned());
+            tab.lifecycle = Lifecycle::Running;
+            tab.purpose = TabPurpose::ProjectAction {
+                action: action.to_owned(),
+                execution: Some(execution.to_owned()),
+            };
+            return true;
+        }
+        self.next_id += 1;
+        let id = TabId(self.next_id);
+        let entry = self.directories.entry(directory.to_owned()).or_default();
+        entry.tabs.push(Tab {
+            id,
+            session: Some(session.to_owned()),
+            lifecycle: Lifecycle::Running,
+            label: action.to_owned(),
+            purpose: TabPurpose::ProjectAction {
+                action: action.to_owned(),
+                execution: Some(execution.to_owned()),
+            },
+        });
+        entry.active.get_or_insert(id);
+        true
+    }
+
+    /// Renames an action's tab to the action's current name.
+    pub fn name_action(&mut self, directory: &str, action: &str, label: &str) {
+        if let Some(tab) = self.action_tab_mut(directory, action)
+            && tab.label != label
+        {
+            tab.label = label.to_owned();
+        }
     }
 
     fn tab_mut(&mut self, directory: &str, id: TabId) -> Option<&mut Tab> {
@@ -302,7 +538,105 @@ mod tests {
             session: session.to_owned(),
             running,
             is_terminal: true,
+            action: None,
         }
+    }
+
+    fn listed_run(session: &str, action: &str, execution: &str, running: bool) -> ListedTerminal {
+        ListedTerminal {
+            session: session.to_owned(),
+            running,
+            is_terminal: false,
+            action: Some((action.to_owned(), execution.to_owned())),
+        }
+    }
+
+    #[test]
+    fn an_action_run_starts_stops_and_ends_in_one_tab() {
+        let mut tabs = TerminalTabs::new();
+        tabs.open("/w");
+        let id = tabs.open_action("/w", "dev", "Dev");
+        assert_eq!(tabs.active("/w").map(|tab| tab.id), Some(id));
+        assert_eq!(
+            tabs.open_action("/w", "dev", "Dev server"),
+            id,
+            "one tab per action"
+        );
+        assert_eq!(tabs.tab("/w", id).expect("tab").label, "Dev server");
+        assert_eq!(tabs.action_run("/w", "dev"), None);
+
+        assert_eq!(tabs.begin_run("/w", id, "exec-1"), None);
+        assert!(
+            !tabs.action_started("/w", id, "exec-0", "exec-0", "s0"),
+            "an earlier run's answer"
+        );
+        assert!(tabs.action_started("/w", id, "exec-1", "exec-1", "s1"));
+        let run = tabs.action_run("/w", "dev").expect("running");
+        assert_eq!(
+            (run.session.as_str(), run.execution.as_str()),
+            ("s1", "exec-1")
+        );
+        assert!(!run.stopping);
+        tabs.set_stopping("s1", true);
+        assert!(tabs.action_run("/w", "dev").expect("stopping").stopping);
+        tabs.set_stopping("s1", false);
+        assert!(
+            !tabs
+                .action_run("/w", "dev")
+                .expect("running again")
+                .stopping
+        );
+
+        tabs.exited("s1", Some(130), None);
+        assert_eq!(tabs.action_run("/w", "dev"), None);
+        assert!(!tabs.is_current_run("/w", id, "exec-1"), "the run ended");
+        assert_eq!(
+            tabs.begin_run("/w", id, "exec-2"),
+            Some("s1".to_owned()),
+            "a rerun replaces the exited terminal"
+        );
+        tabs.run_failed("/w", id, "exec-2");
+        assert_eq!(tabs.tab("/w", id).expect("tab").lifecycle, Lifecycle::Ended);
+        assert_eq!(tabs.action_run("/w", "dev"), None);
+
+        // The server joined a run another client had started.
+        tabs.begin_run("/w", id, "exec-3");
+        assert!(tabs.action_started("/w", id, "exec-3", "exec-x", "sx"));
+        assert_eq!(
+            tabs.action_run("/w", "dev").map(|run| run.execution),
+            Some("exec-x".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_run_started_elsewhere_joins_its_action_tab() {
+        let mut tabs = TerminalTabs::new();
+        let adopted = tabs.adopt(
+            "/w",
+            &[
+                listed_run("other", "dev", "exec-9", true),
+                listed_run("old", "test", "exec-3", false),
+            ],
+        );
+        assert_eq!(adopted, vec!["other".to_owned()], "an exited run stays out");
+        let run = tabs.action_run("/w", "dev").expect("adopted run");
+        assert_eq!(run.execution, "exec-9");
+        tabs.name_action("/w", "dev", "Dev");
+        assert_eq!(tabs.tab("/w", run.tab).expect("tab").label, "Dev");
+
+        // The run vanished from an authoritative list.
+        tabs.adopt("/w", &[]);
+        assert_eq!(tabs.action_run("/w", "dev"), None);
+        let id = run.tab;
+        assert_eq!(tabs.tab("/w", id).expect("tab").lifecycle, Lifecycle::Ended);
+
+        // A starting run keeps its tab; another client's run does not take it.
+        tabs.begin_run("/w", id, "exec-10");
+        assert!(
+            tabs.adopt("/w", &[listed_run("race", "dev", "exec-11", true)])
+                .is_empty()
+        );
+        assert!(tabs.is_current_run("/w", id, "exec-10"));
     }
 
     #[test]

@@ -156,6 +156,8 @@ pub(crate) struct Panels {
     files: HashMap<ViewKey, (Entity<FilesView>, Rc<Cell<bool>>)>,
     git: HashMap<ViewKey, Entity<GitView>>,
     diff: HashMap<ViewKey, Entity<DiffView>>,
+    /// A file a link asked for, opened once its directory's view exists.
+    pending_file: Option<(ViewKey, String)>,
 }
 
 impl Workspace {
@@ -256,6 +258,19 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Opens `path` in the Files surface of the panel's directory
+    /// (`openContextFile`). A file outside it opens read-only.
+    pub(crate) fn open_context_file(&mut self, path: String, cx: &mut Context<Self>) -> bool {
+        let Some(scope) = self.panel_scope(cx) else {
+            return false;
+        };
+        self.terminal_open = false;
+        self.panels.open = Some(PanelSurface::Files);
+        self.panels.pending_file = Some(((scope.runtime, scope.directory), path));
+        cx.notify();
+        true
+    }
+
     /// The directory the panel works in: the selected session's, else the
     /// new-session draft's project, else the active project, as the web's
     /// effective directory falls back.
@@ -307,18 +322,28 @@ impl Workspace {
         }
         let body = match (scope, key) {
             (Some(scope), Some(key)) => match surface {
-                PanelSurface::Files => self
-                    .panels
-                    .files
-                    .entry(key)
-                    .or_insert_with(|| {
-                        let shown = Rc::new(Cell::new(true));
-                        let flag = shown.clone();
-                        (cx.new(|cx| FilesView::new(scope, flag, window, cx)), shown)
-                    })
-                    .0
-                    .clone()
-                    .into_any_element(),
+                PanelSurface::Files => {
+                    let pending = self
+                        .panels
+                        .pending_file
+                        .take_if(|(target, _)| *target == key)
+                        .map(|(_, path)| path);
+                    let view = self
+                        .panels
+                        .files
+                        .entry(key)
+                        .or_insert_with(|| {
+                            let shown = Rc::new(Cell::new(true));
+                            let flag = shown.clone();
+                            (cx.new(|cx| FilesView::new(scope, flag, window, cx)), shown)
+                        })
+                        .0
+                        .clone();
+                    if let Some(path) = pending {
+                        view.update(cx, |view, cx| view.open_later(path, cx));
+                    }
+                    view.into_any_element()
+                }
                 PanelSurface::Git => self
                     .panels
                     .git
@@ -691,6 +716,20 @@ impl FilesView {
                 if let Some(ticket) = view.tree.request(&root, ListingCause::Reveal) {
                     view.list(ticket, cx);
                 }
+                // The tree as it was left, across restarts (`useFilesViewTabsStore`).
+                let remembered = cx
+                    .try_global::<crate::ui_memory::UiMemory>()
+                    .and_then(|memory| memory.tree(view.scope.runtime.as_str(), &root))
+                    .cloned();
+                if let Some(remembered) = remembered {
+                    for ticket in view.tree.restore(&remembered.expanded) {
+                        view.list(ticket, cx);
+                    }
+                    if view.open_next.is_none() {
+                        view.open_next = remembered.selected;
+                    }
+                    cx.notify();
+                }
             });
         });
         view
@@ -739,6 +778,25 @@ impl FilesView {
             self.list(ticket, cx);
         }
         self.tree.select(Some(path.to_owned()));
+        self.remember_tree(cx);
+        cx.notify();
+    }
+
+    /// Keeps the expanded folders and the open file for the next start.
+    pub(crate) fn remember_tree(&self, cx: &mut Context<Self>) {
+        let selected = self.open.as_ref().map(|open| open.file.path().to_owned());
+        crate::ui_memory::remember_tree(
+            self.scope.runtime.as_str(),
+            self.tree.root(),
+            self.tree.expanded_paths(),
+            selected,
+            cx,
+        );
+    }
+
+    /// Opens `path` on the next frame, as a link from the transcript asks.
+    pub(crate) fn open_later(&mut self, path: String, cx: &mut Context<Self>) {
+        self.open_next = Some(path);
         cx.notify();
     }
 
@@ -948,6 +1006,9 @@ impl FilesView {
         });
         self.polling = false;
         self.tree.select(Some(path.to_owned()));
+        if !outside {
+            self.remember_tree(cx);
+        }
         self.load_open_file(window, cx);
         cx.notify();
     }

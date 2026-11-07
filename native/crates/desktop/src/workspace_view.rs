@@ -161,6 +161,7 @@ impl Render for Workspace {
         self.sync_shortcut_bindings(cx);
         self.ensure_provider_logos(cx);
         self.ensure_project_readouts(cx);
+        self.ensure_project_action_runs(cx);
         self.ensure_space_queue(cx);
         self.ensure_project_starters(cx);
         self.ensure_goal_reads(window, cx);
@@ -447,6 +448,7 @@ impl Workspace {
                             .flex_row_from(direction)
                             .items_center()
                             .gap(px(8.0))
+                            .children(self.render_project_action(palette, direction, cx))
                             .child(
                                 IconButton::new(
                                     "mini-chat",

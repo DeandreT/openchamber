@@ -13,9 +13,11 @@ use std::collections::HashMap;
 
 use crate::request::RequestBuilder;
 use openchamber_native_core::git_changes::{
-    ChangesRead, FileStatus, GitChanges, LineStat, NetworkAction, NetworkOperation, NetworkRequest,
-    OperationError, OperationState, RemoteEndpoint, RemoteGrant, RepositoryBinding, TransportMode,
+    ChangesRead, FileStatus, GitChanges, Integration, LineStat, MergeState, NetworkAction,
+    NetworkOperation, NetworkRequest, OperationError, OperationState, RebaseState, RemoteEndpoint,
+    RemoteGrant, RepositoryBinding, TransportMode,
 };
+use openchamber_native_core::git_identity::{Identity, IdentityTransport};
 use reqwest::{Method, Url};
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -84,6 +86,25 @@ pub struct CommitCreated {
     pub empty: bool,
 }
 
+/// How a merge, rebase or their continuation ended.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IntegrationOutcome {
+    /// The operation stopped on conflicts in these paths.
+    pub conflict: bool,
+    pub conflict_files: Vec<String>,
+}
+
+/// What the conflict dialog shows and hands to a session
+/// (`GET /api/git/conflict-details`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ConflictDetails {
+    pub operation: Option<Integration>,
+    pub head_info: String,
+    pub status_porcelain: String,
+    pub unmerged_files: Vec<String>,
+    pub diff: String,
+}
+
 /// The repository's branches.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Branches {
@@ -109,8 +130,64 @@ struct StatusBody {
     #[serde(default)]
     files: Vec<FileBody>,
     diff_stats: Option<DiffStatsBody>,
-    merge_in_progress: Option<Value>,
-    rebase_in_progress: Option<Value>,
+    merge_in_progress: Option<MergeBody>,
+    rebase_in_progress: Option<RebaseBody>,
+}
+
+#[derive(Deserialize)]
+struct MergeBody {
+    #[serde(default)]
+    head: String,
+    message: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RebaseBody {
+    head_name: Option<String>,
+    onto: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IntegrationBody {
+    #[serde(default)]
+    conflict: bool,
+    #[serde(default)]
+    conflict_files: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ConflictBody {
+    operation: Option<String>,
+    #[serde(default)]
+    head_info: String,
+    #[serde(default)]
+    status_porcelain: String,
+    #[serde(default)]
+    unmerged_files: Vec<String>,
+    #[serde(default)]
+    diff: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IdentityBody {
+    id: String,
+    name: String,
+    user_name: String,
+    user_email: String,
+    account: Option<Value>,
+    transport: Option<String>,
+    ssh_credential_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AuthorBody {
+    user_name: Option<String>,
+    user_email: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -425,6 +502,110 @@ impl ServerClient {
         expect_success(request).await
     }
 
+    /// The stored commit identities (`GET /api/git/identities`).
+    pub async fn git_identities(&self) -> Result<Vec<Identity>, GitError> {
+        let request = self.authorized(Method::GET, self.git_url("api/git/identities", None));
+        let bodies: Vec<IdentityBody> = git_json(request).await?;
+        Ok(bodies.into_iter().map(identity).collect())
+    }
+
+    /// The machine's own author, as the System identity offers it.
+    pub async fn system_identity(&self) -> Result<Identity, GitError> {
+        let request = self.authorized(Method::GET, self.git_url("api/git/global-identity", None));
+        let author: Option<AuthorBody> = git_json(request).await?;
+        let author = author.unwrap_or(AuthorBody {
+            user_name: None,
+            user_email: None,
+        });
+        Ok(Identity::system(author.user_name, author.user_email))
+    }
+
+    /// The author the repository commits as: its own, else the machine's.
+    pub async fn current_author(
+        &self,
+        directory: &str,
+    ) -> Result<(Option<String>, Option<String>), GitError> {
+        let author: Option<AuthorBody> =
+            git_json(self.git_request(Method::GET, "api/git/current-identity", directory)).await?;
+        Ok(author.map_or((None, None), |author| (author.user_name, author.user_email)))
+    }
+
+    /// Writes the identity's author into the repository; the System
+    /// identity removes the repository's own author.
+    pub async fn set_identity(&self, directory: &str, profile_id: &str) -> Result<(), GitError> {
+        let request = self
+            .git_request(Method::POST, "api/git/set-identity", directory)
+            .json(&json!({ "profileId": profile_id }));
+        expect_success(request).await
+    }
+
+    /// Merges `branch` into the current branch, or rebases the current
+    /// branch onto `branch`. A conflict is an outcome, never an error.
+    pub async fn integrate(
+        &self,
+        directory: &str,
+        integration: Integration,
+        branch: &str,
+    ) -> Result<IntegrationOutcome, GitError> {
+        let request = match integration {
+            Integration::Merge => self
+                .git_request(Method::POST, "api/git/merge", directory)
+                .json(&json!({ "branch": branch })),
+            Integration::Rebase => self
+                .git_request(Method::POST, "api/git/rebase", directory)
+                .json(&json!({ "onto": branch })),
+        };
+        let body: IntegrationBody = git_json(request).await?;
+        Ok(outcome(body))
+    }
+
+    /// Continues the merge or rebase in progress once its conflicts are
+    /// resolved; a further conflict is its outcome.
+    pub async fn continue_integration(
+        &self,
+        directory: &str,
+        integration: Integration,
+    ) -> Result<IntegrationOutcome, GitError> {
+        let route = match integration {
+            Integration::Merge => "api/git/merge/continue",
+            Integration::Rebase => "api/git/rebase/continue",
+        };
+        let body: IntegrationBody =
+            git_json(self.git_request(Method::POST, route, directory)).await?;
+        Ok(outcome(body))
+    }
+
+    /// Abandons the merge or rebase in progress.
+    pub async fn abort_integration(
+        &self,
+        directory: &str,
+        integration: Integration,
+    ) -> Result<(), GitError> {
+        let route = match integration {
+            Integration::Merge => "api/git/merge/abort",
+            Integration::Rebase => "api/git/rebase/abort",
+        };
+        let _: Value = git_json(self.git_request(Method::POST, route, directory)).await?;
+        Ok(())
+    }
+
+    /// The conflicted paths, the in-progress head and the current diff.
+    pub async fn conflict_details(&self, directory: &str) -> Result<ConflictDetails, GitError> {
+        let body: ConflictBody =
+            git_json(self.git_request(Method::GET, "api/git/conflict-details", directory)).await?;
+        Ok(ConflictDetails {
+            operation: match body.operation.as_deref() {
+                Some("merge") => Some(Integration::Merge),
+                Some("rebase") => Some(Integration::Rebase),
+                _ => None,
+            },
+            head_info: body.head_info,
+            status_porcelain: body.status_porcelain,
+            unmerged_files: body.unmerged_files,
+            diff: body.diff,
+        })
+    }
+
     /// The repository's transport binding; an unconfigured repository holds
     /// a ready System grant for each remote, as `effectiveRepositoryBinding`
     /// derives it.
@@ -500,6 +681,36 @@ async fn expect_success(request: RequestBuilder) -> Result<(), GitError> {
     }
 }
 
+fn identity(body: IdentityBody) -> Identity {
+    Identity {
+        id: body.id,
+        name: body.name,
+        user_name: body.user_name,
+        user_email: body.user_email,
+        transport: match body.transport.as_deref() {
+            Some("account") => IdentityTransport::Account,
+            Some("ssh") => IdentityTransport::Ssh,
+            Some("anonymous") => IdentityTransport::Anonymous,
+            _ => IdentityTransport::System,
+        },
+        has_account: body
+            .account
+            .as_ref()
+            .is_some_and(|account| !account.is_null()),
+        has_ssh_key: body
+            .ssh_credential_id
+            .as_deref()
+            .is_some_and(|key| !key.trim().is_empty()),
+    }
+}
+
+fn outcome(body: IntegrationBody) -> IntegrationOutcome {
+    IntegrationOutcome {
+        conflict: body.conflict,
+        conflict_files: body.conflict_files,
+    }
+}
+
 fn letter(value: &str) -> char {
     value.chars().next().unwrap_or(' ')
 }
@@ -523,7 +734,6 @@ fn changes_read(body: StatusBody) -> ChangesRead {
             .collect()
     };
     let diff_stats = body.diff_stats.unwrap_or_default();
-    let present = |value: &Option<Value>| value.as_ref().is_some_and(|value| !value.is_null());
     ChangesRead::Repository(GitChanges {
         branch: body
             .current
@@ -544,8 +754,14 @@ fn changes_read(body: StatusBody) -> ChangesRead {
             .collect(),
         staged_stats: stats(diff_stats.staged),
         working_stats: stats(diff_stats.working),
-        merge_in_progress: present(&body.merge_in_progress),
-        rebase_in_progress: present(&body.rebase_in_progress),
+        merge: body.merge_in_progress.map(|merge| MergeState {
+            head: merge.head,
+            message: merge.message.filter(|message| !message.is_empty()),
+        }),
+        rebase: body.rebase_in_progress.map(|rebase| RebaseState {
+            head_name: rebase.head_name.filter(|name| !name.is_empty()),
+            onto: rebase.onto.filter(|onto| !onto.is_empty()),
+        }),
     })
 }
 
@@ -709,8 +925,15 @@ mod tests {
             ('M', 'M')
         );
         assert_eq!(changes.staged_stats["a.txt"].insertions, 2);
-        assert!(!changes.merge_in_progress);
-        assert!(changes.rebase_in_progress);
+        assert_eq!(changes.merge, None);
+        assert_eq!(changes.in_progress(), Some(Integration::Rebase));
+        assert_eq!(
+            changes
+                .rebase
+                .as_ref()
+                .and_then(|rebase| rebase.head_name.as_deref()),
+            Some("x")
+        );
         let none: StatusBody =
             serde_json::from_str(r#"{"isGitRepository":false}"#).expect("test JSON is valid");
         assert_eq!(changes_read(none), ChangesRead::NotRepository);
@@ -772,5 +995,53 @@ mod tests {
         assert_eq!(body["operation"], "push");
         assert_eq!(body["sourceRef"], "refs/heads/main");
         assert!(body.get("fetchScope").is_none());
+    }
+
+    #[test]
+    fn integration_and_conflict_answers_keep_their_files() {
+        let body: IntegrationBody =
+            serde_json::from_str(r#"{"success":false,"conflict":true,"conflictFiles":["a.txt"]}"#)
+                .expect("test JSON is valid");
+        assert_eq!(
+            outcome(body),
+            IntegrationOutcome {
+                conflict: true,
+                conflict_files: vec!["a.txt".to_owned()]
+            }
+        );
+        let clean: IntegrationBody =
+            serde_json::from_str(r#"{"success":true,"conflict":false}"#).expect("valid");
+        assert!(!outcome(clean).conflict);
+        let status: StatusBody = serde_json::from_str(
+            r#"{"current":"main","files":[],"mergeInProgress":{"head":"abc1234","message":"Merge branch 'x'"},"rebaseInProgress":null}"#,
+        )
+        .expect("valid");
+        let ChangesRead::Repository(changes) = changes_read(status) else {
+            panic!("a repository");
+        };
+        assert_eq!(changes.in_progress(), Some(Integration::Merge));
+        assert_eq!(
+            changes.merge.and_then(|merge| merge.message),
+            Some("Merge branch 'x'".to_owned())
+        );
+    }
+
+    #[test]
+    fn identities_keep_their_transport_and_account() {
+        let bodies: Vec<IdentityBody> = serde_json::from_str(
+            r#"[{"id":"w","name":"Work","userName":"Ada","userEmail":"a@w","transport":"account","account":{"provider":"github","instance":"github.com","accountId":"1"},"color":"info"},
+               {"id":"k","name":"Key","userName":"Ada","userEmail":"a@k","transport":"ssh","sshCredentialId":"key_1"},
+               {"id":"o","name":"Old","userName":"Ada","userEmail":"a@o"}]"#,
+        )
+        .expect("test JSON is valid");
+        let identities: Vec<Identity> = bodies.into_iter().map(identity).collect();
+        assert_eq!(identities[0].transport, IdentityTransport::Account);
+        assert!(identities[0].has_account && identities[0].is_complete());
+        assert!(identities[1].has_ssh_key);
+        assert_eq!(
+            identities[2].transport,
+            IdentityTransport::System,
+            "no transport is System"
+        );
     }
 }

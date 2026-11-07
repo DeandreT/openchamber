@@ -113,8 +113,29 @@ pub struct GitChanges {
     pub files: Vec<FileStatus>,
     pub staged_stats: HashMap<String, LineStat>,
     pub working_stats: HashMap<String, LineStat>,
-    pub merge_in_progress: bool,
-    pub rebase_in_progress: bool,
+    pub merge: Option<MergeState>,
+    pub rebase: Option<RebaseState>,
+}
+
+/// A merge the repository is in the middle of (`mergeInProgress`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MergeState {
+    pub head: String,
+    pub message: Option<String>,
+}
+
+/// A rebase the repository is in the middle of (`rebaseInProgress`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RebaseState {
+    pub head_name: Option<String>,
+    pub onto: Option<String>,
+}
+
+/// An integration that can stop on conflicts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Integration {
+    Merge,
+    Rebase,
 }
 
 /// What a status read found.
@@ -153,6 +174,34 @@ impl GitChanges {
 
     pub fn is_clean(&self) -> bool {
         self.files.is_empty()
+    }
+
+    /// The operation in progress, as the banner shows it: a merge with a
+    /// head, else a rebase naming its branch or base.
+    pub fn in_progress(&self) -> Option<Integration> {
+        if self
+            .merge
+            .as_ref()
+            .is_some_and(|merge| !merge.head.is_empty())
+        {
+            return Some(Integration::Merge);
+        }
+        self.rebase
+            .as_ref()
+            .filter(|rebase| rebase.head_name.is_some() || rebase.onto.is_some())
+            .map(|_| Integration::Rebase)
+    }
+
+    /// Paths both sides changed, in path order (`isConflictedStatusFile`).
+    pub fn conflicted(&self) -> Vec<String> {
+        let mut paths: Vec<String> = self
+            .files
+            .iter()
+            .filter(|file| file.is_conflicted())
+            .map(|file| file.path.clone())
+            .collect();
+        paths.sort();
+        paths
     }
 
     fn rows(&self, scope: ChangeScope) -> Vec<ChangeRow> {
@@ -831,5 +880,36 @@ mod tests {
         );
         assert!(OperationState::parse("outcome-unknown").is_some_and(|state| !state.is_open()));
         assert_eq!(OperationState::parse("later"), None);
+    }
+
+    #[test]
+    fn a_merge_with_a_head_or_a_rebase_with_a_ref_is_in_progress() {
+        let file = |path: &str, index: char, working: char| FileStatus {
+            path: path.to_owned(),
+            index,
+            working,
+        };
+        let mut changes = GitChanges {
+            files: vec![
+                file("b", 'U', 'U'),
+                file("a", 'A', 'A'),
+                file("c", 'M', ' '),
+            ],
+            ..GitChanges::default()
+        };
+        assert_eq!(changes.in_progress(), None);
+        assert_eq!(changes.conflicted(), vec!["a".to_owned(), "b".to_owned()]);
+        changes.merge = Some(MergeState::default());
+        assert_eq!(changes.in_progress(), None, "a merge without a head");
+        changes.rebase = Some(RebaseState {
+            head_name: None,
+            onto: Some("abc".to_owned()),
+        });
+        assert_eq!(changes.in_progress(), Some(Integration::Rebase));
+        changes.merge = Some(MergeState {
+            head: "def".to_owned(),
+            message: None,
+        });
+        assert_eq!(changes.in_progress(), Some(Integration::Merge));
     }
 }

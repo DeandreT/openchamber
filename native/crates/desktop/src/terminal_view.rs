@@ -19,11 +19,14 @@ use gpui_kit::{
     prelude::FluentBuilder, px,
 };
 use openchamber_native_core::ids::RuntimeId;
-use openchamber_native_core::terminal_tabs::{Lifecycle, ListedTerminal, TabId, TerminalTabs};
+use openchamber_native_core::terminal_tabs::{
+    ActionRun, Lifecycle, ListedTerminal, TabId, TerminalTabs,
+};
 use openchamber_native_transport::client::ServerClient;
 use openchamber_native_transport::terminal::{
-    CreateTerminal, TerminalApi, TerminalCommands, TerminalEvent, TerminalPurpose,
-    TerminalSettings, TerminalSocket, TerminalStatus, ThemeMode,
+    ActionCommand, CreateTerminal, CreatedTerminal, TerminalApi, TerminalCommands, TerminalEvent,
+    TerminalPurpose, TerminalRequestError, TerminalSettings, TerminalSocket, TerminalStatus,
+    ThemeMode,
 };
 
 use crate::activation::on_activate;
@@ -42,6 +45,9 @@ const TAB_HEIGHT: f32 = 28.0;
 const KEEPALIVE: Duration = Duration::from_secs(10 * 60);
 /// The size a terminal starts with before its grid is measured.
 const PROVISIONAL: (u16, u16) = (80, 24);
+/// How long a stopping run has to exit after Ctrl+C before it is killed
+/// (`stopProjectActionTerminalSession`).
+const STOP_GRACE: Duration = Duration::from_secs(1);
 
 /// The key contexts above a focused terminal, outermost first: Kit's window
 /// root, the workspace and the surface.
@@ -149,6 +155,11 @@ pub(crate) struct TerminalPanel {
     menu: Option<Menu>,
     focus: FocusHandle,
     pending_focus: Option<(String, gpui_kit::AnyWindowHandle)>,
+    /// Directories whose action runs the header shows; their terminals are
+    /// listed again when the server says its terminals changed.
+    observed: BTreeSet<String>,
+    /// Each action's glyph, for its tab.
+    action_glyphs: HashMap<String, &'static str>,
     _keepalive: Option<Task<()>>,
     _settings: Option<Task<()>>,
     _appearance: [Subscription; 2],
@@ -231,6 +242,8 @@ impl TerminalPanel {
             menu: None,
             focus: cx.focus_handle(),
             pending_focus: None,
+            observed: BTreeSet::new(),
+            action_glyphs: HashMap::new(),
             _keepalive: None,
             _settings: None,
             _appearance: [
@@ -405,6 +418,13 @@ impl TerminalPanel {
                                 running: terminal.status == TerminalStatus::Running,
                                 is_terminal: terminal.interactive
                                     && terminal.purpose == TerminalPurpose::Terminal,
+                                action: match terminal.purpose {
+                                    TerminalPurpose::ProjectAction {
+                                        action_id,
+                                        execution_id,
+                                    } => Some((action_id, execution_id)),
+                                    TerminalPurpose::Terminal => None,
+                                },
                                 session: terminal.session_id,
                             })
                             .collect();
@@ -487,30 +507,7 @@ impl TerminalPanel {
         let id = self.tabs.open(directory);
         let (cols, rows) = self.provisional_size(cx);
         self.new_surface(id, cols, rows, cx);
-        let palette = cx.global::<Palette>();
-        let hex = |color: gpui_kit::Hsla| {
-            let color = color.to_rgb();
-            format!(
-                "#{:02x}{:02x}{:02x}",
-                (color.r * 255.0).round() as u8,
-                (color.g * 255.0).round() as u8,
-                (color.b * 255.0).round() as u8
-            )
-        };
-        let shell = self.settings.shell.clone();
-        let request = CreateTerminal {
-            cwd: directory.to_owned(),
-            cols,
-            rows,
-            theme_mode: match palette.appearance {
-                Appearance::Light => ThemeMode::Light,
-                Appearance::Dark => ThemeMode::Dark,
-            },
-            background: Some(hex(palette.background)),
-            foreground: Some(hex(palette.syntax_foreground)),
-            login_shell: self.settings.login_shells.contains(&shell),
-            shell,
-        };
+        let request = self.create_request(directory, cols, rows, cx);
         let Some(create) = self.run(async move { api.create(&request).await }) else {
             return;
         };
@@ -523,16 +520,40 @@ impl TerminalPanel {
         cx.notify();
     }
 
+    /// What a new terminal starts with: the size, the shell and the colors
+    /// its color queries are answered with.
+    fn create_request(&self, directory: &str, cols: u16, rows: u16, cx: &App) -> CreateTerminal {
+        let palette = cx.global::<Palette>();
+        let hex = |color: gpui_kit::Hsla| {
+            let color = color.to_rgb();
+            format!(
+                "#{:02x}{:02x}{:02x}",
+                (color.r * 255.0).round() as u8,
+                (color.g * 255.0).round() as u8,
+                (color.b * 255.0).round() as u8
+            )
+        };
+        let shell = self.settings.shell.clone();
+        CreateTerminal {
+            cwd: directory.to_owned(),
+            cols,
+            rows,
+            theme_mode: match palette.appearance {
+                Appearance::Light => ThemeMode::Light,
+                Appearance::Dark => ThemeMode::Dark,
+            },
+            background: Some(hex(palette.background)),
+            foreground: Some(hex(palette.syntax_foreground)),
+            login_shell: self.settings.login_shells.contains(&shell),
+            shell,
+        }
+    }
+
     fn created(
         &mut self,
         directory: &str,
         id: TabId,
-        outcome: Option<
-            Result<
-                openchamber_native_transport::terminal::CreatedTerminal,
-                openchamber_native_transport::terminal::TerminalRequestError,
-            >,
-        >,
+        outcome: Option<Result<CreatedTerminal, TerminalRequestError>>,
         cx: &mut Context<Self>,
     ) {
         let created = match outcome {
@@ -669,6 +690,222 @@ impl TerminalPanel {
         cx.notify();
     }
 
+    /// The live run of `action` in `directory`.
+    pub(crate) fn action_run(&self, directory: &str, action: &str) -> Option<ActionRun> {
+        self.tabs.action_run(directory, action)
+    }
+
+    /// Keeps `directory`'s action runs current: its terminals are listed now
+    /// and again whenever the server says its terminals changed, so a run
+    /// another client started shows as running.
+    pub(crate) fn observe(&mut self, directory: &str, cx: &mut Context<Self>) {
+        if self.server.is_none() || !self.observed.insert(directory.to_owned()) {
+            return;
+        }
+        self.adopt(directory, false, cx);
+    }
+
+    /// The server's terminals changed (`openchamber:terminal-sessions-changed`).
+    pub(crate) fn refresh_observed(&mut self, cx: &mut Context<Self>) {
+        let directories: BTreeSet<String> = self
+            .observed
+            .iter()
+            .chain(self.directory.iter())
+            .cloned()
+            .collect();
+        for directory in directories {
+            self.adopt(&directory, false, cx);
+        }
+    }
+
+    /// Names the action tabs of `directory` after the actions they run.
+    pub(crate) fn name_actions<'a>(
+        &mut self,
+        directory: &str,
+        actions: impl IntoIterator<Item = (&'a str, &'a str, &'static str)>,
+    ) {
+        for (id, name, glyph) in actions {
+            self.tabs.name_action(directory, id, name);
+            self.action_glyphs.insert(id.to_owned(), glyph);
+        }
+    }
+
+    /// Runs a project action's command in its own tab of `directory`
+    /// (`runAction`). A run already live is left alone; a run another client
+    /// started is joined, since the server answers a duplicate create with it.
+    pub(crate) fn run_action(
+        &mut self,
+        directory: &str,
+        action: ActionCommand,
+        label: &str,
+        glyph: &'static str,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(api) = self.server.as_ref().map(|server| server.api.clone()) else {
+            return;
+        };
+        if self.tabs.action_run(directory, &action.action_id).is_some() {
+            return;
+        }
+        self.action_glyphs.insert(action.action_id.clone(), glyph);
+        let id = self.tabs.open_action(directory, &action.action_id, label);
+        if let Some(previous) = self.tabs.begin_run(directory, id, &action.execution_id)
+            && let Some(server) = &self.server
+        {
+            server.commands.detach(&previous);
+        }
+        self.notices.remove(&id);
+        // Each run starts on a clean screen.
+        let (cols, rows) = self.provisional_size(cx);
+        if let Some((surface, _)) = self.surfaces.remove(&id) {
+            surface.update(cx, |surface, _| surface.stop_resizing());
+        }
+        self.new_surface(id, cols, rows, cx);
+        let request = self.create_request(directory, cols, rows, cx);
+        let command = action.clone();
+        let Some(create) = self.run(async move { api.create_command(&request, &command).await })
+        else {
+            return;
+        };
+        let directory = directory.to_owned();
+        cx.spawn(async move |this, cx| {
+            let outcome = create.await;
+            let _ = this.update(cx, |this, cx| {
+                this.action_created(&directory, id, &action, outcome, cx)
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
+    fn action_created(
+        &mut self,
+        directory: &str,
+        id: TabId,
+        action: &ActionCommand,
+        outcome: Option<Result<CreatedTerminal, TerminalRequestError>>,
+        cx: &mut Context<Self>,
+    ) {
+        let requested = action.execution_id.as_str();
+        let created = match outcome {
+            Some(Ok(created)) => created,
+            Some(Err(error)) => {
+                tracing::debug!(%error, "the project action did not start");
+                self.tabs.run_failed(directory, id, requested);
+                self.notices.insert(
+                    id,
+                    Notice::StartFailed {
+                        cwd_missing: error.is_cwd_missing(),
+                    },
+                );
+                cx.notify();
+                return;
+            }
+            None => return,
+        };
+        // A deduplicated answer is the run another client started; only a
+        // terminal this request created is closed when it is refused.
+        let own = created.session_id == requested;
+        let joined = match &created.purpose {
+            Some(TerminalPurpose::ProjectAction {
+                action_id,
+                execution_id,
+            }) if created.command_mode && *action_id == action.action_id => execution_id.clone(),
+            _ => {
+                if own {
+                    self.close_server_terminal(&created.session_id, directory);
+                }
+                self.tabs.run_failed(directory, id, requested);
+                self.notices
+                    .insert(id, Notice::StartFailed { cwd_missing: false });
+                cx.notify();
+                return;
+            }
+        };
+        if !self
+            .tabs
+            .action_started(directory, id, requested, &joined, &created.session_id)
+        {
+            // Stopped or rerun while it started; nobody shows this run.
+            if own {
+                self.close_server_terminal(&created.session_id, directory);
+            }
+            return;
+        }
+        let Some(server) = &self.server else {
+            return;
+        };
+        let commands = server.commands.clone();
+        commands.attach(&created.session_id);
+        if let Some((surface, _)) = self.surfaces.get(&id) {
+            let session = created.session_id.clone();
+            surface.update(cx, |surface, cx| {
+                surface.set_writer(commands, session);
+                surface.set_pty_size((created.cols, created.rows), cx);
+            });
+        }
+        cx.notify();
+    }
+
+    /// Stops a live run (`stopProjectActionTerminalSession`): Ctrl+C, then,
+    /// when it has not exited within a second, a kill. A failed kill shows
+    /// the run as running again.
+    pub(crate) fn stop_action(&mut self, directory: &str, action: &str, cx: &mut Context<Self>) {
+        let Some(run) = self.tabs.action_run(directory, action) else {
+            return;
+        };
+        if run.stopping {
+            return;
+        }
+        let Some(server) = &self.server else {
+            return;
+        };
+        self.tabs.set_stopping(&run.session, true);
+        server.commands.write(&run.session, "\u{3}".to_owned());
+        let api = server.api.clone();
+        let directory = directory.to_owned();
+        let action = action.to_owned();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(STOP_GRACE).await;
+            let Ok(kill) = this.update(cx, |this, _| {
+                // Exited, ended or rerun meanwhile: nothing left to stop.
+                let still = this
+                    .tabs
+                    .action_run(&directory, &action)
+                    .is_some_and(|current| current.execution == run.execution);
+                still.then(|| {
+                    let session = run.session.clone();
+                    let directory = directory.clone();
+                    this.run(async move { api.force_kill(&session, &directory).await })
+                })
+            }) else {
+                return;
+            };
+            let Some(Some(kill)) = kill else {
+                return;
+            };
+            let outcome = kill.await;
+            let _ = this.update(cx, |this, cx| {
+                if !this
+                    .tabs
+                    .is_current_run(&directory, run.tab, &run.execution)
+                {
+                    return;
+                }
+                match outcome {
+                    Some(Ok(())) => this.exited(&run.session, None, None, false, cx),
+                    _ => {
+                        tracing::debug!("the project action could not be stopped");
+                        this.tabs.set_stopping(&run.session, false);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+        cx.notify();
+    }
+
     fn select_tab(&mut self, id: TabId, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(directory) = self.directory.clone() {
             self.tabs.select(&directory, id);
@@ -707,9 +944,9 @@ impl TerminalPanel {
                     // Terminals started elsewhere while away are adopted again.
                     self.adopted.clear();
                     if let Some(directory) = self.directory.clone() {
-                        self.adopted.insert(directory.clone());
-                        self.adopt(&directory, false, cx);
+                        self.adopted.insert(directory);
                     }
+                    self.refresh_observed(cx);
                 }
             }
             TerminalEvent::Reconnecting { .. } => self.reconnecting = true,
@@ -925,7 +1162,13 @@ impl TerminalPanel {
                 .when(!selected, |this| {
                     this.hover(|style| style.bg(palette.hover.opacity(0.5)))
                 })
-                .child(glyph("terminal-box", 14.0, palette.muted_foreground))
+                .child(glyph(
+                    tab.action()
+                        .map(|action| self.action_glyphs.get(action).copied().unwrap_or("play"))
+                        .unwrap_or("terminal-box"),
+                    14.0,
+                    palette.muted_foreground,
+                ))
                 .child(div().whitespace_nowrap().child(label))
                 .child(close);
             on_activate(row, cx, move |this: &mut Self, window, cx| {
@@ -1153,15 +1396,42 @@ impl crate::workspace::Workspace {
     /// The directory terminals open in: the selected session's, else the
     /// project a new-session draft targets.
     pub(crate) fn terminal_directory(&self) -> Option<String> {
-        if let Some(record) = self.selected.as_ref().and_then(|id| self.sessions.get(id)) {
-            return record.directory.clone();
+        let host = if let Some(record) = self.selected.as_ref().and_then(|id| self.sessions.get(id))
+        {
+            record.directory.clone()
+        } else {
+            self.draft_projects.get(&self.runtime).cloned()
+        };
+        // A project action that runs in the project's checkout shows its tab
+        // there while the panel was opened for it (`targetDirectory`).
+        match (&self.terminal_target, &host) {
+            (Some((owner, target)), Some(host)) if owner == host => Some(target.clone()),
+            _ => host,
         }
-        self.draft_projects.get(&self.runtime).cloned()
+    }
+
+    /// Opens the terminal panel on `directory`'s active tab, as a project
+    /// action's run reveals its output (`revealProjectActionTerminal`).
+    pub(crate) fn reveal_terminal(
+        &mut self,
+        host: Option<String>,
+        directory: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.terminal_target = host
+            .filter(|host| host != directory)
+            .map(|host| (host, directory.to_owned()));
+        self.terminal_open = true;
+        self.panels.open = None;
+        self.sync_terminal(false, window, cx);
+        cx.notify();
     }
 
     /// Opens or closes the terminal panel (`toggle_terminal`, Ctrl+J).
     pub(crate) fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.terminal_open = !self.terminal_open;
+        self.terminal_target = None;
         if self.terminal_open {
             // One surface shows in the panel column at a time.
             self.panels.open = None;
@@ -1176,6 +1446,18 @@ impl crate::workspace::Workspace {
     /// before the client authenticated, or for another runtime, is replaced;
     /// dropping it detaches its terminals without stopping them.
     fn sync_terminal(&mut self, focus: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.ensure_terminal_panel(cx);
+        let directory = self.terminal_directory();
+        if let Some(panel) = &self.terminal_panel {
+            panel.update(cx, |panel, cx| {
+                panel.show_directory(directory, focus, window, cx)
+            });
+        }
+    }
+
+    /// The panel for the current runtime and connection, made when missing.
+    /// Project actions run through it while it is hidden too.
+    pub(crate) fn ensure_terminal_panel(&mut self, cx: &mut Context<Self>) {
         self.invalidate_terminal_client(cx);
         let client = self.connection.as_ref().and_then(|connection| {
             connection
@@ -1217,11 +1499,13 @@ impl crate::workspace::Workspace {
                 panel
             }));
         }
-        let directory = self.terminal_directory();
+    }
+
+    /// The server's terminals changed: the panel lists the directories it
+    /// shows and observes again.
+    pub(crate) fn refresh_terminal_sessions(&mut self, cx: &mut Context<Self>) {
         if let Some(panel) = &self.terminal_panel {
-            panel.update(cx, |panel, cx| {
-                panel.show_directory(directory, focus, window, cx)
-            });
+            panel.update(cx, |panel, cx| panel.refresh_observed(cx));
         }
     }
 
@@ -1397,6 +1681,7 @@ mod tests {
                         session: "retained".to_owned(),
                         running: true,
                         is_terminal: true,
+                        action: None,
                     }],
                 );
                 panel.attach_adopted("retained", cx);
@@ -1518,6 +1803,7 @@ mod tests {
                         session: "adopted".to_owned(),
                         running: true,
                         is_terminal: true,
+                        action: None,
                     }],
                 );
                 panel.attach_adopted("adopted", cx);
