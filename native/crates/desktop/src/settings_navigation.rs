@@ -216,6 +216,20 @@ pub(crate) const SEARCH_ITEMS: &[SearchItem] = &[
         keywords: "in work in progress track done sidebar",
     },
     SearchItem {
+        id: "sessions.worktree-archive-on-done",
+        page: Page::Sessions,
+        title: "settings.openchamber.finishedWorktrees.field.archiveOnDone",
+        description: Some("settings.openchamber.finishedWorktrees.info"),
+        keywords: "done finish in work worktree archive cleanup remove",
+    },
+    SearchItem {
+        id: "sessions.merged-worktree-cleanup",
+        page: Page::Sessions,
+        title: "settings.openchamber.mergedWorktreeCleanup.field.enable",
+        description: Some("settings.openchamber.finishedWorktrees.info"),
+        keywords: "pr pull request merged worktree branch archive cleanup remove",
+    },
+    SearchItem {
         id: "shortcuts.keyboard-shortcuts",
         page: Page::Shortcuts,
         title: "settings.openchamber.keyboardShortcuts.title",

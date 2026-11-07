@@ -14,18 +14,7 @@ use crate::client::ServerClient;
 pub(crate) struct Recorded {
     pub method: String,
     pub path: String,
-    pub query: Vec<(String, String)>,
-    pub directory: Option<String>,
     pub body: Value,
-}
-
-impl Recorded {
-    pub fn param(&self, name: &str) -> Option<&str> {
-        self.query
-            .iter()
-            .find(|(key, _)| key == name)
-            .map(|(_, value)| value.as_str())
-    }
 }
 
 pub(crate) type Route = Box<dyn Fn(&Recorded) -> (u16, Value) + Send + Sync>;
@@ -82,8 +71,6 @@ pub(crate) async fn serve(route: Route) -> (ServerClient, Arc<Mutex<Vec<Recorded
             let request = Recorded {
                 method,
                 path: target.path().to_owned(),
-                query: target.query_pairs().into_owned().collect(),
-                directory: header("x-opencode-directory"),
                 body: if length == 0 {
                     Value::Null
                 } else {

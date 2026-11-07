@@ -300,6 +300,8 @@ pub(crate) struct Settings {
     pub session_goal_default_budget: Option<Value>,
     pub prompt_navigator_enabled: Option<Value>,
     pub show_deletion_dialog: Option<Value>,
+    pub worktree_archive_on_done_enabled: Option<Value>,
+    pub merged_worktree_cleanup_enabled: Option<Value>,
     pub permission_default_mode: Option<Value>,
     pub follow_up_behavior: Option<Value>,
     pub queue_mode_enabled: Option<Value>,

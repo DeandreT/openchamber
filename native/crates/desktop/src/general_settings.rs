@@ -39,7 +39,9 @@ pub(crate) const PERMISSION_DEFAULT: usize = 6;
 pub(crate) const SHOW_CHATS: usize = 7;
 pub(crate) const WORK_ENABLED: usize = 8;
 pub(crate) const DELETION_DIALOG: usize = 9;
-const FIELDS: usize = 10;
+pub(crate) const ARCHIVE_ON_DONE: usize = 10;
+pub(crate) const MERGED_CLEANUP: usize = 11;
+const FIELDS: usize = 12;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Choice {
@@ -83,6 +85,9 @@ impl Default for State {
                 Choice::Boolean(true),
                 Choice::Boolean(true),
                 Choice::Boolean(true),
+                // Both finished-worktree switches are off until chosen.
+                Choice::Boolean(false),
+                Choice::Boolean(false),
             ],
             revisions: [0; FIELDS],
             known: [false; FIELDS],
@@ -213,6 +218,8 @@ impl State {
             show_chats: boolean(SHOW_CHATS),
             work_enabled: boolean(WORK_ENABLED),
             show_deletion_dialog: boolean(DELETION_DIALOG),
+            worktree_archive_on_done: boolean(ARCHIVE_ON_DONE),
+            merged_worktree_cleanup: boolean(MERGED_CLEANUP),
         }
     }
 }
@@ -229,6 +236,8 @@ fn fields(settings: &ServerSettings) -> Values {
         settings.show_chats.map(Choice::Boolean),
         settings.work_enabled.map(Choice::Boolean),
         settings.show_deletion_dialog.map(Choice::Boolean),
+        settings.worktree_archive_on_done.map(Choice::Boolean),
+        settings.merged_worktree_cleanup.map(Choice::Boolean),
     ]
 }
 
@@ -266,6 +275,8 @@ impl Write {
             sidebar_show_chats_section: boolean(SHOW_CHATS),
             session_work_enabled: boolean(WORK_ENABLED),
             show_deletion_dialog: boolean(DELETION_DIALOG),
+            worktree_archive_on_done_enabled: boolean(ARCHIVE_ON_DONE),
+            merged_worktree_cleanup_enabled: boolean(MERGED_CLEANUP),
             ..SettingsChanges::default()
         }
     }
@@ -313,6 +324,8 @@ pub(crate) struct GeneralPreferences {
     pub(crate) show_chats: Option<bool>,
     pub(crate) work_enabled: Option<bool>,
     pub(crate) show_deletion_dialog: Option<bool>,
+    pub(crate) worktree_archive_on_done: Option<bool>,
+    pub(crate) merged_worktree_cleanup: Option<bool>,
 }
 
 impl GeneralPreferences {
@@ -347,6 +360,14 @@ impl GeneralPreferences {
         set(
             &mut settings.show_deletion_dialog,
             &self.show_deletion_dialog,
+        );
+        set(
+            &mut settings.worktree_archive_on_done,
+            &self.worktree_archive_on_done,
+        );
+        set(
+            &mut settings.merged_worktree_cleanup,
+            &self.merged_worktree_cleanup,
         );
     }
 }
