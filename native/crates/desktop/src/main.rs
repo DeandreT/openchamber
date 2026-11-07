@@ -83,6 +83,8 @@ mod host_profiles;
 mod host_recovery;
 #[cfg(target_os = "linux")]
 mod html_answer_view;
+#[cfg(target_os = "linux")]
+mod html_preview_view;
 mod html_render_document;
 mod install_id;
 mod journal_worker;
