@@ -134,6 +134,8 @@ pub enum SendStage {
     Prompt,
     /// The command request or its response failed.
     Command,
+    /// The goal the prompt starts could not be saved; nothing was admitted.
+    Goal,
 }
 
 /// Whether the client has evidence that the prompt was admitted.
@@ -723,7 +725,7 @@ fn valid_selection(model: Option<&ModelChoice>, agent: Option<&str>) -> bool {
         })
 }
 
-async fn send_checked(
+pub(crate) async fn send_checked(
     request: RequestBuilder,
     expected: StatusCode,
 ) -> Result<Response, TransportError> {

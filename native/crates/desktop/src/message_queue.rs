@@ -258,7 +258,7 @@ impl Workspace {
         {
             return;
         }
-        if self.run_branch_command(window, cx) {
+        if self.run_review_command(window, cx) || self.run_branch_command(window, cx) {
             return;
         }
         if self.btw_takes_composer() {
@@ -487,7 +487,18 @@ impl Workspace {
             }
             return;
         }
-        if !self.can_start_send(&session) {
+        if !self.can_start_send(&session) || self.goal_arming_selected() {
+            return;
+        }
+        // An armed goal is saved first; the send with the queue follows.
+        if self.goals.armed
+            && self.composer_has_sendable_content(cx)
+            && self.send_with_goal(
+                crate::session_goal::GoalFollowUp::WithQueue { delivery },
+                window,
+                cx,
+            )
+        {
             return;
         }
         self.begin_payload_prefix(key, ids, delivery, window, cx);

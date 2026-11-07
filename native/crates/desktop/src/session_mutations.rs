@@ -135,6 +135,17 @@ impl Workspace {
         self.submit_composer(None, true, window, cx);
     }
 
+    /// The composer's send after its goal was saved.
+    pub(crate) fn submit_after_goal(
+        &mut self,
+        delivery: Option<Delivery>,
+        now: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.submit_composer(delivery, now, window, cx);
+    }
+
     fn submit_composer(
         &mut self,
         delivery: Option<Delivery>,
@@ -164,6 +175,17 @@ impl Workspace {
             return;
         }
         if !self.open_sessions.contains_key(&session) || !self.composer_has_sendable_content(cx) {
+            return;
+        }
+        // An armed goal is saved first; the send follows once it landed.
+        if self.goal_arming_selected()
+            || (self.goals.armed
+                && self.send_with_goal(
+                    crate::session_goal::GoalFollowUp::Composer { delivery, now },
+                    window,
+                    cx,
+                ))
+        {
             return;
         }
         if let Some(plain) = self.plain_composer_text(&key, cx) {
@@ -521,6 +543,7 @@ impl Workspace {
             .send_attempts
             .attempt(&key, &id)
             .map(|attempt| attempt.owner.directory().to_owned());
+        let goal = self.goals.created.get(&id).cloned();
         let Some((revision, saved)) = self.persistence_barrier(cx) else {
             self.effort_preferences.forget_user_send(&key.runtime, &id);
             self.send_attempts.finish(
@@ -661,6 +684,18 @@ impl Workspace {
             }
             let session = key.session.clone();
             let request = NetworkTask::spawn_on(&executor, async move {
+                if let Some(goal) = &goal
+                    && let Err(source) =
+                        crate::session_goal::save_created_goal(&client, &session, goal).await
+                {
+                    return Err(SendError {
+                        session_id: session,
+                        message_id: prompt.message_id.clone(),
+                        stage: SendStage::Goal,
+                        admission: PromptAdmission::NotAttempted,
+                        source,
+                    });
+                }
                 if let Some(intent) = reservation {
                     let result = crate::legacy_queue_reservation::reserve_captured_prefix(
                         &client, &session, directory.as_deref().unwrap_or_default(), &prompt, &intent,
@@ -679,6 +714,10 @@ impl Workspace {
             });
             let result = request.await;
             let _ = this.update_in(cx, |this, window, cx| {
+                if let Some(result) = &result {
+                    let saved = !matches!(result, Err(error) if error.stage == SendStage::Goal);
+                    this.release_created_goal(&id, saved);
+                }
                 this.finish_send(&key, &id, result, window, cx);
                 this.mutation_tasks.remove(&key);
             });
