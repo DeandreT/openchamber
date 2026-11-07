@@ -134,3 +134,10 @@ chat-forward
 link
 pause
 close-circle
+record-circle
+git-merge
+git-pr-draft
+git-close-pull-request
+chat-1
+filter-3
+arrow-right

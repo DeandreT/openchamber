@@ -31,7 +31,9 @@ impl Workspace {
     pub(crate) fn toggle_archive_page(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.navigation_revision = self.navigation_revision.wrapping_add(1);
         self.archive_open = !self.archive_open;
-        if !self.archive_open {
+        if self.archive_open {
+            self.source_board_open = false;
+        } else {
             self.focus_composer(window, cx);
         }
         cx.notify();

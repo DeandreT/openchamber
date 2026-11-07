@@ -46,6 +46,7 @@ pub mod session_index;
 pub mod sidebar_collection;
 pub mod sidebar_rows;
 pub mod sidebar_work;
+pub mod source_board;
 pub mod synthetic;
 pub mod terminal_tabs;
 pub mod tool_names;
