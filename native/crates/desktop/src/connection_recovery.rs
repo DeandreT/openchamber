@@ -277,17 +277,12 @@ impl Workspace {
                                     ),
                             )
                             .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(8.0))
-                                    .children(retry)
-                                    .child(
-                                        div()
-                                            .flex_row_from(direction)
-                                            .gap(px(8.0))
-                                            .child(use_remote),
-                                    ),
+                                div().flex().flex_col().gap(px(8.0)).children(retry).child(
+                                    div()
+                                        .flex_row_from(direction)
+                                        .gap(px(8.0))
+                                        .child(use_remote),
+                                ),
                             ),
                     ),
             )
@@ -332,7 +327,10 @@ mod tests {
         })
         .expect("window");
         let started = Instant::now();
-        while cx.read(|cx| workspace.read(cx).connection_recovery()).is_none() {
+        while cx
+            .read(|cx| workspace.read(cx).connection_recovery())
+            .is_none()
+        {
             cx.run_until_parked();
             assert!(
                 started.elapsed() < Duration::from_secs(5),
@@ -373,7 +371,11 @@ mod tests {
                 );
                 // Once a connection was established, a lost server keeps
                 // the last valid state on screen.
-                workspace.connection.as_mut().expect("connection").established = true;
+                workspace
+                    .connection
+                    .as_mut()
+                    .expect("connection")
+                    .established = true;
                 assert_eq!(workspace.connection_recovery(), None);
             });
         })
