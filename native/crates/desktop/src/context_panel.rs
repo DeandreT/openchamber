@@ -427,6 +427,7 @@ impl Workspace {
                     "rail-files" => Some(PanelSurface::Files),
                     "rail-git" => Some(PanelSurface::Git),
                     "rail-diff" => Some(PanelSurface::Diff),
+                    "rail-browser" => Some(PanelSurface::Browser),
                     _ => None,
                 };
                 let open = (surface.is_some() && self.panels.open == surface)
@@ -470,6 +471,7 @@ impl Workspace {
                     )
                     .into_any_element()
             }))
+            .children(self.render_guest_rail(palette, cx))
             .child(
                 IconButton::new(
                     "rail-configure",
@@ -479,6 +481,47 @@ impl Workspace {
                 .size(RAIL_BUTTON, RAIL_GLYPH)
                 .render(palette, cx, |_, _, _| {}),
             )
+    }
+}
+
+impl Workspace {
+    /// A rail button per extension panel of the selected runtime.
+    fn render_guest_rail(&self, palette: &Palette, cx: &Context<Self>) -> Vec<AnyElement> {
+        let Some((runtime, panels)) = &self.panels.guest_catalog else {
+            return Vec::new();
+        };
+        if *runtime != self.runtime {
+            return Vec::new();
+        }
+        panels
+            .iter()
+            .map(|panel| {
+                // A Remixicon the export lacks, or a package SVG, falls back
+                // to `apps`, as the rail's sprite does.
+                let icon = crate::assets::icon_name(&panel.icon).unwrap_or("apps");
+                let open = self.panels.open == Some(PanelSurface::Guest)
+                    && self
+                        .panels
+                        .open_guest
+                        .as_ref()
+                        .is_some_and(|open| open.id == panel.id);
+                let toggled = panel.clone();
+                IconButton::new(
+                    SharedString::from(format!("rail-guest-{}", panel.id)),
+                    icon,
+                    SharedString::from(panel.name.clone()),
+                )
+                .size(RAIL_BUTTON, RAIL_GLYPH)
+                .tone(if open {
+                    crate::chrome::ButtonTone::Active
+                } else {
+                    crate::chrome::ButtonTone::Quiet
+                })
+                .render(palette, cx, move |this, _, cx| {
+                    this.toggle_guest_panel(toggled.clone(), cx)
+                })
+            })
+            .collect()
     }
 }
 

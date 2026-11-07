@@ -34,6 +34,8 @@ mod blocking_requests;
 #[cfg(test)]
 mod branching_tests;
 mod branching_view;
+#[cfg(target_os = "linux")]
+mod browser_view;
 mod chrome;
 mod clipboard_attachment;
 mod code_card;
@@ -73,10 +75,15 @@ mod form_copy;
 mod form_input;
 mod general_settings;
 mod git_view;
+#[cfg(target_os = "linux")]
+mod guest_panel_view;
 mod heic_worker;
 mod host_manager;
 mod host_profiles;
 mod host_recovery;
+#[cfg(target_os = "linux")]
+mod html_answer_view;
+mod html_render_document;
 mod install_id;
 mod journal_worker;
 mod legacy_queue_reservation;
@@ -121,6 +128,7 @@ mod recovery_view;
 mod request_dock;
 mod review_flow;
 mod review_view;
+mod sdk_envelope;
 mod selection_storage;
 mod send_attempt;
 mod send_catalog;
@@ -169,6 +177,12 @@ mod transcript_selection;
 mod transcript_view;
 mod turn_footer;
 mod turn_stats_section;
+mod web_policy;
+mod web_shim;
+#[cfg(target_os = "linux")]
+mod webview_host;
+#[cfg(target_os = "linux")]
+mod webview_platform;
 mod workspace;
 #[cfg(test)]
 mod workspace_tests;

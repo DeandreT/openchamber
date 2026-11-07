@@ -26,6 +26,11 @@ fn icons() -> &'static HashMap<String, String> {
     })
 }
 
+/// The exported icon named `name`, when the sprite export carries it.
+pub(crate) fn icon_name(name: &str) -> Option<&'static str> {
+    icons().get_key_value(name).map(|(name, _)| name.as_str())
+}
+
 /// The asset path of a sprite icon, such as `arrow-right-s`.
 pub fn icon_path(name: &str) -> SharedString {
     format!("{ICON_PREFIX}{name}.svg").into()
