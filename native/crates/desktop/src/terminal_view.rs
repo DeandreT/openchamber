@@ -35,8 +35,6 @@ use crate::terminal_emulator::TerminalColors;
 use crate::terminal_surface::{self, SurfaceEvent, TerminalSurface};
 use crate::theme::{Appearance, Palette};
 
-/// Width of the docked terminal panel.
-pub(crate) const PANEL_WIDTH: f32 = 560.0;
 const HEADER_HEIGHT: f32 = 36.0;
 const TAB_HEIGHT: f32 = 28.0;
 /// Open clients keep their terminals from the idle sweep
@@ -44,11 +42,6 @@ const TAB_HEIGHT: f32 = 28.0;
 const KEEPALIVE: Duration = Duration::from_secs(10 * 60);
 /// The size a terminal starts with before its grid is measured.
 const PROVISIONAL: (u16, u16) = (80, 24);
-
-/// Chords the app keeps while a terminal has focus: the terminal toggle, as
-/// `handleTerminalShortcutCapture` lets it through. The surface's own key
-/// handler keeps the copy, paste and zoom chords.
-const APP_CHORDS: &[&str] = &["ctrl-j"];
 
 /// The key contexts above a focused terminal, outermost first: Kit's window
 /// root, the workspace and the surface.
@@ -64,21 +57,23 @@ pub(crate) fn terminal_context_stack() -> Vec<KeyContext> {
 }
 
 /// Gives the focused shell every chord a binding above it claims, except
-/// [`APP_CHORDS`]. Runs after every other binding is registered: a later
-/// `NoAction` outranks earlier bindings and cancels their pending chords.
-pub(crate) fn bind_keys(cx: &mut App) {
-    let chords = shadowed_chords(&cx.key_bindings().borrow());
-    cx.bind_keys(
-        chords
-            .iter()
-            .map(|keys| KeyBinding::new(keys, NoAction, Some(terminal_surface::KEY_CONTEXT))),
-    );
+/// `app_chords`: the terminal toggle, as `handleTerminalShortcutCapture` lets
+/// it through. The surface's own key handler keeps the copy, paste and zoom
+/// chords. Runs after every other binding is registered: a later `NoAction`
+/// outranks earlier bindings and cancels their pending chords. The bindings
+/// belong to `shortcuts::bind`, which rebuilds them with the shortcuts.
+pub(crate) fn bind_keys(app_chords: &[String], cx: &mut App) {
+    let chords = shadowed_chords(&cx.key_bindings().borrow(), app_chords);
+    cx.bind_keys(chords.iter().map(|keys| {
+        KeyBinding::new(keys, NoAction, Some(terminal_surface::KEY_CONTEXT))
+            .with_meta(crate::shortcuts::OWNED)
+    }));
 }
 
 /// The chords of every live binding enabled above a focused terminal. A
 /// multi-key chord brings its first key too, which would otherwise wait for
 /// the rest of the chord.
-fn shadowed_chords(keymap: &Keymap) -> BTreeSet<String> {
+fn shadowed_chords(keymap: &Keymap, app_chords: &[String]) -> BTreeSet<String> {
     let stack = terminal_context_stack();
     let mut chords = BTreeSet::new();
     for binding in keymap.bindings() {
@@ -99,7 +94,7 @@ fn shadowed_chords(keymap: &Keymap) -> BTreeSet<String> {
         let Some(first) = keys.first() else {
             continue;
         };
-        if APP_CHORDS.contains(&first.as_str()) {
+        if app_chords.contains(first) {
             continue;
         }
         if keys.len() > 1 {
@@ -1128,9 +1123,7 @@ impl Render for TerminalPanel {
             .accessibility_id("terminal-panel")
             .aria_label(strings.get("layout.mainTab.terminal"))
             .track_focus(&self.focus)
-            .w(px(PANEL_WIDTH))
-            .flex_shrink_0()
-            .h_full()
+            .size_full()
             .flex()
             .flex_col()
             .bg(palette.background)
@@ -1271,9 +1264,26 @@ impl crate::workspace::Workspace {
             return None;
         }
         self.sync_terminal(false, window, cx);
-        self.terminal_panel
-            .clone()
-            .map(|panel| panel.into_any_element())
+        let panel = self.terminal_panel.clone()?;
+        let palette = cx.global::<crate::theme::Palette>().clone();
+        let strings = locale::strings(cx).clone();
+        // The right zone's width, which every surface in it shares.
+        Some(
+            div()
+                .relative()
+                .w(px(self.fitted_panel_width(window)))
+                .flex_shrink_0()
+                .h_full()
+                .child(panel)
+                .child(self.render_resize_handle(
+                    crate::pane_resize::Pane::Panel,
+                    strings.get("contextPanel.actions.resizePanelAria"),
+                    &palette,
+                    strings.direction(),
+                    cx,
+                ))
+                .into_any_element(),
+        )
     }
 }
 

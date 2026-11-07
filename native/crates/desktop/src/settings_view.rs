@@ -26,6 +26,7 @@ pub(crate) struct Settings {
     appearance: Entity<crate::appearance_view::AppearanceView>,
     pub(crate) chat: Entity<PreferencePage>,
     pub(crate) sessions: Entity<PreferencePage>,
+    shortcuts: Entity<crate::shortcuts_settings::ShortcutsPage>,
     page: Page,
     search: Entity<InputState>,
     active_result: usize,
@@ -76,7 +77,9 @@ impl Settings {
         let chat = cx.new(|cx| PreferencePage::new(owner.clone(), general.clone(), Page::Chat, cx));
         let sessions =
             cx.new(|cx| PreferencePage::new(owner.clone(), general.clone(), Page::Sessions, cx));
+        let shortcuts = cx.new(|_| crate::shortcuts_settings::ShortcutsPage::new(owner.clone()));
         Self {
+            shortcuts,
             owner,
             hosts,
             general,
@@ -129,6 +132,7 @@ impl Settings {
             Page::Sessions => self
                 .sessions
                 .update(cx, |page, cx| page.reveal(item.id, window, cx)),
+            Page::Shortcuts => {}
             Page::Hosts => {
                 self.hosts
                     .update(cx, |page, cx| page.focus_settings(window, cx));
@@ -399,6 +403,7 @@ impl Render for Settings {
             Page::Appearance => self.appearance.clone().into_any_element(),
             Page::Chat => self.chat.clone().into_any_element(),
             Page::Sessions => self.sessions.clone().into_any_element(),
+            Page::Shortcuts => self.shortcuts.clone().into_any_element(),
             Page::Hosts => {
                 let scroll = self.hosts.read(cx).settings_scroll.clone();
                 div()

@@ -9,16 +9,18 @@ pub(crate) enum Page {
     Appearance,
     Chat,
     Sessions,
+    Shortcuts,
     Hosts,
 }
 
 impl Page {
     /// `pageOrder` in `SettingsView.tsx`, limited to implemented pages.
-    pub(crate) const ALL: [Self; 5] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::General,
         Self::Appearance,
         Self::Chat,
         Self::Sessions,
+        Self::Shortcuts,
         Self::Hosts,
     ];
 
@@ -28,6 +30,7 @@ impl Page {
             Self::Appearance => "appearance",
             Self::Chat => "chat",
             Self::Sessions => "sessions",
+            Self::Shortcuts => "shortcuts",
             Self::Hosts => "remote-instances",
         }
     }
@@ -38,13 +41,14 @@ impl Page {
             Self::Appearance => "settings.page.appearance.title",
             Self::Chat => "settings.page.chat.title",
             Self::Sessions => "settings.page.sessions.title",
+            Self::Shortcuts => "settings.page.shortcuts.title",
             Self::Hosts => "settings.page.remoteInstances.title",
         }
     }
 
     pub(crate) fn group(self) -> &'static str {
         match self {
-            Self::General | Self::Appearance | Self::Chat | Self::Sessions => {
+            Self::General | Self::Appearance | Self::Chat | Self::Sessions | Self::Shortcuts => {
                 "settings.view.nav.group.general"
             }
             Self::Hosts => "settings.view.nav.group.projects",
@@ -57,6 +61,7 @@ impl Page {
             Self::Appearance => "settings.page.appearance.description",
             Self::Chat => "settings.page.chat.description",
             Self::Sessions => "settings.page.sessions.description",
+            Self::Shortcuts => "settings.page.shortcuts.description",
             Self::Hosts => "settings.remoteInstances.direct.description",
         }
     }
@@ -67,6 +72,7 @@ impl Page {
             Self::Appearance => "palette",
             Self::Chat => "chat-ai-3",
             Self::Sessions => "chat-history",
+            Self::Shortcuts => "command",
             Self::Hosts => "computer",
         }
     }
@@ -201,6 +207,11 @@ pub(crate) const SEARCH_ITEMS: &[SearchItem] = &[
         title: "settings.openchamber.sessionWork.field.enabled",
         description: None,
         keywords: "in work in progress track done sidebar",
+        id: "shortcuts.keyboard-shortcuts",
+        page: Page::Shortcuts,
+        title: "settings.openchamber.keyboardShortcuts.title",
+        description: Some("settings.openchamber.keyboardShortcuts.tooltip"),
+        keywords: "keyboard hotkeys bindings",
     },
     SearchItem {
         id: "remote-instances.direct-hosts",

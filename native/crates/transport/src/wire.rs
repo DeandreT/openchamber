@@ -307,6 +307,7 @@ pub(crate) struct Settings {
     pub draft_starters_visible: Option<Value>,
     pub draft_starters_craft_goal_added: Option<Value>,
     pub draft_starters_schedule_task_added: Option<Value>,
+    pub shortcut_overrides: Option<Value>,
 }
 
 // A JSON object's encounter order is the profile's effort-recency order.

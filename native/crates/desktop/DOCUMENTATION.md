@@ -166,7 +166,14 @@ prompt. Attachments and worktree creation remain separate workflows.
   goal-objective file copy of a fork, attachments and context chips on a
   restored prompt, and a fork from an assistant turn's footer are not ported.
 - `connection.rs` holds the configured server, the connection state the views
-  explain and the tasks of the current connection attempt.
+  explain and the tasks of the current connection attempt. A dropped event
+  stream shows nothing, as in the reference; the last valid state stays.
+- `compatibility_view.rs` is `OpenCodeCompatibilityGate.tsx`: each ready
+  connection checks the host's OpenCode, and only a confirmed incompatible
+  answer replaces the window with the gate (Install or Update when the host
+  can install, Check again, the guide link and Switch instance). A failed or
+  unknown check keeps what was known. The gate lives on its connection, so a
+  host switch drops it; a recovered host reconnects from the start.
 - `about.rs` owns the footer's About dialog and its independent version reads.
   Reads use the captured connection generation; closing the dialog cancels its
   work. Unavailable OpenCode versions remain unknown, and an unavailable server
@@ -183,6 +190,16 @@ prompt. Attachments and worktree creation remain separate workflows.
   pairing profiles remain separate native work. Add instance opens the native
   Remote instances Settings page through `settings_view.rs`, reusing the same
   profile model and write barrier. Window-opening actions are separate work.
+- `shortcuts.rs` binds the configurable shortcuts that have a native command
+  into GPUI's keymap, runs them and saves the user's map to the settings
+  document. `shortcuts_settings.rs` is the Shortcuts page and its recording
+  dialog. `app_menu.rs` is Electron's Windows and Linux application menu
+  behind the title row's menu button, labelled from Electron's own menu
+  dictionaries (`resources/menu-locales.json`).
+- `pane_resize.rs` owns the sidebar's and the context panel's widths, their
+  drag handles and the device-local `layout.json` (sidebar open, sidebar
+  width, panel width) that restores them. The Files, Git, Diff and terminal
+  surfaces share the panel width, as the reference's right zone does.
 - `settings_view.rs` owns the retained Settings dialog, selected page and search
   field. `settings_navigation.rs` lists only implemented pages, in the
   reference's `pageOrder`, and indexes only implemented targets. General is
@@ -1222,6 +1239,17 @@ prompt. Attachments and worktree creation remain separate workflows.
   instead. Ctrl+click opens an OSC 8 link or an `http(s)` URL of the logical
   line through the platform opener.
 
+- Keymap entries the shortcuts own carry `shortcuts::OWNED` in their meta,
+  including the terminal's shadowing `NoAction`s. Rebinding removes exactly
+  those and adds the new set; the terminal's set is rebuilt after it, from
+  the whole keymap, with the effective terminal toggle left to the app.
+- The user's shortcut choice applies at once. A server read never replaces
+  a change that is still saving; saves run one at a time, and a failed save
+  keeps the choice and shows Save failed.
+- Sidebar widths stay within 264 to 500 px. The panel keeps at least 320 px
+  and leaves the chat 320 px. Layout writes run one at a time, so the last
+  change is the one on disk; an unreadable or newer file reads the defaults.
+
 ## Decisions
 
 ### Why Settings owns scrolling and confirmation
@@ -1639,8 +1667,9 @@ and presses keys through real hit testing.
 GPUI matches bindings before key-down handlers. Root Copy can therefore
 consume Ctrl+C when the transcript retains a selection. After registration,
 the terminal disables bindings applicable to its ancestor context stack with
-`NoAction`, including multi-key prefixes. Ctrl+J remains an app shortcut,
-matching `handleTerminalShortcutCapture` in `useKeyboardShortcuts.ts`.
+`NoAction`, including multi-key prefixes. The effective Toggle terminal chord
+(Ctrl+J by default) remains an app shortcut, matching
+`handleTerminalShortcutCapture` in `useKeyboardShortcuts.ts`.
 
 ### Why scrollback is budgeted in bytes
 
@@ -1655,3 +1684,26 @@ more, since rows are pruned by whole pages.
 The web client detaches hidden tabs and keeps a 512 KiB replay projection to
 restore them. Native keeps each tab's emulator and attachment, so switching
 tabs repaints at once and a hidden terminal answers its program's queries.
+
+### Why the shortcuts rebuild GPUI's keymap
+
+GPUI matches key bindings before key-down handlers, and the terminal relies on
+that order to shadow app chords. A dispatcher in a key-down handler, as the
+web's, would run after the terminal and the inputs had already taken the key.
+So each effective binding becomes a GPUI binding, and a changed set replaces
+the marked entries. Only actions with a native command are bound: a binding
+for a missing feature would swallow a key the focused control should get.
+
+### Why the menu shows Electron's accelerators
+
+Electron's popup menu lists its template's accelerators as hints; the keys go
+to the renderer's configurable shortcuts. Native copies the labels as text, so
+a rebound shortcut does not change the menu, as in Electron. Items whose
+feature is not ported stay in the menu, disabled, so its structure matches
+the reference.
+
+### Why the layout lives on the device
+
+The web keeps the sidebar and panel sizes in its persisted UI store, outside
+the settings document, so each device has its own. Native writes the same
+three values to its private folder instead of the server.

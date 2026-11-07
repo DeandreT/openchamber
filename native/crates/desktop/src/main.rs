@@ -7,6 +7,7 @@
 
 mod about;
 mod activation;
+mod app_menu;
 mod appearance;
 mod appearance_storage;
 mod appearance_view;
@@ -37,6 +38,7 @@ mod chrome;
 mod clipboard_attachment;
 mod code_card;
 mod code_wrap_state;
+mod compatibility_view;
 mod composer_attachment_input;
 mod composer_attachment_view;
 mod composer_choices;
@@ -88,6 +90,7 @@ mod model_controls;
 mod mutation_journal;
 mod network;
 mod open_in_app;
+mod pane_resize;
 #[cfg(test)]
 mod panel_tests;
 mod part_state;
@@ -130,6 +133,8 @@ mod session_menu_tests;
 mod session_mutations;
 mod settings_navigation;
 mod settings_view;
+mod shortcuts;
+mod shortcuts_settings;
 mod sidebar_item;
 mod sidebar_view;
 mod source_board;
@@ -187,6 +192,11 @@ fn main() {
     diagnostics::start();
     // Read off the startup path; joined just before the first frame.
     let generic_fonts = fonts::spawn_generic_lookup();
+    let layout = install_id::config_directory().map(|directory| {
+        let store = pane_resize::LayoutStore::new(&directory);
+        let layout = store.load();
+        (store, layout)
+    });
     let appearance = install_id::config_directory().map(|directory| {
         let store = appearance_storage::AppearanceStore::new(&directory);
         let reader = store.clone();
@@ -272,6 +282,9 @@ fn main() {
                 }
                 cx.new(|cx| {
                     let mut workspace = Workspace::new(source, window, cx);
+                    if let Some((store, layout)) = layout {
+                        workspace.restore_layout(store, layout);
+                    }
                     workspace.start_policy_monitor(cx);
                     workspace.initial_size = Some(chrome::InitialSize::new(size(
                         px(WINDOW_WIDTH),

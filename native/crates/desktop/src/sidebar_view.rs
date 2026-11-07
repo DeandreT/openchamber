@@ -28,8 +28,6 @@ use crate::theme::Palette;
 use crate::workspace::Workspace;
 use gpui_kit::component::Colorize as _;
 
-/// Default sidebar width of the desktop layout.
-pub const SIDEBAR_WIDTH: f32 = 280.0;
 const TOOLBAR_HEIGHT: f32 = 40.0;
 const FOOTER_HEIGHT: f32 = 40.0;
 /// The list's inline padding (`ps-2.5 pe-2`); row slots span the rest.
@@ -78,7 +76,7 @@ impl Workspace {
         div()
             .id("sidebar-column")
             .relative()
-            .w(px(SIDEBAR_WIDTH))
+            .w(px(self.pane_sizes.sidebar_width()))
             .flex_shrink_0()
             .h_full()
             .bg(palette.muted)
@@ -141,6 +139,13 @@ impl Workspace {
                     .w(px(1.0))
                     .bg(palette.border),
             )
+            .child(self.render_resize_handle(
+                crate::pane_resize::Pane::Sidebar,
+                strings.get("sidebar.resize.leftPanelAria"),
+                palette,
+                direction,
+                cx,
+            ))
     }
 
     /// Menu, sidebar toggle and New session: the sidebar's title row, or the
@@ -192,7 +197,9 @@ impl Workspace {
                     "menu-2",
                     strings.get("header.actions.openAppMenuAria"),
                 )
-                .render(palette, cx, |_, _, _| {}),
+                .render(palette, cx, |this, window, cx| {
+                    this.toggle_app_menu(window, cx)
+                }),
             )
             .child(
                 IconButton::new(
@@ -430,7 +437,9 @@ impl Workspace {
                 "desktopHostSwitcher.startup.connectingTo",
                 &[("host", &host)],
             ),
-            ConnectionState::Reconnecting => strings.get("opencodeCompatibility.reconnecting"),
+            // The reference shows nothing while the stream reconnects; the
+            // last valid state stays on screen.
+            ConnectionState::Reconnecting => return None,
             ConnectionState::Failed(failure) => failure_text(strings, failure, &host),
             ConnectionState::Connected => match self.sessions.status() {
                 IndexStatus::Loading if self.sessions.active().is_empty() => {
