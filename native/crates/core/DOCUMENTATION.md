@@ -50,6 +50,9 @@ rendering asks for a projection and dispatches an action.
   name, icon, description, justification, diff and line counts, duration,
   which tools draw the compact static row, the input the expanded row prints,
   and the folded reasoning preview.
+- `rendered_page.rs` decides whether an `openchamber_render` call shows its
+  page in place of its row and where the page stands on the user's answer
+  (`renderedPage`), including the title read from the page's own markup.
 - `file_tree.rs` holds the Files surface's tree: one snapshot per listed
   folder, expanded and selected paths and the visible rows (folders first,
   then names in `localeCompare` order; dotfiles shown, `node_modules` left
