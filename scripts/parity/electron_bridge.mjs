@@ -9,8 +9,14 @@
  * same hit-testing and focus paths as a user's. Nothing here calls
  * application code directly.
  *
- * Commands: launch, wait, rows, inflight, rects, targets, textBoxes, paintRegions, observe, fonts,
- * click, key, type, text, screenshot, close.
+ * Commands: launch, restart, wait, rows, inflight, rects, targets, textBoxes, paintRegions, observe, fonts,
+ * click, clickNamed, hover, key, type, ime, drop, interceptFileChoosers, pick, api, fault, release, faults, text,
+ * screenshot, close.
+ *
+ * `fault` pauses matching page requests through the Fetch domain: before
+ * the server receives them (request stage) or after it answered (response
+ * stage). `api` reads the in-process server directly with the page's own
+ * base URL and token, which never leave this process.
  */
 import { spawn } from "node:child_process"
 import { closeSync, openSync, writeFileSync } from "node:fs"
@@ -18,14 +24,63 @@ import { createInterface } from "node:readline"
 
 import { CdpClient, reservePort, wait } from "../perf/cdp.mjs"
 import { isComposerSheen } from "./composer_sheen.mjs"
+import { claimFault } from "./fault_rules.mjs"
 import { RequestTracker } from "./request_tracker.mjs"
 
 let child = null
+let exited = null
 let client = null
+let launchParams = null
 // Fetch and XHR requests the page started and that have not ended. Streams
 // that stay open by design (EventSource) are not counted.
-const inflight = new RequestTracker()
+let inflight = new RequestTracker()
 const TRACKED_REQUESTS = new Set(["Fetch", "XHR"])
+// Scenario faults, their hits and held requests, kept across a restart.
+const faultRules = []
+const faultHits = []
+const held = new Map()
+// File choosers the page opened and the runner has not answered.
+const fileChoosers = []
+let interceptFileChoosers = false
+
+const FAULT_BODY = Buffer.from(JSON.stringify({ error: "parity fault" })).toString("base64")
+const DROPPED_HEADERS = new Set(["content-length", "content-encoding", "content-type", "transfer-encoding"])
+
+const onRequestPaused = async (event) => {
+  const { requestId, request, responseStatusCode, responseErrorReason, responseHeaders = [] } = event
+  const stage = responseStatusCode === undefined && responseErrorReason === undefined ? "before" : "after"
+  const rule = request.url.startsWith("http") ? claimFault(faultRules, faultHits, { method: request.method, url: request.url, stage }) : null
+  try {
+    if (!rule || (rule.action === "hold" && rule.released)) {
+      await client.send("Fetch.continueRequest", { requestId })
+    } else if (rule.action === "hold") {
+      held.set(rule.id, [...(held.get(rule.id) ?? []), requestId])
+    } else if (rule.action === "drop") {
+      await client.send("Fetch.failRequest", { requestId, errorReason: "ConnectionClosed" })
+    } else {
+      // Before the server answers there are no CORS headers to keep; the
+      // page must still see the status rather than a CORS failure.
+      const origin = Object.entries(request.headers).find(([name]) => name.toLowerCase() === "origin")?.[1]
+      const headers = stage === "after"
+        ? responseHeaders.filter(({ name }) => !DROPPED_HEADERS.has(name.toLowerCase()))
+        : origin ? [{ name: "Access-Control-Allow-Origin", value: origin }, { name: "Access-Control-Allow-Credentials", value: "true" }, { name: "Vary", value: "Origin" }] : []
+      await client.send("Fetch.fulfillRequest", {
+        requestId, responseCode: rule.status, body: FAULT_BODY,
+        responseHeaders: [...headers, { name: "Content-Type", value: "application/json" }],
+      })
+    }
+  } catch {
+    // The page abandoned the request meanwhile.
+  }
+}
+
+const enableFaults = async () => {
+  const stages = [...new Set(faultRules.map((rule) => rule.when))]
+  if (!stages.length) return
+  await client.send("Fetch.enable", {
+    patterns: stages.map((stage) => ({ urlPattern: "http*", requestStage: stage === "before" ? "Request" : "Response" })),
+  })
+}
 
 const evaluate = async (expression) => {
   const result = await client.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true })
@@ -81,52 +136,90 @@ const rectOf = (selector, button) => `(() => {
   return [rect.x, rect.y, rect.width, rect.height]
 })()`
 
+/** Starts the app; a restart appends to the same log. */
+const start = async ({ app, env, scale, width, height, logPath, timeoutMs = 120_000 }, logMode) => {
+  const port = await reservePort()
+  // The basic password store keeps Chromium off the desktop's secret
+  // service, which would ask the user to unlock their keyring.
+  const args = [`--remote-debugging-port=${port}`, `--force-device-scale-factor=${scale}`, "--password-store=basic", "--ozone-platform=x11", "--disable-features=MacAppCodeSignClone"]
+  const log = logPath ? openSync(logPath, logMode, 0o600) : undefined
+  try {
+    child = spawn(app, args, { env, stdio: log === undefined ? "ignore" : ["ignore", log, log], detached: true })
+  } finally {
+    if (log !== undefined) closeSync(log)
+  }
+  child.unref()
+  exited = new Promise((resolve) => child.once("exit", (code, signal) => resolve({ exitCode: code, signal })))
+  inflight = new RequestTracker()
+  const page = await pageTarget(port, Date.now() + timeoutMs)
+  client = new CdpClient(page.webSocketDebuggerUrl)
+  await client.connect()
+  client.on("Fetch.requestPaused", (event) => { void onRequestPaused(event) })
+  client.on("Page.fileChooserOpened", (event) => fileChoosers.push(event))
+  client.on("Page.frameNavigated", ({ frame }) => inflight.navigate(frame))
+  client.on("Page.frameDetached", ({ frameId, reason }) => inflight.detach(frameId, reason))
+  client.on("Network.requestWillBeSent", (event) => {
+    const { type, request } = event
+    if (TRACKED_REQUESTS.has(type)) {
+      const url = new URL(request.url)
+      const routeDepth = url.pathname.startsWith("/api/openchamber/") || url.pathname.startsWith("/api/source-control/") ? 4 : 3
+      const route = url.protocol === "http:" || url.protocol === "https:"
+        ? url.pathname.split("/").slice(0, routeDepth).join("/")
+        : url.protocol
+      inflight.start(event, route)
+    }
+  })
+  client.on("Network.loadingFinished", ({ requestId }) => inflight.finish(requestId))
+  client.on("Network.loadingFailed", ({ requestId }) => inflight.finish(requestId))
+  await client.send("Page.enable")
+  await client.send("Network.enable")
+  const { frameTree } = await client.send("Page.getFrameTree")
+  inflight.seed(frameTree)
+  await client.send("Runtime.enable")
+  await enableFaults()
+  if (interceptFileChoosers) await client.send("Page.setInterceptFileChooserDialog", { enabled: true })
+  // Electron's DevTools endpoint cannot size the window. The default main
+  // window has the standard client size; when it differs (a stored size, a
+  // window manager constraint), emulate the viewport and say so.
+  const inner = await evaluate("[window.innerWidth, window.innerHeight]")
+  let emulated = false
+  if (inner[0] !== width || inner[1] !== height) {
+    await client.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: scale, mobile: false })
+    emulated = true
+  }
+  return { pid: child.pid, port, window: inner, emulated, viewport: await evaluate("[window.innerWidth, window.innerHeight]") }
+}
+
+/** Stops the app and every process it left in its group. */
+const stop = async (signalFirst, timeoutMs) => {
+  try { client?.close() } catch {}
+  if (!child) return {}
+  if (signalFirst) {
+    try { process.kill(child.pid, "SIGTERM") } catch {}
+  }
+  const outcome = await Promise.race([exited, wait(timeoutMs).then(() => null)])
+  try { process.kill(-child.pid, "SIGKILL") } catch {}
+  return outcome ?? { exitCode: null, signal: "timeout" }
+}
+
+const centreOf = async (selector, button) => {
+  const rect = await evaluate(rectOf(selector, button))
+  if (!rect) throw new Error(`no element for ${button ?? selector}`)
+  return [rect[0] + rect[2] / 2, rect[1] + rect[3] / 2]
+}
+
 const handlers = {
-  async launch({ app, env, scale, width, height, logPath, timeoutMs = 120_000 }) {
-    const port = await reservePort()
-    // The basic password store keeps Chromium off the desktop's secret
-    // service, which would ask the user to unlock their keyring.
-    const args = [`--remote-debugging-port=${port}`, `--force-device-scale-factor=${scale}`, "--password-store=basic", "--ozone-platform=x11", "--disable-features=MacAppCodeSignClone"]
-    const log = logPath ? openSync(logPath, "w", 0o600) : undefined
-    try {
-      child = spawn(app, args, { env, stdio: log === undefined ? "ignore" : ["ignore", log, log], detached: true })
-    } finally {
-      if (log !== undefined) closeSync(log)
-    }
-    child.unref()
-    const page = await pageTarget(port, Date.now() + timeoutMs)
-    client = new CdpClient(page.webSocketDebuggerUrl)
-    await client.connect()
-    client.on("Page.frameNavigated", ({ frame }) => inflight.navigate(frame))
-    client.on("Page.frameDetached", ({ frameId, reason }) => inflight.detach(frameId, reason))
-    client.on("Network.requestWillBeSent", (event) => {
-      const { type, request } = event
-      if (TRACKED_REQUESTS.has(type)) {
-        const url = new URL(request.url)
-        const routeDepth = url.pathname.startsWith("/api/openchamber/") || url.pathname.startsWith("/api/source-control/") ? 4 : 3
-        const route = url.protocol === "http:" || url.protocol === "https:"
-          ? url.pathname.split("/").slice(0, routeDepth).join("/")
-          : url.protocol
-        inflight.start(event, route)
-      }
-    })
-    client.on("Network.loadingFinished", ({ requestId }) => inflight.finish(requestId))
-    client.on("Network.loadingFailed", ({ requestId }) => inflight.finish(requestId))
-    await client.send("Page.enable")
-    await client.send("Network.enable")
-    const { frameTree } = await client.send("Page.getFrameTree")
-    inflight.seed(frameTree)
-    await client.send("Runtime.enable")
-    // Electron's DevTools endpoint cannot size the window. The default main
-    // window has the standard client size; when it differs (a stored size, a
-    // window manager constraint), emulate the viewport and say so.
-    const inner = await evaluate("[window.innerWidth, window.innerHeight]")
-    let emulated = false
-    if (inner[0] !== width || inner[1] !== height) {
-      await client.send("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: scale, mobile: false })
-      emulated = true
-    }
-    return { pid: child.pid, port, window: inner, emulated, viewport: await evaluate("[window.innerWidth, window.innerHeight]") }
+  async launch(params) {
+    launchParams = params
+    return await start(params, "w")
+  },
+  /** Quits on SIGTERM (or waits for the app to exit on its own), then
+   * starts it again on the same profile with the same faults. */
+  async restart({ after = "signal", timeoutMs = 30_000 }) {
+    const closed = await stop(after === "signal", timeoutMs)
+    for (const ids of held.values()) ids.length = 0
+    fileChoosers.length = 0
+    return { closed, launch: await start(launchParams, "a") }
   },
   async wait({ expression, timeoutMs = 60_000 }) {
     const deadline = Date.now() + timeoutMs
@@ -288,15 +381,118 @@ const handlers = {
       return { regions, protectedBoxes, composerGradientRegions, composerGradientProtected, composerGradientDefinitions, composerGradientProtectionComplete: true }
     })()`)
   },
-  async key({ key, code, keyCode, modifiers = 0 }) {
-    for (const type of ["rawKeyDown", "keyUp"]) {
-      await client.send("Input.dispatchKeyEvent", { type, key, code, windowsVirtualKeyCode: keyCode, modifiers })
-    }
+  /** One chord: `steps.dom_key_events` supplies every press and release. */
+  async key({ events }) {
+    for (const event of events) await client.send("Input.dispatchKeyEvent", event)
     return {}
   },
   async type({ text }) {
     await client.send("Input.insertText", { text })
     return {}
+  },
+  /** Composition updates as each key arrives, ending at `preedit` when
+   * given, or a commit of `commit`. */
+  async ime({ compose, preedit, commit }) {
+    if (compose !== undefined) {
+      const updates = [...compose].map((_, index) => compose.slice(0, index + 1))
+      if (preedit) updates.push(preedit)
+      for (const text of updates) {
+        await client.send("Input.imeSetComposition", { text, selectionStart: text.length, selectionEnd: text.length })
+      }
+    } else {
+      await client.send("Input.insertText", { text: commit })
+    }
+    return {}
+  },
+  async hover({ selector, button }) {
+    const [x, y] = await centreOf(selector, button)
+    await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y })
+    return { at: [x, y] }
+  },
+  /** Clicks the one unignored node with this accessible name and role. */
+  async clickNamed({ name, role }) {
+    const { root } = await client.send("DOM.getDocument", { depth: 0 })
+    const query = { backendNodeId: root.backendNodeId, accessibleName: name }
+    if (role) query.role = role
+    const { nodes } = await client.send("Accessibility.queryAXTree", query)
+    const matches = nodes.filter((node) => !node.ignored && node.backendDOMNodeId)
+    if (matches.length !== 1) throw new Error(`${matches.length} accessible nodes are named ${JSON.stringify(name)}${role ? ` with role ${role}` : ""}`)
+    const backendNodeId = matches[0].backendDOMNodeId
+    await client.send("DOM.scrollIntoViewIfNeeded", { backendNodeId })
+    const { model } = await client.send("DOM.getBoxModel", { backendNodeId })
+    const xs = model.border.filter((_, index) => index % 2 === 0)
+    const ys = model.border.filter((_, index) => index % 2 === 1)
+    const x = (Math.min(...xs) + Math.max(...xs)) / 2
+    const y = (Math.min(...ys) + Math.max(...ys)) / 2
+    const { object } = await client.send("DOM.resolveNode", { backendNodeId })
+    const { result } = await client.send("Runtime.callFunctionOn", {
+      objectId: object.objectId, returnByValue: true, arguments: [{ value: x }, { value: y }],
+      functionDeclaration: "function (x, y) { const hit = document.elementFromPoint(x, y); return !!hit && this.contains(hit) }",
+    })
+    if (!result.value) throw new Error(`the centre of ${JSON.stringify(name)} is covered by another element`)
+    await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y })
+    await client.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 })
+    await client.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 })
+    return { at: [x, y] }
+  },
+  /** A drag carrying files from outside the page, dropped on the target. */
+  async drop({ selector, button, files }) {
+    const [x, y] = await centreOf(selector, button)
+    const data = { items: [], files, dragOperationsMask: 1 }
+    for (const type of ["dragEnter", "dragOver", "drop"]) {
+      await client.send("Input.dispatchDragEvent", { type, x, y, data })
+    }
+    return { at: [x, y] }
+  },
+  /** From now on a file chooser the page opens waits for `pick`. */
+  async interceptFileChoosers() {
+    interceptFileChoosers = true
+    await client.send("Page.setInterceptFileChooserDialog", { enabled: true })
+    return {}
+  },
+  /** Answers the file chooser the page opened, waiting for it to open. */
+  async pick({ files, timeoutMs = 10_000 }) {
+    const deadline = Date.now() + timeoutMs
+    while (!fileChoosers.length) {
+      if (Date.now() > deadline) throw new Error("no file chooser opened")
+      await wait(50)
+    }
+    const chooser = fileChoosers.shift()
+    await client.send("DOM.setFileInputFiles", { files, backendNodeId: chooser.backendNodeId })
+    return { mode: chooser.mode }
+  },
+  /** A read of the in-process server, outside the page and its faults. */
+  async api({ path }) {
+    const { base, token } = await evaluate("({ base: window.__OPENCHAMBER_API_BASE_URL__ || '', token: window.__OPENCHAMBER_CLIENT_TOKEN__ || '' })")
+    if (!base) throw new Error("the page has no API base URL")
+    const response = await fetch(new URL(path, `${base.replace(/\/+$/, "")}/`), {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      signal: AbortSignal.timeout(15_000),
+    })
+    const text = await response.text()
+    let body = text
+    try { body = JSON.parse(text) } catch {}
+    return { status: response.status, body }
+  },
+  async fault({ rule }) {
+    if (faultRules.some((existing) => existing.id === rule.id)) throw new Error(`fault ${rule.id} is already declared`)
+    faultRules.push({ ...rule, remaining: rule.times })
+    await enableFaults()
+    return {}
+  },
+  /** Lets every request held by the fault continue. */
+  async release({ faultId }) {
+    for (const requestId of held.get(faultId) ?? []) {
+      try { await client.send("Fetch.continueRequest", { requestId }) } catch {}
+    }
+    held.set(faultId, [])
+    // Later matches still count as hits but pass, as the native proxy's do.
+    const rule = faultRules.find((candidate) => candidate.id === faultId)
+    if (rule) rule.released = true
+    return {}
+  },
+  async faults() {
+    return { hits: faultHits }
   },
   /** Read-only observation, such as layout and computed styles. */
   async observe({ expression }) {

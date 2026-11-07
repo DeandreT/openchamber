@@ -21,13 +21,19 @@ PyGObject with AT-SPI, `busctl`, `dbus-run-session`, `xsettingsd` and fontconfig
 
 | File | Owns |
 | --- | --- |
-| `runner.py` | Commands, seed copies, isolated servers, scenario steps, comparisons and the report. |
+| `runner.py` | Commands, seed copies, fixture projects, isolated servers, scenario steps, comparisons and the report. |
+| `steps.py` | The step vocabulary: key chords and their CDP events, accessible-role mapping, fault rules, expectation predicates and step validation. Pure; `steps_test.py` covers it. |
 | `virtual_display.py` | The private display runs happen in, and `-- <command>` for probes that need one. |
 | `inventory.json` | The feature inventory: stable IDs, reference files, states, scenarios and coverage kind. Requirements only. |
 | `scenarios.json` | Scenario steps. Rows are addressed by key prefix and title, never by seeded IDs. |
-| `electron_adapter.py`, `electron_bridge.mjs` | Electron through CDP (`scripts/perf/cdp.mjs`): launch, input dispatch, rows, geometry, screenshots, and read-only `observe` of layout and computed styles and `fonts` of the faces a node is drawn with, for porting. |
+| `step_probes.json` | The runner's own self-checks, one probe per group of step kinds, run with `--scenarios-file`. They declare no proofs. |
+| `electron_adapter.py`, `electron_bridge.mjs` | Electron through CDP (`scripts/perf/cdp.mjs`): launch and restart, input dispatch, rows, geometry, screenshots, Fetch-domain faults, file-chooser answers, server reads, and read-only `observe` of layout and computed styles and `fonts` of the faces a node is drawn with, for porting. |
+| `fault_rules.mjs` | The bridge's fault matching, the same rules `steps.fault_matches` applies natively. |
 | `request_tracker.mjs` | Fetch/XHR ownership by frame and document loader, so a discarded document cannot keep a new one busy. |
-| `native_adapter.py` | The native window through AT-SPI: launch, activation, generated pointer and key input, accessibility actions, rows, geometry, and content capture. |
+| `native_adapter.py` | The native window through AT-SPI: launch and restart, activation, generated pointer and key input, accessibility actions, rows, geometry, content capture, and the scenario services the runner attaches. |
+| `fault_proxy.py` | The native `fault` step: a loopback proxy applying scenario fault rules between the native client and its server. |
+| `ime_fixture.py` | A private IBus with libpinyin for native `ime` steps. |
+| `drop_source.py` | An XDND drag source window for native `drop` steps. |
 | `clipboard_probe.py` | Asynchronous clipboard ownership and exact text after a real copy action on the private display. |
 | `native_platform.py` | Synthetic native window-manager and IBus checks with private profiles and service logs. |
 | `native_accessibility.py` | Orca-generated control announcements, AT-SPI transcript exposure, disabled menu states and toast announcements, with silent private speech services. |
@@ -481,8 +487,9 @@ states it covers, then add steps to `scenarios.json` that name it. The runner
 refuses a scenario whose feature is not in the inventory and an inventory entry
 that lists a scenario that does not exist. Steps are `click` (a row by zone
 prefix and title), `clickTarget` (a named control with an Electron selector
-and a native accessible ID), `key`, `type`, `wait`, `settle` and `capture`. A capture
-can list `targets` from the scenario file's shared target table.
+and a native accessible ID), `type`, `wait`, `settle` and `capture`, plus the
+kinds under *Steps* below. A capture can list `targets` from the scenario
+file's shared target table. Every step is validated before any client starts.
 
 Prefer `wait` to `settle`: it names the observable state a checkpoint needs,
 with one condition per client (a page expression for Electron; accessible
@@ -494,9 +501,11 @@ turn later typing into a composer submission.
 
 Native waits can also match a named accessible node with
 `{"named": {"name": "Search projects...", "role": "entry"}}`. Optional `id`
-and `role` fields distinguish matching labels; `"present": false` waits for
-the node to disappear. Typing starts only after the
-popup's search field mounts.
+and `role` fields distinguish matching labels, `"prefix": true` matches the
+start of the name, and `"present": false` waits for the node to disappear.
+Typing starts only after the popup's search field mounts. Both clients accept
+`{"focusedText": text}`: the focused editable's exact text (a field's value or
+a contenteditable's text without its trailing line break).
 
 Session-row clicks first require a settled client, then verify that the exact
 requested row is selected. An unrelated selected row cannot satisfy this
@@ -510,3 +519,129 @@ have no fetch or XHR request in flight; a panel whose data has not arrived can
 hold still for longer than the quiet period. Panels that fill in after the
 transcript would otherwise be captured midway. A reference that never holds
 still blocks the scenario; a native client that never does fails it.
+
+## Steps
+
+Each step names one kind. A step that cannot run on a client fails that
+client (blocked for Electron, failed for native); it is never replaced by a
+weaker path, except the pointer clicks already described, which are recorded
+as substitutions. The services a step needs (clipboard, fault proxy, IBus,
+drop source, portal) start only for scenarios that use it, so other scenarios
+launch exactly as before.
+
+| Step | Electron (CDP) | Native (owned display) |
+| --- | --- | --- |
+| `key: "ctrl+shift+z"` | `Input.dispatchKeyEvent`: each modifier pressed, the key, the modifiers released, with the DOM key, code and virtual key code. Named keys carry no text; characters do unless a command modifier is held. | A bare key through AT-SPI key synthesis, as before; a chord through `xdotool key` (XTest). |
+| `paste: "text"` | The runner's GTK clipboard serves the exact text while Ctrl+V reads it. | The same clipboard and chord. |
+| `clickNamed: {"name", "role"}` | The one unignored node with that accessible name and ARIA role in Chromium's accessibility tree, clicked at its centre once nothing covers it. | The one node with that AT-SPI name and a role the ARIA role maps to (`steps.ATSPI_ROLES`), clicked like `click`. |
+| `hover: "<target>"` | A `mouseMoved` to the target's centre. | The real pointer moved there; a pointer that does not arrive fails, since hover has no accessibility equivalent. |
+| `restart: {}` | SIGTERM, which runs Electron's own quit teardown, then a new launch on the same profile, keeping fault rules and file-chooser interception. `{"after": "exit"}` waits for an exit an earlier step caused. | SIGTERM, or the same wait, then a new launch on the same profile, server and services. |
+| `expect` | Server reads from the bridge with the page's own API base URL and token, which never leave the bridge. | Reads straight from the isolated server, never through the fault proxy. |
+| `fault`, `release` | The Fetch domain pauses page requests at the request stage (`before`) or response stage (`after`). | `fault_proxy.py` between the client and its server. |
+| `drop: {"target", "files"}` | `Input.dispatchDragEvent` with the files' paths: a drag into the renderer, not an X11 XDND session. | A GTK source window offers `text/uri-list`; XTest presses there and drags onto the target, so the drop arrives through XDND. |
+| `pick: {"files"}` | Page file-chooser interception, answered with `DOM.setFileInputFiles` once the page opened a chooser. | The portal fixture's GTK chooser: its location entry takes the path. |
+| `ime: {"compose"}` / `{"commit"}` | `Input.imeSetComposition` for each key, then `Input.insertText`. | Pinyin keys typed into a private IBus libpinyin engine over XIM; Space takes the first candidate, Return the raw keys. |
+
+The native client has no SIGTERM handler: `restart: {}` ends it by the signal
+(exit -15) while Electron quits cleanly (exit 0). A scenario about state that
+survives a normal quit closes the window through its own control
+(`clickTarget: "window-close"`, after which both clients exit 0) and then uses
+`{"after": "exit"}`; each client's `restarts` record says how it ended.
+
+`paste` takes `{"text", "until": {"electron", "native"}}` to name its own
+observable result; by default the focused editable must contain the text.
+Chromium answers a Ctrl+V only after reading the clipboard, which the
+runner's own GTK loop serves, so the chord is sent without waiting and its
+answer is checked while the loop runs.
+
+`expect` reads one authoritative source and polls it until `timeout`
+(15 s): `{"api": "/api/..."}` with an optional `select` path of keys and
+indexes; `{"file": "{fixture}/path"}` as exact UTF-8 text, or `"encoding":
+"bytes"` for its SHA-256 and size, or None when absent; `{"git": [command,
+...]}` running one read-only Git command (`steps.GIT_READS`) in `{fixture}`
+or `cwd`, without system or global configuration and with optional locks off;
+`{"fault": id, "hits": n}`. Predicates are `equals`, `contains` (substring,
+list member or structural subset), `length` and `exists`, after an optional
+`where` subset filter on a list. A non-2xx answer or a failed Git command
+never holds, so a failed read cannot pass as an empty result. Paths take
+`{fixture}`, `{project}` (the seed's project) and `{session:<title>}`, the one
+session with that title. The observed value is kept in the client's `waits`.
+
+A fault is `{"id", "method", "path", "when", "action", "status", "times"}`.
+`path` is a glob where `*` is the only wildcard and matches across `/`; query
+strings never match; it may differ per client (`{"electron", "native"}`) and
+take `{session:<title>}`. `when: "before"` keeps the request from the server,
+`"after"` lets the server answer first. `fail` answers with `status` (500 by
+default) and a JSON error body; before the server answers, Electron's response
+carries the request's own origin in its CORS headers so the page sees the
+status, not a CORS failure. `drop` closes the connection; `hold` keeps the
+request until `release`, after which later matches pass but still count. A
+held request the client abandoned is not sent on. `times` (default 1) limits
+the hits. WebSocket traffic, such as the terminal, cannot be faulted this way
+on either client. Each checkpoint records `faultHits`.
+
+`drop` and `pick` files are `{"name", "text"}`: each step's files are written
+into a new directory of their own under the client's run directory, so both
+clients receive the same names and bytes.
+
+`pick` chooses exactly one file and cannot cancel: the native chooser's
+location entry takes one path, and CDP can answer an intercepted chooser but
+not dismiss it the way a user does. On Electron it covers HTML file inputs,
+which the composer's Attach files uses; pickers that go through the main
+process's `dialog.showOpenDialog` (directories, theme import) are not
+intercepted. On native it needs the portal fixture, whose frontend currently
+refuses readiness without the Documents portal that `portal_fixture.py`
+deliberately does not start, so native `pick` fails at fixture startup until
+that fixture is qualified with it.
+
+`ime: {"compose": "nihao", "preedit": "你好"}` leaves a composition open;
+with `preedit`, Electron ends on that marked text and both clients must show
+it, so a capture of the composing state compares like with like. `{"commit":
+"candidate", "text": "你好"}` or `{"commit": "raw"}` commits it, and both
+clients must then contain the committed text. Electron's composition comes from
+CDP, not from an OS input method: its launch keeps `gtk-im-context-simple`
+because GTK's IBus selection can deadlock a private launch.
+
+Scenario options: `"fixture": "git"` gives each client a fresh copy of
+`isolated-server.mjs --git-fixture`'s repository at one fixed path under the
+seed root (`fixtures/git/fixture-repo`, with its bare remote beside it) and
+makes it the active project. The path is the same for both clients, so
+project IDs and row keys match; clients run serially and each starts from a
+new copy. `"model": "provider/model"` sets the profile's `defaultModel`
+preference in each copy, which new sessions start on. The server keeps that
+preference authoritative: a value written only to `settings.json` is replaced
+at startup.
+
+Each client's result keeps its `waits` (including expectation observations,
+drop outcomes and picker modes) and `restarts` (exit and relaunch records),
+also when the scenario has no capture.
+
+### Why the step services start per scenario and not per run
+
+A proxy in front of the native server, an input method on the display or a
+portal on the bus changes what the clients see. Starting them only for the
+scenarios whose steps need them keeps every other scenario's launch identical
+to the comparisons it was reviewed with.
+
+### Why faults sit in the Fetch domain for Electron and not in a proxy
+
+Electron runs its own server in process and the page reaches it at an address
+chosen at startup, with a token injected into the page. Pausing the page's
+own requests in CDP faults exactly the requests the reference makes, without
+relaunching Electron against an external server or changing its address.
+
+### Why `pick` intercepts the page's chooser and not `dialog.showOpenDialog`
+
+The composer's Attach files opens an HTML file input. Chromium shows that
+chooser without the main process's `dialog` module, so a stub there would
+never be called; the page-level interception is the path the reference
+actually takes.
+
+`step_probes.json` exercises every step kind on both clients:
+
+```sh
+bun run parity run --scenarios-file scripts/parity/step_probes.json --output /tmp/opencode/<new>
+```
+
+With another scenario file, the inventory's links to `scenarios.json` IDs
+still resolve, and a probe cannot declare a proof: no feature links a probe.
