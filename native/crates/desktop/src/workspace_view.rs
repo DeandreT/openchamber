@@ -126,6 +126,12 @@ impl Render for Workspace {
                 .render_host_recovery(&palette, window, cx)
                 .child(frame_markers(markers));
         }
+        if let Some(variant) = self.connection_recovery() {
+            let palette = cx.global::<Palette>().clone();
+            return self
+                .render_connection_recovery(variant, &palette, window, cx)
+                .child(frame_markers(markers));
+        }
         if self.authentication.visible {
             let palette = cx.global::<Palette>().clone();
             let direction = locale::strings(cx).direction();

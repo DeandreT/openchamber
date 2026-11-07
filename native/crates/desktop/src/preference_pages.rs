@@ -20,7 +20,7 @@ use crate::chrome::glyph;
 use crate::code_card::CodeWrap;
 use crate::general_settings::{
     Choice, DELETION_DIALOG, DRAFT_STARTERS, FOLLOW_UP, GeneralSettings, PERMISSION_DEFAULT,
-    PROMPT_NAVIGATOR, SHOW_CHATS, WORK_ENABLED,
+    PROMPT_NAVIGATOR, SHOW_CHATS, SUBAGENT_PROMPTS, WORK_ENABLED,
 };
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
@@ -60,7 +60,7 @@ impl ChatTab {
     pub(crate) fn for_search_target(item: &str) -> Option<Self> {
         match item {
             "chat.prompt-navigator" | "chat.code-block-line-wrap" => Some(Self::Messages),
-            "chat.follow-up-behavior" => Some(Self::Composer),
+            "chat.follow-up-behavior" | "chat.subagent-read-only-banner" => Some(Self::Composer),
             "chat.draft-starters-visible" => Some(Self::Assistance),
             _ => None,
         }
@@ -68,10 +68,11 @@ impl ChatTab {
 }
 
 /// The search target each control answers to, and its focus target.
-const CONTROLS: [&str; 8] = [
+const CONTROLS: [&str; 9] = [
     "chat.prompt-navigator",
     "chat.code-block-line-wrap",
     "chat.follow-up-behavior",
+    "chat.subagent-read-only-banner",
     "chat.draft-starters-visible",
     "sessions.permission-default",
     "sessions.show-chats",
@@ -456,6 +457,7 @@ impl PreferencePage {
         let boolean = |field| matches!(general.current_choice(field), Choice::Boolean(true));
         let prompt_navigator = boolean(PROMPT_NAVIGATOR);
         let starters = boolean(DRAFT_STARTERS);
+        let subagent_prompts = boolean(SUBAGENT_PROMPTS);
         let Choice::FollowUp(follow_up) = general.current_choice(FOLLOW_UP) else {
             unreachable!("the follow-up field holds a follow-up choice");
         };
@@ -528,10 +530,24 @@ impl PreferencePage {
                     FOLLOW_UP,
                     cx,
                 );
+                let subagents = self.checkbox(
+                    CheckboxRow {
+                        item: "chat.subagent-read-only-banner",
+                        label: "settings.openchamber.visual.field.allowPromptingSubagentSessions",
+                        aria: "settings.openchamber.visual.field.allowPromptingSubagentSessionsAria",
+                        info: None,
+                        checked: subagent_prompts,
+                        enabled,
+                        on_change: |this, value, cx| {
+                            this.change(SUBAGENT_PROMPTS, Choice::Boolean(value), cx)
+                        },
+                    },
+                    cx,
+                );
                 sections.push(section(
                     "settings.layout.chat.section.sending",
                     true,
-                    vec![row],
+                    vec![row, subagents],
                     cx,
                 ));
             }

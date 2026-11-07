@@ -174,6 +174,13 @@ pub(crate) const SEARCH_ITEMS: &[SearchItem] = &[
         keywords: "starter starters new session welcome suggestions",
     },
     SearchItem {
+        id: "chat.subagent-read-only-banner",
+        page: Page::Chat,
+        title: "settings.openchamber.visual.field.allowPromptingSubagentSessions",
+        description: None,
+        keywords: "subagent read only prompt banner",
+    },
+    SearchItem {
         id: "chat.follow-up-behavior",
         page: Page::Chat,
         title: "settings.openchamber.visual.section.followUpBehavior",

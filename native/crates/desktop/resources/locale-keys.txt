@@ -1081,3 +1081,14 @@ chat.snippetAutocomplete.footer
 chat.draftStarters.sectionSkills
 settings.page.snippets.title
 chat.sessionReference.unavailable
+chat.container.readOnlySubagentPromptBanner
+settings.openchamber.visual.field.allowPromptingSubagentSessions
+settings.openchamber.visual.field.allowPromptingSubagentSessionsAria
+onboarding.desktopRecovery.remoteUnreachable.title
+onboarding.desktopRecovery.remoteUnreachable.retry
+onboarding.desktopRecovery.incompatibleServer.title
+onboarding.desktopRecovery.remoteIncompatible.title
+onboarding.desktopRecovery.remoteIncompatible.description
+onboarding.desktopRecovery.common.useRemote
+onboarding.desktopRecovery.actions.retrying
+onboarding.remoteConnection.field.serverAddress

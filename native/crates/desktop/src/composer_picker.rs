@@ -765,37 +765,70 @@ mod tests {
     }
 
     #[gpui_kit::test]
-    fn readonly_child_exposes_disabled_submit(cx: &mut TestAppContext) {
+    fn readonly_child_shows_the_banner_with_stop_while_running(cx: &mut TestAppContext) {
+        use gpui_kit::ElementId;
+        use gpui_kit::test::TestWindowExt;
         use openchamber_native_core::ids::SessionId;
-        use openchamber_native_core::session::SessionRecord;
+        use openchamber_native_core::session::{LiveStatus, SessionRecord};
         use openchamber_native_core::session_index::SessionChange;
         let (window, workspace) = crate::workspace_tests::open(cx);
+        let child_id = SessionId::from("ses_readonly");
         cx.update_window(window, |_, window, cx| {
             window.activate_accessibility_for_test();
             workspace.update(cx, |workspace, cx| {
-                let mut child = SessionRecord::new(SessionId::from("ses_readonly"), "/project");
-                child.parent_id = Some(SessionId::from("ses_parent"));
+                // A child in a registered project, so selection admits it.
+                let parent = workspace.sessions.active()[0].clone();
+                let mut child = SessionRecord::new(
+                    child_id.clone(),
+                    parent.directory.clone().expect("synthetic sessions have a directory"),
+                );
+                child.parent_id = Some(parent.id.clone());
                 let _ = workspace.sessions.apply([SessionChange::Created(child)]);
-                workspace.select_session(SessionId::from("ses_readonly"), window, cx);
+                workspace.select_session(child_id.clone(), window, cx);
+                assert_eq!(workspace.selected.as_ref(), Some(&child_id));
                 workspace.composer.update(cx, |composer, cx| {
                     composer.set_value("retained child draft", window, cx)
                 });
             });
             window.draw(cx).clear(cx);
-            let label = locale::strings(cx).get("chat.chatInput.actions.sendMessageAria");
+            let text = locale::strings(cx).get("chat.container.readOnlySubagentPromptBanner");
             let tree = window
                 .accessibility_tree_for_test()
                 .expect("accessible tree");
-            let node = tree
-                .nodes
-                .iter()
-                .find(|(_, node)| {
-                    node.role() == Role::Button && node.label() == Some(label.as_ref())
-                })
-                .expect("submit button");
             assert!(
-                node.1.is_disabled(),
-                "readonly submit exposes its disabled state"
+                tree.nodes
+                    .iter()
+                    .any(|(_, node)| node.role() == Role::Status
+                        && node.label() == Some(text.as_ref())),
+                "the banner names why the session takes no prompts"
+            );
+            window.render_frame(cx);
+            assert!(
+                window
+                    .try_find(ElementId::Name("composer-submit".into()))
+                    .is_none(),
+                "no composer is mounted"
+            );
+            assert!(
+                window
+                    .try_find(ElementId::Name("read-only-stop".into()))
+                    .is_none(),
+                "an idle subagent has no Stop"
+            );
+            workspace.update(cx, |workspace, _| {
+                workspace.live_status.insert(child_id.clone(), LiveStatus::Busy);
+            });
+            window.render_frame(cx);
+            assert!(
+                window
+                    .try_find(ElementId::Name("read-only-stop".into()))
+                    .is_some(),
+                "a running subagent can be stopped"
+            );
+            assert_eq!(
+                workspace.read(cx).composer.read(cx).value().as_ref(),
+                "retained child draft",
+                "the draft is kept for when the session takes prompts again"
             );
         })
         .expect("window opens");

@@ -299,6 +299,7 @@ pub(crate) struct Settings {
     pub session_goal_default_budget_enabled: Option<Value>,
     pub session_goal_default_budget: Option<Value>,
     pub prompt_navigator_enabled: Option<Value>,
+    pub allow_prompting_subagent_sessions: Option<Value>,
     pub show_deletion_dialog: Option<Value>,
     pub permission_default_mode: Option<Value>,
     pub follow_up_behavior: Option<Value>,

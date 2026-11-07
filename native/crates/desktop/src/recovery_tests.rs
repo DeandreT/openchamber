@@ -729,6 +729,66 @@ fn child_prompt_policy_blocks_send_and_retry_without_consuming_text(cx: &mut Tes
 }
 
 #[gpui_kit::test]
+fn subagent_prompting_follows_the_profile_setting_through_dispatch(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let key = tests::key("subagent-setting-runtime", "ses_subagent_setting");
+    let server = Server::new(fixture.journal(), false);
+    let (window, workspace) = open(cx, &server, &fixture, &key);
+    ready(cx, &workspace);
+    let allow = |workspace: &mut Workspace, allowed: bool| {
+        workspace
+            .send_catalog
+            .settings
+            .as_mut()
+            .expect("settings read")
+            .allow_prompting_subagent_sessions = Some(allowed);
+    };
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            configure_send(workspace, &key, window, cx);
+            let mut child = workspace
+                .sessions
+                .get(&key.session)
+                .expect("session")
+                .clone();
+            child.parent_id = Some("ses_parent".into());
+            let load = workspace.sessions.begin_load();
+            let _ = workspace.sessions.complete_load(load, vec![child]);
+            assert!(workspace.selected_prompt_read_only());
+            allow(workspace, true);
+            assert!(workspace.prompt_allowed(&key));
+            assert!(workspace.composer_editable());
+            assert!(!workspace.selected_prompt_read_only());
+            workspace.composer.update(cx, |composer, cx| {
+                composer.set_value("revoked while preparing", window, cx)
+            });
+            workspace.submit_connected(window, cx);
+            assert!(workspace.send_attempts.is_active(&key));
+            // Turning the setting off before the post refuses the dispatch.
+            allow(workspace, false);
+        });
+    })
+    .expect("window open");
+    wait(cx, |cx| {
+        cx.read(|cx| !workspace.read(cx).send_attempts.is_active(&key))
+    });
+    assert_eq!(server.prompt_count(), 0, "a revoked setting never posts");
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            assert_eq!(
+                workspace.composer.read(cx).value().as_ref(),
+                "revoked while preparing"
+            );
+            allow(workspace, true);
+            workspace.submit_connected(window, cx);
+        });
+    })
+    .expect("window open");
+    wait(cx, |_| server.prompt_count() == 1);
+    close(cx, window, &workspace);
+}
+
+#[gpui_kit::test]
 fn child_prompt_policy_rechecks_metadata_after_durable_preparation(cx: &mut TestAppContext) {
     use openchamber_native_core::session::{MetadataFacts, SessionKind, SessionPatch};
     use openchamber_native_core::session_index::SessionChange;

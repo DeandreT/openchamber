@@ -17,6 +17,7 @@ use gpui_kit::{
 use openchamber_native_core::permission_mode::PermissionMode;
 
 use crate::activation::on_activate;
+use crate::baseline::CssTextExt;
 use crate::chrome::{self, ButtonTone, IconButton, glyph};
 use crate::composer_autocomplete::PickerKey;
 use crate::context_panel;
@@ -203,9 +204,86 @@ impl Workspace {
                         window,
                         self.chat_area_width(window),
                     ))
-                    .children(self.render_btw_panel(palette, direction, cx))
-                    .children(self.render_request_dock(palette, window, cx))
-                    .child(self.render_composer_box(palette, direction, window, cx)),
+                    .map(|column| {
+                        if self.selected_prompt_read_only() {
+                            // The docks stay: a subagent still asks, and the
+                            // parent shows the same requests.
+                            column
+                                .children(self.render_request_dock(palette, window, cx))
+                                .child(self.render_read_only_banner(palette, direction, cx))
+                        } else {
+                            column
+                                .children(self.render_btw_panel(palette, direction, cx))
+                                .children(self.render_request_dock(palette, window, cx))
+                                .child(self.render_composer_box(palette, direction, window, cx))
+                        }
+                    }),
+            )
+            .into_any_element()
+    }
+
+    /// `ReadOnlyPromptBanner`: in place of the composer of a session that
+    /// takes no prompts, with Stop while its turn runs.
+    fn render_read_only_banner(
+        &self,
+        palette: &Palette,
+        direction: Direction,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let strings = locale::strings(cx);
+        let text = strings.get("chat.container.readOnlySubagentPromptBanner");
+        let running = self
+            .selected
+            .as_ref()
+            .is_some_and(|id| self.is_streaming(id));
+        let stop_label = strings.get("chat.chatInput.actions.stopGeneratingAria");
+        let hover = palette.hover;
+        let stop = running.then(|| {
+            on_activate(
+                div()
+                    .id("read-only-stop")
+                    .role(Role::Button)
+                    .accessibility_id("read-only-stop")
+                    .aria_label(stop_label.clone())
+                    .size(px(32.0))
+                    .my(px(-6.0))
+                    .margin_end(direction, px(-8.0))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(6.0))
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(hover))
+                    .tooltip(move |window, cx| Tooltip::new(stop_label.clone()).build(window, cx))
+                    .child(glyph("stop", 16.0, palette.status_error)),
+                cx,
+                |this, window, cx| this.stop(window, cx),
+            )
+            .test_support()
+        });
+        div()
+            .id("read-only-prompt-banner")
+            .accessibility_id("read-only-prompt-banner")
+            .role(Role::Status)
+            .aria_label(text.clone())
+            .w_full()
+            .pt(px(12.0))
+            .child(
+                div()
+                    .flex_row_from(direction)
+                    .items_center()
+                    .gap(px(8.0))
+                    .rounded(px(16.0))
+                    .border_1()
+                    .border_color(palette.border.opacity(0.7))
+                    .bg(palette.background)
+                    .px(px(16.0))
+                    .py(px(12.0))
+                    .css_text(0.843_75, 1.25, cx)
+                    .text_color(palette.muted_foreground)
+                    .child(div().min_w_0().flex_1().text_center().child(text))
+                    .children(stop),
             )
             .into_any_element()
     }

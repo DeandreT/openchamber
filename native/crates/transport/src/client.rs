@@ -65,6 +65,8 @@ pub struct SettingsChanges {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_navigator_enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_prompting_subagent_sessions: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub draft_starters_visible: Option<bool>,
     /// `ask`, `safety` or `auto`.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -243,6 +245,9 @@ pub struct ServerSettings {
     pub keep_work_in_place: Option<bool>,
     pub work_enabled: Option<bool>,
     pub prompt_navigator_enabled: Option<bool>,
+    /// `allowPromptingSubagentSessions`: absent keeps subagent sessions
+    /// read-only.
+    pub allow_prompting_subagent_sessions: Option<bool>,
     /// `sessionGoalEnabled`: absent shows the goal controls.
     pub goal_enabled: Option<bool>,
     /// `sessionGoalChecker`: who checks a goal's progress.
@@ -447,6 +452,10 @@ impl ServerSettings {
                 .and_then(Value::as_bool),
             prompt_navigator_enabled: settings
                 .prompt_navigator_enabled
+                .as_ref()
+                .and_then(Value::as_bool),
+            allow_prompting_subagent_sessions: settings
+                .allow_prompting_subagent_sessions
                 .as_ref()
                 .and_then(Value::as_bool),
             goal_enabled: settings

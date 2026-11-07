@@ -140,6 +140,12 @@ pub struct Connection {
     pub loaded: bool,
     /// The stream dropped since it last connected.
     pub stale: bool,
+    /// An attempt of this connection reached the server. It survives
+    /// `restart`: a later failure keeps the last valid state on screen.
+    pub(crate) established: bool,
+    /// What the recovery screen shows while this connection has never been
+    /// established. It survives `restart`, so a retry keeps the screen.
+    pub(crate) recovery: Option<crate::connection_recovery::RecoveryVariant>,
     pub connect_task: Option<Task<()>>,
     pub stream_task: Option<Task<()>>,
     pub control_task: Option<Task<()>>,
@@ -182,6 +188,8 @@ impl Connection {
             generation: 0,
             loaded: false,
             stale: false,
+            established: false,
+            recovery: None,
             connect_task: None,
             stream_task: None,
             control_task: None,

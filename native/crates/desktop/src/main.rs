@@ -53,6 +53,7 @@ mod composer_preparation;
 mod composer_references;
 mod composer_view;
 mod connection;
+mod connection_recovery;
 mod context_panel;
 mod create_attempt;
 mod credential_store;
