@@ -120,6 +120,8 @@ pub enum ServerEvent {
     SessionFoldersChanged {
         updated_at: i64,
     },
+    /// A notification the server raised for this user.
+    Notification(crate::notification::UiNotification),
     /// A type this client does not model.
     Unsupported {
         kind: String,
@@ -940,6 +942,14 @@ fn translate_openchamber(kind: &str, payload: &Value) -> Option<Vec<ServerEvent>
             ),
         ]);
     }
+    if kind == "openchamber:notification" {
+        return Some(vec![crate::notification::decode(properties).map_or_else(
+            || ServerEvent::Unsupported {
+                kind: kind.to_owned(),
+            },
+            ServerEvent::Notification,
+        )]);
+    }
     if kind == "openchamber:auto-review.updated" {
         // A malformed broadcast changes nothing; the next read corrects it.
         return Some(vec![crate::review::decode_update(properties).map_or_else(
@@ -1064,6 +1074,27 @@ fn tool_text(content: Option<&Value>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decodes_notification_broadcasts() {
+        let frame = decode_frame(
+            r#"{"type":"event","payload":{"type":"openchamber:notification","properties":{"kind":"completion","sessionId":"ses_1","directory":"/repo","title":"Ready","body":"Done","requireHidden":true,"desktopNotificationDelivered":false,"desktopStdoutActive":false}}}"#,
+        )
+        .expect("valid");
+        let [ServerEvent::Notification(notification)] = frame.events.as_slice() else {
+            panic!("a notification: {:?}", frame.events);
+        };
+        assert_eq!(notification.title.as_deref(), Some("Ready"));
+        assert_eq!(notification.directory.as_deref(), Some("/repo"));
+        let malformed = decode_frame(
+            r#"{"type":"event","payload":{"type":"openchamber:notification","properties":{"title":1}}}"#,
+        )
+        .expect("valid frame");
+        assert!(matches!(
+            malformed.events.as_slice(),
+            [ServerEvent::Unsupported { .. }]
+        ));
+    }
 
     #[test]
     fn decodes_message_queue_broadcasts() {

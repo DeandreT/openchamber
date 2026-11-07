@@ -23,9 +23,11 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 
 use crate::credential::Credential;
+use crate::dictation::SttProvider;
 use crate::endpoint::Endpoint;
 use crate::error::TransportError;
 use crate::identity::{PART_SHELLS_CAPABILITY, ServerIdentity};
+use crate::notification::NotificationTemplates;
 use crate::projection;
 use crate::wire;
 
@@ -91,6 +93,42 @@ pub struct SettingsChanges {
     /// saved one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub shortcut_overrides: Option<Overrides>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_notifications_enabled: Option<bool>,
+    /// `always` or `hidden-only`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notification_mode: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notify_on_completion: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notify_on_pull_requests: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notify_on_subtasks: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notify_on_error: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notify_on_question: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notification_templates: Option<NotificationTemplates>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dictation_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dictation_auto_send: Option<bool>,
+    /// `local` or `openai-compatible`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stt_provider: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stt_server_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stt_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stt_endpoint_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stt_local_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stt_language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stt_correct_transcript: Option<bool>,
 }
 
 fn serialize_efforts<S: serde::Serializer>(
@@ -268,6 +306,26 @@ pub struct ServerSettings {
     pub draft_starters_visible: Option<bool>,
     /// `shortcutOverrides`; absent or malformed leaves the defaults.
     pub shortcut_overrides: Option<Overrides>,
+    /// The Notifications page's fields; the server applies them itself.
+    pub native_notifications_enabled: Option<bool>,
+    /// `notificationMode` is `always`: notify while the window has focus.
+    pub notification_always: Option<bool>,
+    pub notify_on_completion: Option<bool>,
+    pub notify_on_pull_requests: Option<bool>,
+    pub notify_on_subtasks: Option<bool>,
+    pub notify_on_error: Option<bool>,
+    pub notify_on_question: Option<bool>,
+    pub notification_templates: Option<NotificationTemplates>,
+    /// Dictation: the composer's microphone and the server's transcription.
+    pub dictation_enabled: Option<bool>,
+    pub dictation_auto_send: Option<bool>,
+    pub stt_provider: Option<SttProvider>,
+    pub stt_server_url: Option<String>,
+    pub stt_model: Option<String>,
+    pub stt_endpoint_path: Option<String>,
+    pub stt_local_model: Option<String>,
+    pub stt_language: Option<String>,
+    pub stt_correct_transcript: Option<bool>,
 }
 
 /// A registered project's display label, trimmed.
@@ -290,6 +348,16 @@ pub struct ProjectDefaults {
 
 impl ServerSettings {
     fn from_wire(settings: wire::Settings) -> Self {
+        let boolean = |value: &Option<Value>| value.as_ref().and_then(Value::as_bool);
+        // `parseTrimmedStringUpTo`: trimmed, and dropped past the limit.
+        let text = |value: &Option<Value>, limit: usize| {
+            value
+                .as_ref()
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| text.chars().count() <= limit)
+                .map(str::to_owned)
+        };
         let home_directory = non_empty_string(settings.home_directory);
         let paths = settings
             .projects
@@ -523,6 +591,34 @@ impl ServerSettings {
                             .filter_map(|(key, value)| Some((key.as_str(), value.as_str()?))),
                     )
                 }),
+            native_notifications_enabled: boolean(&settings.native_notifications_enabled),
+            notification_always: match settings.notification_mode.as_ref().and_then(Value::as_str) {
+                Some("always") => Some(true),
+                Some("hidden-only") => Some(false),
+                _ => None,
+            },
+            notify_on_completion: boolean(&settings.notify_on_completion),
+            notify_on_pull_requests: boolean(&settings.notify_on_pull_requests),
+            notify_on_subtasks: boolean(&settings.notify_on_subtasks),
+            notify_on_error: boolean(&settings.notify_on_error),
+            notify_on_question: boolean(&settings.notify_on_question),
+            notification_templates: settings
+                .notification_templates
+                .as_ref()
+                .and_then(NotificationTemplates::parse),
+            dictation_enabled: boolean(&settings.dictation_enabled),
+            dictation_auto_send: boolean(&settings.dictation_auto_send),
+            stt_provider: match settings.stt_provider.as_ref().and_then(Value::as_str) {
+                Some("local") => Some(SttProvider::Local),
+                Some("openai-compatible") => Some(SttProvider::OpenAiCompatible),
+                _ => None,
+            },
+            stt_server_url: text(&settings.stt_server_url, 2048),
+            stt_model: text(&settings.stt_model, 256),
+            stt_endpoint_path: text(&settings.stt_endpoint_path, 1024),
+            stt_local_model: text(&settings.stt_local_model, 256),
+            stt_language: text(&settings.stt_language, 64),
+            stt_correct_transcript: boolean(&settings.stt_correct_transcript),
             permission_default_mode: match settings
                 .permission_default_mode
                 .as_ref()
@@ -1401,6 +1497,72 @@ mod tests {
         assert_eq!(
             serde_json::to_value(SettingsChanges::default()).expect("serializes"),
             json!({})
+        );
+    }
+
+    #[test]
+    fn notification_and_voice_settings_read_and_write_the_exact_server_fields() {
+        let settings = ServerSettings::from_wire(
+            serde_json::from_value(json!({
+                "nativeNotificationsEnabled": true,
+                "notificationMode": "always",
+                "notifyOnSubtasks": false,
+                "notifyOnQuestion": "yes",
+                "notificationTemplates": {"completion": {"title": "Done", "message": ""}},
+                "dictationEnabled": false,
+                "sttProvider": "openai-compatible",
+                "sttServerUrl": "  http://localhost:8001/v1 ",
+                "sttLanguage": "x".repeat(65),
+                "sttCorrectTranscript": true,
+            }))
+            .expect("settings parse"),
+        );
+        assert_eq!(settings.native_notifications_enabled, Some(true));
+        assert_eq!(settings.notification_always, Some(true));
+        assert_eq!(settings.notify_on_subtasks, Some(false));
+        assert_eq!(
+            settings.notify_on_question, None,
+            "a malformed toggle is unknown"
+        );
+        assert_eq!(
+            settings
+                .notification_templates
+                .as_ref()
+                .map(|templates| templates.completion.title.as_str()),
+            Some("Done")
+        );
+        assert_eq!(settings.dictation_enabled, Some(false));
+        assert_eq!(settings.stt_provider, Some(SttProvider::OpenAiCompatible));
+        assert_eq!(
+            settings.stt_server_url.as_deref(),
+            Some("http://localhost:8001/v1")
+        );
+        assert_eq!(settings.stt_language, None, "past its limit");
+        assert_eq!(settings.stt_correct_transcript, Some(true));
+        let changes = SettingsChanges {
+            notification_mode: Some("hidden-only"),
+            notify_on_error: Some(false),
+            dictation_auto_send: Some(true),
+            stt_provider: Some("local"),
+            stt_local_model: Some("whisper-tiny-int8".into()),
+            notification_templates: Some(NotificationTemplates::default()),
+            ..SettingsChanges::default()
+        };
+        assert_eq!(
+            serde_json::to_value(&changes).expect("serializes"),
+            json!({
+                "notificationMode": "hidden-only",
+                "notifyOnError": false,
+                "dictationAutoSend": true,
+                "sttProvider": "local",
+                "sttLocalModel": "whisper-tiny-int8",
+                "notificationTemplates": {
+                    "completion": {"title": "", "message": ""},
+                    "error": {"title": "", "message": ""},
+                    "question": {"title": "", "message": ""},
+                    "subtask": {"title": "", "message": ""},
+                },
+            })
         );
     }
 

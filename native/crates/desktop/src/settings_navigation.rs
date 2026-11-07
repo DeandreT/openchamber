@@ -8,19 +8,23 @@ pub(crate) enum Page {
     General,
     Appearance,
     Chat,
+    Notifications,
     Sessions,
     Shortcuts,
+    Voice,
     Hosts,
 }
 
 impl Page {
     /// `pageOrder` in `SettingsView.tsx`, limited to implemented pages.
-    pub(crate) const ALL: [Self; 6] = [
+    pub(crate) const ALL: [Self; 8] = [
         Self::General,
         Self::Appearance,
         Self::Chat,
+        Self::Notifications,
         Self::Sessions,
         Self::Shortcuts,
+        Self::Voice,
         Self::Hosts,
     ];
 
@@ -29,6 +33,8 @@ impl Page {
             Self::General => "general",
             Self::Appearance => "appearance",
             Self::Chat => "chat",
+            Self::Notifications => "notifications",
+            Self::Voice => "voice",
             Self::Sessions => "sessions",
             Self::Shortcuts => "shortcuts",
             Self::Hosts => "remote-instances",
@@ -40,6 +46,8 @@ impl Page {
             Self::General => "settings.page.general.title",
             Self::Appearance => "settings.page.appearance.title",
             Self::Chat => "settings.page.chat.title",
+            Self::Notifications => "settings.page.notifications.title",
+            Self::Voice => "settings.page.voice.title",
             Self::Sessions => "settings.page.sessions.title",
             Self::Shortcuts => "settings.page.shortcuts.title",
             Self::Hosts => "settings.page.remoteInstances.title",
@@ -48,9 +56,13 @@ impl Page {
 
     pub(crate) fn group(self) -> &'static str {
         match self {
-            Self::General | Self::Appearance | Self::Chat | Self::Sessions | Self::Shortcuts => {
-                "settings.view.nav.group.general"
-            }
+            Self::General
+            | Self::Appearance
+            | Self::Chat
+            | Self::Notifications
+            | Self::Sessions
+            | Self::Shortcuts
+            | Self::Voice => "settings.view.nav.group.general",
             Self::Hosts => "settings.view.nav.group.projects",
         }
     }
@@ -60,6 +72,8 @@ impl Page {
             Self::General => "settings.page.general.description",
             Self::Appearance => "settings.page.appearance.description",
             Self::Chat => "settings.page.chat.description",
+            Self::Notifications => "settings.page.notifications.description",
+            Self::Voice => "settings.page.voice.description",
             Self::Sessions => "settings.page.sessions.description",
             Self::Shortcuts => "settings.page.shortcuts.description",
             Self::Hosts => "settings.remoteInstances.direct.description",
@@ -71,6 +85,8 @@ impl Page {
             Self::General => "settings-3",
             Self::Appearance => "palette",
             Self::Chat => "chat-ai-3",
+            Self::Notifications => "notification-3",
+            Self::Voice => "mic",
             Self::Sessions => "chat-history",
             Self::Shortcuts => "command",
             Self::Hosts => "computer",
@@ -214,6 +230,41 @@ pub(crate) const SEARCH_ITEMS: &[SearchItem] = &[
         title: "settings.openchamber.keyboardShortcuts.title",
         description: Some("settings.openchamber.keyboardShortcuts.tooltip"),
         keywords: "keyboard hotkeys bindings",
+    },
+    SearchItem {
+        id: "notifications.delivery",
+        page: Page::Notifications,
+        title: "settings.notifications.page.delivery.title",
+        description: None,
+        keywords: "desktop notifications system notifications",
+    },
+    SearchItem {
+        id: "notifications.events",
+        page: Page::Notifications,
+        title: "settings.notifications.page.events.title",
+        description: None,
+        keywords: "completion subtasks errors questions",
+    },
+    SearchItem {
+        id: "notifications.pullRequests",
+        page: Page::Notifications,
+        title: "settings.notifications.pullRequests.label",
+        description: Some("settings.notifications.pullRequests.info"),
+        keywords: "pull requests merge queue auto-merge checks github",
+    },
+    SearchItem {
+        id: "voice.speech-recognition",
+        page: Page::Voice,
+        title: "settings.voice.page.section.speechRecognition",
+        description: None,
+        keywords: "stt dictation voice input transcribe whisper parakeet qwen microphone misheard correct fix small model",
+    },
+    SearchItem {
+        id: "voice.dictation-auto-send",
+        page: Page::Voice,
+        title: "settings.voice.page.field.dictationAutoSend",
+        description: Some("settings.voice.page.field.dictationAutoSendInfo"),
+        keywords: "dictation voice input send submit automatic",
     },
     SearchItem {
         id: "remote-instances.direct-hosts",

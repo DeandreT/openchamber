@@ -56,6 +56,16 @@ pub(crate) struct HostManager {
 }
 
 impl HostManager {
+    /// Whether `endpoint` is one of the saved hosts, once they are read.
+    pub(crate) fn has_saved_endpoint(
+        &self,
+        endpoint: &openchamber_native_transport::endpoint::Endpoint,
+    ) -> bool {
+        self.profiles
+            .as_ref()
+            .is_some_and(|profiles| profiles.hosts.iter().any(|host| &host.endpoint == endpoint))
+    }
+
     fn apply_profiles(&mut self, profiles: HostProfiles, cx: &mut Context<Self>) {
         let _ = self.owner.update(cx, |owner, cx| {
             if let Some(connection) = owner.connection.as_mut() {
@@ -466,6 +476,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let was_unconnected = self.connection.is_none();
+        // A dictation streams to the host it started on.
+        self.cancel_dictation(cx);
         self.save_composer_draft(cx);
         self.queue_persistence(cx);
         let config = crate::connection::ServerConfig::for_endpoint(endpoint);
