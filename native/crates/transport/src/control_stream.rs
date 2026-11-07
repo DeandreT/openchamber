@@ -21,8 +21,12 @@ const SILENCE_LIMIT: Duration = Duration::from_secs(40);
 #[derive(Debug, PartialEq, Eq)]
 pub enum ControlEvent {
     Connected,
-    WorktreeChanged { directories: Vec<String> },
+    WorktreeChanged {
+        directories: Vec<String>,
+    },
     SessionCreated,
+    /// A terminal was created, closed or exited on the server.
+    TerminalSessionsChanged,
 }
 
 /// A control connection outcome. Failure never means empty topology.
@@ -206,6 +210,7 @@ fn decode(data: &[u8]) -> Result<Option<ControlEvent>, TransportError> {
     match envelope.kind.as_str() {
         "openchamber:event-stream-ready" => Ok(Some(ControlEvent::Connected)),
         "openchamber:session-created" => Ok(Some(ControlEvent::SessionCreated)),
+        "openchamber:terminal-sessions-changed" => Ok(Some(ControlEvent::TerminalSessionsChanged)),
         "openchamber:worktree-changed" => {
             #[derive(Deserialize)]
             struct Changed {

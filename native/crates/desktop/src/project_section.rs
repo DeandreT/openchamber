@@ -1,14 +1,13 @@
 //! The work status card's Project section (`WorkStatusPrimaryGroup.tsx`): the
-//! project's name with the open-in-app control, the attention callout, the
-//! branch and changed-files rows from the session directory's Git status, and
-//! the project action row.
+//! project's name with the open-in-app control, the attention callout and the
+//! branch and changed-files rows from the session directory's Git status. It
+//! also reads the project's setup, whose actions the header's button runs
+//! (`project_action_run.rs`); the card shows no action, as the web's does.
 //!
 //! The status is read when a session's directory comes into view, again when
 //! the last read is over five seconds old as the web's `ensureStatus` does,
 //! and once a burst of finished file-changing tool calls in an open session
-//! settles. Nested repositories, pull request rows, and running or choosing
-//! project actions are not ported yet; the action row shows what the web's
-//! shows before anything runs.
+//! settles. Nested repositories and pull request rows are not ported yet.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -20,7 +19,7 @@ use gpui_kit::{
 };
 use openchamber_native_core::chat_roots;
 use openchamber_native_core::path;
-use openchamber_native_core::project_actions::{ProjectAction, ShownAction};
+use openchamber_native_core::project_actions::ProjectSetup;
 use openchamber_native_core::repository::{Attention, GitStatusRead, RepositoryStatus};
 use openchamber_native_transport::error::TransportError;
 
@@ -40,12 +39,10 @@ const STATUS_STALE: Duration = Duration::from_secs(5);
 /// `TOOL_GIT_REFRESH_WINDOW_MS`: finished tool calls within this window
 /// share one status read.
 const TOOL_REFRESH_WINDOW: Duration = Duration::from_millis(250);
-/// The open-in-app control's 24 px buttons with 16 px glyphs, the action
-/// row's 20 px chevron button.
+/// The open-in-app control's 24 px buttons with 16 px glyphs.
 const APP_BUTTON: f32 = 24.0;
 const APP_GLYPH: f32 = 16.0;
 const APP_ICON_OPACITY: f32 = 0.85;
-const ACTION_CHEVRON: f32 = 20.0;
 
 /// One directory's Git status reads.
 #[derive(Default)]
@@ -57,12 +54,12 @@ struct GitEntry {
     refresh: Option<gpui_kit::Task<()>>,
 }
 
-/// One project's configured actions.
+/// One project's setup.
 #[derive(Default)]
 struct ActionsEntry {
     /// `None` until read; a failed read shows no configured action, as the
     /// web falls back to its empty setup.
-    actions: Option<Result<Vec<ProjectAction>, TransportError>>,
+    setup: Option<Result<ProjectSetup, TransportError>>,
     _fetch: Option<gpui_kit::Task<()>>,
 }
 
@@ -99,13 +96,13 @@ impl ProjectReadouts {
 
 /// What the section is about: the session's directory and the project whose
 /// actions run there.
-struct Subject {
-    directory: String,
+pub(crate) struct Subject {
+    pub(crate) directory: String,
     /// The project the directory belongs to, for its name.
-    project_path: Option<String>,
-    /// The project whose actions the row offers: the directory's, else the
-    /// active one; none in a managed Chat.
-    action_project: Option<String>,
+    pub(crate) project_path: Option<String>,
+    /// The project whose actions the header offers: the directory's, else
+    /// the active one; none in a managed Chat.
+    pub(crate) action_project: Option<String>,
 }
 
 pub(crate) struct HeaderProjectMeta {
@@ -140,7 +137,7 @@ impl Workspace {
         (project.is_some() || branch.is_some()).then_some(HeaderProjectMeta { project, branch })
     }
 
-    fn project_subject(&self) -> Option<Subject> {
+    pub(crate) fn project_subject(&self) -> Option<Subject> {
         let directory = if self.selected.is_some() {
             let session = self.selected_session()?;
             path::normalize_optional(session.directory.as_deref())?
@@ -301,6 +298,54 @@ impl Workspace {
             .fetch = Some(fetch);
     }
 
+    /// The project's setup once read; a failed read offers no action.
+    pub(crate) fn project_setup(&self, project_path: &str) -> Option<&ProjectSetup> {
+        self.project_readouts
+            .actions
+            .get(project_path)?
+            .setup
+            .as_ref()?
+            .as_ref()
+            .ok()
+    }
+
+    /// This instance now trusts the project's shared commands with `hash`:
+    /// the prompt stays away at once, and the answer is recorded on the
+    /// server. A failed record brings the prompt back with the next read.
+    pub(crate) fn trusted_shared_setup(
+        &mut self,
+        project_path: &str,
+        hash: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(Some(Ok(setup))) = self
+            .project_readouts
+            .actions
+            .get_mut(project_path)
+            .map(|entry| entry.setup.as_mut())
+        {
+            setup.untrusted = None;
+        }
+        let Some(connection) = self.connection.as_ref() else {
+            return;
+        };
+        let Some(client) = connection.client.clone() else {
+            return;
+        };
+        let project = project_path.to_owned();
+        let hash = hash.to_owned();
+        let record = connection
+            .network
+            .run(async move { client.trust_shared_setup(&project, &hash).await });
+        cx.background_executor()
+            .spawn(async move {
+                if let Some(Err(error)) = record.await {
+                    tracing::warn!(%error, "the trust answer could not be recorded");
+                }
+            })
+            .detach();
+    }
+
     fn read_project_actions(&mut self, project_path: &str, cx: &mut Context<Self>) {
         let Some(connection) = self.connection.as_ref() else {
             return;
@@ -311,7 +356,7 @@ impl Workspace {
         let read_path = project_path.to_owned();
         let task = connection
             .network
-            .run(async move { client.project_actions(&read_path).await });
+            .run(async move { client.project_setup(&read_path).await });
         let key = project_path.to_owned();
         let fetch = cx.spawn(async move |this, cx| {
             let Some(outcome) = task.await else {
@@ -321,18 +366,14 @@ impl Workspace {
                 if let Err(error) = &outcome {
                     tracing::debug!(%error, "the project actions could not be read");
                 }
-                this.project_readouts
-                    .actions
-                    .entry(key)
-                    .or_default()
-                    .actions = Some(outcome);
+                this.project_readouts.actions.entry(key).or_default().setup = Some(outcome);
                 cx.notify();
             });
         });
         self.project_readouts.actions.insert(
             project_path.to_owned(),
             ActionsEntry {
-                actions: None,
+                setup: None,
                 _fetch: Some(fetch),
             },
         );
@@ -373,7 +414,7 @@ impl Workspace {
     }
 
     /// The section, when the session's directory has a branch, changes or an
-    /// operation needing attention, or its project has actions to offer.
+    /// operation needing attention, or the open-in-app control applies.
     pub(crate) fn render_project_section(
         &self,
         palette: &Palette,
@@ -393,7 +434,7 @@ impl Workspace {
         let has_readout = status.is_some_and(|status| {
             status.branch.is_some() || status.changed().is_some() || status.attention.is_some()
         });
-        if !has_readout && subject.action_project.is_none() {
+        if !has_readout && (subject.action_project.is_none() || !self.desktop_local()) {
             return None;
         }
         let strings = locale::strings(cx);
@@ -404,23 +445,6 @@ impl Workspace {
         let mut rows: Vec<AnyElement> = Vec::new();
         if let Some(status) = status {
             rows.extend(self.repository_rows(status, strings, palette, direction, cx));
-        }
-        if let Some(project) = &subject.action_project {
-            let actions = self
-                .project_readouts
-                .actions
-                .get(project)
-                .and_then(|entry| entry.actions.as_ref())
-                .and_then(|outcome| outcome.as_ref().ok())
-                .map(Vec::as_slice)
-                .unwrap_or_default();
-            rows.push(render_action_row(
-                ShownAction::of(actions),
-                strings,
-                palette,
-                direction,
-                cx,
-            ));
         }
         let summary = subject
             .action_project
@@ -694,56 +718,6 @@ fn render_callout(
                 .css_text(context_panel::ROW_SIZE, context_panel::ROW_LINE, cx)
                 .font_weight(FontWeight::MEDIUM)
                 .child(label),
-        )
-        .into_any_element()
-}
-
-/// The action row as `ProjectActionsButton` shows an action before it runs:
-/// its glyph and name, the run glyph, and the chevron of the action menu.
-fn render_action_row(
-    shown: ShownAction<'_>,
-    strings: &Strings,
-    palette: &Palette,
-    direction: Direction,
-    cx: &Context<Workspace>,
-) -> AnyElement {
-    let name: SharedString = match shown {
-        ShownAction::Configured(action) => action.name.clone().into(),
-        ShownAction::AutoDiscover => strings.get("projectActions.actions.autoDiscover"),
-    };
-    div()
-        .h(px(context_panel::ROW_HEIGHT))
-        .px(px(4.0))
-        .flex_row_from(direction)
-        .items_center()
-        .gap(px(8.0))
-        .text_color(palette.muted_foreground)
-        .child(
-            div()
-                .flex_1()
-                .min_w_0()
-                .flex_row_from(direction)
-                .items_center()
-                .gap(px(8.0))
-                .child(glyph(shown.icon(), 16.0, palette.muted_foreground))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .css_text(context_panel::ROW_SIZE, context_panel::ROW_LINE, cx)
-                        .child(name),
-                )
-                .child(glyph("play", 16.0, palette.muted_foreground)),
-        )
-        .child(
-            div()
-                .size(px(ACTION_CHEVRON))
-                .flex_shrink_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(glyph("arrow-down-s", 16.0, palette.muted_foreground)),
         )
         .into_any_element()
 }

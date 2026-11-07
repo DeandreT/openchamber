@@ -11,8 +11,8 @@ use openchamber_native_transport::client::ServerClient;
 use openchamber_native_transport::credential::Credential;
 use openchamber_native_transport::endpoint::Endpoint;
 use openchamber_native_transport::terminal::{
-    CreateTerminal, MAX_FRAME_BYTES, SocketTiming, TerminalApi, TerminalEvent, TerminalSocket,
-    TerminalStatus, ThemeMode,
+    ActionCommand, CreateTerminal, MAX_FRAME_BYTES, SocketTiming, TerminalApi, TerminalEvent,
+    TerminalPurpose, TerminalSocket, TerminalStatus, ThemeMode,
 };
 use serde_json::{Value, json};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -687,4 +687,54 @@ async fn refusals_keep_the_server_message_and_code() {
         full.to_string()
             .contains("Maximum terminal sessions reached")
     );
+}
+
+#[tokio::test]
+async fn an_action_run_names_its_execution_command_and_purpose() {
+    let (endpoint, requests) = command_server(|request| {
+        if request.request_line.starts_with("POST /api/terminal/create") {
+            (200, json!({"sessionId": "exec-1", "cols": 100, "rows": 30, "status": "running", "mode": "command",
+                "purpose": {"type": "project-action", "actionId": "dev", "executionId": "exec-1"}}))
+        } else {
+            (200, json!({"success": true, "killedCount": 1, "killedSessionIds": ["exec-1"]}))
+        }
+    })
+    .await;
+    let api = TerminalApi::new(ServerClient::new(endpoint, Credential::None).expect("client"));
+    let created = api
+        .create_command(
+            &create_request("/work"),
+            &ActionCommand {
+                command: "bun dev".to_owned(),
+                action_id: "dev".to_owned(),
+                execution_id: "exec-1".to_owned(),
+            },
+        )
+        .await
+        .expect("create");
+    assert!(created.command_mode);
+    assert_eq!(
+        created.purpose,
+        Some(TerminalPurpose::ProjectAction {
+            action_id: "dev".to_owned(),
+            execution_id: "exec-1".to_owned(),
+        })
+    );
+    api.force_kill("exec-1", "/work").await.expect("kill");
+    let requests = requests.lock().expect("requests").clone();
+    let body: Value = serde_json::from_slice(&requests[0].body).expect("json");
+    assert_eq!(body["sessionId"], "exec-1");
+    assert_eq!(body["mode"], "command");
+    assert_eq!(body["command"], "bun dev");
+    assert_eq!(
+        body["purpose"],
+        json!({"type": "project-action", "actionId": "dev", "executionId": "exec-1"})
+    );
+    assert!(
+        requests[1]
+            .request_line
+            .starts_with("POST /api/terminal/force-kill ")
+    );
+    let body: Value = serde_json::from_slice(&requests[1].body).expect("json");
+    assert_eq!(body, json!({"sessionId": "exec-1"}));
 }

@@ -106,6 +106,20 @@ pub struct CreatedTerminal {
     pub cols: u16,
     pub rows: u16,
     pub status: TerminalStatus,
+    /// `false` when the server started a shell for a command request, as a
+    /// server without command mode does.
+    pub command_mode: bool,
+    pub purpose: Option<TerminalPurpose>,
+}
+
+/// A project action's run (`createProjectActionTerminalSession`): the
+/// command runs in place of a shell, under the execution ID, which the
+/// server also uses as the terminal's ID.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActionCommand {
+    pub command: String,
+    pub action_id: String,
+    pub execution_id: String,
 }
 
 /// The terminal settings of the desktop surface, each with the web
@@ -190,6 +204,8 @@ struct CreatedWire {
     cols: u16,
     rows: u16,
     status: String,
+    mode: Option<String>,
+    purpose: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -278,6 +294,42 @@ impl TerminalApi {
             )
             .await?;
         created(response).await
+    }
+
+    /// Starts a project action's command. A running terminal of the same
+    /// action in `cwd` answers instead, as the server joins duplicate runs.
+    pub async fn create_command(
+        &self,
+        request: &CreateTerminal,
+        command: &ActionCommand,
+    ) -> Result<CreatedTerminal, TerminalRequestError> {
+        let url = self.client.endpoint().url("api/terminal/create");
+        let mut body = create_body(request);
+        body["sessionId"] = json!(command.execution_id);
+        body["mode"] = json!("command");
+        body["command"] = json!(command.command);
+        body["purpose"] = json!({
+            "type": "project-action",
+            "actionId": command.action_id,
+            "executionId": command.execution_id,
+        });
+        let response = self
+            .send(Method::POST, url, Some(body), Some(&request.cwd))
+            .await?;
+        created(response).await
+    }
+
+    /// Stops the terminal's process at once and forgets it (SIGKILL).
+    pub async fn force_kill(
+        &self,
+        session_id: &str,
+        directory: &str,
+    ) -> Result<(), TerminalRequestError> {
+        let url = self.client.endpoint().url("api/terminal/force-kill");
+        let body = json!({ "sessionId": session_id });
+        self.send(Method::POST, url, Some(body), Some(directory))
+            .await?;
+        Ok(())
     }
 
     /// Starts a new shell in place of the terminal's process, keeping its ID.
@@ -424,6 +476,8 @@ async fn created(response: Response) -> Result<CreatedTerminal, TerminalRequestE
         cols: wire.cols,
         rows: wire.rows,
         status,
+        command_mode: wire.mode.as_deref() == Some("command"),
+        purpose: parse_purpose(wire.purpose.as_ref()),
     })
 }
 

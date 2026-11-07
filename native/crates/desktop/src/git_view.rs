@@ -14,8 +14,10 @@
 //! Cancel is sent for that ID; a push cancelled mid-transfer can end as
 //! outcome unknown, which the view shows as such. A lost execute answer is
 //! resolved by reading the ID again, never by planning another operation.
-//! Commit identities, stash, merge and rebase, hunk staging, nested
-//! repository listings and project actions are not ported.
+//!
+//! A branch row merges that branch into the current one or rebases onto it;
+//! conflicts open the conflict dialog and a merge or rebase in progress shows
+//! its banner (`conflicts.rs`). Stash and hunk staging are not ported.
 
 use std::time::Duration;
 
@@ -26,8 +28,8 @@ use gpui_kit::{
     Task, TestSupportExt, Window, div, prelude::FluentBuilder, px,
 };
 use openchamber_native_core::git_changes::{
-    ChangeRow, ChangeScope, ChangesRead, GitChanges, IndexMutation, IndexQueue, NetworkAction,
-    NetworkOperation, NetworkRefusal, StatusLoads, accept_snapshot, network_request,
+    ChangeRow, ChangeScope, ChangesRead, GitChanges, IndexMutation, IndexQueue, Integration,
+    NetworkAction, NetworkOperation, NetworkRefusal, StatusLoads, accept_snapshot, network_request,
 };
 use openchamber_native_transport::git::{Branches, GitError};
 
@@ -40,6 +42,9 @@ use crate::files_view::{Notice, PANEL_ROW, PanelScope, empty_state, status_line,
 use crate::locale::{self, Direction, Strings};
 use crate::logical::LogicalStyledExt;
 use crate::theme::Palette;
+
+mod conflicts;
+mod identity;
 
 const OPERATION_POLL: Duration = Duration::from_secs(1);
 const DIFF_HEIGHT: f32 = 260.0;
@@ -74,6 +79,8 @@ pub(crate) struct GitView {
     branch_task: Option<Task<()>>,
     operation: Option<OperationRun>,
     notice: Option<Notice>,
+    conflicts: conflicts::Conflicts,
+    identities: identity::Identities,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -132,11 +139,16 @@ impl GitView {
             branch_task: None,
             operation: None,
             notice: None,
+            conflicts: conflicts::Conflicts::default(),
+            identities: identity::Identities::default(),
             _subscriptions: vec![commit_subscription, branch_subscription],
         };
         let entity = cx.entity().downgrade();
         cx.defer(move |cx| {
-            let _ = entity.update(cx, |view, cx| view.refresh(cx));
+            let _ = entity.update(cx, |view, cx| {
+                view.read_identities(cx);
+                view.refresh(cx);
+            });
         });
         view
     }
@@ -171,6 +183,7 @@ impl GitView {
                 run.poll = Some(poll);
             }
         }
+        self.read_author(cx);
         let ticket = self.status.begin();
         let Some(client) = self.scope.client(cx) else {
             self.status.complete(ticket, Err(()));
@@ -929,6 +942,7 @@ impl GitView {
             .gap(px(4.0))
             .child(branch_button)
             .child(div().flex_1())
+            .child(self.render_identity_button(palette, direction, cx))
             .child(text_button(
                 "git-fetch",
                 strings.get("gitView.sync.fetch"),
@@ -1115,6 +1129,40 @@ impl GitView {
             )
             .test_support();
             let delete_name = name.clone();
+            let merge_name = name.clone();
+            let rebase_name = name.clone();
+            let integrations = (!is_current && current.is_some()).then(|| {
+                div()
+                    .flex_row_from(direction)
+                    .child(
+                        IconButton::new(
+                            format!("git-branch-merge:{name}"),
+                            "git-merge",
+                            strings.get("gitView.operation.merge"),
+                        )
+                        .render(
+                            palette,
+                            cx,
+                            move |this: &mut Self, window, cx| {
+                                this.integrate(Integration::Merge, merge_name.clone(), window, cx)
+                            },
+                        ),
+                    )
+                    .child(
+                        IconButton::new(
+                            format!("git-branch-rebase:{name}"),
+                            "git-branch",
+                            strings.get("gitView.operation.rebase"),
+                        )
+                        .render(
+                            palette,
+                            cx,
+                            move |this: &mut Self, window, cx| {
+                                this.integrate(Integration::Rebase, rebase_name.clone(), window, cx)
+                            },
+                        ),
+                    )
+            });
             let action = if is_current {
                 IconButton::new(
                     "git-branch-rename",
@@ -1140,6 +1188,7 @@ impl GitView {
                     .items_center()
                     .padding_end(direction, px(8.0))
                     .child(div().flex_1().min_w_0().child(row))
+                    .children(integrations)
                     .child(action)
                     .into_any_element(),
             );
@@ -1556,6 +1605,8 @@ impl Render for GitView {
                 this.child(self.render_header(changes.as_ref(), &palette, direction, cx))
             })
             .children(self.render_operation(&palette, direction, cx))
+            .children(self.render_identities(&palette, cx))
+            .children(self.render_in_progress(changes.as_ref(), &palette, direction, cx))
             .child(status_line(
                 "git-notice",
                 self.notice.as_ref(),
@@ -1576,5 +1627,7 @@ impl Render for GitView {
                         .child(self.pane.render(false, &palette, cx)),
                 )
             })
+            .relative()
+            .children(self.render_conflict_dialog(&palette, direction, cx))
     }
 }

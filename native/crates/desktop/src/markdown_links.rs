@@ -1,7 +1,8 @@
 //! Untrusted links use the web classification and the native shell exclusions.
 //!
-//! Session routes stay in the current workspace. Files and message fragments
-//! remain inside the client even while their native navigation is unavailable.
+//! Session routes stay in the current workspace. File links open in the Files
+//! surface, read-only outside the session's directory; message fragments
+//! remain inside the client while their native navigation is unavailable.
 //! Only normalized HTTP(S), or an explicitly confirmed application URL, reach
 //! the platform. This module does not fetch links or launch anything at render time.
 
@@ -301,9 +302,79 @@ pub(crate) fn open_user_link(url: &str, window: &mut Window, cx: &mut App) {
                 }
             });
         }
-        Link::File => unavailable("mobile.files.error.readUnavailable", window, cx),
+        Link::File => {
+            let Some(owner) = owner else { return };
+            let opened = owner.update(cx, |workspace, cx| workspace.open_link_file(url, cx));
+            if !opened {
+                unavailable("mobile.files.error.readUnavailable", window, cx);
+            }
+        }
         Link::Fragment => unavailable("contextPanel.tracker.unavailable", window, cx),
         Link::Denied => {}
+    }
+}
+
+/// The absolute path a file link names, without a `:line[:column]`
+/// suffix: a `file:` URL's path, an absolute path, or one relative to
+/// `directory` (`resolveMarkdownFile`). Windows drive paths are not served.
+fn link_path(raw: &str, directory: Option<&str>) -> Option<String> {
+    let value = raw.trim();
+    let path = if let Some(rest) = value.strip_prefix("file://") {
+        let rest = rest.strip_prefix("localhost").unwrap_or(rest);
+        percent_decode(rest)?
+    } else {
+        value.to_owned()
+    };
+    let mut path = path.as_str();
+    for _ in 0..2 {
+        if let Some((head, tail)) = path.rsplit_once(':')
+            && !tail.is_empty()
+            && tail.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            path = head;
+        }
+    }
+    if path.is_empty() || path.contains('\\') {
+        return None;
+    }
+    let joined = if path.starts_with('/') {
+        path.to_owned()
+    } else {
+        let base = directory?.trim_end_matches('/');
+        format!("{base}/{}", path.trim_start_matches("./"))
+    };
+    openchamber_native_core::path::normalize(&joined)
+}
+
+fn percent_decode(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hex = value.get(index + 1..index + 3)?;
+            out.push(u8::from_str_radix(hex, 16).ok()?);
+            index += 3;
+        } else {
+            out.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(out).ok()
+}
+
+impl Workspace {
+    /// Opens the file a link names in the Files surface. `false` when the
+    /// link names no path, or no server is connected to read it.
+    pub(crate) fn open_link_file(&mut self, raw: &str, cx: &mut gpui_kit::Context<Self>) -> bool {
+        let directory = self
+            .selected_session()
+            .and_then(|session| session.directory.clone())
+            .or_else(|| self.draft_projects.get(&self.runtime).cloned());
+        let Some(path) = link_path(raw, directory.as_deref()) else {
+            return false;
+        };
+        self.open_context_file(path, cx)
     }
 }
 
@@ -659,5 +730,23 @@ mod tests {
         assert_eq!(classify("C:/notes/test.md", None), Link::File);
         assert_eq!(classify("C:\\notes\\test.md", None), Link::File);
         assert_eq!(classify("#note", None), Link::Fragment);
+    }
+
+    #[test]
+    fn file_links_resolve_against_the_session_directory() {
+        assert_eq!(
+            link_path("src/main.rs:12:3", Some("/p")).as_deref(),
+            Some("/p/src/main.rs")
+        );
+        assert_eq!(link_path("./a.md", Some("/p/")).as_deref(), Some("/p/a.md"));
+        assert_eq!(
+            link_path("file:///tmp/out%20put.txt", Some("/p")).as_deref(),
+            Some("/tmp/out put.txt")
+        );
+        assert_eq!(
+            link_path("/etc/hosts:4", None).as_deref(),
+            Some("/etc/hosts")
+        );
+        assert_eq!(link_path("relative.txt", None), None);
     }
 }

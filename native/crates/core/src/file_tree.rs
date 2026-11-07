@@ -216,6 +216,27 @@ impl FileTree {
         self.request(path, ListingCause::Reveal)
     }
 
+    /// The expanded folders in path order, as the tree's memory keeps them.
+    pub fn expanded_paths(&self) -> Vec<String> {
+        let mut paths: Vec<String> = self.expanded.iter().cloned().collect();
+        paths.sort();
+        paths
+    }
+
+    /// Expands remembered folders inside the root and asks for each one's
+    /// listing; a folder that is gone fails alone and stays empty.
+    pub fn restore(&mut self, expanded: &[String]) -> Vec<ListingTicket> {
+        let root = self.root.clone();
+        expanded
+            .iter()
+            .filter(|path| path.as_str() != root && is_under(path, &root))
+            .filter_map(|path| {
+                self.expanded.insert(path.clone());
+                self.request(path, ListingCause::Reveal)
+            })
+            .collect()
+    }
+
     /// Folds `path` and every folder under it, as the web's collapse does.
     pub fn collapse(&mut self, path: &str) {
         self.expanded
@@ -498,5 +519,20 @@ mod tests {
             tree.is_expanded("/p/ab"),
             "a sibling with a shared prefix stays"
         );
+    }
+
+    #[test]
+    fn remembered_folders_inside_the_root_expand_and_list() {
+        let mut tree = FileTree::new("/p");
+        let tickets = tree.restore(&["/p/src".to_owned(), "/q/x".to_owned(), "/p".to_owned()]);
+        assert_eq!(
+            tickets
+                .iter()
+                .map(|ticket| ticket.path.as_str())
+                .collect::<Vec<_>>(),
+            ["/p/src"]
+        );
+        assert!(tree.is_expanded("/p/src") && !tree.is_expanded("/q/x"));
+        assert_eq!(tree.expanded_paths(), vec!["/p/src".to_owned()]);
     }
 }

@@ -20,6 +20,7 @@ pub mod file_tree;
 pub mod folders;
 pub mod form;
 pub mod git_changes;
+pub mod git_identity;
 pub mod grouping;
 pub mod ids;
 pub mod load_state;
