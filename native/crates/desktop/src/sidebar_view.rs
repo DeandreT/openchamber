@@ -464,6 +464,9 @@ impl Workspace {
 
     /// What the sidebar says about the server, while there is something to say.
     fn connection_status(&self, strings: &Strings) -> Option<SharedString> {
+        if let Some(status) = self.managed_host_status(strings) {
+            return Some(status);
+        }
         let connection = self.connection.as_ref()?;
         let host = connection.config.endpoint.authority();
         let text = match connection.state {
