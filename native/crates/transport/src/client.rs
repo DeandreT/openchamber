@@ -61,6 +61,17 @@ pub struct SettingsChanges {
     pub show_deletion_dialog: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub follow_up_behavior: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_navigator_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub draft_starters_visible: Option<bool>,
+    /// `ask`, `safety` or `auto`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_default_mode: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidebar_show_chats_section: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_work_enabled: Option<bool>,
     /// The global starters; written with both offered-starter markers set,
     /// so a removed built-in stays removed.
     #[serde(
@@ -1369,6 +1380,32 @@ mod tests {
         assert_eq!(
             serde_json::to_value(SettingsChanges::default()).expect("serializes"),
             json!({})
+        );
+    }
+
+    #[test]
+    fn chat_and_sessions_settings_write_the_exact_server_fields() {
+        let changes = SettingsChanges {
+            follow_up_behavior: Some("steer"),
+            prompt_navigator_enabled: Some(false),
+            draft_starters_visible: Some(false),
+            permission_default_mode: Some("auto"),
+            sidebar_show_chats_section: Some(false),
+            session_work_enabled: Some(true),
+            show_deletion_dialog: Some(false),
+            ..SettingsChanges::default()
+        };
+        assert_eq!(
+            serde_json::to_value(&changes).expect("serializes"),
+            json!({
+                "followUpBehavior": "steer",
+                "promptNavigatorEnabled": false,
+                "draftStartersVisible": false,
+                "permissionDefaultMode": "auto",
+                "sidebarShowChatsSection": false,
+                "sessionWorkEnabled": true,
+                "showDeletionDialog": false,
+            })
         );
     }
 

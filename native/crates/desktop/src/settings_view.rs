@@ -14,6 +14,7 @@ use crate::baseline::CssTextExt;
 use crate::host_manager::HostManager;
 use crate::locale;
 use crate::logical::LogicalStyledExt;
+use crate::preference_pages::PreferencePage;
 use crate::settings_navigation::{self, Page, SearchItem};
 use crate::theme::Palette;
 use crate::workspace::Workspace;
@@ -23,11 +24,13 @@ pub(crate) struct Settings {
     hosts: Entity<HostManager>,
     pub(crate) general: Entity<crate::general_settings::GeneralSettings>,
     appearance: Entity<crate::appearance_view::AppearanceView>,
+    pub(crate) chat: Entity<PreferencePage>,
+    pub(crate) sessions: Entity<PreferencePage>,
     page: Page,
     search: Entity<InputState>,
     active_result: usize,
     navigation_scroll: ScrollHandle,
-    nav_focus: [FocusHandle; 3],
+    nav_focus: [FocusHandle; Page::ALL.len()],
     result_focus: Vec<FocusHandle>,
     _search_subscription: Subscription,
 }
@@ -70,11 +73,16 @@ impl Settings {
         let general =
             cx.new(|cx| crate::general_settings::GeneralSettings::new(owner.clone(), window, cx));
         let appearance = cx.new(|cx| crate::appearance_view::AppearanceView::new(window, cx));
+        let chat = cx.new(|cx| PreferencePage::new(owner.clone(), general.clone(), Page::Chat, cx));
+        let sessions =
+            cx.new(|cx| PreferencePage::new(owner.clone(), general.clone(), Page::Sessions, cx));
         Self {
             owner,
             hosts,
             general,
             appearance,
+            chat,
+            sessions,
             page: Page::default(),
             search,
             active_result: 0,
@@ -96,7 +104,8 @@ impl Settings {
 
     fn select_page(&mut self, page: Page, cx: &mut Context<Self>) {
         self.page = page;
-        if page == Page::General {
+        // Chat and Sessions read the same server document as General.
+        if matches!(page, Page::General | Page::Chat | Page::Sessions) {
             let general = self.general.downgrade();
             cx.defer(move |cx| {
                 let _ = general.update(cx, |page, cx| page.refresh(cx));
@@ -113,6 +122,12 @@ impl Settings {
                 .update(cx, |page, cx| page.reveal(item.id, window, cx)),
             Page::Appearance => self
                 .appearance
+                .update(cx, |page, cx| page.reveal(item.id, window, cx)),
+            Page::Chat => self
+                .chat
+                .update(cx, |page, cx| page.reveal(item.id, window, cx)),
+            Page::Sessions => self
+                .sessions
                 .update(cx, |page, cx| page.reveal(item.id, window, cx)),
             Page::Hosts => {
                 self.hosts
@@ -382,6 +397,8 @@ impl Render for Settings {
         let page = match self.page {
             Page::General => self.general.clone().into_any_element(),
             Page::Appearance => self.appearance.clone().into_any_element(),
+            Page::Chat => self.chat.clone().into_any_element(),
+            Page::Sessions => self.sessions.clone().into_any_element(),
             Page::Hosts => {
                 let scroll = self.hosts.read(cx).settings_scroll.clone();
                 div()

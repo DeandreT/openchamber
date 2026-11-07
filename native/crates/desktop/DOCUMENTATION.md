@@ -184,7 +184,8 @@ prompt. Attachments and worktree creation remain separate workflows.
   Remote instances Settings page through `settings_view.rs`, reusing the same
   profile model and write barrier. Window-opening actions are separate work.
 - `settings_view.rs` owns the retained Settings dialog, selected page and search
-  field. `settings_navigation.rs` indexes only implemented targets. General is
+  field. `settings_navigation.rs` lists only implemented pages, in the
+  reference's `pageOrder`, and indexes only implemented targets. General is
   the first page; reopening keeps the selected page and clears the search.
   Each page owns its scroll container and search anchors.
 - `appearance.rs` owns process-local live theme, language, installed-font and
@@ -192,10 +193,18 @@ prompt. Attachments and worktree creation remain separate workflows.
   `appearance.json` snapshot, atomic writes and compare-and-swap authority.
   `appearance_view.rs` retains the controls; `settings_picker.rs` confirms only
   a selection gesture. A picker dismissal leaves its value unchanged.
-- `general_settings.rs` owns the General page's server-backed autosave, terminal
-  shell and close-on-exit preferences. Reads and serialized writes retain their
-  runtime and client; the page's executor outlives a host switch. Files and
-  Terminal consume its live choices, including edits whose saves failed.
+- `general_settings.rs` owns the server-backed Settings preferences: General's
+  autosave, terminal shell and close-on-exit, and the Chat and Sessions fields
+  (prompt navigator, follow-up behavior, starters, permission default, Chats
+  section, In work, deletion dialog). Reads and serialized writes retain their
+  runtime and client; the executor outlives a host switch. The workspace
+  consumes live choices, including edits whose saves failed, and a newer
+  topology read keeps unconfirmed choices over the server's values.
+  `preference_pages.rs` draws the Chat (with its three tabs) and Sessions
+  pages from that model and the shared save indicator; their remaining
+  reference controls belong to features native does not have yet. Code line
+  wrap on the Chat page goes through the workspace's own writer, shared with
+  code cards, which reports its failure to the indicator.
 - `effort_preferences.rs` owns model-scoped effort memory in the server profile.
   Explicit effort choices update effective memory immediately. Serialized writes
   retain their original runtime and preserve other models. Incoming settings
@@ -1230,6 +1239,23 @@ save task cannot finish there, even when an observer awaits it. Preference and
 profile owners retain the raw I/O operation separately so quit can drain accepted
 work and coalesced choices after windows disappear. General's drain also owns its
 Tokio runtime; a cloned runtime handle alone cannot keep HTTP work running.
+
+### Why Chat and Sessions share General's settings model and not their own
+
+All three pages write fields of the same server settings document. One model
+per runtime gives them one serialized write chain, one failure and Retry state,
+and the close and quit drains General already proves; a second model would
+need its own drains and could race General's writes on the same document. The
+Settings dialog lists only pages with implemented controls, so no page opens
+empty.
+
+### Why reduced motion comes from GPUI Kit and not a native module
+
+GPUI Kit's base layer reads the desktop's `reduced-motion` setting from the XDG
+portal at startup, follows its change signal, and gates every kit transition,
+spring and presence on `App::reduce_motion`. The desktop crate draws no
+animation of its own, so a second reader would only duplicate that flag. An
+animation added here must check `cx.reduce_motion()` as the kit's do.
 
 ### Why appearance has one live owner
 
