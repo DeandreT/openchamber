@@ -362,6 +362,7 @@ mod tests {
             content: PartContent::File {
                 filename: "plan.md".to_owned(),
                 mime: "text/markdown".to_owned(),
+                url: None,
             },
             time: Default::default(),
         });

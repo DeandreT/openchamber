@@ -268,6 +268,29 @@ impl Workspace {
         self.start_fork(session, Some(cut), restore, window, cx);
     }
 
+    /// Forks the selected session after one of its messages, keeping that
+    /// message and everything before it (`forkAfterMessage`).
+    pub(crate) fn fork_after_message(
+        &mut self,
+        message: MessageId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(session) = self.selected.clone() else {
+            return;
+        };
+        let messages = self
+            .open_sessions
+            .get(&session)
+            .map(|open| open.transcript.messages())
+            .unwrap_or_default();
+        let Some(cut) = branching::fork_after_cut(messages, &message) else {
+            self.branching_error("chat.chatInput.toast.forkNothingToFork", None, window, cx);
+            return;
+        };
+        self.start_fork(session, cut, None, window, cx);
+    }
+
     /// `/fork`: forks after the last finished turn. A running turn is left
     /// out (`forkFromLastCompletedTurn`).
     pub(crate) fn fork_after_last_turn(&mut self, window: &mut Window, cx: &mut Context<Self>) {

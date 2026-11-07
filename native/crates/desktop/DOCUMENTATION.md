@@ -261,7 +261,7 @@ prompt. Attachments and worktree creation remain separate workflows.
   the transcript's anchor or the panel's highlighted message.
 - `turn_footer.rs` draws the facts under a finished turn (model, effort,
   agent, duration, time) and fits them to the row as `useFactsFit` does,
-  keeping the place of the message actions the web lays out for hover. The
+  beside the message actions (`message_actions.rs`). The
   time is the step's completion in the local time zone (`chrono`), written
   with the locale's exported data; settings choose the clock.
   Fitted facts paint in one text row so fractional widths do not accumulate
@@ -288,6 +288,46 @@ prompt. Attachments and worktree creation remain separate workflows.
   `composer_view.rs`, `model_controls.rs` and `context_panel.rs` render their
   parts. They dispatch
   to `Workspace` methods and never interpret records themselves.
+- `transcript_view.rs` owns the transcript list and each row's frame and
+  dispatches a message's parts to one module per kind: `text_part_view.rs`
+  (the prompt bubble and assistant Markdown), `reasoning_view.rs`,
+  `tool_part_view.rs` and `attachment_part_view.rs` (file and agent-mention
+  parts). Compaction records draw as a reasoning-style block whose body is
+  the summary; `!command` records draw as the shell tool row.
+- `tool_part_view.rs` draws tool rows as `ToolPart.tsx` does: icon (a chevron
+  under the pointer), display name, description or justification, failure
+  reason while folded, diff and line counts, a live or final duration for
+  shell and subagent rows, and the background label of a shell call
+  OpenCode moved to the background. Navigation tools (`read`, `skill`) stay
+  one static line. Opened, a row shows the call's input, result (subagent
+  Markdown, file diffs as plain colored lines, text output with Copy),
+  truncation note and error beside the block line. Opening a row whose result
+  a history page left out reads the whole message; the row says so after
+  500 ms and offers Retry after a failure. Background shells' live output and
+  Stop, file open actions, question cards, web search results, LSP
+  diagnostics, guest tool presentations and pages drawn in place are not
+  ported.
+- `reasoning_view.rs` draws reasoning blocks (`ReasoningTimelineBlock`):
+  folded to a line with the title, busy dots while streaming and a one-line
+  preview once settled; opened to the text in a 320 px scroll box.
+  `expandReasoningWhileStreaming` keeps its web default, off, so a streaming
+  block stays folded until the reader opens it.
+- `message_actions.rs` draws the actions under a turn's last answer: Copy
+  (every assistant text of the turn, in order), Continue with Fork from
+  here, and More with Copy link (`openchamber://session/<id>?message=<id>`).
+  They show with the pointer over the message and while a menu is open; the
+  menus take the session menu's keys. Pin into context, Start new session
+  and the More menu's export, read-aloud and plan items are not ported.
+- `transcript_search.rs` is Ctrl+F's search bar while the server setting
+  `messageSearchEnabled` is on (off by default, as on the web). Queries go to
+  the server's message index after 200 ms, five pages of 200 at most, and
+  start at the newest hit; Enter and Shift+Enter step, Escape closes. A hit
+  scrolls to its message when the transcript holds it. Word highlighting and
+  loading older history to reach a hit are not ported.
+- `part_state.rs` keeps per open session what the reader opened (tool rows,
+  hand-toggled blocks), the whole-message reads for left-out results and the
+  folded reasoning previews. `transcript_clock.rs` is the once-a-second clock
+  of live durations and busy dots.
 - `markdown_view.rs` renders message Markdown through Kit's text view with
   the web's body color and block spacing. Headings (`markdown_view.rs`),
   lists (`markdown_list.rs`) and fenced code (`code_card.rs`) are custom
@@ -299,6 +339,22 @@ prompt. Attachments and worktree creation remain separate workflows.
   `server_sync.rs`. Code-card actions retain focus handles, participate in
   Tab navigation, and use GPUI's keyboard-generated clicks for Enter and
   Space. Pointer, keyboard and accessibility clicks use the same callback.
+  A `diff` fence is a proposal: its header says so and it has no wrap toggle.
+- `markdown_math.rs` claims `$…$` and `$$…$$` math. A single-dollar span that
+  reads as money stays prose, by the web tokenizer's rules. Formulas lay out
+  with RaTeX and draw as SVG images with KaTeX's glyph outlines in the body
+  color, cached per source, style and color; a formula that does not parse
+  shows its source in the error color. `\(…\)` and `\[…\]` delimiters are
+  not recognized (markdown-rs reads them as escaped brackets).
+- `markdown_diagram.rs` claims ` ```mermaid ` fences: the diagram in the
+  theme's colors with a Copy action for its source. It lays out on the
+  background executor the first time a source and theme are seen; the source
+  shows until then and when it does not parse. Pan, zoom and SVG download are
+  not ported.
+- `attachment_part_view.rs` draws a user message's files at the top of its
+  bubble: name chips and 64 px image thumbnails. A thumbnail draws a `data:`
+  image; any other address shows the failed state, as the web's `<img>` does
+  for a `file:` URL. Opening an attachment is not ported.
 - `markdown_links.rs` owns link activation for ordinary and retained Markdown.
   HTTP(S) links open through the platform; application protocols require an
   explicit one-time confirmation bound to the current workspace, runtime and
@@ -1334,6 +1390,46 @@ Reqwest and tokio-tungstenite need Tokio. Network work runs on two Tokio
 workers; GPUI tasks await the results without blocking either executor. Tokio
 channels and join handles complete from any executor, so the bridge is a join
 handle that aborts on drop and nothing more.
+
+### Why RaTeX for math
+
+The web renders math with KaTeX. RaTeX implements KaTeX's layout rules and
+ships KaTeX's fonts, so formulas keep KaTeX's spacing and glyphs without a
+JavaScript engine. Its SVG output with embedded glyph outlines needs no font
+setup in GPUI's SVG renderer.
+
+### Why diagrams lay out off the main thread
+
+`mermaid-rs-renderer` measures labels with system fonts, loading the font
+database the first time, which takes longer than a frame. A diagram's first
+layout runs on the background executor and the fence shows its source until
+it lands; later frames read the cached image. The renderer keeps a copy of the
+measured font under `$XDG_CACHE_HOME/mmdr`.
+
+### Why one transcript clock that stops itself
+
+The web runs live durations and busy dots on one shared clock
+(`useDurationTicker`) so a page pays for one redraw a second. The native
+clock is marked by each frame that draws a live indicator and redraws only
+if the last frame drew one, so it stops on its own once no running row is on
+screen, without each row tracking its own timer or visibility.
+
+### Why opening a row lets go of the end
+
+A transcript following its end keeps the end in view as rows grow, so a tool
+row or reasoning block opened near the end would grow upward and push the
+header the reader clicked out of view. Opening one pauses following and pins
+the current top row and offset first (`dispatchRowExpand` on the web); the
+content opens below the header, and returning to the end resumes following.
+GPUI's own pause leaves the scroll anchored at the end, so the top is pinned
+explicitly.
+
+### Why a left-out result fills in only shelled calls
+
+A whole-message read can return after live events changed the same message.
+Pushing the read would roll those changes back, so `complete_elided` copies
+only the calls still held as shells, and only from a whole result of the same
+status; the rest of the message stays as the live channel left it.
 
 ### Why the transcript skips most notice roles
 

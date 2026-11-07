@@ -22,6 +22,7 @@ use openchamber_native_core::turn_footer::{self, FactWidths, ShownFacts};
 use crate::baseline::CssTextExt;
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
+use crate::message_actions::ACTIONS_WIDTH;
 use crate::theme::Palette;
 use crate::workspace::Workspace;
 
@@ -33,8 +34,6 @@ const ROW_GAP: f32 = 8.0;
 /// The gap to the changed-files line, which a turn that stopped lays out
 /// even when it lists nothing.
 const FILES_GAP: f32 = 6.0;
-/// Copy, continue, pin and more: four 26 px buttons with `gap-1.5`.
-const ACTIONS_WIDTH: f32 = 4.0 * 26.0 + 3.0 * 6.0;
 /// `text-sm`, in rems of the 16 px root, and its pixels for measuring.
 const TEXT_SIZE: f32 = 0.875;
 const TEXT_LINE: f32 = 1.25;
@@ -177,7 +176,7 @@ impl Workspace {
             .gap(px(ROW_GAP))
             .child(content)
             // The message actions appear on hover; their place is kept.
-            .child(div().w(px(ACTIONS_WIDTH)).flex_shrink_0());
+            .child(self.render_message_actions(row, message, palette, direction, cx));
         Some(
             div()
                 .mt(px(MARGIN_TOP))
