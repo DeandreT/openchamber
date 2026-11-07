@@ -155,6 +155,7 @@ impl Workspace {
                 self.watch_authentication(generation, auth_failures, window, cx);
                 self.subscribe(generation, window, cx);
                 self.subscribe_control(generation, window, cx);
+                self.check_compatibility(generation, window, cx);
                 self.save_code_wrap(cx);
                 if focus_composer {
                     self.focus_composer(window, cx);

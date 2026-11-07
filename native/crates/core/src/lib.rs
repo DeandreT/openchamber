@@ -43,6 +43,7 @@ pub mod session;
 pub mod session_actions;
 pub mod session_goal;
 pub mod session_index;
+pub mod shortcuts;
 pub mod sidebar_collection;
 pub mod sidebar_rows;
 pub mod sidebar_work;

@@ -29,12 +29,6 @@ actions!(
         StopGenerating,
         /// Turns line wrapping in code blocks on or off.
         ToggleCodeWrap,
-        /// Opens or closes the prompt navigation panel.
-        TogglePromptNavigator,
-        /// Opens or closes the terminal panel.
-        ToggleTerminal,
-        /// Searches the selected conversation.
-        FindInTranscript,
     ]
 );
 
@@ -47,13 +41,7 @@ const TITLE_LINE: f32 = 1.093_75;
 pub fn bind_keys(cx: &mut gpui_kit::App) {
     let menu = Some(crate::session_menu::MENU_CONTEXT);
     cx.bind_keys([
-        KeyBinding::new("alt-down", SelectNextSession, Some(KEY_CONTEXT)),
-        KeyBinding::new("alt-up", SelectPreviousSession, Some(KEY_CONTEXT)),
         KeyBinding::new("escape", StopGenerating, Some(KEY_CONTEXT)),
-        KeyBinding::new("ctrl-k n", TogglePromptNavigator, Some(KEY_CONTEXT)),
-        KeyBinding::new("ctrl-j", ToggleTerminal, Some(KEY_CONTEXT)),
-        KeyBinding::new("ctrl-f", FindInTranscript, Some(KEY_CONTEXT)),
-        KeyBinding::new("cmd-k n", TogglePromptNavigator, Some(KEY_CONTEXT)),
         KeyBinding::new(
             "ctrl-n",
             gpui_kit::base::actions::SelectDown,
@@ -86,6 +74,16 @@ pub fn bind_keys(cx: &mut gpui_kit::App) {
             menu,
         ),
         KeyBinding::new("escape", gpui_kit::base::actions::Cancel, menu),
+        KeyBinding::new(
+            "ctrl-n",
+            gpui_kit::NoAction,
+            Some(crate::prompt_rail::LIST_CONTEXT),
+        ),
+        KeyBinding::new(
+            "ctrl-p",
+            gpui_kit::NoAction,
+            Some(crate::prompt_rail::LIST_CONTEXT),
+        ),
         KeyBinding::new("tab", gpui_kit::base::actions::Cancel, menu),
         KeyBinding::new("shift-tab", gpui_kit::base::actions::Cancel, menu),
         KeyBinding::new(
@@ -94,8 +92,10 @@ pub fn bind_keys(cx: &mut gpui_kit::App) {
             Some("ProjectChooser > List"),
         ),
     ]);
-    // After the workspace's bindings: a later `NoAction` cancels a pending chord.
-    crate::terminal_view::bind_keys(cx);
+    crate::shortcuts_settings::bind_keys(cx);
+    // The configurable shortcuts and, after them, the terminal's `NoAction`
+    // bindings: a later `NoAction` cancels a pending chord.
+    crate::shortcuts::bind(&Default::default(), cx);
 }
 
 impl Render for Workspace {
@@ -121,6 +121,11 @@ impl Render for Workspace {
                 .render_authentication(&palette, direction, window, cx)
                 .child(frame_markers(markers));
         }
+        if let Some(gate) =
+            self.render_compatibility_gate(&cx.global::<Palette>().clone(), window, cx)
+        {
+            return gate.child(frame_markers(markers));
+        }
         if self.prompt_panel.is_some()
             && (self
                 .send_catalog
@@ -141,6 +146,7 @@ impl Render for Workspace {
             self.work_status_overlay = false;
         }
         self.ensure_send_catalog(cx);
+        self.sync_shortcut_bindings(cx);
         self.ensure_provider_logos(cx);
         self.ensure_project_readouts(cx);
         self.ensure_space_queue(cx);
@@ -193,6 +199,8 @@ impl Render for Workspace {
             })
             .key_context(KEY_CONTEXT)
             .track_focus(&self.focus_handle)
+            .on_mouse_move(cx.listener(Self::drag_pane))
+            .on_mouse_up(MouseButton::Left, cx.listener(Self::release_pane))
             .on_action(cx.listener(|this, _: &SelectNextSession, window, cx| {
                 this.select_adjacent(1, window, cx);
             }))
@@ -208,15 +216,13 @@ impl Render for Workspace {
                     this.escape_to_stop(window, cx);
                 }
             }))
-            .on_action(cx.listener(|this, _: &TogglePromptNavigator, window, cx| {
-                this.toggle_prompt_navigator(window, cx);
-            }))
-            .on_action(cx.listener(|this, _: &ToggleTerminal, window, cx| {
-                this.toggle_terminal(window, cx);
-            }))
-            .on_action(cx.listener(|this, _: &FindInTranscript, window, cx| {
-                this.open_transcript_search(window, cx);
-            }))
+            .on_action(
+                cx.listener(|this, action: &crate::shortcuts::RunShortcut, window, cx| {
+                    if !this.run_shortcut(&action.id, window, cx) {
+                        cx.propagate();
+                    }
+                }),
+            )
             .on_action(cx.listener(|this, _: &ToggleCodeWrap, _, cx| {
                 this.toggle_code_wrap(cx);
             }))
@@ -273,6 +279,7 @@ impl Render for Workspace {
                     ),
             )
             .child(self.render_session_notice())
+            .children(self.render_app_menu(window, direction))
             .child(frame_markers(markers))
     }
 }
