@@ -207,6 +207,21 @@ export const renderNativeDateFormats = (): string => {
   return `${JSON.stringify(document, null, 2)}\n`;
 };
 
+/**
+ * Prompts the native review flow renders besides the commands' own: the
+ * handoff, the review session's first prompt and the messages an automatic
+ * review run passes between the two sessions.
+ */
+const NATIVE_REVIEW_PROMPTS = [
+  'session.review.instructions',
+  'session.reviewHandoff.visible',
+  'session.reviewHandoff.instructions',
+  'session.reviewSession.visible',
+  'session.reviewSessionWithoutHandoff.visible',
+  'session.reviewFeedbackToImplementer.visible',
+  'session.implementationResponseToReviewer.visible',
+] as const;
+
 /** Stands for the typed argument while a command's variables are exported. */
 const ARGUMENT_SENTINEL = '\u0000argument\u0000';
 
@@ -242,6 +257,9 @@ export const renderNativeMagicPrompts = (): string => {
       variables,
     };
   });
+  for (const id of NATIVE_REVIEW_PROMPTS) {
+    templates[id] = getDefaultMagicPromptTemplate(id);
+  }
   return `${JSON.stringify({ commands, templates }, null, 2)}\n`;
 };
 

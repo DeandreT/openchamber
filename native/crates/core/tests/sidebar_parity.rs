@@ -164,6 +164,7 @@ fn session(fixture: &FixtureSession) -> SessionRecord {
         agent: None,
         revert: None,
         btw: Default::default(),
+        goal: None,
     }
 }
 

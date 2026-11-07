@@ -158,6 +158,8 @@ impl Workspace {
         ) else {
             return false;
         };
+        // The goal's reminder ID is minted before the prompt's.
+        let goal = self.take_created_goal(&prompt_text);
         let (message_id, created) = self.message_ids.next();
         let effort_id = message_id.clone();
         let key = SessionKey {
@@ -183,7 +185,13 @@ impl Workspace {
             navigation: Some(self.navigation_revision),
         };
         if !self.creations.insert(key.clone(), attempt) {
+            if goal.is_some() {
+                self.goals.armed = true;
+            }
             return false;
+        }
+        if let Some(goal) = goal {
+            self.goals.created.insert(effort_id.clone(), goal);
         }
         if let Some(effort) = effort {
             self.effort_preferences

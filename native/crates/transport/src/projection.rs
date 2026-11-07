@@ -13,6 +13,7 @@ use openchamber_native_core::session::{
     BtwMetadata, MetadataFacts, SessionKind, SessionOverlay, SessionRecord,
     SessionTime as CoreSessionTime,
 };
+use openchamber_native_core::session_goal::{self, GoalStatus, SessionGoal};
 use openchamber_native_core::transcript::{
     AssistantFacts, CompactionStatus, Message, MessageInfo, Part, PartContent, PartTime, Role,
     StepOutcome, SubagentRun, SubagentRunState, SyntheticFacts, TokenUsage, ToolStatus, Usd,
@@ -46,7 +47,12 @@ pub(crate) mod part_ids {
 
 /// Projects a session record with its OpenChamber overlay.
 pub(crate) fn session(wire: wire::Session) -> SessionRecord {
-    let MetadataFacts { overlay, kind, btw } = metadata_facts(wire.metadata.as_ref());
+    let MetadataFacts {
+        overlay,
+        kind,
+        btw,
+        goal,
+    } = metadata_facts(wire.metadata.as_ref());
     SessionRecord {
         id: SessionId::new(wire.id),
         parent_id: wire
@@ -73,6 +79,7 @@ pub(crate) fn session(wire: wire::Session) -> SessionRecord {
             .filter(|id| !id.is_empty())
             .map(MessageId::new),
         btw,
+        goal,
     }
 }
 
@@ -131,17 +138,7 @@ pub(crate) fn metadata_facts(metadata: Option<&Value>) -> MetadataFacts {
             && value
                 .get("originalSessionID")
                 .and_then(Value::as_str)
-                .is_some_and(|original| {
-                    // String.trim() in sessionReviewMetadata.ts uses ECMAScript whitespace.
-                    !original
-                        .trim_matches(|c| {
-                            matches!(c,
-                    '\u{0009}'..='\u{000d}' | '\u{0020}' | '\u{00a0}' | '\u{1680}' |
-                    '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' |
-                    '\u{205f}' | '\u{3000}' | '\u{feff}')
-                        })
-                        .is_empty()
-                })
+                .is_some_and(|original| !js_trim(original).is_empty())
     }) {
         SessionKind::Review
     } else {
@@ -151,7 +148,66 @@ pub(crate) fn metadata_facts(metadata: Option<&Value>) -> MetadataFacts {
         overlay: SessionOverlay { pinned_at, in_work },
         kind,
         btw: btw_metadata(openchamber, is_btw),
+        goal: openchamber
+            .and_then(|value| value.get("goal"))
+            .and_then(session_goal),
     }
+}
+
+/// `String.prototype.trim`, which strips ECMAScript whitespace.
+fn js_trim(text: &str) -> &str {
+    text.trim_matches(|c| {
+        matches!(c,
+            '\u{0009}'..='\u{000d}' | '\u{0020}' | '\u{00a0}' | '\u{1680}' |
+            '\u{2000}'..='\u{200a}' | '\u{2028}' | '\u{2029}' | '\u{202f}' |
+            '\u{205f}' | '\u{3000}' | '\u{feff}')
+    })
+}
+
+/// `getSessionGoal`: a goal needs an id, an objective (inline or the file)
+/// and a known status; anything else reads as no goal. Counts are floored
+/// non-negative integers and a budget a positive one.
+fn session_goal(goal: &Value) -> Option<SessionGoal> {
+    let goal = goal.as_object()?;
+    let text = |key: &str| goal.get(key).and_then(Value::as_str);
+    let id = text("id").unwrap_or_default();
+    let objective = js_trim(text("objective").unwrap_or_default());
+    let objective_file = goal.get("objectiveFile").and_then(Value::as_bool) == Some(true);
+    let status = text("status").and_then(GoalStatus::from_wire)?;
+    if id.is_empty() || (objective.is_empty() && !objective_file) {
+        return None;
+    }
+    let count = |key: &str| {
+        goal.get(key)
+            .and_then(Value::as_f64)
+            .filter(|value| value.is_finite() && *value > 0.0)
+            .map(|value| value.floor() as u64)
+    };
+    let units: Vec<u16> = objective.encode_utf16().collect();
+    let objective = if units.len() > session_goal::OBJECTIVE_CHAR_LIMIT {
+        String::from_utf16_lossy(&units[..session_goal::OBJECTIVE_CHAR_LIMIT])
+    } else {
+        objective.to_owned()
+    };
+    let time = |key: &str| {
+        goal.get(key)
+            .and_then(Value::as_f64)
+            .map_or(0, |value| value as i64)
+    };
+    Some(SessionGoal {
+        id: id.to_owned(),
+        objective,
+        objective_file,
+        status,
+        token_budget: count("tokenBudget"),
+        tokens_used: count("tokensUsed").unwrap_or(0),
+        turns_used: count("turnsUsed").unwrap_or(0),
+        status_reason: text("statusReason").unwrap_or_default().to_owned(),
+        evaluation_provider_id: text("evaluationProviderID").unwrap_or_default().to_owned(),
+        evaluation_model_id: text("evaluationModelID").unwrap_or_default().to_owned(),
+        created_at: time("createdAt"),
+        updated_at: time("updatedAt"),
+    })
 }
 
 /// What a synthetic record's description and metadata establish

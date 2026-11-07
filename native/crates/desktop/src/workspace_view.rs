@@ -145,6 +145,8 @@ impl Render for Workspace {
         self.ensure_project_readouts(cx);
         self.ensure_space_queue(cx);
         self.ensure_project_starters(cx);
+        self.ensure_goal_reads(window, cx);
+        self.ensure_space_auto_reviews(cx);
         let palette = cx.global::<Palette>().clone();
         let direction = locale::strings(cx).direction();
         let chat = if self.archive_open {

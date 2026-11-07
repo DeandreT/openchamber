@@ -151,6 +151,7 @@ impl Workspace {
                 .as_ref()
                 .is_none_or(|session| self.prompt_allowed(&self.mutation_key(session)))
             && !matches!(self.persistence.status, Status::Closing | Status::Loading)
+            && !self.goal_arming_selected()
             && !self.selected.as_ref().is_some_and(|session| {
                 self.send_attempts
                     .session(&self.mutation_key(session))

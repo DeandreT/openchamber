@@ -121,6 +121,11 @@ impl MagicCatalog {
         })
     }
 
+    /// The built-in templates by prompt ID.
+    pub(crate) fn templates(&self) -> &HashMap<String, String> {
+        &self.templates
+    }
+
     /// The command named `name` and the locale key of its failure notice.
     pub(crate) fn command(&self, name: &str) -> Option<(&MagicCommand, &str)> {
         self.commands
