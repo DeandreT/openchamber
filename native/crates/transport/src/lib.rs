@@ -46,6 +46,7 @@ pub mod session_folders;
 pub mod session_goal;
 pub mod session_warming;
 pub mod small_model;
+pub mod snippets;
 pub mod source_control;
 pub mod starters;
 pub mod stream;
