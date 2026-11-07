@@ -38,6 +38,7 @@ pub mod review;
 pub mod session_actions;
 pub mod session_create;
 pub mod session_goal;
+pub mod source_control;
 pub mod starters;
 pub mod stream;
 pub mod system;

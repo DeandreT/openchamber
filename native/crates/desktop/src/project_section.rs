@@ -479,7 +479,7 @@ impl Workspace {
     }
 
     /// The project's label from settings, else its folder's name.
-    fn project_label(&self, project_path: &str) -> SharedString {
+    pub(crate) fn project_label(&self, project_path: &str) -> SharedString {
         self.send_catalog
             .settings
             .as_ref()

@@ -50,6 +50,13 @@ rendering asks for a projection and dispatches an action.
   orders index mutations and status reads, builds network operation requests
   for the tracked remote and checks operation snapshots
   (`boundGitNetworkOperation.ts`).
+- `source_board.rs` ports the repository source of the issues and pull
+  requests board: kinds, state and people filters
+  (`referencePickerItems.ts`), item keys and state looks, the read context
+  a repository is read with (`getBoundSourceControlReadContexts`,
+  `resolveSourceControlTarget`, `repositoryHostsOf`), and `BoardList`, the
+  searched list with paging, refresh and the highlighted row
+  (`useReferenceBrowser.ts`, `referenceCache.ts`).
 - `provider_logo.rs` ports the provider logo lookup of `useProviderLogo.ts`
   (bundled candidates, then models.dev) and inverts an SVG's paint colors for
   dark themes, as the web's `dark:invert` does.
@@ -156,6 +163,10 @@ crate owns wire parsing and authority checks, and hands the core records and
 
 ## Invariants
 
+- A board list read applies only while it is the newest read of the list.
+  A failed first page is a failure, never an empty list; a failed refresh
+  keeps the listed rows and says so; disconnected and no-repository answers
+  are their own states. A next page appends only rows not already listed.
 - A folder has at most one listing in flight. A mutation's listing replaces
   it, a poll never does, and a listing from before a filter change is
   dropped. A failed listing keeps the folder's last entries and reports its

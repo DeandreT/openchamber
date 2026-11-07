@@ -171,6 +171,10 @@ pub struct Workspace {
     pub(crate) branching: crate::session_branching::Branching,
     /// The archive page replaces the chat area while open.
     pub(crate) archive_open: bool,
+    /// The issues and pull requests board replaces the chat area while open.
+    pub(crate) source_board_open: bool,
+    /// The board, kept while the runtime stays so it reopens where it was left.
+    pub(crate) source_board: Option<Entity<crate::source_board::SourceBoard>>,
     /// Whether the composer shows the short placeholder; unknown until the
     /// first frame measures it.
     pub(crate) composer_placeholder_compact: Option<bool>,
@@ -325,6 +329,8 @@ impl Workspace {
             session_management: Default::default(),
             branching: Default::default(),
             archive_open: false,
+            source_board_open: false,
+            source_board: None,
             composer_placeholder_compact: None,
             playback: HashMap::new(),
             live_status: HashMap::new(),
@@ -636,6 +642,7 @@ impl Workspace {
     pub fn show_new_session(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.navigation_revision = self.navigation_revision.wrapping_add(1);
         self.archive_open = false;
+        self.source_board_open = false;
         self.close_selected_session(window, cx);
         self.focus_composer(window, cx);
         cx.notify();
@@ -705,6 +712,7 @@ impl Workspace {
         }
         // Selecting a session always leaves a full-page surface.
         self.archive_open = false;
+        self.source_board_open = false;
         self.prompt_panel = None;
         self.prompt_hover_task = None;
         self.prompt_hover_suppressed = false;
