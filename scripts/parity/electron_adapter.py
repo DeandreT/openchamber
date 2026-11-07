@@ -184,6 +184,11 @@ class ElectronClient:
     def hover(self, spec: dict) -> None:
         self._call("hover", **spec)
 
+    def drag(self, source: dict, target: dict) -> None:
+        """Pressed on the source's centre, moved in steps onto the target's
+        centre and released there."""
+        self._call("drag", source=source, target=target)
+
     def click_named(self, query: dict) -> None:
         """A pointer click on the one node with this accessible name and
         ARIA role, found in Chromium's accessibility tree."""

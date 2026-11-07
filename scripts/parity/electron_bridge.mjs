@@ -10,7 +10,7 @@
  * application code directly.
  *
  * Commands: launch, restart, wait, rows, inflight, rects, targets, textBoxes, paintRegions, observe, fonts,
- * click, clickNamed, hover, key, type, ime, drop, interceptFileChoosers, pick, api, fault, release, faults, text,
+ * click, clickNamed, hover, drag, key, type, ime, drop, interceptFileChoosers, pick, api, fault, release, faults, text,
  * screenshot, close.
  *
  * `fault` pauses matching page requests through the Fetch domain: before
@@ -408,6 +408,21 @@ const handlers = {
     const [x, y] = await centreOf(selector, button)
     await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y })
     return { at: [x, y] }
+  },
+  /** A pointer drag from the source's centre onto the target's, in steps. */
+  async drag({ source, target }) {
+    const [x0, y0] = await centreOf(source.selector, source.button)
+    const [x1, y1] = await centreOf(target.selector, target.button)
+    await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", x: x0, y: y0 })
+    await client.send("Input.dispatchMouseEvent", { type: "mousePressed", x: x0, y: y0, button: "left", clickCount: 1 })
+    for (let step = 1; step <= 10; step++) {
+      const x = x0 + ((x1 - x0) * step) / 10
+      const y = y0 + ((y1 - y0) * step) / 10
+      await client.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y, button: "left", buttons: 1 })
+      await wait(30)
+    }
+    await client.send("Input.dispatchMouseEvent", { type: "mouseReleased", x: x1, y: y1, button: "left", clickCount: 1 })
+    return { from: [x0, y0], to: [x1, y1] }
   },
   /** Clicks the one unignored node with this accessible name and role. */
   async clickNamed({ name, role }) {

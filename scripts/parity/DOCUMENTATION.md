@@ -516,6 +516,15 @@ requested row is selected. An unrelated selected row cannot satisfy this
 postcondition. `runner_test.py` covers these input checks; run it from this
 directory with `python3 -m unittest runner_test`.
 
+Electron's server runs inside the app, so quitting Electron also ends its
+OpenCode and any running turn; the native client's isolated server keeps
+running across a native restart. A scenario that restarts during a turn
+checks what both clients share, such as the server delivering a queued
+message exactly once, and not the turn still running afterwards.
+Both transcripts are virtualized: only rows near the bottom exist, so a wait
+on a message's text works only for messages still in view. A held
+`think-30s` turn keeps a new prompt at the bottom.
+
 Every capture first waits up to 15 s for the client to hold still for
 750 ms: Electron's text and the boxes of its panels, sections, prompt ticks,
 rows and messages, the native client's accessible rows. Electron must also
@@ -539,6 +548,8 @@ launch exactly as before.
 | `paste: "text"` | The runner's GTK clipboard serves the exact text while Ctrl+V reads it. | The same clipboard and chord. |
 | `clickNamed: {"name", "role"}` | The one unignored node with that accessible name and ARIA role in Chromium's accessibility tree, clicked at its centre once nothing covers it. | The one node with that AT-SPI name and a role the ARIA role maps to (`steps.ATSPI_ROLES`), clicked like `click`. |
 | `hover: "<target>"` | A `mouseMoved` to the target's centre. | The real pointer moved there; a pointer that does not arrive fails, since hover has no accessibility equivalent. |
+| `drag: {"from", "to"}` | Pressed at the `from` target's centre, moved in ten steps onto the `to` target's centre and released. | The same through XTest; drag has no accessibility equivalent. |
+| `gate: "hold"` / `"release"` | The fixture provider's turn gate: while held, a delayed model's turn (`think-30s`) waits for the release instead of its delay. | The same, on the isolated server's fixture provider. |
 | `restart: {}` | SIGTERM, which runs Electron's own quit teardown, then a new launch on the same profile, keeping fault rules and file-chooser interception. `{"after": "exit"}` waits for an exit an earlier step caused. | SIGTERM, or the same wait, then a new launch on the same profile, server and services. |
 | `expect` | Server reads from the bridge with the page's own API base URL and token, which never leave the bridge. | Reads straight from the isolated server, never through the fault proxy. |
 | `fault`, `release` | The Fetch domain pauses page requests at the request stage (`before`) or response stage (`after`). | `fault_proxy.py` between the client and its server. |
@@ -560,16 +571,19 @@ answer is checked while the loop runs.
 
 `expect` reads one authoritative source and polls it until `timeout`
 (15 s): `{"api": "/api/..."}` with an optional `select` path of keys and
-indexes; `{"file": "{fixture}/path"}` as exact UTF-8 text, or `"encoding":
+indexes, where `"*"` maps the rest of the path over a list and keeps what it
+finds (a further `"*"` adds to the same flat list); `{"file": "{fixture}/path"}` as exact UTF-8 text, or `"encoding":
 "bytes"` for its SHA-256 and size, or None when absent; `{"git": [command,
 ...]}` running one read-only Git command (`steps.GIT_READS`) in `{fixture}`
 or `cwd`, without system or global configuration and with optional locks off;
-`{"fault": id, "hits": n}`. Predicates are `equals`, `contains` (substring,
+`{"fault": id, "hits": n}`; `{"gate": "held"|"waiting"}`, the turn gate's
+state and the number of turns it holds. Predicates are `equals`, `contains` (substring,
 list member or structural subset), `length` and `exists`, after an optional
 `where` subset filter on a list. A non-2xx answer or a failed Git command
 never holds, so a failed read cannot pass as an empty result. Paths take
 `{fixture}`, `{project}` (the seed's project) and `{session:<title>}`, the one
-session with that title. The observed value is kept in the client's `waits`.
+session with that title; `select` keys take `{session:<title>}` too, for
+records keyed by session ID. The observed value is kept in the client's `waits`.
 
 A fault is `{"id", "method", "path", "when", "action", "status", "times"}`.
 `path` is a glob where `*` is the only wildcard and matches across `/`; query
@@ -606,7 +620,17 @@ clients must then contain the committed text. Electron's composition comes from
 CDP, not from an OS input method: its launch keeps `gtk-im-context-simple`
 because GTK's IBus selection can deadlock a private launch.
 
-Scenario options: `"fixture": "git"` gives each client a fresh copy of
+A target's native half is an accessible ID, or `{"name", "role"?}` with an
+optional `"within": {"name", "role"?}` for controls whose IDs the server
+assigns, such as queued rows and permission cards: the one node with that
+name, inside the one ancestor with that name when `within` is given.
+Roles there are AT-SPI role names. The Electron half of such a target uses a
+positional selector, since the rows' order is part of the scenario.
+
+Scenario options: `"provider": "interactions"` runs both clients' fixture
+provider in its interaction mode (the shell and question models) with the
+OpenCode configuration that asks permission for the fixture's shell command
+(`isolated-server.mjs --provider-mode interactions`). `"fixture": "git"` gives each client a fresh copy of
 `isolated-server.mjs --git-fixture`'s repository at one fixed path under the
 seed root (`fixtures/git/fixture-repo`, with its bare remote beside it) and
 makes it the active project. The path is the same for both clients, so

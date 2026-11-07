@@ -229,6 +229,25 @@ class NativeStepInputTest(unittest.TestCase):
         with self.assertRaises(LookupError):
             client.click_named({"name": "Missing", "roles": ["push button"]})
 
+    def test_row_scoped_targets_need_one_row_and_one_control_in_it(self):
+        def node(name, role, children=()):
+            return SimpleNamespace(get_name=lambda: name, get_role_name=lambda: role,
+                                   get_child_count=lambda: len(children), get_child_at_index=lambda index: children[index])
+
+        alpha_send, beta_send = node("send", "button"), node("send", "button")
+        alpha, beta = node("Queued alpha", "panel", [alpha_send]), node("Queued beta", "panel", [beta_send])
+        client = InputClient([alpha, alpha_send, beta, beta_send])
+        client.click_target({"within": {"name": "Queued beta", "role": "panel"}, "name": "send"})
+        self.assertEqual(client.clicked, [(beta_send, "Queued beta/send")])
+        with self.assertRaises(LookupError):
+            client.click_target({"within": {"name": "Queued gamma"}, "name": "send"})
+        with self.assertRaises(LookupError):
+            client.click_target({"within": {"name": "Queued beta"}, "name": "edit"})
+        with self.assertRaises(LookupError):
+            client.click_target({"name": "send", "role": "button"})
+        client.click_target({"name": "Queued alpha", "role": "panel"})
+        self.assertEqual(client.clicked[-1], (alpha, "Queued alpha"))
+
     def test_restart_signals_waits_and_clears_the_previous_process_state(self):
         client = InputClient()
         process = SimpleNamespace(pid=4242, returncode=0, stdout=SimpleNamespace(close=lambda: None), wait=lambda timeout: 0)
