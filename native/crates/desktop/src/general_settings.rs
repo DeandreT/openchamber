@@ -1,4 +1,5 @@
-//! General's implemented Files and Terminal settings, scoped to a captured server.
+//! Server-backed Settings preferences, scoped to a captured server: General's
+//! Files and Terminal fields and the implemented Chat and Sessions fields.
 //! Each runtime serializes its writes. Failed fields retain their chosen value
 //! until an explicit retry; other fields can still save.
 
@@ -14,6 +15,8 @@ use gpui_kit::{
     prelude::FluentBuilder, px,
 };
 use openchamber_native_core::ids::RuntimeId;
+use openchamber_native_core::message_queue::FollowUpBehavior;
+use openchamber_native_core::permission_mode::PermissionMode;
 use openchamber_native_transport::client::{ServerClient, ServerSettings, SettingsChanges};
 use openchamber_native_transport::terminal::{TerminalApi, TerminalShell};
 
@@ -29,43 +32,62 @@ use crate::workspace::Workspace;
 const AUTO_SAVE: usize = 0;
 const CLOSE_ON_EXIT: usize = 1;
 const SHELL: usize = 2;
+pub(crate) const PROMPT_NAVIGATOR: usize = 3;
+pub(crate) const FOLLOW_UP: usize = 4;
+pub(crate) const DRAFT_STARTERS: usize = 5;
+pub(crate) const PERMISSION_DEFAULT: usize = 6;
+pub(crate) const SHOW_CHATS: usize = 7;
+pub(crate) const WORK_ENABLED: usize = 8;
+pub(crate) const DELETION_DIALOG: usize = 9;
+const FIELDS: usize = 10;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-enum Choice {
+pub(crate) enum Choice {
     Boolean(bool),
     Shell(String),
+    FollowUp(FollowUpBehavior),
+    Mode(PermissionMode),
 }
 
-type WriteResult = Option<[Option<Choice>; 3]>;
+type Values = [Option<Choice>; FIELDS];
+type WriteResult = Option<Values>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Write {
-    revisions: [u64; 3],
-    values: [Option<Choice>; 3],
+    revisions: [u64; FIELDS],
+    values: Values,
 }
 
 #[derive(Debug)]
 struct State {
-    values: [Choice; 3],
-    known: [bool; 3],
-    revisions: [u64; 3],
-    pending: [bool; 3],
-    failed: [bool; 3],
+    values: [Choice; FIELDS],
+    known: [bool; FIELDS],
+    revisions: [u64; FIELDS],
+    pending: [bool; FIELDS],
+    failed: [bool; FIELDS],
     writing: Option<Write>,
 }
 
 impl Default for State {
+    /// Unknown fields show the defaults their consumers apply.
     fn default() -> Self {
         Self {
             values: [
                 Choice::Boolean(true),
                 Choice::Boolean(true),
                 Choice::Shell("auto".into()),
+                Choice::Boolean(true),
+                Choice::FollowUp(FollowUpBehavior::default()),
+                Choice::Boolean(true),
+                Choice::Mode(PermissionMode::default()),
+                Choice::Boolean(true),
+                Choice::Boolean(true),
+                Choice::Boolean(true),
             ],
-            revisions: [0; 3],
-            known: [false; 3],
-            pending: [false; 3],
-            failed: [false; 3],
+            revisions: [0; FIELDS],
+            known: [false; FIELDS],
+            pending: [false; FIELDS],
+            failed: [false; FIELDS],
             writing: None,
         }
     }
@@ -102,12 +124,12 @@ impl State {
         Some(write)
     }
 
-    fn finish(&mut self, write: &Write, response: Option<[Option<Choice>; 3]>) {
+    fn finish(&mut self, write: &Write, response: WriteResult) {
         if self.writing.as_ref() != Some(write) {
             return;
         }
         self.writing = None;
-        for field in 0..3 {
+        for field in 0..FIELDS {
             if let Some(value) = &write.values[field]
                 && self.revisions[field] == write.revisions[field]
             {
@@ -117,27 +139,24 @@ impl State {
         }
     }
 
-    fn read_revisions(&self) -> [Option<u64>; 3] {
-        std::array::from_fn(|field| {
-            (!self.pending[field]
-                && !self.failed[field]
-                && self
-                    .writing
-                    .as_ref()
-                    .is_none_or(|write| write.values[field].is_none()))
-            .then_some(self.revisions[field])
-        })
+    /// Whether the field holds a choice the server has not confirmed.
+    fn unsettled(&self, field: usize) -> bool {
+        self.pending[field]
+            || self.failed[field]
+            || self
+                .writing
+                .as_ref()
+                .is_some_and(|write| write.values[field].is_some())
     }
 
-    fn adopt(&mut self, revisions: [Option<u64>; 3], values: [Option<Choice>; 3]) {
+    fn read_revisions(&self) -> [Option<u64>; FIELDS] {
+        std::array::from_fn(|field| (!self.unsettled(field)).then_some(self.revisions[field]))
+    }
+
+    fn adopt(&mut self, revisions: [Option<u64>; FIELDS], values: Values) {
         for (field, value) in values.into_iter().enumerate() {
             if Some(self.revisions[field]) == revisions[field]
-                && !self.pending[field]
-                && !self.failed[field]
-                && self
-                    .writing
-                    .as_ref()
-                    .is_none_or(|write| write.values[field].is_none())
+                && !self.unsettled(field)
                 && let Some(value) = value
             {
                 self.values[field] = value;
@@ -147,7 +166,7 @@ impl State {
     }
 
     fn retry(&mut self) {
-        for field in 0..3 {
+        for field in 0..FIELDS {
             if std::mem::take(&mut self.failed[field]) {
                 self.pending[field] = true;
             }
@@ -161,25 +180,64 @@ impl State {
     fn shell(&self) -> &str {
         match &self.values[SHELL] {
             Choice::Shell(shell) => shell,
-            Choice::Boolean(_) => unreachable!("the shell field only accepts shell choices"),
+            _ => unreachable!("the shell field only accepts shell choices"),
         }
     }
 
-    fn preferences(&self) -> GeneralPreferences {
+    fn follow_up(&self) -> FollowUpBehavior {
+        match self.values[FOLLOW_UP] {
+            Choice::FollowUp(behavior) => behavior,
+            _ => unreachable!("the follow-up field only accepts follow-up choices"),
+        }
+    }
+
+    fn permission_mode(&self) -> PermissionMode {
+        match self.values[PERMISSION_DEFAULT] {
+            Choice::Mode(mode) => mode,
+            _ => unreachable!("the permission field only accepts modes"),
+        }
+    }
+
+    /// Known choices, or with `unsettled_only` only those the server has not confirmed.
+    fn preferences(&self, unsettled_only: bool) -> GeneralPreferences {
+        let include = |field| self.known[field] && (!unsettled_only || self.unsettled(field));
+        let boolean = |field| include(field).then(|| self.boolean(field));
         GeneralPreferences {
-            auto_save_enabled: self.known[AUTO_SAVE].then(|| self.boolean(AUTO_SAVE)),
-            terminal_close_on_exit: self.known[CLOSE_ON_EXIT].then(|| self.boolean(CLOSE_ON_EXIT)),
-            terminal_shell: self.known[SHELL].then(|| self.shell().to_owned()),
+            auto_save_enabled: boolean(AUTO_SAVE),
+            terminal_close_on_exit: boolean(CLOSE_ON_EXIT),
+            terminal_shell: include(SHELL).then(|| self.shell().to_owned()),
+            prompt_navigator_enabled: boolean(PROMPT_NAVIGATOR),
+            follow_up_behavior: include(FOLLOW_UP).then(|| self.follow_up()),
+            draft_starters_visible: boolean(DRAFT_STARTERS),
+            permission_default_mode: include(PERMISSION_DEFAULT).then(|| self.permission_mode()),
+            show_chats: boolean(SHOW_CHATS),
+            work_enabled: boolean(WORK_ENABLED),
+            show_deletion_dialog: boolean(DELETION_DIALOG),
         }
     }
 }
 
-fn fields(settings: &ServerSettings) -> [Option<Choice>; 3] {
+fn fields(settings: &ServerSettings) -> Values {
     [
         settings.auto_save_enabled.map(Choice::Boolean),
         settings.terminal_close_on_exit.map(Choice::Boolean),
         settings.terminal_shell.clone().map(Choice::Shell),
+        settings.prompt_navigator_enabled.map(Choice::Boolean),
+        settings.follow_up_behavior.map(Choice::FollowUp),
+        settings.draft_starters_visible.map(Choice::Boolean),
+        settings.permission_default_mode.map(Choice::Mode),
+        settings.show_chats.map(Choice::Boolean),
+        settings.work_enabled.map(Choice::Boolean),
+        settings.show_deletion_dialog.map(Choice::Boolean),
     ]
+}
+
+fn mode_setting(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Ask => "ask",
+        PermissionMode::Safety => "safety",
+        PermissionMode::Auto => "auto",
+    }
 }
 
 impl Write {
@@ -191,10 +249,23 @@ impl Write {
         SettingsChanges {
             auto_save_enabled: boolean(AUTO_SAVE),
             terminal_close_on_exit: boolean(CLOSE_ON_EXIT),
-            terminal_shell: self.values[SHELL].as_ref().and_then(|choice| match choice {
-                Choice::Shell(shell) => Some(shell.clone()),
-                Choice::Boolean(_) => None,
-            }),
+            terminal_shell: match &self.values[SHELL] {
+                Some(Choice::Shell(shell)) => Some(shell.clone()),
+                _ => None,
+            },
+            prompt_navigator_enabled: boolean(PROMPT_NAVIGATOR),
+            follow_up_behavior: match self.values[FOLLOW_UP] {
+                Some(Choice::FollowUp(behavior)) => Some(behavior.as_setting()),
+                _ => None,
+            },
+            draft_starters_visible: boolean(DRAFT_STARTERS),
+            permission_default_mode: match self.values[PERMISSION_DEFAULT] {
+                Some(Choice::Mode(mode)) => Some(mode_setting(mode)),
+                _ => None,
+            },
+            sidebar_show_chats_section: boolean(SHOW_CHATS),
+            session_work_enabled: boolean(WORK_ENABLED),
+            show_deletion_dialog: boolean(DELETION_DIALOG),
             ..SettingsChanges::default()
         }
     }
@@ -229,12 +300,55 @@ struct RuntimeSettings {
     shells_failed: bool,
 }
 
-/// Known General choices. Missing fields leave the consumer's own state intact.
+/// Known Settings choices. Missing fields leave the consumer's own state intact.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct GeneralPreferences {
     pub(crate) auto_save_enabled: Option<bool>,
     pub(crate) terminal_close_on_exit: Option<bool>,
     pub(crate) terminal_shell: Option<String>,
+    pub(crate) prompt_navigator_enabled: Option<bool>,
+    pub(crate) follow_up_behavior: Option<FollowUpBehavior>,
+    pub(crate) draft_starters_visible: Option<bool>,
+    pub(crate) permission_default_mode: Option<PermissionMode>,
+    pub(crate) show_chats: Option<bool>,
+    pub(crate) work_enabled: Option<bool>,
+    pub(crate) show_deletion_dialog: Option<bool>,
+}
+
+impl GeneralPreferences {
+    /// Writes each known choice into the workspace's copy of the server settings.
+    pub(crate) fn apply_to(&self, settings: &mut ServerSettings) {
+        fn set<T: Clone>(target: &mut Option<T>, value: &Option<T>) {
+            if value.is_some() {
+                target.clone_from(value);
+            }
+        }
+        set(&mut settings.auto_save_enabled, &self.auto_save_enabled);
+        set(
+            &mut settings.terminal_close_on_exit,
+            &self.terminal_close_on_exit,
+        );
+        set(&mut settings.terminal_shell, &self.terminal_shell);
+        set(
+            &mut settings.prompt_navigator_enabled,
+            &self.prompt_navigator_enabled,
+        );
+        set(&mut settings.follow_up_behavior, &self.follow_up_behavior);
+        set(
+            &mut settings.draft_starters_visible,
+            &self.draft_starters_visible,
+        );
+        set(
+            &mut settings.permission_default_mode,
+            &self.permission_default_mode,
+        );
+        set(&mut settings.show_chats, &self.show_chats);
+        set(&mut settings.work_enabled, &self.work_enabled);
+        set(
+            &mut settings.show_deletion_dialog,
+            &self.show_deletion_dialog,
+        );
+    }
 }
 
 pub(crate) struct GeneralSettings {
@@ -419,7 +533,7 @@ impl GeneralSettings {
         cx.notify();
     }
 
-    fn change(&mut self, field: usize, value: Choice, cx: &mut Context<Self>) {
+    pub(crate) fn change(&mut self, field: usize, value: Choice, cx: &mut Context<Self>) {
         if self.closing {
             return;
         }
@@ -503,7 +617,14 @@ impl GeneralSettings {
     pub(crate) fn preferences(&self, runtime: &RuntimeId) -> Option<GeneralPreferences> {
         self.runtimes
             .get(runtime)
-            .map(|slot| slot.state.preferences())
+            .map(|slot| slot.state.preferences(false))
+    }
+
+    /// Choices the server has not confirmed, which a newer server read must not replace.
+    pub(crate) fn unsettled_preferences(&self, runtime: &RuntimeId) -> Option<GeneralPreferences> {
+        self.runtimes
+            .get(runtime)
+            .map(|slot| slot.state.preferences(true))
     }
 
     /// Writes dispatch immediately; normal close can await this without retrying failures.
@@ -586,7 +707,49 @@ impl GeneralSettings {
             .any(|slot| slot.state.failed.iter().any(|failed| *failed))
     }
 
-    fn retry(&mut self, cx: &mut Context<Self>) {
+    fn current_slot(&self) -> Option<&RuntimeSettings> {
+        self.runtimes.get(&self.current.as_ref()?.runtime)
+    }
+
+    /// The current server's choice, or the consumer default before it is known.
+    pub(crate) fn current_choice(&self, field: usize) -> Choice {
+        self.current_slot().map_or_else(
+            || State::default().values[field].clone(),
+            |slot| slot.state.values[field].clone(),
+        )
+    }
+
+    /// Edits need a captured server and an open page.
+    pub(crate) fn editable(&self) -> bool {
+        self.current_slot().is_some() && !self.closing
+    }
+
+    /// The shared save indicator: its message and whether Retry is offered.
+    /// `shells` includes the General page's shell list read.
+    pub(crate) fn status(&self, shells: bool) -> (Option<&'static str>, bool) {
+        let slot = self.current_slot();
+        let failed = slot.is_some_and(|slot| slot.state.failed.iter().any(|failed| *failed));
+        let read_failed =
+            slot.is_some_and(|slot| slot.read_failed || (shells && slot.shells_failed));
+        let key = if failed {
+            Some("settings.common.status.saveFailed")
+        } else if read_failed {
+            Some("settings.openchamber.desktopNetwork.error.loadFailed")
+        } else if slot.is_some_and(|slot| slot.write.is_some()) {
+            Some("settings.common.actions.saving")
+        } else if self.current.is_none() {
+            Some("common.unavailable")
+        } else {
+            None
+        };
+        (key, failed || read_failed)
+    }
+
+    pub(crate) fn is_closing(&self) -> bool {
+        self.closing
+    }
+
+    pub(crate) fn retry(&mut self, cx: &mut Context<Self>) {
         if self.closing {
             return;
         }
@@ -613,17 +776,11 @@ impl Render for GeneralSettings {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let strings = locale::strings(cx).clone();
         let direction = strings.direction();
-        let slot = self
-            .current
-            .as_ref()
-            .and_then(|target| self.runtimes.get(&target.runtime));
+        let slot = self.current_slot();
         let enabled = slot.is_some() && !self.closing;
         let auto_save = slot.is_none_or(|slot| slot.state.boolean(AUTO_SAVE));
         let close_on_exit = slot.is_none_or(|slot| slot.state.boolean(CLOSE_ON_EXIT));
         let shell = slot.map_or("auto", |slot| slot.state.shell()).to_owned();
-        let failed = slot.is_some_and(|slot| slot.state.failed.iter().any(|failed| *failed));
-        let read_failed = slot.is_some_and(|slot| slot.read_failed || slot.shells_failed);
-        let saving = slot.is_some_and(|slot| slot.write.is_some());
         let shell_enabled = !self.closing && slot.is_some_and(|slot| slot.shells_loaded);
         let mut shell_values = vec![ShellOption {
             value: "auto".into(),
@@ -696,17 +853,7 @@ impl Render for GeneralSettings {
                 .mb(px(12.0))
                 .child(strings.get(key))
         };
-        let status_key = if failed {
-            Some("settings.common.status.saveFailed")
-        } else if read_failed {
-            Some("settings.openchamber.desktopNetwork.error.loadFailed")
-        } else if saving {
-            Some("settings.common.actions.saving")
-        } else if self.current.is_none() {
-            Some("common.unavailable")
-        } else {
-            None
-        };
+        let (status_key, retryable) = self.status(true);
         let retry = on_activate(
             gpui_kit::base::Button::new("general-retry")
                 .disabled(self.closing)
@@ -798,7 +945,7 @@ impl Render for GeneralSettings {
                     .gap(px(8.0))
                     .text_color(palette.muted_foreground)
                     .children(status_key.map(|key| strings.get(key)))
-                    .when(failed || read_failed, |view| view.child(retry)),
+                    .when(retryable, |view| view.child(retry)),
             )
     }
 }
@@ -1256,20 +1403,89 @@ mod tests {
         );
     }
 
+    /// A server read carrying only `entries`.
+    fn read(entries: &[(usize, Choice)]) -> Values {
+        let mut values: Values = Default::default();
+        for (field, choice) in entries {
+            values[*field] = Some(choice.clone());
+        }
+        values
+    }
+
+    #[test]
+    fn unsettled_preferences_hold_only_choices_the_server_has_not_confirmed() {
+        let mut state = State::default();
+        state.adopt(
+            state.read_revisions(),
+            read(&[(SHOW_CHATS, Choice::Boolean(false))]),
+        );
+        state.change(PROMPT_NAVIGATOR, Choice::Boolean(false));
+        state.change(WORK_ENABLED, Choice::Boolean(false));
+        let write = state.begin().expect("both edits dispatch together");
+        assert_eq!(
+            serde_json::to_value(write.changes()).expect("serializes"),
+            json!({"promptNavigatorEnabled": false, "sessionWorkEnabled": false})
+        );
+        let mut response = read(&[(WORK_ENABLED, Choice::Boolean(false))]);
+        response[SHOW_CHATS] = Some(Choice::Boolean(false));
+        state.finish(&write, Some(response));
+        assert!(state.failed[PROMPT_NAVIGATOR], "the server did not echo it");
+        assert_eq!(
+            state.preferences(true),
+            GeneralPreferences {
+                prompt_navigator_enabled: Some(false),
+                ..GeneralPreferences::default()
+            }
+        );
+        assert_eq!(state.preferences(false).show_chats, Some(false));
+        assert_eq!(state.preferences(false).work_enabled, Some(false));
+
+        state.change(FOLLOW_UP, Choice::FollowUp(FollowUpBehavior::Steer));
+        state.change(PERMISSION_DEFAULT, Choice::Mode(PermissionMode::Safety));
+        state.change(DRAFT_STARTERS, Choice::Boolean(false));
+        state.change(DELETION_DIALOG, Choice::Boolean(false));
+        state.change(SHOW_CHATS, Choice::Boolean(true));
+        let write = state.begin().expect("the next edits dispatch");
+        assert_eq!(
+            serde_json::to_value(write.changes()).expect("serializes"),
+            json!({
+                "followUpBehavior": "steer",
+                "permissionDefaultMode": "safety",
+                "draftStartersVisible": false,
+                "showDeletionDialog": false,
+                "sidebarShowChatsSection": true,
+            }),
+            "a failed field waits for an explicit retry"
+        );
+        let mut settings = ServerSettings::default();
+        state.preferences(true).apply_to(&mut settings);
+        assert_eq!(settings.follow_up_behavior, Some(FollowUpBehavior::Steer));
+        assert_eq!(
+            settings.permission_default_mode,
+            Some(PermissionMode::Safety)
+        );
+        assert_eq!(settings.show_chats, Some(true));
+        assert_eq!(settings.prompt_navigator_enabled, Some(false));
+        assert_eq!(
+            settings.work_enabled, None,
+            "confirmed choices are not overlaid"
+        );
+    }
+
     #[test]
     fn partial_reads_only_establish_authority_for_present_valid_fields() {
         let mut state = State::default();
         assert_eq!(
-            state.preferences(),
+            state.preferences(false),
             GeneralPreferences::default(),
             "display defaults have no authority over consumers"
         );
         state.adopt(
             state.read_revisions(),
-            [Some(Choice::Boolean(false)), None, None],
+            read(&[(AUTO_SAVE, Choice::Boolean(false))]),
         );
         assert_eq!(
-            state.preferences(),
+            state.preferences(false),
             GeneralPreferences {
                 auto_save_enabled: Some(false),
                 ..GeneralPreferences::default()
@@ -1277,14 +1493,14 @@ mod tests {
         );
         state.adopt(
             state.read_revisions(),
-            [None, Some(Choice::Boolean(false)), None],
+            read(&[(CLOSE_ON_EXIT, Choice::Boolean(false))]),
         );
         assert_eq!(
-            state.preferences(),
+            state.preferences(false),
             GeneralPreferences {
                 auto_save_enabled: Some(false),
                 terminal_close_on_exit: Some(false),
-                terminal_shell: None,
+                ..GeneralPreferences::default()
             },
             "a later omitted field preserves the earlier authoritative value"
         );
@@ -1296,9 +1512,9 @@ mod tests {
         state.change(SHELL, Choice::Shell("fish".into()));
         let write = state.begin().expect("shell edit dispatches");
         state.finish(&write, None);
-        state.adopt(state.read_revisions(), [None, None, None]);
+        state.adopt(state.read_revisions(), read(&[]));
         assert_eq!(
-            state.preferences(),
+            state.preferences(false),
             GeneralPreferences {
                 terminal_shell: Some("fish".into()),
                 ..GeneralPreferences::default()
@@ -1386,7 +1602,10 @@ mod tests {
         );
         let second = state.begin().expect("newer edits follow");
         state.finish(&second, None);
-        assert_eq!(state.failed, [true, true, false]);
+        assert_eq!(
+            state.failed,
+            std::array::from_fn(|field| field == AUTO_SAVE || field == CLOSE_ON_EXIT)
+        );
         state.change(SHELL, Choice::Shell("zsh".into()));
         let third = state.begin().expect("unrelated field still dispatches");
         assert!(third.values[AUTO_SAVE].is_none());
@@ -1403,11 +1622,10 @@ mod tests {
         let mut state = State::default();
         let revisions = state.read_revisions();
         state.change(AUTO_SAVE, Choice::Boolean(false));
-        let snapshot = [
-            Some(Choice::Boolean(true)),
-            Some(Choice::Boolean(false)),
-            None,
-        ];
+        let snapshot = read(&[
+            (AUTO_SAVE, Choice::Boolean(true)),
+            (CLOSE_ON_EXIT, Choice::Boolean(false)),
+        ]);
         state.adopt(revisions, snapshot.clone());
         assert!(!state.boolean(AUTO_SAVE));
         assert!(
@@ -1432,7 +1650,7 @@ mod tests {
         state.change(AUTO_SAVE, Choice::Boolean(false));
         let write = state.begin().expect("edit dispatches");
         state.finish(&write, Some(write.values.clone()));
-        state.adopt(revisions, [Some(Choice::Boolean(true)), None, None]);
+        state.adopt(revisions, read(&[(AUTO_SAVE, Choice::Boolean(true))]));
         assert!(!state.boolean(AUTO_SAVE));
         assert!(!state.failed[AUTO_SAVE]);
     }
@@ -1444,7 +1662,7 @@ mod tests {
         let write = state.begin().expect("edit dispatches");
         let during_write = state.read_revisions();
         state.finish(&write, Some(write.values.clone()));
-        state.adopt(during_write, [Some(Choice::Boolean(true)), None, None]);
+        state.adopt(during_write, read(&[(AUTO_SAVE, Choice::Boolean(true))]));
         assert!(
             !state.boolean(AUTO_SAVE),
             "the read may have observed the old server value"
@@ -1467,7 +1685,7 @@ mod tests {
         assert!(queued.values[AUTO_SAVE].is_none());
         assert_eq!(queued.values[CLOSE_ON_EXIT], Some(Choice::Boolean(false)));
         new.finish(&new_write, Some(new_write.values.clone()));
-        assert_eq!(new.failed, [false; 3]);
+        assert_eq!(new.failed, [false; FIELDS]);
         assert!(old.failed[SHELL]);
         assert_eq!(new.shell(), "auto");
     }

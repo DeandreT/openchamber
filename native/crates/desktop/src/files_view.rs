@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use gpui_kit::component::input::{Editor, EditorState, Input, InputEvent, InputState};
 use gpui_kit::{
-    AnyElement, AppContext, Context, Entity, FocusHandle, Focusable, FontWeight,
+    AnyElement, App, AppContext, Context, Entity, FocusHandle, Focusable, FontWeight,
     InteractiveElement, IntoElement, ParentElement, Render, Role, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, Window, div,
     prelude::FluentBuilder, px,
@@ -164,7 +164,7 @@ pub(crate) struct Panels {
 }
 
 impl Workspace {
-    /// Applies General choices only to the runtime that dispatched them.
+    /// Applies Settings choices only to the runtime that dispatched them.
     pub(crate) fn apply_general_settings(
         &mut self,
         runtime: &RuntimeId,
@@ -173,15 +173,10 @@ impl Workspace {
     ) {
         if &self.runtime == runtime {
             if let Some(settings) = self.send_catalog.settings.as_mut() {
-                if let Some(value) = preferences.auto_save_enabled {
-                    settings.auto_save_enabled = Some(value);
-                }
-                if let Some(value) = preferences.terminal_close_on_exit {
-                    settings.terminal_close_on_exit = Some(value);
-                }
-                if let Some(value) = &preferences.terminal_shell {
-                    settings.terminal_shell = Some(value.clone());
-                }
+                preferences.apply_to(settings);
+            }
+            if preferences.show_chats.is_some() || preferences.work_enabled.is_some() {
+                self.rebuild_sidebar();
             }
             if let Some(panel) = &self.terminal_panel {
                 panel.update(cx, |panel, cx| {
@@ -203,6 +198,23 @@ impl Workspace {
             }
         }
         cx.notify();
+    }
+
+    /// Keeps Settings choices the server has not confirmed over a newer read.
+    pub(crate) fn overlay_unsettled_settings(
+        &self,
+        settings: &mut openchamber_native_transport::client::ServerSettings,
+        cx: &App,
+    ) {
+        if let Some(page) = &self.settings
+            && let Some(preferences) = page
+                .read(cx)
+                .general
+                .read(cx)
+                .unsettled_preferences(&self.runtime)
+        {
+            preferences.apply_to(settings);
+        }
     }
 
     /// Opens `surface`, or closes it when it is the open one.

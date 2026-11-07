@@ -141,3 +141,5 @@ git-close-pull-request
 chat-1
 filter-3
 arrow-right
+chat-ai-3
+chat-history

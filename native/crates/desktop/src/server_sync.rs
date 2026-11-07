@@ -566,9 +566,26 @@ impl Workspace {
     /// does. A failed save keeps the choice on screen.
     pub(crate) fn toggle_code_wrap(&mut self, cx: &mut Context<Self>) {
         let wrap = !cx.try_global::<CodeWrap>().copied().unwrap_or_default().0;
+        self.set_code_wrap(wrap, cx);
+    }
+
+    /// Settings' Chat page choice; the same writer as the code card toggle.
+    pub(crate) fn set_code_wrap(&mut self, wrap: bool, cx: &mut Context<Self>) {
         self.show_code_wrap(wrap, cx);
         self.code_wrap_state.change(wrap);
         self.save_code_wrap(cx);
+    }
+
+    /// Settings' Retry: sends the shown choice again.
+    pub(crate) fn retry_code_wrap(&mut self, cx: &mut Context<Self>) {
+        if self.code_wrap_state.failed() {
+            let wrap = cx.try_global::<CodeWrap>().copied().unwrap_or_default().0;
+            self.set_code_wrap(wrap, cx);
+        }
+    }
+
+    pub(crate) fn code_wrap_save_failed(&self) -> bool {
+        self.code_wrap_state.failed()
     }
 
     /// Drains one runtime's latest choices in order. The captured client
@@ -607,6 +624,10 @@ impl Workspace {
                     let same_generation = this.connection.as_ref().is_some_and(|connection| {
                         connection.generation == generation
                     });
+                    if latest {
+                        this.code_wrap_state.settle(result.is_ok());
+                        cx.notify();
+                    }
                     match result {
                         Ok(settings) if latest && same_generation => {
                             if let Some(wrap) = settings.code_block_line_wrap {
@@ -784,6 +805,7 @@ impl Workspace {
                                     );
                                 }
                                 this.reconcile_effort_settings(&effort_read, &mut settings);
+                                this.overlay_unsettled_settings(&mut settings, cx);
                                 this.send_catalog.settings = Some(settings);
                                 this.session_admission
                                     .confirmed_projects
