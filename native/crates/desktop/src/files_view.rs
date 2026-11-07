@@ -823,6 +823,9 @@ pub(crate) struct FilesView {
     pub(crate) next_rename_revision: u64,
     pub(crate) notice: Option<Notice>,
     shown: Rc<Cell<bool>>,
+    /// The open HTML file as a page, while its preview is on.
+    #[cfg(target_os = "linux")]
+    html_preview: Option<Entity<crate::html_preview_view::HtmlPreviewView>>,
     poll_ticks: u32,
     polling: bool,
     _poll: Task<()>,
@@ -886,6 +889,8 @@ impl FilesView {
             next_rename_revision: 0,
             notice: None,
             shown,
+            #[cfg(target_os = "linux")]
+            html_preview: None,
             poll_ticks: 0,
             polling: false,
             _poll: poll,
@@ -2119,6 +2124,8 @@ impl FilesView {
                 .into_any_element()
         } else if open.file.is_loading() {
             empty_state(strings.get("filesView.state.loading"), palette, cx)
+        } else if let Some(page) = self.html_preview_element() {
+            page
         } else {
             div()
                 .id("files-editor")
@@ -2148,6 +2155,57 @@ impl FilesView {
     }
 }
 
+impl FilesView {
+    /// Keeps the HTML preview in step with the open file: a page while the
+    /// preview of an HTML file is on, granted again after each load or save.
+    #[cfg(target_os = "linux")]
+    fn sync_html_preview(&mut self, cx: &mut Context<Self>) {
+        let wanted = self.open.as_ref().filter(|open| {
+            open.preview
+                && crate::html_preview_view::is_html(open.file.path())
+                && !open.file.is_loading()
+                && open.file.failure().is_none()
+        });
+        let Some(open) = wanted else {
+            self.html_preview = None;
+            return;
+        };
+        let (path, revision, outside) = (
+            open.file.path().to_owned(),
+            open.file.revision(),
+            open.outside,
+        );
+        if self
+            .html_preview
+            .as_ref()
+            .is_some_and(|view| view.read(cx).shows(&path, revision))
+        {
+            return;
+        }
+        let mut scope = self.scope.clone();
+        self.html_preview = Some(cx.new(|cx| {
+            crate::html_preview_view::HtmlPreviewView::new(&mut scope, path, revision, outside, cx)
+        }));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn html_preview_element(&self) -> Option<AnyElement> {
+        self.html_preview.clone().map(|view| {
+            div()
+                .id("files-html-preview")
+                .accessibility_id("files-html-preview")
+                .size_full()
+                .child(view)
+                .into_any_element()
+        })
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn html_preview_element(&self) -> Option<AnyElement> {
+        None
+    }
+}
+
 impl Focusable for FilesView {
     fn focus_handle(&self, _: &gpui_kit::App) -> FocusHandle {
         self.tree_focus.clone()
@@ -2163,6 +2221,8 @@ impl Render for FilesView {
             });
         }
         self.sync_editor(window, cx);
+        #[cfg(target_os = "linux")]
+        self.sync_html_preview(cx);
         let palette = cx.global::<Palette>().clone();
         let direction = locale::strings(cx).direction();
         let searching = !self.search.read(cx).value().trim().is_empty();
