@@ -12,6 +12,14 @@ prompt. Attachments and worktree creation remain separate workflows.
 
 ## Ownership
 
+- `managed_host.rs` owns the managed local server: discovery of the Electron
+  package layout it runs from, the server's environment and bootstrap, the
+  loopback port store and the handle `main` stops after the window closes.
+  `managed_host_supervisor.rs` owns the server process on its own thread:
+  spawn, readiness, crash restarts and the bounded stop.
+  `managed_host_lifecycle.rs` is the pure state machine between them, and
+  `managed_host_view.rs` draws its states. `owned_process.rs` owns process
+  identity (PID plus start time), descendant snapshots and signals.
 - `blocking_requests.rs` owns location-scoped permission/form stores, selected
   subtree routing, host bootstrap hints, exact reconciliation and independent
   mutation tasks. `request_dock.rs` draws one nonmodal permission-priority panel
@@ -508,6 +516,19 @@ prompt. Attachments and worktree creation remain separate workflows.
 
 ## Invariants
 
+- The managed host signals only processes it owns: the server it spawned, or a
+  descendant recorded from `/proc` while that server still ran. Every signal
+  re-reads PID and start time first and refuses a replaced process. An
+  external server, a saved host and any unrelated process are never stopped.
+- The managed server always listens on 127.0.0.1. It receives the inherited
+  environment, so the enterprise policy file and variables reach it, minus the
+  native client's own `OPENCHAMBER_NATIVE_*` settings and a UI password the
+  desktop only passes with LAN access. Node mode and the launch variable never
+  reach OpenCode or terminals.
+- Quit closes the server's stdin, waits up to 35 s, then terminates and kills
+  the recorded process groups and the server's own group. Nothing restarts a
+  server once quit was requested. Restarts after a crash stop after three in a
+  row; a failed host waits for Retry Local, which relaunches the app.
 - Connection startup verifies server identity and authentication before opening
   the event stream or loading sessions. A malformed status cannot become either
   a successful login or a guessed password challenge. A client-token-only
@@ -1308,6 +1329,38 @@ prompt. Attachments and worktree creation remain separate workflows.
   change is the one on disk; an unreadable or newer file reads the defaults.
 
 ## Decisions
+
+### Why the managed server runs under the bundled Electron in Node mode
+
+The desktop hosts the server in its main process; the native client has no
+Node runtime, and porting the server is far larger than parity needs. The
+packaged Electron executable with `ELECTRON_RUN_AS_NODE=1` reads `app.asar`,
+sets `process.resourcesPath` so the server finds the bundled OpenCode, and
+matches the ABI of the unpacked `node-pty`. A separate Node would need its own
+native modules.
+
+### Why end of input stops the server and not a signal
+
+The crate forbids `unsafe` and has no libc binding, so it cannot install signal
+handlers. When the native process dies in any way, including SIGKILL, the
+kernel closes the server's stdin pipe and the bootstrap runs the server's own
+graceful stop. Signals go through the root-owned `kill` program only for the
+forced stop.
+
+### Why descendants are recorded before the stop request
+
+OpenCode and terminals run in their own process groups and are re-parented
+once the server exits, after which nothing ties them to it. The snapshot taken
+while the server still runs is what the forced stop may signal. A server that
+crashed leaves its OpenCode to the next server's startup reaper, as in the
+desktop.
+
+### Why the port is the native profile's own
+
+A stable port keeps the runtime key, and with it drafts and queued sends,
+across launches, as `desktopLocalPort` does for the desktop. The desktop's
+default 57123 stays the desktop's, or the two apps would move each other's
+origin.
 
 ### Why a picker choice edits the textarea
 
