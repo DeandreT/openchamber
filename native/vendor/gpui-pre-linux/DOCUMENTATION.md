@@ -58,6 +58,11 @@ validation and file content reads.
   with the existing clipboard owners. Ordinary image/text precedence is unchanged
   when no file-list format is advertised.
 
+- An X11 `FocusOut` whose detail is `NotifyInferior` keeps the window active.
+  Keyboard focus moved into one of its child windows, such as an embedded
+  WebKit page; the window's own keyboard, compose and IME state still resets
+  as for any focus loss. Every other `FocusOut` deactivates the window.
+
 ## Decisions
 
 ### Why text errors keep the connection
@@ -125,3 +130,11 @@ Runtime qualification uses external clipboard owners on owned private X11 and
 Wayland displays. It covers file-list precedence, unusable-list failure, INCR or
 pipe transfer, ordinary image/text paste, PRIMARY separation, internal metadata,
 and changing clipboard owners or offers between reads.
+
+### Why focus inside a child window keeps the window active
+
+The desktop hosts web pages as X11 child windows of the GPUI window. A click in
+the page moves X focus to the child, and the parent receives `FocusOut` with
+detail `NotifyInferior`. Treating that as deactivation drew the whole window as
+inactive while the user typed in the page, which a browser view in Electron
+never does.

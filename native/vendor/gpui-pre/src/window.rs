@@ -2971,6 +2971,29 @@ impl Window {
         self.platform_window.hide_soft_keyboard();
     }
 
+    /// Returns the visible bounds of every hitbox the last rendered frame
+    /// inserted after `below`, each clipped to its content mask, or `None`
+    /// when `below` was not part of that frame.
+    ///
+    /// Hitboxes are inserted in paint order, and deferred draws, dialogs,
+    /// prompts and the drag element prepaint after the main tree, so these are
+    /// the interactive elements drawn on top of `below`. A native child window
+    /// placed over `below` uses them to uncover what GPUI paints above it, and
+    /// `None` to learn that its element is no longer drawn.
+    pub fn hitbox_bounds_above(&self, below: HitboxId) -> Option<Vec<Bounds<Pixels>>> {
+        let hitboxes = &self.rendered_frame.hitboxes;
+        let position = hitboxes.iter().position(|hitbox| hitbox.id == below)?;
+        Some(
+            hitboxes[position + 1..]
+                .iter()
+                .map(|hitbox| hitbox.bounds.intersect(&hitbox.content_mask.bounds))
+                .filter(|bounds| {
+                    bounds.size.width > Pixels::ZERO && bounds.size.height > Pixels::ZERO
+                })
+                .collect(),
+        )
+    }
+
     /// Returns whether this window is focused by the operating system (receiving key events).
     pub fn is_window_active(&self) -> bool {
         self.active.get()

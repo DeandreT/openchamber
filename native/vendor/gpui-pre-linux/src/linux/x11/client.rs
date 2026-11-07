@@ -1075,7 +1075,12 @@ impl X11Client {
             }
             Event::FocusOut(event) => {
                 let window = self.get_window(event.event)?;
-                window.set_active(false);
+                // Focus that moves into a child window (an embedded web page)
+                // stays inside this window: it remains the active window,
+                // though its own keyboard input ends below.
+                if event.detail != xproto::NotifyDetail::INFERIOR {
+                    window.set_active(false);
+                }
                 let mut state = self.0.borrow_mut();
                 // Set last scroll values to `None` so that a large delta isn't created if scrolling is done outside the window (the valuator is global)
                 reset_all_pointer_device_scroll_positions(&mut state.pointer_device_states);
