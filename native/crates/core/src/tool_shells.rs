@@ -40,6 +40,8 @@ pub struct ToolInput {
     pub action: Option<String>,
     /// The detail of an OpenChamber tool's `parameters` that tells calls apart.
     pub parameter_detail: Option<String>,
+    /// The page an `openchamber_render` call shows.
+    pub page: crate::rendered_page::PageInput,
 }
 
 /// One file a completed `edit` or `patch` call reported (`FileDiff.Info`).
@@ -72,6 +74,8 @@ pub struct ToolMetadata {
     pub tool_calls: Vec<ExecuteToolCall>,
     pub truncated: bool,
     pub output_path: Option<String>,
+    /// OpenChamber's result for a render call: accepted, and the answer.
+    pub page_result: crate::rendered_page::PageResult,
 }
 
 /// Everything a row reads about one call besides its status and result.
