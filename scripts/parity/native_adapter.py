@@ -221,15 +221,16 @@ class NativeClient:
         return matches[0]
 
     def _resolve(self, target):
-        """A target's node: an accessible ID, or ``{"name", "role"?}`` with
-        an optional ``"within": {"name", "role"?}``, the one node with that
-        name (inside the one ancestor with that name), for controls whose IDs
-        the server assigns."""
+        """A target's node: an accessible ID, or ``{"name", "role"?,
+        "prefix"?}`` with an optional ``"within"`` query of the same form,
+        the one node with that name (inside the one ancestor with that name),
+        for controls whose IDs the server assigns."""
         if isinstance(target, str):
             return self._find(target)
 
         def named(query, nodes):
-            return [node for node in nodes if node.get_name() == query["name"]
+            return [node for node in nodes
+                    if ((node.get_name() or "").startswith(query["name"]) if query.get("prefix") else node.get_name() == query["name"])
                     and ("role" not in query or node.get_role_name() == query["role"])]
 
         if "within" not in target:

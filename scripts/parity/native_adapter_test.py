@@ -247,6 +247,8 @@ class NativeStepInputTest(unittest.TestCase):
             client.click_target({"name": "send", "role": "button"})
         client.click_target({"name": "Queued alpha", "role": "panel"})
         self.assertEqual(client.clicked[-1], (alpha, "Queued alpha"))
+        client.click_target({"name": "Queued b", "prefix": True})
+        self.assertEqual(client.clicked[-1], (beta, "Queued b"))
 
     def test_restart_signals_waits_and_clears_the_previous_process_state(self):
         client = InputClient()
