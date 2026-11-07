@@ -231,6 +231,11 @@ markdownRenderer.code.actions.disableWrapTitle
 markdownRenderer.code.actions.enableWrapTitle
 onboarding.desktopRecovery.incompatibleServer.description
 onboarding.desktopRecovery.remoteUnreachable.description
+onboarding.desktopRecovery.localUnavailable.title
+onboarding.desktopRecovery.localUnavailable.description
+onboarding.desktopRecovery.localUnavailable.retry
+onboarding.desktopRecovery.common.useRemote
+updateDialog.status.serverRestarting
 onboarding.remoteConnection.probe.authMessage
 onboarding.remoteConnection.probe.incompatibleMessage
 openInApp.actions.openInAria
