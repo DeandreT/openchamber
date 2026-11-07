@@ -59,6 +59,9 @@ Options:
                            Reach GitHub through a loopback fixture proxy
                            (scripts/parity/github_fixture.py) that trusts <ca>,
                            with a github.com origin remote on the project
+  --provider-mode <mode>   Fixture provider mode for a seeded server: interactions
+                           adds the shell and question models and asks
+                           permission for the shell fixture command
   --git-fixture            Make the project the Files and Git fixture repository:
                            two commits tracking a bare remote at <root>/remote.git,
                            untracked, gitignored, CRLF and nested-repository entries
@@ -103,9 +106,9 @@ const waitForPort = async (port, timeoutMs, child) => {
 }
 
 /** Starts the fixture provider unless one already listens on `port`. */
-export const startFixture = async ({ port, logFile }) => {
+export const startFixture = async ({ port, logFile, providerMode = null }) => {
   if (await portInUse(port)) return { pid: null, reused: true, stop: async () => undefined }
-  const child = spawn(process.execPath, [FIXTURE_SCRIPT, String(port)], {
+  const child = spawn(process.execPath, [FIXTURE_SCRIPT, String(port), ...(providerMode ? [`--${providerMode}`] : [])], {
     detached: true,
     windowsHide: true,
     stdio: ["ignore", logFile ? "pipe" : "ignore", logFile ? "pipe" : "ignore"],
@@ -392,7 +395,7 @@ export const restoreState = (state, seed) => {
  * isolated home under `state`. Resolves once it answers HTTP, with the served
  * main chunk checked against the build's index.html.
  */
-export const startIsolatedServer = async ({ repo, dist, state, project, port, fixturePort, opencodeBinary = defaultOpencodeBinary(), logFile, interactions = false, selections = false, workflows = false, authentication = false, gitFixture = false, githubFixture = null, signal }) => {
+export const startIsolatedServer = async ({ repo, dist, state, project, port, fixturePort, opencodeBinary = defaultOpencodeBinary(), logFile, interactions = false, selections = false, workflows = false, authentication = false, gitFixture = false, githubFixture = null, providerMode = null, signal }) => {
   signal?.throwIfAborted()
   if (await portInUse(port)) throw new Error(`Port ${port} is already in use; stop that server or pass another port.`)
   signal?.throwIfAborted()
@@ -410,7 +413,7 @@ export const startIsolatedServer = async ({ repo, dist, state, project, port, fi
     settings.defaultModel = workflows ? "perf/workflow-1s" : selections ? "perf/stream-1200cps" : "perf/interaction-shell"
     writeFileSync(settingsFile, JSON.stringify(settings, null, 2))
   }
-  const config = isolatedOpencodeConfig(fixturePort, { interactions, selections, workflows })
+  const config = isolatedOpencodeConfig(fixturePort, providerMode ? { [providerMode]: true } : { interactions, selections, workflows })
   // An undefined `inherited` takes the default, process.env.
   const env = isolatedServerEnv({ state, dist, config, opencodeBinary, authentication,
     inherited: interactions ? { PATH: process.env.PATH, LANG: "C.UTF-8", SHELL: "/bin/sh", TMPDIR: join(state, "tmp") } : undefined,
@@ -548,6 +551,10 @@ const parseArgs = (argv) => {
     else if (value === "--authentication") options.authentication = true
     else if (value === "--workflows") options.workflows = true
     else if (value === "--git-fixture") options.gitFixture = true
+    else if (value === "--provider-mode") {
+      options.providerMode = argv[++index]
+      if (options.providerMode !== "interactions") throw new Error(`Unknown provider mode: ${options.providerMode}`)
+    }
     else if (value === "--github-fixture") options.githubFixture = { proxy: argv[++index], ca: resolve(argv[++index]) }
     else if (value === "--port") options.port = Number(argv[++index])
     else if (value === "--fixture-port") options.fixturePort = Number(argv[++index])
@@ -585,13 +592,13 @@ const main = async () => {
   // root, so a first run on a new --root needs the directory made here.
   mkdirSync(options.root, { recursive: true })
   if (options.fresh) restoreState(state, join(options.root, "seed"))
-  const fixture = await startFixture({ port: options.fixturePort, logFile: join(options.root, "fixture.log") })
+  const fixture = await startFixture({ port: options.fixturePort, logFile: join(options.root, "fixture.log"), providerMode: options.providerMode ?? null })
   let server
   try {
     server = await startIsolatedServer({
       repo: options.repo, dist: options.dist, state, project: join(options.root, "project"),
       port: options.port, fixturePort: options.fixturePort, opencodeBinary: options.opencodeBinary,
-      logFile: join(options.root, "server.log"), gitFixture: options.gitFixture,
+      logFile: join(options.root, "server.log"), gitFixture: options.gitFixture, providerMode: options.providerMode ?? null,
       githubFixture: options.githubFixture ?? null,
     })
   } catch (error) {

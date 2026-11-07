@@ -219,8 +219,20 @@ GIT_LISTING_FLAGS = {
 
 
 def select(value, path: list):
-    """Walks keys and list indexes; a missing step selects None."""
-    for step in path:
+    """Walks keys and list indexes; a missing step selects None. `"*"` maps
+    the rest of the path over a list and keeps the values it finds, so
+    `["data", "*", "id"]` is every item's ID; a further `"*"` in the rest
+    adds its values to the same list, so `["data", "*", "parts", "*",
+    "status"]` is every part's status across the items."""
+    for index, step in enumerate(path):
+        if step == "*":
+            if not isinstance(value, list):
+                return None
+            rest = path[index + 1:]
+            found = [select(item, rest) for item in value]
+            if "*" in rest:
+                return [value for item in found if item is not None for value in item]
+            return [item for item in found if item is not None]
         if isinstance(value, dict):
             value = value.get(step)
         elif isinstance(value, list) and isinstance(step, int) and -len(value) <= step < len(value):
@@ -279,8 +291,13 @@ SESSION_PLACEHOLDER = re.compile(r"\{session:([^{}]+)\}")
 # --- validation -------------------------------------------------------------
 
 STEP_KINDS = ("wait", "click", "clickTarget", "clickNamed", "hover", "key", "type", "paste", "settle", "capture",
-              "restart", "expect", "fault", "release", "drop", "pick", "ime")
+              "restart", "expect", "fault", "release", "drop", "pick", "ime", "gate", "drag")
 FIXTURES = ("git",)
+# Fixture provider modes: `interactions` adds the shell and question models
+# and asks permission for the shell fixture command.
+PROVIDERS = ("interactions",)
+GATE_ACTIONS = ("hold", "release")
+GATE_FIELDS = ("held", "waiting")
 FILE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._ -]{0,99}")
 
 
@@ -321,6 +338,12 @@ def check_step(step: dict, targets: dict[str, dict]) -> list[str]:
             problems.append(f"references undefined target {target}")
         if kind == "drop" and isinstance(value, dict):
             problems += _check_files(value.get("files"))
+    elif kind == "drag":
+        if not isinstance(value, dict) or set(value) != {"from", "to"}:
+            problems.append("takes from and to targets")
+        else:
+            problems += [f"references undefined target {target}" for target in (value["from"], value["to"])
+                         if set(targets.get(target, {})) != {"electron", "native"}]
     elif kind == "clickNamed":
         for client in ("electron", "native"):
             try:
@@ -376,6 +399,9 @@ def check_step(step: dict, targets: dict[str, dict]) -> list[str]:
                 problems.append("a candidate commit needs the expected text")
         elif value.get("commit") != "raw" or set(value) != {"commit"}:
             problems.append("commit is candidate (with text) or raw")
+    elif kind == "gate":
+        if value not in GATE_ACTIONS:
+            problems.append("is hold or release")
     elif kind == "settle":
         if not isinstance(value, (int, float)) or value < 0:
             problems.append("needs seconds")
@@ -387,10 +413,10 @@ def check_step(step: dict, targets: dict[str, dict]) -> list[str]:
 
 def check_expectation(value) -> list[str]:
     if not isinstance(value, dict):
-        return ["needs an api, file, git or fault source"]
-    sources = [source for source in ("api", "file", "git", "fault") if source in value]
+        return ["needs an api, file, git, fault or gate source"]
+    sources = [source for source in ("api", "file", "git", "fault", "gate") if source in value]
     if len(sources) != 1:
-        return ["needs exactly one of api, file, git or fault"]
+        return ["needs exactly one of api, file, git, fault or gate"]
     source = sources[0]
     problems = []
     allowed = {source, "timeout", *PREDICATES, "where"}
@@ -420,6 +446,9 @@ def check_expectation(value) -> list[str]:
         allowed.add("hits")
         if not isinstance(value["fault"], str) or not isinstance(value.get("hits"), int):
             problems.append("fault names an id and the expected hits")
+    elif source == "gate":
+        if value["gate"] not in GATE_FIELDS:
+            problems.append(f"gate reads one of {', '.join(GATE_FIELDS)}")
     if not any(predicate in value for predicate in (*PREDICATES, "hits")):
         problems.append(f"names a predicate of {', '.join(PREDICATES)}")
     if set(value) - allowed:
@@ -434,6 +463,8 @@ def check_scenario(scenario: dict) -> list[str]:
     problems = []
     if "fixture" in scenario and scenario["fixture"] not in FIXTURES:
         problems.append(f"unknown fixture {scenario['fixture']!r}")
+    if "provider" in scenario and scenario["provider"] not in PROVIDERS:
+        problems.append(f"unknown provider mode {scenario['provider']!r}")
     if "model" in scenario and (not isinstance(scenario["model"], str) or not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.:#-]+", scenario["model"])):
         problems.append("model is provider/model")
     fault_ids = set()

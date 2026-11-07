@@ -47,6 +47,13 @@ untracked file and a nested repository, all with fixed commit times and no
 system or global Git configuration. A project that already has commits is
 left as a scenario changed it. `native_files.py` and `native_git.py` use it.
 
+`--provider-mode interactions` keeps a seeded root's state and project but
+runs the fixture provider with `--interactions` and gives OpenCode the
+interaction configuration: the shell and question models, and a permission
+ask for the fixture's shell command. The parity runner's `"provider":
+"interactions"` scenarios start the native client's server this way and give
+Electron's own server the same configuration.
+
 `--github-fixture <proxy> <ca>` points the project's `origin` at
 `https://github.com/acme/widgets.git` and gives only the server
 `HTTPS_PROXY=<proxy>`, a loopback `NO_PROXY` and `NODE_EXTRA_CA_CERTS=<ca>`,
