@@ -146,6 +146,13 @@ fn template_mut<'a>(
     }
 }
 
+fn capitalized(text: &str) -> String {
+    let mut chars = text.chars();
+    chars.next().map_or_else(String::new, |first| {
+        first.to_uppercase().chain(chars).collect()
+    })
+}
+
 /// A text field and the setting it edits.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Field {
@@ -373,6 +380,7 @@ impl PreferencePage {
             rows.push(
                 div()
                     .py(px(8.0))
+                    .flex_row_from(strings.direction())
                     .child(on_activate(
                         gpui_kit::base::Button::new("notifications-test")
                             .accessibility_id("notifications-test")
@@ -528,7 +536,8 @@ impl PreferencePage {
                             )))
                             .role(Role::Heading)
                             .font_weight(FontWeight::MEDIUM)
-                            .child(strings.get(label)),
+                            // The web capitalizes the event's name with CSS.
+                            .child(capitalized(&strings.get(label))),
                     )
                     .child(caption("settings.notifications.page.template.field.title"))
                     .child(title)

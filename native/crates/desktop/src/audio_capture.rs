@@ -57,30 +57,24 @@ pub(crate) struct Capture {
 }
 
 impl Capture {
-    /// Opens the default input device. Blocks until it is open or refused.
-    pub(crate) fn start()
-    -> Result<(Self, tokio::sync::mpsc::UnboundedReceiver<CaptureEvent>), CaptureError> {
+    /// Opens the default input device on the capture thread. The receiver
+    /// answers once the device is open or refused.
+    pub(crate) fn start() -> Result<Started, CaptureError> {
         let (events, received) = tokio::sync::mpsc::unbounded_channel();
-        let (opened, open_result) = mpsc::channel::<Result<(), CaptureError>>();
+        let (opened, open_result) = tokio::sync::oneshot::channel::<Result<(), CaptureError>>();
         let (stop, stopped) = mpsc::channel::<()>();
         let thread = std::thread::Builder::new()
             .name("dictation-capture".into())
             .spawn(move || run(events, opened, stopped))
             .map_err(|error| CaptureError::Failed(error.to_string()))?;
-        match open_result.recv() {
-            Ok(Ok(())) => Ok((
-                Self {
-                    stop: Some(stop),
-                    thread: Some(thread),
-                },
-                received,
-            )),
-            Ok(Err(error)) => {
-                let _ = thread.join();
-                Err(error)
-            }
-            Err(_) => Err(CaptureError::Failed("the capture thread ended".into())),
-        }
+        Ok(Started {
+            capture: Self {
+                stop: Some(stop),
+                thread: Some(thread),
+            },
+            events: received,
+            opened: open_result,
+        })
     }
 
     /// Stops the microphone; the last chunk and the end of the channel follow.
@@ -89,11 +83,22 @@ impl Capture {
     }
 }
 
+/// A capture whose device is still opening.
+#[derive(Debug)]
+pub(crate) struct Started {
+    pub(crate) capture: Capture,
+    pub(crate) events: tokio::sync::mpsc::UnboundedReceiver<CaptureEvent>,
+    pub(crate) opened: tokio::sync::oneshot::Receiver<Result<(), CaptureError>>,
+}
+
 impl Drop for Capture {
     fn drop(&mut self) {
         self.stop.take();
-        // The thread only drops its stream and flushes; it ends promptly.
-        if let Some(thread) = self.thread.take() {
+        // A device that never finished opening keeps its thread; it ends on
+        // its own once the open returns and finds the stop gone.
+        if let Some(thread) = self.thread.take()
+            && thread.is_finished()
+        {
             let _ = thread.join();
         }
     }
@@ -101,7 +106,7 @@ impl Drop for Capture {
 
 fn run(
     events: tokio::sync::mpsc::UnboundedSender<CaptureEvent>,
-    opened: mpsc::Sender<Result<(), CaptureError>>,
+    opened: tokio::sync::oneshot::Sender<Result<(), CaptureError>>,
     stopped: mpsc::Receiver<()>,
 ) {
     let host = cpal::default_host();
@@ -185,7 +190,9 @@ fn run(
             return;
         }
     };
-    let _ = opened.send(Ok(()));
+    if opened.send(Ok(())).is_err() {
+        return;
+    }
     // Waits for stop: a message or the sender's drop.
     let _ = stopped.recv();
     drop(stream);
