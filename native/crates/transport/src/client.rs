@@ -63,6 +63,10 @@ pub struct SettingsChanges {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub show_deletion_dialog: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_archive_on_done_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merged_worktree_cleanup_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub follow_up_behavior: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_navigator_enabled: Option<bool>,
@@ -295,6 +299,12 @@ pub struct ServerSettings {
     pub goal_default_budget: Option<u64>,
     /// `showDeletionDialog`: archive and delete ask first; absent means yes.
     pub show_deletion_dialog: Option<bool>,
+    /// `worktreeArchiveOnDoneEnabled`: Done on a worktree also archives it;
+    /// absent means off.
+    pub worktree_archive_on_done: Option<bool>,
+    /// `mergedWorktreeCleanupEnabled`: the server archives a worktree once
+    /// its pull request merges; absent means off.
+    pub merged_worktree_cleanup: Option<bool>,
     /// `permissionDefaultMode`: the mode the server writes onto each new
     /// top-level session.
     pub permission_default_mode: Option<PermissionMode>,
@@ -554,6 +564,14 @@ impl ServerSettings {
             }),
             show_deletion_dialog: settings
                 .show_deletion_dialog
+                .as_ref()
+                .and_then(Value::as_bool),
+            worktree_archive_on_done: settings
+                .worktree_archive_on_done_enabled
+                .as_ref()
+                .and_then(Value::as_bool),
+            merged_worktree_cleanup: settings
+                .merged_worktree_cleanup_enabled
                 .as_ref()
                 .and_then(Value::as_bool),
             follow_up_behavior: match (
@@ -1343,7 +1361,9 @@ mod tests {
             ],
             "routingFeatureAvailable": "yes",
             "timeFormatPreference": "24h",
-            "codeBlockLineWrap": false
+            "codeBlockLineWrap": false,
+            "worktreeArchiveOnDoneEnabled": "on",
+            "mergedWorktreeCleanupEnabled": true
         }))
         .expect("settings with malformed values still parse");
         let settings = ServerSettings::from_wire(wire);
@@ -1369,6 +1389,8 @@ mod tests {
         assert_eq!(settings.clock, ClockPreference::TwentyFourHour);
         assert_eq!(settings.code_block_line_wrap, Some(false));
         assert_eq!(settings.message_search_enabled, None, "absent means off");
+        assert_eq!(settings.worktree_archive_on_done, None);
+        assert_eq!(settings.merged_worktree_cleanup, Some(true));
     }
 
     #[test]
@@ -1585,11 +1607,15 @@ mod tests {
             sidebar_show_chats_section: Some(false),
             session_work_enabled: Some(true),
             show_deletion_dialog: Some(false),
+            worktree_archive_on_done_enabled: Some(true),
+            merged_worktree_cleanup_enabled: Some(false),
             ..SettingsChanges::default()
         };
         assert_eq!(
             serde_json::to_value(&changes).expect("serializes"),
             json!({
+                "worktreeArchiveOnDoneEnabled": true,
+                "mergedWorktreeCleanupEnabled": false,
                 "followUpBehavior": "steer",
                 "promptNavigatorEnabled": false,
                 "draftStartersVisible": false,

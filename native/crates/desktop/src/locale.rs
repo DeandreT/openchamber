@@ -22,6 +22,10 @@ struct DateFormatsEntry {
     months: Vec<String>,
     twelve_hour: ClockEntry,
     twenty_four_hour: ClockEntry,
+    /// Locale labels of the few numbers Settings shows: compact token counts
+    /// keyed by their value, percentages keyed like `20%`.
+    #[serde(default)]
+    numbers: HashMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -58,18 +62,21 @@ impl From<ClockEntry> for ClockLayout {
     }
 }
 
-fn date_formats(locale: &str) -> DateFormats {
+fn date_formats(locale: &str) -> (DateFormats, HashMap<String, String>) {
     let mut file: HashMap<String, DateFormatsEntry> = serde_json::from_str(DATE_FORMATS_JSON)
         .expect("resources/date-formats.json is generated JSON");
     let entry = file
         .remove(locale)
         .expect("the generated date formats cover every exported locale");
-    DateFormats {
-        twelve_hour_by_default: entry.hour12_by_default,
-        months: entry.months,
-        twelve_hour: entry.twelve_hour.into(),
-        twenty_four_hour: entry.twenty_four_hour.into(),
-    }
+    (
+        DateFormats {
+            twelve_hour_by_default: entry.hour12_by_default,
+            months: entry.months,
+            twelve_hour: entry.twelve_hour.into(),
+            twenty_four_hour: entry.twenty_four_hour.into(),
+        },
+        entry.numbers,
+    )
 }
 
 #[derive(Deserialize)]
@@ -99,6 +106,7 @@ pub struct Strings {
     direction: Direction,
     messages: HashMap<String, String>,
     dates: DateFormats,
+    numbers: HashMap<String, String>,
 }
 
 impl Global for Strings {}
@@ -117,6 +125,7 @@ impl Strings {
             .locales
             .remove(&key)
             .expect("the generated locales include the default locale");
+        let (dates, numbers) = date_formats(&key);
         Self {
             direction: if entry.direction == "rtl" {
                 Direction::RightToLeft
@@ -124,7 +133,8 @@ impl Strings {
                 Direction::LeftToRight
             },
             messages: entry.messages,
-            dates: date_formats(&key),
+            dates,
+            numbers,
             locale: key,
         }
     }
@@ -140,6 +150,15 @@ impl Strings {
     /// The locale's month names and clocks.
     pub fn dates(&self) -> &DateFormats {
         &self.dates
+    }
+
+    /// The locale's label for a compact token count (`5000`) or a share
+    /// (`20%`) Settings offers; another value is written in plain digits.
+    pub fn number(&self, key: &str) -> String {
+        self.numbers
+            .get(key)
+            .cloned()
+            .unwrap_or_else(|| key.to_owned())
     }
 
     /// The message for `key`.

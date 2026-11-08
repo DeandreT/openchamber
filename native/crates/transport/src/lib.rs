@@ -7,6 +7,7 @@
 
 pub mod attachment;
 pub mod authentication;
+pub mod behavior;
 pub mod catalog;
 pub mod client;
 pub mod compatibility;
@@ -26,6 +27,7 @@ pub mod identity;
 pub mod message_queue;
 pub mod message_search;
 pub mod notification;
+pub mod opencode_config;
 #[cfg(test)]
 mod parity_tests;
 pub mod permission_policy;
@@ -49,11 +51,14 @@ pub mod session_folders;
 pub mod session_goal;
 pub mod session_warming;
 pub mod small_model;
+pub mod snippets;
 pub mod source_control;
 pub mod starters;
 pub mod stream;
 pub mod system;
 pub mod terminal;
+#[cfg(test)]
+mod test_server;
 mod tool_facts;
 pub mod web_content;
 mod wire;

@@ -170,7 +170,18 @@ export const renderNativeProviderLogos = (): string => {
 };
 
 type ClockFormat = { layout: string[] | null; hours: string[]; dayPeriods: string[] };
-type LocaleDateFormat = { hour12ByDefault: boolean; months: string[]; twelveHour: ClockFormat; twentyFourHour: ClockFormat };
+type LocaleDateFormat = {
+  hour12ByDefault: boolean;
+  months: string[];
+  twelveHour: ClockFormat;
+  twentyFourHour: ClockFormat;
+  numbers: Record<string, string>;
+};
+
+/** Token counts Settings labels with `formatCompactNumber` (compaction steps and defaults). */
+const NATIVE_COMPACT_NUMBERS = [5_000, 10_000, 15_000, 30_000, 50_000, 100_000];
+/** Shares Settings labels as percentages (compaction buffer steps). */
+const NATIVE_PERCENTS = [5, 10, 15, 20, 25, 30, 40, 50];
 
 /**
  * How each locale writes a message's time, as `formatTimestampForDisplay`
@@ -209,6 +220,19 @@ export const renderNativeDateFormats = (): string => {
       months: Array.from({ length: 12 }, (_, month) => new Date(2026, month, 1).toLocaleString(intl, { month: 'short' })),
       twelveHour: clock(true),
       twentyFourHour: clock(false),
+      // `formatCompactNumber` and the compaction buffer's percent labels.
+      numbers: Object.fromEntries([
+        ...NATIVE_COMPACT_NUMBERS.map((value) => [String(value), new Intl.NumberFormat(intl, {
+          notation: 'compact',
+          compactDisplay: 'short',
+          maximumFractionDigits: 1,
+          minimumFractionDigits: 0,
+        }).format(value)]),
+        ...NATIVE_PERCENTS.map((percent) => [`${percent}%`, new Intl.NumberFormat(intl, {
+          style: 'percent',
+          maximumFractionDigits: 1,
+        }).format(percent / 100)]),
+      ]),
     };
   }
   return `${JSON.stringify(document, null, 2)}\n`;

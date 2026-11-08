@@ -33,7 +33,8 @@ use crate::general_settings::{
 use crate::locale;
 use crate::logical::LogicalStyledExt;
 use crate::network::NetworkTask;
-use crate::preference_pages::{CheckboxRow, Chip, PreferencePage, info_hint, section};
+use crate::preference_pages::{CheckboxRow, Chip, PreferencePage};
+use crate::settings_controls::{info_hint, section};
 use crate::theme::Palette;
 
 /// The search targets these pages answer to.
