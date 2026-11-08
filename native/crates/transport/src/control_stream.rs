@@ -340,4 +340,24 @@ mod tests {
         );
         assert!(decoder.push(&vec![b'x'; FRAME_LIMIT + 1]).is_err());
     }
+
+    #[test]
+    fn task_runs_and_knowledge_changes_name_their_project() {
+        let mut decoder = Decoder::default();
+        let events = decoder
+            .push(b"data: {\"type\":\"openchamber:scheduled-task-ran\",\"properties\":{\"projectId\":\"p1\",\"taskId\":\"t\"}}\n\ndata: {\"type\":\"openchamber:project-context-changed\",\"properties\":{\"projectId\":\"path_x\"}}\n\ndata: {\"type\":\"openchamber:project-context-changed\",\"properties\":{}}\n\n")
+            .expect("valid SSE");
+        assert_eq!(
+            events,
+            [
+                ControlEvent::ScheduledTaskRan {
+                    project_id: "p1".into()
+                },
+                ControlEvent::ProjectContextChanged {
+                    project_id: "path_x".into()
+                },
+            ],
+            "an event without its project is dropped"
+        );
+    }
 }
