@@ -14,11 +14,13 @@ pub(crate) enum Page {
     Voice,
     Usage,
     Hosts,
+    Behavior,
+    Snippets,
 }
 
 impl Page {
     /// `pageOrder` in `SettingsView.tsx`, limited to implemented pages.
-    pub(crate) const ALL: [Self; 9] = [
+    pub(crate) const ALL: [Self; 11] = [
         Self::General,
         Self::Appearance,
         Self::Chat,
@@ -28,6 +30,8 @@ impl Page {
         Self::Voice,
         Self::Usage,
         Self::Hosts,
+        Self::Behavior,
+        Self::Snippets,
     ];
 
     pub(crate) fn id(self) -> &'static str {
@@ -41,6 +45,8 @@ impl Page {
             Self::Sessions => "sessions",
             Self::Shortcuts => "shortcuts",
             Self::Hosts => "remote-instances",
+            Self::Behavior => "behavior",
+            Self::Snippets => "snippets",
         }
     }
 
@@ -55,6 +61,8 @@ impl Page {
             Self::Sessions => "settings.page.sessions.title",
             Self::Shortcuts => "settings.page.shortcuts.title",
             Self::Hosts => "settings.page.remoteInstances.title",
+            Self::Behavior => "settings.page.behavior.title",
+            Self::Snippets => "settings.page.snippets.title",
         }
     }
 
@@ -69,11 +77,14 @@ impl Page {
             | Self::Voice
             | Self::Usage => "settings.view.nav.group.general",
             Self::Hosts => "settings.view.nav.group.projects",
+            Self::Behavior => "settings.view.nav.group.opencode",
+            Self::Snippets => "settings.view.nav.group.content",
         }
     }
 
-    pub(crate) fn description(self) -> &'static str {
-        match self {
+    /// The header's description; split pages such as Snippets have none.
+    pub(crate) fn description(self) -> Option<&'static str> {
+        Some(match self {
             Self::General => "settings.page.general.description",
             Self::Appearance => "settings.page.appearance.description",
             Self::Chat => "settings.page.chat.description",
@@ -84,7 +95,9 @@ impl Page {
             Self::Sessions => "settings.page.sessions.description",
             Self::Shortcuts => "settings.page.shortcuts.description",
             Self::Hosts => "settings.remoteInstances.direct.description",
-        }
+            Self::Behavior => "settings.page.behavior.description",
+            Self::Snippets => return None,
+        })
     }
 
     pub(crate) fn icon(self) -> &'static str {
@@ -98,6 +111,8 @@ impl Page {
             Self::Sessions => "chat-history",
             Self::Shortcuts => "command",
             Self::Hosts => "computer",
+            Self::Behavior => "brain",
+            Self::Snippets => "chat-thread",
         }
     }
 }
@@ -240,6 +255,55 @@ pub(crate) const SEARCH_ITEMS: &[SearchItem] = &[
         keywords: "in work in progress track done sidebar",
     },
     SearchItem {
+        id: "sessions.warming",
+        page: Page::Sessions,
+        title: "settings.openchamber.defaults.field.sessionWarming",
+        description: Some("settings.openchamber.defaults.field.sessionWarmingInfo"),
+        keywords: "warming warm cache prompt cache keep-alive idle per session keep warm duration how long hour",
+    },
+    SearchItem {
+        id: "sessions.compaction-auto",
+        page: Page::Sessions,
+        title: "settings.openchamber.defaults.compaction.auto",
+        description: Some("settings.openchamber.defaults.compaction.autoInfo"),
+        keywords: "compaction compact auto automatic context limit summary overflow",
+    },
+    SearchItem {
+        id: "sessions.compaction-buffer",
+        page: Page::Sessions,
+        title: "settings.openchamber.defaults.compaction.buffer",
+        description: Some("settings.openchamber.defaults.compaction.bufferInfo"),
+        keywords: "compaction compact buffer threshold context limit context window summary tokens",
+    },
+    SearchItem {
+        id: "sessions.compaction-keep",
+        page: Page::Sessions,
+        title: "settings.openchamber.defaults.compaction.keep",
+        description: Some("settings.openchamber.defaults.compaction.keepInfo"),
+        keywords: "compaction compact keep recent tail summary tokens",
+    },
+    SearchItem {
+        id: "sessions.background-compaction",
+        page: Page::Sessions,
+        title: "settings.openchamber.defaults.compaction.background",
+        description: Some("settings.openchamber.defaults.compaction.backgroundInfo"),
+        keywords: "compaction compact background experimental precompute summary background_compaction",
+    },
+    SearchItem {
+        id: "sessions.worktree-archive-on-done",
+        page: Page::Sessions,
+        title: "settings.openchamber.finishedWorktrees.field.archiveOnDone",
+        description: Some("settings.openchamber.finishedWorktrees.info"),
+        keywords: "done finish in work worktree archive cleanup remove",
+    },
+    SearchItem {
+        id: "sessions.merged-worktree-cleanup",
+        page: Page::Sessions,
+        title: "settings.openchamber.mergedWorktreeCleanup.field.enable",
+        description: Some("settings.openchamber.finishedWorktrees.info"),
+        keywords: "pr pull request merged worktree branch archive cleanup remove",
+    },
+    SearchItem {
         id: "shortcuts.keyboard-shortcuts",
         page: Page::Shortcuts,
         title: "settings.openchamber.keyboardShortcuts.title",
@@ -287,6 +351,34 @@ pub(crate) const SEARCH_ITEMS: &[SearchItem] = &[
         title: "settings.usage.page.section.modelQuotas",
         description: None,
         keywords: "models quota limits tokens billing usage",
+    },
+    SearchItem {
+        id: "behavior.system-prompt",
+        page: Page::Behavior,
+        title: "settings.behavior.page.section.systemPrompt",
+        description: Some("settings.behavior.page.warning.title"),
+        keywords: "agents.md global instructions system prompt",
+    },
+    SearchItem {
+        id: "behavior.response-style",
+        page: Page::Behavior,
+        title: "settings.behavior.page.section.responseStyle",
+        description: Some("settings.behavior.page.responseStyle.tooltip"),
+        keywords: "tone concise detailed custom instructions",
+    },
+    SearchItem {
+        id: "snippets.create",
+        page: Page::Snippets,
+        title: "settings.snippets.sidebar.actions.create",
+        description: None,
+        keywords: "add new snippet",
+    },
+    SearchItem {
+        id: "snippets.content",
+        page: Page::Snippets,
+        title: "settings.snippets.page.field.content",
+        description: None,
+        keywords: "markdown prompt template",
     },
     SearchItem {
         id: "remote-instances.direct-hosts",

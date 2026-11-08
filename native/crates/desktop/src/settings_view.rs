@@ -30,6 +30,8 @@ pub(crate) struct Settings {
     voice: Entity<PreferencePage>,
     usage: Entity<crate::usage_page::UsagePage>,
     shortcuts: Entity<crate::shortcuts_settings::ShortcutsPage>,
+    pub(crate) behavior: Entity<crate::behavior_settings::BehaviorPage>,
+    pub(crate) snippets: Entity<crate::snippets_settings::SnippetsPage>,
     page: Page,
     search: Entity<InputState>,
     active_result: usize,
@@ -80,14 +82,22 @@ impl Settings {
         let chat = cx.new(|cx| PreferencePage::new(owner.clone(), general.clone(), Page::Chat, cx));
         let sessions =
             cx.new(|cx| PreferencePage::new(owner.clone(), general.clone(), Page::Sessions, cx));
+        let defaults =
+            cx.new(|cx| crate::session_defaults::SessionDefaults::new(owner.clone(), window, cx));
+        sessions.update(cx, |page, cx| page.set_defaults(defaults, cx));
         let shortcuts = cx.new(|_| crate::shortcuts_settings::ShortcutsPage::new(owner.clone()));
         let notifications = cx
             .new(|cx| PreferencePage::new(owner.clone(), general.clone(), Page::Notifications, cx));
         let voice =
             cx.new(|cx| PreferencePage::new(owner.clone(), general.clone(), Page::Voice, cx));
         let usage = cx.new(|_| crate::usage_page::UsagePage::new(owner.clone()));
+        let behavior =
+            cx.new(|cx| crate::behavior_settings::BehaviorPage::new(owner.clone(), window, cx));
+        let snippets = cx.new(|cx| crate::snippets_settings::SnippetsPage::new(owner.clone(), cx));
         Self {
             shortcuts,
+            behavior,
+            snippets,
             owner,
             hosts,
             general,
@@ -131,6 +141,24 @@ impl Settings {
                 let _ = general.update(cx, |page, cx| page.refresh(cx));
             });
         }
+        if page == Page::Sessions
+            && let Some(defaults) = self.sessions.read(cx).defaults.clone()
+        {
+            cx.defer(move |cx| defaults.update(cx, |defaults, cx| defaults.refresh(cx)));
+        }
+        // OpenCode configuration pages read again on every visit.
+        if page == Page::Behavior {
+            let behavior = self.behavior.downgrade();
+            cx.defer(move |cx| {
+                let _ = behavior.update(cx, |page, cx| page.refresh(cx));
+            });
+        }
+        if page == Page::Snippets {
+            let snippets = self.snippets.downgrade();
+            cx.defer(move |cx| {
+                let _ = snippets.update(cx, |page, cx| page.refresh(cx));
+            });
+        }
         cx.notify();
     }
 
@@ -156,6 +184,12 @@ impl Settings {
                 .voice
                 .update(cx, |page, cx| page.reveal(item.id, window, cx)),
             Page::Shortcuts | Page::Usage => {}
+            Page::Behavior => self
+                .behavior
+                .update(cx, |page, cx| page.reveal(item.id, window, cx)),
+            Page::Snippets => self
+                .snippets
+                .update(cx, |page, cx| page.reveal(item.id, window, cx)),
             Page::Hosts => {
                 self.hosts
                     .update(cx, |page, cx| page.focus_settings(window, cx));
@@ -430,6 +464,8 @@ impl Render for Settings {
             Page::Notifications => self.notifications.clone().into_any_element(),
             Page::Voice => self.voice.clone().into_any_element(),
             Page::Usage => self.usage.clone().into_any_element(),
+            Page::Behavior => self.behavior.clone().into_any_element(),
+            Page::Snippets => self.snippets.clone().into_any_element(),
             Page::Hosts => {
                 let scroll = self.hosts.read(cx).settings_scroll.clone();
                 div()
@@ -524,7 +560,7 @@ pub(crate) fn page_header(page: Page, cx: &App) -> gpui_kit::AnyElement {
                 .mt(px(4.0))
                 .css_text(0.875, 1.25, cx)
                 .text_color(cx.global::<Palette>().muted_foreground)
-                .child(strings.get(page.description())),
+                .children(page.description().map(|key| strings.get(key))),
         )
         .into_any_element()
 }

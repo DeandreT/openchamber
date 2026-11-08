@@ -178,3 +178,5 @@ windows
 ubuntu
 apps
 plug
+brain
+chat-thread

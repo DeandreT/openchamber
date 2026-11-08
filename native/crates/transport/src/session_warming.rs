@@ -19,6 +19,8 @@ pub struct WarmingSnapshot {
     pub revision: i64,
     /// Settings chose per-session warming, so the toggles are offered.
     pub enabled: bool,
+    /// How long a chosen session stays warm after a reply, in minutes.
+    pub minutes: u32,
     /// The warmed sessions with the end of their warm window, `None` while
     /// a turn runs or before the first one ends.
     pub sessions: Vec<(SessionId, Option<i64>)>,
@@ -28,9 +30,7 @@ pub struct WarmingSnapshot {
 struct SnapshotBody {
     revision: f64,
     enabled: bool,
-    /// Required by the schema; the menu does not show the duration.
-    #[serde(rename = "minutes")]
-    _minutes: f64,
+    minutes: f64,
     sessions: Vec<SessionBody>,
 }
 
@@ -57,6 +57,7 @@ impl SnapshotBody {
         Some(WarmingSnapshot {
             revision: self.revision as i64,
             enabled: self.enabled,
+            minutes: self.minutes as u32,
             sessions,
         })
     }
@@ -83,6 +84,44 @@ impl ServerClient {
                 TransportError::Malformed(_) => malformed(),
                 other => other,
             })?;
+        body.into_snapshot().ok_or_else(malformed)
+    }
+
+    /// Chooses how idle sessions stay warm: `off`, `all` (OpenCode's
+    /// `warming` for every session) or `session` (the chosen ones).
+    pub async fn set_warming_mode(&self, mode: &str) -> Result<WarmingSnapshot, TransportError> {
+        self.put_warming("api/session-warming/mode", json!({ "mode": mode }))
+            .await
+    }
+
+    /// Sets the warm duration of `scope` (`all` or `session`), in minutes.
+    pub async fn set_warming_duration(
+        &self,
+        scope: &str,
+        minutes: u32,
+    ) -> Result<WarmingSnapshot, TransportError> {
+        self.put_warming(
+            "api/session-warming/duration",
+            json!({ "scope": scope, "minutes": minutes }),
+        )
+        .await
+    }
+
+    async fn put_warming(
+        &self,
+        route: &str,
+        body: Value,
+    ) -> Result<WarmingSnapshot, TransportError> {
+        let response = self
+            .authorized(Method::PUT, self.endpoint().url(route))
+            .json(&body)
+            .send()
+            .await
+            .map_err(TransportError::from_request)?;
+        let body: SnapshotBody = read_json(response).await.map_err(|error| match error {
+            TransportError::Malformed(_) => malformed(),
+            other => other,
+        })?;
         body.into_snapshot().ok_or_else(malformed)
     }
 

@@ -59,7 +59,9 @@ pub(crate) const STT_ENDPOINT_PATH: usize = 24;
 pub(crate) const STT_LOCAL_MODEL: usize = 25;
 pub(crate) const STT_LANGUAGE: usize = 26;
 pub(crate) const STT_CORRECT: usize = 27;
-const FIELDS: usize = 28;
+pub(crate) const ARCHIVE_ON_DONE: usize = 28;
+pub(crate) const MERGED_CLEANUP: usize = 29;
+const FIELDS: usize = 30;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Choice {
@@ -126,6 +128,9 @@ impl Default for State {
                 Choice::Text(String::new()),
                 Choice::Text(String::new()),
                 Choice::Text(String::new()),
+                Choice::Boolean(false),
+                // Both finished-worktree switches are off until chosen.
+                Choice::Boolean(false),
                 Choice::Boolean(false),
             ],
             revisions: [0; FIELDS],
@@ -283,6 +288,8 @@ impl State {
                 .then(|| self.text(STT_LOCAL_MODEL).to_owned()),
             stt_language: include(STT_LANGUAGE).then(|| self.text(STT_LANGUAGE).to_owned()),
             stt_correct_transcript: boolean(STT_CORRECT),
+            worktree_archive_on_done: boolean(ARCHIVE_ON_DONE),
+            merged_worktree_cleanup: boolean(MERGED_CLEANUP),
         }
     }
 }
@@ -322,6 +329,8 @@ fn fields(settings: &ServerSettings) -> Values {
         settings.stt_local_model.clone().map(Choice::Text),
         settings.stt_language.clone().map(Choice::Text),
         settings.stt_correct_transcript.map(Choice::Boolean),
+        settings.worktree_archive_on_done.map(Choice::Boolean),
+        settings.merged_worktree_cleanup.map(Choice::Boolean),
     ]
 }
 
@@ -388,6 +397,8 @@ impl Write {
             session_work_enabled: boolean(WORK_ENABLED),
             show_deletion_dialog: boolean(DELETION_DIALOG),
             allow_prompting_subagent_sessions: boolean(SUBAGENT_PROMPTS),
+            worktree_archive_on_done_enabled: boolean(ARCHIVE_ON_DONE),
+            merged_worktree_cleanup_enabled: boolean(MERGED_CLEANUP),
             ..SettingsChanges::default()
         }
     }
@@ -445,6 +456,8 @@ pub(crate) struct GeneralPreferences {
     pub(crate) stt_local_model: Option<String>,
     pub(crate) stt_language: Option<String>,
     pub(crate) stt_correct_transcript: Option<bool>,
+    pub(crate) worktree_archive_on_done: Option<bool>,
+    pub(crate) merged_worktree_cleanup: Option<bool>,
 }
 
 impl GeneralPreferences {
@@ -495,6 +508,14 @@ impl GeneralPreferences {
         set(
             &mut settings.stt_correct_transcript,
             &self.stt_correct_transcript,
+        );
+        set(
+            &mut settings.worktree_archive_on_done,
+            &self.worktree_archive_on_done,
+        );
+        set(
+            &mut settings.merged_worktree_cleanup,
+            &self.merged_worktree_cleanup,
         );
     }
 }

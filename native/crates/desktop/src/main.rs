@@ -31,6 +31,7 @@ mod authentication;
 mod authentication_tests;
 mod authentication_view;
 mod baseline;
+mod behavior_settings;
 mod blocking_requests;
 #[cfg(test)]
 mod branching_tests;
@@ -151,6 +152,7 @@ mod session_admission;
 mod session_ai_rename;
 mod session_branching;
 mod session_creation;
+mod session_defaults;
 mod session_export;
 mod session_folders;
 mod session_goal;
@@ -162,13 +164,17 @@ mod session_menu;
 mod session_menu_tests;
 mod session_mutations;
 mod session_warming;
+mod settings_controls;
 mod settings_navigation;
+#[cfg(test)]
+mod settings_test_server;
 mod settings_view;
 mod shortcuts;
 mod shortcuts_settings;
 mod sidebar_item;
 mod sidebar_search;
 mod sidebar_view;
+mod snippets_settings;
 mod source_board;
 #[cfg(test)]
 mod source_board_tests;
