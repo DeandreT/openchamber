@@ -14,8 +14,7 @@ use gpui_kit::{
     AnyElement, App, AppContext, Context, Entity, FocusHandle, FontWeight, InteractiveElement,
     IntoElement, ParentElement, Render, Role, ScrollHandle, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, Toggled, WeakEntity,
-    Window, div,
-    prelude::FluentBuilder, px,
+    Window, div, prelude::FluentBuilder, px,
 };
 use openchamber_native_transport::snippets::{
     NameProblem, Snippet, SnippetError, SnippetFields, SnippetScope, is_valid_snippet_name,
@@ -317,7 +316,10 @@ impl SnippetsPage {
         cx: &mut Context<Self>,
     ) {
         let strings = locale::strings(cx).clone();
-        let input = |value: &str, placeholder: SharedString, window: &mut Window, cx: &mut Context<Self>| {
+        let input = |value: &str,
+                     placeholder: SharedString,
+                     window: &mut Window,
+                     cx: &mut Context<Self>| {
             let value = value.to_owned();
             cx.new(|cx| {
                 let mut state = InputState::new(window, cx);
@@ -381,7 +383,9 @@ impl SnippetsPage {
                 }
                 cx.notify();
             }),
-            cx.subscribe_in(&description, window, |_, _, _: &InputEvent, _, cx| cx.notify()),
+            cx.subscribe_in(&description, window, |_, _, _: &InputEvent, _, cx| {
+                cx.notify()
+            }),
             cx.subscribe_in(&content, window, |_, _, _: &InputEvent, _, cx| cx.notify()),
             cx.subscribe_in(&alias, window, |this, input, event, window, cx| {
                 let value = input.read(cx).value().to_string();
@@ -506,7 +510,10 @@ impl SnippetsPage {
         if name.is_empty() {
             return Err(SaveRefusal::NameRequired);
         }
-        let own = self.editor.as_ref().and_then(|editor| editor.file.as_deref());
+        let own = self
+            .editor
+            .as_ref()
+            .and_then(|editor| editor.file.as_deref());
         if let Some(problem) = snippet_name_problem(name, self.snippets(), own) {
             return Err(SaveRefusal::Name(problem));
         }
@@ -599,11 +606,26 @@ impl SnippetsPage {
                             editor.file = Some(file.clone().unwrap_or_default());
                             this.selected = Some(name.clone());
                         }
-                        this.toast(strings.get("settings.snippets.page.toast.saved"), true, window, cx);
+                        this.toast(
+                            strings.get("settings.snippets.page.toast.saved"),
+                            true,
+                            window,
+                            cx,
+                        );
                         this.reload_after_write(Some(name.clone()), cx);
                     }
-                    Some(Err(SnippetError::NameTaken)) => this.toast(strings.format("snippets.name.taken", &[("name", &name)]), false, window, cx),
-                    _ => this.toast(strings.get("settings.snippets.page.toast.saveFailed"), false, window, cx),
+                    Some(Err(SnippetError::NameTaken)) => this.toast(
+                        strings.format("snippets.name.taken", &[("name", &name)]),
+                        false,
+                        window,
+                        cx,
+                    ),
+                    _ => this.toast(
+                        strings.get("settings.snippets.page.toast.saveFailed"),
+                        false,
+                        window,
+                        cx,
+                    ),
                 }
                 cx.notify();
             });
@@ -679,17 +701,33 @@ impl SnippetsPage {
                         this.selected = None;
                         this.editor = None;
                     }
-                    this.toast(strings.get("settings.snippets.sidebar.toast.deleted"), true, window, cx);
+                    this.toast(
+                        strings.get("settings.snippets.sidebar.toast.deleted"),
+                        true,
+                        window,
+                        cx,
+                    );
                     this.reload_after_write(None, cx);
                 } else {
-                    this.toast(strings.get("settings.snippets.sidebar.toast.deleteFailed"), false, window, cx);
+                    this.toast(
+                        strings.get("settings.snippets.sidebar.toast.deleteFailed"),
+                        false,
+                        window,
+                        cx,
+                    );
                 }
                 cx.notify();
             });
         }));
     }
 
-    fn toast(&mut self, text: SharedString, success: bool, window: &mut Window, cx: &mut Context<Self>) {
+    fn toast(
+        &mut self,
+        text: SharedString,
+        success: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.notice = Some(text.clone());
         let notification = if success {
             Notification::success(text)
@@ -796,8 +834,10 @@ impl SnippetsPage {
             Load::Loading => {}
             Load::Ready(_) => {
                 for scope in [SnippetScope::Project, SnippetScope::Global] {
-                    let group: Vec<&Snippet> =
-                        sorted.iter().filter(|snippet| snippet.source == scope).collect();
+                    let group: Vec<&Snippet> = sorted
+                        .iter()
+                        .filter(|snippet| snippet.source == scope)
+                        .collect();
                     if group.is_empty() {
                         continue;
                     }
@@ -824,8 +864,12 @@ impl SnippetsPage {
             .flex()
             .flex_col()
             .border_color(palette.border)
-            .when(direction == Direction::LeftToRight, |side| side.border_r_1())
-            .when(direction == Direction::RightToLeft, |side| side.border_l_1())
+            .when(direction == Direction::LeftToRight, |side| {
+                side.border_r_1()
+            })
+            .when(direction == Direction::RightToLeft, |side| {
+                side.border_l_1()
+            })
             .child(
                 div()
                     .px(px(12.0))
@@ -953,7 +997,11 @@ impl SnippetsPage {
                 .accessibility_id(id)
                 .role(Role::Button)
                 .aria_label(label.clone())
-                .aria_toggled(if selected { Toggled::True } else { Toggled::False })
+                .aria_toggled(if selected {
+                    Toggled::True
+                } else {
+                    Toggled::False
+                })
                 .track_focus(&focus)
                 .tab_index(0)
                 .h_full()
@@ -1016,9 +1064,7 @@ impl SnippetsPage {
         };
         let path = editor.file.clone().filter(|file| !file.is_empty());
         let name_problem = (!form.name.is_empty())
-            .then(|| {
-                snippet_name_problem(&form.name, self.snippets(), editor.file.as_deref())
-            })
+            .then(|| snippet_name_problem(&form.name, self.snippets(), editor.file.as_deref()))
             .flatten();
         let stacked = |label: SharedString, control: AnyElement| {
             div()
@@ -1164,7 +1210,9 @@ impl SnippetsPage {
             .track_scroll(&self.scroll)
             .px(px(48.0))
             .py(px(32.0))
-            .when(direction == Direction::RightToLeft, |view| view.text_right())
+            .when(direction == Direction::RightToLeft, |view| {
+                view.text_right()
+            })
             .child(
                 div()
                     .mb(px(24.0))
@@ -1194,8 +1242,9 @@ impl SnippetsPage {
                             .css_text(0.8125, 1.25, cx)
                             .text_color(palette.status_error)
                             .child(match problem {
-                                NameProblem::Taken => strings
-                                    .format("snippets.name.taken", &[("name", &form.name)]),
+                                NameProblem::Taken => {
+                                    strings.format("snippets.name.taken", &[("name", &form.name)])
+                                }
                                 NameProblem::Invalid => strings.get("snippets.name.invalid"),
                             })
                     }))
@@ -1239,7 +1288,9 @@ impl SnippetsPage {
                                             .id("snippets-content-title")
                                             .role(Role::Heading)
                                             .font_weight(FontWeight::SEMIBOLD)
-                                            .child(strings.get("settings.snippets.page.field.content")),
+                                            .child(
+                                                strings.get("settings.snippets.page.field.content"),
+                                            ),
                                     )
                                     .child(crate::settings_controls::info_hint(
                                         "snippets.content",
@@ -1251,7 +1302,9 @@ impl SnippetsPage {
                                 div()
                                     .id("snippets-content-mode")
                                     .role(Role::Group)
-                                    .aria_label(strings.get("settings.snippets.page.content.modeAria"))
+                                    .aria_label(
+                                        strings.get("settings.snippets.page.content.modeAria"),
+                                    )
                                     .flex_row_from(direction)
                                     .h(gpui_kit::rems(2.0))
                                     .p(px(2.0))
@@ -1329,25 +1382,39 @@ mod tests {
         let held = Arc::clone(&store);
         let server = Server::new(move |request| {
             let mut store = held.lock().expect("store");
-            let path = request.target.split('?').next().unwrap_or_default().to_owned();
+            let path = request
+                .target
+                .split('?')
+                .next()
+                .unwrap_or_default()
+                .to_owned();
             let name = path.trim_start_matches("/api/config/snippets/").to_owned();
             match request.method.as_str() {
                 "GET" if fail_list => (500, json!({"error": "fixture read failure"})),
                 "GET" => (200, Value::Array(store.clone())),
-                "POST" if name == "expand" => {
-                    (200, json!({"text": format!("<{}>", request.body["content"].as_str().unwrap_or_default())}))
-                }
+                "POST" if name == "expand" => (
+                    200,
+                    json!({"text": format!("<{}>", request.body["content"].as_str().unwrap_or_default())}),
+                ),
                 "POST" if store.iter().any(|snippet| snippet["name"] == name.as_str()) => {
                     (409, json!({"error": "already exists"}))
                 }
                 "POST" => {
-                    let scope = request.body["scope"].as_str().unwrap_or("global").to_owned();
-                    let content = request.body["content"].as_str().unwrap_or_default().to_owned();
+                    let scope = request.body["scope"]
+                        .as_str()
+                        .unwrap_or("global")
+                        .to_owned();
+                    let content = request.body["content"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .to_owned();
                     store.push(entry(&name, &scope, &content));
                     (200, json!({"success": true}))
                 }
                 "PATCH" => {
-                    let Some(snippet) = store.iter_mut().find(|snippet| snippet["name"] == name.as_str())
+                    let Some(snippet) = store
+                        .iter_mut()
+                        .find(|snippet| snippet["name"] == name.as_str())
                     else {
                         return (404, json!({"error": "not found"}));
                     };
@@ -1386,7 +1453,12 @@ mod tests {
         settle(window, cx);
     }
 
-    fn set_content(page: &mut SnippetsPage, text: &str, window: &mut Window, cx: &mut Context<SnippetsPage>) {
+    fn set_content(
+        page: &mut SnippetsPage,
+        text: &str,
+        window: &mut Window,
+        cx: &mut Context<SnippetsPage>,
+    ) {
         let content = page.editor.as_ref().expect("editor").content.clone();
         let text = text.to_owned();
         content.update(cx, |input, cx| input.set_value(text, window, cx));
@@ -1420,10 +1492,16 @@ mod tests {
             json!({"content": "Review this carefully", "aliases": [], "description": ""}),
             "an unchanged name and scope are not sent"
         );
-        assert_eq!(store.lock().expect("store")[0]["content"], "Review this carefully");
+        assert_eq!(
+            store.lock().expect("store")[0]["content"],
+            "Review this carefully"
+        );
         cx.read(|cx| {
             let page = page.read(cx);
-            assert!(!page.has_unsaved_changes(cx), "the saved form is the new baseline");
+            assert!(
+                !page.has_unsaved_changes(cx),
+                "the saved form is the new baseline"
+            );
             assert_eq!(page.notice.as_deref(), Some("Snippet saved"));
         });
     }
@@ -1433,14 +1511,22 @@ mod tests {
         let (server, store) = server(false);
         let (window, workspace) = open(&server, Page::Snippets, cx);
         let page = page(&workspace, cx);
-        act(window, &page, cx, |page, window, cx| page.create_new(window, cx));
+        act(window, &page, cx, |page, window, cx| {
+            page.create_new(window, cx)
+        });
         act(window, &page, cx, |page, window, cx| {
             assert_eq!(page.selected.as_deref(), Some("new-snippet"));
             page.save(window, cx);
         });
-        assert!(server.writes().is_empty(), "an empty body is refused locally");
+        assert!(
+            server.writes().is_empty(),
+            "an empty body is refused locally"
+        );
         cx.read(|cx| {
-            assert_eq!(page.read(cx).notice.as_deref(), Some("Snippet content is required"));
+            assert_eq!(
+                page.read(cx).notice.as_deref(),
+                Some("Snippet content is required")
+            );
         });
         act(window, &page, cx, |page, window, cx| {
             let name = page.editor.as_ref().expect("editor").name.clone();
@@ -1448,7 +1534,10 @@ mod tests {
             set_content(page, "Body", window, cx);
             page.save(window, cx);
         });
-        assert!(server.writes().is_empty(), "a taken name is refused locally");
+        assert!(
+            server.writes().is_empty(),
+            "a taken name is refused locally"
+        );
         cx.read(|cx| {
             assert_eq!(
                 page.read(cx).notice.as_deref(),
@@ -1464,7 +1553,11 @@ mod tests {
             });
         });
         act(window, &page, cx, |page, window, cx| {
-            assert_eq!(page.form(cx).expect("form").name, "fresh-one", "names are normalized");
+            assert_eq!(
+                page.form(cx).expect("form").name,
+                "fresh-one",
+                "names are normalized"
+            );
             page.save(window, cx);
         });
         let writes = server.writes();
@@ -1476,7 +1569,9 @@ mod tests {
             let page = page.read(cx);
             assert_eq!(page.selected.as_deref(), Some("fresh-one"));
             assert_eq!(
-                page.editor.as_ref().and_then(|editor| editor.file.as_deref()),
+                page.editor
+                    .as_ref()
+                    .and_then(|editor| editor.file.as_deref()),
                 Some("/global/fresh-one.md"),
                 "the created snippet opens on its file"
             );
@@ -1488,7 +1583,9 @@ mod tests {
         let (server, store) = server(false);
         let (window, workspace) = open(&server, Page::Snippets, cx);
         let page = page(&workspace, cx);
-        act(window, &page, cx, |page, window, cx| page.select("plan".into(), window, cx));
+        act(window, &page, cx, |page, window, cx| {
+            page.select("plan".into(), window, cx)
+        });
         act(window, &page, cx, |page, window, cx| {
             set_content(page, "Edited", window, cx);
             page.select("review".into(), window, cx);
@@ -1506,13 +1603,23 @@ mod tests {
         });
         cx.read(|cx| {
             assert_eq!(
-                page.read(cx).editor.as_ref().map(|editor| editor.preview.clone()),
+                page.read(cx)
+                    .editor
+                    .as_ref()
+                    .map(|editor| editor.preview.clone()),
                 Some(Preview::Ready("<Edited>".into())),
                 "the preview expands the unsaved body"
             );
         });
-        act(window, &page, cx, |page, window, cx| page.delete("plan".into(), window, cx));
-        assert!(server.writes().iter().any(|write| write.is("DELETE", "/api/config/snippets/plan")));
+        act(window, &page, cx, |page, window, cx| {
+            page.delete("plan".into(), window, cx)
+        });
+        assert!(
+            server
+                .writes()
+                .iter()
+                .any(|write| write.is("DELETE", "/api/config/snippets/plan"))
+        );
         assert_eq!(store.lock().expect("store").len(), 1);
         cx.read(|cx| {
             let page = page.read(cx);
@@ -1528,11 +1635,16 @@ mod tests {
         let (window, workspace) = open(&server, Page::Snippets, cx);
         let page = page(&workspace, cx);
         cx.read(|cx| assert_eq!(page.read(cx).list, Load::Failed));
-        act(window, &page, cx, |page, window, cx| page.create_new(window, cx));
+        act(window, &page, cx, |page, window, cx| {
+            page.create_new(window, cx)
+        });
         cx.update_window(window, |_, window, cx| {
             window.render_frame(cx);
             assert!(window.try_find("snippets-load-failed-retry").is_some());
-            assert!(window.try_find("snippets-editor").is_none(), "no draft without a list");
+            assert!(
+                window.try_find("snippets-editor").is_none(),
+                "no draft without a list"
+            );
         })
         .expect("test window");
     }

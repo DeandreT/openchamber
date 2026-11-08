@@ -156,10 +156,16 @@ impl ServerClient {
                 Some(body),
             )
             .await?;
-        Ok(files::parse::<Written>(&bytes).ok().and_then(|written| written.snippet))
+        Ok(files::parse::<Written>(&bytes)
+            .ok()
+            .and_then(|written| written.snippet))
     }
 
-    pub async fn delete_snippet(&self, name: &str, directory: Option<&str>) -> Result<(), SnippetError> {
+    pub async fn delete_snippet(
+        &self,
+        name: &str,
+        directory: Option<&str>,
+    ) -> Result<(), SnippetError> {
         self.snippet_write(
             Method::DELETE,
             self.snippet_url(Some(name), directory),
@@ -181,7 +187,12 @@ impl ServerClient {
             url.query_pairs_mut().append_pair("directory", directory);
         }
         let bytes = self
-            .snippet_write(Method::POST, url, directory, Some(json!({ "content": content })))
+            .snippet_write(
+                Method::POST,
+                url,
+                directory,
+                Some(json!({ "content": content })),
+            )
             .await
             .map_err(|error| match error {
                 SnippetError::Transport(error) => error,
@@ -196,7 +207,9 @@ impl ServerClient {
 /// `_` and `-`, starting with a letter or digit, at most 80 characters.
 pub fn is_valid_snippet_name(name: &str) -> bool {
     let mut chars = name.chars();
-    chars.next().is_some_and(|first| first.is_ascii_alphanumeric())
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_alphanumeric())
         && name.len() <= 80
         && chars.all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')
 }
@@ -338,7 +351,10 @@ mod tests {
         assert_eq!(saved.map(|snippet| snippet.name).as_deref(), Some("b"));
         assert!(matches!(
             client.delete_snippet("b", None).await,
-            Err(SnippetError::Refused { status: 500, message: Some(_) })
+            Err(SnippetError::Refused {
+                status: 500,
+                message: Some(_)
+            })
         ));
         assert_eq!(
             client.preview_snippet("#a", None).await.expect("preview"),

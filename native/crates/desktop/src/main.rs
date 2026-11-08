@@ -150,9 +150,9 @@ mod settings_view;
 mod shortcuts;
 mod shortcuts_settings;
 mod sidebar_item;
-mod snippets_settings;
 mod sidebar_search;
 mod sidebar_view;
+mod snippets_settings;
 mod source_board;
 #[cfg(test)]
 mod source_board_tests;

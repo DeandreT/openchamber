@@ -8,9 +8,9 @@ use std::collections::HashMap;
 
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
+use gpui_kit::component::notification::Notification;
 use gpui_kit::component::searchable_list::{SearchableListItem, SearchableVec};
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
-use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{Theme, WindowExt};
 use gpui_kit::{
     AnyElement, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
@@ -178,15 +178,17 @@ impl BehaviorPage {
                     this.request_save(window, cx);
                 }
             }),
-            cx.subscribe_in(&preview, window, |this, input, event, window, cx| {
-                match event {
+            cx.subscribe_in(
+                &preview,
+                window,
+                |this, input, event, window, cx| match event {
                     InputEvent::Change if this.preset == "custom" => {
                         this.custom = input.read(cx).value().to_string();
                     }
                     InputEvent::Blur => this.request_save(window, cx),
                     _ => {}
-                }
-            }),
+                },
+            ),
             cx.subscribe_in(&preset_picker, window, |this, _, event, window, cx| {
                 if let SelectEvent::Confirm(Some(preset)) = event {
                     this.set_preset(preset.clone(), window, cx);
@@ -346,7 +348,8 @@ impl BehaviorPage {
             return;
         };
         let client = target.client;
-        let reading = NetworkTask::spawn_on(&target.network, async move { client.agents_md().await });
+        let reading =
+            NetworkTask::spawn_on(&target.network, async move { client.agents_md().await });
         cx.spawn(async move |this, cx| {
             let Some(Ok(file)) = reading.await else {
                 return;
@@ -483,8 +486,7 @@ impl BehaviorPage {
                     return;
                 }
                 this.write = None;
-                let (file_written, result) =
-                    outcome.unwrap_or((false, Err(SaveFailure::Failed)));
+                let (file_written, result) = outcome.unwrap_or((false, Err(SaveFailure::Failed)));
                 if let Some(loaded) = this.load.ready_mut() {
                     if file_written {
                         loaded.on_disk = Some(content.clone());
@@ -683,7 +685,11 @@ mod tests {
     use crate::settings_test_server::{Server, open, settings, settle};
 
     /// A server holding an `AGENTS.md` and a settings document.
-    fn server(file: Option<&str>, conflict: bool, settings_ok: bool) -> (Server, Arc<Mutex<Value>>) {
+    fn server(
+        file: Option<&str>,
+        conflict: bool,
+        settings_ok: bool,
+    ) -> (Server, Arc<Mutex<Value>>) {
         let document = Arc::new(Mutex::new(json!({
             "responseStyleEnabled": false,
             "responseStylePreset": "concise",
@@ -705,7 +711,10 @@ mod tests {
             if request.is("PUT", "/api/behavior/agents-md") {
                 let mut disk = disk.lock().expect("disk");
                 if conflict || request.body["expectedContent"].as_str() != disk.as_deref() {
-                    return (409, json!({"error": "changed", "code": "AGENTS_MD_CONFLICT"}));
+                    return (
+                        409,
+                        json!({"error": "changed", "code": "AGENTS_MD_CONFLICT"}),
+                    );
                 }
                 *disk = request.body["content"].as_str().map(str::to_owned);
                 return (200, json!({"success": true}));
@@ -867,6 +876,9 @@ mod tests {
                 "responseStyleCustomInstructions": "",
             })
         );
-        assert_eq!(document.lock().expect("settings")["responseStyleEnabled"], true);
+        assert_eq!(
+            document.lock().expect("settings")["responseStyleEnabled"],
+            true
+        );
     }
 }
