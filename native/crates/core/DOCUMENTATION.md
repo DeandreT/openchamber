@@ -74,7 +74,10 @@ rendering asks for a projection and dispatches an action.
   `scheduledTaskEditorDraft.ts`. `time_zone.rs` parses compiled zoneinfo
   (TZif with its POSIX footer rule) and turns wall-clock times into instants;
   the caller reads the files. The server computes and enforces the real
-  schedule.
+  schedule. `tests/cron_parity.rs` checks the preview against next runs
+  `cron-parser` 5.10.1 produced (`tests/fixtures/cron-next-runs.json`),
+  across daylight-saving changes in five zones; a wall time the clock skips
+  fires when the gap ends, as it does there.
 - `knowledge.rs` holds Project knowledge records and the panel's rules:
   note titles, the todo order, the agent `ready` rule (a deleted dependency
   counts as met), the plan Markdown split and the panel-wide search.

@@ -642,7 +642,8 @@ impl CronExpression {
 
     /// The next `count` firing instants strictly after `after`, in seconds,
     /// read on `zone`'s wall clock. A wall time a forward clock change skips
-    /// does not fire; one that repeats fires once. Searches eight years.
+    /// fires as the gap ends; one that repeats fires once. Searches thirty
+    /// years.
     pub fn next_runs(&self, zone: &TimeZone, after: UnixSeconds, count: usize) -> Vec<UnixSeconds> {
         let mut runs = Vec::new();
         if count == 0 {
@@ -650,7 +651,7 @@ impl CronExpression {
         }
         let local_after = after + i64::from(zone.offset_at(after));
         let first_day = local_after.div_euclid(86_400) - 1;
-        for day in first_day..first_day + 366 * 8 {
+        for day in first_day..first_day + 366 * 30 {
             let (year, month, date) = time_zone::civil_from_days(day);
             let weekday = time_zone::weekday_of(day) as u32;
             if !self.matches_date(year, month, date, weekday) {
@@ -666,9 +667,11 @@ impl CronExpression {
                         if local + 86_400 < local_after {
                             continue;
                         }
-                        let Some(instant) = zone.to_instant(local) else {
-                            continue;
-                        };
+                        // A wall time a forward change skips fires when the
+                        // gap ends, on the offset before it, as cron-parser does.
+                        let instant = zone
+                            .to_instant(local)
+                            .unwrap_or_else(|| local - i64::from(zone.offset_at(local - 86_400)));
                         if instant > after && runs.last().is_none_or(|last| instant > *last) {
                             runs.push(instant);
                             if runs.len() == count {
