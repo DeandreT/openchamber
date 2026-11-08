@@ -177,3 +177,4 @@ android
 windows
 ubuntu
 apps
+plug

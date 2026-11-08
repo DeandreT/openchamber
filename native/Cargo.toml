@@ -63,6 +63,11 @@ webkit2gtk = { version = "=2.0.1", features = ["v2_40"] }
 x11rb = "=0.13.2"
 raw-window-handle = "=0.6.2"
 tracing = "=0.1.44"
+# Desktop notifications go to `org.freedesktop.Notifications` on the session
+# bus; the version is the one GPUI and the keyring already link.
+zbus = "=5.19.0"
+# Microphone capture for dictation (ALSA on Linux, which PipeWire serves).
+cpal = "=0.18.2"
 tracing-subscriber = { version = "=0.3.23", default-features = false, features = ["env-filter", "fmt", "std", "tracing-log"] }
 
 [workspace.lints.rust]

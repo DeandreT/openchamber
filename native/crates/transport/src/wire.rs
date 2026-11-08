@@ -309,6 +309,23 @@ pub(crate) struct Settings {
     pub draft_starters_craft_goal_added: Option<Value>,
     pub draft_starters_schedule_task_added: Option<Value>,
     pub shortcut_overrides: Option<Value>,
+    pub native_notifications_enabled: Option<Value>,
+    pub notification_mode: Option<Value>,
+    pub notify_on_completion: Option<Value>,
+    pub notify_on_pull_requests: Option<Value>,
+    pub notify_on_subtasks: Option<Value>,
+    pub notify_on_error: Option<Value>,
+    pub notify_on_question: Option<Value>,
+    pub notification_templates: Option<Value>,
+    pub dictation_enabled: Option<Value>,
+    pub dictation_auto_send: Option<Value>,
+    pub stt_provider: Option<Value>,
+    pub stt_server_url: Option<Value>,
+    pub stt_model: Option<Value>,
+    pub stt_endpoint_path: Option<Value>,
+    pub stt_local_model: Option<Value>,
+    pub stt_language: Option<Value>,
+    pub stt_correct_transcript: Option<Value>,
 }
 
 // A JSON object's encounter order is the profile's effort-recency order.

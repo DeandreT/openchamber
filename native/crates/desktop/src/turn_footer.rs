@@ -263,10 +263,10 @@ fn tabular() -> FontFeatures {
 
 /// The message time as `formatTimestampForDisplay` writes it, in the local
 /// time zone; `None` for a time the zone cannot place.
-fn message_time(
+pub(crate) fn message_time<V>(
     timestamp_ms: i64,
     clock: ClockPreference,
-    cx: &Context<Workspace>,
+    cx: &Context<V>,
 ) -> Option<SharedString> {
     let moment = Local.timestamp_millis_opt(timestamp_ms).single()?;
     let today = Local::now().date_naive();

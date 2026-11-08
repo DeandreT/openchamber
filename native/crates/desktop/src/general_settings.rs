@@ -18,6 +18,8 @@ use openchamber_native_core::ids::RuntimeId;
 use openchamber_native_core::message_queue::FollowUpBehavior;
 use openchamber_native_core::permission_mode::PermissionMode;
 use openchamber_native_transport::client::{ServerClient, ServerSettings, SettingsChanges};
+use openchamber_native_transport::dictation::SttProvider;
+use openchamber_native_transport::notification::NotificationTemplates;
 use openchamber_native_transport::terminal::{TerminalApi, TerminalShell};
 
 use crate::activation::on_activate;
@@ -40,7 +42,24 @@ pub(crate) const SHOW_CHATS: usize = 7;
 pub(crate) const WORK_ENABLED: usize = 8;
 pub(crate) const DELETION_DIALOG: usize = 9;
 pub(crate) const SUBAGENT_PROMPTS: usize = 10;
-const FIELDS: usize = 11;
+pub(crate) const NOTIFY_ENABLED: usize = 11;
+pub(crate) const NOTIFY_ALWAYS: usize = 12;
+pub(crate) const NOTIFY_COMPLETION: usize = 13;
+pub(crate) const NOTIFY_PULL_REQUESTS: usize = 14;
+pub(crate) const NOTIFY_SUBTASKS: usize = 15;
+pub(crate) const NOTIFY_ERROR: usize = 16;
+pub(crate) const NOTIFY_QUESTION: usize = 17;
+pub(crate) const NOTIFY_TEMPLATES: usize = 18;
+pub(crate) const DICTATION_ENABLED: usize = 19;
+pub(crate) const DICTATION_AUTO_SEND: usize = 20;
+pub(crate) const STT_PROVIDER: usize = 21;
+pub(crate) const STT_SERVER_URL: usize = 22;
+pub(crate) const STT_MODEL: usize = 23;
+pub(crate) const STT_ENDPOINT_PATH: usize = 24;
+pub(crate) const STT_LOCAL_MODEL: usize = 25;
+pub(crate) const STT_LANGUAGE: usize = 26;
+pub(crate) const STT_CORRECT: usize = 27;
+const FIELDS: usize = 28;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Choice {
@@ -48,6 +67,9 @@ pub(crate) enum Choice {
     Shell(String),
     FollowUp(FollowUpBehavior),
     Mode(PermissionMode),
+    Text(String),
+    Templates(NotificationTemplates),
+    Provider(SttProvider),
 }
 
 type Values = [Option<Choice>; FIELDS];
@@ -84,6 +106,26 @@ impl Default for State {
                 Choice::Boolean(true),
                 Choice::Boolean(true),
                 Choice::Boolean(true),
+                // Subagent prompting stays off until settings are read.
+                Choice::Boolean(false),
+                // Notifications: off, background only, every event on.
+                Choice::Boolean(false),
+                Choice::Boolean(false),
+                Choice::Boolean(true),
+                Choice::Boolean(true),
+                Choice::Boolean(true),
+                Choice::Boolean(true),
+                Choice::Boolean(true),
+                Choice::Templates(NotificationTemplates::default()),
+                // Dictation, as `useConfigStore` starts it.
+                Choice::Boolean(true),
+                Choice::Boolean(false),
+                Choice::Provider(SttProvider::Local),
+                Choice::Text("http://localhost:8001/v1".into()),
+                Choice::Text("deepdml/faster-whisper-large-v3-turbo-ct2".into()),
+                Choice::Text(String::new()),
+                Choice::Text(String::new()),
+                Choice::Text(String::new()),
                 Choice::Boolean(false),
             ],
             revisions: [0; FIELDS],
@@ -200,6 +242,20 @@ impl State {
         }
     }
 
+    pub(crate) fn text(&self, field: usize) -> &str {
+        match &self.values[field] {
+            Choice::Text(text) => text,
+            _ => unreachable!("text fields only accept text"),
+        }
+    }
+
+    fn provider(&self) -> SttProvider {
+        match self.values[STT_PROVIDER] {
+            Choice::Provider(provider) => provider,
+            _ => unreachable!("the provider field only accepts providers"),
+        }
+    }
+
     /// Known choices, or with `unsettled_only` only those the server has not confirmed.
     fn preferences(&self, unsettled_only: bool) -> GeneralPreferences {
         let include = |field| self.known[field] && (!unsettled_only || self.unsettled(field));
@@ -216,6 +272,17 @@ impl State {
             work_enabled: boolean(WORK_ENABLED),
             show_deletion_dialog: boolean(DELETION_DIALOG),
             allow_prompting_subagent_sessions: boolean(SUBAGENT_PROMPTS),
+            dictation_enabled: boolean(DICTATION_ENABLED),
+            dictation_auto_send: boolean(DICTATION_AUTO_SEND),
+            stt_provider: include(STT_PROVIDER).then(|| self.provider()),
+            stt_server_url: include(STT_SERVER_URL).then(|| self.text(STT_SERVER_URL).to_owned()),
+            stt_model: include(STT_MODEL).then(|| self.text(STT_MODEL).to_owned()),
+            stt_endpoint_path: include(STT_ENDPOINT_PATH)
+                .then(|| self.text(STT_ENDPOINT_PATH).to_owned()),
+            stt_local_model: include(STT_LOCAL_MODEL)
+                .then(|| self.text(STT_LOCAL_MODEL).to_owned()),
+            stt_language: include(STT_LANGUAGE).then(|| self.text(STT_LANGUAGE).to_owned()),
+            stt_correct_transcript: boolean(STT_CORRECT),
         }
     }
 }
@@ -235,6 +302,26 @@ fn fields(settings: &ServerSettings) -> Values {
         settings
             .allow_prompting_subagent_sessions
             .map(Choice::Boolean),
+        settings.native_notifications_enabled.map(Choice::Boolean),
+        settings.notification_always.map(Choice::Boolean),
+        settings.notify_on_completion.map(Choice::Boolean),
+        settings.notify_on_pull_requests.map(Choice::Boolean),
+        settings.notify_on_subtasks.map(Choice::Boolean),
+        settings.notify_on_error.map(Choice::Boolean),
+        settings.notify_on_question.map(Choice::Boolean),
+        settings
+            .notification_templates
+            .clone()
+            .map(Choice::Templates),
+        settings.dictation_enabled.map(Choice::Boolean),
+        settings.dictation_auto_send.map(Choice::Boolean),
+        settings.stt_provider.map(Choice::Provider),
+        settings.stt_server_url.clone().map(Choice::Text),
+        settings.stt_model.clone().map(Choice::Text),
+        settings.stt_endpoint_path.clone().map(Choice::Text),
+        settings.stt_local_model.clone().map(Choice::Text),
+        settings.stt_language.clone().map(Choice::Text),
+        settings.stt_correct_transcript.map(Choice::Boolean),
     ]
 }
 
@@ -252,7 +339,35 @@ impl Write {
             Some(Choice::Boolean(value)) => Some(value),
             _ => None,
         };
+        let text = |field| match &self.values[field] {
+            Some(Choice::Text(text)) => Some(text.clone()),
+            _ => None,
+        };
         SettingsChanges {
+            native_notifications_enabled: boolean(NOTIFY_ENABLED),
+            notification_mode: boolean(NOTIFY_ALWAYS)
+                .map(|always| if always { "always" } else { "hidden-only" }),
+            notify_on_completion: boolean(NOTIFY_COMPLETION),
+            notify_on_pull_requests: boolean(NOTIFY_PULL_REQUESTS),
+            notify_on_subtasks: boolean(NOTIFY_SUBTASKS),
+            notify_on_error: boolean(NOTIFY_ERROR),
+            notify_on_question: boolean(NOTIFY_QUESTION),
+            notification_templates: match &self.values[NOTIFY_TEMPLATES] {
+                Some(Choice::Templates(templates)) => Some(templates.clone()),
+                _ => None,
+            },
+            dictation_enabled: boolean(DICTATION_ENABLED),
+            dictation_auto_send: boolean(DICTATION_AUTO_SEND),
+            stt_provider: match self.values[STT_PROVIDER] {
+                Some(Choice::Provider(provider)) => Some(provider.as_setting()),
+                _ => None,
+            },
+            stt_server_url: text(STT_SERVER_URL),
+            stt_model: text(STT_MODEL),
+            stt_endpoint_path: text(STT_ENDPOINT_PATH),
+            stt_local_model: text(STT_LOCAL_MODEL),
+            stt_language: text(STT_LANGUAGE),
+            stt_correct_transcript: boolean(STT_CORRECT),
             auto_save_enabled: boolean(AUTO_SAVE),
             terminal_close_on_exit: boolean(CLOSE_ON_EXIT),
             terminal_shell: match &self.values[SHELL] {
@@ -321,6 +436,15 @@ pub(crate) struct GeneralPreferences {
     pub(crate) work_enabled: Option<bool>,
     pub(crate) show_deletion_dialog: Option<bool>,
     pub(crate) allow_prompting_subagent_sessions: Option<bool>,
+    pub(crate) dictation_enabled: Option<bool>,
+    pub(crate) dictation_auto_send: Option<bool>,
+    pub(crate) stt_provider: Option<SttProvider>,
+    pub(crate) stt_server_url: Option<String>,
+    pub(crate) stt_model: Option<String>,
+    pub(crate) stt_endpoint_path: Option<String>,
+    pub(crate) stt_local_model: Option<String>,
+    pub(crate) stt_language: Option<String>,
+    pub(crate) stt_correct_transcript: Option<bool>,
 }
 
 impl GeneralPreferences {
@@ -359,6 +483,18 @@ impl GeneralPreferences {
         set(
             &mut settings.allow_prompting_subagent_sessions,
             &self.allow_prompting_subagent_sessions,
+        );
+        set(&mut settings.dictation_enabled, &self.dictation_enabled);
+        set(&mut settings.dictation_auto_send, &self.dictation_auto_send);
+        set(&mut settings.stt_provider, &self.stt_provider);
+        set(&mut settings.stt_server_url, &self.stt_server_url);
+        set(&mut settings.stt_model, &self.stt_model);
+        set(&mut settings.stt_endpoint_path, &self.stt_endpoint_path);
+        set(&mut settings.stt_local_model, &self.stt_local_model);
+        set(&mut settings.stt_language, &self.stt_language);
+        set(
+            &mut settings.stt_correct_transcript,
+            &self.stt_correct_transcript,
         );
     }
 }
@@ -1482,6 +1618,47 @@ mod tests {
             settings.work_enabled, None,
             "confirmed choices are not overlaid"
         );
+    }
+
+    #[test]
+    fn notification_and_voice_fields_write_their_server_names_and_reach_the_composer() {
+        let mut state = State::default();
+        assert!(!state.boolean(NOTIFY_ENABLED), "notifications start off");
+        assert!(state.boolean(DICTATION_ENABLED), "dictation starts on");
+        state.change(NOTIFY_ALWAYS, Choice::Boolean(true));
+        state.change(
+            STT_PROVIDER,
+            Choice::Provider(SttProvider::OpenAiCompatible),
+        );
+        state.change(STT_LANGUAGE, Choice::Text("uk".into()));
+        let mut templates = NotificationTemplates::default();
+        templates.error.title = "Failed".into();
+        state.change(NOTIFY_TEMPLATES, Choice::Templates(templates));
+        let write = state.begin().expect("edits dispatch together");
+        let changes = serde_json::to_value(write.changes()).expect("serializes");
+        assert_eq!(changes["notificationMode"], json!("always"));
+        assert_eq!(changes["sttProvider"], json!("openai-compatible"));
+        assert_eq!(changes["sttLanguage"], json!("uk"));
+        assert_eq!(
+            changes["notificationTemplates"]["error"]["title"],
+            json!("Failed")
+        );
+        assert_eq!(changes.as_object().map(|fields| fields.len()), Some(4));
+        state.finish(&write, Some(write.values.clone()));
+        let mut settings = ServerSettings::default();
+        state.preferences(false).apply_to(&mut settings);
+        assert_eq!(settings.stt_provider, Some(SttProvider::OpenAiCompatible));
+        assert_eq!(settings.stt_language.as_deref(), Some("uk"));
+        assert_eq!(
+            settings.dictation_enabled, None,
+            "unknown until read or chosen"
+        );
+        state.adopt(
+            state.read_revisions(),
+            read(&[(DICTATION_ENABLED, Choice::Boolean(false))]),
+        );
+        state.preferences(false).apply_to(&mut settings);
+        assert_eq!(settings.dictation_enabled, Some(false));
     }
 
     #[test]

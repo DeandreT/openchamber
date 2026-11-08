@@ -43,12 +43,16 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `projection.rs` | Wire records to core records, mirroring `packages/ui/src/lib/opencode/projection.ts`. Private. |
 | `message_search.rs` | One session's messages matching a query, from the server's message index (`/api/openchamber/message-search`); a missing index or route is `Unavailable`, never an empty result. |
 | `tool_facts.rs` | A tool call's input and metadata read into the core's `ToolFacts`, field by field as `lib/opencode/tools.ts` reads them; history records and live transitions share it. Private. |
+| `notification.rs` | `openchamber:notification` events as `event-pipeline.ts` validates them (every field optional, a wrong type rejects the event; a plugin's notice is always background-only) and the `notificationTemplates` settings field. |
+| `dictation.rs` | Dictation against the server's transcription: the `/api/dictation/ws` stream (bearer upgrade, `start` and `ack`, numbered chunks kept until the dictation ends, `finish`, `final`, `cancel` on drop), the start retried every few seconds while the local model downloads and once more at finish, `GET /api/dictation/status`, model download and delete, and the voice key routes (`/api/voice/keys`), which answer only whether a key is saved. |
+| `quota.rs` | One provider's quota (`GET /api/quota/:providerId`) as `fetchQuota.ts` validates it: a malformed window, or another provider's answer, rejects the whole answer. |
 | `event.rs` | Bridge frames to `ServerEvent`s, mirroring `lib/opencode/events.ts` and `sync/event-pipeline.ts`. |
 | `stream.rs` | `EventStream`: the reconnecting WebSocket subscription. |
 | `terminal.rs` | Server terminals: `TerminalApi` (shells, list, touch, create, restart, resize, close, terminal settings) and `TerminalSocket`, the reconnecting protocol v3 socket with its binary codec and input splitting. |
 | `parity_tests.rs` | Differential tests against the official client's fixture. |
 | `tests/server.rs` | The transport against a scripted loopback HTTP and WebSocket server: login fields, bearer use, failure classes, redirects, paging, cancellation, resume and reset cursors, fragmented frames and the `ready` timeout. |
 | `tests/composer_catalog/` | The command list with each config read (a failed read keeps the listed command), snippets and the folder search against the scripted server. |
+| `tests/dictation.rs` | The dictation stream against a scripted loopback server: the bearer upgrade, chunk numbering with chunks buffered before the `ack`, the transcript, a start retried while the model downloads that sends every chunk again, a server failure, a cancel when the stream is dropped and a refused connection failing at finish. |
 | `tests/terminal.rs` | The terminal socket and commands against scripted loopback servers: bearer upgrade, sequence handling, reconnect with snapshot replay, input under the frame limit, idle close, refused credentials, request fidelity and refusals. |
 
 `examples/probe.rs` exercises the crate against a running server and prints
