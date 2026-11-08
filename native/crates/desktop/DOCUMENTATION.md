@@ -167,6 +167,27 @@ prompt. Attachments and worktree creation remain separate workflows.
   place of the chat; it lists archived sessions with Restore and Delete.
   The archive page's project buckets, search, dates and archived worktrees
   are not ported.
+- `scheduled_tasks.rs` is the scheduled tasks page the sidebar's button
+  opens in place of the chat; it, the source board and the archive close
+  each other. Scopes are Chats and every project; row actions write to the
+  scope whose list is shown, reads are numbered per scope, and a failed read
+  shows an error with Retry, never "no tasks". `TaskEditor` is the create and
+  edit dialog; a task moved to another scope is written there before it is
+  deleted from the old one. `time_zones.rs` reads the system zoneinfo for its
+  timezone list and cron preview. `scheduled_tasks_view.rs` draws both.
+  Not ported: prompt autocomplete, the date, time and branch pickers (typed
+  instead), opening a loop's file from Edit, the mobile layout.
+- `knowledge.rs` is the Project knowledge panel behind the rail's notes
+  button (`PanelSurface::Notes`), one entity per runtime and owner, the
+  owner being the Chats root or the project of the panel's directory. Todo
+  changes show at once and send one todo; open notes and plans keep a draft
+  saved after a pause and on leaving, kept when a save fails; note and plan
+  deletes wait out a five second undo window. Sends from a todo or a plan
+  start a session through the workspace on the composer's model and agent.
+  `knowledge_view.rs` draws it; `panel_controls.rs` holds the buttons,
+  checkboxes and selects both surfaces share. Not ported: agent memory,
+  session pins, plan import, formatted Markdown editing, drag reorder, the
+  wide split layout, the send dialog and sends to a new worktree.
 - `source_board.rs` is the issues and pull requests board the sidebar's
   Issues and PRs button opens in place of the chat (the work status card
   hides with the chat); it and the archive page close each other, and
@@ -1402,6 +1423,18 @@ the board reads the workspace's connection for every request so a reconnect
 or runtime switch is picked up. Reading it there would panic on the
 re-entrant read, so opening a project defers its first resolution until the
 update ends; the board shows its loading state meanwhile.
+
+### Why a failed task read shows an error and not the reference's empty list
+
+The web clears the list to empty after a failed read and toasts. Here the
+list area shows the failure with Retry, because an empty list reads as "this
+scope has no tasks", which the server never said.
+
+### Why the task editor reads its connection when it opens
+
+The editor is created inside the page's update, so it cannot read the page
+for its target-eligibility request; it takes the page's client and network
+at open instead.
 
 ### Why the Files surface polls and does not watch
 

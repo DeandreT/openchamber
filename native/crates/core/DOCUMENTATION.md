@@ -67,6 +67,17 @@ rendering asks for a projection and dispatches an action.
   `resolveSourceControlTarget`, `repositoryHostsOf`), and `BoardList`, the
   searched list with paging, refresh and the highlighted row
   (`useReferenceBrowser.ts`, `referenceCache.ts`).
+- `schedule.rs` ports the scheduled task rules the editor and list show:
+  cron parsing and the next-run preview of `lib/cron.ts` (five or six
+  fields, names, `L`, `#` and the `@` shorthands, as `cron-parser` reads
+  them), the row labels of `ScheduledTasksDialog.tsx` and the draft rules of
+  `scheduledTaskEditorDraft.ts`. `time_zone.rs` parses compiled zoneinfo
+  (TZif with its POSIX footer rule) and turns wall-clock times into instants;
+  the caller reads the files. The server computes and enforces the real
+  schedule.
+- `knowledge.rs` holds Project knowledge records and the panel's rules:
+  note titles, the todo order, the agent `ready` rule (a deleted dependency
+  counts as met), the plan Markdown split and the panel-wide search.
 - `provider_logo.rs` ports the provider logo lookup of `useProviderLogo.ts`
   (bundled candidates, then models.dev) and inverts an SVG's paint colors for
   dark themes, as the web's `dark:invert` does.
