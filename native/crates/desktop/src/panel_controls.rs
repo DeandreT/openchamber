@@ -91,9 +91,7 @@ pub(crate) fn button<V: 'static>(
             .opacity(0.5)
             .a11y_synthetic_children(|builder| builder.parent_node().set_disabled())
     } else {
-        element
-            .cursor_pointer()
-            .hover(move |style| style.bg(hover))
+        element.cursor_pointer().hover(move |style| style.bg(hover))
     };
     if disabled {
         element.test_support().into_any_element()

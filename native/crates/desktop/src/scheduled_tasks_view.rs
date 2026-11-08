@@ -644,7 +644,9 @@ impl ScheduledTasks {
         let workspace = workspace.read(cx);
         workspace
             .sessions
-            .get(&openchamber_native_core::ids::SessionId::new(session.to_owned()))
+            .get(&openchamber_native_core::ids::SessionId::new(
+                session.to_owned(),
+            ))
             .map(|record| record.title.clone())
             .filter(|title| !title.is_empty())
     }
@@ -876,7 +878,13 @@ impl TaskEditor {
             .into_any_element()
     }
 
-    fn input(&self, id: &'static str, state: &gpui_kit::Entity<gpui_kit::component::input::InputState>, aria: SharedString, width: f32) -> AnyElement {
+    fn input(
+        &self,
+        id: &'static str,
+        state: &gpui_kit::Entity<gpui_kit::component::input::InputState>,
+        aria: SharedString,
+        width: f32,
+    ) -> AnyElement {
         div()
             .w(px(width))
             .max_w_full()
@@ -923,7 +931,13 @@ impl TaskEditor {
             .into_any_element()
     }
 
-    fn timezone_select(&self, strings: &Strings, palette: &Palette, direction: Direction, cx: &mut Context<Self>) -> AnyElement {
+    fn timezone_select(
+        &self,
+        strings: &Strings,
+        palette: &Palette,
+        direction: Direction,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let filter = self.filter.read(cx).value().to_lowercase();
         let mut options: Vec<AnyElement> = vec![
             div()
@@ -979,7 +993,13 @@ impl TaskEditor {
         )
     }
 
-    fn schedule_fields(&self, strings: &Strings, palette: &Palette, direction: Direction, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    fn schedule_fields(
+        &self,
+        strings: &Strings,
+        palette: &Palette,
+        direction: Direction,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let mut fields = Vec::new();
         match self.draft.kind {
             ScheduleKind::Cron => {
@@ -997,10 +1017,14 @@ impl TaskEditor {
                             .id("scheduled-task-cron-invalid")
                             .role(Role::Alert)
                             .accessibility_id("scheduled-task-cron-invalid")
-                            .aria_label(strings.get("sessions.scheduledTasks.editor.validation.cronInvalid"))
+                            .aria_label(
+                                strings
+                                    .get("sessions.scheduledTasks.editor.validation.cronInvalid"),
+                            )
                             .test_support()
                             .child(text(
-                                strings.get("sessions.scheduledTasks.editor.validation.cronInvalid"),
+                                strings
+                                    .get("sessions.scheduledTasks.editor.validation.cronInvalid"),
                                 (MICRO_SIZE, MICRO_LINE),
                                 palette.status_error,
                                 cx,
@@ -1035,12 +1059,19 @@ impl TaskEditor {
                                 .flex_col()
                                 .gap(px(2.0))
                                 .child(text(
-                                    strings.get("sessions.scheduledTasks.editor.cronExpression.nextRuns"),
+                                    strings.get(
+                                        "sessions.scheduledTasks.editor.cronExpression.nextRuns",
+                                    ),
                                     (META_SIZE, META_LINE),
                                     palette.muted_foreground,
                                     cx,
                                 ))
-                                .child(text(runs.join(", "), (MICRO_SIZE, MICRO_LINE), palette.foreground, cx))
+                                .child(text(
+                                    runs.join(", "),
+                                    (MICRO_SIZE, MICRO_LINE),
+                                    palette.foreground,
+                                    cx,
+                                ))
                                 .into_any_element(),
                         );
                     }
@@ -1052,7 +1083,10 @@ impl TaskEditor {
                         button(
                             format!("scheduled-task-cron-example:{expression}"),
                             None,
-                            Some(SharedString::from(format!("{expression}  {}", strings.get(key)))),
+                            Some(SharedString::from(format!(
+                                "{expression}  {}",
+                                strings.get(key)
+                            ))),
                             strings.get(key),
                             Variant::Outline,
                             false,
@@ -1074,7 +1108,13 @@ impl TaskEditor {
                             palette.muted_foreground,
                             cx,
                         ))
-                        .child(div().flex_row_from(direction).flex_wrap().gap(px(6.0)).children(examples))
+                        .child(
+                            div()
+                                .flex_row_from(direction)
+                                .flex_wrap()
+                                .gap(px(6.0))
+                                .children(examples),
+                        )
                         .into_any_element(),
                 );
             }
@@ -1127,19 +1167,21 @@ impl TaskEditor {
                             )
                         })
                         .collect();
-                    fields.push(self.field(
-                        strings.get("sessions.scheduledTasks.editor.weekdays.label"),
-                        false,
-                        div()
-                            .flex_row_from(direction)
-                            .flex_wrap()
-                            .gap(px(12.0))
-                            .children(days)
-                            .into_any_element(),
-                        palette,
-                        direction,
-                        cx,
-                    ));
+                    fields.push(
+                        self.field(
+                            strings.get("sessions.scheduledTasks.editor.weekdays.label"),
+                            false,
+                            div()
+                                .flex_row_from(direction)
+                                .flex_wrap()
+                                .gap(px(12.0))
+                                .children(days)
+                                .into_any_element(),
+                            palette,
+                            direction,
+                            cx,
+                        ),
+                    );
                 }
                 let several = self.times.len() > 1;
                 let rows: Vec<AnyElement> = self
@@ -1156,7 +1198,10 @@ impl TaskEditor {
                                     Input::new(input)
                                         .text_size(rems(LABEL_SIZE))
                                         .accessibility_id(format!("scheduled-task-time:{index}"))
-                                        .aria_label(strings.get("sessions.scheduledTasks.editor.time.label")),
+                                        .aria_label(
+                                            strings
+                                                .get("sessions.scheduledTasks.editor.time.label"),
+                                        ),
                                 ),
                             )
                             .when(several, |this| {
@@ -1170,44 +1215,54 @@ impl TaskEditor {
                                     palette,
                                     direction,
                                     cx,
-                                    move |this: &mut Self, window, cx| this.remove_time(index, window, cx),
+                                    move |this: &mut Self, window, cx| {
+                                        this.remove_time(index, window, cx)
+                                    },
                                 ))
                             })
                             .into_any_element()
                     })
                     .collect();
-                fields.push(self.field(
-                    strings.get("sessions.scheduledTasks.editor.times.label"),
-                    false,
-                    div()
-                        .flex()
-                        .flex_col()
-                        .gap(px(8.0))
-                        .children(rows)
-                        .child(button(
-                            "scheduled-task-time-add",
-                            Some("add"),
-                            Some(strings.get("sessions.scheduledTasks.editor.times.add")),
-                            strings.get("sessions.scheduledTasks.editor.times.add"),
-                            Variant::Outline,
-                            false,
-                            palette,
-                            direction,
-                            cx,
-                            |this: &mut Self, window, cx| this.add_time(window, cx),
-                        ))
-                        .into_any_element(),
-                    palette,
-                    direction,
-                    cx,
-                ));
+                fields.push(
+                    self.field(
+                        strings.get("sessions.scheduledTasks.editor.times.label"),
+                        false,
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.0))
+                            .children(rows)
+                            .child(button(
+                                "scheduled-task-time-add",
+                                Some("add"),
+                                Some(strings.get("sessions.scheduledTasks.editor.times.add")),
+                                strings.get("sessions.scheduledTasks.editor.times.add"),
+                                Variant::Outline,
+                                false,
+                                palette,
+                                direction,
+                                cx,
+                                |this: &mut Self, window, cx| this.add_time(window, cx),
+                            ))
+                            .into_any_element(),
+                        palette,
+                        direction,
+                        cx,
+                    ),
+                );
             }
         }
         fields.push(self.timezone_select(strings, palette, direction, cx));
         fields
     }
 
-    fn model_fields(&self, strings: &Strings, palette: &Palette, direction: Direction, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    fn model_fields(
+        &self,
+        strings: &Strings,
+        palette: &Palette,
+        direction: Direction,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let mut fields = Vec::new();
         let filter = self.filter.read(cx).value().to_lowercase();
         let mut models: Vec<AnyElement> = vec![
@@ -1224,7 +1279,10 @@ impl TaskEditor {
         for provider in &self.catalog.providers {
             for model in &provider.models {
                 let shown = model.name.clone().unwrap_or_else(|| model.id.clone());
-                let full = format!("{} / {shown}", provider.name.as_deref().unwrap_or(&provider.id));
+                let full = format!(
+                    "{} / {shown}",
+                    provider.name.as_deref().unwrap_or(&provider.id)
+                );
                 if !filter.is_empty() && !full.to_lowercase().contains(&filter) {
                     continue;
                 }
@@ -1340,7 +1398,11 @@ impl TaskEditor {
             let value = agent.name.clone();
             agents.push(option_row(
                 format!("scheduled-task-agent:{}", agent.name),
-                agent.display_name.clone().unwrap_or_else(|| agent.name.clone()).into(),
+                agent
+                    .display_name
+                    .clone()
+                    .unwrap_or_else(|| agent.name.clone())
+                    .into(),
                 agent.name == self.draft.agent,
                 false,
                 palette,
@@ -1385,13 +1447,15 @@ impl Render for TaskEditor {
         let strings = locale::strings(cx).clone();
         let direction = strings.direction();
         let palette = cx.global::<Palette>().clone();
-        let mut fields: Vec<AnyElement> = vec![text(
-            strings.get("sessions.scheduledTasks.editor.description"),
-            (META_SIZE, META_LINE),
-            palette.muted_foreground,
-            cx,
-        )
-        .into_any_element()];
+        let mut fields: Vec<AnyElement> = vec![
+            text(
+                strings.get("sessions.scheduledTasks.editor.description"),
+                (META_SIZE, META_LINE),
+                palette.muted_foreground,
+                cx,
+            )
+            .into_any_element(),
+        ];
         if self.scopes.len() > 1 {
             let options: Vec<AnyElement> = self
                 .scopes
@@ -1449,7 +1513,11 @@ impl Render for TaskEditor {
                 option_row(
                     format!(
                         "scheduled-task-session-mode:{}",
-                        if mode == SessionMode::New { "new" } else { "existing" }
+                        if mode == SessionMode::New {
+                            "new"
+                        } else {
+                            "existing"
+                        }
                     ),
                     mode_label(mode),
                     self.draft.session_mode == mode,
@@ -1481,14 +1549,16 @@ impl Render for TaskEditor {
         ));
         if existing {
             let options: Vec<AnyElement> = match &self.eligibility {
-                Eligibility::Loading => vec![text(
-                    strings.get("common.loading"),
-                    (META_SIZE, META_LINE),
-                    palette.muted_foreground,
-                    cx,
-                )
-                .p(px(8.0))
-                .into_any_element()],
+                Eligibility::Loading => vec![
+                    text(
+                        strings.get("common.loading"),
+                        (META_SIZE, META_LINE),
+                        palette.muted_foreground,
+                        cx,
+                    )
+                    .p(px(8.0))
+                    .into_any_element(),
+                ],
                 _ => self
                     .target_sessions()
                     .into_iter()
@@ -1527,60 +1597,69 @@ impl Render for TaskEditor {
                 .map(SharedString::from)
                 .unwrap_or_else(|| strings.get("sessions.scheduledTasks.editor.targetSession"));
             let failed = self.eligibility == Eligibility::Failed;
-            fields.push(self.field(
-                strings.get("sessions.scheduledTasks.editor.targetSession"),
-                false,
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap(px(4.0))
-                    .child(self.select(
-                        "scheduled-task-target",
-                        EditorMenu::Target,
-                        value,
-                        strings.get("sessions.scheduledTasks.editor.targetSession"),
-                        options,
-                        false,
-                        &palette,
-                        direction,
-                        cx,
-                    ))
-                    .when(failed, |this| {
-                        this.child(
-                            div()
-                                .id("scheduled-task-target-failed")
-                                .role(Role::Alert)
-                                .accessibility_id("scheduled-task-target-failed")
-                                .aria_label(strings.get("sessions.scheduledTasks.editor.targetLoadFailed"))
-                                .test_support()
-                                .flex_row_from(direction)
-                                .items_center()
-                                .gap(px(8.0))
-                                .child(text(
-                                    strings.get("sessions.scheduledTasks.editor.targetLoadFailed"),
-                                    (META_SIZE, META_LINE),
-                                    palette.muted_foreground,
-                                    cx,
-                                ))
-                                .child(button(
-                                    "scheduled-task-target-retry",
-                                    None,
-                                    Some(strings.get("sessions.scheduledTasks.editor.targetRetry")),
-                                    strings.get("sessions.scheduledTasks.editor.targetRetry"),
-                                    Variant::Ghost,
-                                    false,
-                                    &palette,
-                                    direction,
-                                    cx,
-                                    |this: &mut Self, _, cx| this.load_targets(cx),
-                                )),
-                        )
-                    })
-                    .into_any_element(),
-                &palette,
-                direction,
-                cx,
-            ));
+            fields.push(
+                self.field(
+                    strings.get("sessions.scheduledTasks.editor.targetSession"),
+                    false,
+                    div()
+                        .flex()
+                        .flex_col()
+                        .gap(px(4.0))
+                        .child(self.select(
+                            "scheduled-task-target",
+                            EditorMenu::Target,
+                            value,
+                            strings.get("sessions.scheduledTasks.editor.targetSession"),
+                            options,
+                            false,
+                            &palette,
+                            direction,
+                            cx,
+                        ))
+                        .when(failed, |this| {
+                            this.child(
+                                div()
+                                    .id("scheduled-task-target-failed")
+                                    .role(Role::Alert)
+                                    .accessibility_id("scheduled-task-target-failed")
+                                    .aria_label(
+                                        strings
+                                            .get("sessions.scheduledTasks.editor.targetLoadFailed"),
+                                    )
+                                    .test_support()
+                                    .flex_row_from(direction)
+                                    .items_center()
+                                    .gap(px(8.0))
+                                    .child(text(
+                                        strings
+                                            .get("sessions.scheduledTasks.editor.targetLoadFailed"),
+                                        (META_SIZE, META_LINE),
+                                        palette.muted_foreground,
+                                        cx,
+                                    ))
+                                    .child(button(
+                                        "scheduled-task-target-retry",
+                                        None,
+                                        Some(
+                                            strings
+                                                .get("sessions.scheduledTasks.editor.targetRetry"),
+                                        ),
+                                        strings.get("sessions.scheduledTasks.editor.targetRetry"),
+                                        Variant::Ghost,
+                                        false,
+                                        &palette,
+                                        direction,
+                                        cx,
+                                        |this: &mut Self, _, cx| this.load_targets(cx),
+                                    )),
+                            )
+                        })
+                        .into_any_element(),
+                    &palette,
+                    direction,
+                    cx,
+                ),
+            );
         }
         let kinds: Vec<AnyElement> = ScheduleKind::ALL
             .into_iter()
@@ -1636,26 +1715,34 @@ impl Render for TaskEditor {
                 .into_any_element(),
         );
         fields.extend(self.schedule_fields(&strings, &palette, direction, cx));
-        if !existing && self.scope_path().is_some_and(|path| !path.trim().is_empty()) {
-            let mut worktree = div().flex().flex_col().gap(px(4.0)).child(checkbox(
-                "scheduled-task-worktree",
-                strings.get("sessions.scheduledTasks.editor.worktree.label"),
-                self.draft.run_in_worktree,
-                false,
-                &palette,
-                direction,
-                cx,
-                |this: &mut Self, _, cx| {
-                    this.draft.run_in_worktree = !this.draft.run_in_worktree;
-                    cx.notify();
-                },
-            ))
-            .child(text(
-                strings.get("sessions.scheduledTasks.editor.worktree.hint"),
-                (META_SIZE, META_LINE),
-                palette.muted_foreground,
-                cx,
-            ));
+        if !existing
+            && self
+                .scope_path()
+                .is_some_and(|path| !path.trim().is_empty())
+        {
+            let mut worktree = div()
+                .flex()
+                .flex_col()
+                .gap(px(4.0))
+                .child(checkbox(
+                    "scheduled-task-worktree",
+                    strings.get("sessions.scheduledTasks.editor.worktree.label"),
+                    self.draft.run_in_worktree,
+                    false,
+                    &palette,
+                    direction,
+                    cx,
+                    |this: &mut Self, _, cx| {
+                        this.draft.run_in_worktree = !this.draft.run_in_worktree;
+                        cx.notify();
+                    },
+                ))
+                .child(text(
+                    strings.get("sessions.scheduledTasks.editor.worktree.hint"),
+                    (META_SIZE, META_LINE),
+                    palette.muted_foreground,
+                    cx,
+                ));
             if self.draft.run_in_worktree {
                 worktree = worktree
                     .child(self.field(
@@ -1728,27 +1815,29 @@ impl Render for TaskEditor {
         } else {
             fields.extend(self.model_fields(&strings, &palette, direction, cx));
         }
-        fields.push(self.field(
-            strings.get("sessions.scheduledTasks.editor.prompt.label"),
-            true,
-            div()
-                .min_h(px(120.0))
-                .rounded(px(6.0))
-                .border_1()
-                .border_color(palette.border)
-                .child(
-                    Textarea::new(&self.prompt)
-                        .px(px(8.0))
-                        .py(px(6.0))
-                        .text_size(rems(META_SIZE))
-                        .accessibility_id("scheduled-task-prompt")
-                        .aria_label(strings.get("sessions.scheduledTasks.editor.prompt.label")),
-                )
-                .into_any_element(),
-            &palette,
-            direction,
-            cx,
-        ));
+        fields.push(
+            self.field(
+                strings.get("sessions.scheduledTasks.editor.prompt.label"),
+                true,
+                div()
+                    .min_h(px(120.0))
+                    .rounded(px(6.0))
+                    .border_1()
+                    .border_color(palette.border)
+                    .child(
+                        Textarea::new(&self.prompt)
+                            .px(px(8.0))
+                            .py(px(6.0))
+                            .text_size(rems(META_SIZE))
+                            .accessibility_id("scheduled-task-prompt")
+                            .aria_label(strings.get("sessions.scheduledTasks.editor.prompt.label")),
+                    )
+                    .into_any_element(),
+                &palette,
+                direction,
+                cx,
+            ),
+        );
         if !existing && self.draft.goal_enabled {
             fields.push(
                 div()
@@ -1829,7 +1918,8 @@ impl Render for TaskEditor {
                             direction,
                             cx,
                             |this: &mut Self, _, cx| {
-                                this.draft.permission_auto_accept = !this.draft.permission_auto_accept;
+                                this.draft.permission_auto_accept =
+                                    !this.draft.permission_auto_accept;
                                 cx.notify();
                             },
                         ))
@@ -1909,7 +1999,12 @@ impl Render for TaskEditor {
                         .accessibility_id("scheduled-task-editor-error")
                         .aria_label(error.clone())
                         .test_support()
-                        .child(text(error, (META_SIZE, META_LINE), palette.status_error, cx)),
+                        .child(text(
+                            error,
+                            (META_SIZE, META_LINE),
+                            palette.status_error,
+                            cx,
+                        )),
                 )
             })
             .child(footer)

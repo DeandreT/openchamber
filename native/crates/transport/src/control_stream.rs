@@ -21,12 +21,18 @@ const SILENCE_LIMIT: Duration = Duration::from_secs(40);
 #[derive(Debug, PartialEq, Eq)]
 pub enum ControlEvent {
     Connected,
-    WorktreeChanged { directories: Vec<String> },
+    WorktreeChanged {
+        directories: Vec<String>,
+    },
     SessionCreated,
     /// A scheduled task of `project_id` started or finished a run.
-    ScheduledTaskRan { project_id: String },
+    ScheduledTaskRan {
+        project_id: String,
+    },
     /// A client or an agent changed `project_id`'s notes, todos or plans.
-    ProjectContextChanged { project_id: String },
+    ProjectContextChanged {
+        project_id: String,
+    },
 }
 
 /// A control connection outcome. Failure never means empty topology.

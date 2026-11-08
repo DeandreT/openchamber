@@ -71,13 +71,22 @@ fn knowledge_date(at_ms: i64, strings: &Strings, cx: &gpui_kit::App) -> String {
 fn section_look(section: Section) -> (&'static str, &'static str) {
     match section {
         Section::Notes => ("sticky-note", "rightSidebar.contextNotesTodo.tabs.notes"),
-        Section::Todos => ("checkbox-circle", "rightSidebar.contextNotesTodo.tabs.todos"),
+        Section::Todos => (
+            "checkbox-circle",
+            "rightSidebar.contextNotesTodo.tabs.todos",
+        ),
         Section::Plans => ("file-text", "rightSidebar.contextNotesTodo.tabs.plans"),
     }
 }
 
 impl KnowledgePanel {
-    fn render_tabs(&self, strings: &Strings, palette: &Palette, direction: Direction, cx: &mut Context<Self>) -> AnyElement {
+    fn render_tabs(
+        &self,
+        strings: &Strings,
+        palette: &Palette,
+        direction: Direction,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let counts = self.counts();
         let tabs: Vec<AnyElement> = Section::ALL
             .into_iter()
@@ -112,7 +121,10 @@ impl KnowledgePanel {
                         // The active tab keeps its label; the others show
                         // their icon and count.
                         .when(selected, |this| {
-                            this.child(text(strings.get(key), META, color, cx).font_weight(FontWeight::MEDIUM))
+                            this.child(
+                                text(strings.get(key), META, color, cx)
+                                    .font_weight(FontWeight::MEDIUM),
+                            )
                         })
                         .child(text(count.to_string(), MICRO, palette.muted_foreground, cx)),
                     cx,
@@ -160,9 +172,16 @@ impl KnowledgePanel {
             .into_any_element()
     }
 
-    fn render_search(&self, strings: &Strings, palette: &Palette, direction: Direction, cx: &mut Context<Self>) -> AnyElement {
+    fn render_search(
+        &self,
+        strings: &Strings,
+        palette: &Palette,
+        direction: Direction,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let counts = self.counts();
-        let nothing = !self.query.trim().is_empty() && counts.notes + counts.todos + counts.plans == 0;
+        let nothing =
+            !self.query.trim().is_empty() && counts.notes + counts.todos + counts.plans == 0;
         div()
             .px(px(8.0))
             .pt(px(8.0))
@@ -194,11 +213,17 @@ impl KnowledgePanel {
                         ),
                     )
                     .child(
-                        IconButton::new("knowledge-search-close", "close", strings.get("chat.search.close"))
-                            .size(20.0, 14.0)
-                            .render(palette, cx, |this: &mut Self, window, cx| {
-                                this.close_search(window, cx)
-                            }),
+                        IconButton::new(
+                            "knowledge-search-close",
+                            "close",
+                            strings.get("chat.search.close"),
+                        )
+                        .size(20.0, 14.0)
+                        .render(
+                            palette,
+                            cx,
+                            |this: &mut Self, window, cx| this.close_search(window, cx),
+                        ),
                     ),
             )
             .when(nothing, |this| {
@@ -209,7 +234,12 @@ impl KnowledgePanel {
                         .accessibility_id("knowledge-search-empty")
                         .aria_label(strings.get("chat.search.noResults"))
                         .test_support()
-                        .child(text(strings.get("chat.search.noResults"), META, palette.muted_foreground, cx)),
+                        .child(text(
+                            strings.get("chat.search.noResults"),
+                            META,
+                            palette.muted_foreground,
+                            cx,
+                        )),
                 )
             })
             .into_any_element()
@@ -240,11 +270,28 @@ impl KnowledgePanel {
             .items_center()
             .gap(px(6.0))
             .child(div().flex_1().min_w_0().child(field))
-            .child(button(add, Some("add"), None, add_label, Variant::Ghost, false, palette, direction, cx, action))
+            .child(button(
+                add,
+                Some("add"),
+                None,
+                add_label,
+                Variant::Ghost,
+                false,
+                palette,
+                direction,
+                cx,
+                action,
+            ))
             .into_any_element()
     }
 
-    fn empty_line(&self, key: &'static str, strings: &Strings, palette: &Palette, cx: &Context<Self>) -> AnyElement {
+    fn empty_line(
+        &self,
+        key: &'static str,
+        strings: &Strings,
+        palette: &Palette,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         let value = if self.query.trim().is_empty() {
             strings.get(key)
         } else {
@@ -286,25 +333,37 @@ impl KnowledgePanel {
                     strings.get("rightSidebar.contextNotesTodo.actions.more"),
                 )
                 .size(24.0, 14.0)
-                .render(palette, cx, move |this: &mut Self, _, cx| this.toggle_entry_menu(&key, cx)),
+                .render(palette, cx, move |this: &mut Self, _, cx| {
+                    this.toggle_entry_menu(&key, cx)
+                }),
             )
             .when(open, |this| {
-                this.child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .right_0()
-                        .child(popup("knowledge-row-menu", options, 200.0, palette)),
-                )
+                this.child(div().absolute().top_0().right_0().child(popup(
+                    "knowledge-row-menu",
+                    options,
+                    200.0,
+                    palette,
+                )))
             })
             .into_any_element()
     }
 
-    fn render_note_card(&self, note: &Note, strings: &Strings, palette: &Palette, direction: Direction, cx: &mut Context<Self>) -> AnyElement {
+    fn render_note_card(
+        &self,
+        note: &Note,
+        strings: &Strings,
+        palette: &Palette,
+        direction: Direction,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let (title, rest) = knowledge::split_note_title(&note.body);
         let source = match note.source {
-            NoteSource::Selection => Some(strings.get("rightSidebar.contextNotesTodo.notes.source.selection")),
-            NoteSource::Agent => Some(strings.get("rightSidebar.contextNotesTodo.notes.source.agent")),
+            NoteSource::Selection => {
+                Some(strings.get("rightSidebar.contextNotesTodo.notes.source.selection"))
+            }
+            NoteSource::Agent => {
+                Some(strings.get("rightSidebar.contextNotesTodo.notes.source.agent"))
+            }
             NoteSource::Manual => None,
         };
         let id = note.id.clone();
@@ -343,7 +402,12 @@ impl KnowledgePanel {
                                 .truncate()
                                 .pr(px(24.0)),
                         )
-                        .child(div().flex_1().min_h_0().overflow_hidden().child(text(preview, META, palette.muted_foreground, cx)))
+                        .child(div().flex_1().min_h_0().overflow_hidden().child(text(
+                            preview,
+                            META,
+                            palette.muted_foreground,
+                            cx,
+                        )))
                         .child(
                             div()
                                 .flex_row_from(direction)
@@ -351,7 +415,16 @@ impl KnowledgePanel {
                                 .when_some(source, |this, source| {
                                     this.child(text(source, MICRO, palette.muted_foreground, cx))
                                 })
-                                .child(text(knowledge_date(note.updated_at.max(note.created_at), strings, cx), MICRO, palette.muted_foreground, cx)),
+                                .child(text(
+                                    knowledge_date(
+                                        note.updated_at.max(note.created_at),
+                                        strings,
+                                        cx,
+                                    ),
+                                    MICRO,
+                                    palette.muted_foreground,
+                                    cx,
+                                )),
                         ),
                     cx,
                     move |this: &mut Self, window, cx| this.open_note(Some(id.clone()), window, cx),
@@ -359,56 +432,75 @@ impl KnowledgePanel {
                 .test_support(),
             )
             .child(
-                div().absolute().top(px(6.0)).right(px(6.0)).child(self.row_menu(
-                    note.id.clone(),
-                    vec![option_row(
-                        format!("knowledge-note-delete:{}", note.id),
-                        strings.get("rightSidebar.contextNotesTodo.notes.actions.delete"),
-                        false,
-                        true,
+                div()
+                    .absolute()
+                    .top(px(6.0))
+                    .right(px(6.0))
+                    .child(self.row_menu(
+                        note.id.clone(),
+                        vec![option_row(
+                            format!("knowledge-note-delete:{}", note.id),
+                            strings.get("rightSidebar.contextNotesTodo.notes.actions.delete"),
+                            false,
+                            true,
+                            palette,
+                            direction,
+                            cx,
+                            move |this: &mut Self, window, cx| {
+                                this.schedule_delete(Section::Notes, &delete_id, window, cx)
+                            },
+                        )],
+                        strings,
                         palette,
-                        direction,
                         cx,
-                        move |this: &mut Self, window, cx| {
-                            this.schedule_delete(Section::Notes, &delete_id, window, cx)
-                        },
-                    )],
-                    strings,
-                    palette,
-                    cx,
-                )),
+                    )),
             )
             .into_any_element()
     }
 
-    fn render_notes(&self, strings: &Strings, palette: &Palette, direction: Direction, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let mut rows = vec![self.composer(
-            "knowledge-note-composer",
-            Textarea::new(&self.note_input)
-                .appearance(false)
-                .bordered(false)
-                .text_size(rems(LABEL_SIZE))
-                .accessibility_id("knowledge-note-input")
-                .aria_label(strings.get("rightSidebar.contextNotesTodo.notes.placeholder"))
-                .into_any_element(),
-            "knowledge-note-add",
-            strings.get("rightSidebar.contextNotesTodo.notes.addAria"),
-            palette,
-            direction,
-            cx,
-            |this: &mut Self, window, cx| this.add_note(window, cx),
-        )];
+    fn render_notes(
+        &self,
+        strings: &Strings,
+        palette: &Palette,
+        direction: Direction,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let mut rows = vec![
+            self.composer(
+                "knowledge-note-composer",
+                Textarea::new(&self.note_input)
+                    .appearance(false)
+                    .bordered(false)
+                    .text_size(rems(LABEL_SIZE))
+                    .accessibility_id("knowledge-note-input")
+                    .aria_label(strings.get("rightSidebar.contextNotesTodo.notes.placeholder"))
+                    .into_any_element(),
+                "knowledge-note-add",
+                strings.get("rightSidebar.contextNotesTodo.notes.addAria"),
+                palette,
+                direction,
+                cx,
+                |this: &mut Self, window, cx| this.add_note(window, cx),
+            ),
+        ];
         let Some(knowledge) = &self.knowledge else {
             return rows;
         };
         let visible: Vec<&Note> = knowledge
             .notes
             .iter()
-            .filter(|note| !self.delete_pending(&note.id) && knowledge::note_matches(note, &self.query))
+            .filter(|note| {
+                !self.delete_pending(&note.id) && knowledge::note_matches(note, &self.query)
+            })
             .collect();
         // With no notes at all the composer's placeholder says enough.
         if visible.is_empty() && !knowledge.notes.is_empty() {
-            rows.push(self.empty_line("rightSidebar.contextNotesTodo.notes.placeholder", strings, palette, cx));
+            rows.push(self.empty_line(
+                "rightSidebar.contextNotesTodo.notes.placeholder",
+                strings,
+                palette,
+                cx,
+            ));
         }
         for note in visible {
             rows.push(self.render_note_card(note, strings, palette, direction, cx));
@@ -416,7 +508,14 @@ impl KnowledgePanel {
         rows
     }
 
-    fn render_open_note(&self, id: &str, strings: &Strings, palette: &Palette, direction: Direction, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    fn render_open_note(
+        &self,
+        id: &str,
+        strings: &Strings,
+        palette: &Palette,
+        direction: Direction,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let note = self
             .knowledge
             .as_ref()
@@ -434,12 +533,25 @@ impl KnowledgePanel {
                         .items_center()
                         .gap(px(6.0))
                         .child(
-                            IconButton::new("knowledge-back", "arrow-left-s", strings.get("rightSidebar.contextNotesTodo.notes.actions.back"))
-                                .size(24.0, 16.0)
-                                .render(palette, cx, |this: &mut Self, _, cx| this.close_entry(cx)),
+                            IconButton::new(
+                                "knowledge-back",
+                                "arrow-left-s",
+                                strings.get("rightSidebar.contextNotesTodo.notes.actions.back"),
+                            )
+                            .size(24.0, 16.0)
+                            .render(
+                                palette,
+                                cx,
+                                |this: &mut Self, _, cx| this.close_entry(cx),
+                            ),
                         )
                         .when_some(note.as_ref(), |this, note| {
-                            this.child(text(knowledge_date(note.updated_at.max(note.created_at), strings, cx), MICRO, palette.muted_foreground, cx))
+                            this.child(text(
+                                knowledge_date(note.updated_at.max(note.created_at), strings, cx),
+                                MICRO,
+                                palette.muted_foreground,
+                                cx,
+                            ))
                         }),
                 )
                 .child(self.row_menu(
@@ -477,12 +589,25 @@ impl KnowledgePanel {
         ]
     }
 
-    fn render_todo(&self, todo: &Todo, strings: &Strings, palette: &Palette, direction: Direction, cx: &mut Context<Self>) -> AnyElement {
+    fn render_todo(
+        &self,
+        todo: &Todo,
+        strings: &Strings,
+        palette: &Palette,
+        direction: Direction,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let expanded = self.expanded.contains(&todo.id);
         let menu_open = self.todo_menu.as_deref() == Some(todo.id.as_str());
         let id = todo.id.clone();
-        let (check_id, expand_id, send_id, current_id, new_id, delete_id) =
-            (id.clone(), id.clone(), id.clone(), id.clone(), id.clone(), id.clone());
+        let (check_id, expand_id, send_id, current_id, new_id, delete_id) = (
+            id.clone(),
+            id.clone(),
+            id.clone(),
+            id.clone(),
+            id.clone(),
+            id.clone(),
+        );
         let sending = self.sending.as_deref() == Some(todo.id.as_str());
         let element_id = format!("knowledge-todo:{}", todo.id);
         div()
@@ -619,23 +744,31 @@ impl KnowledgePanel {
             .into_any_element()
     }
 
-    fn render_todos(&self, strings: &Strings, palette: &Palette, direction: Direction, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let mut rows = vec![self.composer(
-            "knowledge-todo-composer",
-            Input::new(&self.todo_input)
-                .appearance(false)
-                .bordered(false)
-                .text_size(rems(LABEL_SIZE))
-                .accessibility_id("knowledge-todo-input")
-                .aria_label(strings.get("rightSidebar.contextNotesTodo.todo.inputPlaceholder"))
-                .into_any_element(),
-            "knowledge-todo-add",
-            strings.get("rightSidebar.contextNotesTodo.todo.addAria"),
-            palette,
-            direction,
-            cx,
-            |this: &mut Self, window, cx| this.add_todo(window, cx),
-        )];
+    fn render_todos(
+        &self,
+        strings: &Strings,
+        palette: &Palette,
+        direction: Direction,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let mut rows = vec![
+            self.composer(
+                "knowledge-todo-composer",
+                Input::new(&self.todo_input)
+                    .appearance(false)
+                    .bordered(false)
+                    .text_size(rems(LABEL_SIZE))
+                    .accessibility_id("knowledge-todo-input")
+                    .aria_label(strings.get("rightSidebar.contextNotesTodo.todo.inputPlaceholder"))
+                    .into_any_element(),
+                "knowledge-todo-add",
+                strings.get("rightSidebar.contextNotesTodo.todo.addAria"),
+                palette,
+                direction,
+                cx,
+                |this: &mut Self, window, cx| this.add_todo(window, cx),
+            ),
+        ];
         let todos = self
             .knowledge
             .as_ref()
@@ -646,7 +779,12 @@ impl KnowledgePanel {
             .filter(|todo| knowledge::todo_matches(todo, &self.query))
             .collect();
         let list = if visible.is_empty() {
-            vec![self.empty_line("rightSidebar.contextNotesTodo.todo.empty", strings, palette, cx)]
+            vec![self.empty_line(
+                "rightSidebar.contextNotesTodo.todo.empty",
+                strings,
+                palette,
+                cx,
+            )]
         } else {
             visible
                 .into_iter()
@@ -683,7 +821,14 @@ impl KnowledgePanel {
         rows
     }
 
-    fn render_plan_row(&self, plan: &Plan, strings: &Strings, palette: &Palette, direction: Direction, cx: &mut Context<Self>) -> AnyElement {
+    fn render_plan_row(
+        &self,
+        plan: &Plan,
+        strings: &Strings,
+        palette: &Palette,
+        direction: Direction,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let id = plan.id.clone();
         let (move_id, delete_id) = (id.clone(), id.clone());
         let shared = plan.source == PlanSource::Shared;
@@ -712,9 +857,28 @@ impl KnowledgePanel {
                         .gap(px(8.0))
                         .cursor_pointer()
                         .hover(move |style| style.bg(hover))
-                        .child(text(plan.title.clone(), (LABEL_SIZE, LABEL_LINE), palette.foreground, cx).min_w_0().truncate())
+                        .child(
+                            text(
+                                plan.title.clone(),
+                                (LABEL_SIZE, LABEL_LINE),
+                                palette.foreground,
+                                cx,
+                            )
+                            .min_w_0()
+                            .truncate(),
+                        )
                         .when(shared, |this| {
-                            this.child(text(strings.get("rightSidebar.contextNotesTodo.plans.sharedBadge"), MICRO, palette.muted_foreground, cx).px(px(4.0)).rounded(px(4.0)).bg(palette.subtle))
+                            this.child(
+                                text(
+                                    strings.get("rightSidebar.contextNotesTodo.plans.sharedBadge"),
+                                    MICRO,
+                                    palette.muted_foreground,
+                                    cx,
+                                )
+                                .px(px(4.0))
+                                .rounded(px(4.0))
+                                .bg(palette.subtle),
+                            )
                         })
                         .when_some(plan.progress, |this, progress| {
                             let element_id = format!("knowledge-plan-progress:{}", plan.id);
@@ -722,22 +886,49 @@ impl KnowledgePanel {
                                 div()
                                     .id(SharedString::from(element_id.clone()))
                                     .accessibility_id(element_id)
-                                    .aria_label(strings.get("rightSidebar.contextNotesTodo.plans.progress.done"))
-                                    .child(text(strings.get("rightSidebar.contextNotesTodo.plans.progress.done"), MICRO, palette.status_success, cx).px(px(4.0)))
+                                    .aria_label(
+                                        strings.get(
+                                            "rightSidebar.contextNotesTodo.plans.progress.done",
+                                        ),
+                                    )
+                                    .child(
+                                        text(
+                                            strings.get(
+                                                "rightSidebar.contextNotesTodo.plans.progress.done",
+                                            ),
+                                            MICRO,
+                                            palette.status_success,
+                                            cx,
+                                        )
+                                        .px(px(4.0)),
+                                    )
                             } else {
                                 let title = strings.format(
                                     "rightSidebar.contextNotesTodo.plans.progress.title",
-                                    &[("done", &progress.done.to_string()), ("total", &progress.total.to_string())],
+                                    &[
+                                        ("done", &progress.done.to_string()),
+                                        ("total", &progress.total.to_string()),
+                                    ],
                                 );
                                 div()
                                     .id(SharedString::from(element_id.clone()))
                                     .accessibility_id(element_id)
                                     .aria_label(title)
-                                    .child(text(format!("{}/{}", progress.done, progress.total), MICRO, palette.muted_foreground, cx))
+                                    .child(text(
+                                        format!("{}/{}", progress.done, progress.total),
+                                        MICRO,
+                                        palette.muted_foreground,
+                                        cx,
+                                    ))
                             })
                         })
                         .child(div().flex_1())
-                        .child(text(knowledge_date(plan.created_at, strings, cx), MICRO, palette.muted_foreground, cx)),
+                        .child(text(
+                            knowledge_date(plan.created_at, strings, cx),
+                            MICRO,
+                            palette.muted_foreground,
+                            cx,
+                        )),
                     cx,
                     move |this: &mut Self, window, cx| this.open_plan(Some(id.clone()), window, cx),
                 )
@@ -751,7 +942,9 @@ impl KnowledgePanel {
                         strings.get("rightSidebar.contextNotesTodo.plans.session.open"),
                     )
                     .size(24.0, 14.0)
-                    .render(palette, cx, move |this: &mut Self, _, cx| this.open_session(&session, cx)),
+                    .render(palette, cx, move |this: &mut Self, _, cx| {
+                        this.open_session(&session, cx)
+                    }),
                 )
             })
             .child(self.row_menu(
@@ -791,23 +984,31 @@ impl KnowledgePanel {
             .into_any_element()
     }
 
-    fn render_plans(&self, strings: &Strings, palette: &Palette, direction: Direction, cx: &mut Context<Self>) -> Vec<AnyElement> {
-        let mut rows = vec![self.composer(
-            "knowledge-plan-composer",
-            Input::new(&self.plan_input)
-                .appearance(false)
-                .bordered(false)
-                .text_size(rems(LABEL_SIZE))
-                .accessibility_id("knowledge-plan-input")
-                .aria_label(strings.get("rightSidebar.contextNotesTodo.plans.newPlaceholder"))
-                .into_any_element(),
-            "knowledge-plan-add",
-            strings.get("rightSidebar.contextNotesTodo.plans.create"),
-            palette,
-            direction,
-            cx,
-            |this: &mut Self, window, cx| this.add_plan(window, cx),
-        )];
+    fn render_plans(
+        &self,
+        strings: &Strings,
+        palette: &Palette,
+        direction: Direction,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
+        let mut rows = vec![
+            self.composer(
+                "knowledge-plan-composer",
+                Input::new(&self.plan_input)
+                    .appearance(false)
+                    .bordered(false)
+                    .text_size(rems(LABEL_SIZE))
+                    .accessibility_id("knowledge-plan-input")
+                    .aria_label(strings.get("rightSidebar.contextNotesTodo.plans.newPlaceholder"))
+                    .into_any_element(),
+                "knowledge-plan-add",
+                strings.get("rightSidebar.contextNotesTodo.plans.create"),
+                palette,
+                direction,
+                cx,
+                |this: &mut Self, window, cx| this.add_plan(window, cx),
+            ),
+        ];
         let plans: Vec<Plan> = self
             .knowledge
             .as_ref()
@@ -815,13 +1016,20 @@ impl KnowledgePanel {
                 knowledge
                     .plans
                     .iter()
-                    .filter(|plan| !self.delete_pending(&plan.id) && knowledge::plan_matches(plan, &self.query))
+                    .filter(|plan| {
+                        !self.delete_pending(&plan.id) && knowledge::plan_matches(plan, &self.query)
+                    })
                     .cloned()
                     .collect()
             })
             .unwrap_or_default();
         let list = if plans.is_empty() {
-            vec![self.empty_line("rightSidebar.contextNotesTodo.plans.empty", strings, palette, cx)]
+            vec![self.empty_line(
+                "rightSidebar.contextNotesTodo.plans.empty",
+                strings,
+                palette,
+                cx,
+            )]
         } else {
             plans
                 .iter()
@@ -844,7 +1052,14 @@ impl KnowledgePanel {
         rows
     }
 
-    fn render_open_plan(&self, id: &str, strings: &Strings, palette: &Palette, direction: Direction, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    fn render_open_plan(
+        &self,
+        id: &str,
+        strings: &Strings,
+        palette: &Palette,
+        direction: Direction,
+        cx: &mut Context<Self>,
+    ) -> Vec<AnyElement> {
         let title = match &self.plan {
             Some(PlanLoad::Ready(document)) => document.plan.title.clone(),
             _ => self
@@ -863,11 +1078,21 @@ impl KnowledgePanel {
                 .items_center()
                 .gap(px(6.0))
                 .child(
-                    IconButton::new("knowledge-back", "arrow-left-s", strings.get("rightSidebar.contextNotesTodo.plans.actions.back"))
-                        .size(24.0, 16.0)
-                        .render(palette, cx, |this: &mut Self, _, cx| this.close_entry(cx)),
+                    IconButton::new(
+                        "knowledge-back",
+                        "arrow-left-s",
+                        strings.get("rightSidebar.contextNotesTodo.plans.actions.back"),
+                    )
+                    .size(24.0, 16.0)
+                    .render(palette, cx, |this: &mut Self, _, cx| this.close_entry(cx)),
                 )
-                .child(text(title, (LABEL_SIZE, LABEL_LINE), palette.foreground, cx).font_weight(FontWeight::MEDIUM).flex_1().min_w_0().truncate())
+                .child(
+                    text(title, (LABEL_SIZE, LABEL_LINE), palette.foreground, cx)
+                        .font_weight(FontWeight::MEDIUM)
+                        .flex_1()
+                        .min_w_0()
+                        .truncate(),
+                )
                 .child(button(
                     "knowledge-plan-improve",
                     None,
@@ -926,12 +1151,25 @@ impl KnowledgePanel {
                 palette,
                 cx,
             ),
-            _ => self.state_line("knowledge-plan-state", strings.get("common.loading"), false, palette, cx),
+            _ => self.state_line(
+                "knowledge-plan-state",
+                strings.get("common.loading"),
+                false,
+                palette,
+                cx,
+            ),
         });
         rows
     }
 
-    fn state_line(&self, id: &'static str, value: SharedString, error: bool, palette: &Palette, cx: &Context<Self>) -> AnyElement {
+    fn state_line(
+        &self,
+        id: &'static str,
+        value: SharedString,
+        error: bool,
+        palette: &Palette,
+        cx: &Context<Self>,
+    ) -> AnyElement {
         div()
             .id(id)
             .role(if error { Role::Alert } else { Role::Status })
@@ -939,7 +1177,16 @@ impl KnowledgePanel {
             .aria_label(value.clone())
             .test_support()
             .p(px(12.0))
-            .child(text(value, META, if error { palette.status_error } else { palette.muted_foreground }, cx))
+            .child(text(
+                value,
+                META,
+                if error {
+                    palette.status_error
+                } else {
+                    palette.muted_foreground
+                },
+                cx,
+            ))
             .into_any_element()
     }
 }
@@ -962,29 +1209,48 @@ impl Render for KnowledgePanel {
             );
         }
         let placeholders = [
-            (&self.note_input, "rightSidebar.contextNotesTodo.notes.placeholder"),
-            (&self.plan_editor, "rightSidebar.contextNotesTodo.tabs.plans"),
+            (
+                &self.note_input,
+                "rightSidebar.contextNotesTodo.notes.placeholder",
+            ),
+            (
+                &self.plan_editor,
+                "rightSidebar.contextNotesTodo.tabs.plans",
+            ),
         ];
         for (input, key) in placeholders {
             let placeholder = strings.get(key);
             if input.read(cx).presentation().placeholder() != &placeholder {
-                input.update(cx, |input, cx| input.set_placeholder(placeholder, window, cx));
+                input.update(cx, |input, cx| {
+                    input.set_placeholder(placeholder, window, cx)
+                });
             }
         }
         for (input, key) in [
-            (&self.todo_input, "rightSidebar.contextNotesTodo.todo.inputPlaceholder"),
-            (&self.plan_input, "rightSidebar.contextNotesTodo.plans.newPlaceholder"),
+            (
+                &self.todo_input,
+                "rightSidebar.contextNotesTodo.todo.inputPlaceholder",
+            ),
+            (
+                &self.plan_input,
+                "rightSidebar.contextNotesTodo.plans.newPlaceholder",
+            ),
         ] {
             let placeholder = strings.get(key);
             if input.read(cx).presentation().placeholder() != &placeholder {
-                input.update(cx, |input, cx| input.set_placeholder(placeholder, window, cx));
+                input.update(cx, |input, cx| {
+                    input.set_placeholder(placeholder, window, cx)
+                });
             }
         }
         let page = cx.entity().downgrade();
         cx.defer(move |cx| {
             let _ = page.update(cx, |page, cx| page.refresh_if_stale(cx));
         });
-        let open = self.open.clone().filter(|(section, _)| *section == self.section);
+        let open = self
+            .open
+            .clone()
+            .filter(|(section, _)| *section == self.section);
         let body: Vec<AnyElement> = if self.knowledge.is_none() {
             match &self.load_error {
                 Some(error) => vec![
@@ -1012,18 +1278,31 @@ impl Render for KnowledgePanel {
                         |this: &mut Self, _, cx| this.reload(cx),
                     ),
                 ],
-                None => vec![self.state_line("knowledge-loading", strings.get("common.loading"), false, &palette, cx)],
+                None => vec![self.state_line(
+                    "knowledge-loading",
+                    strings.get("common.loading"),
+                    false,
+                    &palette,
+                    cx,
+                )],
             }
         } else {
             match (self.section, open) {
-                (Section::Notes, Some((_, id))) => self.render_open_note(&id, &strings, &palette, direction, cx),
-                (Section::Plans, Some((_, id))) => self.render_open_plan(&id, &strings, &palette, direction, cx),
+                (Section::Notes, Some((_, id))) => {
+                    self.render_open_note(&id, &strings, &palette, direction, cx)
+                }
+                (Section::Plans, Some((_, id))) => {
+                    self.render_open_plan(&id, &strings, &palette, direction, cx)
+                }
                 (Section::Notes, _) => self.render_notes(&strings, &palette, direction, cx),
                 (Section::Todos, _) => self.render_todos(&strings, &palette, direction, cx),
                 (Section::Plans, _) => self.render_plans(&strings, &palette, direction, cx),
             }
         };
-        let entry_open = self.open.as_ref().is_some_and(|(section, _)| *section == self.section);
+        let entry_open = self
+            .open
+            .as_ref()
+            .is_some_and(|(section, _)| *section == self.section);
         div()
             .id("knowledge-panel")
             .role(Role::Region)

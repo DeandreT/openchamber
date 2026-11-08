@@ -70,7 +70,10 @@ pub fn is_clock_time(value: &str) -> bool {
     let bytes = value.as_bytes();
     bytes.len() == 5
         && bytes[2] == b':'
-        && matches!((bytes[0], bytes[1]), (b'0' | b'1', b'0'..=b'9') | (b'2', b'0'..=b'3'))
+        && matches!(
+            (bytes[0], bytes[1]),
+            (b'0' | b'1', b'0'..=b'9') | (b'2', b'0'..=b'3')
+        )
         && matches!((bytes[3], bytes[4]), (b'0'..=b'5', b'0'..=b'9'))
 }
 
@@ -334,10 +337,7 @@ impl RunStatus {
 
 /// The list order: enabled first, then by name (`localeCompare` for the
 /// ASCII names tasks carry), then the sooner next run.
-pub fn compare_tasks(
-    a: (bool, &str, Option<i64>),
-    b: (bool, &str, Option<i64>),
-) -> Ordering {
+pub fn compare_tasks(a: (bool, &str, Option<i64>), b: (bool, &str, Option<i64>)) -> Ordering {
     b.0.cmp(&a.0)
         .then_with(|| {
             a.1.to_lowercase()
@@ -708,7 +708,10 @@ fn plain_field(
 /// where a single start with a step runs to the field's end.
 fn expand(part: &str, min: u32, max: u32, names: &[&str]) -> Option<Vec<u32>> {
     let (range, step) = match part.split_once('/') {
-        Some((range, step)) => (range, Some(step.parse::<u32>().ok().filter(|step| *step > 0)?)),
+        Some((range, step)) => (
+            range,
+            Some(step.parse::<u32>().ok().filter(|step| *step > 0)?),
+        ),
         None => (part, None),
     };
     let value = |text: &str| -> Option<u32> {
@@ -855,7 +858,10 @@ mod tests {
             [at(2028, 2, 29, 0, 0)]
         );
         let nth = CronExpression::parse("0 0 * * 2#1").expect("parses");
-        assert_eq!(nth.next_runs(&utc, at(2026, 11, 7, 0, 0), 1), [at(2026, 12, 1, 0, 0)]);
+        assert_eq!(
+            nth.next_runs(&utc, at(2026, 11, 7, 0, 0), 1),
+            [at(2026, 12, 1, 0, 0)]
+        );
     }
 
     #[test]
@@ -865,7 +871,11 @@ mod tests {
         let runs = cron.next_runs(&TimeZone::utc(), at(2026, 11, 1, 0, 0), 3);
         assert_eq!(
             runs,
-            [at(2026, 11, 6, 0, 0), at(2026, 11, 13, 0, 0), at(2026, 11, 20, 0, 0)]
+            [
+                at(2026, 11, 6, 0, 0),
+                at(2026, 11, 13, 0, 0),
+                at(2026, 11, 20, 0, 0)
+            ]
         );
     }
 
@@ -873,13 +883,21 @@ mod tests {
     fn schedule_labels_name_their_times_days_and_zone() {
         let weekly = Schedule {
             kind: ScheduleKind::Weekly,
-            times: Some(vec!["17:00".into(), "09:00".into(), "9:00".into(), "09:00".into()]),
+            times: Some(vec![
+                "17:00".into(),
+                "09:00".into(),
+                "9:00".into(),
+                "09:00".into(),
+            ]),
             weekdays: Some(vec![1, 3]),
             timezone: Some("Europe/Kiev".into()),
             ..Schedule::default()
         };
         let label = schedule_label(&weekly, |day| format!("d{day}"));
-        assert_eq!(label.key, "sessions.scheduledTasks.dialog.schedule.weeklyWithTimezone");
+        assert_eq!(
+            label.key,
+            "sessions.scheduledTasks.dialog.schedule.weeklyWithTimezone"
+        );
         assert_eq!(
             label.params,
             [
@@ -896,7 +914,10 @@ mod tests {
         assert_eq!(label.key, "sessions.scheduledTasks.dialog.schedule.once");
         assert_eq!(
             label.params,
-            [("date", UNKNOWN_DATE.to_owned()), ("time", "--:--".to_owned())]
+            [
+                ("date", UNKNOWN_DATE.to_owned()),
+                ("time", "--:--".to_owned())
+            ]
         );
     }
 
@@ -962,7 +983,7 @@ mod tests {
 
     #[test]
     fn tasks_sort_enabled_then_by_name_then_next_run() {
-        let mut tasks = vec![
+        let mut tasks = [
             (false, "a", None),
             (true, "beta", Some(5)),
             (true, "Alpha", Some(9)),

@@ -159,7 +159,13 @@ impl ScheduledTasks {
         Some((connection.client.clone()?, connection.network.handle()))
     }
 
-    fn notify_toast(&mut self, error: bool, text: SharedString, window: &mut Window, cx: &mut Context<Self>) {
+    fn notify_toast(
+        &mut self,
+        error: bool,
+        text: SharedString,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.toast = Some(Toast {
             error,
             text: text.clone(),
@@ -332,8 +338,13 @@ impl ScheduledTasks {
         &mut self,
         task_id: &str,
         write: impl FnOnce(ServerClient, String) -> Write<T>,
-        done: impl FnOnce(&mut Self, &str, Result<T, ScheduledTaskError>, &mut Window, &mut Context<Self>)
-        + 'static,
+        done: impl FnOnce(
+            &mut Self,
+            &str,
+            Result<T, ScheduledTaskError>,
+            &mut Window,
+            &mut Context<Self>,
+        ) + 'static,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -364,7 +375,12 @@ impl ScheduledTasks {
     }
 
     /// Enables or pauses a task. A repository loop changes through its file.
-    pub(crate) fn toggle_enabled(&mut self, task_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_enabled(
+        &mut self,
+        task_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(task) = self.task(task_id).cloned() else {
             return;
         };
@@ -413,7 +429,12 @@ impl ScheduledTasks {
     }
 
     /// Asks before deleting; a loop's file goes with it.
-    pub(crate) fn request_delete(&mut self, task_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn request_delete(
+        &mut self,
+        task_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(task) = self.task(task_id).cloned() else {
             return;
         };
@@ -429,7 +450,13 @@ impl ScheduledTasks {
         let page = cx.entity().downgrade();
         let id = task.id.clone();
         window.open_dialog(cx, move |dialog, _, cx| {
-            crate::scheduled_tasks_view::delete_dialog(dialog, description.clone(), page.clone(), id.clone(), cx)
+            crate::scheduled_tasks_view::delete_dialog(
+                dialog,
+                description.clone(),
+                page.clone(),
+                id.clone(),
+                cx,
+            )
         });
     }
 
@@ -452,7 +479,8 @@ impl ScheduledTasks {
             },
             |this, _, result, window, cx| match result {
                 Ok(()) => {
-                    let text = locale::strings(cx).get("sessions.scheduledTasks.dialog.toast.deleted");
+                    let text =
+                        locale::strings(cx).get("sessions.scheduledTasks.dialog.toast.deleted");
                     this.notify_toast(false, text, window, cx);
                 }
                 Err(error) => this.fail(
@@ -514,7 +542,8 @@ impl ScheduledTasks {
                             && let Some(session) = last_session.clone()
                         {
                             let page = cx.entity().downgrade();
-                            let label = strings.get("sessions.scheduledTasks.dialog.actions.openSession");
+                            let label =
+                                strings.get("sessions.scheduledTasks.dialog.actions.openSession");
                             notification = notification.action(move |_, _, _| {
                                 let page = page.clone();
                                 let session = session.clone();
@@ -543,7 +572,12 @@ impl ScheduledTasks {
     }
 
     /// The session of a task's latest run.
-    pub(crate) fn open_last_run(&mut self, task_id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_last_run(
+        &mut self,
+        task_id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if let Some(session) = self
             .task(task_id)
             .and_then(|task| task.state.last_session_id.clone())
@@ -650,18 +684,22 @@ impl ScheduledTasks {
                         object.remove("state");
                     }
                     client.save_scheduled_task(&target, moved).await?;
-                    let left = client.delete_scheduled_task(&owner, &task_id).await.is_err();
+                    let left = client
+                        .delete_scheduled_task(&owner, &task_id)
+                        .await
+                        .is_err();
                     Ok(left)
                 }
-                _ => client.save_scheduled_task(&target, payload).await.map(|_| false),
+                _ => client
+                    .save_scheduled_task(&target, payload)
+                    .await
+                    .map(|_| false),
             }
         });
         Some(cx.spawn_in(window, async move |this, cx| {
-            let result = task
-                .await
-                .unwrap_or(Err(ScheduledTaskError::Transport(
-                    openchamber_native_transport::error::TransportError::Cancelled,
-                )));
+            let result = task.await.unwrap_or(Err(ScheduledTaskError::Transport(
+                openchamber_native_transport::error::TransportError::Cancelled,
+            )));
             let _ = this.update_in(cx, |this, window, cx| {
                 if let Ok(left_original) = &result {
                     let strings = locale::strings(cx).clone();
@@ -800,9 +838,24 @@ impl TaskEditor {
         let subscriptions = vec![
             watch(&name, |draft, value| draft.name = value, window, cx),
             watch(&cron, |draft, value| draft.cron = value, window, cx),
-            watch(&once_date, |draft, value| draft.once_date = value, window, cx),
-            watch(&once_time, |draft, value| draft.once_time = value, window, cx),
-            watch(&base_branch, |draft, value| draft.base_branch = value, window, cx),
+            watch(
+                &once_date,
+                |draft, value| draft.once_date = value,
+                window,
+                cx,
+            ),
+            watch(
+                &once_time,
+                |draft, value| draft.once_time = value,
+                window,
+                cx,
+            ),
+            watch(
+                &base_branch,
+                |draft, value| draft.base_branch = value,
+                window,
+                cx,
+            ),
             watch(
                 &budget,
                 |draft, value| {
@@ -867,8 +920,10 @@ impl TaskEditor {
                 input.set_value(time, window, cx);
                 input
             });
-            self.time_subscriptions
-                .push(cx.subscribe_in(&input, window, move |this, input, event, _, cx| {
+            self.time_subscriptions.push(cx.subscribe_in(
+                &input,
+                window,
+                move |this, input, event, _, cx| {
                     if let InputEvent::Change = event
                         && let Some(slot) = this.draft.times.get_mut(index)
                     {
@@ -876,7 +931,8 @@ impl TaskEditor {
                         this.error = None;
                         cx.notify();
                     }
-                }));
+                },
+            ));
             self.times.push(input);
         }
     }
@@ -887,30 +943,54 @@ impl TaskEditor {
         cx.notify();
     }
 
-    pub(crate) fn remove_time(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn remove_time(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.draft.remove_time(index);
         self.rebuild_times(window, cx);
         cx.notify();
     }
 
-    pub(crate) fn set_cron(&mut self, expression: &str, window: &mut Window, cx: &mut Context<Self>) {
-        self.cron
-            .update(cx, |input, cx| input.set_value(expression.to_owned(), window, cx));
+    pub(crate) fn set_cron(
+        &mut self,
+        expression: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.cron.update(cx, |input, cx| {
+            input.set_value(expression.to_owned(), window, cx)
+        });
         self.draft.cron = expression.to_owned();
         cx.notify();
     }
 
-    pub(crate) fn toggle_menu(&mut self, menu: EditorMenu, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn toggle_menu(
+        &mut self,
+        menu: EditorMenu,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.menu = (self.menu != Some(menu)).then_some(menu);
         self.filter
             .update(cx, |input, cx| input.set_value("", window, cx));
-        if self.menu.is_some_and(|menu| matches!(menu, EditorMenu::Timezone | EditorMenu::Model)) {
+        if self
+            .menu
+            .is_some_and(|menu| matches!(menu, EditorMenu::Timezone | EditorMenu::Model))
+        {
             self.filter.update(cx, |input, cx| input.focus(window, cx));
         }
         cx.notify();
     }
 
-    pub(crate) fn set_kind(&mut self, kind: ScheduleKind, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn set_kind(
+        &mut self,
+        kind: ScheduleKind,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.draft.set_kind(kind);
         if kind == ScheduleKind::Cron {
             let cron = self.draft.cron.clone();
@@ -1058,8 +1138,9 @@ impl TaskEditor {
         };
         let target = self.scope.clone();
         let original = self.original.clone();
-        let Some(task) = page.update(cx, |page, cx| page.save(payload, target, original, window, cx))
-        else {
+        let Some(task) = page.update(cx, |page, cx| {
+            page.save(payload, target, original, window, cx)
+        }) else {
             return;
         };
         self.saving = true;
@@ -1072,7 +1153,8 @@ impl TaskEditor {
                     Ok(()) => window.close_dialog(cx),
                     Err(error) => {
                         let text = error.message().map(SharedString::from).unwrap_or_else(|| {
-                            locale::strings(cx).get("sessions.scheduledTasks.editor.toast.saveFailed")
+                            locale::strings(cx)
+                                .get("sessions.scheduledTasks.editor.toast.saveFailed")
                         });
                         this.error = Some(text.clone());
                         window.push_notification(Notification::error(text), cx);
@@ -1214,7 +1296,12 @@ impl Workspace {
 
     /// Leaves for a session by id, reading it first when the list does not
     /// have it yet (a run creates its session after the list last loaded).
-    pub(crate) fn open_session_by_id(&mut self, id: SessionId, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_session_by_id(
+        &mut self,
+        id: SessionId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.scheduled_tasks_open = false;
         if self.sessions.get(&id).is_some() {
             self.select_session(id, window, cx);
@@ -1237,7 +1324,11 @@ impl Workspace {
                     && this.sessions.get(&record.id).is_none()
                 {
                     this.apply_server_events(
-                        vec![openchamber_native_transport::event::ServerEvent::SessionCreated(record)],
+                        vec![
+                            openchamber_native_transport::event::ServerEvent::SessionCreated(
+                                record,
+                            ),
+                        ],
                         window,
                         cx,
                     );

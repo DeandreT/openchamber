@@ -95,7 +95,11 @@ fn open_panel(
     cx: &mut TestAppContext,
     server: &Scripted,
     network: &Network,
-) -> (AnyWindowHandle, Entity<KnowledgePanel>, Arc<Mutex<Vec<KnowledgeEvent>>>) {
+) -> (
+    AnyWindowHandle,
+    Entity<KnowledgePanel>,
+    Arc<Mutex<Vec<KnowledgeEvent>>>,
+) {
     cx.executor().allow_parking();
     let (window, workspace) = crate::workspace_tests::open(cx);
     let client = server.client();
@@ -136,16 +140,23 @@ fn todos_show_at_once_and_a_failed_write_reads_the_list_again(cx: &mut TestAppCo
     cx.update_window(window, |_, window, cx| {
         panel.update(cx, |panel, cx| {
             panel.select_section(Section::Todos, cx);
-            panel
-                .todo_input
-                .update(cx, |input, cx| input.set_value("Write release notes", window, cx));
+            panel.todo_input.update(cx, |input, cx| {
+                input.set_value("Write release notes", window, cx)
+            });
             panel.add_todo(window, cx);
         })
     })
     .expect("window is open");
     // Shown before the server answers.
-    assert_eq!(cx.read(|cx| panel.read(cx).knowledge.as_ref().map(|k| k.todos.len())), Some(1));
-    wait(cx, |_| !server.requests("POST", &format!("{}/todos", base())).is_empty());
+    assert_eq!(
+        cx.read(|cx| panel.read(cx).knowledge.as_ref().map(|k| k.todos.len())),
+        Some(1)
+    );
+    wait(cx, |_| {
+        !server
+            .requests("POST", &format!("{}/todos", base()))
+            .is_empty()
+    });
     let created = &server.requests("POST", &format!("{}/todos", base()))[0].body;
     assert_eq!(created["text"], json!("Write release notes"));
     let id = created["id"].as_str().expect("an id").to_owned();
@@ -156,13 +167,22 @@ fn todos_show_at_once_and_a_failed_write_reads_the_list_again(cx: &mut TestAppCo
         panel.update(cx, |panel, cx| panel.toggle_todo(&id, window, cx))
     })
     .expect("window is open");
-    assert!(cx.read(|cx| panel.read(cx).knowledge.as_ref().is_some_and(|k| k.todos[0].completed)));
+    assert!(cx.read(|cx| {
+        panel
+            .read(cx)
+            .knowledge
+            .as_ref()
+            .is_some_and(|k| k.todos[0].completed)
+    }));
     wait(cx, |cx| {
         cx.read(|cx| {
             let panel = panel.read(cx);
             panel.todo_writes == 0
                 && !panel.loading
-                && panel.knowledge.as_ref().is_some_and(|k| !k.todos[0].completed)
+                && panel
+                    .knowledge
+                    .as_ref()
+                    .is_some_and(|k| !k.todos[0].completed)
         })
     });
     let toast = cx.read(|cx| panel.read(cx).toast.clone());
@@ -185,7 +205,9 @@ fn todos_show_at_once_and_a_failed_write_reads_the_list_again(cx: &mut TestAppCo
 #[gpui_kit::test]
 fn a_failed_note_save_keeps_the_draft_and_deletes_wait_for_undo(cx: &mut TestAppContext) {
     let (server, store) = serve(Store {
-        notes: vec![json!({"id": "n1", "body": "# Release\nShip it", "createdAt": 1, "updatedAt": 1, "source": "manual"})],
+        notes: vec![
+            json!({"id": "n1", "body": "# Release\nShip it", "createdAt": 1, "updatedAt": 1, "source": "manual"}),
+        ],
         ..Store::default()
     });
     let network = Network::new().expect("a network runtime");
@@ -197,21 +219,31 @@ fn a_failed_note_save_keeps_the_draft_and_deletes_wait_for_undo(cx: &mut TestApp
     cx.update_window(window, |_, window, cx| {
         panel.update(cx, |panel, cx| {
             panel.open_note(Some("n1".into()), window, cx);
-            panel
-                .note_editor
-                .update(cx, |input, cx| input.set_value("# Release\nShip it today", window, cx));
+            panel.note_editor.update(cx, |input, cx| {
+                input.set_value("# Release\nShip it today", window, cx)
+            });
             panel.save_note(cx);
         })
     })
     .expect("window is open");
     wait(cx, |cx| cx.read(|cx| !panel.read(cx).note_saving));
-    assert!(!server.requests("PATCH", &format!("{}/notes/n1", base())).is_empty());
+    assert!(
+        !server
+            .requests("PATCH", &format!("{}/notes/n1", base()))
+            .is_empty()
+    );
     assert_eq!(
         cx.read(|cx| panel.read(cx).note_editor.read(cx).value().to_string()),
         "# Release\nShip it today",
         "the draft survives the failed save"
     );
-    assert!(cx.read(|cx| panel.read(cx).toast.as_ref().is_some_and(|toast| toast.error)));
+    assert!(cx.read(|cx| {
+        panel
+            .read(cx)
+            .toast
+            .as_ref()
+            .is_some_and(|toast| toast.error)
+    }));
 
     store.lock().expect("store").fail_writes = false;
     cx.update(|cx| panel.update(cx, |panel, cx| panel.save_note(cx)));
@@ -223,16 +255,29 @@ fn a_failed_note_save_keeps_the_draft_and_deletes_wait_for_undo(cx: &mut TestApp
 
     // Undo inside the window sends nothing.
     cx.update_window(window, |_, window, cx| {
-        panel.update(cx, |panel, cx| panel.schedule_delete(Section::Notes, "n1", window, cx))
+        panel.update(cx, |panel, cx| {
+            panel.schedule_delete(Section::Notes, "n1", window, cx)
+        })
     })
     .expect("window is open");
     assert!(cx.read(|cx| panel.read(cx).delete_pending("n1")));
-    assert_eq!(cx.read(|cx| panel.read(cx).counts().notes), 0, "hidden at once");
-    assert!(cx.read(|cx| panel.read(cx).open.is_none()), "the open note closes");
+    assert_eq!(
+        cx.read(|cx| panel.read(cx).counts().notes),
+        0,
+        "hidden at once"
+    );
+    assert!(
+        cx.read(|cx| panel.read(cx).open.is_none()),
+        "the open note closes"
+    );
     cx.update(|cx| panel.update(cx, |panel, cx| panel.undo_delete("n1", cx)));
     assert_eq!(cx.read(|cx| panel.read(cx).counts().notes), 1);
     cx.run_until_parked();
-    assert!(server.requests("DELETE", &format!("{}/notes/n1", base())).is_empty());
+    assert!(
+        server
+            .requests("DELETE", &format!("{}/notes/n1", base()))
+            .is_empty()
+    );
 
     // The window ending sends the delete.
     cx.update_window(window, |_, window, cx| {
@@ -242,14 +287,29 @@ fn a_failed_note_save_keeps_the_draft_and_deletes_wait_for_undo(cx: &mut TestApp
         })
     })
     .expect("window is open");
-    wait(cx, |cx| cx.read(|cx| panel.read(cx).knowledge.as_ref().is_some_and(|k| k.notes.is_empty())));
-    assert_eq!(server.requests("DELETE", &format!("{}/notes/n1", base())).len(), 1);
+    wait(cx, |cx| {
+        cx.read(|cx| {
+            panel
+                .read(cx)
+                .knowledge
+                .as_ref()
+                .is_some_and(|k| k.notes.is_empty())
+        })
+    });
+    assert_eq!(
+        server
+            .requests("DELETE", &format!("{}/notes/n1", base()))
+            .len(),
+        1
+    );
 }
 
 #[gpui_kit::test]
 fn plans_open_their_markdown_save_it_and_search_follows(cx: &mut TestAppContext) {
     let (server, _) = serve(Store {
-        todos: vec![json!({"id": "t1", "text": "Launch checklist", "completed": false, "createdAt": 1})],
+        todos: vec![
+            json!({"id": "t1", "text": "Launch checklist", "completed": false, "createdAt": 1}),
+        ],
         ..Store::default()
     });
     let network = Network::new().expect("a network runtime");
@@ -280,7 +340,12 @@ fn plans_open_their_markdown_save_it_and_search_follows(cx: &mut TestAppContext)
         })
     })
     .expect("window is open");
-    wait(cx, |cx| matches!(cx.read(|cx| panel.read(cx).plan.clone()), Some(PlanLoad::Ready(_))));
+    wait(cx, |cx| {
+        matches!(
+            cx.read(|cx| panel.read(cx).plan.clone()),
+            Some(PlanLoad::Ready(_))
+        )
+    });
     cx.update_window(window, |_, window, cx| {
         panel.update(cx, |panel, cx| {
             panel.plan_editor.update(cx, |input, cx| {
@@ -290,7 +355,11 @@ fn plans_open_their_markdown_save_it_and_search_follows(cx: &mut TestAppContext)
         })
     })
     .expect("window is open");
-    wait(cx, |_| !server.requests("PUT", &format!("{}/plans/p1", base())).is_empty());
+    wait(cx, |_| {
+        !server
+            .requests("PUT", &format!("{}/plans/p1", base()))
+            .is_empty()
+    });
     assert_eq!(
         server.requests("PUT", &format!("{}/plans/p1", base()))[0].body["raw"],
         json!("# Launch\n\n## Steps\n- [x] one\n"),
@@ -298,7 +367,10 @@ fn plans_open_their_markdown_save_it_and_search_follows(cx: &mut TestAppContext)
     );
     assert!(matches!(
         events.lock().expect("events").last(),
-        Some(KnowledgeEvent::Dispatch(crate::knowledge::Dispatch::Plan { implement: true, .. }))
+        Some(KnowledgeEvent::Dispatch(crate::knowledge::Dispatch::Plan {
+            implement: true,
+            ..
+        }))
     ));
     let parts = cx.read(|cx| panel.read(cx).plan_send_parts("p1", cx));
     assert_eq!(

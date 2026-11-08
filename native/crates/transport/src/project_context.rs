@@ -207,10 +207,7 @@ impl ServerClient {
         if let Some(body) = body {
             request = request.json(&body);
         }
-        let response = request
-            .send()
-            .await
-            .map_err(TransportError::from_request)?;
+        let response = request.send().await.map_err(TransportError::from_request)?;
         let status = response.status();
         if status.is_redirection() {
             return Err(TransportError::Redirected.into());
@@ -244,9 +241,14 @@ impl ServerClient {
         body: Option<Value>,
         gone_is_none: bool,
     ) -> Result<Option<Knowledge>, KnowledgeError> {
-        match self.context_request(method, url, body, gone_is_none).await? {
+        match self
+            .context_request(method, url, body, gone_is_none)
+            .await?
+        {
             None => Ok(None),
-            Some(body) => decode_context(&body).map(Some).ok_or_else(|| malformed("context")),
+            Some(body) => decode_context(&body)
+                .map(Some)
+                .ok_or_else(|| malformed("context")),
         }
     }
 
@@ -541,11 +543,20 @@ mod tests {
         assert_eq!(context.notes[0].source, NoteSource::Agent);
         assert_eq!(context.todos[0].depends_on, ["t0"]);
         assert_eq!(context.todos[0].plan_id.as_deref(), Some("p1"));
-        assert_eq!(context.plans[0].progress, None, "done above total is dropped");
+        assert_eq!(
+            context.plans[0].progress, None,
+            "done above total is dropped"
+        );
         assert_eq!(context.plans[0].session_id.as_deref(), Some("ses"));
         assert_eq!(context.plans[1].source, PlanSource::Shared);
-        assert_eq!(context.plans[1].progress, Some(PlanProgress { done: 1, total: 4 }));
-        assert_eq!(context.plans[1].session_id, None, "a session without a time is dropped");
+        assert_eq!(
+            context.plans[1].progress,
+            Some(PlanProgress { done: 1, total: 4 })
+        );
+        assert_eq!(
+            context.plans[1].session_id, None,
+            "a session without a time is dropped"
+        );
         assert_eq!(decode_context(&json!({})), Some(Knowledge::default()));
         assert!(decode_context(&json!([])).is_none());
     }

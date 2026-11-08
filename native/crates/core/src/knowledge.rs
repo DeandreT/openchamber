@@ -386,7 +386,11 @@ mod tests {
 
     #[test]
     fn completion_moves_todos_around_the_completed_block() {
-        let todos = vec![todo("a", false, &[]), todo("b", false, &[]), todo("c", true, &[])];
+        let todos = vec![
+            todo("a", false, &[]),
+            todo("b", false, &[]),
+            todo("c", true, &[]),
+        ];
         let done = toggled(&todos, "a", true).expect("changes");
         assert_eq!(
             done.iter().map(|todo| todo.id.as_str()).collect::<Vec<_>>(),
@@ -394,7 +398,10 @@ mod tests {
         );
         let reopened = toggled(&done, "c", false).expect("changes");
         assert_eq!(
-            reopened.iter().map(|todo| todo.id.as_str()).collect::<Vec<_>>(),
+            reopened
+                .iter()
+                .map(|todo| todo.id.as_str())
+                .collect::<Vec<_>>(),
             ["b", "c", "a"]
         );
         assert!(toggled(&todos, "c", true).is_none(), "no change, no write");
@@ -415,7 +422,10 @@ mod tests {
             todo("ship", false, &["build"]),
             todo("announce", false, &["gone"]),
         ];
-        let ready: Vec<&str> = ready_todos(&todos).iter().map(|todo| todo.id.as_str()).collect();
+        let ready: Vec<&str> = ready_todos(&todos)
+            .iter()
+            .map(|todo| todo.id.as_str())
+            .collect();
         assert_eq!(ready, ["build", "announce"]);
     }
 
