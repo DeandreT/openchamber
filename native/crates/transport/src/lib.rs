@@ -24,6 +24,7 @@ pub mod git;
 pub mod identity;
 pub mod message_queue;
 pub mod message_search;
+pub mod opencode_config;
 #[cfg(test)]
 mod parity_tests;
 pub mod permission_policy;
