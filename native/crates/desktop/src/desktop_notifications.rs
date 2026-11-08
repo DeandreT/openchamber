@@ -496,10 +496,13 @@ mod tests {
         assert_eq!(shown.body, "");
     }
 
+    /// Summary, body and actions of one `Notify` call.
+    type Call = (String, String, Vec<String>);
+
     /// A notification service on a private peer connection.
     #[derive(Clone, Default)]
     struct FakeService {
-        shown: Arc<Mutex<Vec<(String, String, Vec<String>)>>>,
+        shown: Arc<Mutex<Vec<Call>>>,
     }
 
     #[zbus::interface(name = "org.freedesktop.Notifications")]
