@@ -35,8 +35,6 @@ use crate::webview_platform::{Profile, Unavailable, WebPlatform, random_id};
 
 /// GPUI's lines per wheel notch on Linux (`SCROLL_LINES`).
 const SCROLL_LINES: f32 = 3.0;
-/// Room around an overlay for its shadow, which has no hitbox.
-const OVERLAY_SHADOW: f32 = 12.0;
 /// How long after a press in the page a submission still counts as the
 /// user's gesture.
 const GESTURE_WINDOW: Duration = Duration::from_secs(5);
@@ -605,7 +603,6 @@ impl HostedWebView {
                     .filter(|bounds| {
                         bounds.size.width < viewport.width || bounds.size.height < viewport.height
                     })
-                    .map(|bounds| bounds.dilate(px(OVERLAY_SHADOW)))
                     .filter(|bounds| bounds.intersects(&visible))
                     .collect();
                 if cutouts != self.cutouts {
