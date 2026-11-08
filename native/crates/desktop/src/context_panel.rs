@@ -427,6 +427,7 @@ impl Workspace {
                     "rail-files" => Some(PanelSurface::Files),
                     "rail-git" => Some(PanelSurface::Git),
                     "rail-diff" => Some(PanelSurface::Diff),
+                    "rail-notes" => Some(PanelSurface::Notes),
                     _ => None,
                 };
                 let open = (surface.is_some() && self.panels.open == surface)

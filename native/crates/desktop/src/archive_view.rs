@@ -33,6 +33,7 @@ impl Workspace {
         self.archive_open = !self.archive_open;
         if self.archive_open {
             self.source_board_open = false;
+            self.scheduled_tasks_open = false;
         } else {
             self.focus_composer(window, cx);
         }

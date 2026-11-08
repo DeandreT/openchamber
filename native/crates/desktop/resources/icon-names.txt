@@ -157,3 +157,6 @@ expand-up-down
 file
 folder-3-fill
 chat-3
+edit-2
+pulse
+timer

@@ -169,6 +169,8 @@ impl Render for Workspace {
         let direction = locale::strings(cx).direction();
         let source_board = if self.source_board_open {
             self.render_source_board(cx)
+        } else if self.scheduled_tasks_open {
+            self.render_scheduled_tasks(cx)
         } else {
             None
         };
