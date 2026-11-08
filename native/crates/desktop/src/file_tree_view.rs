@@ -238,6 +238,7 @@ impl FilesView {
         } else if key == back {
             if is_dir && row.expanded {
                 self.tree.collapse(&row.path);
+                self.remember_tree(cx);
             } else if let Some(parent) = rows[..index]
                 .iter()
                 .rev()
