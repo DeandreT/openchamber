@@ -234,7 +234,12 @@ fn open_page(
 }
 
 fn toast(cx: &mut TestAppContext, page: &Entity<ScheduledTasks>) -> Option<String> {
-    cx.read(|cx| page.read(cx).toast.as_ref().map(|toast| toast.text.to_string()))
+    cx.read(|cx| {
+        page.read(cx)
+            .toast
+            .as_ref()
+            .map(|toast| toast.text.to_string())
+    })
 }
 
 #[gpui_kit::test]
@@ -282,8 +287,10 @@ fn a_failed_read_is_an_error_never_an_empty_list(cx: &mut TestAppContext) {
         "the page opens on the first project"
     );
     fail.store(false, Ordering::Release);
-    cx.update_window(window, |_, window, cx| window.click(name("scheduled-tasks-retry"), cx))
-        .expect("window is open");
+    cx.update_window(window, |_, window, cx| {
+        window.click(name("scheduled-tasks-retry"), cx)
+    })
+    .expect("window is open");
     wait(cx, |cx| painted(cx, window, "scheduled-tasks-empty"));
 }
 
@@ -293,29 +300,43 @@ fn toggles_write_the_whole_task_back_and_runs_report_busy(cx: &mut TestAppContex
     let state = enabled.clone();
     let deleted = Arc::new(AtomicBool::new(false));
     let gone = deleted.clone();
-    let server = Scripted::new(move |request| match (request.method.as_str(), request.path.as_str()) {
-        ("GET", LIST) if gone.load(Ordering::Acquire) => (200, json!({"tasks": []})),
-        ("GET", LIST) => (200, json!({"tasks": [stored_task(*state.lock().expect("state"))]})),
-        ("PUT", LIST) => {
-            *state.lock().expect("state") = request.body["task"]["enabled"] == json!(true);
-            (200, json!({"tasks": [stored_task(*state.lock().expect("state"))]}))
-        }
-        ("POST", "/api/projects/proj-1/scheduled-tasks/t1/run") => {
-            (409, json!({"error": "busy", "busy": "queued"}))
-        }
-        ("DELETE", "/api/projects/proj-1/scheduled-tasks/t1") => {
-            gone.store(true, Ordering::Release);
-            (200, json!({"tasks": []}))
-        }
-        _ => (404, json!({})),
-    });
+    let server =
+        Scripted::new(
+            move |request| match (request.method.as_str(), request.path.as_str()) {
+                ("GET", LIST) if gone.load(Ordering::Acquire) => (200, json!({"tasks": []})),
+                ("GET", LIST) => (
+                    200,
+                    json!({"tasks": [stored_task(*state.lock().expect("state"))]}),
+                ),
+                ("PUT", LIST) => {
+                    *state.lock().expect("state") = request.body["task"]["enabled"] == json!(true);
+                    (
+                        200,
+                        json!({"tasks": [stored_task(*state.lock().expect("state"))]}),
+                    )
+                }
+                ("POST", "/api/projects/proj-1/scheduled-tasks/t1/run") => {
+                    (409, json!({"error": "busy", "busy": "queued"}))
+                }
+                ("DELETE", "/api/projects/proj-1/scheduled-tasks/t1") => {
+                    gone.store(true, Ordering::Release);
+                    (200, json!({"tasks": []}))
+                }
+                _ => (404, json!({})),
+            },
+        );
     let network = Network::new().expect("a network runtime");
     let (window, page) = open_page(cx, &server, &network);
     wait(cx, |cx| painted(cx, window, "scheduled-task:t1"));
-    assert!(painted(cx, window, "scheduled-task-error:t1"), "the last error shows");
+    assert!(
+        painted(cx, window, "scheduled-task-error:t1"),
+        "the last error shows"
+    );
 
-    cx.update_window(window, |_, window, cx| window.click(name("scheduled-task-toggle:t1"), cx))
-        .expect("window is open");
+    cx.update_window(window, |_, window, cx| {
+        window.click(name("scheduled-task-toggle:t1"), cx)
+    })
+    .expect("window is open");
     wait(cx, |cx| {
         cx.read(|cx| page.read(cx).task("t1").is_some_and(|task| !task.enabled))
             && cx.read(|cx| page.read(cx).mutating.is_none())
@@ -329,9 +350,13 @@ fn toggles_write_the_whole_task_back_and_runs_report_busy(cx: &mut TestAppContex
         "fields this client does not know go back unchanged"
     );
 
-    cx.update_window(window, |_, window, cx| window.click(name("scheduled-task-run:t1"), cx))
-        .expect("window is open");
-    wait(cx, |cx| toast(cx, &page).is_some_and(|text| text.contains("waiting in the queue")));
+    cx.update_window(window, |_, window, cx| {
+        window.click(name("scheduled-task-run:t1"), cx)
+    })
+    .expect("window is open");
+    wait(cx, |cx| {
+        toast(cx, &page).is_some_and(|text| text.contains("waiting in the queue"))
+    });
 
     cx.update_window(window, |_, window, cx| {
         page.update(cx, |page, cx| page.delete("t1", window, cx))
@@ -350,38 +375,45 @@ fn toggles_write_the_whole_task_back_and_runs_report_busy(cx: &mut TestAppContex
 fn the_editor_refuses_invalid_input_and_keeps_a_refused_save_open(cx: &mut TestAppContext) {
     let refuse = Arc::new(AtomicBool::new(true));
     let refusing = refuse.clone();
-    let server = Scripted::new(move |request| match (request.method.as_str(), request.path.as_str()) {
-        ("GET", LIST) if !refusing.load(Ordering::Acquire) => {
-            (200, json!({"tasks": [stored_task(true)]}))
-        }
-        ("GET", LIST) => (200, json!({"tasks": []})),
-        ("PUT", LIST) if refusing.load(Ordering::Acquire) => {
-            (400, json!({"error": "Invalid timezone"}))
-        }
-        ("PUT", LIST) => (200, json!({"tasks": [stored_task(true)]})),
-        _ => (404, json!({})),
-    });
+    let server =
+        Scripted::new(
+            move |request| match (request.method.as_str(), request.path.as_str()) {
+                ("GET", LIST) if !refusing.load(Ordering::Acquire) => {
+                    (200, json!({"tasks": [stored_task(true)]}))
+                }
+                ("GET", LIST) => (200, json!({"tasks": []})),
+                ("PUT", LIST) if refusing.load(Ordering::Acquire) => {
+                    (400, json!({"error": "Invalid timezone"}))
+                }
+                ("PUT", LIST) => (200, json!({"tasks": [stored_task(true)]})),
+                _ => (404, json!({})),
+            },
+        );
     let network = Network::new().expect("a network runtime");
     let (window, page) = open_page(cx, &server, &network);
     wait(cx, |cx| painted(cx, window, "scheduled-tasks-empty"));
-    cx.update_window(window, |_, window, cx| window.click(name("scheduled-tasks-new"), cx))
-        .expect("window is open");
+    cx.update_window(window, |_, window, cx| {
+        window.click(name("scheduled-tasks-new"), cx)
+    })
+    .expect("window is open");
     wait(cx, |cx| painted(cx, window, "scheduled-task-editor"));
     let editor = cx
         .read(|cx| page.read(cx).editor.clone())
         .expect("the editor is open");
 
     // Nothing named yet: the save is refused before any request.
-    cx.update_window(window, |_, window, cx| window.click(name("scheduled-task-save"), cx))
-        .expect("window is open");
+    cx.update_window(window, |_, window, cx| {
+        window.click(name("scheduled-task-save"), cx)
+    })
+    .expect("window is open");
     assert!(painted(cx, window, "scheduled-task-editor-error"));
     assert!(server.requests("PUT", LIST).is_empty());
 
     cx.update_window(window, |_, window, cx| {
         editor.update(cx, |editor, cx| {
-            editor
-                .name
-                .update(cx, |input, cx| input.set_value("Nightly digest", window, cx));
+            editor.name.update(cx, |input, cx| {
+                input.set_value("Nightly digest", window, cx)
+            });
             editor
                 .prompt
                 .update(cx, |input, cx| input.set_value("Summarize", window, cx));
@@ -406,23 +438,41 @@ fn the_editor_refuses_invalid_input_and_keeps_a_refused_save_open(cx: &mut TestA
     .expect("window is open");
     assert!(painted(cx, window, "scheduled-task-next-runs"));
 
-    cx.update_window(window, |_, window, cx| window.click(name("scheduled-task-save"), cx))
-        .expect("window is open");
-    wait(cx, |cx| cx.read(|cx| !editor.read(cx).saving) && !server.requests("PUT", LIST).is_empty());
+    cx.update_window(window, |_, window, cx| {
+        window.click(name("scheduled-task-save"), cx)
+    })
+    .expect("window is open");
+    wait(cx, |cx| {
+        cx.read(|cx| !editor.read(cx).saving) && !server.requests("PUT", LIST).is_empty()
+    });
     let saved = &server.requests("PUT", LIST)[0].body["task"];
-    assert_eq!(saved["schedule"], json!({"kind": "cron", "timezone": "UTC", "cron": "0 9 * * 1"}));
+    assert_eq!(
+        saved["schedule"],
+        json!({"kind": "cron", "timezone": "UTC", "cron": "0 9 * * 1"})
+    );
     assert_eq!(saved["name"], json!("Nightly digest"));
     assert_eq!(
-        cx.read(|cx| editor.read(cx).error.as_ref().map(|error| error.to_string())),
+        cx.read(|cx| editor
+            .read(cx)
+            .error
+            .as_ref()
+            .map(|error| error.to_string())),
         Some("Invalid timezone".to_owned()),
         "the refusal keeps the dialog and its form"
     );
     assert!(painted(cx, window, "scheduled-task-editor"));
 
     refuse.store(false, Ordering::Release);
-    cx.update_window(window, |_, window, cx| window.click(name("scheduled-task-save"), cx))
-        .expect("window is open");
+    cx.update_window(window, |_, window, cx| {
+        window.click(name("scheduled-task-save"), cx)
+    })
+    .expect("window is open");
     wait(cx, |cx| painted(cx, window, "scheduled-task:t1"));
-    assert!(!painted(cx, window, "scheduled-task-editor"), "a landed save closes the dialog");
-    assert!(matches!(cx.read(|cx| page.read(cx).list.clone()), TaskList::Ready(tasks) if tasks.len() == 1));
+    assert!(
+        !painted(cx, window, "scheduled-task-editor"),
+        "a landed save closes the dialog"
+    );
+    assert!(
+        matches!(cx.read(|cx| page.read(cx).list.clone()), TaskList::Ready(tasks) if tasks.len() == 1)
+    );
 }

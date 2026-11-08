@@ -178,11 +178,14 @@ fn decode_task(value: &Value) -> Option<ScheduledTask> {
             times: strings(schedule.get("times")),
             time: text(schedule, "time"),
             date: text(schedule, "date"),
-            weekdays: schedule.get("weekdays").and_then(Value::as_array).map(|days| {
-                days.iter()
-                    .filter_map(|day| day.as_f64().map(|day| day as i64))
-                    .collect()
-            }),
+            weekdays: schedule
+                .get("weekdays")
+                .and_then(Value::as_array)
+                .map(|days| {
+                    days.iter()
+                        .filter_map(|day| day.as_f64().map(|day| day as i64))
+                        .collect()
+                }),
             cron: text(schedule, "cron"),
             timezone: text(schedule, "timezone"),
         },
@@ -303,7 +306,10 @@ pub fn task_payload(draft: &TaskDraft, state: Option<&Value>) -> Value {
 }
 
 /// `toDraft(task, …)`: the editor's form for a stored task.
-pub fn task_draft(task: &ScheduledTask, defaults: &openchamber_native_core::schedule::DraftDefaults) -> TaskDraft {
+pub fn task_draft(
+    task: &ScheduledTask,
+    defaults: &openchamber_native_core::schedule::DraftDefaults,
+) -> TaskDraft {
     let times = openchamber_native_core::schedule::schedule_times(&task.schedule);
     TaskDraft {
         id: Some(task.id.clone()),
@@ -399,10 +405,7 @@ impl ServerClient {
         if let Some(body) = body {
             request = request.json(&body);
         }
-        let response = request
-            .send()
-            .await
-            .map_err(TransportError::from_request)?;
+        let response = request.send().await.map_err(TransportError::from_request)?;
         let status = response.status();
         if status.is_redirection() {
             return Err(TransportError::Redirected.into());
@@ -607,7 +610,10 @@ mod tests {
         assert_eq!(task.schedule.weekdays.as_deref(), Some(&[1, 5][..]));
         assert_eq!(task.state.last_status, RunStatus::Failed);
         assert_eq!(task.state.next_run_at, Some(99));
-        assert!(task.cleanup_worktree, "absent means the worktree is removed");
+        assert!(
+            task.cleanup_worktree,
+            "absent means the worktree is removed"
+        );
         assert_eq!(task.raw["future"], json!({"kept": 1}));
         assert!(decode_tasks(&json!({"tasks": "no"})).is_none());
     }
@@ -645,7 +651,10 @@ mod tests {
         };
         let payload = task_payload(&existing, Some(&state));
         assert_eq!(payload["targetSessionId"], json!("ses_1"));
-        assert_eq!(payload["schedule"], json!({"kind": "cron", "timezone": "Europe/Kyiv", "cron": "0 9 * * 1"}));
+        assert_eq!(
+            payload["schedule"],
+            json!({"kind": "cron", "timezone": "Europe/Kyiv", "cron": "0 9 * * 1"})
+        );
         assert!(payload.get("runInWorktree").is_none() && payload.get("state").is_none());
     }
 

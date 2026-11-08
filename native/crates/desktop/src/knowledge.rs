@@ -164,7 +164,10 @@ impl KnowledgePanel {
                 }
             }),
             cx.subscribe_in(&note_input, window, |this, _, event, window, cx| {
-                if let InputEvent::PressEnter { secondary: false, .. } = event {
+                if let InputEvent::PressEnter {
+                    secondary: false, ..
+                } = event
+                {
                     this.add_note(window, cx);
                 }
             }),
@@ -236,7 +239,13 @@ impl KnowledgePanel {
         self.owner.project_id.clone()
     }
 
-    fn toast(&mut self, error: bool, key: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+    fn toast(
+        &mut self,
+        error: bool,
+        key: &'static str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let text = locale::strings(cx).get(key);
         self.toast = Some(Toast {
             error,
@@ -429,7 +438,12 @@ impl KnowledgePanel {
     }
 
     /// Opens a note in place of the list, or closes it with `None`.
-    pub(crate) fn open_note(&mut self, id: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_note(
+        &mut self,
+        id: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.flush_open(cx);
         self.entry_menu = None;
         let Some(id) = id else {
@@ -526,8 +540,10 @@ impl KnowledgePanel {
                 match result {
                     Some(Ok(Some(note))) => {
                         if let Some(knowledge) = &mut this.knowledge
-                            && let Some(stored) =
-                                knowledge.notes.iter_mut().find(|stored| stored.id == note.id)
+                            && let Some(stored) = knowledge
+                                .notes
+                                .iter_mut()
+                                .find(|stored| stored.id == note.id)
                         {
                             *stored = note;
                         }
@@ -637,7 +653,10 @@ impl KnowledgePanel {
 
     pub(crate) fn toggle_todo(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         let todos = self.todos();
-        let Some(completed) = todos.iter().find(|todo| todo.id == id).map(|todo| !todo.completed)
+        let Some(completed) = todos
+            .iter()
+            .find(|todo| todo.id == id)
+            .map(|todo| !todo.completed)
         else {
             return;
         };
@@ -668,7 +687,11 @@ impl KnowledgePanel {
     /// Writes the whole list without its completed todos.
     pub(crate) fn clear_completed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let todos = self.todos();
-        let next: Vec<Todo> = todos.iter().filter(|todo| !todo.completed).cloned().collect();
+        let next: Vec<Todo> = todos
+            .iter()
+            .filter(|todo| !todo.completed)
+            .cloned()
+            .collect();
         if next.len() == todos.len() {
             return;
         }
@@ -722,16 +745,28 @@ impl KnowledgePanel {
         let Some(todo) = self.todos().into_iter().find(|todo| todo.id == id) else {
             return;
         };
-        cx.emit(KnowledgeEvent::AppendToComposer(knowledge::fenced_todo(&todo.text)));
+        cx.emit(KnowledgeEvent::AppendToComposer(knowledge::fenced_todo(
+            &todo.text,
+        )));
         cx.notify();
     }
 
     /// The workspace's answer to an append: whether a session took it.
     pub(crate) fn appended(&mut self, taken: bool, window: &mut Window, cx: &mut Context<Self>) {
         if taken {
-            self.toast(false, "rightSidebar.contextNotesTodo.toast.sentToCurrentSession", window, cx);
+            self.toast(
+                false,
+                "rightSidebar.contextNotesTodo.toast.sentToCurrentSession",
+                window,
+                cx,
+            );
         } else {
-            self.toast(true, "rightSidebar.contextNotesTodo.toast.noActiveSession", window, cx);
+            self.toast(
+                true,
+                "rightSidebar.contextNotesTodo.toast.noActiveSession",
+                window,
+                cx,
+            );
         }
     }
 
@@ -753,7 +788,13 @@ impl KnowledgePanel {
 
     /// The workspace's answer to a send: the toast, and the send's controls
     /// free again.
-    pub(crate) fn finish_dispatch(&mut self, key: Option<&'static str>, error: bool, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn finish_dispatch(
+        &mut self,
+        key: Option<&'static str>,
+        error: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.sending = None;
         if let Some(key) = key {
             self.toast(error, key, window, cx);
@@ -764,7 +805,8 @@ impl KnowledgePanel {
     // Plans.
 
     pub(crate) fn add_plan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let title = knowledge::single_line(&self.plan_input.read(cx).value(), PLAN_TITLE_MAX_LENGTH);
+        let title =
+            knowledge::single_line(&self.plan_input.read(cx).value(), PLAN_TITLE_MAX_LENGTH);
         let title = title.trim().to_owned();
         if title.is_empty() {
             return;
@@ -809,7 +851,12 @@ impl KnowledgePanel {
         }));
     }
 
-    pub(crate) fn open_plan(&mut self, id: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn open_plan(
+        &mut self,
+        id: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.flush_open(cx);
         self.entry_menu = None;
         let Some(id) = id else {
@@ -845,7 +892,9 @@ impl KnowledgePanel {
                         PlanLoad::Ready(Box::new(document))
                     }
                     Some(Ok(None)) => PlanLoad::Missing,
-                    Some(Err(error)) => PlanLoad::Failed(error.message().unwrap_or_default().to_owned()),
+                    Some(Err(error)) => {
+                        PlanLoad::Failed(error.message().unwrap_or_default().to_owned())
+                    }
                     None => PlanLoad::Failed(String::new()),
                 });
                 cx.notify();
@@ -900,8 +949,10 @@ impl KnowledgePanel {
                 match result {
                     Some(Ok(Some((plan, _)))) => {
                         if let Some(knowledge) = &mut this.knowledge
-                            && let Some(stored) =
-                                knowledge.plans.iter_mut().find(|stored| stored.id == plan.id)
+                            && let Some(stored) = knowledge
+                                .plans
+                                .iter_mut()
+                                .find(|stored| stored.id == plan.id)
                         {
                             *stored = plan.clone();
                         }
@@ -942,7 +993,11 @@ impl KnowledgePanel {
     }
 
     /// The open plan's title, path and text, for its send.
-    pub(crate) fn plan_send_parts(&self, id: &str, cx: &gpui_kit::App) -> Option<(String, Option<String>, String)> {
+    pub(crate) fn plan_send_parts(
+        &self,
+        id: &str,
+        cx: &gpui_kit::App,
+    ) -> Option<(String, Option<String>, String)> {
         let Some(PlanLoad::Ready(document)) = &self.plan else {
             return None;
         };
@@ -1022,7 +1077,13 @@ impl KnowledgePanel {
 
     /// Hides a note or plan at once and deletes it when the undo window
     /// ends; Undo within the window keeps it, id and links intact.
-    pub(crate) fn schedule_delete(&mut self, section: Section, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn schedule_delete(
+        &mut self,
+        section: Section,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.entry_menu = None;
         if self.open.as_ref().is_some_and(|(_, open)| open == id) {
             self.note_timer = None;
@@ -1072,7 +1133,13 @@ impl KnowledgePanel {
     }
 
     /// Sends a delete whose undo window ended; a failure brings it back.
-    pub(crate) fn run_delete(&mut self, section: Section, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn run_delete(
+        &mut self,
+        section: Section,
+        id: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.pending_deletes.remove(id).is_none() {
             return;
         }
@@ -1150,7 +1217,11 @@ struct DispatchPrompt {
 impl crate::workspace::Workspace {
     /// The panel's owner for `directory`: the Chats root for a chat, else
     /// the project the folder or its worktree belongs to.
-    pub(crate) fn knowledge_owner(&self, directory: &str, cx: &gpui_kit::App) -> Option<KnowledgeOwner> {
+    pub(crate) fn knowledge_owner(
+        &self,
+        directory: &str,
+        cx: &gpui_kit::App,
+    ) -> Option<KnowledgeOwner> {
         if let Some(root) = self
             .topology
             .chat_roots
@@ -1225,15 +1296,30 @@ impl crate::workspace::Workspace {
         use openchamber_native_transport::session_create::CreateSession;
 
         let owner = panel.read(cx).owner.clone();
-        let fail = |panel: &Entity<KnowledgePanel>, key: &'static str, window: &mut Window, cx: &mut Context<Self>| {
-            panel.update(cx, |panel, cx| panel.finish_dispatch(Some(key), true, window, cx));
+        let fail = |panel: &Entity<KnowledgePanel>,
+                    key: &'static str,
+                    window: &mut Window,
+                    cx: &mut Context<Self>| {
+            panel.update(cx, |panel, cx| {
+                panel.finish_dispatch(Some(key), true, window, cx)
+            });
         };
         let Some(connection) = self.connection.as_ref() else {
-            fail(&panel, "rightSidebar.contextNotesTodo.toast.createSessionFailed", window, cx);
+            fail(
+                &panel,
+                "rightSidebar.contextNotesTodo.toast.createSessionFailed",
+                window,
+                cx,
+            );
             return;
         };
         let Some(client) = connection.client.clone() else {
-            fail(&panel, "rightSidebar.contextNotesTodo.toast.createSessionFailed", window, cx);
+            fail(
+                &panel,
+                "rightSidebar.contextNotesTodo.toast.createSessionFailed",
+                window,
+                cx,
+            );
             return;
         };
         let network = connection.network.handle();
@@ -1249,7 +1335,12 @@ impl crate::workspace::Workspace {
             model.clone(),
             agent.clone(),
         ) else {
-            fail(&panel, "rightSidebar.contextNotesTodo.toast.createSessionFailed", window, cx);
+            fail(
+                &panel,
+                "rightSidebar.contextNotesTodo.toast.createSessionFailed",
+                window,
+                cx,
+            );
             return;
         };
         let (context_id, prompt_id) = (self.message_ids.next().0, self.message_ids.next().0);
@@ -1286,8 +1377,13 @@ impl crate::workspace::Workspace {
                     None,
                 ),
                 Dispatch::Plan { id, implement } => {
-                    let (title, path, content) = plan_parts.ok_or("rightSidebar.contextNotesTodo.toast.sendTodoFailed")?;
-                    let action = if *implement { "plan.implement" } else { "plan.improve" };
+                    let (title, path, content) =
+                        plan_parts.ok_or("rightSidebar.contextNotesTodo.toast.sendTodoFailed")?;
+                    let action = if *implement {
+                        "plan.implement"
+                    } else {
+                        "plan.improve"
+                    };
                     let path_text = path.clone().unwrap_or_default();
                     let mut instructions = render(
                         &format!("{action}.instructions"),
@@ -1306,7 +1402,10 @@ impl crate::workspace::Workspace {
                     }
                     (
                         DispatchPrompt {
-                            visible: render(&format!("{action}.visible"), &[("plan_title", &title)]),
+                            visible: render(
+                                &format!("{action}.visible"),
+                                &[("plan_title", &title)],
+                            ),
                             instructions,
                         },
                         Some(id.clone()),
@@ -1351,19 +1450,29 @@ impl crate::workspace::Workspace {
             Ok::<_, &'static str>((record, linked))
         });
         cx.spawn_in(window, async move |this, cx| {
-            let result = task.await.unwrap_or(Err("rightSidebar.contextNotesTodo.toast.sendTodoFailed"));
+            let result = task
+                .await
+                .unwrap_or(Err("rightSidebar.contextNotesTodo.toast.sendTodoFailed"));
             let _ = this.update_in(cx, |this, window, cx| match result {
                 Ok((record, linked)) => {
                     let session = record.id.clone();
                     if let Some(plan) = linked {
-                        panel.update(cx, |panel, cx| panel.plan_linked(&plan, session.as_str(), cx));
+                        panel.update(cx, |panel, cx| {
+                            panel.plan_linked(&plan, session.as_str(), cx)
+                        });
                     }
                     let key = matches!(dispatch, Dispatch::Todo { .. })
                         .then_some("rightSidebar.contextNotesTodo.toast.sentToNewSession");
-                    panel.update(cx, |panel, cx| panel.finish_dispatch(key, false, window, cx));
+                    panel.update(cx, |panel, cx| {
+                        panel.finish_dispatch(key, false, window, cx)
+                    });
                     if this.sessions.get(&session).is_none() {
                         this.apply_server_events(
-                            vec![openchamber_native_transport::event::ServerEvent::SessionCreated(record)],
+                            vec![
+                                openchamber_native_transport::event::ServerEvent::SessionCreated(
+                                    record,
+                                ),
+                            ],
                             window,
                             cx,
                         );
@@ -1371,11 +1480,12 @@ impl crate::workspace::Workspace {
                     this.select_session(session, window, cx);
                 }
                 Err(key) => {
-                    panel.update(cx, |panel, cx| panel.finish_dispatch(Some(key), true, window, cx));
+                    panel.update(cx, |panel, cx| {
+                        panel.finish_dispatch(Some(key), true, window, cx)
+                    });
                 }
             });
         })
         .detach();
     }
 }
-

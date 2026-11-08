@@ -377,7 +377,8 @@ impl Workspace {
                         self.panels.notes[&key].0.clone().into_any_element()
                     }
                     None => empty_state(
-                        locale::strings(cx).get("rightSidebar.contextNotesTodo.empty.selectProject"),
+                        locale::strings(cx)
+                            .get("rightSidebar.contextNotesTodo.empty.selectProject"),
                         palette,
                         cx,
                     ),

@@ -27,7 +27,10 @@ pub(crate) fn zone_names() -> &'static [String] {
         if names.len() > 1 {
             names
         } else {
-            FALLBACK_ZONES.iter().map(|zone| (*zone).to_owned()).collect()
+            FALLBACK_ZONES
+                .iter()
+                .map(|zone| (*zone).to_owned())
+                .collect()
         }
     })
 }
