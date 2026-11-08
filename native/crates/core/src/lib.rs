@@ -28,6 +28,7 @@ pub mod magic_prompt;
 pub mod message_queue;
 pub mod message_time;
 pub mod model_identifier;
+pub mod nested_repositories;
 pub mod ordering;
 pub mod ownership;
 pub mod path;

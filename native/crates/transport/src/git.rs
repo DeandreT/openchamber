@@ -502,6 +502,37 @@ impl ServerClient {
         expect_success(request).await
     }
 
+    /// The repositories under `root` (`GET /api/fs/git-dirs`). A server
+    /// without the route answers 501, which lists none.
+    pub async fn git_directories(&self, root: &str) -> Result<Vec<String>, GitError> {
+        #[derive(Deserialize)]
+        struct Listed {
+            repositories: Vec<Entry>,
+        }
+        #[derive(Deserialize)]
+        struct Entry {
+            path: Option<String>,
+        }
+        let mut url = self.git_url("api/fs/git-dirs", Some(root));
+        url.query_pairs_mut().append_pair("path", root);
+        let response = self
+            .authorized(Method::GET, url)
+            .send()
+            .await
+            .map_err(TransportError::from_request)?;
+        let listed: Listed = match read_answer(response).await? {
+            Ok(bytes) => parse(&bytes)?,
+            Err(refusal) if refusal.status.as_u16() == 501 => return Ok(Vec::new()),
+            Err(refusal) => return Err(refusal.into()),
+        };
+        Ok(listed
+            .repositories
+            .into_iter()
+            .filter_map(|entry| entry.path)
+            .filter_map(|path| openchamber_native_core::path::normalize(&path))
+            .collect())
+    }
+
     /// The stored commit identities (`GET /api/git/identities`).
     pub async fn git_identities(&self) -> Result<Vec<Identity>, GitError> {
         let request = self.authorized(Method::GET, self.git_url("api/git/identities", None));
@@ -734,7 +765,7 @@ fn changes_read(body: StatusBody) -> ChangesRead {
             .collect()
     };
     let diff_stats = body.diff_stats.unwrap_or_default();
-    ChangesRead::Repository(GitChanges {
+    ChangesRead::Repository(Box::new(GitChanges {
         branch: body
             .current
             .map(|branch| branch.trim().to_owned())
@@ -762,7 +793,7 @@ fn changes_read(body: StatusBody) -> ChangesRead {
             head_name: rebase.head_name.filter(|name| !name.is_empty()),
             onto: rebase.onto.filter(|onto| !onto.is_empty()),
         }),
-    })
+    }))
 }
 
 fn endpoint(body: EndpointBody) -> RemoteEndpoint {

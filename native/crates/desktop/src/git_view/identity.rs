@@ -83,7 +83,7 @@ impl GitView {
         let Some(client) = self.scope.client(cx) else {
             return;
         };
-        let directory = self.scope.directory.clone();
+        let directory = self.git_directory();
         let task = self
             .scope
             .run(async move { client.current_author(&directory).await });
@@ -130,7 +130,7 @@ impl GitView {
         let Some(client) = self.scope.client(cx) else {
             return;
         };
-        let directory = self.scope.directory.clone();
+        let directory = self.git_directory();
         let id = identity.id.clone();
         let task = self
             .scope
