@@ -540,18 +540,20 @@ impl UsagePage {
             .when(direction == Direction::RightToLeft, |view| {
                 view.text_right()
             })
-            .child(
+            .child({
+                let title = strings.format(
+                    "settings.usage.page.header.providerUsage",
+                    &[("provider", name)],
+                );
                 div()
                     .id("usage-provider-title")
                     .accessibility_id("usage-provider-title")
                     .role(Role::Heading)
+                    .aria_label(title.clone())
                     .font_weight(FontWeight::SEMIBOLD)
                     .css_text(1.125, 1.5, cx)
-                    .child(strings.format(
-                        "settings.usage.page.header.providerUsage",
-                        &[("provider", name)],
-                    )),
-            )
+                    .child(title)
+            })
             .child(
                 div()
                     .id("usage-status")
