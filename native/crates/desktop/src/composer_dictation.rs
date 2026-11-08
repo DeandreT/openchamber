@@ -163,14 +163,18 @@ impl Workspace {
         {
             return;
         }
-        let (capture, mut events) = match Capture::start() {
+        let started = match Capture::start() {
             Ok(started) => started,
             Err(error) => {
-                // As the web client does: the composer stays as it was.
                 tracing::warn!(%error, "the microphone did not open");
                 return;
             }
         };
+        let crate::audio_capture::Started {
+            capture,
+            mut events,
+            opened,
+        } = started;
         self.save_composer_draft(cx);
         let dictation = &mut self.dictation;
         dictation.reset();
@@ -180,21 +184,50 @@ impl Workspace {
         dictation.runtime = Some(self.runtime.clone());
         dictation.capture = Some(capture);
         let generation = dictation.generation;
-        self.open_dictation_stream(window, cx);
         self.dictation.capture_task = Some(cx.spawn_in(window, async move |this, cx| {
-            while let Some(event) = events.recv().await {
+            // As the web client does: a microphone that does not open puts
+            // the composer back as it was.
+            match opened.await {
+                Ok(Ok(())) => {}
+                outcome => {
+                    if let Ok(Err(error)) = &outcome {
+                        tracing::warn!(%error, "the microphone did not open");
+                    }
+                    let _ = this.update(cx, |this, cx| {
+                        if this.dictation.generation == generation {
+                            this.dictation.reset();
+                            cx.notify();
+                        }
+                    });
+                    return;
+                }
+            }
+            let _ = this.update_in(cx, |this, window, cx| {
+                if this.dictation.generation == generation {
+                    this.open_dictation_stream(window, cx);
+                }
+            });
+            while let Some(first) = events.recv().await {
+                // Everything that arrived meanwhile goes in one update, so a
+                // device that calls back often cannot flood the window.
+                let mut batch = vec![first];
+                while let Ok(event) = events.try_recv() {
+                    batch.push(event);
+                }
                 let alive = this.update(cx, |this, cx| {
                     if this.dictation.generation != generation {
                         return false;
                     }
-                    match event {
-                        CaptureEvent::Chunk(chunk) => {
-                            if let Some(stream) = &this.dictation.stream {
-                                stream.send_chunk(chunk.clone());
+                    for event in batch {
+                        match event {
+                            CaptureEvent::Chunk(chunk) => {
+                                if let Some(stream) = &this.dictation.stream {
+                                    stream.send_chunk(chunk.clone());
+                                }
+                                this.dictation.chunks.push(chunk);
                             }
-                            this.dictation.chunks.push(chunk);
+                            CaptureEvent::Level(level) => this.dictation.level = level,
                         }
-                        CaptureEvent::Level(level) => this.dictation.level = level,
                     }
                     cx.notify();
                     true
