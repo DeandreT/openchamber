@@ -250,7 +250,8 @@ prompt. Attachments and worktree creation remain separate workflows.
 - `general_settings.rs` owns the server-backed Settings preferences: General's
   autosave, terminal shell and close-on-exit, and the Chat and Sessions fields
   (prompt navigator, follow-up behavior, starters, permission default, Chats
-  section, In work, deletion dialog). Reads and serialized writes retain their
+  section, In work, deletion dialog, finished-worktree archiving). Reads and
+  serialized writes retain their
   runtime and client; the executor outlives a host switch. The workspace
   consumes live choices, including edits whose saves failed, and a newer
   topology read keeps unconfirmed choices over the server's values.
@@ -259,6 +260,19 @@ prompt. Attachments and worktree creation remain separate workflows.
   reference controls belong to features native does not have yet. Code line
   wrap on the Chat page goes through the workspace's own writer, shared with
   code cards, which reports its failure to the indicator.
+  `session_defaults.rs` adds the Sessions page's prompt cache and compaction,
+  read from OpenCode's effective config and the warming snapshot and written
+  one field at a time; a failed write puts back only a field no later write
+  changed.
+- `settings_controls.rs` holds the chrome the newer pages share (page frame,
+  sections, field and checkbox rows, info hints, the load-failure line, the
+  confirm dialog), the captured `ServerTarget`, `Load` and the serial
+  autosave. `behavior_settings.rs` is Behavior: the global `AGENTS.md` guarded
+  by the content last read, and the response style, with autosave on blur and
+  on each toggle or preset. `snippets_settings.rs` is Snippets: the list
+  grouped by scope and one editor with an explicit Save, a discard prompt
+  before leaving unsaved edits and a delete prompt. Each OpenCode config page
+  reads again on every visit and drops another server's or project's state.
 - `effort_preferences.rs` owns model-scoped effort memory in the server profile.
   Explicit effort choices update effective memory immediately. Serialized writes
   retain their original runtime and preserve other models. Incoming settings
@@ -1350,6 +1364,15 @@ save task cannot finish there, even when an observer awaits it. Preference and
 profile owners retain the raw I/O operation separately so quit can drain accepted
 work and coalesced choices after windows disappear. General's drain also owns its
 Tokio runtime; a cloned runtime handle alone cannot keep HTTP work running.
+
+### Why a failed Settings read shows Retry and not the empty form
+
+The reference's Behavior page and Snippets list log a failed read and show an
+empty, editable form or list; Behavior then never saves, and an empty list
+reads as "no snippets". Native shows the read failure with Retry and keeps
+the controls away until a read succeeds, because a fetch failure must not
+pass for an authoritative empty answer. A read that fails after one succeeded
+keeps what is shown.
 
 ### Why Chat and Sessions share General's settings model and not their own
 
