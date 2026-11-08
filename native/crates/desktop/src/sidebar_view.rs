@@ -282,11 +282,15 @@ impl Workspace {
                             this.toggle_archive_page(window, cx)
                         }),
                     )
-                    .child(button(
-                        "integrations",
-                        "store-2",
-                        "integrationsCatalog.sidebar.open",
-                    )),
+                    // The bundled catalog offers outside services; enterprise
+                    // mode waits for administrator-curated sources instead.
+                    .when(!self.enterprise.enterprise_mode(), |row| {
+                        row.child(button(
+                            "integrations",
+                            "store-2",
+                            "integrationsCatalog.sidebar.open",
+                        ))
+                    }),
             )
             .child(
                 div()

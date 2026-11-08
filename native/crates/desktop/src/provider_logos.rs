@@ -122,6 +122,11 @@ impl ProviderLogos {
 }
 
 impl Workspace {
+    fn withholds_public_requests(&self) -> bool {
+        self.enterprise
+            .withholds_public_requests(self.connection.is_some())
+    }
+
     /// Starts loading the logos the composer and selected turn footers show.
     pub(crate) fn ensure_provider_logos(&mut self, cx: &mut Context<Self>) {
         if let ModelControl::Model { provider_id, .. } = self.model_control() {
@@ -156,7 +161,7 @@ impl Workspace {
         let Some(source) = LogoSource::of(provider_id) else {
             return;
         };
-        if matches!(source, LogoSource::Remote(_)) && self.enterprise.status.enabled {
+        if matches!(source, LogoSource::Remote(_)) && self.withholds_public_requests() {
             if let std::collections::hash_map::Entry::Vacant(entry) =
                 self.provider_logos.states.entry(source)
             {
@@ -193,7 +198,7 @@ impl Workspace {
         let Some(source) = LogoSource::of(provider_id) else {
             return ProviderLogo::Absent;
         };
-        if matches!(source, LogoSource::Remote(_)) && self.enterprise.status.enabled {
+        if matches!(source, LogoSource::Remote(_)) && self.withholds_public_requests() {
             return ProviderLogo::Absent;
         }
         match self.provider_logos.states.get(&source) {
