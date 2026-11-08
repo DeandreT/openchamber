@@ -4,9 +4,9 @@
 
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
-    AnyElement, App, Context, FocusHandle, FontWeight, InteractiveElement,
-    IntoElement, ParentElement, Role, ScrollAnchor, ScrollHandle, SharedString,
-    StatefulInteractiveElement, Styled, WeakEntity, div, prelude::FluentBuilder, px,
+    AnyElement, App, Context, FocusHandle, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, Role, ScrollAnchor, ScrollHandle, SharedString, StatefulInteractiveElement,
+    Styled, WeakEntity, div, prelude::FluentBuilder, px,
 };
 use openchamber_native_core::ids::RuntimeId;
 use openchamber_native_transport::client::ServerClient;
@@ -109,10 +109,6 @@ impl SerialSave {
     pub(crate) fn finish(&mut self) -> bool {
         self.running = false;
         std::mem::take(&mut self.queued)
-    }
-
-    pub(crate) fn running(&self) -> bool {
-        self.running
     }
 }
 
@@ -245,6 +241,7 @@ pub(crate) fn info_hint(item: &str, text: SharedString, cx: &App) -> AnyElement 
 }
 
 /// One boolean row (`SettingsCheckboxRow`). `id` is also its accessibility id.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn checkbox_row<T: 'static>(
     id: SharedString,
     label: SharedString,
@@ -395,10 +392,9 @@ mod tests {
         assert!(save.begin(), "an idle autosave writes at once");
         assert!(!save.begin(), "a request during a write waits");
         assert!(!save.begin(), "further requests share one follow-up");
-        assert!(save.running());
         assert!(save.finish(), "the queued follow-up runs");
         assert!(save.begin());
         assert!(!save.finish(), "nothing else was requested");
-        assert!(!save.running());
+        assert!(save.begin(), "a finished write leaves the autosave idle");
     }
 }

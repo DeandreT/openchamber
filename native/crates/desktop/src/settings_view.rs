@@ -82,8 +82,7 @@ impl Settings {
         let shortcuts = cx.new(|_| crate::shortcuts_settings::ShortcutsPage::new(owner.clone()));
         let behavior =
             cx.new(|cx| crate::behavior_settings::BehaviorPage::new(owner.clone(), window, cx));
-        let snippets =
-            cx.new(|cx| crate::snippets_settings::SnippetsPage::new(owner.clone(), cx));
+        let snippets = cx.new(|cx| crate::snippets_settings::SnippetsPage::new(owner.clone(), cx));
         Self {
             shortcuts,
             behavior,

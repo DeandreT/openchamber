@@ -19,8 +19,8 @@ use crate::baseline::CssTextExt;
 use crate::chrome::glyph;
 use crate::code_card::CodeWrap;
 use crate::general_settings::{
-    ARCHIVE_ON_DONE, Choice, DELETION_DIALOG, DRAFT_STARTERS, MERGED_CLEANUP, FOLLOW_UP, GeneralSettings, PERMISSION_DEFAULT,
-    PROMPT_NAVIGATOR, SHOW_CHATS, WORK_ENABLED,
+    ARCHIVE_ON_DONE, Choice, DELETION_DIALOG, DRAFT_STARTERS, FOLLOW_UP, GeneralSettings,
+    MERGED_CLEANUP, PERMISSION_DEFAULT, PROMPT_NAVIGATOR, SHOW_CHATS, WORK_ENABLED,
 };
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;

@@ -296,7 +296,10 @@ mod tests {
                     200,
                     json!({"content": "", "exists": true, "path": "/cfg/AGENTS.md"}),
                 ),
-                ("PUT", Value::Null) => (409, json!({"error": "changed", "code": "AGENTS_MD_CONFLICT"})),
+                ("PUT", Value::Null) => (
+                    409,
+                    json!({"error": "changed", "code": "AGENTS_MD_CONFLICT"}),
+                ),
                 ("PUT", Value::String(expected)) if expected == "boom" => {
                     (413, json!({"error": "Content exceeds maximum size"}))
                 }
@@ -316,10 +319,7 @@ mod tests {
             .await
             .expect_err("refused");
         assert_eq!(refused.message(), Some("Content exceeds maximum size"));
-        client
-            .save_agents_md("x\n", Some(""))
-            .await
-            .expect("saved");
+        client.save_agents_md("x\n", Some("")).await.expect("saved");
         let recorded = recorded.lock().expect("log");
         assert_eq!(recorded[1].path, "/api/behavior/agents-md");
         assert_eq!(
