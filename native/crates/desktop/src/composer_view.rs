@@ -27,14 +27,14 @@ use crate::logical::LogicalStyledExt;
 use crate::theme::Palette;
 use crate::workspace::Workspace;
 
-const BOX_RADIUS: f32 = 12.0;
+pub(crate) const BOX_RADIUS: f32 = 12.0;
 const EDITOR_MIN_HEIGHT: f32 = 52.0;
-const TOOLBAR_HEIGHT: f32 = 44.0;
+pub(crate) const TOOLBAR_HEIGHT: f32 = 44.0;
 const ACTION_SIZE: f32 = 24.0;
 const ACTION_GLYPH: f32 = 18.0;
 /// The toolbar's `px-2.5`, the start actions' and the groups' `gap-x-1.5`,
 /// and the end controls' `md:gap-x-3`.
-const TOOLBAR_PADDING_X: f32 = 10.0;
+pub(crate) const TOOLBAR_PADDING_X: f32 = 10.0;
 const START_GAP: f32 = 6.0;
 const END_GAP: f32 = 12.0;
 /// Attach, permissions and goal.
@@ -334,12 +334,20 @@ impl Workspace {
                 "send-plane-2",
             )
         };
-        let action = |id: &'static str, icon: &'static str, key: &str| {
-            IconButton::new(id, icon, strings.get(key))
-                .size(ACTION_SIZE, ACTION_GLYPH)
-                .tone(ButtonTone::Active)
-                .render(palette, cx, |_, _, _| {})
-        };
+        // The microphone, while dictation is on and a server can transcribe.
+        let dictation = self.dictation_available().then(|| {
+            IconButton::new(
+                "composer-dictation",
+                "mic",
+                strings.get("chat.dictation.start"),
+            )
+            .size(ACTION_SIZE, ACTION_GLYPH)
+            .tone(ButtonTone::Active)
+            .render(palette, cx, |this, window, cx| {
+                this.start_dictation(window, cx)
+            })
+        });
+        let dictating = self.dictation.status != crate::composer_dictation::Status::Idle;
         let send = on_activate(
             div()
                 .id("composer-submit")
@@ -392,6 +400,26 @@ impl Workspace {
                     this.attach_selected_paths(owner, paths.paths().to_vec(), window, cx);
                 }
             }))
+            // While recording, Enter confirms and Escape cancels, before the
+            // editor's send.
+            .when(dictating, |this| {
+                this.capture_action(cx.listener(
+                    |this, _: &gpui_kit::component::input::Enter, _, cx| {
+                        if this.dictation.status == crate::composer_dictation::Status::Recording {
+                            this.confirm_dictation_default(cx);
+                            cx.stop_propagation();
+                        }
+                    },
+                ))
+                .capture_action(cx.listener(
+                    |this, _: &gpui_kit::component::input::Escape, _, cx| {
+                        if this.dictation.status == crate::composer_dictation::Status::Recording {
+                            this.cancel_dictation(cx);
+                            cx.stop_propagation();
+                        }
+                    },
+                ))
+            })
             // An open picker takes Up, Down, Enter, Tab and Escape (and
             // Ctrl+N/P) before the editor does.
             .capture_action(cx.listener(
@@ -555,11 +583,12 @@ impl Workspace {
                                     cx,
                                 ))
                             })
-                            .child(action("composer-dictation", "mic", "chat.dictation.start"))
+                            .children(dictation)
                             .child(send),
                     ),
             )
             .children(self.render_autocomplete(palette, direction, cx))
+            .children(self.render_dictation_overlay(palette, cx))
             .test_support()
             .into_any_element()
     }

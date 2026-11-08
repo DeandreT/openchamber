@@ -207,6 +207,8 @@ pub struct Workspace {
     pub(crate) host_recovery: Option<crate::host_recovery::HostRecovery>,
     /// Present when this launch started the managed local server.
     pub(crate) managed_host: Option<crate::managed_host_view::ManagedHostView>,
+    pub(crate) desktop_notifications: crate::desktop_notifications::DesktopNotifications,
+    pub(crate) dictation: crate::composer_dictation::Dictation,
     pub(crate) host_close: Option<Task<()>>,
     pub(crate) appearance_close: Option<Task<()>>,
     pub(crate) general_close: Option<Task<()>>,
@@ -372,6 +374,8 @@ impl Workspace {
             settings: None,
             host_recovery,
             managed_host: None,
+            desktop_notifications: Default::default(),
+            dictation: Default::default(),
             host_close: None,
             appearance_close: None,
             general_close: None,

@@ -558,6 +558,7 @@ impl Workspace {
                 }
                 this.after_index_update(update, window, cx);
                 this.rebuild_sidebar();
+                this.open_awaited_notification(window, cx);
                 cx.notify();
             });
         }));
@@ -1208,6 +1209,9 @@ impl Workspace {
                     self.apply_queue_broadcast(update, space)
                 }
                 ServerEvent::AutoReviewUpdated(update) => self.apply_auto_review_update(update),
+                ServerEvent::Notification(notification) => {
+                    self.deliver_notification(notification, window, cx)
+                }
                 ServerEvent::Transcript { session_id, event } => {
                     if self.finishes_git_changing_call(&session_id, &event)
                         && !git_changed.contains(&session_id)
