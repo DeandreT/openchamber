@@ -270,6 +270,8 @@ impl Workspace {
                                         div()
                                             .id("connection-recovery-address")
                                             .accessibility_id("connection-recovery-address")
+                                            .role(Role::Paragraph)
+                                            .aria_label(url.clone())
                                             .truncate()
                                             .font_family(mono)
                                             .css_text(0.875, 1.25, cx)
