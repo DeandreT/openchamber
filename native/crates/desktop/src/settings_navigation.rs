@@ -12,12 +12,13 @@ pub(crate) enum Page {
     Sessions,
     Shortcuts,
     Voice,
+    Usage,
     Hosts,
 }
 
 impl Page {
     /// `pageOrder` in `SettingsView.tsx`, limited to implemented pages.
-    pub(crate) const ALL: [Self; 8] = [
+    pub(crate) const ALL: [Self; 9] = [
         Self::General,
         Self::Appearance,
         Self::Chat,
@@ -25,6 +26,7 @@ impl Page {
         Self::Sessions,
         Self::Shortcuts,
         Self::Voice,
+        Self::Usage,
         Self::Hosts,
     ];
 
@@ -35,6 +37,7 @@ impl Page {
             Self::Chat => "chat",
             Self::Notifications => "notifications",
             Self::Voice => "voice",
+            Self::Usage => "usage",
             Self::Sessions => "sessions",
             Self::Shortcuts => "shortcuts",
             Self::Hosts => "remote-instances",
@@ -48,6 +51,7 @@ impl Page {
             Self::Chat => "settings.page.chat.title",
             Self::Notifications => "settings.page.notifications.title",
             Self::Voice => "settings.page.voice.title",
+            Self::Usage => "settings.page.usage.title",
             Self::Sessions => "settings.page.sessions.title",
             Self::Shortcuts => "settings.page.shortcuts.title",
             Self::Hosts => "settings.page.remoteInstances.title",
@@ -62,7 +66,8 @@ impl Page {
             | Self::Notifications
             | Self::Sessions
             | Self::Shortcuts
-            | Self::Voice => "settings.view.nav.group.general",
+            | Self::Voice
+            | Self::Usage => "settings.view.nav.group.general",
             Self::Hosts => "settings.view.nav.group.projects",
         }
     }
@@ -74,6 +79,8 @@ impl Page {
             Self::Chat => "settings.page.chat.description",
             Self::Notifications => "settings.page.notifications.description",
             Self::Voice => "settings.page.voice.description",
+            // A split page: its list stands in for a description.
+            Self::Usage => "settings.usage.page.empty.selectProvider",
             Self::Sessions => "settings.page.sessions.description",
             Self::Shortcuts => "settings.page.shortcuts.description",
             Self::Hosts => "settings.remoteInstances.direct.description",
@@ -87,6 +94,7 @@ impl Page {
             Self::Chat => "chat-ai-3",
             Self::Notifications => "notification-3",
             Self::Voice => "mic",
+            Self::Usage => "bar-chart-2",
             Self::Sessions => "chat-history",
             Self::Shortcuts => "command",
             Self::Hosts => "computer",
@@ -265,6 +273,13 @@ pub(crate) const SEARCH_ITEMS: &[SearchItem] = &[
         title: "settings.voice.page.field.dictationAutoSend",
         description: Some("settings.voice.page.field.dictationAutoSendInfo"),
         keywords: "dictation voice input send submit automatic",
+    },
+    SearchItem {
+        id: "usage.model-quotas",
+        page: Page::Usage,
+        title: "settings.usage.page.section.modelQuotas",
+        description: None,
+        keywords: "models quota limits tokens billing usage",
     },
     SearchItem {
         id: "remote-instances.direct-hosts",

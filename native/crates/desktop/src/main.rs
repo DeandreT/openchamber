@@ -173,6 +173,7 @@ mod transcript_selection;
 mod transcript_view;
 mod turn_footer;
 mod turn_stats_section;
+mod usage_page;
 mod workspace;
 #[cfg(test)]
 mod workspace_tests;
