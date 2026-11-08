@@ -41,8 +41,9 @@ rendering asks for a projection and dispatches an action.
   and agent changes apply immediately even when sidebar appearance is unchanged;
   later patches must build on those values before the session settles.
 - `repository.rs` holds what the card reports about a repository,
-  `project_actions.rs` which project action its row shows and with which
-  glyph, and `tool_names.rs` OpenCode's tool name comparison, including
+  `project_actions.rs` which project action the header button shows and
+  with which glyph, the command a run sends and auto-discovery's dev server
+  command, and `tool_names.rs` OpenCode's tool name comparison, including
   which finished calls may change what Git reports.
 - `tool_shells.rs` decides what a tool row shows from the call's typed
   `ToolFacts` (`lib/opencode/tools.ts`, `toolPresentation.tsx`,
@@ -59,7 +60,10 @@ rendering asks for a projection and dispatches an action.
   poll steps. `git_changes.rs` splits a status into staged and unstaged rows,
   orders index mutations and status reads, builds network operation requests
   for the tracked remote and checks operation snapshots
-  (`boundGitNetworkOperation.ts`).
+  (`boundGitNetworkOperation.ts`), and reports a merge or rebase in progress
+  with its conflicted paths. `git_identity.rs` decides which commit
+  identities are offered and which one a repository acts as;
+  `nested_repositories.rs` which repository a Git surface opens and lists.
 - `source_board.rs` ports the repository source of the issues and pull
   requests board: kinds, state and people filters
   (`referencePickerItems.ts`), item keys and state looks, the read context
@@ -167,9 +171,13 @@ crate owns wire parsing and authority checks, and hands the core records and
 
 - `terminal_tabs.rs` holds each working directory's terminal tabs: their
   order, the active tab, the server terminal each shows and its lifecycle
-  (`Starting`, `Running`, `Exited`, `StartFailed`, `Ended`). It adopts the
-  server's interactive terminals from an authoritative list. The server owns
-  the terminals; tabs live for the window's lifetime and are not persisted.
+  (`Starting`, `Running`, `Stopping`, `Exited`, `StartFailed`, `Ended`). It
+  adopts the server's interactive terminals from an authoritative list. A
+  project action has one tab per directory; each run carries a fresh
+  execution ID, so an answer for an earlier or stopped run is refused, and
+  a running action terminal no tab shows joins its action's tab. The server
+  owns the terminals; tabs live for the window's lifetime and are not
+  persisted.
 - `shortcuts.rs` ports `packages/ui/src/lib/shortcuts` (`config.ts`,
   `schema.ts`, `bindings.ts`) and the recording rules of
   `ShortcutRecordingDialog.tsx`: the declared actions in Settings order, the
