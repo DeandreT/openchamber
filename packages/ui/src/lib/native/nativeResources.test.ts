@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import {
   NATIVE_DATE_FORMATS_PATH,
+  NATIVE_HTML_RENDER_PATH,
   NATIVE_ICONS_PATH,
   NATIVE_LOCALES_PATH,
   NATIVE_MAGIC_PROMPTS_PATH,
@@ -12,6 +13,7 @@ import {
   NATIVE_PROVIDER_LOGOS_PATH,
   NATIVE_THEMES_PATH,
   renderNativeDateFormats,
+  renderNativeHtmlRender,
   renderNativeIcons,
   renderNativeLocales,
   renderNativeMagicPrompts,
@@ -43,6 +45,10 @@ describe('native desktop resources', () => {
 
   test('the checked-in magic prompts match the built-in templates', () => {
     expect(checkedIn(NATIVE_MAGIC_PROMPTS_PATH)).toBe(renderNativeMagicPrompts());
+  });
+
+  test('the checked-in HTML page bootstrap matches the chat\'s', () => {
+    expect(checkedIn(NATIVE_HTML_RENDER_PATH)).toBe(renderNativeHtmlRender());
   });
 
   test('the checked-in menu labels match the Electron menu dictionaries', () => {

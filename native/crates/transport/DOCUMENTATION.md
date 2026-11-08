@@ -91,6 +91,11 @@ counts and identifiers only.
   explained in JSON is its refusal (the filesystem routes report denied access
   so); one without a JSON `error` stays `AuthenticationRequired`. No refusal
   reads as an empty folder, an empty file or an empty diff.
+- `web_content` mints the grants previews (`/api/fs/preview`) and extension
+  frames (`/api/guests/:id/frame-grant`) load by, builds their addresses with
+  the grant in the path, reads the extension panels of `/api/guests` row by
+  row, and posts answers to rendered pages. The client's credential goes only
+  on these requests, never into an address a page reads.
 - `stat_file` asks with `optional=true`, so a missing file is
   `StatRead::Missing` and a failed stat is an error; the open-file poll needs
   that difference. `read_file` accepts only a `text/plain` body.

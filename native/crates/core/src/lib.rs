@@ -38,6 +38,7 @@ pub mod permission_mode;
 pub mod project_actions;
 pub mod provider_logo;
 pub mod relative_time;
+pub mod rendered_page;
 pub mod repository;
 pub mod request_list;
 pub mod request_owner;

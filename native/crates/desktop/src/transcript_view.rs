@@ -342,6 +342,18 @@ impl Workspace {
         // The text parts' `my-1`.
         let mut column = div().py(px(4.0)).flex().flex_col().gap_2();
         for part in &message.parts {
+            if let PartContent::Tool {
+                tool,
+                status,
+                facts,
+                ..
+            } = &part.content
+                && let Some(page) =
+                    self.shown_page(session, open, &part.id, tool, *status, facts, cx)
+            {
+                column = column.child(page);
+                continue;
+            }
             column = match &part.content {
                 PartContent::Text { text } => column.child(text_part_view::assistant_text(
                     message,
@@ -399,6 +411,59 @@ impl Workspace {
             };
         }
         column.into_any_element()
+    }
+
+    /// The page an `openchamber_render` call showed, drawn in place of its
+    /// row. A page in the UI block language keeps the row: native has no
+    /// drawing of those blocks.
+    #[allow(clippy::too_many_arguments)]
+    #[cfg(target_os = "linux")]
+    fn shown_page(
+        &self,
+        session: &SessionId,
+        open: &OpenSession,
+        part: &PartId,
+        tool: &str,
+        status: ToolStatus,
+        facts: &ToolFacts,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let page = openchamber_native_core::rendered_page::rendered_page(
+            tool,
+            status,
+            &facts.input.page,
+            &facts.metadata.page_result,
+        )
+        .filter(|page| page.ui.is_none())?;
+        let view = open.parts.page_view(part, || {
+            let call = crate::html_answer_view::PageCall {
+                runtime: self.runtime.clone(),
+                session: session.clone(),
+                call: part.clone(),
+            };
+            let owner = cx.entity().downgrade();
+            let page = page.clone();
+            gpui_kit::AppContext::new(cx, |_| {
+                crate::html_answer_view::HtmlAnswerView::new(call, owner, page)
+            })
+        });
+        view.update(cx, |view, cx| view.update_page(page, cx));
+        Some(view.into_any_element())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    #[cfg(not(target_os = "linux"))]
+    fn shown_page(
+        &self,
+        _session: &SessionId,
+        _open: &OpenSession,
+        _part: &PartId,
+        _tool: &str,
+        _status: ToolStatus,
+        _facts: &ToolFacts,
+        _cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        None
     }
 
     /// Whether the session's reply is still arriving on the live channel.

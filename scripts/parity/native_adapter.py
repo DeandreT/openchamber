@@ -134,7 +134,19 @@ class NativeClient:
         ).stdout.split()
         if not windows:
             raise RuntimeError("the native client has no X11 window")
-        return windows[-1]
+        # Embedded WebKit pages are GTK windows of the same process, mapped as
+        # children of the client's window; the client's own window is the
+        # largest mapped one.
+        def area(window: str) -> int:
+            result = subprocess.run(["xdotool", "getwindowgeometry", "--shell", window],
+                                    capture_output=True, text=True, timeout=10)
+            if result.returncode:
+                return -1
+            geometry = dict(line.split("=", 1) for line in result.stdout.split())
+            return int(geometry["WIDTH"]) * int(geometry["HEIGHT"])
+        if len(windows) == 1:
+            return windows[0]
+        return max(reversed(windows), key=area)
 
     def _resize_to_requested(self, timeout_s: float) -> None:
         """Match physical content dimensions, accounting for the native frame.

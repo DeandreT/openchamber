@@ -48,9 +48,27 @@ pub(crate) struct PartState {
     summaries: RefCell<HashMap<PartId, (usize, SharedString)>>,
     /// Attachment images by part, decoded once; `None` when one cannot be.
     images: RefCell<HashMap<PartId, Option<Arc<Image>>>>,
+    /// Pages agents showed, by call, kept with their frame and height while
+    /// the session stays open.
+    #[cfg(target_os = "linux")]
+    pages: RefCell<HashMap<PartId, gpui_kit::Entity<crate::html_answer_view::HtmlAnswerView>>>,
 }
 
 impl PartState {
+    /// The page view of `part`, made by `create` on first use.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn page_view(
+        &self,
+        part: &PartId,
+        create: impl FnOnce() -> gpui_kit::Entity<crate::html_answer_view::HtmlAnswerView>,
+    ) -> gpui_kit::Entity<crate::html_answer_view::HtmlAnswerView> {
+        self.pages
+            .borrow_mut()
+            .entry(part.clone())
+            .or_insert_with(create)
+            .clone()
+    }
+
     pub(crate) fn is_expanded(&self, part: &PartId) -> bool {
         self.expanded.contains(part)
     }

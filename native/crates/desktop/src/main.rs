@@ -34,6 +34,8 @@ mod blocking_requests;
 #[cfg(test)]
 mod branching_tests;
 mod branching_view;
+#[cfg(target_os = "linux")]
+mod browser_view;
 mod chrome;
 mod clipboard_attachment;
 mod code_card;
@@ -74,10 +76,17 @@ mod form_copy;
 mod form_input;
 mod general_settings;
 mod git_view;
+#[cfg(target_os = "linux")]
+mod guest_panel_view;
 mod heic_worker;
 mod host_manager;
 mod host_profiles;
 mod host_recovery;
+#[cfg(target_os = "linux")]
+mod html_answer_view;
+#[cfg(target_os = "linux")]
+mod html_preview_view;
+mod html_render_document;
 mod install_id;
 mod journal_worker;
 mod legacy_queue_reservation;
@@ -128,6 +137,7 @@ mod recovery_view;
 mod request_dock;
 mod review_flow;
 mod review_view;
+mod sdk_envelope;
 mod selection_storage;
 mod send_attempt;
 mod send_catalog;
@@ -177,6 +187,12 @@ mod transcript_view;
 mod turn_footer;
 mod turn_stats_section;
 mod ui_memory;
+mod web_policy;
+mod web_shim;
+#[cfg(target_os = "linux")]
+mod webview_host;
+#[cfg(target_os = "linux")]
+mod webview_platform;
 mod workspace;
 #[cfg(test)]
 mod workspace_tests;
@@ -214,6 +230,7 @@ fn main() {
     if let Some(status) = heic_worker::run_if_requested() {
         std::process::exit(status);
     }
+    connection::take_password_from_environment();
     diagnostics::start();
     // Read off the startup path; joined just before the first frame.
     let generic_fonts = fonts::spawn_generic_lookup();
