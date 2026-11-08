@@ -109,8 +109,9 @@ impl ServerClient {
         &self,
         directory: Option<&str>,
     ) -> Result<EffectiveConfig, TransportError> {
-        let entries: Vec<wire::ConfigEntry> =
-            self.get_json(self.opencode_url("config"), directory).await?;
+        let entries: Vec<wire::ConfigEntry> = self
+            .get_json(self.opencode_url("config"), directory)
+            .await?;
         Ok(merge_documents(entries))
     }
 
@@ -218,7 +219,11 @@ mod tests {
         let recorded = recorded.lock().expect("log");
         assert_eq!(recorded[0].path, "/api/config/compaction");
         assert_eq!(recorded[0].body, json!({"buffer": "20%"}));
-        assert_eq!(recorded[1].body, json!({"keepTokens": null}), "null restores the default");
+        assert_eq!(
+            recorded[1].body,
+            json!({"keepTokens": null}),
+            "null restores the default"
+        );
         assert_eq!(recorded[3].path, "/api/config/warming");
         assert_eq!(recorded[3].body, json!({"enabled": true}));
     }

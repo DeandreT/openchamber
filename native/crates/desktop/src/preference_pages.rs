@@ -146,8 +146,19 @@ pub(crate) struct PreferencePage {
     scroll: ScrollHandle,
     anchors: HashMap<&'static str, ScrollAnchor>,
     focus: HashMap<SharedString, FocusHandle>,
+    /// Sessions' prompt cache and compaction, which OpenCode's config holds.
+    pub(crate) defaults: Option<Entity<crate::session_defaults::SessionDefaults>>,
     _subscriptions: Vec<Subscription>,
 }
+
+/// Search targets the Sessions page's OpenCode sections own.
+const DEFAULTS_CONTROLS: [&str; 5] = [
+    "sessions.warming",
+    "sessions.compaction-keep",
+    "sessions.compaction-auto",
+    "sessions.compaction-buffer",
+    "sessions.background-compaction",
+];
 
 impl PreferencePage {
     pub(crate) fn new(
@@ -173,8 +184,20 @@ impl PreferencePage {
             scroll,
             anchors,
             focus: HashMap::new(),
+            defaults: None,
             _subscriptions: subscriptions,
         }
+    }
+
+    /// Adds the Sessions page's OpenCode-backed sections.
+    pub(crate) fn set_defaults(
+        &mut self,
+        defaults: Entity<crate::session_defaults::SessionDefaults>,
+        cx: &mut Context<Self>,
+    ) {
+        self._subscriptions
+            .push(cx.observe(&defaults, |_, _, cx| cx.notify()));
+        self.defaults = Some(defaults);
     }
 
     fn focus_handle(&mut self, id: &SharedString, cx: &mut Context<Self>) -> FocusHandle {
@@ -186,6 +209,15 @@ impl PreferencePage {
 
     /// Opens a search target: its tab first, then scroll and focus once laid out.
     pub(crate) fn reveal(&mut self, item: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if DEFAULTS_CONTROLS.contains(&item) {
+            if let Some(defaults) = self.defaults.clone() {
+                let item = item.to_owned();
+                cx.on_next_frame(window, move |_, window, cx| {
+                    defaults.update(cx, |defaults, cx| defaults.reveal(&item, window, cx));
+                });
+            }
+            return;
+        }
         let Some(item) = CONTROLS.iter().copied().find(|control| *control == item) else {
             return;
         };
@@ -202,6 +234,18 @@ impl PreferencePage {
                 window.focus(focus, cx);
             }
         });
+    }
+
+    /// Brings a control into the test window: the first section sits at the
+    /// top, every later Sessions control within the page's last screen.
+    #[cfg(test)]
+    fn scroll_to(&mut self, item: &'static str, _: &mut Window, cx: &mut Context<Self>) {
+        if item.starts_with("sessions.") && item != "sessions.permission-default" {
+            self.scroll.scroll_to_bottom();
+        } else {
+            self.scroll.set_offset(gpui_kit::point(px(0.0), px(0.0)));
+        }
+        cx.notify();
     }
 
     /// A chip group focuses its selected chip, as a radio group does.
@@ -690,6 +734,11 @@ impl PreferencePage {
                 vec![permission],
                 cx,
             ),
+            // The reference's prompt cache and compaction follow new sessions.
+            match &self.defaults {
+                Some(defaults) => defaults.clone().into_any_element(),
+                None => div().into_any_element(),
+            },
             section(
                 "settings.layout.sessions.sidebar.title",
                 false,
@@ -1027,7 +1076,36 @@ mod tests {
             .expect("test window");
     }
 
-    fn click(window: AnyWindowHandle, id: &'static str, cx: &mut TestAppContext) {
+    /// Brings a control into view, as search does, then clicks it.
+    fn click(
+        window: AnyWindowHandle,
+        workspace: &Entity<Workspace>,
+        id: &'static str,
+        cx: &mut TestAppContext,
+    ) {
+        let item = CONTROLS.iter().copied().find(|item| {
+            id == item.replace('.', "-")
+                || id
+                    .strip_prefix(*item)
+                    .is_some_and(|rest| rest.starts_with('-'))
+        });
+        if let Some(item) = item {
+            cx.update_window(window, |_, window, cx| {
+                let settings = workspace
+                    .read(cx)
+                    .settings
+                    .clone()
+                    .expect("settings dialog");
+                let page = if item.starts_with("chat.") {
+                    settings.read(cx).chat.clone()
+                } else {
+                    settings.read(cx).sessions.clone()
+                };
+                page.update(cx, |page, cx| page.scroll_to(item, window, cx));
+            })
+            .expect("test window");
+            settle(window, cx);
+        }
         cx.update_window(window, |_, window, cx| {
             window.render_frame(cx);
             window.click(id, cx);
@@ -1080,12 +1158,12 @@ mod tests {
             assert_eq!(general.current_choice(SHOW_CHATS), Choice::Boolean(false));
         });
 
-        click(window, "sessions-work-enabled", cx);
-        click(window, "sessions-show-chats", cx);
-        click(window, "sessions-deletion-dialog", cx);
-        click(window, "sessions.permission-default-ask", cx);
-        click(window, "sessions-worktree-archive-on-done", cx);
-        click(window, "sessions-merged-worktree-cleanup", cx);
+        click(window, &workspace, "sessions-work-enabled", cx);
+        click(window, &workspace, "sessions-show-chats", cx);
+        click(window, &workspace, "sessions-deletion-dialog", cx);
+        click(window, &workspace, "sessions.permission-default-ask", cx);
+        click(window, &workspace, "sessions-worktree-archive-on-done", cx);
+        click(window, &workspace, "sessions-merged-worktree-cleanup", cx);
         assert_eq!(
             server.writes(),
             vec![
@@ -1131,7 +1209,7 @@ mod tests {
             PermissionMode::Ask,
             "a stored Safety reads as Ask while the safety net cannot run"
         );
-        click(window, "sessions.permission-default-safety", cx);
+        click(window, &workspace, "sessions.permission-default-safety", cx);
         assert!(
             server.writes().is_empty(),
             "the disabled chip saves nothing"
@@ -1148,8 +1226,8 @@ mod tests {
             cx.read(|cx| sessions.read(cx).shown_mode(cx)),
             PermissionMode::Safety
         );
-        click(window, "sessions.permission-default-auto", cx);
-        click(window, "sessions.permission-default-safety", cx);
+        click(window, &workspace, "sessions.permission-default-auto", cx);
+        click(window, &workspace, "sessions.permission-default-safety", cx);
         assert_eq!(
             server.writes(),
             vec![
@@ -1164,7 +1242,7 @@ mod tests {
         let server = Server::new(json!({}));
         let (window, workspace) = open(&server, Page::Chat, false, cx);
         server.fail_writes.store(true, Ordering::Release);
-        click(window, "chat-prompt-navigator", cx);
+        click(window, &workspace, "chat-prompt-navigator", cx);
         assert_eq!(
             settings(&workspace, cx).prompt_navigator_enabled,
             Some(false),
@@ -1196,7 +1274,7 @@ mod tests {
         assert_eq!(reread.prompt_navigator_enabled, Some(false));
 
         server.fail_writes.store(false, Ordering::Release);
-        click(window, "chat-retry", cx);
+        click(window, &workspace, "chat-retry", cx);
         assert_eq!(server.saved("promptNavigatorEnabled"), Some(json!(false)));
         assert_eq!(status(&workspace, cx), None, "retry clears the failure");
         assert_eq!(
@@ -1220,9 +1298,9 @@ mod tests {
         assert!(present("chat-prompt-navigator", cx));
         assert!(!present("chat.follow-up-behavior-steer", cx));
 
-        click(window, "chat-settings-tab-composer", cx);
+        click(window, &workspace, "chat-settings-tab-composer", cx);
         assert!(present("chat.follow-up-behavior-steer", cx));
-        click(window, "chat.follow-up-behavior-steer", cx);
+        click(window, &workspace, "chat.follow-up-behavior-steer", cx);
         assert_eq!(server.writes(), vec![json!({"followUpBehavior": "steer"})]);
         assert_eq!(
             cx.read(|cx| workspace.read(cx).follow_up_behavior()),
@@ -1248,7 +1326,7 @@ mod tests {
         .expect("test window");
         settle(window, cx);
         assert!(present("chat-draft-starters-visible", cx));
-        click(window, "chat-draft-starters-visible", cx);
+        click(window, &workspace, "chat-draft-starters-visible", cx);
         assert_eq!(settings(&workspace, cx).draft_starters_visible, Some(false));
         assert!(cx.read(|cx| !workspace.read(cx).starters_visible()));
     }
@@ -1259,7 +1337,7 @@ mod tests {
         let (window, workspace) = open(&server, Page::Chat, false, cx);
         let before = cx.read(|cx| cx.try_global::<CodeWrap>().copied().unwrap_or_default().0);
         server.fail_writes.store(true, Ordering::Release);
-        click(window, "chat-code-block-line-wrap", cx);
+        click(window, &workspace, "chat-code-block-line-wrap", cx);
         assert_eq!(
             cx.read(|cx| cx.try_global::<CodeWrap>().copied().unwrap_or_default().0),
             !before,
@@ -1268,7 +1346,7 @@ mod tests {
         assert_eq!(server.writes(), vec![json!({"codeBlockLineWrap": !before})]);
         assert!(cx.read(|cx| workspace.read(cx).code_wrap_save_failed()));
         server.fail_writes.store(false, Ordering::Release);
-        click(window, "chat-retry", cx);
+        click(window, &workspace, "chat-retry", cx);
         assert_eq!(server.saved("codeBlockLineWrap"), Some(json!(!before)));
         assert!(cx.read(|cx| !workspace.read(cx).code_wrap_save_failed()));
     }
@@ -1278,7 +1356,7 @@ mod tests {
         let server = Server::new(json!({"showDeletionDialog": true}));
         let (window, workspace) = open(&server, Page::Sessions, false, cx);
         server.fail_writes.store(true, Ordering::Release);
-        click(window, "sessions-deletion-dialog", cx);
+        click(window, &workspace, "sessions-deletion-dialog", cx);
         assert_eq!(settings(&workspace, cx).show_deletion_dialog, Some(false));
 
         server.fail_writes.store(false, Ordering::Release);
