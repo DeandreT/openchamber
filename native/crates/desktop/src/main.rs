@@ -217,6 +217,7 @@ fn main() {
     if let Some(status) = heic_worker::run_if_requested() {
         std::process::exit(status);
     }
+    connection::take_password_from_environment();
     diagnostics::start();
     // Read off the startup path; joined just before the first frame.
     let generic_fonts = fonts::spawn_generic_lookup();
