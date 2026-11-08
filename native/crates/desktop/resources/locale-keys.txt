@@ -1134,3 +1134,4 @@ gitView.operation.inProgressTitle
 gitView.operation.mergeInProgressWithHead
 gitView.operation.mergingMessage
 gitView.operation.rebasingOnto
+gitView.empty.selectRepositoryPlaceholder

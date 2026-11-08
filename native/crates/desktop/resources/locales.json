@@ -1135,7 +1135,8 @@
         "gitView.operation.inProgressTitle": "{operation} in progress",
         "gitView.operation.mergeInProgressWithHead": "Merging {head}",
         "gitView.operation.mergingMessage": "Merging: {message}",
-        "gitView.operation.rebasingOnto": "Rebasing {headName} onto {onto}"
+        "gitView.operation.rebasingOnto": "Rebasing {headName} onto {onto}",
+        "gitView.empty.selectRepositoryPlaceholder": "Select a repository..."
       }
     },
     "de": {
@@ -2272,7 +2273,8 @@
         "gitView.operation.inProgressTitle": "{operation} in Bearbeitung",
         "gitView.operation.mergeInProgressWithHead": "Merge von {head}",
         "gitView.operation.mergingMessage": "Merge: {message}",
-        "gitView.operation.rebasingOnto": "Rebase von {headName} auf {onto}"
+        "gitView.operation.rebasingOnto": "Rebase von {headName} auf {onto}",
+        "gitView.empty.selectRepositoryPlaceholder": "Repository auswählen..."
       }
     },
     "fr": {
@@ -3409,7 +3411,8 @@
         "gitView.operation.inProgressTitle": "{operation} en cours",
         "gitView.operation.mergeInProgressWithHead": "Fusion de {head}",
         "gitView.operation.mergingMessage": "Fusion : {message}",
-        "gitView.operation.rebasingOnto": "Rebaser {headName} sur {onto}"
+        "gitView.operation.rebasingOnto": "Rebaser {headName} sur {onto}",
+        "gitView.empty.selectRepositoryPlaceholder": "Sélectionnez un dépôt..."
       }
     },
     "nl": {
@@ -4546,7 +4549,8 @@
         "gitView.operation.inProgressTitle": "{operation} in behandeling",
         "gitView.operation.mergeInProgressWithHead": "Bezig met mergen van {head}",
         "gitView.operation.mergingMessage": "Bezig met mergen: {message}",
-        "gitView.operation.rebasingOnto": "Bezig met rebasen van {headName} op {onto}"
+        "gitView.operation.rebasingOnto": "Bezig met rebasen van {headName} op {onto}",
+        "gitView.empty.selectRepositoryPlaceholder": "Selecteer een repository..."
       }
     },
     "zh-CN": {
@@ -5683,7 +5687,8 @@
         "gitView.operation.inProgressTitle": "{operation} 进行中",
         "gitView.operation.mergeInProgressWithHead": "合并进行中（{head}）",
         "gitView.operation.mergingMessage": "正在合并：{message}",
-        "gitView.operation.rebasingOnto": "正在将 {headName} 变基到 {onto}"
+        "gitView.operation.rebasingOnto": "正在将 {headName} 变基到 {onto}",
+        "gitView.empty.selectRepositoryPlaceholder": "选择仓库..."
       }
     },
     "zh-TW": {
@@ -6820,7 +6825,8 @@
         "gitView.operation.inProgressTitle": "{operation} 進行中",
         "gitView.operation.mergeInProgressWithHead": "合併進行中（{head}）",
         "gitView.operation.mergingMessage": "正在合併：{message}",
-        "gitView.operation.rebasingOnto": "正在將 {headName} Rebase 到 {onto}"
+        "gitView.operation.rebasingOnto": "正在將 {headName} Rebase 到 {onto}",
+        "gitView.empty.selectRepositoryPlaceholder": "選擇儲存庫..."
       }
     },
     "uk": {
@@ -7957,7 +7963,8 @@
         "gitView.operation.inProgressTitle": "Виконується {operation}",
         "gitView.operation.mergeInProgressWithHead": "Виконується злиття з {head}",
         "gitView.operation.mergingMessage": "Виконується злиття: {message}",
-        "gitView.operation.rebasingOnto": "Перебазування {headName} на {onto}"
+        "gitView.operation.rebasingOnto": "Перебазування {headName} на {onto}",
+        "gitView.empty.selectRepositoryPlaceholder": "Виберіть репозиторій..."
       }
     },
     "es": {
@@ -9094,7 +9101,8 @@
         "gitView.operation.inProgressTitle": "{operation} en progreso",
         "gitView.operation.mergeInProgressWithHead": "Haciendo merge de {head}",
         "gitView.operation.mergingMessage": "Haciendo merge: {message}",
-        "gitView.operation.rebasingOnto": "Haciendo rebase de {headName} sobre {onto}"
+        "gitView.operation.rebasingOnto": "Haciendo rebase de {headName} sobre {onto}",
+        "gitView.empty.selectRepositoryPlaceholder": "Selecciona un repositorio..."
       }
     },
     "pt-BR": {
@@ -10231,7 +10239,8 @@
         "gitView.operation.inProgressTitle": "{operation} em andamento",
         "gitView.operation.mergeInProgressWithHead": "Fazendo merge de {head}",
         "gitView.operation.mergingMessage": "Fazendo merge: {message}",
-        "gitView.operation.rebasingOnto": "Fazendo rebase de {headName} sobre {onto}"
+        "gitView.operation.rebasingOnto": "Fazendo rebase de {headName} sobre {onto}",
+        "gitView.empty.selectRepositoryPlaceholder": "Selecione um repositório..."
       }
     },
     "ko": {
@@ -11368,7 +11377,8 @@
         "gitView.operation.inProgressTitle": "{operation} 진행 중",
         "gitView.operation.mergeInProgressWithHead": "{head} 병합 진행 중",
         "gitView.operation.mergingMessage": "병합 중: {message}",
-        "gitView.operation.rebasingOnto": "{headName}을(를) {onto} 위로 리베이스 중"
+        "gitView.operation.rebasingOnto": "{headName}을(를) {onto} 위로 리베이스 중",
+        "gitView.empty.selectRepositoryPlaceholder": "저장소 선택..."
       }
     },
     "pl": {
@@ -12505,7 +12515,8 @@
         "gitView.operation.inProgressTitle": "{operation} w toku",
         "gitView.operation.mergeInProgressWithHead": "Scalanie {head}",
         "gitView.operation.mergingMessage": "Scalanie: {message}",
-        "gitView.operation.rebasingOnto": "Rebase {headName} na {onto}"
+        "gitView.operation.rebasingOnto": "Rebase {headName} na {onto}",
+        "gitView.empty.selectRepositoryPlaceholder": "Wybierz repozytorium..."
       }
     },
     "ja": {
@@ -13642,7 +13653,8 @@
         "gitView.operation.inProgressTitle": "{operation}進行中",
         "gitView.operation.mergeInProgressWithHead": "{head}をマージ中",
         "gitView.operation.mergingMessage": "マージ中: {message}",
-        "gitView.operation.rebasingOnto": "{headName}を{onto}にリベース中"
+        "gitView.operation.rebasingOnto": "{headName}を{onto}にリベース中",
+        "gitView.empty.selectRepositoryPlaceholder": "リポジトリを選択..."
       }
     },
     "tr": {
@@ -14779,7 +14791,8 @@
         "gitView.operation.inProgressTitle": "{operation} sürüyor",
         "gitView.operation.mergeInProgressWithHead": "{head} merge ediliyor",
         "gitView.operation.mergingMessage": "Merge ediliyor: {message}",
-        "gitView.operation.rebasingOnto": "{headName}, {onto} üzerine rebase ediliyor"
+        "gitView.operation.rebasingOnto": "{headName}, {onto} üzerine rebase ediliyor",
+        "gitView.empty.selectRepositoryPlaceholder": "Bir repository seçin..."
       }
     },
     "ar": {
@@ -15916,7 +15929,8 @@
         "gitView.operation.inProgressTitle": "{operation} قيد التنفيذ",
         "gitView.operation.mergeInProgressWithHead": "جارٍ دمج {head}",
         "gitView.operation.mergingMessage": "جارٍ الدمج: {message}",
-        "gitView.operation.rebasingOnto": "جارٍ إعادة تأسيس {headName} على {onto}"
+        "gitView.operation.rebasingOnto": "جارٍ إعادة تأسيس {headName} على {onto}",
+        "gitView.empty.selectRepositoryPlaceholder": "حدّد مستودعًا…"
       }
     },
     "he": {
@@ -17053,7 +17067,8 @@
         "gitView.operation.inProgressTitle": "{operation} בתהליך",
         "gitView.operation.mergeInProgressWithHead": "ממזג את {head}",
         "gitView.operation.mergingMessage": "ממזג: {message}",
-        "gitView.operation.rebasingOnto": "מבצע rebase ל-{headName} על {onto}"
+        "gitView.operation.rebasingOnto": "מבצע rebase ל-{headName} על {onto}",
+        "gitView.empty.selectRepositoryPlaceholder": "בחר מאגר…"
       }
     }
   }

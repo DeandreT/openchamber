@@ -142,7 +142,7 @@ pub enum Integration {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ChangesRead {
     NotRepository,
-    Repository(GitChanges),
+    Repository(Box<GitChanges>),
 }
 
 /// The scope a change row belongs to.
@@ -274,7 +274,7 @@ impl StatusLoads {
 
     pub fn repository(&self) -> Option<&GitChanges> {
         match &self.current {
-            Some(ChangesRead::Repository(changes)) => Some(changes),
+            Some(ChangesRead::Repository(changes)) => Some(changes.as_ref()),
             _ => None,
         }
     }
@@ -688,7 +688,7 @@ mod tests {
         let second = loads.begin();
         assert!(loads.complete(second, Ok(ChangesRead::NotRepository)));
         assert!(
-            !loads.complete(first, Ok(ChangesRead::Repository(GitChanges::default()))),
+            !loads.complete(first, Ok(ChangesRead::Repository(Box::default()))),
             "an older read is dropped"
         );
         assert_eq!(loads.current(), Some(&ChangesRead::NotRepository));

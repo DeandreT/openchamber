@@ -45,6 +45,7 @@ use crate::theme::Palette;
 
 mod conflicts;
 mod identity;
+mod repositories;
 
 const OPERATION_POLL: Duration = Duration::from_secs(1);
 const DIFF_HEIGHT: f32 = 260.0;
@@ -81,6 +82,7 @@ pub(crate) struct GitView {
     notice: Option<Notice>,
     conflicts: conflicts::Conflicts,
     identities: identity::Identities,
+    repositories: repositories::Repositories,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -141,12 +143,14 @@ impl GitView {
             notice: None,
             conflicts: conflicts::Conflicts::default(),
             identities: identity::Identities::default(),
+            repositories: repositories::Repositories::default(),
             _subscriptions: vec![commit_subscription, branch_subscription],
         };
         let entity = cx.entity().downgrade();
         cx.defer(move |cx| {
             let _ = entity.update(cx, |view, cx| {
                 view.read_identities(cx);
+                view.discover_repositories(cx);
                 view.refresh(cx);
             });
         });
@@ -194,7 +198,7 @@ impl GitView {
             cx.notify();
             return;
         };
-        let directory = self.scope.directory.clone();
+        let directory = self.git_directory();
         let task = self
             .scope
             .run(async move { client.git_changes(&directory).await });
@@ -216,6 +220,7 @@ impl GitView {
                     ));
                 }
                 this.reconcile_selection(cx);
+                this.root_status_read(cx);
                 cx.notify();
             });
         }));
@@ -235,7 +240,7 @@ impl GitView {
             rows.iter().any(|row| row.path == path)
         });
         if listed {
-            let scope_of = self.scope.clone();
+            let scope_of = self.git_scope();
             self.pane.show(
                 &scope_of,
                 &path,
@@ -255,7 +260,7 @@ impl GitView {
             return;
         }
         self.selected = Some(selection);
-        let scope = self.scope.clone();
+        let scope = self.git_scope();
         self.pane.show(
             &scope,
             &row.path,
@@ -284,7 +289,7 @@ impl GitView {
             cx.notify();
             return;
         };
-        let directory = self.scope.directory.clone();
+        let directory = self.git_directory();
         let applied = mutation.clone();
         let task = self.scope.run(async move {
             match &applied {
@@ -354,7 +359,7 @@ impl GitView {
         let Some(client) = self.scope.client(cx) else {
             return;
         };
-        let directory = self.scope.directory.clone();
+        let directory = self.git_directory();
         let task = self
             .scope
             .run(async move { client.commit(&directory, &message).await });
@@ -398,7 +403,7 @@ impl GitView {
         let Some(client) = self.scope.client(cx) else {
             return;
         };
-        let directory = self.scope.directory.clone();
+        let directory = self.git_directory();
         let task = self
             .scope
             .run(async move { client.branches(&directory).await });
@@ -428,7 +433,7 @@ impl GitView {
         let Some(client) = self.scope.client(cx) else {
             return;
         };
-        let directory = self.scope.directory.clone();
+        let directory = self.git_directory();
         let run = change.clone();
         let task = self.scope.run(async move {
             match &run {
@@ -518,7 +523,7 @@ impl GitView {
         let Some(client) = self.scope.client(cx) else {
             return;
         };
-        let directory = self.scope.directory.clone();
+        let directory = self.git_directory();
         let plan = self.scope.run(async move {
             let binding = client
                 .repository_binding(&directory)
@@ -941,6 +946,7 @@ impl GitView {
             .items_center()
             .gap(px(4.0))
             .child(branch_button)
+            .children(self.render_repository_button(palette, direction, cx))
             .child(div().flex_1())
             .child(self.render_identity_button(palette, direction, cx))
             .child(text_button(
@@ -983,7 +989,10 @@ impl GitView {
                     "refresh",
                     strings.get("gitView.history.refresh"),
                 )
-                .render(palette, cx, |this: &mut Self, _, cx| this.refresh(cx)),
+                .render(palette, cx, |this: &mut Self, _, cx| {
+                    this.discover_repositories(cx);
+                    this.refresh(cx)
+                }),
             )
             .into_any_element()
     }
@@ -1605,6 +1614,7 @@ impl Render for GitView {
                 this.child(self.render_header(changes.as_ref(), &palette, direction, cx))
             })
             .children(self.render_operation(&palette, direction, cx))
+            .children(self.render_repositories(&palette, cx))
             .children(self.render_identities(&palette, cx))
             .children(self.render_in_progress(changes.as_ref(), &palette, direction, cx))
             .child(status_line(

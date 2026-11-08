@@ -72,7 +72,7 @@ impl GitView {
             .changes()
             .and_then(|changes| changes.branch.clone())
             .unwrap_or_default();
-        let directory = self.scope.directory.clone();
+        let directory = self.git_directory();
         let target = branch.clone();
         let task = self
             .scope
@@ -139,7 +139,7 @@ impl GitView {
         let Some(client) = self.scope.client(cx) else {
             return;
         };
-        let directory = self.scope.directory.clone();
+        let directory = self.git_directory();
         let task = self
             .scope
             .run(async move { client.conflict_details(&directory).await });
@@ -202,7 +202,7 @@ impl GitView {
         let Some(client) = self.scope.client(cx) else {
             return;
         };
-        let directory = self.scope.directory.clone();
+        let directory = self.git_directory();
         let task = self.scope.run(async move {
             if resume {
                 client.continue_integration(&directory, operation).await
