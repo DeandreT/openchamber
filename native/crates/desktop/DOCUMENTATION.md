@@ -14,8 +14,10 @@ prompt. Attachments and worktree creation remain separate workflows.
 
 - `blocking_requests.rs` owns location-scoped permission/form stores, selected
   subtree routing, host bootstrap hints, exact reconciliation and independent
-  mutation tasks. `request_dock.rs` draws one nonmodal permission-priority panel
-  above the composer. `form_input.rs` owns retained typed drafts and field widgets;
+  mutation tasks. The dock's active permission answers Alt+Enter (once),
+  Alt+Shift+Enter (always, when it can be saved) and Alt+Backspace (deny)
+  wherever focus is in the window. `request_dock.rs` draws one nonmodal
+  permission-priority panel above the composer. `form_input.rs` owns retained typed drafts and field widgets;
   `form_copy.rs` exports the form's content through explicit clipboard actions.
 - `session_goal.rs` owns the composer's goal arm, the goal writes (arm on
   send, Pause, Resume, the dialog's Start, Save and Remove goal) and the reads
@@ -275,9 +277,10 @@ prompt. Attachments and worktree creation remain separate workflows.
 - `send_catalog.rs` holds the composer's catalogs per configuration directory
   and resolves what a send would use through the core's `send_config`: the
   directory's default selection, refined by a selected session's record;
-  `model_controls.rs` draws the effort, model and agent controls from it and
-  hides their labels by the controls' width as the web's container query
-  does.
+  `model_controls.rs` draws the model, its effort as a muted "/ high" suffix,
+  and the agent from it, and hides their labels by the controls' width as the
+  web's container query does. Returning to a session selects its restored
+  draft whole, as the web's `onDraftRestored` does.
 - `provider_logos.rs` resolves, loads and caches provider logos for the
   composer and turn footers. Sidebar rows do not request provider logos.
 - `enterprise.rs` reads the fixed machine-policy locations, validates the
