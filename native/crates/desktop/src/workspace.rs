@@ -144,6 +144,10 @@ pub struct Workspace {
     /// The terminal panel, kept while hidden so its terminals keep parsing.
     pub(crate) terminal_panel: Option<Entity<crate::terminal_view::TerminalPanel>>,
     pub(crate) terminal_open: bool,
+    /// The panel shows this directory's terminals instead of the host
+    /// directory's, as `(host, target)`: a project action revealed its run
+    /// in the project's own checkout.
+    pub(crate) terminal_target: Option<(String, String)>,
     pub(crate) prompt_panel: Option<PromptPanel>,
     pub(crate) prompt_hover_task: Option<Task<()>>,
     pub(crate) prompt_hover_suppressed: bool,
@@ -241,6 +245,7 @@ pub struct Workspace {
     pub(crate) provider_logos: ProviderLogos,
     pub(crate) enterprise: crate::enterprise::PolicyMonitor,
     pub(crate) project_readouts: ProjectReadouts,
+    pub(crate) project_action_button: crate::project_action_run::ProjectActionButton,
     /// The context panel's Files, Git and Diff surfaces.
     pub(crate) panels: crate::files_view::Panels,
     /// Set while the new window's content is held at its requested size.
@@ -318,6 +323,7 @@ impl Workspace {
             work_status_overlay: false,
             terminal_panel: None,
             terminal_open: false,
+            terminal_target: None,
             prompt_panel: None,
             prompt_hover_task: None,
             prompt_hover_suppressed: false,
@@ -413,6 +419,7 @@ impl Workspace {
             provider_logos: ProviderLogos::default(),
             enterprise: crate::enterprise::PolicyMonitor::default(),
             project_readouts: ProjectReadouts::default(),
+            project_action_button: Default::default(),
             panels: crate::files_view::Panels::default(),
             initial_size: None,
             composer_slot: Rc::default(),

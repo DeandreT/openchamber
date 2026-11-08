@@ -6,7 +6,9 @@
 use std::collections::HashMap;
 
 use openchamber_native_core::ids::ProjectId;
-use openchamber_native_core::project_actions::ProjectAction;
+use openchamber_native_core::project_actions::{
+    ActionSource, ProjectAction, ProjectSetup, SharedTrust,
+};
 use openchamber_native_core::repository::{
     Attention, Changes, GitStatusRead, LineCounts, RepositoryStatus,
 };
@@ -52,19 +54,41 @@ struct LineStat {
     deletions: u64,
 }
 
-/// `GET /api/projects/:projectId/config`: only the merged actions are read.
+/// `GET /api/projects/:projectId/config`: the merged actions and the trust
+/// state of the shared ones.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ProjectSetupBody {
     project_actions: Vec<ActionBody>,
+    trust: Option<TrustBody>,
+    shared: Option<SharedBody>,
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct ActionBody {
     id: String,
     name: String,
     command: String,
     icon: Option<String>,
+    run_in: Option<String>,
+    source: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TrustBody {
+    hash: Option<String>,
+    trusted: bool,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SharedBody {
+    path: String,
+    #[serde(default)]
+    setup_worktree: Vec<String>,
+    #[serde(default)]
+    project_actions: Vec<ActionBody>,
 }
 
 impl ServerClient {
@@ -87,18 +111,50 @@ impl ServerClient {
             .url(&format!("api/projects/{}/config", project.as_str()))
     }
 
-    /// The configured actions of the project at `project_path`, in order.
-    pub async fn project_actions(
-        &self,
-        project_path: &str,
-    ) -> Result<Vec<ProjectAction>, TransportError> {
+    /// The configured actions of the project at `project_path`, in order,
+    /// and whether its shared commands still need trust.
+    pub async fn project_setup(&self, project_path: &str) -> Result<ProjectSetup, TransportError> {
         let Some(project) = ProjectId::from_path(project_path) else {
-            return Ok(Vec::new());
+            return Ok(ProjectSetup::default());
         };
         let body: ProjectSetupBody = self
             .get_json(self.project_setup_url(&project), None)
             .await?;
-        project_actions(body)
+        project_setup(body)
+    }
+
+    /// A free loopback port for a static preview server (`/api/system/free-port`).
+    pub async fn free_port(&self) -> Result<Option<u16>, TransportError> {
+        let body: Value = self
+            .get_json(self.endpoint().url("api/system/free-port"), None)
+            .await?;
+        Ok(body
+            .get("port")
+            .and_then(Value::as_u64)
+            .and_then(|port| u16::try_from(port).ok())
+            .filter(|port| *port > 0))
+    }
+
+    /// Records that this instance trusts the shared commands with `hash`
+    /// (`updateProjectSetup` with `sharedTrustHash`).
+    pub async fn trust_shared_setup(
+        &self,
+        project_path: &str,
+        hash: &str,
+    ) -> Result<(), TransportError> {
+        let Some(project) = ProjectId::from_path(project_path) else {
+            return Err(TransportError::Malformed("no project path".to_owned()));
+        };
+        let body =
+            serde_json::json!({ "sharedTrustHash": hash, "projectPath": project_path.trim() });
+        let response = self
+            .authorized(reqwest::Method::PUT, self.project_setup_url(&project))
+            .json(&body)
+            .send()
+            .await
+            .map_err(TransportError::from_request)?;
+        let _: Value = crate::client::read_json(response).await?;
+        Ok(())
     }
 }
 
@@ -143,22 +199,52 @@ fn present(value: &Option<Value>) -> bool {
 
 /// Every action needs an ID, a name and a command; as in the web's schema,
 /// one that lacks any makes the whole setup unreadable.
-fn project_actions(body: ProjectSetupBody) -> Result<Vec<ProjectAction>, TransportError> {
-    body.project_actions
+fn project_setup(body: ProjectSetupBody) -> Result<ProjectSetup, TransportError> {
+    let actions = body
+        .project_actions
         .into_iter()
-        .map(|action| {
-            if action.id.is_empty() || action.name.is_empty() || action.command.is_empty() {
-                return Err(TransportError::Malformed(
-                    "a project action lacks its ID, name or command".to_owned(),
-                ));
-            }
-            Ok(ProjectAction {
-                id: action.id,
-                name: action.name,
-                icon: action.icon,
-            })
-        })
-        .collect()
+        .map(project_action)
+        .collect::<Result<Vec<_>, _>>()?;
+    let untrusted = match (body.trust, body.shared) {
+        (
+            Some(TrustBody {
+                hash: Some(hash),
+                trusted: false,
+            }),
+            Some(shared),
+        ) => Some(SharedTrust {
+            hash,
+            path: shared.path,
+            setup_commands: shared.setup_worktree,
+            actions: shared
+                .project_actions
+                .into_iter()
+                .map(|action| (action.name, action.command))
+                .collect(),
+        }),
+        _ => None,
+    };
+    Ok(ProjectSetup { actions, untrusted })
+}
+
+fn project_action(action: ActionBody) -> Result<ProjectAction, TransportError> {
+    if action.id.is_empty() || action.name.is_empty() || action.command.is_empty() {
+        return Err(TransportError::Malformed(
+            "a project action lacks its ID, name or command".to_owned(),
+        ));
+    }
+    Ok(ProjectAction {
+        id: action.id,
+        name: action.name,
+        icon: action.icon,
+        command: action.command,
+        run_in_parent: action.run_in.as_deref() == Some("parent"),
+        source: if action.source.as_deref() == Some("shared") {
+            ActionSource::Shared
+        } else {
+            ActionSource::Personal
+        },
+    })
 }
 
 #[cfg(test)]
@@ -238,7 +324,8 @@ mod tests {
             r#"{"projectActions":[{"id":"dev","name":"Dev","command":"bun dev","icon":"rocket","source":"shared"},{"id":"t","name":"Test","command":"bun test"}]}"#,
         )
         .expect("test JSON is valid");
-        let actions = project_actions(body).expect("every action is complete");
+        let setup = project_setup(body).expect("every action is complete");
+        let actions = &setup.actions;
         assert_eq!(
             actions
                 .iter()
@@ -247,9 +334,43 @@ mod tests {
             ["dev", "t"]
         );
         assert_eq!(actions[0].icon.as_deref(), Some("rocket"));
+        assert_eq!(actions[0].source, ActionSource::Shared);
+        assert_eq!(actions[1].source, ActionSource::Personal);
+        assert_eq!(actions[0].command, "bun dev");
+        assert_eq!(
+            setup.untrusted, None,
+            "a setup without trust state needs none"
+        );
         let incomplete: ProjectSetupBody =
             serde_json::from_str(r#"{"projectActions":[{"id":"x","name":"X","command":""}]}"#)
                 .expect("test JSON is valid");
-        assert!(project_actions(incomplete).is_err());
+        assert!(project_setup(incomplete).is_err());
+    }
+
+    #[test]
+    fn untrusted_shared_commands_carry_what_the_prompt_shows() {
+        let body: ProjectSetupBody = serde_json::from_str(
+            r#"{"trust":{"hash":"h1","trusted":false},
+               "projectActions":[{"id":"dev","name":"Dev","command":"bun dev","runIn":"parent","source":"shared"}],
+               "shared":{"status":"ok","path":".openchamber/project.json","setupWorktree":["bun i"],"setupWorktreeWait":null,
+                 "projectActions":[{"id":"dev","name":"Dev","command":"bun dev"}],"draftStarters":[],"plansDir":null}}"#,
+        )
+        .expect("test JSON is valid");
+        let setup = project_setup(body).expect("valid");
+        assert!(setup.actions[0].run_in_parent);
+        assert_eq!(
+            setup.untrusted,
+            Some(SharedTrust {
+                hash: "h1".to_owned(),
+                path: ".openchamber/project.json".to_owned(),
+                setup_commands: vec!["bun i".to_owned()],
+                actions: vec![("Dev".to_owned(), "bun dev".to_owned())],
+            })
+        );
+        let trusted: ProjectSetupBody = serde_json::from_str(
+            r#"{"trust":{"hash":"h1","trusted":true},"projectActions":[],"shared":{"path":"p"}}"#,
+        )
+        .expect("test JSON is valid");
+        assert_eq!(project_setup(trusted).expect("valid").untrusted, None);
     }
 }

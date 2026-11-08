@@ -107,6 +107,7 @@ mod panel_tests;
 mod part_state;
 mod permission_modes;
 mod preference_pages;
+mod project_action_run;
 mod project_chooser;
 mod project_registration;
 mod project_section;
@@ -175,6 +176,7 @@ mod transcript_selection;
 mod transcript_view;
 mod turn_footer;
 mod turn_stats_section;
+mod ui_memory;
 mod workspace;
 #[cfg(test)]
 mod workspace_tests;
@@ -220,6 +222,9 @@ fn main() {
         let layout = store.load();
         (store, layout)
     });
+    let ui_memory = install_id::config_directory()
+        .map(|directory| ui_memory::UiMemory::load(&directory))
+        .unwrap_or_default();
     let appearance = install_id::config_directory().map(|directory| {
         let store = appearance_storage::AppearanceStore::new(&directory);
         let reader = store.clone();
@@ -257,6 +262,7 @@ fn main() {
             let strings = Strings::load(&locale::requested_locale());
             tracing::info!(locale = strings.locale(), "locale selected");
             cx.set_global(strings);
+            cx.set_global(ui_memory);
             let palette = requested_palette(cx.window_appearance());
             theme::apply(palette, cx);
             let generic_fonts = generic_fonts.join().unwrap_or_else(|_| {
