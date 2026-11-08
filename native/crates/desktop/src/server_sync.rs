@@ -310,8 +310,14 @@ impl Workspace {
                                 ControlEvent::WorktreeChanged { .. } | ControlEvent::SessionCreated,
                             ) => this.refresh_topology_soon(window, cx),
                             ControlItem::Event(ControlEvent::ScheduledTaskRan { project_id }) => {
-                                if let Some(page) = this.scheduled_tasks.clone() {
-                                    page.update(cx, |page, cx| page.task_ran(&project_id, cx));
+                                // The page's read asks the workspace for its
+                                // connection, so it starts after this update.
+                                if let Some(page) = this.scheduled_tasks.as_ref() {
+                                    let page = page.downgrade();
+                                    cx.defer(move |cx| {
+                                        let _ = page
+                                            .update(cx, |page, cx| page.task_ran(&project_id, cx));
+                                    });
                                 }
                             }
                             ControlItem::Event(ControlEvent::ProjectContextChanged {

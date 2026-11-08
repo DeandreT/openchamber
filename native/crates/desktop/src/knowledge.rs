@@ -192,7 +192,7 @@ impl KnowledgePanel {
                 }
             }),
         ];
-        let mut panel = Self {
+        let panel = Self {
             scope,
             owner,
             knowledge: None,
@@ -231,7 +231,12 @@ impl KnowledgePanel {
             tasks: Vec::new(),
             _subscriptions: subscriptions,
         };
-        panel.reload(cx);
+        // The side panel makes this view inside the workspace's update, and a
+        // read asks the workspace for its connection; it starts once that ends.
+        let view = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            let _ = view.update(cx, |view, cx| view.reload(cx));
+        });
         panel
     }
 
@@ -1239,11 +1244,17 @@ impl crate::workspace::Workspace {
 
     /// An owner's knowledge changed elsewhere: its open panels read again.
     pub(crate) fn project_context_changed(&mut self, project_id: &str, cx: &mut Context<Self>) {
+        // A read asks the workspace for its connection, so it starts once
+        // this update ends.
         for panel in self.panels.knowledge_views(&self.runtime) {
-            panel.update(cx, |panel, cx| {
-                if panel.owner.project_id == project_id {
-                    panel.reload(cx);
-                }
+            let project = project_id.to_owned();
+            let panel = panel.downgrade();
+            cx.defer(move |cx| {
+                let _ = panel.update(cx, |panel, cx| {
+                    if panel.owner.project_id == project {
+                        panel.reload(cx);
+                    }
+                });
             });
         }
     }
