@@ -762,6 +762,7 @@ impl Workspace {
         self.open_btw_fork(cx);
         self.composer_key = next_key;
         self.restore_composer_draft(window, cx);
+        self.select_switched_draft(cx);
         self.focus_composer(window, cx);
         self.pending_switch = Some(started);
         self.refresh_blocking_requests(window, cx);
@@ -1056,6 +1057,17 @@ impl Workspace {
             composer.set_selected_range(draft.selection.clone(), cx);
         });
         self.sync_draft_preview(cx);
+    }
+
+    /// The reference's `onDraftRestored`: a session's draft comes back
+    /// selected whole, so typing replaces it, while a side conversation's
+    /// composer keeps the caret at the end.
+    fn select_switched_draft(&mut self, cx: &mut Context<Self>) {
+        let at_end = self.btw_takes_composer();
+        self.composer.update(cx, |composer, cx| {
+            let end = composer.value().len();
+            composer.set_selected_range(if at_end { end..end } else { 0..end }, cx);
+        });
     }
 
     pub fn focus_composer(&mut self, window: &mut Window, cx: &mut Context<Self>) {

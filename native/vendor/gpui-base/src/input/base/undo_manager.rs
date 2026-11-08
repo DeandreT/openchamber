@@ -456,8 +456,10 @@ fn is_adjacent(intent: EditIntent, previous: &Change, current: &Change) -> bool 
     }
     match intent {
         EditIntent::Typing => {
+            // Only a typed line break leads a typing group; nothing joins
+            // across a line break inside one.
             previous.old_range.is_empty()
-                && !previous.new_text.contains(['\n', '\r'])
+                && !previous.new_text.trim_start_matches(['\n', '\r']).contains(['\n', '\r'])
                 && !current.new_text.contains(['\n', '\r'])
                 && previous.new_range.start <= current.old_range.start
                 && previous.new_range.end == current.old_range.end
