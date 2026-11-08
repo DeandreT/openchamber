@@ -23,6 +23,10 @@ pub enum ControlEvent {
     Connected,
     WorktreeChanged { directories: Vec<String> },
     SessionCreated,
+    /// A scheduled task of `project_id` started or finished a run.
+    ScheduledTaskRan { project_id: String },
+    /// A client or an agent changed `project_id`'s notes, todos or plans.
+    ProjectContextChanged { project_id: String },
 }
 
 /// A control connection outcome. Failure never means empty topology.
@@ -206,6 +210,22 @@ fn decode(data: &[u8]) -> Result<Option<ControlEvent>, TransportError> {
     match envelope.kind.as_str() {
         "openchamber:event-stream-ready" => Ok(Some(ControlEvent::Connected)),
         "openchamber:session-created" => Ok(Some(ControlEvent::SessionCreated)),
+        "openchamber:scheduled-task-ran" | "openchamber:project-context-changed" => {
+            let project_id = envelope
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.get("projectId"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned);
+            Ok(project_id.map(|project_id| {
+                if envelope.kind == "openchamber:scheduled-task-ran" {
+                    ControlEvent::ScheduledTaskRan { project_id }
+                } else {
+                    ControlEvent::ProjectContextChanged { project_id }
+                }
+            }))
+        }
         "openchamber:worktree-changed" => {
             #[derive(Deserialize)]
             struct Changed {

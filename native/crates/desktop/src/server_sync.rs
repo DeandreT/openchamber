@@ -309,6 +309,14 @@ impl Workspace {
                             ControlItem::Event(
                                 ControlEvent::WorktreeChanged { .. } | ControlEvent::SessionCreated,
                             ) => this.refresh_topology_soon(window, cx),
+                            ControlItem::Event(ControlEvent::ScheduledTaskRan { project_id }) => {
+                                if let Some(page) = this.scheduled_tasks.clone() {
+                                    page.update(cx, |page, cx| page.task_ran(&project_id, cx));
+                                }
+                            }
+                            ControlItem::Event(ControlEvent::ProjectContextChanged {
+                                project_id,
+                            }) => this.project_context_changed(&project_id, cx),
                             ControlItem::Disconnected(error) => {
                                 tracing::warn!(%error, "the topology control stream dropped")
                             }

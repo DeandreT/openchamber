@@ -79,6 +79,10 @@ mod host_profiles;
 mod host_recovery;
 mod install_id;
 mod journal_worker;
+mod knowledge;
+#[cfg(test)]
+mod knowledge_tests;
+mod knowledge_view;
 mod legacy_queue_reservation;
 mod locale;
 mod logical;
@@ -96,6 +100,7 @@ mod mutation_journal;
 mod network;
 mod open_in_app;
 mod pane_resize;
+mod panel_controls;
 #[cfg(test)]
 mod panel_tests;
 mod part_state;
@@ -121,6 +126,10 @@ mod recovery_view;
 mod request_dock;
 mod review_flow;
 mod review_view;
+mod scheduled_tasks;
+#[cfg(test)]
+mod scheduled_tasks_tests;
+mod scheduled_tasks_view;
 mod selection_storage;
 mod send_attempt;
 mod send_catalog;
@@ -161,6 +170,7 @@ mod terminal_surface;
 mod terminal_view;
 mod text_part_view;
 mod theme;
+mod time_zones;
 mod tool_part_view;
 mod tracked_text;
 mod transcript_clock;

@@ -262,11 +262,21 @@ impl Workspace {
                             this.toggle_source_board(window, cx)
                         }),
                     )
-                    .child(button(
-                        "scheduled-tasks",
-                        "calendar-schedule",
-                        "sessions.sidebar.header.actions.scheduledTasks",
-                    ))
+                    .child(
+                        IconButton::new(
+                            "scheduled-tasks",
+                            "calendar-schedule",
+                            strings.get("sessions.sidebar.header.actions.scheduledTasks"),
+                        )
+                        .tone(if self.scheduled_tasks_open {
+                            ButtonTone::Active
+                        } else {
+                            ButtonTone::Quiet
+                        })
+                        .render(palette, cx, |this, window, cx| {
+                            this.toggle_scheduled_tasks(window, cx)
+                        }),
+                    )
                     .child(
                         IconButton::new(
                             "archive",

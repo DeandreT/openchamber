@@ -43,6 +43,7 @@ use crate::context_panel::{ROW_LINE, ROW_SIZE, XS_LINE, XS_SIZE};
 use crate::diff_view::DiffView;
 use crate::elevation;
 use crate::git_view::GitView;
+use crate::knowledge::KnowledgePanel;
 use crate::locale::{self, Direction, Strings};
 use crate::logical::LogicalStyledExt;
 use crate::network::NetworkTask;
@@ -135,6 +136,8 @@ pub(crate) enum PanelSurface {
     Files,
     Git,
     Diff,
+    /// Project knowledge: notes, todos and plans.
+    Notes,
 }
 
 impl PanelSurface {
@@ -143,6 +146,7 @@ impl PanelSurface {
             Self::Files => "contextPanel.mode.files",
             Self::Git => "layout.rightSidebar.git",
             Self::Diff => "contextPanel.mode.diff",
+            Self::Notes => "contextRail.surface.notes",
         }
     }
 }
@@ -156,6 +160,20 @@ pub(crate) struct Panels {
     files: HashMap<ViewKey, (Entity<FilesView>, Rc<Cell<bool>>)>,
     git: HashMap<ViewKey, Entity<GitView>>,
     diff: HashMap<ViewKey, Entity<DiffView>>,
+    /// Knowledge panels by runtime and owner path, with the subscription
+    /// that carries their sends to the workspace.
+    notes: HashMap<ViewKey, (Entity<KnowledgePanel>, gpui_kit::Subscription)>,
+}
+
+impl Panels {
+    /// The retained knowledge panels of `runtime`.
+    pub(crate) fn knowledge_views(&self, runtime: &RuntimeId) -> Vec<Entity<KnowledgePanel>> {
+        self.notes
+            .iter()
+            .filter(|((owner, _), _)| owner == runtime)
+            .map(|(_, (view, _))| view.clone())
+            .collect()
+    }
 }
 
 impl Workspace {
@@ -250,6 +268,18 @@ impl Workspace {
                         });
                     }
                 }
+                PanelSurface::Notes => {
+                    let owner = self.knowledge_owner(&scope.directory, cx);
+                    if let Some(owner) = owner
+                        && let Some((view, _)) =
+                            self.panels.notes.get(&(scope.runtime.clone(), owner.path))
+                    {
+                        let view = view.downgrade();
+                        cx.defer(move |cx| {
+                            let _ = view.update(cx, |view, cx| view.reload(cx));
+                        });
+                    }
+                }
                 PanelSurface::Files => {}
             }
         }
@@ -333,6 +363,25 @@ impl Workspace {
                     .or_insert_with(|| cx.new(|cx| DiffView::new(scope, cx)))
                     .clone()
                     .into_any_element(),
+                PanelSurface::Notes => match self.knowledge_owner(&scope.directory, cx) {
+                    Some(owner) => {
+                        let key = (scope.runtime.clone(), owner.path.clone());
+                        if !self.panels.notes.contains_key(&key) {
+                            let view = cx.new(|cx| KnowledgePanel::new(scope, owner, window, cx));
+                            let subscription =
+                                cx.subscribe_in(&view, window, |this, view, event, window, cx| {
+                                    this.on_knowledge_event(view, event, window, cx)
+                                });
+                            self.panels.notes.insert(key.clone(), (view, subscription));
+                        }
+                        self.panels.notes[&key].0.clone().into_any_element()
+                    }
+                    None => empty_state(
+                        locale::strings(cx).get("rightSidebar.contextNotesTodo.empty.selectProject"),
+                        palette,
+                        cx,
+                    ),
+                },
             },
             _ => {
                 let strings = locale::strings(cx);
@@ -340,6 +389,7 @@ impl Workspace {
                     PanelSurface::Files => "filesView.editor.pickFileFromTree",
                     PanelSurface::Git => "gitView.empty.selectSessionOrDirectory",
                     PanelSurface::Diff => "diffView.state.selectSessionDirectory",
+                    PanelSurface::Notes => "rightSidebar.contextNotesTodo.empty.selectProject",
                 };
                 empty_state(strings.get(key), palette, cx)
             }
