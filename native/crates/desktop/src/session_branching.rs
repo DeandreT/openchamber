@@ -591,9 +591,25 @@ impl Workspace {
         self.branching.strip_expanded = None;
         self.remeasure_transcript(&session);
         if let (Some(text), Some(draft)) = (restore, draft) {
-            self.put_in_composer(draft, text, window, cx);
+            self.show_reverted_prompt(draft, text, window, cx);
         }
         cx.notify();
+    }
+
+    /// The reverted prompt goes back to its composer, which takes the focus
+    /// when it is the one on screen, as the reference's does.
+    pub(crate) fn show_reverted_prompt(
+        &mut self,
+        draft: DraftKey,
+        text: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let shown = self.composer_key.as_ref() == Some(&draft);
+        self.put_in_composer(draft, text, window, cx);
+        if shown {
+            self.focus_composer(window, cx);
+        }
     }
 
     pub(crate) fn finish_revert(

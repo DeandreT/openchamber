@@ -158,7 +158,81 @@
         "selector": "button[aria-label=\"Open session actions\"]"
       },
       "native": "session-actions"
-    }
+    },
+    "composer-model": {"electron": {"selector": ".model-controls__model-trigger"}, "native": "composer-model"},
+    "composer-variant": {"electron": {"selector": ".model-controls__variant-trigger"}, "native": "composer-variant"},
+    "composer-agent": {"electron": {"selector": "[role=button]:has(> .model-controls__agent-label)"}, "native": "composer-agent"},
+    "composer-permissions": {"electron": {"selector": "button[aria-label^=\"Permissions\"]"}, "native": "composer-permissions"},
+    "agent-option-plan": {"electron": {"selector": "[role=menuitem]", "button": "Plan"}, "native": "composer-agent-option:plan"},
+    "variant-option-high": {"electron": {"selector": "[role=menuitem]", "button": "high"}, "native": "composer-variant-option:named:high"},
+    "queued-toggle": {"electron": {"selector": "[role=group][aria-label=\"Queued messages\"] button[aria-expanded]"}, "native": "queued-toggle"},
+    "queued-only-edit": {
+      "electron": {"selector": "[role=group][aria-label=\"Queued messages\"] > button", "button": "edit"},
+      "native": {"within": {"name": "Queued alpha", "role": "panel"}, "name": "edit", "role": "button"}
+    },
+    "queued-only-send": {
+      "electron": {"selector": "[role=group][aria-label=\"Queued messages\"] > button", "button": "send"},
+      "native": {"within": {"name": "Queued beta", "role": "panel"}, "name": "send", "role": "button"}
+    },
+    "queued-first-handle": {
+      "electron": {"selector": "[role=group][aria-label=\"Queued messages\"] [id] > div:nth-child(1) button[aria-label=\"Drag to reorder\"]"},
+      "native": {"within": {"name": "Queued alpha", "role": "panel"}, "name": "Drag to reorder", "role": "button"}
+    },
+    "queued-second-handle": {
+      "electron": {"selector": "[role=group][aria-label=\"Queued messages\"] [id] > div:nth-child(2) button[aria-label=\"Drag to reorder\"]"},
+      "native": {"within": {"name": "Queued beta", "role": "panel"}, "name": "Drag to reorder", "role": "button"}
+    },
+    "queued-second-remove": {
+      "electron": {"selector": "[role=group][aria-label=\"Queued messages\"] [id] > div:nth-child(2) button[aria-label=\"Remove from queue\"]"},
+      "native": {"within": {"name": "Queued alpha", "role": "panel"}, "name": "Remove from queue", "role": "button"}
+    },
+    "starter-craft-goal": {"electron": {"button": "Craft a Goal"}, "native": "starter-global-command-craft-goal"},
+    "starter-explore-remove": {"electron": {"selector": "button[aria-label=\"Remove\"]"}, "native": "starter-global-command-explore-remove"},
+    "starter-pick-explore": {
+      "electron": {"selector": "[role=listbox][aria-label=\"Suggestions\"] [role=option]", "button": "Explore the codebase"},
+      "native": "starter-pick-explore"
+    },
+    "composer-stop": {"electron": {"selector": "button[aria-label=\"Stop generating\"]"}, "native": "composer-submit"},
+    "permission-once": {
+      "electron": {"selector": "[role=dialog][aria-label=\"Permission required\"] button", "button": "Allow once\nAlt + Enter"},
+      "native": {"name": "Allow once", "role": "button"}
+    },
+    "permission-always": {
+      "electron": {"selector": "[role=dialog][aria-label=\"Permission required\"] button", "button": "Always: printf *"},
+      "native": {"name": "Always: printf *", "role": "button"}
+    },
+    "permission-deny": {
+      "electron": {"selector": "[role=dialog][aria-label=\"Permission required\"] button", "button": "Deny\nAlt + ⌫"},
+      "native": {"name": "Deny", "role": "button"}
+    },
+    "form-beta": {
+      "electron": {"selector": "[role=dialog][aria-label=\"Questions\"] button", "button": "Beta\nSecond option"},
+      "native": {"name": "Beta", "role": "radio button"}
+    },
+    "form-one": {
+      "electron": {"selector": "[role=dialog][aria-label=\"Questions\"] button", "button": "One\nFirst check"},
+      "native": {"name": "One", "role": "check box"}
+    },
+    "form-two": {
+      "electron": {"selector": "[role=dialog][aria-label=\"Questions\"] button", "button": "Two\nSecond check"},
+      "native": {"name": "Two", "role": "check box"}
+    },
+    "form-next": {"electron": {"selector": "[role=dialog][aria-label=\"Questions\"] button", "button": "Next"}, "native": {"name": "Next", "role": "button"}},
+    "form-back": {"electron": {"selector": "[role=dialog][aria-label=\"Questions\"] button", "button": "Back"}, "native": {"name": "Back", "role": "button"}},
+    "form-submit": {"electron": {"selector": "[role=dialog][aria-label=\"Questions\"] button", "button": "Submit"}, "native": {"name": "Submit", "role": "button"}},
+    "form-dismiss": {"electron": {"selector": "[role=dialog][aria-label=\"Questions\"] button", "button": "Dismiss"}, "native": {"name": "Dismiss", "role": "button"}},
+    "form-answer": {"electron": {"selector": "[role=dialog][aria-label=\"Questions\"] textarea"}, "native": {"name": "Custom"}},
+    "starter-explore-chip": {"electron": {"button": "Explore the codebase"}, "native": "starter-global-command-explore"},
+    "revert-target-row": {
+      "electron": {"selector": "[data-message-id]:has(button[aria-label=\"Revert to this message\"])"},
+      "native": {"name": "Revert target prompt", "prefix": true, "role": "paragraph"}
+    },
+    "revert-target-action": {
+      "electron": {"selector": "[data-message-id]:hover button[aria-label=\"Revert to this message\"]"},
+      "native": {"name": "Revert to this message", "role": "button"}
+    },
+    "revert-restore": {"electron": {"button": "Restore"}, "native": "revert-restore"},
+    "attachment-remove-dropped": {"electron": {"selector": "[data-remove-button][aria-label=\"Remove dropped.txt\"]"}, "native": {"name": "Remove dropped.txt", "role": "button"}}
   },
   "scenarios": [
     {
@@ -341,6 +415,1717 @@
             "new-session"
           ]
         }
+      ]
+    },
+    {
+      "id": "composer.configuration.select-restore-dispatch",
+      "feature": "composer.configuration",
+      "proofs": {
+        "composer.configuration": {
+          "behaviors": ["model and provider selection", "agent selection", "variant selection", "persist and restore selection", "dispatch captures configuration"],
+          "states": ["menu open", "selected", "restored"]
+        }
+      },
+      "description": "In a session, the agent menu, the model search and the effort menu choose Plan, the 30-second fixture and high. The choice survives a normal quit and relaunch, and the next send runs with it on the server.",
+      "steps": [
+        {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
+        {
+          "wait": {
+            "electron": {
+              "expression": "document.querySelector('.model-controls__model-label')?.textContent === 'Fixture stream, seeding speed' && document.querySelector('.model-controls__agent-label')?.textContent === 'Build'"
+            },
+            "native": {"named": {"id": "composer-model", "name": "Fixture stream, seeding speed"}},
+            "timeout": 30
+          }
+        },
+        {"clickTarget": "composer-agent"},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[role=menu] [role=menuitem]')].some((item) => item.innerText.trim() === 'Plan')"},
+            "native": {"elements": ["composer-agent-option:plan"]}
+          }
+        },
+        {"clickTarget": "agent-option-plan"},
+        {
+          "wait": {
+            "electron": {"expression": "document.querySelector('.model-controls__agent-label')?.textContent === 'Plan' && !document.querySelector('[role=menu]')"},
+            "native": {"named": {"id": "composer-agent", "name": "Plan"}}
+          }
+        },
+        {"clickTarget": "composer-model"},
+        {
+          "wait": {
+            "electron": {"expression": "document.activeElement?.getAttribute('placeholder') === 'Search models'"},
+            "native": {"named": {"name": "Search models", "role": "entry"}}
+          }
+        },
+        {"type": "silence"},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[role=listbox] [role=option]')].length === 1"},
+            "native": {"elements": ["composer-model-option:perf/think-30s"]}
+          }
+        },
+        {"key": "Return"},
+        {
+          "wait": {
+            "electron": {
+              "expression": "document.querySelector('.model-controls__model-label')?.textContent === 'Fixture silence, 30s' && !document.querySelector('[role=listbox]')"
+            },
+            "native": {"named": {"id": "composer-model", "name": "Fixture silence, 30s"}}
+          }
+        },
+        {"clickTarget": "composer-variant"},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[role=menu] [role=menuitem]')].some((item) => item.innerText.trim() === 'high')"},
+            "native": {"elements": ["composer-variant-option:named:high"]}
+          }
+        },
+        {"clickTarget": "variant-option-high"},
+        {
+          "wait": {
+            "electron": {
+              "expression": "document.querySelector('.model-controls__variant-label')?.textContent === 'High' && !document.querySelector('[role=menu]')"
+            },
+            "native": {"named": {"id": "composer-variant", "name": "high"}}
+          }
+        },
+        {"expect": {"api": "/api/config/settings", "select": ["lastUsedEfforts", "perf/think-30s"], "equals": "high"}},
+        {"clickTarget": "window-close"},
+        {"restart": {"after": "exit", "timeout": 20}},
+        {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
+        {
+          "wait": {
+            "electron": {
+              "expression": "document.querySelector('.model-controls__model-label')?.textContent === 'Fixture silence, 30s' && document.querySelector('.model-controls__agent-label')?.textContent === 'Plan' && document.querySelector('.model-controls__variant-label')?.textContent === 'High'"
+            },
+            "native": {"named": {"id": "composer-variant", "name": "high"}},
+            "timeout": 30
+          }
+        },
+        {
+          "wait": {
+            "electron": {"expression": "document.querySelector('.model-controls__model-label')?.textContent === 'Fixture silence, 30s'"},
+            "native": {"named": {"id": "composer-model", "name": "Fixture silence, 30s"}}
+          }
+        },
+        {
+          "wait": {
+            "electron": {"expression": "document.querySelector('.model-controls__agent-label')?.textContent === 'Plan'"},
+            "native": {"named": {"id": "composer-agent", "name": "Plan"}}
+          }
+        },
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"type": "Configured send"},
+        {"key": "Return"},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=20",
+            "select": ["data"],
+            "contains": {"type": "user", "text": "Configured send"},
+            "timeout": 30
+          }
+        },
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}",
+            "select": ["data"],
+            "contains": {"agent": "plan", "model": {"providerID": "perf", "id": "think-30s", "variant": "high"}},
+            "timeout": 30
+          }
+        }
+      ]
+    },
+    {
+      "id": "composer.configuration.permission-mode",
+      "feature": "composer.configuration",
+      "proofs": {"composer.configuration": {"behaviors": ["permission mode outcome"], "states": ["selected"]}},
+      "description": "The permission shield cycles a session from ask to accept everything and back, each press saved by the server, and the saved mode returns after a relaunch.",
+      "steps": [
+        {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
+        {
+          "wait": {
+            "electron": {
+              "expression": "document.querySelector('button[aria-label^=\"Permissions\"]')?.getAttribute('aria-label') === 'Permissions: ask every time'"
+            },
+            "native": {"named": {"id": "composer-permissions", "name": "Permissions: ask every time"}},
+            "timeout": 30
+          }
+        },
+        {"clickTarget": "composer-permissions"},
+        {
+          "wait": {
+            "electron": {
+              "expression": "document.querySelector('button[aria-label^=\"Permissions\"]')?.getAttribute('aria-label') === 'Permissions: accept everything'"
+            },
+            "native": {"named": {"id": "composer-permissions", "name": "Permissions: accept everything"}}
+          }
+        },
+        {"expect": {"api": "/api/permission-auto-accept", "select": ["modes", "{session:parity: short a}"], "equals": "auto"}},
+        {"clickTarget": "composer-permissions"},
+        {
+          "wait": {
+            "electron": {
+              "expression": "document.querySelector('button[aria-label^=\"Permissions\"]')?.getAttribute('aria-label') === 'Permissions: ask every time'"
+            },
+            "native": {"named": {"id": "composer-permissions", "name": "Permissions: ask every time"}}
+          }
+        },
+        {"expect": {"api": "/api/permission-auto-accept", "select": ["modes", "{session:parity: short a}"], "equals": "ask"}},
+        {"clickTarget": "composer-permissions"},
+        {"expect": {"api": "/api/permission-auto-accept", "select": ["modes", "{session:parity: short a}"], "equals": "auto"}},
+        {"clickTarget": "window-close"},
+        {"restart": {"after": "exit", "timeout": 20}},
+        {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
+        {
+          "wait": {
+            "electron": {
+              "expression": "document.querySelector('button[aria-label^=\"Permissions\"]')?.getAttribute('aria-label') === 'Permissions: accept everything'"
+            },
+            "native": {"named": {"id": "composer-permissions", "name": "Permissions: accept everything"}},
+            "timeout": 30
+          }
+        }
+      ]
+    },
+    {
+      "id": "composer.queue.queue-edit-reorder-steer",
+      "feature": "composer.queue-steer-starters",
+      "proofs": {
+        "composer.queue-steer-starters": {
+          "behaviors": ["queue while running", "edit reorder remove queued prompt", "steer outcome"],
+          "states": ["idle", "running", "queued", "editing", "delivered"]
+        }
+      },
+      "description": "While a held turn runs, Enter queues on the server; edit and ArrowUp take a queued message back into the composer without a duplicate; a drag reorders, Remove deletes, and send steers the last one into the running turn, which then delivers it.",
+      "steps": [
+        {"click": {"zone": "activity:work:session:", "title": "parity: short b"}},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('.model-controls__model-label')?.textContent"},
+            "native": {"elements": ["composer-model"]},
+            "timeout": 30
+          }
+        },
+        {"clickTarget": "composer-model"},
+        {
+          "wait": {
+            "electron": {"expression": "document.activeElement?.getAttribute('placeholder') === 'Search models'"},
+            "native": {"named": {"name": "Search models", "role": "entry"}}
+          }
+        },
+        {"type": "silence"},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[role=listbox] [role=option]')].length === 1"},
+            "native": {"elements": ["composer-model-option:perf/think-30s"]}
+          }
+        },
+        {"key": "Return"},
+        {
+          "wait": {
+            "electron": {
+              "expression": "document.querySelector('.model-controls__model-label')?.textContent === 'Fixture silence, 30s' && !document.querySelector('[role=listbox]')"
+            },
+            "native": {"named": {"id": "composer-model", "name": "Fixture silence, 30s"}}
+          }
+        },
+        {"gate": "hold"},
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"type": "Queue base"},
+        {"key": "Return"},
+        {"expect": {"gate": "waiting", "equals": 1, "timeout": 30}},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('button[aria-label=\"Stop generating\"]')"},
+            "native": {"named": {"id": "composer-submit", "name": "Stop generating"}},
+            "timeout": 30
+          }
+        },
+        {"type": "Queued alpha"},
+        {"key": "Return"},
+        {"expect": {"api": "/api/message-queue", "select": ["sessions", 0, "items"], "where": {"content": "Queued alpha"}, "length": 1}},
+        {"wait": {"electron": {"focusedText": ""}, "native": {"focusedText": ""}}},
+        {"clickTarget": "queued-only-edit"},
+        {"wait": {"electron": {"focusedText": "Queued alpha"}, "native": {"focusedText": "Queued alpha"}}},
+        {"key": "Return"},
+        {"expect": {"api": "/api/message-queue", "select": ["sessions", 0, "items"], "length": 1}},
+        {"expect": {"api": "/api/message-queue", "select": ["sessions", 0, "items"], "where": {"content": "Queued alpha"}, "length": 1}},
+        {"wait": {"electron": {"focusedText": ""}, "native": {"focusedText": ""}}},
+        {"key": "Up"},
+        {"wait": {"electron": {"focusedText": "Queued alpha"}, "native": {"focusedText": "Queued alpha"}}},
+        {"key": "Return"},
+        {"expect": {"api": "/api/message-queue", "select": ["sessions", 0, "items"], "length": 1}},
+        {"wait": {"electron": {"focusedText": ""}, "native": {"focusedText": ""}}},
+        {"type": "Queued beta"},
+        {"key": "Return"},
+        {"expect": {"api": "/api/message-queue", "select": ["sessions", 0, "items"], "length": 2}},
+        {"clickTarget": "queued-toggle"},
+        {
+          "wait": {
+            "electron": {"expression": "document.querySelectorAll('[role=group][aria-label=\"Queued messages\"] [id] > div').length === 2"},
+            "native": {"named": {"name": "Queued beta", "role": "panel"}}
+          }
+        },
+        {"drag": {"from": "queued-second-handle", "to": "queued-first-handle"}},
+        {"expect": {"api": "/api/message-queue", "select": ["sessions", 0, "items", 0, "content"], "equals": "Queued beta"}},
+        {"clickTarget": "queued-second-remove"},
+        {"expect": {"api": "/api/message-queue", "select": ["sessions", 0, "items"], "length": 1}},
+        {"expect": {"api": "/api/message-queue", "select": ["sessions", 0, "items", 0, "content"], "equals": "Queued beta"}},
+        {"clickTarget": "queued-only-send"},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short b}/inbox",
+            "select": ["data"],
+            "contains": {"type": "user", "payload": {"text": "Queued beta"}, "delivery": "steer"}
+          }
+        },
+        {"expect": {"gate": "held", "equals": true}},
+        {"gate": "release"},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short b}/message?limit=50",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Queued beta"},
+            "length": 1,
+            "timeout": 60
+          }
+        },
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short b}/message?limit=50",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Queued alpha"},
+            "length": 0
+          }
+        },
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('button[aria-label=\"Send message\"]')"},
+            "native": {"named": {"id": "composer-submit", "name": "Send message"}},
+            "timeout": 60
+          }
+        }
+      ]
+    },
+    {
+      "id": "composer.queue.restart-delivery",
+      "feature": "composer.queue-steer-starters",
+      "proofs": {"composer.queue-steer-starters": {"behaviors": ["queued delivery and retry ownership"], "states": ["running", "queued", "delivered"]}},
+      "description": "A message queued behind a held turn is still owned by the server across a normal quit and relaunch and is delivered exactly once. Electron's quit also stops its in-process server and the held turn, so it delivers on relaunch; the isolated server delivers when the turn is released.",
+      "steps": [
+        {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('.model-controls__model-label')?.textContent"},
+            "native": {"elements": ["composer-model"]},
+            "timeout": 30
+          }
+        },
+        {"clickTarget": "composer-model"},
+        {
+          "wait": {
+            "electron": {"expression": "document.activeElement?.getAttribute('placeholder') === 'Search models'"},
+            "native": {"named": {"name": "Search models", "role": "entry"}}
+          }
+        },
+        {"type": "silence"},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[role=listbox] [role=option]')].length === 1"},
+            "native": {"elements": ["composer-model-option:perf/think-30s"]}
+          }
+        },
+        {"key": "Return"},
+        {
+          "wait": {
+            "electron": {
+              "expression": "document.querySelector('.model-controls__model-label')?.textContent === 'Fixture silence, 30s' && !document.querySelector('[role=listbox]')"
+            },
+            "native": {"named": {"id": "composer-model", "name": "Fixture silence, 30s"}}
+          }
+        },
+        {"gate": "hold"},
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"type": "Restart base"},
+        {"key": "Return"},
+        {"expect": {"gate": "waiting", "equals": 1, "timeout": 30}},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('button[aria-label=\"Stop generating\"]')"},
+            "native": {"named": {"id": "composer-submit", "name": "Stop generating"}},
+            "timeout": 30
+          }
+        },
+        {"type": "Queued across restart"},
+        {"key": "Return"},
+        {"expect": {"api": "/api/message-queue", "select": ["sessions", 0, "items"], "where": {"content": "Queued across restart"}, "length": 1}},
+        {"clickTarget": "window-close"},
+        {"restart": {"after": "exit", "timeout": 20}},
+        {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
+        {"gate": "release"},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=50",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Queued across restart"},
+            "length": 1,
+            "timeout": 90
+          }
+        },
+        {"expect": {"api": "/api/message-queue", "select": ["sessions"], "length": 0, "timeout": 30}},
+        {
+          "wait": {
+            "electron": {"expression": "!document.querySelector('[role=group][aria-label=\"Queued messages\"]')"},
+            "native": {"named": {"id": "queued-strip", "name": "Queued messages"}, "present": false},
+            "timeout": 30
+          }
+        },
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=50",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Queued across restart"},
+            "length": 1
+          }
+        }
+      ]
+    },
+    {
+      "id": "composer.starters.submit-and-manage",
+      "feature": "composer.queue-steer-starters",
+      "proofs": {
+        "composer.queue-steer-starters": {"behaviors": ["starter submits with draft appended", "starter management persistence"], "states": ["idle", "restored"]}
+      },
+      "description": "Craft a Goal sends its prompt with the draft as the idea and creates one session. Removing Explore the codebase and pinning it again are saved by the server and survive a normal quit and relaunch.",
+      "steps": [
+        {"clickTarget": "choose-project"},
+        {
+          "wait": {
+            "electron": {"expression": "document.activeElement?.getAttribute('placeholder') === 'Search projects...'"},
+            "native": {"named": {"role": "entry", "name": "Search projects..."}}
+          }
+        },
+        {"type": "project"},
+        {"key": "Return"},
+        {
+          "wait": {
+            "electron": {"expression": "!document.querySelector('input[placeholder=\"Search projects...\"]')"},
+            "native": {"named": {"id": "choose-project", "name": "project"}}
+          }
+        },
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"type": "native starter idea"},
+        {"wait": {"electron": {"focusedText": "native starter idea"}, "native": {"focusedText": "native starter idea"}}},
+        {"clickTarget": "starter-craft-goal"},
+        {"expect": {"api": "/api/session?limit=200", "select": ["data"], "length": 5, "timeout": 30}},
+        {
+          "expect": {
+            "api": "/api/session/{session:## 1. Executing a call in a bytecode virtual machine}/message?limit=50",
+            "select": ["data"],
+            "contains": {"type": "user", "text": "Help me turn an idea or task into a clear, verifiable Goal.\n\nHere is my initial idea:\nnative starter idea"},
+            "timeout": 45
+          }
+        },
+        {"clickTarget": "new-session"},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('button')].some((button) => button.innerText.trim() === 'Explore the codebase')"},
+            "native": {"elements": ["starter-global-command-explore"]}
+          }
+        },
+        {"hover": "starter-explore-chip"},
+        {"clickTarget": "starter-explore-remove"},
+        {
+          "expect": {
+            "api": "/api/config/settings?surface=desktop",
+            "select": ["draftStarters", "*", "name"],
+            "equals": ["catch-up", "weigh", "plan-feature", "craft-goal", "schedule-task", "debug", "review"]
+          }
+        },
+        {
+          "wait": {
+            "electron": {"expression": "![...document.querySelectorAll('button')].some((button) => button.innerText.trim() === 'Explore the codebase')"},
+            "native": {"named": {"id": "starter-global-command-explore", "name": "Explore the codebase"}, "present": false}
+          }
+        },
+        {"clickTarget": "starter-add"},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('[role=listbox][aria-label=\"Suggestions\"]')"},
+            "native": {"elements": ["starter-pick-explore"]}
+          }
+        },
+        {"clickTarget": "starter-pick-explore"},
+        {"expect": {"api": "/api/config/settings?surface=desktop", "select": ["draftStarters", "*", "name"], "contains": "explore"}},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('button')].some((button) => button.innerText.trim() === 'Explore the codebase')"},
+            "native": {"elements": ["starter-global-command-explore"]}
+          }
+        },
+        {"clickTarget": "window-close"},
+        {"restart": {"after": "exit", "timeout": 20}},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('button')].some((button) => button.innerText.trim() === 'Explore the codebase')"},
+            "native": {"elements": ["starter-global-command-explore"]},
+            "timeout": 30
+          }
+        },
+        {"expect": {"api": "/api/config/settings?surface=desktop", "select": ["draftStarters", "*", "name"], "contains": "explore"}}
+      ]
+    },
+    {
+      "id": "workflow.send.create-stop-revisit",
+      "feature": "workflow.create-send-stop-recovery",
+      "model": "perf/think-30s",
+      "proofs": {
+        "workflow.create-send-stop-recovery": {"behaviors": ["create and first send", "abort outcome", "revisit preserves owner"], "states": ["draft", "creating", "running", "idle"]}
+      },
+      "description": "A first prompt in a chosen project creates exactly one session and runs a held turn; Stop ends it on the server with the prompt kept once, and leaving and reopening the session shows the same prompt.",
+      "steps": [
+        {"clickTarget": "choose-project"},
+        {
+          "wait": {
+            "electron": {"expression": "document.activeElement?.getAttribute('placeholder') === 'Search projects...'"},
+            "native": {"named": {"role": "entry", "name": "Search projects..."}}
+          }
+        },
+        {"type": "project"},
+        {"key": "Return"},
+        {
+          "wait": {
+            "electron": {"expression": "!document.querySelector('input[placeholder=\"Search projects...\"]')"},
+            "native": {"named": {"id": "choose-project", "name": "project"}}
+          }
+        },
+        {"gate": "hold"},
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"type": "Workflow first prompt"},
+        {"wait": {"electron": {"focusedText": "Workflow first prompt"}, "native": {"focusedText": "Workflow first prompt"}}},
+        {"key": "Return"},
+        {"expect": {"api": "/api/session?limit=200", "select": ["data"], "length": 5, "timeout": 30}},
+        {"expect": {"gate": "waiting", "equals": 1, "timeout": 30}},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('button[aria-label=\"Stop generating\"]')"},
+            "native": {"named": {"id": "composer-submit", "name": "Stop generating"}},
+            "timeout": 30
+          }
+        },
+        {
+          "expect": {
+            "api": "/api/session/{session:## 1. Executing a call in a bytecode virtual machine}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Workflow first prompt"},
+            "length": 1,
+            "timeout": 45
+          }
+        },
+        {"clickTarget": "composer-stop"},
+        {
+          "expect": {
+            "api": "/api/session/active",
+            "select": ["data", "{session:## 1. Executing a call in a bytecode virtual machine}"],
+            "exists": false,
+            "timeout": 30
+          }
+        },
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('button[aria-label=\"Send message\"]')"},
+            "native": {"named": {"id": "composer-submit", "name": "Send message"}},
+            "timeout": 30
+          }
+        },
+        {"gate": "release"},
+        {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
+        {
+          "wait": {
+            "electron": {"expression": "document.querySelectorAll('[data-message-id]').length > 0"},
+            "native": {"marker": "history-shown"},
+            "timeout": 30
+          }
+        },
+        {"click": {"zone": "activity:work:session:", "title": "## 1. Executing a call in a bytecode virtual machine"}},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[data-message-id]')].some((row) => row.innerText.includes(\"Workflow first prompt\"))"},
+            "native": {"named": {"name": "Workflow first prompt", "prefix": true, "role": "paragraph"}},
+            "timeout": 30
+          }
+        },
+        {
+          "expect": {
+            "api": "/api/session/{session:## 1. Executing a call in a bytecode virtual machine}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Workflow first prompt"},
+            "length": 1,
+            "timeout": 15
+          }
+        },
+        {"expect": {"api": "/api/session?limit=200", "select": ["data"], "length": 5}}
+      ]
+    },
+    {
+      "id": "workflow.send.existing-rejected",
+      "feature": "workflow.create-send-stop-recovery",
+      "proofs": {
+        "workflow.create-send-stop-recovery": {"behaviors": ["existing session send", "definite rejection recovery"], "states": ["sending", "rejected", "idle"]}
+      },
+      "description": "A prompt the server refuses with HTTP 400 is not admitted and its text returns to the composer; the same session's next prompt is admitted exactly once.",
+      "steps": [
+        {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
+        {
+          "fault": {
+            "id": "reject",
+            "method": "POST",
+            "path": "/api/session/{session:parity: short a}/prompt",
+            "when": "before",
+            "action": "fail",
+            "status": 400
+          }
+        },
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"type": "Rejected prompt"},
+        {"key": "Return"},
+        {"expect": {"fault": "reject", "hits": 1}},
+        {"wait": {"electron": {"focusedText": "Rejected prompt"}, "native": {"focusedText": "Rejected prompt"}}},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Rejected prompt"},
+            "length": 0,
+            "timeout": 15
+          }
+        },
+        {"key": "ctrl+a"},
+        {"key": "BackSpace"},
+        {"wait": {"electron": {"focusedText": ""}, "native": {"focusedText": ""}}},
+        {"type": "Admitted prompt"},
+        {"key": "Return"},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Admitted prompt"},
+            "length": 1,
+            "timeout": 30
+          }
+        },
+        {"wait": {"electron": {"focusedText": ""}, "native": {"focusedText": ""}}},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('button[aria-label=\"Send message\"]')"},
+            "native": {"named": {"id": "composer-submit", "name": "Send message"}},
+            "timeout": 30
+          }
+        },
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Admitted prompt"},
+            "length": 1,
+            "timeout": 15
+          }
+        },
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Rejected prompt"},
+            "length": 0,
+            "timeout": 15
+          }
+        }
+      ]
+    },
+    {
+      "id": "workflow.send.lost-reply",
+      "feature": "workflow.create-send-stop-recovery",
+      "proofs": {"workflow.create-send-stop-recovery": {"behaviors": ["ambiguous outcome reconciliation"], "states": ["uncertain", "restarted", "recovered"]}},
+      "description": "The server admits a prompt to a held turn but its reply is lost. The client settles on the admitted message without sending it again, also after a normal quit and relaunch.",
+      "steps": [
+        {"click": {"zone": "activity:work:session:", "title": "parity: short b"}},
+        {"clickTarget": "composer-model"},
+        {
+          "wait": {
+            "electron": {"expression": "document.activeElement?.getAttribute('placeholder') === 'Search models'"},
+            "native": {"named": {"name": "Search models", "role": "entry"}}
+          }
+        },
+        {"type": "silence"},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[role=listbox] [role=option]')].length === 1"},
+            "native": {"elements": ["composer-model-option:perf/think-30s"]}
+          }
+        },
+        {"key": "Return"},
+        {
+          "wait": {
+            "electron": {
+              "expression": "document.querySelector('.model-controls__model-label')?.textContent === 'Fixture silence, 30s' && !document.querySelector('[role=listbox]')"
+            },
+            "native": {"named": {"id": "composer-model", "name": "Fixture silence, 30s"}}
+          }
+        },
+        {"gate": "hold"},
+        {"fault": {"id": "lose", "method": "POST", "path": "/api/session/{session:parity: short b}/prompt", "when": "after", "action": "drop"}},
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"type": "Lost reply prompt"},
+        {"key": "Return"},
+        {"expect": {"fault": "lose", "hits": 1}},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short b}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Lost reply prompt"},
+            "length": 1,
+            "timeout": 15
+          }
+        },
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[data-message-id]')].some((row) => row.innerText.includes(\"Lost reply prompt\"))"},
+            "native": {"named": {"name": "Lost reply prompt", "prefix": true, "role": "paragraph"}},
+            "timeout": 30
+          }
+        },
+        {"clickTarget": "window-close"},
+        {"restart": {"after": "exit", "timeout": 20}},
+        {"click": {"zone": "activity:work:session:", "title": "parity: short b"}},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[data-message-id]')].some((row) => row.innerText.includes(\"Lost reply prompt\"))"},
+            "native": {"named": {"name": "Lost reply prompt", "prefix": true, "role": "paragraph"}},
+            "timeout": 30
+          }
+        },
+        {"settle": 3},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short b}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Lost reply prompt"},
+            "length": 1,
+            "timeout": 15
+          }
+        },
+        {"expect": {"fault": "lose", "hits": 1}},
+        {"gate": "release"}
+      ]
+    },
+    {
+      "id": "workflow.permission.once-deny-always",
+      "feature": "workflow.permissions-forms",
+      "provider": "interactions",
+      "proofs": {
+        "workflow.permissions-forms": {
+          "behaviors": ["pending request discovery", "permission allow and deny", "keyboard and accessibility response"],
+          "states": ["pending", "focused", "settled"]
+        }
+      },
+      "description": "The fixture's shell command asks permission. Alt+Enter allows it once and the command completes; the next ask is denied and errors; Always saves the rule so the third run completes without asking.",
+      "steps": [
+        {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
+        {"clickTarget": "composer-model"},
+        {
+          "wait": {
+            "electron": {"expression": "document.activeElement?.getAttribute('placeholder') === 'Search models'"},
+            "native": {"named": {"name": "Search models", "role": "entry"}}
+          }
+        },
+        {"type": "interaction-shell"},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[role=listbox] [role=option]')].length === 1"},
+            "native": {"elements": ["composer-model-option:perf/interaction-shell"]}
+          }
+        },
+        {"key": "Return"},
+        {
+          "wait": {
+            "electron": {
+              "expression": "document.querySelector('.model-controls__model-label')?.textContent === 'interaction-shell' && !document.querySelector('[role=listbox]')"
+            },
+            "native": {"named": {"id": "composer-model", "name": "interaction-shell"}}
+          }
+        },
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"type": "Permission turn one"},
+        {"key": "Return"},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Permission turn one"},
+            "length": 1,
+            "timeout": 30
+          }
+        },
+        {"expect": {"api": "/api/session/{session:parity: short a}/permission", "select": ["data"], "length": 1, "timeout": 30}},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('[role=dialog][aria-label=\"Permission required\"]')"},
+            "native": {"named": {"name": "Allow once", "role": "button"}},
+            "timeout": 30
+          }
+        },
+        {"key": "alt+Return"},
+        {
+          "wait": {
+            "electron": {"expression": "!document.querySelector('[role=dialog][aria-label=\"Permission required\"]')"},
+            "native": {"named": {"name": "Allow once", "role": "button"}, "present": false},
+            "timeout": 30
+          }
+        },
+        {"expect": {"api": "/api/session/{session:parity: short a}/permission", "select": ["data"], "length": 0, "timeout": 30}},
+        {"expect": {"api": "/api/session/active", "select": ["data", "{session:parity: short a}"], "exists": false, "timeout": 30}},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=100",
+            "select": ["data", "*", "content", "*", "state", "status"],
+            "equals": ["completed"]
+          }
+        },
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"type": "Permission turn two"},
+        {"key": "Return"},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Permission turn two"},
+            "length": 1,
+            "timeout": 30
+          }
+        },
+        {"expect": {"api": "/api/session/{session:parity: short a}/permission", "select": ["data"], "length": 1, "timeout": 30}},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('[role=dialog][aria-label=\"Permission required\"]')"},
+            "native": {"named": {"name": "Allow once", "role": "button"}},
+            "timeout": 30
+          }
+        },
+        {"clickTarget": "permission-deny"},
+        {
+          "wait": {
+            "electron": {"expression": "!document.querySelector('[role=dialog][aria-label=\"Permission required\"]')"},
+            "native": {"named": {"name": "Allow once", "role": "button"}, "present": false},
+            "timeout": 30
+          }
+        },
+        {"expect": {"api": "/api/session/{session:parity: short a}/permission", "select": ["data"], "length": 0, "timeout": 30}},
+        {"expect": {"api": "/api/session/active", "select": ["data", "{session:parity: short a}"], "exists": false, "timeout": 30}},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=100",
+            "select": ["data", "*", "content", "*", "state", "status"],
+            "equals": ["error", "completed"]
+          }
+        },
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"type": "Permission turn three"},
+        {"key": "Return"},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Permission turn three"},
+            "length": 1,
+            "timeout": 30
+          }
+        },
+        {"expect": {"api": "/api/session/{session:parity: short a}/permission", "select": ["data"], "length": 1, "timeout": 30}},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('[role=dialog][aria-label=\"Permission required\"]')"},
+            "native": {"named": {"name": "Allow once", "role": "button"}},
+            "timeout": 30
+          }
+        },
+        {"clickTarget": "permission-always"},
+        {
+          "wait": {
+            "electron": {"expression": "!document.querySelector('[role=dialog][aria-label=\"Permission required\"]')"},
+            "native": {"named": {"name": "Allow once", "role": "button"}, "present": false},
+            "timeout": 30
+          }
+        },
+        {"expect": {"api": "/api/session/active", "select": ["data", "{session:parity: short a}"], "exists": false, "timeout": 30}},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=100",
+            "select": ["data", "*", "content", "*", "state", "status"],
+            "equals": ["completed", "error", "completed"]
+          }
+        },
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"type": "Permission turn four"},
+        {"key": "Return"},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Permission turn four"},
+            "length": 1,
+            "timeout": 30
+          }
+        },
+        {"expect": {"api": "/api/session/active", "select": ["data", "{session:parity: short a}"], "exists": false, "timeout": 30}},
+        {"expect": {"api": "/api/session/{session:parity: short a}/permission", "select": ["data"], "length": 0, "timeout": 5}},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=100",
+            "select": ["data", "*", "content", "*", "state", "status"],
+            "equals": ["completed", "completed", "error", "completed"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "workflow.form.validate-submit",
+      "feature": "workflow.permissions-forms",
+      "provider": "interactions",
+      "proofs": {
+        "workflow.permissions-forms": {
+          "behaviors": ["pending request discovery", "conditional form validation", "form submit and cancel"],
+          "states": ["pending", "invalid", "submitting", "settled"]
+        }
+      },
+      "description": "The fixture's three questions: a single choice, a multiple choice and a required custom answer. Submit does nothing while the answer is empty; filled, it answers all three and the question tool keeps the answers.",
+      "steps": [
+        {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
+        {"clickTarget": "composer-model"},
+        {
+          "wait": {
+            "electron": {"expression": "document.activeElement?.getAttribute('placeholder') === 'Search models'"},
+            "native": {"named": {"name": "Search models", "role": "entry"}}
+          }
+        },
+        {"type": "interaction-question"},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[role=listbox] [role=option]')].length === 1"},
+            "native": {"elements": ["composer-model-option:perf/interaction-question"]}
+          }
+        },
+        {"key": "Return"},
+        {
+          "wait": {
+            "electron": {
+              "expression": "document.querySelector('.model-controls__model-label')?.textContent === 'interaction-question' && !document.querySelector('[role=listbox]')"
+            },
+            "native": {"named": {"id": "composer-model", "name": "interaction-question"}}
+          }
+        },
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"type": "Question turn"},
+        {"key": "Return"},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Question turn"},
+            "length": 1,
+            "timeout": 30
+          }
+        },
+        {"expect": {"api": "/api/session/{session:parity: short a}/form", "select": ["data"], "length": 1, "timeout": 30}},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('[role=dialog][aria-label=\"Questions\"]')"},
+            "native": {"named": {"name": "Next", "role": "button"}},
+            "timeout": 30
+          }
+        },
+        {"clickTarget": "form-beta"},
+        {"clickTarget": "form-next"},
+        {"clickTarget": "form-one"},
+        {"clickTarget": "form-two"},
+        {"clickTarget": "form-next"},
+        {"clickTarget": "form-back"},
+        {"clickTarget": "form-next"},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('[role=dialog][aria-label=\"Questions\"] textarea')"},
+            "native": {"named": {"name": "Submit", "role": "button"}}
+          }
+        },
+        {"clickTarget": "form-submit"},
+        {"settle": 1},
+        {"expect": {"api": "/api/session/{session:parity: short a}/form", "select": ["data"], "length": 1, "timeout": 5}},
+        {"clickTarget": "form-answer"},
+        {"type": "custom answer"},
+        {"clickTarget": "form-submit"},
+        {
+          "wait": {
+            "electron": {"expression": "!document.querySelector('[role=dialog][aria-label=\"Questions\"]')"},
+            "native": {"named": {"name": "Dismiss", "role": "button"}, "present": false},
+            "timeout": 30
+          }
+        },
+        {"expect": {"api": "/api/session/{session:parity: short a}/form", "select": ["data"], "length": 0, "timeout": 30}},
+        {"expect": {"api": "/api/session/active", "select": ["data", "{session:parity: short a}"], "exists": false, "timeout": 30}},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=100",
+            "select": ["data", "*", "content", "*", "state", "metadata", "answers"],
+            "contains": [["Beta"], ["One", "Two"], ["custom answer"]]
+          }
+        }
+      ]
+    },
+    {
+      "id": "workflow.form.dismiss",
+      "feature": "workflow.permissions-forms",
+      "provider": "interactions",
+      "proofs": {"workflow.permissions-forms": {"behaviors": ["form submit and cancel"], "states": ["pending", "settled"]}},
+      "description": "Dismiss cancels the pending questions on the server and the turn settles.",
+      "steps": [
+        {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
+        {"clickTarget": "composer-model"},
+        {
+          "wait": {
+            "electron": {"expression": "document.activeElement?.getAttribute('placeholder') === 'Search models'"},
+            "native": {"named": {"name": "Search models", "role": "entry"}}
+          }
+        },
+        {"type": "interaction-question"},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[role=listbox] [role=option]')].length === 1"},
+            "native": {"elements": ["composer-model-option:perf/interaction-question"]}
+          }
+        },
+        {"key": "Return"},
+        {
+          "wait": {
+            "electron": {
+              "expression": "document.querySelector('.model-controls__model-label')?.textContent === 'interaction-question' && !document.querySelector('[role=listbox]')"
+            },
+            "native": {"named": {"id": "composer-model", "name": "interaction-question"}}
+          }
+        },
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"type": "Dismissed question turn"},
+        {"key": "Return"},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Dismissed question turn"},
+            "length": 1,
+            "timeout": 30
+          }
+        },
+        {"expect": {"api": "/api/session/{session:parity: short a}/form", "select": ["data"], "length": 1, "timeout": 30}},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('[role=dialog][aria-label=\"Questions\"]')"},
+            "native": {"named": {"name": "Next", "role": "button"}},
+            "timeout": 30
+          }
+        },
+        {"clickTarget": "form-dismiss"},
+        {
+          "wait": {
+            "electron": {"expression": "!document.querySelector('[role=dialog][aria-label=\"Questions\"]')"},
+            "native": {"named": {"name": "Dismiss", "role": "button"}, "present": false},
+            "timeout": 30
+          }
+        },
+        {"expect": {"api": "/api/session/{session:parity: short a}/form", "select": ["data"], "length": 0, "timeout": 30}},
+        {"expect": {"api": "/api/session/active", "select": ["data", "{session:parity: short a}"], "exists": false, "timeout": 30}}
+      ]
+    },
+    {
+      "id": "workflow.branch.revert-restore-commit",
+      "feature": "workflow.fork-revert-btw-subagents",
+      "proofs": {"workflow.fork-revert-btw-subagents": {"behaviors": ["stage, restore and commit revert"], "states": ["default", "staged", "restored"]}},
+      "description": "Reverting the last prompt stages a revert on the server and returns its text to the composer; Restore clears it; a revert followed by a new prompt removes the reverted prompt for good.",
+      "steps": [
+        {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
+        {"clickTarget": "composer-model"},
+        {
+          "wait": {
+            "electron": {"expression": "document.activeElement?.getAttribute('placeholder') === 'Search models'"},
+            "native": {"named": {"name": "Search models", "role": "entry"}}
+          }
+        },
+        {"type": "silence"},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[role=listbox] [role=option]')].length === 1"},
+            "native": {"elements": ["composer-model-option:perf/think-30s"]}
+          }
+        },
+        {"key": "Return"},
+        {
+          "wait": {
+            "electron": {
+              "expression": "document.querySelector('.model-controls__model-label')?.textContent === 'Fixture silence, 30s' && !document.querySelector('[role=listbox]')"
+            },
+            "native": {"named": {"id": "composer-model", "name": "Fixture silence, 30s"}}
+          }
+        },
+        {"gate": "hold"},
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"type": "Revert target prompt"},
+        {"key": "Return"},
+        {"expect": {"gate": "waiting", "equals": 1, "timeout": 30}},
+        {"gate": "release"},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('button[aria-label=\"Send message\"]')"},
+            "native": {"named": {"id": "composer-submit", "name": "Send message"}},
+            "timeout": 30
+          }
+        },
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[data-message-id]')].some((row) => row.innerText.includes(\"Revert target prompt\"))"},
+            "native": {"named": {"name": "Revert target prompt", "prefix": true, "role": "paragraph"}},
+            "timeout": 30
+          }
+        },
+        {"expect": {"api": "/api/session/{session:parity: short a}", "select": ["data", "revert"], "exists": false, "timeout": 15}},
+        {"hover": "revert-target-row"},
+        {"clickTarget": "revert-target-action"},
+        {"expect": {"api": "/api/session/{session:parity: short a}", "select": ["data", "revert"], "exists": true, "timeout": 15}},
+        {"wait": {"electron": {"focusedText": "Revert target prompt"}, "native": {"focusedText": "Revert target prompt"}}},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('button')].some((button) => button.innerText.trim() === 'Restore')"},
+            "native": {"elements": ["revert-restore"]}
+          }
+        },
+        {"clickTarget": "revert-restore"},
+        {"expect": {"api": "/api/session/{session:parity: short a}", "select": ["data", "revert"], "exists": false, "timeout": 15}},
+        {
+          "wait": {
+            "electron": {"expression": "![...document.querySelectorAll('button')].some((button) => button.innerText.trim() === 'Restore')"},
+            "native": {"named": {"id": "revert-restore", "name": "Restore"}, "present": false}
+          }
+        },
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[data-message-id]')].some((row) => row.innerText.includes(\"Revert target prompt\"))"},
+            "native": {"named": {"name": "Revert target prompt", "prefix": true, "role": "paragraph"}},
+            "timeout": 30
+          }
+        },
+        {"hover": "revert-target-row"},
+        {"clickTarget": "revert-target-action"},
+        {"expect": {"api": "/api/session/{session:parity: short a}", "select": ["data", "revert"], "exists": true, "timeout": 15}},
+        {"wait": {"electron": {"focusedText": "Revert target prompt"}, "native": {"focusedText": "Revert target prompt"}}},
+        {"key": "ctrl+a"},
+        {"key": "BackSpace"},
+        {"type": "Committed after revert"},
+        {"key": "Return"},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Committed after revert"},
+            "length": 1,
+            "timeout": 30
+          }
+        },
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Revert target prompt"},
+            "length": 0,
+            "timeout": 30
+          }
+        },
+        {"expect": {"api": "/api/session/{session:parity: short a}", "select": ["data", "revert"], "exists": false, "timeout": 30}},
+        {
+          "wait": {
+            "electron": {"expression": "!([...document.querySelectorAll('[data-message-id]')].some((row) => row.innerText.includes(\"Revert target prompt\")))"},
+            "native": {"named": {"name": "Revert target prompt", "prefix": true, "role": "paragraph"}, "present": false},
+            "timeout": 30
+          }
+        }
+      ]
+    },
+    {
+      "id": "workflow.branch.revert-failed",
+      "feature": "workflow.fork-revert-btw-subagents",
+      "proofs": {"workflow.fork-revert-btw-subagents": {"behaviors": ["failed mutation recovery"], "states": ["failed"]}},
+      "description": "A revert the server refuses stages nothing: the prompt stays in the transcript and no strip appears. As in the reference, the composer keeps the reverted prompt it was given.",
+      "steps": [
+        {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
+        {"clickTarget": "composer-model"},
+        {
+          "wait": {
+            "electron": {"expression": "document.activeElement?.getAttribute('placeholder') === 'Search models'"},
+            "native": {"named": {"name": "Search models", "role": "entry"}}
+          }
+        },
+        {"type": "silence"},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[role=listbox] [role=option]')].length === 1"},
+            "native": {"elements": ["composer-model-option:perf/think-30s"]}
+          }
+        },
+        {"key": "Return"},
+        {
+          "wait": {
+            "electron": {
+              "expression": "document.querySelector('.model-controls__model-label')?.textContent === 'Fixture silence, 30s' && !document.querySelector('[role=listbox]')"
+            },
+            "native": {"named": {"id": "composer-model", "name": "Fixture silence, 30s"}}
+          }
+        },
+        {"gate": "hold"},
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"type": "Revert target prompt"},
+        {"key": "Return"},
+        {"expect": {"gate": "waiting", "equals": 1, "timeout": 30}},
+        {"gate": "release"},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('button[aria-label=\"Send message\"]')"},
+            "native": {"named": {"id": "composer-submit", "name": "Send message"}},
+            "timeout": 30
+          }
+        },
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[data-message-id]')].some((row) => row.innerText.includes(\"Revert target prompt\"))"},
+            "native": {"named": {"name": "Revert target prompt", "prefix": true, "role": "paragraph"}},
+            "timeout": 30
+          }
+        },
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"key": "ctrl+a"},
+        {"key": "BackSpace"},
+        {"type": "Draft before the failed revert"},
+        {
+          "fault": {
+            "id": "stage",
+            "method": "POST",
+            "path": {"electron": "/api/session/{session:parity: short a}/revert*", "native": "/api/session/{session:parity: short a}/revert*"},
+            "when": "before",
+            "action": "fail",
+            "status": 500
+          }
+        },
+        {"hover": "revert-target-row"},
+        {"clickTarget": "revert-target-action"},
+        {"expect": {"fault": "stage", "hits": 1}},
+        {"expect": {"api": "/api/session/{session:parity: short a}", "select": ["data", "revert"], "exists": false, "timeout": 15}},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[data-message-id]')].some((row) => row.innerText.includes(\"Revert target prompt\"))"},
+            "native": {"named": {"name": "Revert target prompt", "prefix": true, "role": "paragraph"}},
+            "timeout": 30
+          }
+        },
+        {
+          "wait": {
+            "electron": {"expression": "![...document.querySelectorAll('button')].some((button) => button.innerText.trim() === 'Restore')"},
+            "native": {"named": {"id": "revert-restore", "name": "Restore"}, "present": false}
+          }
+        },
+        {"wait": {"electron": {"focusedText": "Revert target prompt"}, "native": {"focusedText": "Revert target prompt"}}}
+      ]
+    },
+    {
+      "id": "composer.editing.shortcuts-undo-paste",
+      "feature": "composer.editing-drafts",
+      "proofs": {"composer.editing-drafts": {"behaviors": ["undo and redo", "multiline paste", "submit and newline shortcuts"], "states": ["empty", "typing"]}},
+      "description": "Shift+Enter adds a line; Ctrl+Z and Ctrl+Shift+Z step back and forth through the typed text; a multiline Unicode paste lands exactly; Enter sends it as one prompt and empties the composer.",
+      "steps": [
+        {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"wait": {"electron": {"focusedText": ""}, "native": {"focusedText": ""}}},
+        {"type": "first line"},
+        {"key": "shift+Return"},
+        {"type": "second line"},
+        {"wait": {"electron": {"focusedText": "first line\nsecond line"}, "native": {"focusedText": "first line\nsecond line"}}},
+        {"key": "ctrl+z"},
+        {"wait": {"electron": {"focusedText": "first line"}, "native": {"focusedText": "first line"}}},
+        {"key": "ctrl+z"},
+        {"wait": {"electron": {"focusedText": ""}, "native": {"focusedText": ""}}},
+        {"key": "ctrl+shift+z"},
+        {"wait": {"electron": {"focusedText": "first line"}, "native": {"focusedText": "first line"}}},
+        {"key": "ctrl+shift+z"},
+        {"wait": {"electron": {"focusedText": "first line\nsecond line"}, "native": {"focusedText": "first line\nsecond line"}}},
+        {"key": "ctrl+a"},
+        {"key": "BackSpace"},
+        {"wait": {"electron": {"focusedText": ""}, "native": {"focusedText": ""}}},
+        {"paste": "Pasted line one\nPasted line two 你好 👩‍💻"},
+        {
+          "wait": {
+            "electron": {"focusedText": "Pasted line one\nPasted line two 你好 👩‍💻"},
+            "native": {"focusedText": "Pasted line one\nPasted line two 你好 👩‍💻"}
+          }
+        },
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Pasted line one\nPasted line two 你好 👩‍💻"},
+            "length": 0,
+            "timeout": 15
+          }
+        },
+        {"key": "Return"},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Pasted line one\nPasted line two 你好 👩‍💻"},
+            "length": 1,
+            "timeout": 30
+          }
+        },
+        {"wait": {"electron": {"focusedText": ""}, "native": {"focusedText": ""}}}
+      ]
+    },
+    {
+      "id": "composer.editing.switch-restart",
+      "feature": "composer.editing-drafts",
+      "proofs": {
+        "composer.editing-drafts": {"behaviors": ["draft and selection restored by owner", "durable draft recovery"], "states": ["typing", "switched", "restarted"]}
+      },
+      "description": "Each session keeps its own draft. Returning to a session restores its draft selected whole, so typing replaces it; both drafts survive a normal quit and relaunch.",
+      "steps": [
+        {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"type": "Draft for short a"},
+        {"key": "Left"},
+        {"key": "Left"},
+        {"click": {"zone": "activity:work:session:", "title": "parity: short b"}},
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"wait": {"electron": {"focusedText": ""}, "native": {"focusedText": ""}}},
+        {"type": "Draft for short b"},
+        {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
+        {"wait": {"electron": {"focusedText": "Draft for short a"}, "native": {"focusedText": "Draft for short a"}}},
+        {"type": "Replaced draft"},
+        {"wait": {"electron": {"focusedText": "Replaced draft"}, "native": {"focusedText": "Replaced draft"}}},
+        {"clickTarget": "window-close"},
+        {"restart": {"after": "exit", "timeout": 20}},
+        {"click": {"zone": "activity:work:session:", "title": "parity: short b"}},
+        {"wait": {"electron": {"focusedText": "Draft for short b"}, "native": {"focusedText": "Draft for short b"}}},
+        {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
+        {"wait": {"electron": {"focusedText": "Replaced draft"}, "native": {"focusedText": "Replaced draft"}}},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "Replaced draft"},
+            "length": 0,
+            "timeout": 15
+          }
+        }
+      ]
+    },
+    {
+      "id": "composer.editing.ime-commit",
+      "feature": "composer.editing-drafts",
+      "proofs": {"composer.editing-drafts": {"behaviors": ["IME commit does not send"], "states": ["composing"]}},
+      "description": "A pinyin composition shows its marked text; Return commits the raw keys into the draft without sending it.",
+      "steps": [
+        {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"ime": {"compose": "nihao", "preedit": "你好"}},
+        {"ime": {"commit": "raw"}},
+        {"wait": {"electron": {"focusedText": "nihao"}, "native": {"focusedText": "nihao"}}},
+        {"settle": 1},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short a}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "nihao"},
+            "length": 0,
+            "timeout": 15
+          }
+        },
+        {"wait": {"electron": {"focusedText": "nihao"}, "native": {"focusedText": "nihao"}}}
+      ]
+    },
+    {
+      "id": "composer.editing.streaming",
+      "feature": "composer.editing-drafts",
+      "proofs": {"composer.editing-drafts": {"behaviors": ["stream preserves focus and composition"], "states": ["streaming", "composing"]}},
+      "description": "While a slow answer streams in, typing and a pinyin composition stay in the focused composer.",
+      "steps": [
+        {"click": {"zone": "activity:work:session:", "title": "parity: short b"}},
+        {"clickTarget": "composer-model"},
+        {
+          "wait": {
+            "electron": {"expression": "document.activeElement?.getAttribute('placeholder') === 'Search models'"},
+            "native": {"named": {"name": "Search models", "role": "entry"}}
+          }
+        },
+        {"paste": "100 characters"},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[role=listbox] [role=option]')].length === 1"},
+            "native": {"elements": ["composer-model-option:perf/stream-100cps"]}
+          }
+        },
+        {"key": "Return"},
+        {
+          "wait": {
+            "electron": {
+              "expression": "document.querySelector('.model-controls__model-label')?.textContent === 'Fixture stream, 100 characters/s' && !document.querySelector('[role=listbox]')"
+            },
+            "native": {"named": {"id": "composer-model", "name": "Fixture stream, 100 characters/s"}}
+          }
+        },
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"paste": "Stream while typing"},
+        {"key": "Return"},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('button[aria-label=\"Stop generating\"]')"},
+            "native": {"named": {"id": "composer-submit", "name": "Stop generating"}},
+            "timeout": 30
+          }
+        },
+        {"paste": "typed during the stream "},
+        {"ime": {"compose": "nihao", "preedit": "你好"}},
+        {"ime": {"commit": "candidate", "text": "你好"}},
+        {"wait": {"electron": {"focusedText": "typed during the stream 你好"}, "native": {"focusedText": "typed during the stream 你好"}}},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('button[aria-label=\"Stop generating\"]')"},
+            "native": {"named": {"id": "composer-submit", "name": "Stop generating"}},
+            "timeout": 30
+          }
+        },
+        {"settle": 2},
+        {"wait": {"electron": {"focusedText": "typed during the stream 你好"}, "native": {"focusedText": "typed during the stream 你好"}}},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short b}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "typed during the stream 你好"},
+            "length": 0,
+            "timeout": 15
+          }
+        }
+      ]
+    },
+    {
+      "id": "composer.attachments.drop-remove",
+      "feature": "composer.attachments-references",
+      "proofs": {"composer.attachments-references": {"behaviors": ["remove attachment"], "states": ["empty", "ready"]}},
+      "description": "A dropped file becomes an attachment and Remove takes it out again.",
+      "steps": [
+        {"click": {"zone": "activity:work:session:", "title": "parity: short b"}},
+        {"drop": {"target": "composer", "files": [{"name": "dropped.txt", "text": "dropped bytes\n"}]}},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('[data-remove-button][aria-label=\"Remove dropped.txt\"]')"},
+            "native": {"named": {"name": "Remove dropped.txt", "role": "button"}},
+            "timeout": 20
+          }
+        },
+        {"clickTarget": "attachment-remove-dropped"},
+        {
+          "wait": {
+            "electron": {"expression": "!document.querySelector('[data-remove-button][aria-label=\"Remove dropped.txt\"]')"},
+            "native": {"named": {"name": "Remove dropped.txt", "role": "button"}, "present": false}
+          }
+        }
+      ]
+    },
+    {
+      "id": "composer.attachments.drop-send",
+      "feature": "composer.attachments-references",
+      "proofs": {"composer.attachments-references": {"behaviors": [], "states": ["sent"]}},
+      "description": "A dropped file is cited in the prompt as [second.txt] and sent with it.",
+      "steps": [
+        {"click": {"zone": "activity:work:session:", "title": "parity: short b"}},
+        {"drop": {"target": "composer", "files": [{"name": "second.txt", "text": "second bytes\n"}]}},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('[data-remove-button][aria-label=\"Remove second.txt\"]')"},
+            "native": {"named": {"name": "Remove second.txt", "role": "button"}},
+            "timeout": 20
+          }
+        },
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"key": "End"},
+        {"type": " with attachment"},
+        {"key": "Return"},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short b}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "[second.txt] with attachment"},
+            "length": 1,
+            "timeout": 30
+          }
+        },
+        {
+          "expect": {"api": "/api/session/{session:parity: short b}/message?limit=100", "select": ["data", "*", "files", "*", "mime"], "contains": "text/plain"}
+        }
+      ]
+    },
+    {
+      "id": "composer.attachments.mention-send",
+      "feature": "composer.attachments-references",
+      "proofs": {
+        "composer.attachments-references": {"behaviors": ["send preserves captured attachments and references"], "states": ["empty", "autocomplete open", "selected", "sent"]}
+      },
+      "description": "Typing @alpha opens the file popup; Enter takes perf-read/alpha.ts, and the prompt is sent with the file attached.",
+      "steps": [
+        {"click": {"zone": "activity:work:session:", "title": "parity: short b"}},
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"wait": {"electron": {"focusedText": ""}, "native": {"focusedText": ""}}},
+        {"type": "@alpha"},
+        {
+          "wait": {
+            "electron": {"expression": "document.body.innerText.includes('↑↓ navigate') && document.body.innerText.includes('perf-read/alpha.ts')"},
+            "native": {"named": {"name": "perf-read/alpha.ts"}},
+            "timeout": 20
+          }
+        },
+        {"key": "Return"},
+        {"settle": 0.5},
+        {"type": "explain"},
+        {"key": "Return"},
+        {
+          "expect": {
+            "api": "/api/session/{session:parity: short b}/message?limit=100",
+            "select": ["data"],
+            "where": {"type": "user", "text": "@perf-read/alpha.ts explain"},
+            "length": 1,
+            "timeout": 30
+          }
+        },
+        {
+          "expect": {"api": "/api/session/{session:parity: short b}/message?limit=100", "select": ["data", "*", "files", "*", "name"], "contains": "alpha.ts"}
+        },
+        {"wait": {"electron": {"focusedText": ""}, "native": {"focusedText": ""}}}
+      ]
+    },
+    {
+      "id": "composer.appearance",
+      "feature": "composer.configuration",
+      "proofs": {
+        "composer.configuration": {"behaviors": ["appearance"], "states": ["menu open", "selected"]},
+        "composer.editing-drafts": {"behaviors": ["appearance"], "states": ["empty", "typing"]},
+        "composer.attachments-references": {"behaviors": ["appearance"], "states": ["empty", "autocomplete open"]},
+        "composer.queue-steer-starters": {"behaviors": ["appearance"], "states": ["running", "queued"]},
+        "workflow.create-send-stop-recovery": {"behaviors": ["appearance"], "states": ["running"]}
+      },
+      "description": "The session composer at rest, with the agent menu open, with two typed lines, with the @ mention popup, and with a held turn and one queued message.",
+      "steps": [
+        {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
+        {
+          "wait": {
+            "electron": {"expression": "document.querySelector('.model-controls__agent-label')?.textContent === 'Build'"},
+            "native": {"named": {"id": "composer-agent", "name": "Build"}},
+            "timeout": 30
+          }
+        },
+        {
+          "capture": "composer",
+          "targets": ["composer", "composer-attach", "composer-submit", "composer-model", "composer-variant", "composer-agent", "composer-permissions"]
+        },
+        {"clickTarget": "composer-agent"},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[role=menu] [role=menuitem]')].some((item) => item.innerText.trim() === 'Plan')"},
+            "native": {"elements": ["composer-agent-option:plan"]}
+          }
+        },
+        {
+          "capture": "agent-menu",
+          "targets": ["composer", "composer-attach", "composer-submit", "composer-model", "composer-variant", "composer-agent", "composer-permissions"]
+        },
+        {"key": "Escape"},
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"type": "first line"},
+        {"key": "shift+Return"},
+        {"type": "second line"},
+        {"wait": {"electron": {"focusedText": "first line\nsecond line"}, "native": {"focusedText": "first line\nsecond line"}}},
+        {
+          "capture": "two-lines",
+          "targets": ["composer", "composer-attach", "composer-submit", "composer-model", "composer-variant", "composer-agent", "composer-permissions"]
+        },
+        {"key": "ctrl+a"},
+        {"key": "BackSpace"},
+        {"type": "@alpha"},
+        {
+          "wait": {
+            "electron": {"expression": "document.body.innerText.includes('↑↓ navigate') && document.body.innerText.includes('perf-read/alpha.ts')"},
+            "native": {"named": {"name": "perf-read/alpha.ts"}},
+            "timeout": 20
+          }
+        },
+        {
+          "capture": "mention-popup",
+          "targets": ["composer", "composer-attach", "composer-submit", "composer-model", "composer-variant", "composer-agent", "composer-permissions"]
+        },
+        {"key": "Escape"},
+        {"key": "ctrl+a"},
+        {"key": "BackSpace"},
+        {"clickTarget": "composer-model"},
+        {
+          "wait": {
+            "electron": {"expression": "document.activeElement?.getAttribute('placeholder') === 'Search models'"},
+            "native": {"named": {"name": "Search models", "role": "entry"}}
+          }
+        },
+        {"type": "silence"},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[role=listbox] [role=option]')].length === 1"},
+            "native": {"elements": ["composer-model-option:perf/think-30s"]}
+          }
+        },
+        {"key": "Return"},
+        {
+          "wait": {
+            "electron": {
+              "expression": "document.querySelector('.model-controls__model-label')?.textContent === 'Fixture silence, 30s' && !document.querySelector('[role=listbox]')"
+            },
+            "native": {"named": {"id": "composer-model", "name": "Fixture silence, 30s"}}
+          }
+        },
+        {"gate": "hold"},
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"type": "Appearance base"},
+        {"key": "Return"},
+        {"expect": {"gate": "waiting", "equals": 1, "timeout": 30}},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('button[aria-label=\"Stop generating\"]')"},
+            "native": {"named": {"id": "composer-submit", "name": "Stop generating"}},
+            "timeout": 30
+          }
+        },
+        {"type": "Queued alpha"},
+        {"key": "Return"},
+        {"expect": {"api": "/api/message-queue", "select": ["sessions", 0, "items"], "length": 1}},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('[role=group][aria-label=\"Queued messages\"]')"},
+            "native": {"elements": ["queued-strip"]}
+          }
+        },
+        {
+          "capture": "queued",
+          "targets": ["composer", "composer-attach", "composer-submit", "composer-model", "composer-variant", "composer-agent", "composer-permissions"]
+        },
+        {"gate": "release"}
+      ]
+    },
+    {
+      "id": "workflow.requests.appearance",
+      "feature": "workflow.permissions-forms",
+      "provider": "interactions",
+      "proofs": {"workflow.permissions-forms": {"behaviors": ["appearance"], "states": ["pending"]}},
+      "description": "A pending shell permission card above the composer.",
+      "steps": [
+        {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
+        {"clickTarget": "composer-model"},
+        {
+          "wait": {
+            "electron": {"expression": "document.activeElement?.getAttribute('placeholder') === 'Search models'"},
+            "native": {"named": {"name": "Search models", "role": "entry"}}
+          }
+        },
+        {"type": "interaction-shell"},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[role=listbox] [role=option]')].length === 1"},
+            "native": {"elements": ["composer-model-option:perf/interaction-shell"]}
+          }
+        },
+        {"key": "Return"},
+        {
+          "wait": {
+            "electron": {
+              "expression": "document.querySelector('.model-controls__model-label')?.textContent === 'interaction-shell' && !document.querySelector('[role=listbox]')"
+            },
+            "native": {"named": {"id": "composer-model", "name": "interaction-shell"}}
+          }
+        },
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"type": "Permission appearance"},
+        {"key": "Return"},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('[role=dialog][aria-label=\"Permission required\"]')"},
+            "native": {"named": {"name": "Allow once", "role": "button"}},
+            "timeout": 30
+          }
+        },
+        {"capture": "permission", "targets": ["composer", "composer-submit"]}
+      ]
+    },
+    {
+      "id": "workflow.branch.appearance",
+      "feature": "workflow.fork-revert-btw-subagents",
+      "proofs": {"workflow.fork-revert-btw-subagents": {"behaviors": ["appearance"], "states": ["default", "staged"]}},
+      "description": "A finished short turn, then the same prompt staged for revert with the strip above the composer.",
+      "steps": [
+        {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
+        {"clickTarget": "composer-model"},
+        {
+          "wait": {
+            "electron": {"expression": "document.activeElement?.getAttribute('placeholder') === 'Search models'"},
+            "native": {"named": {"name": "Search models", "role": "entry"}}
+          }
+        },
+        {"type": "silence"},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('[role=listbox] [role=option]')].length === 1"},
+            "native": {"elements": ["composer-model-option:perf/think-30s"]}
+          }
+        },
+        {"key": "Return"},
+        {
+          "wait": {
+            "electron": {
+              "expression": "document.querySelector('.model-controls__model-label')?.textContent === 'Fixture silence, 30s' && !document.querySelector('[role=listbox]')"
+            },
+            "native": {"named": {"id": "composer-model", "name": "Fixture silence, 30s"}}
+          }
+        },
+        {"gate": "hold"},
+        {"clickNamed": {"name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox"}},
+        {"type": "Revert target prompt"},
+        {"key": "Return"},
+        {"expect": {"gate": "waiting", "equals": 1, "timeout": 30}},
+        {"gate": "release"},
+        {
+          "wait": {
+            "electron": {"expression": "!!document.querySelector('button[aria-label=\"Send message\"]')"},
+            "native": {"named": {"id": "composer-submit", "name": "Send message"}},
+            "timeout": 30
+          }
+        },
+        {"capture": "turn", "targets": ["composer"]},
+        {"hover": "revert-target-row"},
+        {"clickTarget": "revert-target-action"},
+        {"expect": {"api": "/api/session/{session:parity: short a}", "select": ["data", "revert"], "exists": true}},
+        {
+          "wait": {
+            "electron": {"expression": "[...document.querySelectorAll('button')].some((button) => button.innerText.trim() === 'Restore')"},
+            "native": {"elements": ["revert-restore"]}
+          }
+        },
+        {"capture": "staged", "targets": ["composer"]}
       ]
     }
   ]

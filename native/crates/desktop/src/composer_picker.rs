@@ -242,6 +242,7 @@ impl Workspace {
             label,
             icon,
             color,
+            label_color,
             provider,
         } = appearance;
         let picker = match kind {
@@ -382,6 +383,7 @@ impl Workspace {
             label,
             icon,
             color,
+            label_color,
             provider,
             show_label,
             direction,
@@ -402,6 +404,7 @@ pub(crate) struct SelectionControl {
     label: SharedString,
     icon: &'static str,
     color: gpui_kit::Hsla,
+    label_color: gpui_kit::Hsla,
     provider: Option<String>,
     show_label: bool,
     direction: Direction,
@@ -417,7 +420,9 @@ pub(crate) struct SelectionControl {
 pub(crate) struct PickerAppearance {
     pub label: SharedString,
     pub icon: &'static str,
+    /// The icon's color.
     pub color: gpui_kit::Hsla,
+    pub label_color: gpui_kit::Hsla,
     pub provider: Option<String>,
 }
 
@@ -489,7 +494,18 @@ impl RenderOnce for SelectionControl {
                     let open = trigger.is_open();
                     let state = state.clone();
                     let disabled = self.disabled;
-                    let leading = if let Some(provider) = self.provider.as_ref() {
+                    // The effort reads as a quiet suffix of the model name,
+                    // "Model / medium"; collapsed, its icon stands in.
+                    let suffix = self.kind == PickerKind::Effort;
+                    let leading = if suffix && self.show_label {
+                        Some(
+                            div()
+                                .css_text(0.78125, 1.125, cx)
+                                .text_color(palette.muted_foreground.opacity(0.6))
+                                .child("/")
+                                .into_any_element(),
+                        )
+                    } else if let Some(provider) = self.provider.as_ref() {
                         self.workspace.upgrade().and_then(|workspace| {
                             workspace
                                 .read(cx)
@@ -497,6 +513,11 @@ impl RenderOnce for SelectionControl {
                         })
                     } else {
                         Some(glyph(self.icon, 16.0, self.color).into_any_element())
+                    };
+                    let shown = if suffix {
+                        self.label.to_lowercase().into()
+                    } else {
+                        self.label.clone()
                     };
                     div()
                         .id(self.kind.id())
@@ -523,19 +544,19 @@ impl RenderOnce for SelectionControl {
                         .min_w_0()
                         .flex_row_from(self.direction)
                         .items_center()
-                        .gap(px(6.0))
+                        .gap(px(if suffix { 4.0 } else { 6.0 }))
                         .cursor_pointer()
                         .hover(|style| style.opacity(0.7))
                         .children(leading)
                         .children(self.show_label.then(|| {
                             div()
                                 .min_w_0()
-                                .max_w(px(260.0))
+                                .max_w(px(if suffix { 180.0 } else { 260.0 }))
                                 .truncate()
                                 .css_text(0.78125, 1.125, cx)
                                 .font_weight(FontWeight::MEDIUM)
-                                .text_color(self.color)
-                                .child(self.label.clone())
+                                .text_color(self.label_color)
+                                .child(shown)
                         }))
                         .test_support()
                 }),
@@ -604,6 +625,62 @@ mod tests {
             .send_catalog
             .insert_test_directory(directory.clone(), catalog);
         workspace.choose_draft_project(&directory, window, cx);
+    }
+
+    #[gpui_kit::test]
+    fn effort_follows_the_model_as_its_suffix(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let fixture = crate::recovery_tests::Fixture::new();
+        let (window, workspace) = crate::workspace_tests::open(cx);
+        cx.update_window(window, |_, window, cx| {
+            window.activate_accessibility_for_test();
+            workspace.update(cx, |workspace, cx| setup(workspace, window, cx));
+            workspace.update(cx, |workspace, cx| {
+                workspace.open_persistence(fixture.journal(), window, cx)
+            });
+        })
+        .expect("open journal");
+        crate::recovery_tests::ready(cx, &workspace);
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.click(ElementId::Name("composer-model".into()), cx);
+            window.render_frame(cx);
+            window.press("down", cx);
+            window.input("beta", cx);
+        })
+        .expect("window opens");
+        cx.run_until_parked();
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.press("enter", cx);
+        })
+        .expect("window opens");
+        cx.run_until_parked();
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            let model = window.find("composer-model").bounds();
+            let effort = window.find("composer-variant").bounds();
+            let agent = window.find("composer-agent").bounds();
+            // The reference groups model and effort with gap-x-1 and keeps
+            // gap-x-3 before the agent.
+            assert_eq!(
+                effort.left() - model.right(),
+                px(4.0),
+                "effort is the model's suffix"
+            );
+            assert_eq!(
+                agent.left() - effort.right(),
+                px(12.0),
+                "the agent keeps its own gap"
+            );
+            let dictation = window.find("composer-dictation").bounds();
+            assert_eq!(
+                dictation.left() - agent.right(),
+                px(12.0),
+                "the controls end where the reference's do"
+            );
+        })
+        .expect("window opens");
     }
 
     #[gpui_kit::test]

@@ -95,6 +95,13 @@ class ExpectationTest(unittest.TestCase):
         self.assertIsNone(steps.select(self.MESSAGES, ["data", 9, "info"]))
         self.assertEqual(steps.select(self.MESSAGES, ["data", -1, "info", "id"]), "b")
 
+    def test_select_wildcard_maps_over_lists_and_drops_misses(self):
+        nested = {"data": [{"parts": [{"answers": [["A"]]}, {"text": "x"}]}, {"parts": []}, {"other": 1}]}
+        self.assertEqual(steps.select(nested, ["data", "*", "parts", "*", "answers"]), [[["A"]]])
+        self.assertEqual(steps.select(nested, ["data", "*", "parts"]), [[{"answers": [["A"]]}, {"text": "x"}], []])
+        self.assertEqual(steps.select(self.MESSAGES, ["data", "*", "info", "id"]), ["a", "b"])
+        self.assertIsNone(steps.select({"data": {}}, ["data", "*"]))
+
     def test_contains_equals_and_exists(self):
         self.assertTrue(steps.holds({"contains": "M  src/app.txt"}, "M  src/app.txt\n"))
         self.assertTrue(steps.holds({"contains": {"info": {"id": "b"}}}, self.MESSAGES["data"]))
@@ -131,6 +138,8 @@ class StepValidationTest(unittest.TestCase):
             {"pick": {"files": [{"name": "a.txt", "text": "a"}]}},
             {"ime": {"compose": "nihao"}}, {"ime": {"compose": "nihao", "preedit": "你好"}}, {"ime": {"commit": "candidate", "text": "你好"}}, {"ime": {"commit": "raw"}},
             {"capture": "c", "targets": ["composer"]}, {"settle": 0.5}, {"type": "x"},
+            {"gate": "hold"}, {"gate": "release"}, {"expect": {"gate": "waiting", "equals": 1}},
+            {"drag": {"from": "composer", "to": "composer"}},
         ):
             with self.subTest(step=step):
                 self.assertEqual(self.check(step), [])
@@ -147,6 +156,8 @@ class StepValidationTest(unittest.TestCase):
             {"pick": {"files": [{"name": "a", "text": "a"}, {"name": "b", "text": "b"}]}}, {"pick": {"cancel": True}},
             {"ime": {"compose": "你"}}, {"ime": {"compose": "ni", "preedit": ""}}, {"ime": {"compose": "ni", "text": "x"}}, {"ime": {"commit": "candidate"}}, {"ime": {"commit": "raw", "text": "x"}},
             {"key": "a", "type": "b"}, {"unknown": 1},
+            {"gate": "open"}, {"expect": {"gate": "turns", "equals": 1}}, {"expect": {"gate": "waiting"}},
+            {"drag": {"from": "composer"}}, {"drag": {"from": "composer", "to": "missing"}},
         ):
             with self.subTest(step=step):
                 self.assertTrue(self.check(step))
@@ -157,6 +168,8 @@ class StepValidationTest(unittest.TestCase):
             fault, {"release": "f"}, {"expect": {"fault": "f", "hits": 1}}, {"expect": {"file": "{fixture}/a", "exists": True}}]}), [])
         self.assertTrue(steps.check_scenario({"fixture": "svn", "steps": []}))
         self.assertTrue(steps.check_scenario({"model": "think", "steps": []}))
+        self.assertEqual(steps.check_scenario({"provider": "interactions", "steps": []}), [])
+        self.assertTrue(steps.check_scenario({"provider": "selections", "steps": []}))
         self.assertTrue(steps.check_scenario({"steps": [{"release": "f"}, fault]}))
         self.assertTrue(steps.check_scenario({"steps": [{"expect": {"file": "{fixture}/a", "exists": True}}]}))
 
