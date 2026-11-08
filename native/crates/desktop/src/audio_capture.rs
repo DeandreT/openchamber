@@ -133,7 +133,7 @@ fn run(
         }
     };
     let on_error = |error: cpal::Error| tracing::warn!(%error, "microphone stream error");
-    let stream_config: cpal::StreamConfig = config.clone().into();
+    let stream_config: cpal::StreamConfig = config.into();
     let stream = match config.sample_format() {
         cpal::SampleFormat::F32 => device.build_input_stream(
             stream_config,

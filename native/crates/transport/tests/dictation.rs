@@ -31,6 +31,10 @@ fn timing() -> Timing {
 }
 
 /// Hands each upgraded socket to the test with its authorization header.
+#[expect(
+    clippy::result_large_err,
+    reason = "the handshake callback's error type is tungstenite's `ErrorResponse`"
+)]
 async fn server() -> (
     Endpoint,
     mpsc::UnboundedReceiver<(WsServer, Option<String>)>,

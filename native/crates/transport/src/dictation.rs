@@ -280,7 +280,7 @@ pub(crate) fn decode(text: &str, dictation_id: &str) -> ServerMessage {
 }
 
 enum Started {
-    Yes(Socket),
+    Yes(Box<Socket>),
     /// The start failed; the error is the user's to see.
     No(DictationError),
     /// The recording went away.
@@ -377,7 +377,7 @@ impl Session {
                 },
                 message = socket.next() => match message {
                     Some(Ok(WsMessage::Text(text))) => match decode(&text, &self.dictation_id) {
-                        ServerMessage::Ack => return Started::Yes(socket),
+                        ServerMessage::Ack => return Started::Yes(Box::new(socket)),
                         ServerMessage::Error(error) => return Started::No(error),
                         _ => {}
                     },
@@ -402,7 +402,7 @@ impl Session {
                 }
                 message = socket.next() => match message {
                     Some(Ok(WsMessage::Text(text))) => match decode(&text, &self.dictation_id) {
-                        ServerMessage::Ack => return Started::Yes(socket),
+                        ServerMessage::Ack => return Started::Yes(Box::new(socket)),
                         ServerMessage::Error(error) => return Started::No(error),
                         _ => {}
                     },
@@ -442,7 +442,7 @@ impl Session {
     async fn run(&mut self) -> Option<StreamEvent> {
         let mut socket = loop {
             match self.start().await {
-                Started::Yes(socket) => break socket,
+                Started::Yes(socket) => break *socket,
                 Started::Gone => return None,
                 Started::No(error) => {
                     if self.finishing {
