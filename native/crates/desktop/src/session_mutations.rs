@@ -75,14 +75,30 @@ pub(crate) struct Outgoing {
 }
 
 impl Workspace {
-    /// Native has no browser-local allowPromptingSubagentSessions preference.
+    /// `allowPromptingSubagentSessions`, a profile setting of the connected
+    /// server; until it is read, subagent sessions stay read-only.
+    pub(crate) fn allow_prompting_subagents(&self) -> bool {
+        self.send_catalog
+            .settings
+            .as_ref()
+            .and_then(|settings| settings.allow_prompting_subagent_sessions)
+            .unwrap_or(false)
+    }
+
+    /// Whether the selected session takes no prompts by its own policy; the
+    /// read-only banner then stands in for the composer.
+    pub(crate) fn selected_prompt_read_only(&self) -> bool {
+        self.selected_session().is_some_and(|session| {
+            session.prompt_read_only(self.allow_prompting_subagents(), false)
+        })
+    }
+
     /// Unknown records cannot authorize a dispatch to an existing session.
     pub(crate) fn prompt_allowed(&self, key: &SessionKey) -> bool {
         key.runtime == self.runtime
-            && self
-                .sessions
-                .get(&key.session)
-                .is_some_and(|session| !session.prompt_read_only(false, false))
+            && self.sessions.get(&key.session).is_some_and(|session| {
+                !session.prompt_read_only(self.allow_prompting_subagents(), false)
+            })
     }
 
     pub(crate) fn mutation_key(&self, session: &SessionId) -> SessionKey {
@@ -469,7 +485,7 @@ impl Workspace {
             key,
             prompt,
             SendDispatch {
-                prompt_allowed: !session.prompt_read_only(false, false),
+                prompt_allowed: !session.prompt_read_only(self.allow_prompting_subagents(), false),
                 client,
                 executor,
                 kind: DispatchKind::Created,
@@ -499,7 +515,8 @@ impl Workspace {
                 key,
                 prompt,
                 SendDispatch {
-                    prompt_allowed: !session.prompt_read_only(false, false),
+                    prompt_allowed: !session
+                        .prompt_read_only(self.allow_prompting_subagents(), false),
                     client,
                     executor,
                     kind: DispatchKind::Retry,

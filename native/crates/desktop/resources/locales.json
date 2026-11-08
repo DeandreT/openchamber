@@ -1087,7 +1087,18 @@
         "chat.snippetAutocomplete.footer": "↑↓ navigate • Enter select • Esc close",
         "chat.draftStarters.sectionSkills": "Skills",
         "settings.page.snippets.title": "Snippets",
-        "chat.sessionReference.unavailable": "That session or message isn't on this server, or couldn't be read. Its link stays as text."
+        "chat.sessionReference.unavailable": "That session or message isn't on this server, or couldn't be read. Its link stays as text.",
+        "chat.container.readOnlySubagentPromptBanner": "Subagent sessions cannot be prompted.",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessions": "Allow prompting subagent sessions",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessionsAria": "Allow prompting subagent sessions",
+        "onboarding.desktopRecovery.remoteUnreachable.title": "Remote Server Unreachable",
+        "onboarding.desktopRecovery.remoteUnreachable.retry": "Retry Connection",
+        "onboarding.desktopRecovery.incompatibleServer.title": "Incompatible Server",
+        "onboarding.desktopRecovery.remoteIncompatible.title": "Server Update Required",
+        "onboarding.desktopRecovery.remoteIncompatible.description": "The OpenChamber server at \"{host}\" is not compatible with this app version. Update OpenChamber on the server, then try again.",
+        "onboarding.desktopRecovery.common.useRemote": "Use Remote",
+        "onboarding.desktopRecovery.actions.retrying": "Retrying…",
+        "onboarding.remoteConnection.field.serverAddress": "Server Address"
       }
     },
     "de": {
@@ -2176,7 +2187,18 @@
         "chat.snippetAutocomplete.footer": "↑↓ navigieren • Enter auswählen • Esc schließen",
         "chat.draftStarters.sectionSkills": "Fähigkeiten",
         "settings.page.snippets.title": "Snippets",
-        "chat.sessionReference.unavailable": "Diese Sitzung oder Nachricht gibt es auf diesem Server nicht, oder sie konnte nicht gelesen werden. Der Link bleibt als Text."
+        "chat.sessionReference.unavailable": "Diese Sitzung oder Nachricht gibt es auf diesem Server nicht, oder sie konnte nicht gelesen werden. Der Link bleibt als Text.",
+        "chat.container.readOnlySubagentPromptBanner": "Subagent-Sitzungen können nicht abgefragt werden.",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessions": "Erlaube Prompting von Subagent-Sitzungen",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessionsAria": "Erlaube Prompting von Subagent-Sitzungen",
+        "onboarding.desktopRecovery.remoteUnreachable.title": "Remote-Server nicht erreichbar",
+        "onboarding.desktopRecovery.remoteUnreachable.retry": "Verbindung erneut versuchen",
+        "onboarding.desktopRecovery.incompatibleServer.title": "Inkompatibler Server",
+        "onboarding.desktopRecovery.remoteIncompatible.title": "Server-Update erforderlich",
+        "onboarding.desktopRecovery.remoteIncompatible.description": "Der OpenChamber-Server unter \"{host}\" ist nicht kompatibel mit dieser App-Version. Aktualisieren Sie OpenChamber auf dem Server und versuchen Sie es dann erneut.",
+        "onboarding.desktopRecovery.common.useRemote": "Remote verwenden",
+        "onboarding.desktopRecovery.actions.retrying": "Erneuter Versuch…",
+        "onboarding.remoteConnection.field.serverAddress": "Server-Adresse"
       }
     },
     "fr": {
@@ -3265,7 +3287,18 @@
         "chat.snippetAutocomplete.footer": "↑↓ naviguer • Entrer sélectionner • Esc fermer",
         "chat.draftStarters.sectionSkills": "Skills",
         "settings.page.snippets.title": "Extraits",
-        "chat.sessionReference.unavailable": "Cette session ou ce message n'existe pas sur ce serveur, ou n'a pas pu être lu. Le lien reste du texte."
+        "chat.sessionReference.unavailable": "Cette session ou ce message n'existe pas sur ce serveur, ou n'a pas pu être lu. Le lien reste du texte.",
+        "chat.container.readOnlySubagentPromptBanner": "Les sessions de sous-agent ne peuvent pas être invitées.",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessions": "Autoriser les requêtes dans les sessions de sous-agents",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessionsAria": "Autoriser les requêtes dans les sessions de sous-agents",
+        "onboarding.desktopRecovery.remoteUnreachable.title": "Serveur distant inaccessible",
+        "onboarding.desktopRecovery.remoteUnreachable.retry": "Réessayer la connexion",
+        "onboarding.desktopRecovery.incompatibleServer.title": "Serveur incompatible",
+        "onboarding.desktopRecovery.remoteIncompatible.title": "Mise à jour du serveur requise",
+        "onboarding.desktopRecovery.remoteIncompatible.description": "Le serveur OpenChamber à l’adresse « {host} » n’est pas compatible avec cette version de l’application. Mettez OpenChamber à jour sur le serveur, puis réessayez.",
+        "onboarding.desktopRecovery.common.useRemote": "Utiliser le remote",
+        "onboarding.desktopRecovery.actions.retrying": "Nouvelle tentative…",
+        "onboarding.remoteConnection.field.serverAddress": "Adresse du serveur"
       }
     },
     "nl": {
@@ -4354,7 +4387,18 @@
         "chat.snippetAutocomplete.footer": "↑↓ navigeren • Enter selecteren • Esc sluiten",
         "chat.draftStarters.sectionSkills": "Skills",
         "settings.page.snippets.title": "Fragmenten",
-        "chat.sessionReference.unavailable": "Die sessie of dat bericht staat niet op deze server, of kon niet worden gelezen. De link blijft tekst."
+        "chat.sessionReference.unavailable": "Die sessie of dat bericht staat niet op deze server, of kon niet worden gelezen. De link blijft tekst.",
+        "chat.container.readOnlySubagentPromptBanner": "Aan subsessies van subagents kan geen prompt worden gestuurd.",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessions": "Prompten van subagentsessies toestaan",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessionsAria": "Prompten van subagentsessies toestaan",
+        "onboarding.desktopRecovery.remoteUnreachable.title": "Remote server niet bereikbaar",
+        "onboarding.desktopRecovery.remoteUnreachable.retry": "Verbinding opnieuw proberen",
+        "onboarding.desktopRecovery.incompatibleServer.title": "Niet-compatibele server",
+        "onboarding.desktopRecovery.remoteIncompatible.title": "Serverupdate vereist",
+        "onboarding.desktopRecovery.remoteIncompatible.description": "De OpenChamber-server op \"{host}\" is niet compatibel met deze appversie. Werk OpenChamber op de server bij en probeer het opnieuw.",
+        "onboarding.desktopRecovery.common.useRemote": "Remote gebruiken",
+        "onboarding.desktopRecovery.actions.retrying": "Opnieuw proberen…",
+        "onboarding.remoteConnection.field.serverAddress": "Serveradres"
       }
     },
     "zh-CN": {
@@ -5443,7 +5487,18 @@
         "chat.snippetAutocomplete.footer": "↑↓ 导航 • Enter 选择 • Esc 关闭",
         "chat.draftStarters.sectionSkills": "技能",
         "settings.page.snippets.title": "代码片段",
-        "chat.sessionReference.unavailable": "此服务器上没有该会话或消息，或无法读取。链接保留为文本。"
+        "chat.sessionReference.unavailable": "此服务器上没有该会话或消息，或无法读取。链接保留为文本。",
+        "chat.container.readOnlySubagentPromptBanner": "无法向子智能体会话发送提示。",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessions": "允许向子智能体会话发送提示",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessionsAria": "允许向子智能体会话发送提示",
+        "onboarding.desktopRecovery.remoteUnreachable.title": "远程服务器不可达",
+        "onboarding.desktopRecovery.remoteUnreachable.retry": "重试连接",
+        "onboarding.desktopRecovery.incompatibleServer.title": "服务器不兼容",
+        "onboarding.desktopRecovery.remoteIncompatible.title": "需要更新服务器",
+        "onboarding.desktopRecovery.remoteIncompatible.description": "“{host}” 上的 OpenChamber 服务器与此应用版本不兼容。请更新服务器上的 OpenChamber 后重试。",
+        "onboarding.desktopRecovery.common.useRemote": "使用远程",
+        "onboarding.desktopRecovery.actions.retrying": "重试中…",
+        "onboarding.remoteConnection.field.serverAddress": "服务器地址"
       }
     },
     "zh-TW": {
@@ -6532,7 +6587,18 @@
         "chat.snippetAutocomplete.footer": "↑↓ 導航 • Enter 選擇 • Esc 關閉",
         "chat.draftStarters.sectionSkills": "Skills",
         "settings.page.snippets.title": "程式片段",
-        "chat.sessionReference.unavailable": "此伺服器上沒有該工作階段或訊息，或無法讀取。連結保留為文字。"
+        "chat.sessionReference.unavailable": "此伺服器上沒有該工作階段或訊息，或無法讀取。連結保留為文字。",
+        "chat.container.readOnlySubagentPromptBanner": "無法向子 Agent 會話傳送提示。",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessions": "允許向子 Agent 工作階段傳送提示",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessionsAria": "允許向子 Agent 工作階段傳送提示",
+        "onboarding.desktopRecovery.remoteUnreachable.title": "遠端伺服器無法連線",
+        "onboarding.desktopRecovery.remoteUnreachable.retry": "重試連線",
+        "onboarding.desktopRecovery.incompatibleServer.title": "伺服器不相容",
+        "onboarding.desktopRecovery.remoteIncompatible.title": "需要更新伺服器",
+        "onboarding.desktopRecovery.remoteIncompatible.description": "「{host}」上的 OpenChamber 伺服器與此應用程式版本不相容。請更新伺服器上的 OpenChamber 後重試。",
+        "onboarding.desktopRecovery.common.useRemote": "使用遠端",
+        "onboarding.desktopRecovery.actions.retrying": "重試中…",
+        "onboarding.remoteConnection.field.serverAddress": "伺服器位址"
       }
     },
     "uk": {
@@ -7621,7 +7687,18 @@
         "chat.snippetAutocomplete.footer": "↑↓ навігація • Enter вибрати • Esc закрити",
         "chat.draftStarters.sectionSkills": "Скіли",
         "settings.page.snippets.title": "Сніпети",
-        "chat.sessionReference.unavailable": "Цієї сесії чи повідомлення немає на цьому сервері, або їх не вдалося прочитати. Посилання лишається текстом."
+        "chat.sessionReference.unavailable": "Цієї сесії чи повідомлення немає на цьому сервері, або їх не вдалося прочитати. Посилання лишається текстом.",
+        "chat.container.readOnlySubagentPromptBanner": "Сесії субагентів не можна запитувати.",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessions": "Дозволити запити в сесіях субагентів",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessionsAria": "Дозволити надсилати запити в сесії субагентів",
+        "onboarding.desktopRecovery.remoteUnreachable.title": "Віддалений сервер недоступний",
+        "onboarding.desktopRecovery.remoteUnreachable.retry": "Повторити підключення",
+        "onboarding.desktopRecovery.incompatibleServer.title": "Несумісний сервер",
+        "onboarding.desktopRecovery.remoteIncompatible.title": "Потрібне оновлення сервера",
+        "onboarding.desktopRecovery.remoteIncompatible.description": "Сервер OpenChamber на \"{host}\" несумісний із цією версією застосунку. Оновіть OpenChamber на сервері та повторіть спробу.",
+        "onboarding.desktopRecovery.common.useRemote": "Використовувати Remote",
+        "onboarding.desktopRecovery.actions.retrying": "Повторна спроба…",
+        "onboarding.remoteConnection.field.serverAddress": "Адреса сервера"
       }
     },
     "es": {
@@ -8710,7 +8787,18 @@
         "chat.snippetAutocomplete.footer": "↑↓ navegar • Enter seleccionar • Esc cerrar",
         "chat.draftStarters.sectionSkills": "Skills",
         "settings.page.snippets.title": "Snippets",
-        "chat.sessionReference.unavailable": "Esa sesión o mensaje no está en este servidor o no se pudo leer. El enlace queda como texto."
+        "chat.sessionReference.unavailable": "Esa sesión o mensaje no está en este servidor o no se pudo leer. El enlace queda como texto.",
+        "chat.container.readOnlySubagentPromptBanner": "Las sesiones de subagentes no pueden recibir prompts.",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessions": "Permitir solicitudes en sesiones de subagentes",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessionsAria": "Permitir enviar solicitudes a sesiones de subagentes",
+        "onboarding.desktopRecovery.remoteUnreachable.title": "Servidor remoto no disponible",
+        "onboarding.desktopRecovery.remoteUnreachable.retry": "Reintentar conexión",
+        "onboarding.desktopRecovery.incompatibleServer.title": "Servidor incompatible",
+        "onboarding.desktopRecovery.remoteIncompatible.title": "Actualización del servidor requerida",
+        "onboarding.desktopRecovery.remoteIncompatible.description": "El servidor OpenChamber en \"{host}\" no es compatible con esta versión de la app. Actualiza OpenChamber en el servidor y vuelve a intentarlo.",
+        "onboarding.desktopRecovery.common.useRemote": "Usar remoto",
+        "onboarding.desktopRecovery.actions.retrying": "Reintentando…",
+        "onboarding.remoteConnection.field.serverAddress": "Dirección del servidor"
       }
     },
     "pt-BR": {
@@ -9799,7 +9887,18 @@
         "chat.snippetAutocomplete.footer": "↑↓ navegar • Enter selecionar • Esc fechar",
         "chat.draftStarters.sectionSkills": "Skills",
         "settings.page.snippets.title": "Snippets",
-        "chat.sessionReference.unavailable": "Essa sessão ou mensagem não está neste servidor ou não pôde ser lida. O link fica como texto."
+        "chat.sessionReference.unavailable": "Essa sessão ou mensagem não está neste servidor ou não pôde ser lida. O link fica como texto.",
+        "chat.container.readOnlySubagentPromptBanner": "Sessões de subagente não podem receber prompts.",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessions": "Permitir prompts em sessões de subagentes",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessionsAria": "Permitir prompts em sessões de subagentes",
+        "onboarding.desktopRecovery.remoteUnreachable.title": "Servidor remoto não disponível",
+        "onboarding.desktopRecovery.remoteUnreachable.retry": "Tentar novamente conexão",
+        "onboarding.desktopRecovery.incompatibleServer.title": "Servidor incompatível",
+        "onboarding.desktopRecovery.remoteIncompatible.title": "Atualização do servidor necessária",
+        "onboarding.desktopRecovery.remoteIncompatible.description": "O servidor OpenChamber em \"{host}\" não é compatível com esta versão do app. Atualize o OpenChamber no servidor e tente novamente.",
+        "onboarding.desktopRecovery.common.useRemote": "Usar remoto",
+        "onboarding.desktopRecovery.actions.retrying": "Retentendo…",
+        "onboarding.remoteConnection.field.serverAddress": "Endereço do servidor"
       }
     },
     "ko": {
@@ -10888,7 +10987,18 @@
         "chat.snippetAutocomplete.footer": "↑↓ 이동 • Enter 선택 • Esc 닫기",
         "chat.draftStarters.sectionSkills": "Skills",
         "settings.page.snippets.title": "스니펫",
-        "chat.sessionReference.unavailable": "이 세션이나 메시지가 이 서버에 없거나 읽을 수 없습니다. 링크는 텍스트로 남습니다."
+        "chat.sessionReference.unavailable": "이 세션이나 메시지가 이 서버에 없거나 읽을 수 없습니다. 링크는 텍스트로 남습니다.",
+        "chat.container.readOnlySubagentPromptBanner": "하위 에이전트 세션에는 프롬프트를 보낼 수 없습니다.",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessions": "하위 에이전트 세션에 프롬프트 허용",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessionsAria": "하위 에이전트 세션에 프롬프트 허용",
+        "onboarding.desktopRecovery.remoteUnreachable.title": "원격 서버에 연결할 수 없습니다",
+        "onboarding.desktopRecovery.remoteUnreachable.retry": "연결 다시 시도",
+        "onboarding.desktopRecovery.incompatibleServer.title": "호환되지 않는 서버",
+        "onboarding.desktopRecovery.remoteIncompatible.title": "서버 업데이트 필요",
+        "onboarding.desktopRecovery.remoteIncompatible.description": "\"{host}\"의 OpenChamber 서버가 이 앱 버전과 호환되지 않습니다. 서버의 OpenChamber를 업데이트한 후 다시 시도하세요.",
+        "onboarding.desktopRecovery.common.useRemote": "원격 사용",
+        "onboarding.desktopRecovery.actions.retrying": "다시 시도 중…",
+        "onboarding.remoteConnection.field.serverAddress": "서버 주소"
       }
     },
     "pl": {
@@ -11977,7 +12087,18 @@
         "chat.snippetAutocomplete.footer": "↑↓ nawigacja • Enter wybierz • Esc zamknij",
         "chat.draftStarters.sectionSkills": "Skills",
         "settings.page.snippets.title": "Fragmenty",
-        "chat.sessionReference.unavailable": "Tej sesji lub wiadomości nie ma na tym serwerze albo nie udało się jej odczytać. Link zostaje jako tekst."
+        "chat.sessionReference.unavailable": "Tej sesji lub wiadomości nie ma na tym serwerze albo nie udało się jej odczytać. Link zostaje jako tekst.",
+        "chat.container.readOnlySubagentPromptBanner": "Sesje podagentów nie mogą otrzymywać promptów.",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessions": "Zezwalaj na prompty w sesjach podagentów",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessionsAria": "Zezwalaj na wysyłanie promptów do sesji podagentów",
+        "onboarding.desktopRecovery.remoteUnreachable.title": "Serwer zdalny nieosiągalny",
+        "onboarding.desktopRecovery.remoteUnreachable.retry": "Ponów połączenie",
+        "onboarding.desktopRecovery.incompatibleServer.title": "Niekompatybilny serwer",
+        "onboarding.desktopRecovery.remoteIncompatible.title": "Wymagana aktualizacja serwera",
+        "onboarding.desktopRecovery.remoteIncompatible.description": "Serwer OpenChamber pod adresem \"{host}\" nie jest zgodny z tą wersją aplikacji. Zaktualizuj OpenChamber na serwerze i spróbuj ponownie.",
+        "onboarding.desktopRecovery.common.useRemote": "Użyj zdalnego",
+        "onboarding.desktopRecovery.actions.retrying": "Ponawianie...",
+        "onboarding.remoteConnection.field.serverAddress": "Adres serwera"
       }
     },
     "ja": {
@@ -13066,7 +13187,18 @@
         "chat.snippetAutocomplete.footer": "↑↓ 移動 • Enter 選択 • Esc 閉じる",
         "chat.draftStarters.sectionSkills": "スキル",
         "settings.page.snippets.title": "スニペット",
-        "chat.sessionReference.unavailable": "このセッションまたはメッセージはこのサーバーにないか、読み取れませんでした。リンクはテキストのまま残ります。"
+        "chat.sessionReference.unavailable": "このセッションまたはメッセージはこのサーバーにないか、読み取れませんでした。リンクはテキストのまま残ります。",
+        "chat.container.readOnlySubagentPromptBanner": "サブエージェントセッションはプロンプトを受け付けません。",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessions": "サブエージェントセッションへのプロンプトを許可",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessionsAria": "サブエージェントセッションへのプロンプトを許可",
+        "onboarding.desktopRecovery.remoteUnreachable.title": "リモートサーバーに到達できません",
+        "onboarding.desktopRecovery.remoteUnreachable.retry": "接続を再試行",
+        "onboarding.desktopRecovery.incompatibleServer.title": "互換性のないサーバー",
+        "onboarding.desktopRecovery.remoteIncompatible.title": "サーバーの更新が必要",
+        "onboarding.desktopRecovery.remoteIncompatible.description": "「{host}」のOpenChamberサーバーはこのアプリバージョンと互換性がありません。サーバーのOpenChamberを更新してから再試行してください。",
+        "onboarding.desktopRecovery.common.useRemote": "リモートを使用",
+        "onboarding.desktopRecovery.actions.retrying": "再試行中…",
+        "onboarding.remoteConnection.field.serverAddress": "サーバーアドレス"
       }
     },
     "tr": {
@@ -14155,7 +14287,18 @@
         "chat.snippetAutocomplete.footer": "↑↓ gezin • Enter seç • Esc kapat",
         "chat.draftStarters.sectionSkills": "Skill'ler",
         "settings.page.snippets.title": "Snippet'ler",
-        "chat.sessionReference.unavailable": "Bu oturum veya mesaj bu sunucuda yok ya da okunamadı. Bağlantı metin olarak kalır."
+        "chat.sessionReference.unavailable": "Bu oturum veya mesaj bu sunucuda yok ya da okunamadı. Bağlantı metin olarak kalır.",
+        "chat.container.readOnlySubagentPromptBanner": "Subagent session'larına prompt gönderilemez.",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessions": "Subagent session'lara prompt göndermeye izin ver",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessionsAria": "Subagent session'lara prompt göndermeye izin ver",
+        "onboarding.desktopRecovery.remoteUnreachable.title": "Uzak Sunucuya Erişilemiyor",
+        "onboarding.desktopRecovery.remoteUnreachable.retry": "Bağlantıyı Yeniden Dene",
+        "onboarding.desktopRecovery.incompatibleServer.title": "Uyumsuz Sunucu",
+        "onboarding.desktopRecovery.remoteIncompatible.title": "Sunucu Güncellemesi Gerekli",
+        "onboarding.desktopRecovery.remoteIncompatible.description": "\"{host}\" adresindeki OpenChamber sunucusu bu uygulama sürümüyle uyumlu değil. Sunucudaki OpenChamber'ı güncelleyin, ardından yeniden deneyin.",
+        "onboarding.desktopRecovery.common.useRemote": "Uzak'ı Kullan",
+        "onboarding.desktopRecovery.actions.retrying": "Yeniden deneniyor…",
+        "onboarding.remoteConnection.field.serverAddress": "Sunucu Adresi"
       }
     },
     "ar": {
@@ -15244,7 +15387,18 @@
         "chat.snippetAutocomplete.footer": "↑↓ للتنقل • Enter للاختيار • Esc للإغلاق",
         "chat.draftStarters.sectionSkills": "المهارات",
         "settings.page.snippets.title": "المقتطفات",
-        "chat.sessionReference.unavailable": "هذه الجلسة أو الرسالة غير موجودة على هذا الخادم، أو تعذّرت قراءتها. يبقى الرابط نصًا."
+        "chat.sessionReference.unavailable": "هذه الجلسة أو الرسالة غير موجودة على هذا الخادم، أو تعذّرت قراءتها. يبقى الرابط نصًا.",
+        "chat.container.readOnlySubagentPromptBanner": "لا يمكن إرسال طلبات إلى جلسات الوكلاء الفرعيين.",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessions": "السماح بإرسال طلبات إلى جلسات الوكلاء الفرعيين",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessionsAria": "السماح بإرسال طلبات إلى جلسات الوكلاء الفرعيين",
+        "onboarding.desktopRecovery.remoteUnreachable.title": "تعذّر الوصول إلى الخادم البعيد",
+        "onboarding.desktopRecovery.remoteUnreachable.retry": "إعادة محاولة الاتصال",
+        "onboarding.desktopRecovery.incompatibleServer.title": "خادم غير متوافق",
+        "onboarding.desktopRecovery.remoteIncompatible.title": "يلزم تحديث الخادم",
+        "onboarding.desktopRecovery.remoteIncompatible.description": "خادم OpenChamber على \"{host}\" غير متوافق مع إصدار هذا التطبيق. حدّث OpenChamber على الخادم ثم أعد المحاولة.",
+        "onboarding.desktopRecovery.common.useRemote": "استخدام البعيد",
+        "onboarding.desktopRecovery.actions.retrying": "جارٍ إعادة المحاولة…",
+        "onboarding.remoteConnection.field.serverAddress": "عنوان الخادم"
       }
     },
     "he": {
@@ -16333,7 +16487,18 @@
         "chat.snippetAutocomplete.footer": "↑↓ ניווט • Enter בחירה • Esc סגירה",
         "chat.draftStarters.sectionSkills": "מיומנויות",
         "settings.page.snippets.title": "קטעי קוד",
-        "chat.sessionReference.unavailable": "השיחה או ההודעה הזו אינה בשרת זה, או שלא ניתן היה לקרוא אותה. הקישור נשאר כטקסט."
+        "chat.sessionReference.unavailable": "השיחה או ההודעה הזו אינה בשרת זה, או שלא ניתן היה לקרוא אותה. הקישור נשאר כטקסט.",
+        "chat.container.readOnlySubagentPromptBanner": "אי אפשר לשלוח הנחיות להפעלות של סוכני משנה.",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessions": "אפשר שליחת הנחיות להפעלות של סוכני משנה",
+        "settings.openchamber.visual.field.allowPromptingSubagentSessionsAria": "אפשר שליחת הנחיות להפעלות של סוכני משנה",
+        "onboarding.desktopRecovery.remoteUnreachable.title": "אין גישה לשרת המרוחק",
+        "onboarding.desktopRecovery.remoteUnreachable.retry": "נסה להתחבר שוב",
+        "onboarding.desktopRecovery.incompatibleServer.title": "שרת לא תואם",
+        "onboarding.desktopRecovery.remoteIncompatible.title": "נדרש עדכון לשרת",
+        "onboarding.desktopRecovery.remoteIncompatible.description": "שרת OpenChamber שבכתובת \"{host}\" לא תואם לגרסה הזו של האפליקציה. יש לעדכן את OpenChamber בשרת ולנסות שוב.",
+        "onboarding.desktopRecovery.common.useRemote": "השתמש במרוחק",
+        "onboarding.desktopRecovery.actions.retrying": "מנסה שוב…",
+        "onboarding.remoteConnection.field.serverAddress": "כתובת השרת"
       }
     }
   }

@@ -1,4 +1,10 @@
-//! Machine-policy discovery and live updates for native-owned network requests.
+//! Machine-policy discovery and live updates for native-owned network
+//! requests, and the projection of the connected server's own policy.
+//!
+//! Either source turns enterprise mode on for what native does itself: the
+//! machine policy covers this computer whatever server it reaches, and a
+//! server that enforces the mode is not undercut by its client. Until the
+//! server's answer is known, native-owned public requests stay withheld.
 
 use std::fs::File;
 use std::io::Read;
@@ -10,6 +16,8 @@ use std::sync::{
 
 use gpui_kit::{Context, Task};
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use openchamber_native_core::ids::RuntimeId;
+use openchamber_native_transport::enterprise_policy::ServerPolicy;
 use serde_json::Value;
 
 use crate::workspace::Workspace;
@@ -216,6 +224,12 @@ pub(crate) struct PolicyMonitor {
     watcher: Option<RecommendedWatcher>,
     watched: Vec<PathBuf>,
     task: Option<Task<()>>,
+    /// The runtime `server` belongs to.
+    server_runtime: Option<RuntimeId>,
+    /// The server's policy; `None` until a read for this runtime settled.
+    /// A server from before the route reports no policy.
+    pub(crate) server: Option<ServerPolicy>,
+    server_read: Option<Task<()>>,
 }
 
 impl Default for PolicyMonitor {
@@ -226,11 +240,46 @@ impl Default for PolicyMonitor {
             watcher: None,
             watched: Vec::new(),
             task: None,
+            server_runtime: None,
+            server: None,
+            server_read: None,
         }
     }
 }
 
 impl PolicyMonitor {
+    /// Whether enterprise mode is on for native's own surfaces: the machine
+    /// policy (closed while unreadable) or the connected server says so.
+    pub(crate) fn enterprise_mode(&self) -> bool {
+        self.status.enabled
+            || self
+                .server
+                .as_ref()
+                .is_some_and(|policy| policy.enterprise_mode)
+    }
+
+    /// Whether native-owned public requests are withheld: in enterprise mode,
+    /// and while a connected server's policy is still unknown.
+    pub(crate) fn withholds_public_requests(&self, connected: bool) -> bool {
+        self.enterprise_mode() || (connected && self.server.is_none())
+    }
+
+    /// Adopts the answer for `runtime`, if one arrived (`None` for a route
+    /// the server predates). Without an answer, what was known for the same
+    /// runtime stays; another runtime starts unknown. Returns whether the
+    /// projection changed.
+    fn apply_server(&mut self, runtime: &RuntimeId, answer: Option<Option<ServerPolicy>>) -> bool {
+        let before = (self.server_runtime.clone(), self.server.clone());
+        if self.server_runtime.as_ref() != Some(runtime) {
+            self.server_runtime = Some(runtime.clone());
+            self.server = None;
+        }
+        if let Some(policy) = answer {
+            self.server = Some(policy.unwrap_or_default());
+        }
+        before != (self.server_runtime.clone(), self.server.clone())
+    }
+
     fn watch_parents(&mut self) -> bool {
         let Some(watcher) = self.watcher.as_mut() else {
             return false;
@@ -287,6 +336,50 @@ fn event_relevance(event: &notify::Event, paths: &[PathBuf]) -> (bool, bool) {
 }
 
 impl Workspace {
+    /// Reads the connected server's policy, once per connection.
+    pub(crate) fn load_server_policy(&mut self, cx: &mut Context<Self>) {
+        let runtime = self.runtime.clone();
+        if self.enterprise.apply_server(&runtime, None) {
+            self.provider_logos.clear_remote();
+        }
+        let Some(connection) = self.connection.as_ref() else {
+            return;
+        };
+        let Some(client) = connection.client.clone() else {
+            return;
+        };
+        let read = connection
+            .network
+            .run(async move { client.enterprise_policy().await });
+        self.enterprise.server_read = Some(cx.spawn(async move |this, cx| {
+            let result = read.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.runtime != runtime {
+                    return;
+                }
+                let answer = match result {
+                    Some(Ok(policy)) => Some(policy),
+                    Some(Err(error)) => {
+                        tracing::warn!(%error, "the server's enterprise policy could not be read");
+                        None
+                    }
+                    None => None,
+                };
+                if this.enterprise.apply_server(&runtime, answer) {
+                    this.provider_logos.clear_remote();
+                    cx.notify();
+                }
+                if let Some(policy) = &this.enterprise.server {
+                    crate::diagnostics::mark(
+                        crate::diagnostics::Marker::ServerPolicyRead,
+                        None,
+                        Some(usize::from(policy.enterprise_mode)),
+                    );
+                }
+            });
+        }));
+    }
+
     pub(crate) fn start_policy_monitor(&mut self, cx: &mut Context<Self>) {
         let (events, mut updates) = tokio::sync::mpsc::channel(1);
         let guard = self.enterprise.guard.clone();
@@ -442,6 +535,87 @@ mod tests {
             event_relevance(&event, &policy_paths("linux", None)),
             (true, true)
         );
+    }
+
+    #[test]
+    fn server_policy_stays_unknown_until_answered_and_either_source_restricts() {
+        let mut monitor = PolicyMonitor {
+            status: PolicyStatus {
+                enabled: false,
+                unavailable: false,
+            },
+            ..PolicyMonitor::default()
+        };
+        let (one, two) = (RuntimeId::from("one"), RuntimeId::from("two"));
+        assert!(
+            !monitor.withholds_public_requests(false),
+            "no server, no wait"
+        );
+        assert!(
+            monitor.withholds_public_requests(true),
+            "an unanswered server policy withholds public requests"
+        );
+        assert!(
+            monitor.apply_server(&one, Some(None)),
+            "a server from before the route"
+        );
+        assert!(!monitor.enterprise_mode() && !monitor.withholds_public_requests(true));
+        let restricted = ServerPolicy {
+            enterprise_mode: true,
+            organization: Some("Acme".to_owned()),
+            ..ServerPolicy::default()
+        };
+        assert!(monitor.apply_server(&one, Some(Some(restricted))));
+        assert!(
+            monitor.enterprise_mode(),
+            "the server's mode applies to native surfaces"
+        );
+        assert!(
+            !monitor.apply_server(&one, None),
+            "a failed read keeps what was known"
+        );
+        assert!(monitor.enterprise_mode());
+        assert!(
+            monitor.apply_server(&two, None),
+            "another runtime starts unknown"
+        );
+        assert!(monitor.server.is_none() && !monitor.enterprise_mode());
+        assert!(monitor.withholds_public_requests(true));
+        assert!(monitor.apply_server(&two, Some(Some(ServerPolicy::default()))));
+        monitor.status = PolicyStatus::CLOSED;
+        assert!(
+            monitor.enterprise_mode(),
+            "an unreadable machine policy restricts whatever the server says"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn enterprise_mode_hides_the_integrations_catalog(cx: &mut gpui_kit::TestAppContext) {
+        use gpui_kit::test::TestWindowExt;
+        use gpui_kit::{AppContext, ElementId};
+        let (window, workspace) = crate::workspace_tests::open(cx);
+        for (status, shown) in [
+            (
+                PolicyStatus {
+                    enabled: false,
+                    unavailable: false,
+                },
+                true,
+            ),
+            (PolicyStatus::CLOSED, false),
+        ] {
+            cx.update_window(window, |_, window, cx| {
+                workspace.update(cx, |workspace, _| workspace.enterprise.status = status);
+                window.render_frame(cx);
+                assert_eq!(
+                    window
+                        .try_find(ElementId::Name("integrations".into()))
+                        .is_some(),
+                    shown
+                );
+            })
+            .expect("window");
+        }
     }
 
     #[gpui_kit::test]

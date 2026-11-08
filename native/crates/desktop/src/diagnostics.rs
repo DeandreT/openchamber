@@ -33,6 +33,8 @@ pub enum Marker {
     PolicyChecked,
     /// A public asset was withheld by the native machine policy.
     PublicAssetBlocked,
+    /// The connected server's policy read settled; count is 1 when restricted.
+    ServerPolicyRead,
 }
 
 impl Marker {
@@ -48,6 +50,7 @@ impl Marker {
             Self::HistoryShown => "history-shown",
             Self::PolicyChecked => "policy-checked",
             Self::PublicAssetBlocked => "public-asset-blocked",
+            Self::ServerPolicyRead => "server-policy-read",
         }
     }
 }

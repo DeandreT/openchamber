@@ -16,6 +16,7 @@ mod context_payload;
 pub mod control_stream;
 pub mod credential;
 pub mod endpoint;
+pub mod enterprise_policy;
 pub mod error;
 pub mod event;
 pub mod files;
