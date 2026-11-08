@@ -161,6 +161,7 @@ mod tests {
         WarmingSnapshot {
             revision,
             enabled,
+            minutes: 60,
             sessions: sessions
                 .iter()
                 .map(|id| (SessionId::from(*id), None))

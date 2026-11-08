@@ -131,6 +131,7 @@ mod session_admission;
 mod session_ai_rename;
 mod session_branching;
 mod session_creation;
+mod session_defaults;
 mod session_export;
 mod session_folders;
 mod session_goal;

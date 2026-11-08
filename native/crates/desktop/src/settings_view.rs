@@ -79,6 +79,9 @@ impl Settings {
         let chat = cx.new(|cx| PreferencePage::new(owner.clone(), general.clone(), Page::Chat, cx));
         let sessions =
             cx.new(|cx| PreferencePage::new(owner.clone(), general.clone(), Page::Sessions, cx));
+        let defaults =
+            cx.new(|cx| crate::session_defaults::SessionDefaults::new(owner.clone(), window, cx));
+        sessions.update(cx, |page, cx| page.set_defaults(defaults, cx));
         let shortcuts = cx.new(|_| crate::shortcuts_settings::ShortcutsPage::new(owner.clone()));
         let behavior =
             cx.new(|cx| crate::behavior_settings::BehaviorPage::new(owner.clone(), window, cx));
@@ -120,6 +123,11 @@ impl Settings {
             cx.defer(move |cx| {
                 let _ = general.update(cx, |page, cx| page.refresh(cx));
             });
+        }
+        if page == Page::Sessions
+            && let Some(defaults) = self.sessions.read(cx).defaults.clone()
+        {
+            cx.defer(move |cx| defaults.update(cx, |defaults, cx| defaults.refresh(cx)));
         }
         // OpenCode configuration pages read again on every visit.
         if page == Page::Behavior {
