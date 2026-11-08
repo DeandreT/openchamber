@@ -82,6 +82,7 @@ class Session:
         for directory in runner.state_dirs(state).values():
             Path(directory).mkdir(parents=True, exist_ok=True)
         self.env = runner.native_env(state, self.server.url, "openchamber-dark")
+        self.env.update(getattr(args, "extra_env", {}))
         log = cleanup.enter_context((args.output / "native.log").open("w"))
         self.client = NativeClient(args.binary, self.env, args.scale, 1440, 900, stderr=log)
         cleanup.callback(self.client.close)

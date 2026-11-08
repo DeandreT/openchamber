@@ -1276,6 +1276,8 @@ mod compound_workspace {
                             "/api/git/status?directory=%2Fproject" => {
                                 r#"{"isGitRepository":false}"#
                             }
+                            // The rail's extension panels.
+                            "/api/guests" => r#"{"guests":[]}"#,
                             _ => panic!("unsupported fixture request {method} {path}"),
                         };
                         recorded_reads
@@ -1458,7 +1460,7 @@ mod compound_workspace {
         cx.update_window(window, |_, window, cx| window.render_frame(cx))
             .expect("render the connected selected session before editing");
         cx.condition(&workspace, |_, _| {
-            server.reads.lock().expect("supported render reads").len() >= 3
+            server.reads.lock().expect("supported render reads").len() >= 4
         })
         .await;
         let mut reads = server
@@ -1471,6 +1473,7 @@ mod compound_workspace {
             reads,
             vec![
                 "/api/git/status?directory=%2Fproject",
+                "/api/guests",
                 "/api/permission-auto-accept",
                 "/api/routing"
             ],

@@ -549,6 +549,19 @@ prompt. Attachments and worktree creation remain separate workflows.
   (`vendor/libghostty-vt-sys`) behind a renderer-independent API: replay,
   frames, scrollback, selection, links and the key, paste and mouse encoders.
 
+- `webview_platform.rs` and `webview_host.rs` own embedded web content on
+  Linux/X11: GTK start, the browser and content profiles, the frame shim
+  scheme, the GLib pump, and one WebKitGTK view per host entity, positioned,
+  clipped, shaped around overlays, tinted under modals and focused by its
+  `HostElement`. `web_policy.rs` decides every address a view may load,
+  `web_shim.rs` builds the shim document and its isolated-world relay.
+  `browser_view.rs` is the panel's browser surface (tabs, toolbar, address),
+  `html_answer_view.rs` an `openchamber_render` page in the transcript
+  (document from `html_render_document.rs`, call state from the core's
+  `rendered_page`), `guest_panel_view.rs` an extension's rail panel with the
+  SDK envelope of `sdk_envelope.rs`. Other platforms and Wayland show the
+  surfaces' failure state.
+
 ## Invariants
 
 - The managed host signals only processes it owns: the server it spawned, or a
@@ -564,6 +577,33 @@ prompt. Attachments and worktree creation remain separate workflows.
   the recorded process groups and the server's own group. Nothing restarts a
   server once quit was requested. Restarts after a crash stop after three in a
   row; a failed host waits for Retry Local, which relaunches the app.
+- No credential enters a web view. Previews and extension frames load by a
+  server grant in the URL path, minted with the client's credential over the
+  transport; answers to pages are posted by the transport. Views start no
+  process with the token in their environment.
+- Every load the desktop starts passes `ViewPolicy::allows_load`, and every
+  navigation WebKit decides passes `ViewPolicy::allows`: browser tabs reach
+  http(s), `about:`, `data:` and `blob:` only; an answer page stays in its
+  `srcdoc`; a preview stays in its grant; an extension stays in its package
+  grant. Refused navigations are ignored, never downloaded or opened.
+- Content with an opaque origin runs in the content profile, which is
+  ephemeral and shares nothing with the browser profile. The browser profile
+  is one persistent profile for every runtime, separate from the app's own
+  storage, and keeps its HTTP cache and CacheStorage inside its directory.
+- The shim's relay and its message handler exist only in an isolated world of
+  the top frame. A shim document is served once, to the view it was made for,
+  and only shim documents may display the shim scheme.
+- While a Kit dialog or sheet is open every host is tinted, has an empty
+  input shape, drops queued presses, keys and wheel turns, closes the page's
+  own popups and returns X focus to GPUI only if the page held it. Presses
+  from before a modal never focus the page.
+- A host shows nothing GPUI draws above it: every hitbox the last frame
+  inserted after the host's own is cut from its shape, full-window layers
+  excepted. A host whose element was not painted in the last frame is unmapped.
+- A dropped host terminates its web process and closes its popups.
+- A page's `openchamber.submit` reaches the server only while its call waits,
+  after a real press in the page within five seconds, with a summary.
+
 - Connection startup verifies server identity and authentication before opening
   the event stream or loading sessions. A malformed status cannot become either
   a successful login or a guessed password challenge. A client-token-only
@@ -1934,3 +1974,55 @@ the reference.
 The web keeps the sidebar and panel sizes in its persisted UI store, outside
 the settings document, so each device has its own. Native writes the same
 three values to its private folder instead of the server.
+
+### Why WebKitGTK directly and not wry
+
+wry's Linux child path rejects GPUI's XCB handle, its `build_gtk` adds only
+the container glue the host already owns, its default IPC handler is visible
+to sandboxed subframes, and its profiles share one cache directory. The host
+uses WebKitGTK's own API, which the isolated-world bridge needed anyway.
+
+### Why a toplevel-typed GDK window under the GPUI window
+
+WebKit paints only into a GTK toplevel with a frame clock. A GDK window of type
+toplevel created under a foreign parent keeps that clock while X makes it a
+child, the arrangement `GtkPlug` uses. A plain GDK child never painted a page.
+
+### Why overlays are cut out and dialogs tinted
+
+A child window always covers GPUI. Unmapping the page under a menu, or
+painting a WebKit snapshot instead, left the page blank or still for 0.1 to
+3 s. Cutting the overlay's painted area keeps the page live; the shade in the
+GTK host gives the dialog's dimming over the live page, and the empty input
+shape gives the dialog all input.
+
+### Why GLib runs on a 4 ms timer
+
+GPUI's calloop source registration is private and GLib's safe bindings omit
+`query` and `check`, so its descriptors cannot join GPUI's loop without new
+unsafe code. The timer runs only while a view exists.
+
+### Why the shim uses the `openchamber-ui://app` origin
+
+The server's `frame-ancestors` allows `openchamber-ui://app` for Electron's
+packaged UI. The desktop's shim takes that origin so previews and extension
+frames load from an unmodified server; the scheme is registered only in the
+content profile and display-isolated there.
+
+### Why the browser profile is shared by every runtime
+
+Electron's browser panel uses one `persist:openchamber-browser` partition per
+app, whichever server a window shows. Native follows it; isolation is between
+the user's browsing, opaque-origin content and the desktop's own storage.
+
+### Why a submission's gesture is GTK's
+
+`navigator.userActivation` of the shim does not reliably reflect a press in a
+cross-origin child in WebKit. GTK sees only real presses, so a press in the
+view within five seconds stands in for the reference's activation check.
+
+### Why extension requests answer `UNSUPPORTED`
+
+No host service is ported yet. Answering each request with the SDK's explicit
+`UNSUPPORTED` code, as VS Code and mobile do, keeps panels running and gives
+them no workspace, file, network or credential access.

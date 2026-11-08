@@ -135,6 +135,9 @@ pub(crate) enum PanelSurface {
     Files,
     Git,
     Diff,
+    Browser,
+    /// An extension's panel, the one `Panels::open_guest` names.
+    Guest,
 }
 
 impl PanelSurface {
@@ -143,6 +146,8 @@ impl PanelSurface {
             Self::Files => "contextPanel.mode.files",
             Self::Git => "layout.rightSidebar.git",
             Self::Diff => "contextPanel.mode.diff",
+            Self::Browser => "contextPanel.mode.browser",
+            Self::Guest => "settings.page.extensions.title",
         }
     }
 }
@@ -158,6 +163,18 @@ pub(crate) struct Panels {
     diff: HashMap<ViewKey, Entity<DiffView>>,
     /// A file a link asked for, opened once its directory's view exists.
     pending_file: Option<(ViewKey, String)>,
+    #[cfg(target_os = "linux")]
+    browser: HashMap<ViewKey, Entity<crate::browser_view::BrowserPanel>>,
+    /// The extension panel the Guest surface shows.
+    pub(crate) open_guest: Option<openchamber_native_transport::web_content::GuestPanel>,
+    /// The selected runtime's extensions with a rail panel.
+    pub(crate) guest_catalog: Option<(
+        RuntimeId,
+        Vec<openchamber_native_transport::web_content::GuestPanel>,
+    )>,
+    guest_catalog_task: Option<(RuntimeId, gpui_kit::Task<()>)>,
+    #[cfg(target_os = "linux")]
+    guests: HashMap<(RuntimeId, String, String), Entity<crate::guest_panel_view::GuestPanelView>>,
 }
 
 impl Workspace {
@@ -252,7 +269,7 @@ impl Workspace {
                         });
                     }
                 }
-                PanelSurface::Files => {}
+                PanelSurface::Files | PanelSurface::Browser | PanelSurface::Guest => {}
             }
         }
         cx.notify();
@@ -277,8 +294,20 @@ impl Workspace {
     fn panel_scope(&self, cx: &Context<Self>) -> Option<PanelScope> {
         let connection = self.connection.as_ref()?;
         let client = connection.client.clone()?;
-        let directory = if self.selected.is_some() {
-            path::normalize_optional(self.selected_session()?.directory.as_deref())?
+        let directory = self.panel_directory()?;
+        Some(PanelScope {
+            client,
+            network: connection.network.handle(),
+            runtime: self.runtime.clone(),
+            directory,
+            owner: Some(cx.entity().downgrade()),
+        })
+    }
+
+    /// The directory a panel surface shows.
+    fn panel_directory(&self) -> Option<String> {
+        if self.selected.is_some() {
+            path::normalize_optional(self.selected_session()?.directory.as_deref())
         } else {
             let project = self
                 .draft_projects
@@ -290,15 +319,8 @@ impl Workspace {
                         .as_ref()
                         .and_then(|settings| settings.active_project_path())
                 })?;
-            path::normalize(project)?
-        };
-        Some(PanelScope {
-            client,
-            network: connection.network.handle(),
-            runtime: self.runtime.clone(),
-            directory,
-            owner: Some(cx.entity().downgrade()),
-        })
+            path::normalize(project)
+        }
     }
 
     /// The open surface for the panel's directory, created on first use.
@@ -312,6 +334,7 @@ impl Workspace {
         for (_, shown) in self.panels.files.values() {
             shown.set(false);
         }
+        self.ensure_guest_catalog(cx);
         let surface = self.panels.open?;
         let scope = self.panel_scope(cx);
         let key = scope
@@ -320,8 +343,12 @@ impl Workspace {
         for (view_key, (_, shown)) in &self.panels.files {
             shown.set(surface == PanelSurface::Files && Some(view_key) == key.as_ref());
         }
-        let body = match (scope, key) {
-            (Some(scope), Some(key)) => match surface {
+        let body = match (surface, scope, key) {
+            (PanelSurface::Browser, _, _) => self.render_browser_surface(palette, window, cx),
+            (PanelSurface::Guest, Some(scope), Some(_)) => {
+                self.render_guest_surface(scope, palette, cx)
+            }
+            (surface, Some(scope), Some(key)) => match surface {
                 PanelSurface::Files => {
                     let pending = self
                         .panels
@@ -358,50 +385,231 @@ impl Workspace {
                     .or_insert_with(|| cx.new(|cx| DiffView::new(scope, cx)))
                     .clone()
                     .into_any_element(),
+                PanelSurface::Browser => self.render_browser_surface(palette, window, cx),
+                PanelSurface::Guest => empty_state(
+                    locale::strings(cx).get("contextPanel.browser.loadFailed"),
+                    palette,
+                    cx,
+                ),
             },
             _ => {
                 let strings = locale::strings(cx);
                 let key = match surface {
                     PanelSurface::Files => "filesView.editor.pickFileFromTree",
                     PanelSurface::Git => "gitView.empty.selectSessionOrDirectory",
-                    PanelSurface::Diff => "diffView.state.selectSessionDirectory",
+                    PanelSurface::Diff | PanelSurface::Browser | PanelSurface::Guest => {
+                        "diffView.state.selectSessionDirectory"
+                    }
                 };
                 empty_state(strings.get(key), palette, cx)
             }
         };
-        let strings = locale::strings(cx);
-        Some(
-            div()
-                .id("side-panel")
-                .role(Role::Complementary)
-                .accessibility_id("side-panel")
-                .test_support()
-                .aria_label(strings.get(surface.label_key()))
-                .relative()
-                .w(px(self.fitted_panel_width(window)))
-                .flex_shrink_0()
-                .h_full()
-                .py(px(8.0))
-                .margin_start(direction, px(4.0))
-                .margin_end(direction, px(8.0))
-                .child(
-                    div()
-                        .size_full()
-                        .rounded(px(12.0))
-                        .overflow_hidden()
-                        .bg(elevation::panel_fill(palette))
-                        .shadow(elevation::panel_edge(palette))
-                        .child(body),
-                )
-                .child(self.render_resize_handle(
-                    crate::pane_resize::Pane::Panel,
-                    strings.get("contextPanel.actions.resizePanelAria"),
-                    palette,
-                    direction,
-                    cx,
-                ))
-                .into_any_element(),
+        Some(self.side_panel_frame(surface, body, palette, direction, window, cx))
+    }
+
+    /// Reads the selected runtime's extension panels once per connection.
+    fn ensure_guest_catalog(&mut self, cx: &mut Context<Self>) {
+        let runtime = self.runtime.clone();
+        let known = self
+            .panels
+            .guest_catalog
+            .as_ref()
+            .is_some_and(|(owner, _)| *owner == runtime)
+            || self
+                .panels
+                .guest_catalog_task
+                .as_ref()
+                .is_some_and(|(owner, _)| *owner == runtime);
+        if known {
+            return;
+        }
+        let Some(connection) = self.connection.as_ref() else {
+            return;
+        };
+        let Some(client) = connection.client.clone() else {
+            return;
+        };
+        let request = NetworkTask::spawn_on(&connection.network.handle(), async move {
+            client.guest_panels().await
+        });
+        let owner = runtime.clone();
+        let task = cx.spawn(async move |this, cx| {
+            let panels = request.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.runtime != owner {
+                    return;
+                }
+                this.panels.guest_catalog_task = None;
+                match panels {
+                    Some(Ok(panels)) => {
+                        this.panels.guest_catalog = Some((owner, panels));
+                        cx.notify();
+                    }
+                    // A failed read lists nothing; the next connection reads again.
+                    Some(Err(error)) => {
+                        tracing::warn!(%error, "the extension catalog could not be read");
+                        this.panels.guest_catalog = Some((owner, Vec::new()));
+                    }
+                    None => {}
+                }
+            });
+        });
+        self.panels.guest_catalog_task = Some((runtime, task));
+    }
+
+    /// The open extension's panel for the scope's directory.
+    #[cfg(target_os = "linux")]
+    fn render_guest_surface(
+        &mut self,
+        scope: PanelScope,
+        palette: &Palette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(panel) = self.panels.open_guest.clone() else {
+            return empty_state(
+                locale::strings(cx).get("contextPanel.browser.loadFailed"),
+                palette,
+                cx,
+            );
+        };
+        let key = (
+            scope.runtime.clone(),
+            panel.id.clone(),
+            scope.directory.clone(),
+        );
+        let owner = cx.entity().downgrade();
+        self.panels
+            .guests
+            .entry(key)
+            .or_insert_with(|| {
+                cx.new(|cx| {
+                    crate::guest_panel_view::GuestPanelView::new(
+                        panel,
+                        scope.runtime,
+                        Some(scope.directory),
+                        owner,
+                        cx,
+                    )
+                })
+            })
+            .clone()
+            .into_any_element()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn render_guest_surface(
+        &mut self,
+        _scope: PanelScope,
+        palette: &Palette,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        empty_state(
+            locale::strings(cx).get("contextPanel.browser.loadFailed"),
+            palette,
+            cx,
         )
+    }
+
+    /// Opens an extension's panel, or closes it when it is the open one.
+    pub(crate) fn toggle_guest_panel(
+        &mut self,
+        panel: openchamber_native_transport::web_content::GuestPanel,
+        cx: &mut Context<Self>,
+    ) {
+        let open = self.panels.open == Some(PanelSurface::Guest)
+            && self
+                .panels
+                .open_guest
+                .as_ref()
+                .is_some_and(|open| open.id == panel.id);
+        if open {
+            self.panels.open = None;
+        } else {
+            self.panels.open = Some(PanelSurface::Guest);
+            self.panels.open_guest = Some(panel);
+        }
+        cx.notify();
+    }
+
+    /// The browser's tabs for the panel's directory, or for no directory
+    /// before a project is chosen; the browser needs no server.
+    #[cfg(target_os = "linux")]
+    fn render_browser_surface(
+        &mut self,
+        _palette: &Palette,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let key = (
+            self.runtime.clone(),
+            self.panel_directory().unwrap_or_default(),
+        );
+        self.panels
+            .browser
+            .entry(key)
+            .or_insert_with(|| cx.new(|cx| crate::browser_view::BrowserPanel::new(window, cx)))
+            .clone()
+            .into_any_element()
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn render_browser_surface(
+        &mut self,
+        palette: &Palette,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        empty_state(
+            locale::strings(cx).get("contextPanel.browser.loadFailed"),
+            palette,
+            cx,
+        )
+    }
+
+    /// The panel's card around a surface, with its resize handle.
+    fn side_panel_frame(
+        &self,
+        surface: PanelSurface,
+        body: AnyElement,
+        palette: &Palette,
+        direction: Direction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let strings = locale::strings(cx);
+        div()
+            .id("side-panel")
+            .role(Role::Complementary)
+            .accessibility_id("side-panel")
+            .test_support()
+            .aria_label(match (surface, &self.panels.open_guest) {
+                (PanelSurface::Guest, Some(panel)) => SharedString::from(panel.name.clone()),
+                _ => strings.get(surface.label_key()),
+            })
+            .relative()
+            .w(px(self.fitted_panel_width(window)))
+            .flex_shrink_0()
+            .h_full()
+            .py(px(8.0))
+            .margin_start(direction, px(4.0))
+            .margin_end(direction, px(8.0))
+            .child(
+                div()
+                    .size_full()
+                    .rounded(px(12.0))
+                    .overflow_hidden()
+                    .bg(elevation::panel_fill(palette))
+                    .shadow(elevation::panel_edge(palette))
+                    .child(body),
+            )
+            .child(self.render_resize_handle(
+                crate::pane_resize::Pane::Panel,
+                strings.get("contextPanel.actions.resizePanelAria"),
+                palette,
+                direction,
+                cx,
+            ))
+            .into_any_element()
     }
 }
 
@@ -640,6 +848,9 @@ pub(crate) struct FilesView {
     pub(crate) next_rename_revision: u64,
     pub(crate) notice: Option<Notice>,
     shown: Rc<Cell<bool>>,
+    /// The open HTML file as a page, while its preview is on.
+    #[cfg(target_os = "linux")]
+    html_preview: Option<Entity<crate::html_preview_view::HtmlPreviewView>>,
     poll_ticks: u32,
     polling: bool,
     _poll: Task<()>,
@@ -703,6 +914,8 @@ impl FilesView {
             next_rename_revision: 0,
             notice: None,
             shown,
+            #[cfg(target_os = "linux")]
+            html_preview: None,
             poll_ticks: 0,
             polling: false,
             _poll: poll,
@@ -1972,6 +2185,8 @@ impl FilesView {
                 .into_any_element()
         } else if open.file.is_loading() {
             empty_state(strings.get("filesView.state.loading"), palette, cx)
+        } else if let Some(page) = self.html_preview_element() {
+            page
         } else {
             div()
                 .id("files-editor")
@@ -2001,6 +2216,57 @@ impl FilesView {
     }
 }
 
+impl FilesView {
+    /// Keeps the HTML preview in step with the open file: a page while the
+    /// preview of an HTML file is on, granted again after each load or save.
+    #[cfg(target_os = "linux")]
+    fn sync_html_preview(&mut self, cx: &mut Context<Self>) {
+        let wanted = self.open.as_ref().filter(|open| {
+            open.preview
+                && crate::html_preview_view::is_html(open.file.path())
+                && !open.file.is_loading()
+                && open.file.failure().is_none()
+        });
+        let Some(open) = wanted else {
+            self.html_preview = None;
+            return;
+        };
+        let (path, revision, outside) = (
+            open.file.path().to_owned(),
+            open.file.revision(),
+            open.outside,
+        );
+        if self
+            .html_preview
+            .as_ref()
+            .is_some_and(|view| view.read(cx).shows(&path, revision))
+        {
+            return;
+        }
+        let mut scope = self.scope.clone();
+        self.html_preview = Some(cx.new(|cx| {
+            crate::html_preview_view::HtmlPreviewView::new(&mut scope, path, revision, outside, cx)
+        }));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn html_preview_element(&self) -> Option<AnyElement> {
+        self.html_preview.clone().map(|view| {
+            div()
+                .id("files-html-preview")
+                .accessibility_id("files-html-preview")
+                .size_full()
+                .child(view)
+                .into_any_element()
+        })
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn html_preview_element(&self) -> Option<AnyElement> {
+        None
+    }
+}
+
 impl Focusable for FilesView {
     fn focus_handle(&self, _: &gpui_kit::App) -> FocusHandle {
         self.tree_focus.clone()
@@ -2016,6 +2282,8 @@ impl Render for FilesView {
             });
         }
         self.sync_editor(window, cx);
+        #[cfg(target_os = "linux")]
+        self.sync_html_preview(cx);
         let palette = cx.global::<Palette>().clone();
         let direction = locale::strings(cx).direction();
         let searching = !self.search.read(cx).value().trim().is_empty();

@@ -4,6 +4,7 @@
 //! Every field is read on its own, so one malformed field never blanks the
 //! rest of a row.
 
+use openchamber_native_core::rendered_page::{PageAnswer, PageInput, PageResult};
 use openchamber_native_core::tool_shells::{
     ExecuteToolCall, ToolFacts, ToolFileDiff, ToolInput, ToolMetadata,
 };
@@ -70,6 +71,66 @@ fn read_input(input: &Value) -> ToolInput {
         parameter_detail: parameters
             .and_then(parameter_detail)
             .or_else(|| text(input, "title")),
+        page: read_page(input, parameters),
+    }
+}
+
+/// A render call's page fields, `parameters` first and field by field
+/// (`renderPageInputSchema`).
+fn read_page(input: &Value, parameters: Option<&Value>) -> PageInput {
+    let raw = |key: &str| -> Option<String> {
+        parameters
+            .and_then(|parameters| parameters.get(key)?.as_str())
+            .or_else(|| input.get(key)?.as_str())
+            .map(str::to_owned)
+    };
+    // `booleanish`: a boolean, or the strings "true" and "false".
+    let flag = |record: &Value| -> Option<bool> {
+        match record.get("awaitAnswer")? {
+            Value::Bool(value) => Some(*value),
+            Value::String(value) if value == "true" => Some(true),
+            Value::String(value) if value == "false" => Some(false),
+            _ => None,
+        }
+    };
+    PageInput {
+        html: raw("html"),
+        ui: raw("ui"),
+        title: parameters
+            .and_then(|parameters| text(parameters, "title"))
+            .or_else(|| text(input, "title")),
+        await_answer: parameters.and_then(flag).or_else(|| flag(input)),
+    }
+}
+
+/// The `openchamber` result of a render call (`openChamberResultSchema`).
+fn read_page_result(metadata: &Value) -> PageResult {
+    let Some(result) = metadata
+        .get("openchamber")
+        .filter(|value| value.is_object())
+    else {
+        return PageResult::default();
+    };
+    let answer =
+        result
+            .get("answer")
+            .and_then(|answer| match answer.get("answered")?.as_bool()? {
+                true => Some(PageAnswer::Answered {
+                    summary: answer.get("summary")?.as_str()?.to_owned(),
+                    data: answer
+                        .get("data")
+                        .map_or_else(|| "null".to_owned(), Value::to_string),
+                }),
+                false => Some(PageAnswer::NotAnswered {
+                    reason: answer
+                        .get("reason")
+                        .and_then(Value::as_str)
+                        .map(str::to_owned),
+                }),
+            });
+    PageResult {
+        ok: result.get("ok").and_then(Value::as_bool),
+        answer,
     }
 }
 
@@ -160,6 +221,7 @@ fn read_metadata(metadata: &Value) -> ToolMetadata {
         tool_calls,
         truncated: metadata.get("truncated").and_then(Value::as_bool) == Some(true),
         output_path: text(metadata, "outputPath"),
+        page_result: read_page_result(metadata),
     }
 }
 
@@ -244,6 +306,30 @@ mod tests {
         let mut lines: Vec<&str> = listed.lines().collect();
         lines.sort_unstable();
         assert_eq!(lines, ["File name: a", "Max results: 5", "Recursive: Yes"]);
+    }
+
+    #[test]
+    fn render_calls_read_their_page_and_answer() {
+        let input = json!({"action": "render.page", "html": "<p>outer</p>", "parameters": {"html": "<p>inner</p>", "awaitAnswer": "true"}});
+        let metadata = json!({"openchamber": {"ok": true, "answer": {"answered": true, "summary": "A", "data": {"pick": 1}}}});
+        let facts = tool_facts(Some(&input), Some(&metadata), None);
+        assert_eq!(facts.input.page.html.as_deref(), Some("<p>inner</p>"));
+        assert_eq!(facts.input.page.await_answer, Some(true));
+        assert_eq!(facts.metadata.page_result.ok, Some(true));
+        assert_eq!(
+            facts.metadata.page_result.answer,
+            Some(PageAnswer::Answered {
+                summary: "A".to_owned(),
+                data: "{\"pick\":1}".to_owned()
+            })
+        );
+        let bare = tool_facts(
+            Some(&json!({"html": "<b>x</b>", "awaitAnswer": 1})),
+            None,
+            None,
+        );
+        assert_eq!(bare.input.page.html.as_deref(), Some("<b>x</b>"));
+        assert_eq!(bare.input.page.await_answer, None);
     }
 
     #[test]

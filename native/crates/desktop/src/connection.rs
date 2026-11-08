@@ -15,6 +15,34 @@ const SERVER_VARIABLE: &str = "OPENCHAMBER_NATIVE_SERVER";
 /// `OPENCHAMBER_NATIVE_PASSWORD`: the UI password of a password server.
 const PASSWORD_VARIABLE: &str = "OPENCHAMBER_NATIVE_PASSWORD";
 
+/// The password variable's value, read once and removed from the
+/// environment on Linux, so WebKit's processes and every other child started
+/// later cannot inherit it.
+static PASSWORD: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+
+/// Takes `OPENCHAMBER_NATIVE_PASSWORD` out of the environment. `main` calls
+/// this before any thread starts, as changing the environment requires.
+pub(crate) fn take_password_from_environment() {
+    PASSWORD.get_or_init(|| {
+        let password = std::env::var(PASSWORD_VARIABLE)
+            .ok()
+            .filter(|password| !password.is_empty());
+        #[cfg(target_os = "linux")]
+        gtk::glib::unsetenv(PASSWORD_VARIABLE);
+        password
+    });
+}
+
+fn environment_password() -> Option<String> {
+    PASSWORD
+        .get_or_init(|| {
+            std::env::var(PASSWORD_VARIABLE)
+                .ok()
+                .filter(|password| !password.is_empty())
+        })
+        .clone()
+}
+
 /// An explicitly selected server.
 #[derive(Clone)]
 pub struct ServerConfig {
@@ -36,9 +64,7 @@ impl ServerConfig {
     /// The server named in the environment, if one is.
     pub fn from_env() -> Option<Result<Self, TransportError>> {
         let url = std::env::var(SERVER_VARIABLE).ok()?;
-        let password = std::env::var(PASSWORD_VARIABLE)
-            .ok()
-            .filter(|password| !password.is_empty());
+        let password = environment_password();
         Some(Endpoint::parse(&url).map(|endpoint| Self {
             endpoint,
             password,

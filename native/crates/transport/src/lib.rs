@@ -52,5 +52,9 @@ pub mod stream;
 pub mod system;
 pub mod terminal;
 mod tool_facts;
+pub mod web_content;
 mod wire;
 pub mod worktree;
+
+/// WHATWG URL parsing, for callers that judge addresses the way browsers do.
+pub use reqwest::Url;
