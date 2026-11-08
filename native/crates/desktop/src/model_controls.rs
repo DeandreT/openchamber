@@ -85,27 +85,27 @@ impl Workspace {
                 label,
                 icon,
                 color,
+                label_color: color,
                 provider,
             },
             labels.model,
             direction,
             cx,
         );
+        // The effort is a muted suffix whether it is Default or a choice.
         let effort = match variant {
             VariantControl::Hidden => None,
-            VariantControl::Default => Some((
-                strings.get("chat.modelControls.default"),
-                palette.muted_foreground,
-            )),
-            VariantControl::Selected(name) => Some((name.into(), palette.status_info)),
+            VariantControl::Default => Some(strings.get("chat.modelControls.default")),
+            VariantControl::Selected(name) => Some(name.into()),
         }
-        .map(|(label, color)| {
+        .map(|label| {
             self.picker_control(
                 PickerKind::Effort,
                 PickerAppearance {
                     label,
                     icon: "brain-ai-3",
-                    color,
+                    color: palette.muted_foreground,
+                    label_color: palette.muted_foreground,
                     provider: None,
                 },
                 labels.variant,
@@ -114,7 +114,8 @@ impl Workspace {
             )
         });
         let agent = (!auto).then(|| {
-            let (label, icon, color) = match self.agent_control(palette) {
+            // The agent's color marks its icon; its name stays in the text color.
+            let (label, icon, color, label_color) = match self.agent_control(palette) {
                 AgentControl::Pending { unavailable } => (
                     strings.get(if unavailable {
                         "common.unavailable"
@@ -127,15 +128,20 @@ impl Workspace {
                         "loader-4"
                     },
                     palette.muted_foreground,
+                    palette.muted_foreground,
                 ),
                 AgentControl::Default { label } => (
                     label.map_or_else(|| strings.get("chat.modelControls.selectAgent"), Into::into),
                     "ai-agent",
                     palette.foreground,
+                    palette.foreground,
                 ),
-                AgentControl::Agent { label, color } => {
-                    (label.into(), "ai-agent", palette.agent_color(&color))
-                }
+                AgentControl::Agent { label, color } => (
+                    label.into(),
+                    "ai-agent",
+                    palette.agent_color(&color),
+                    palette.foreground,
+                ),
             };
             self.picker_control(
                 PickerKind::Agent,
@@ -143,6 +149,7 @@ impl Workspace {
                     label,
                     icon,
                     color,
+                    label_color,
                     provider: None,
                 },
                 labels.agent,
@@ -150,15 +157,27 @@ impl Workspace {
                 cx,
             )
         });
+        // The effort follows the model as its suffix, so the two sit closer
+        // than the other controls: 4px between them and 12px before the
+        // agent, as gap-x-1 and gap-x-3 place them. Each trigger's combobox
+        // already leaves 4px after it, so the gaps here are 4px less and the
+        // row ends 4px past its edge.
         div()
             .flex_1()
             .min_w_0()
             .flex_row_from(direction)
             .items_center()
             .justify_end()
-            .gap(px(12.0))
-            .children(effort)
-            .child(model)
+            .margin_end(direction, px(-4.0))
+            .gap(px(8.0))
+            .child(
+                div()
+                    .min_w_0()
+                    .flex_row_from(direction)
+                    .items_center()
+                    .child(model)
+                    .children(effort),
+            )
             .children(agent)
     }
 

@@ -42,6 +42,23 @@ pub enum RequestReply {
     Dismiss,
 }
 
+/// `permissionShortcutReply`: the reply a key press gives, if any.
+pub(crate) fn permission_shortcut_reply(
+    keystroke: &gpui_kit::Keystroke,
+    can_save: bool,
+) -> Option<PermissionReply> {
+    let modifiers = &keystroke.modifiers;
+    if !modifiers.alt || modifiers.control || modifiers.platform {
+        return None;
+    }
+    match keystroke.key.as_str() {
+        "enter" if modifiers.shift => can_save.then_some(PermissionReply::Always),
+        "enter" => Some(PermissionReply::Once),
+        "backspace" if !modifiers.shift => Some(PermissionReply::Reject),
+        _ => None,
+    }
+}
+
 pub(crate) async fn exact(
     client: &ServerClient,
     key: &RequestKey,
@@ -227,6 +244,34 @@ impl Workspace {
             .filter(|key| key.id.kind() == kind && keys.contains(key))
             .cloned()
             .or_else(|| keys.into_iter().next())
+    }
+
+    /// The reference's permission shortcuts: the dock's active permission
+    /// answers Alt+Enter (once), Alt+Shift+Enter (always, when the request
+    /// has something to save) and Alt+Backspace (deny), wherever focus is.
+    pub(crate) fn permission_shortcut(
+        &mut self,
+        event: &gpui_kit::KeyDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(key) = self.active_request() else {
+            return;
+        };
+        let Some(PendingRequest::Permission(request)) = self
+            .blocking
+            .stores
+            .get(&key.scope)
+            .and_then(|store| store.get(&key))
+            .map(|entry| &entry.request)
+        else {
+            return;
+        };
+        let Some(reply) = permission_shortcut_reply(&event.keystroke, request.can_save()) else {
+            return;
+        };
+        cx.stop_propagation();
+        self.reply_request(key, RequestReply::Permission(reply), window, cx);
     }
 
     pub(crate) fn request_actionable(&self, key: &RequestKey) -> bool {
@@ -637,5 +682,30 @@ impl Workspace {
         });
         self.blocking.actions.insert(task_key, task);
         cx.notify();
+    }
+}
+
+#[cfg(test)]
+mod shortcut_tests {
+    use super::*;
+
+    fn reply(keys: &str, can_save: bool) -> Option<PermissionReply> {
+        let keystroke = gpui_kit::Keystroke::parse(keys).expect("test keystroke parses");
+        permission_shortcut_reply(&keystroke, can_save)
+    }
+
+    #[test]
+    fn permission_shortcuts_follow_the_reference() {
+        assert_eq!(reply("alt-enter", false), Some(PermissionReply::Once));
+        assert_eq!(
+            reply("alt-shift-enter", true),
+            Some(PermissionReply::Always)
+        );
+        assert_eq!(reply("alt-shift-enter", false), None, "nothing to save");
+        assert_eq!(reply("alt-backspace", true), Some(PermissionReply::Reject));
+        assert_eq!(reply("alt-shift-backspace", true), None);
+        assert_eq!(reply("enter", true), None);
+        assert_eq!(reply("ctrl-alt-enter", true), None);
+        assert_eq!(reply("alt-a", true), None);
     }
 }

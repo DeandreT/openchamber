@@ -232,6 +232,43 @@ class NativeClient:
             raise LookupError(f"{len(matches)} native elements have the ID {accessible_id!r}")
         return matches[0]
 
+    def _resolve(self, target):
+        """A target's node: an accessible ID, or ``{"name", "role"?,
+        "prefix"?}`` with an optional ``"within"`` query of the same form,
+        the one node with that name (inside the one ancestor with that name),
+        for controls whose IDs the server assigns."""
+        if isinstance(target, str):
+            return self._find(target)
+
+        def named(query, nodes):
+            return [node for node in nodes
+                    if ((node.get_name() or "").startswith(query["name"]) if query.get("prefix") else node.get_name() == query["name"])
+                    and ("role" not in query or node.get_role_name() == query["role"])]
+
+        if "within" not in target:
+            matches = named(target, self._walk())
+            if len(matches) != 1:
+                raise LookupError(f"{len(matches)} native elements are named {target['name']!r}")
+            return matches[0]
+        rows = named(target["within"], self._walk())
+        if len(rows) != 1:
+            raise LookupError(f"{len(rows)} native elements are named {target['within']['name']!r}")
+        stack, nodes = [rows[0]], []
+        while stack:
+            node = stack.pop()
+            nodes.append(node)
+            stack.extend(node.get_child_at_index(index) for index in range(node.get_child_count()))
+        matches = named(target, nodes[1:])
+        if len(matches) != 1:
+            raise LookupError(f"{len(matches)} native elements in {target['within']['name']!r} are named {target['name']!r}")
+        return matches[0]
+
+    @staticmethod
+    def _label(target) -> str:
+        if isinstance(target, str):
+            return target
+        return f"{target['within']['name']}/{target['name']}" if "within" in target else target["name"]
+
     def _content(self):
         """Window extents of the application's content root, inside any
         client-side frame the platform draws around it."""
@@ -284,7 +321,7 @@ class NativeClient:
         content = self._content()
         for name, accessible_id in targets.items():
             try:
-                result[name] = self._rect(self._find(accessible_id), content)
+                result[name] = self._rect(self._resolve(accessible_id), content)
             except LookupError:
                 result[name] = None
         return result
@@ -381,7 +418,7 @@ class NativeClient:
         """A real pointer click at the target's centre. If synthetic pointer
         input fails, use the target's accessibility action, recorded as a
         substitution so the pointer path is never reported as verified."""
-        self._click_node(self._find(accessible_id), accessible_id)
+        self._click_node(self._resolve(accessible_id), self._label(accessible_id))
 
     def _click_node(self, node, label: str) -> None:
         self._input_mark = len(self.marks)
@@ -411,11 +448,26 @@ class NativeClient:
         equivalent, so a pointer the host does not move fails the step."""
         self._input_mark = len(self.marks)
         self._activate()
-        x, y = self._screen_point(self._find(accessible_id))
+        x, y = self._screen_point(self._resolve(accessible_id))
         _atspi().generate_mouse_event(x, y, "abs")
         time.sleep(0.05)
         if self._pointer() != (x, y):
-            raise RuntimeError(f"the pointer did not reach {accessible_id}")
+            raise RuntimeError(f"the pointer did not reach {self._label(accessible_id)}")
+
+    def drag(self, source, target) -> None:
+        """A real pointer drag: pressed on the source, moved in steps onto the
+        target and released there. Drag has no accessibility equivalent."""
+        self._input_mark = len(self.marks)
+        self._activate()
+        start = self._screen_point(self._resolve(source))
+        end = self._screen_point(self._resolve(target))
+        self._xdotool("mousemove", str(start[0]), str(start[1]))
+        self._xdotool("mousedown", "1")
+        for step in range(1, 11):
+            self._xdotool("mousemove", str(start[0] + (end[0] - start[0]) * step // 10),
+                          str(start[1] + (end[1] - start[1]) * step // 10))
+            time.sleep(0.03)
+        self._xdotool("mouseup", "1")
 
     def _pointer(self) -> tuple[int, int]:
         location = dict(
@@ -511,7 +563,7 @@ class NativeClient:
         """Files dragged from an XDND source window onto the target."""
         self._input_mark = len(self.marks)
         self._activate()
-        return self.drop_source.drop(files, self._screen_point(self._find(accessible_id)))
+        return self.drop_source.drop(files, self._screen_point(self._resolve(accessible_id)))
 
     def pick(self, files: list[Path], timeout_s: float) -> dict:
         """Chooses the file in the portal's GTK chooser the client opened:

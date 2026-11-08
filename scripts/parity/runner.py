@@ -71,7 +71,7 @@ def free_port() -> int:
 class IsolatedServer:
     """`scripts/perf/isolated-server.mjs` on a root this run owns."""
 
-    def __init__(self, root: Path, args: argparse.Namespace):
+    def __init__(self, root: Path, args: argparse.Namespace, provider: str | None = None):
         self.root = root
         self.port = free_port()
         self.fixture_port = free_port()
@@ -79,6 +79,7 @@ class IsolatedServer:
             "node", str(ISOLATED_SERVER), "--root", str(root),
             "--port", str(self.port), "--fixture-port", str(self.fixture_port),
             "--dist", str(args.dist), "--opencode-binary", str(args.opencode_binary),
+            *(["--provider-mode", provider] if provider else []),
         ]
         self.log = open(root / "isolated-server.log", "w")
         self.process = subprocess.Popen(command, cwd=REPO_ROOT, stdout=self.log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -114,19 +115,22 @@ class IsolatedServer:
 
 class FixtureProvider:
     """The fixture model provider for a client that runs its own server, with
-    the OpenCode configuration the isolated server gives its OpenCode."""
+    the OpenCode configuration the isolated server gives its OpenCode. A
+    `provider` mode (`steps.PROVIDERS`) is the one `--provider-mode` gives the
+    isolated server."""
 
-    def __init__(self, root: Path):
+    def __init__(self, root: Path, provider: str | None = None):
         self.port = free_port()
         self.log = open(root / "fixture.log", "w")
         env = {key: os.environ[key] for key in ("PATH", "LANG") if key in os.environ}
         self.process = subprocess.Popen(
-            ["node", str(FIXTURE_PROVIDER), str(self.port)],
+            ["node", str(FIXTURE_PROVIDER), str(self.port), *([f"--{provider}"] if provider else [])],
             cwd=REPO_ROOT, env=env, stdout=self.log, stderr=subprocess.STDOUT, start_new_session=True,
         )
+        options = json.dumps({provider: True} if provider else {})
         script = (
             f"import {{ isolatedOpencodeConfig }} from {json.dumps(ISOLATED_SERVER.as_uri())};"
-            f"console.log(JSON.stringify(isolatedOpencodeConfig({self.port})))"
+            f"console.log(JSON.stringify(isolatedOpencodeConfig({self.port}, {options})))"
         )
         self.opencode_config = subprocess.run(
             ["node", "--input-type=module", "-e", script], cwd=REPO_ROOT, env=env,
@@ -341,10 +345,13 @@ class StepContext:
     path placeholders, the private clipboard, where step input files go, and
     the last composition."""
 
-    def __init__(self, places: dict[str, str] | None = None, clipboard=None, inputs: Path | None = None):
+    def __init__(self, places: dict[str, str] | None = None, clipboard=None, inputs: Path | None = None,
+                 fixture_port: int | None = None):
         self.places = places or {}
         self.clipboard = clipboard
         self.inputs = inputs
+        # The fixture provider this client's server uses, for its turn gate.
+        self.fixture_port = fixture_port
         self.composed: str | None = None
         self.restarts: list[dict] = []
         self.waits: list[dict] = []
@@ -369,8 +376,9 @@ def require_settled(client, before: str) -> None:
         raise TimeoutError(f"the client never settled before {before}; pending route prefixes: {pending}")
 
 
-def resolve_sessions(client, path: str) -> str:
-    """`{session:<title>}` -> the ID of the one session with that title."""
+def resolve_sessions(client, path: str, quote: bool = True) -> str:
+    """`{session:<title>}` -> the ID of the one session with that title,
+    quoted for a URL path unless `quote` is false (a `select` key)."""
     titles = scenario_steps.SESSION_PLACEHOLDER.findall(path)
     if not titles:
         return path
@@ -380,8 +388,25 @@ def resolve_sessions(client, path: str) -> str:
         matches = [entry["id"] for entry in sessions if entry.get("title") == title]
         if len(matches) != 1:
             raise LookupError(f"{len(matches)} sessions are titled {title!r}")
-        path = path.replace(f"{{session:{title}}}", urllib.parse.quote(matches[0], safe=""))
+        path = path.replace(f"{{session:{title}}}", urllib.parse.quote(matches[0], safe="") if quote else matches[0])
     return path
+
+
+def turn_gate(context: StepContext, held: bool | None = None) -> dict:
+    """The fixture provider's turn gate: while held, a delayed model's turn
+    waits for the release instead of its delay. Without `held`, a read."""
+    if context.fixture_port is None:
+        raise RuntimeError("no fixture provider to gate")
+    body = None if held is None else json.dumps({"held": held}).encode()
+    request = urllib.request.Request(f"http://127.0.0.1:{context.fixture_port}/__fixture/turn-gate", data=body,
+                                     method="GET" if held is None else "PUT", headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(request, timeout=5) as response:
+        state = json.load(response)
+    if not isinstance(state, dict) or not isinstance(state.get("held"), bool) or type(state.get("waiting")) is not int:
+        raise RuntimeError("the fixture returned a malformed turn gate")
+    if held is not None and state["held"] != held:
+        raise RuntimeError(f"the fixture turn gate did not become held={held}")
+    return state
 
 
 def observe(client, spec: dict, context: StepContext) -> tuple[bool, object]:
@@ -391,7 +416,8 @@ def observe(client, spec: dict, context: StepContext) -> tuple[bool, object]:
         response = client.api_get(resolve_sessions(client, spec["api"]))
         if not 200 <= response["status"] < 300:
             return False, {"status": response["status"]}
-        value = scenario_steps.select(response["body"], spec.get("select", []))
+        keys = [resolve_sessions(client, key, quote=False) if isinstance(key, str) else key for key in spec.get("select", [])]
+        value = scenario_steps.select(response["body"], keys)
     elif "file" in spec:
         path = Path(scenario_steps.substitute(spec["file"], context.places))
         if not path.is_file():
@@ -411,6 +437,8 @@ def observe(client, spec: dict, context: StepContext) -> tuple[bool, object]:
         if result.returncode != 0:
             return False, {"exitCode": result.returncode, "stderr": result.stderr.decode(errors="replace")[:500]}
         value = result.stdout.decode("utf-8")
+    elif "gate" in spec:
+        value = turn_gate(context)[spec["gate"]]
     else:
         value = sum(hit["id"] == spec["fault"] for hit in client.fault_hits())
         return value == spec["hits"], value
@@ -477,6 +505,9 @@ def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], dire
         elif "hover" in step:
             require_settled(client, "hover")
             client.hover(targets[step["hover"]][kind])
+        elif "drag" in step:
+            require_settled(client, "drag")
+            client.drag(targets[step["drag"]["from"]][kind], targets[step["drag"]["to"]][kind])
         elif "type" in step:
             client.type_text(step["type"])
         elif "paste" in step:
@@ -535,6 +566,9 @@ def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], dire
             client.add_fault({**rule, "path": resolve_sessions(client, rule["path"])})
         elif "release" in step:
             client.release_fault(step["release"])
+        elif "gate" in step:
+            waits.append({"condition": {"gate": step["gate"]}, "met": True,
+                          "observed": turn_gate(context, step["gate"] == "hold")})
         elif "restart" in step:
             value = step["restart"]
             record = client.restart(value.get("after", "signal"), float(value.get("timeout", 30)))
@@ -546,7 +580,11 @@ def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], dire
             spec = step["expect"]
             deadline = time.monotonic() + float(spec.get("timeout", 15))
             while True:
-                met, observed = observe(client, spec, context)
+                try:
+                    met, observed = observe(client, spec, context)
+                except LookupError as error:
+                    # A session the step names may not exist or be titled yet.
+                    met, observed = False, {"unresolved": str(error)}
                 if met or time.monotonic() >= deadline:
                     break
                 time.sleep(0.25)
@@ -612,9 +650,10 @@ def run_client(kind: str, scenario: dict, work: Path, args: argparse.Namespace) 
 
                 context.clipboard = ClipboardProbe()
             if kind == "native":
-                server = IsolatedServer(directory, args)
+                server = IsolatedServer(directory, args, scenario.get("provider"))
                 services.callback(server.stop)
                 server.wait_ready(args.timeout)
+                context.fixture_port = server.fixture_port
                 env = native_env(state, server.url, args.theme)
                 client = NativeClient(args.native_binary, env, args.scale, args.width, args.height)
                 client.server_url = server.url
@@ -643,9 +682,10 @@ def run_client(kind: str, scenario: dict, work: Path, args: argparse.Namespace) 
                     services.callback(client.portal.close)
                     client.portal.start()
             else:
-                fixture = FixtureProvider(directory)
+                fixture = FixtureProvider(directory, scenario.get("provider"))
                 services.callback(fixture.stop)
                 fixture.wait_ready(args.timeout)
+                context.fixture_port = fixture.port
                 client = ElectronClient(args.electron_app, electron_env(state, fixture.opencode_config), args.scale, args.width, args.height)
             try:
                 launched = client.launch()

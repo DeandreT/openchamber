@@ -324,6 +324,9 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("ctrl-z", Undo, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-y", Redo, Some(CONTEXT)),
+        // CodeMirror, the web composer's editor, redoes on both.
+        #[cfg(not(target_os = "macos"))]
+        KeyBinding::new("ctrl-shift-z", Redo, Some(CONTEXT)),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-.", ToggleCodeActions, Some(CONTEXT)),
         #[cfg(not(target_os = "macos"))]
@@ -3088,11 +3091,20 @@ impl<M: InputModeKind> InputBaseState<M> {
         let old_text = text.slice(range.clone()).to_string();
         let new_range = range.start..range.start + new_text.len();
 
+        // A line break typed on its own starts an undo group that the typing
+        // after it joins, as the web composer's CodeMirror history does.
+        let line_break = requested_intent.is_none()
+            && range.is_empty()
+            && old_text.is_empty()
+            && matches!(new_text, "\n" | "\r\n")
+            && !self.is_code_editor()
+            && !self.undo_manager.has_open_transaction();
         let intent = requested_intent.unwrap_or_else(|| {
-            if range.is_empty()
-                && old_text.is_empty()
-                && !new_text.is_empty()
-                && !new_text.contains(['\n', '\r'])
+            if line_break
+                || range.is_empty()
+                    && old_text.is_empty()
+                    && !new_text.is_empty()
+                    && !new_text.contains(['\n', '\r'])
                 || self.rewrites_typed_char(selection_before, &range, &old_text, new_text)
             {
                 EditIntent::Typing
@@ -3100,6 +3112,9 @@ impl<M: InputModeKind> InputBaseState<M> {
                 EditIntent::Atomic
             }
         });
+        if line_break {
+            self.undo_manager.break_transaction_coalescing();
+        }
 
         let selection_before = Self::collapse_for_intent(intent, selection_before, &range);
         let selection_after =

@@ -1172,6 +1172,64 @@ fn a_draft_survives_switching_away_and_back(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
+fn composer_undo_takes_back_a_line_break_with_the_typing_after_it(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let rows = session_rows(&workspace, cx);
+    let (first, _) = rows[1].clone();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id(&first), cx);
+        window.input("first line", cx);
+        window.press("shift-enter", cx);
+        window.input("second line", cx);
+    })
+    .expect("window is open");
+    assert_eq!(composer_text(&workspace, cx), "first line\nsecond line");
+    // The reference composer's CodeMirror history: the line break starts a
+    // group and the typing after it joins that group.
+    for expected in ["first line", ""] {
+        cx.update_window(window, |_, window, cx| window.press("ctrl-z", cx))
+            .expect("window is open");
+        assert_eq!(composer_text(&workspace, cx), expected);
+    }
+    for expected in ["first line", "first line\nsecond line"] {
+        cx.update_window(window, |_, window, cx| window.press("ctrl-shift-z", cx))
+            .expect("window is open");
+        assert_eq!(composer_text(&workspace, cx), expected);
+    }
+}
+
+#[gpui_kit::test]
+fn a_returning_draft_is_selected_whole_so_typing_replaces_it(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let rows = session_rows(&workspace, cx);
+    let (first, _) = rows[1].clone();
+    let (second, _) = rows[2].clone();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id(&first), cx);
+        window.input("abcd", cx);
+        window.press("left", cx);
+        window.press("left", cx);
+    })
+    .expect("window is open");
+    cx.update_window(window, |_, window, cx| window.click(id(&second), cx))
+        .expect("window is open");
+    cx.update_window(window, |_, window, cx| window.click(id(&first), cx))
+        .expect("window is open");
+    cx.read(|cx| {
+        assert_eq!(
+            workspace.read(cx).composer.read(cx).selected_range(),
+            0..4,
+            "the reference selects the restored draft, not its old caret"
+        )
+    });
+    cx.update_window(window, |_, window, cx| window.input("X", cx))
+        .expect("window is open");
+    assert_eq!(composer_text(&workspace, cx), "X");
+}
+
+#[gpui_kit::test]
 async fn enter_sends_and_the_stream_plays_to_completion(cx: &mut TestAppContext) {
     let (window, workspace) = open(cx);
     let rows = session_rows(&workspace, cx);
