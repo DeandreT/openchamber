@@ -248,9 +248,11 @@ prompt. Attachments and worktree creation remain separate workflows.
   `appearance_view.rs` retains the controls; `settings_picker.rs` confirms only
   a selection gesture. A picker dismissal leaves its value unchanged.
 - `general_settings.rs` owns the server-backed Settings preferences: General's
-  autosave, terminal shell and close-on-exit, and the Chat and Sessions fields
+  autosave, terminal shell and close-on-exit, the Chat and Sessions fields
   (prompt navigator, follow-up behavior, starters, permission default, Chats
-  section, In work, deletion dialog). Reads and serialized writes retain their
+  section, In work, deletion dialog), the Notifications fields (the switch,
+  `notificationMode`, the event toggles and the templates, written whole) and
+  the dictation fields of Voice. Reads and serialized writes retain their
   runtime and client; the executor outlives a host switch. The workspace
   consumes live choices, including edits whose saves failed, and a newer
   topology read keeps unconfirmed choices over the server's values.
@@ -259,6 +261,36 @@ prompt. Attachments and worktree creation remain separate workflows.
   reference controls belong to features native does not have yet. Code line
   wrap on the Chat page goes through the workspace's own writer, shared with
   code cards, which reports its failure to the indicator.
+- `notification_voice_pages.rs` draws the Notifications and Voice pages on
+  `PreferencePage`: their text fields, the Test notification button, the
+  local speech model list (`/api/dictation/status`, download and delete,
+  polled while one downloads) and the transcription key, which goes to the
+  server and never into the settings document. The browser's push section and
+  Voice's read-aloud section are not drawn: native has neither.
+- `usage_page.rs` is the Usage page: every quota provider with its fullest
+  window's tone, each read on its own, and the selected provider's windows
+  and model windows. A refresh that fails keeps the last usage and says it is
+  stale. Provider logos, credential forms, Claude Code sign-in, gift resets,
+  console budgets, the work status toggle, model families and the persisted
+  display mode are not ported.
+- `desktop_notifications.rs` shows the server's `openchamber:notification`
+  events through `org.freedesktop.Notifications` on the session bus, as
+  Electron's `maybeShowNativeNotification` does: skipped while the window has
+  focus when the event asks for that, one per tag within five seconds, the
+  title falling back to the product name. A plugin's `showWhenFocused` notice
+  is also a toast in a focused window. The server decides which events notify.
+  A click brings the window forward and opens the session on the runtime that
+  raised it; for another saved host it reconnects first and opens the session
+  when that host's list arrives. Settings' Test notification has no target.
+- `composer_dictation.rs` owns the composer's dictation (`useDictation.ts`):
+  idle, recording, transcribing and failed, Enter and Escape while recording,
+  Insert, Insert and send (or the auto-send setting), Cancel, Retry with every
+  kept chunk on a new stream, Insert of the partial text after a failure, and
+  the transcript kept for the draft that was on screen when recording started.
+  A host switch cancels it. `audio_capture.rs` opens the default input device
+  through cpal on its own thread. A microphone that does not open puts the
+  composer back as it was, as the web does after a refused `getUserMedia`; no
+  message is shown.
 - `effort_preferences.rs` owns model-scoped effort memory in the server profile.
   Explicit effort choices update effective memory immediately. Serialized writes
   retain their original runtime and preserve other models. Incoming settings
@@ -1351,14 +1383,37 @@ profile owners retain the raw I/O operation separately so quit can drain accepte
 work and coalesced choices after windows disappear. General's drain also owns its
 Tokio runtime; a cloned runtime handle alone cannot keep HTTP work running.
 
-### Why Chat and Sessions share General's settings model and not their own
+### Why Chat, Sessions, Notifications and Voice share General's settings model and not their own
 
-All three pages write fields of the same server settings document. One model
+All these pages write fields of the same server settings document. One model
 per runtime gives them one serialized write chain, one failure and Retry state,
 and the close and quit drains General already proves; a second model would
 need its own drains and could race General's writes on the same document. The
 Settings dialog lists only pages with implemented controls, so no page opens
 empty.
+
+### Why a notification click may reconnect the window
+
+Electron opens a session of another host in that host's window. Native has one
+window that switches hosts in place, so a click for a session of another saved
+host switches this window to that host and opens the session once the host's
+session list arrives. A host no longer saved opens nothing, as
+`resolveHostEntryForRuntimeKey` finds nothing for it.
+
+### Why the microphone opens off the UI thread and capture events are batched
+
+Opening an ALSA device can take a while, and a device that never answers would
+freeze the window, so the capture thread reports the open and the composer
+shows Listening meanwhile, as the web shows recording before `getUserMedia`
+answers. Audio callbacks arrive on the capture thread at the device's pace; the
+composer takes every event that arrived since its last update in one update,
+so a device that calls back often cannot starve the window.
+
+### Why dictation opens a stream per dictation
+
+The web keeps one socket per app and closes it after 30 idle seconds. Native
+opens the socket with the dictation and closes it with the transcript: the
+server sees the same frames, and nothing outlives a host switch.
 
 ### Why reduced motion comes from GPUI Kit and not a native module
 

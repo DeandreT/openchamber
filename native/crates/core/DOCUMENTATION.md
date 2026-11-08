@@ -20,6 +20,12 @@ rendering asks for a projection and dispatches an action.
   by revision (`PermissionPolicy`) and the hold-back bookkeeping of fresh
   requests the server may answer itself (`AutoAnswerHolds`). It answers nothing.
 
+- `dictation.rs` holds dictation's pure steps: microphone samples to 16 kHz
+  mono PCM16 one-second chunks with a linear resampler that carries its
+  position across buffers (`use-dictation-audio-source.ts` resamples each
+  buffer on its own), base64, the waveform level, the `m:ss` clock and
+  `appendInlineText`.
+
 - `search_rank.rs` ports the web's list matchers: `rankByQuery` and
   `matchesRankQuery` (`lib/search/fuzzySearch.ts`), `matchesFuzzyQuery`, and
   `rankBySubsequence` with its path mode (`lib/search/subsequenceSearch.ts`).
