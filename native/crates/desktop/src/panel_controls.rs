@@ -265,20 +265,19 @@ pub(crate) fn option_row<V: 'static>(
     .into_any_element()
 }
 
-/// The floating list an open select shows under its trigger.
+/// The floating list an open select shows under its trigger. It is drawn
+/// after everything else and kept inside the window, so later fields and a
+/// scrolling form neither cover nor clip it.
 pub(crate) fn popup(
     id: &'static str,
     items: Vec<AnyElement>,
     width: f32,
     palette: &Palette,
 ) -> AnyElement {
-    div()
+    let list = div()
         .id(id)
         .role(Role::ListBox)
         .accessibility_id(id)
-        .absolute()
-        .top(px(34.0))
-        .left_0()
         .w(px(width))
         .max_h(px(280.0))
         .overflow_y_scroll()
@@ -287,7 +286,23 @@ pub(crate) fn popup(
         .bg(palette.elevated)
         .shadow(elevation::floating(palette))
         .occlude()
-        .children(items)
+        .children(items);
+    div()
+        .absolute()
+        .top(px(32.0))
+        .left_0()
+        .size_0()
+        .child(
+            gpui_kit::deferred(
+                gpui_kit::anchored()
+                    .anchor(gpui_kit::Anchor::TopLeft)
+                    .snap_to_window_with_margin(gpui_kit::Edges::all(px(8.0)))
+                    .child(div().mt(px(2.0)).child(list)),
+            )
+            // The priority selects use, so a popup inside a dialog draws
+            // above the dialog too.
+            .with_priority(gpui_kit::base::POPUP_PRIORITY),
+        )
         .into_any_element()
 }
 

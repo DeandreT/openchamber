@@ -1820,6 +1820,10 @@ impl Render for TaskEditor {
                 strings.get("sessions.scheduledTasks.editor.prompt.label"),
                 true,
                 div()
+                    .id("scheduled-task-prompt-frame")
+                    .role(Role::Group)
+                    .accessibility_id("scheduled-task-prompt-frame")
+                    .test_support()
                     .min_h(px(120.0))
                     .rounded(px(6.0))
                     .border_1()
