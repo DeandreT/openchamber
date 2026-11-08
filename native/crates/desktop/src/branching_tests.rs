@@ -839,6 +839,23 @@ fn a_staged_revert_hides_its_cut_and_a_refusal_restores_it(cx: &mut TestAppConte
 }
 
 #[gpui_kit::test]
+fn a_reverted_prompt_returns_to_the_focused_composer(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    select_root(window, &workspace, cx);
+    let focused = update(window, &workspace, cx, |this, window, cx| {
+        window.blur(cx);
+        let draft = this
+            .composer_key
+            .clone()
+            .expect("selected session has a draft owner");
+        this.show_reverted_prompt(draft, "reverted prompt".into(), window, cx);
+        gpui_kit::Focusable::focus_handle(this.composer.read(cx), cx).is_focused(window)
+    });
+    assert!(focused, "the composer holding the prompt takes the focus");
+    assert_eq!(composer_text(&workspace, cx), "reverted prompt");
+}
+
+#[gpui_kit::test]
 fn the_server_marker_lists_reverted_prompts_and_a_commit_trims_them(cx: &mut TestAppContext) {
     let (window, workspace) = open(cx);
     let (session, users) = select_root(window, &workspace, cx);
