@@ -343,6 +343,36 @@ pub(crate) fn load_failed<T: 'static>(
         .into_any_element()
 }
 
+/// A confirmation above Settings (`Dialog` with Cancel and an action), as
+/// the reference's discard and delete dialogs.
+pub(crate) fn confirm<T: 'static>(
+    page: WeakEntity<T>,
+    title: SharedString,
+    description: SharedString,
+    action: SharedString,
+    window: &mut gpui_kit::Window,
+    cx: &mut App,
+    on_confirm: impl Fn(&mut T, &mut gpui_kit::Window, &mut Context<T>) + 'static,
+) {
+    use gpui_kit::component::WindowExt;
+    let cancel = locale::strings(cx).get("settings.common.actions.cancel");
+    let on_confirm = std::rc::Rc::new(on_confirm);
+    window.open_alert_dialog(cx, move |alert, _, _| {
+        let page = page.clone();
+        let on_confirm = on_confirm.clone();
+        alert
+            .title(title.clone())
+            .description(description.clone())
+            .confirm()
+            .ok_text(action.clone())
+            .cancel_text(cancel.clone())
+            .on_ok(move |_, window, cx| {
+                let _ = page.update(cx, |this, cx| on_confirm(this, window, cx));
+                true
+            })
+    });
+}
+
 /// A focus handle per stable control id, created on first use.
 pub(crate) fn focus_handle<T: 'static>(
     handles: &mut std::collections::HashMap<SharedString, FocusHandle>,

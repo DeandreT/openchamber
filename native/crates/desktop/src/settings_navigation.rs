@@ -12,11 +12,12 @@ pub(crate) enum Page {
     Shortcuts,
     Hosts,
     Behavior,
+    Snippets,
 }
 
 impl Page {
     /// `pageOrder` in `SettingsView.tsx`, limited to implemented pages.
-    pub(crate) const ALL: [Self; 7] = [
+    pub(crate) const ALL: [Self; 8] = [
         Self::General,
         Self::Appearance,
         Self::Chat,
@@ -24,6 +25,7 @@ impl Page {
         Self::Shortcuts,
         Self::Hosts,
         Self::Behavior,
+        Self::Snippets,
     ];
 
     pub(crate) fn id(self) -> &'static str {
@@ -35,6 +37,7 @@ impl Page {
             Self::Shortcuts => "shortcuts",
             Self::Hosts => "remote-instances",
             Self::Behavior => "behavior",
+            Self::Snippets => "snippets",
         }
     }
 
@@ -47,6 +50,7 @@ impl Page {
             Self::Shortcuts => "settings.page.shortcuts.title",
             Self::Hosts => "settings.page.remoteInstances.title",
             Self::Behavior => "settings.page.behavior.title",
+            Self::Snippets => "settings.page.snippets.title",
         }
     }
 
@@ -57,11 +61,13 @@ impl Page {
             }
             Self::Hosts => "settings.view.nav.group.projects",
             Self::Behavior => "settings.view.nav.group.opencode",
+            Self::Snippets => "settings.view.nav.group.content",
         }
     }
 
-    pub(crate) fn description(self) -> &'static str {
-        match self {
+    /// The header's description; split pages such as Snippets have none.
+    pub(crate) fn description(self) -> Option<&'static str> {
+        Some(match self {
             Self::General => "settings.page.general.description",
             Self::Appearance => "settings.page.appearance.description",
             Self::Chat => "settings.page.chat.description",
@@ -69,7 +75,8 @@ impl Page {
             Self::Shortcuts => "settings.page.shortcuts.description",
             Self::Hosts => "settings.remoteInstances.direct.description",
             Self::Behavior => "settings.page.behavior.description",
-        }
+            Self::Snippets => return None,
+        })
     }
 
     pub(crate) fn icon(self) -> &'static str {
@@ -81,6 +88,7 @@ impl Page {
             Self::Shortcuts => "command",
             Self::Hosts => "computer",
             Self::Behavior => "brain",
+            Self::Snippets => "chat-thread",
         }
     }
 }
@@ -249,6 +257,20 @@ pub(crate) const SEARCH_ITEMS: &[SearchItem] = &[
         title: "settings.behavior.page.section.responseStyle",
         description: Some("settings.behavior.page.responseStyle.tooltip"),
         keywords: "tone concise detailed custom instructions",
+    },
+    SearchItem {
+        id: "snippets.create",
+        page: Page::Snippets,
+        title: "settings.snippets.sidebar.actions.create",
+        description: None,
+        keywords: "add new snippet",
+    },
+    SearchItem {
+        id: "snippets.content",
+        page: Page::Snippets,
+        title: "settings.snippets.page.field.content",
+        description: None,
+        keywords: "markdown prompt template",
     },
     SearchItem {
         id: "remote-instances.direct-hosts",

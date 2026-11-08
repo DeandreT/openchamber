@@ -158,3 +158,4 @@ file
 folder-3-fill
 chat-3
 brain
+chat-thread

@@ -28,6 +28,7 @@ pub(crate) struct Settings {
     pub(crate) sessions: Entity<PreferencePage>,
     shortcuts: Entity<crate::shortcuts_settings::ShortcutsPage>,
     pub(crate) behavior: Entity<crate::behavior_settings::BehaviorPage>,
+    pub(crate) snippets: Entity<crate::snippets_settings::SnippetsPage>,
     page: Page,
     search: Entity<InputState>,
     active_result: usize,
@@ -81,9 +82,12 @@ impl Settings {
         let shortcuts = cx.new(|_| crate::shortcuts_settings::ShortcutsPage::new(owner.clone()));
         let behavior =
             cx.new(|cx| crate::behavior_settings::BehaviorPage::new(owner.clone(), window, cx));
+        let snippets =
+            cx.new(|cx| crate::snippets_settings::SnippetsPage::new(owner.clone(), cx));
         Self {
             shortcuts,
             behavior,
+            snippets,
             owner,
             hosts,
             general,
@@ -125,6 +129,12 @@ impl Settings {
                 let _ = behavior.update(cx, |page, cx| page.refresh(cx));
             });
         }
+        if page == Page::Snippets {
+            let snippets = self.snippets.downgrade();
+            cx.defer(move |cx| {
+                let _ = snippets.update(cx, |page, cx| page.refresh(cx));
+            });
+        }
         cx.notify();
     }
 
@@ -146,6 +156,9 @@ impl Settings {
             Page::Shortcuts => {}
             Page::Behavior => self
                 .behavior
+                .update(cx, |page, cx| page.reveal(item.id, window, cx)),
+            Page::Snippets => self
+                .snippets
                 .update(cx, |page, cx| page.reveal(item.id, window, cx)),
             Page::Hosts => {
                 self.hosts
@@ -419,6 +432,7 @@ impl Render for Settings {
             Page::Sessions => self.sessions.clone().into_any_element(),
             Page::Shortcuts => self.shortcuts.clone().into_any_element(),
             Page::Behavior => self.behavior.clone().into_any_element(),
+            Page::Snippets => self.snippets.clone().into_any_element(),
             Page::Hosts => {
                 let scroll = self.hosts.read(cx).settings_scroll.clone();
                 div()
@@ -513,7 +527,7 @@ pub(crate) fn page_header(page: Page, cx: &App) -> gpui_kit::AnyElement {
                 .mt(px(4.0))
                 .css_text(0.875, 1.25, cx)
                 .text_color(cx.global::<Palette>().muted_foreground)
-                .child(strings.get(page.description())),
+                .children(page.description().map(|key| strings.get(key))),
         )
         .into_any_element()
 }
