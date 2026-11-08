@@ -313,9 +313,18 @@ prompt. Attachments and worktree creation remain separate workflows.
   create, rename, checkout and delete, fetch, pull and push as planned
   operations with cancel, staged and unstaged changes with stage, unstage and
   confirmed discard, the commit field and the selected change's diff.
-  Persisted tree state, read-only files outside the workspace from links,
-  hunk staging, identities, stash, merge and rebase, nested repository
-  listings, the walkthrough and project action run and stop are not ported.
+  `git_view/conflicts.rs` merges a branch or rebases onto it from its row,
+  shows the merge or rebase in progress with Abort and Continue, and the
+  conflict dialog with the server's conflict details; its Resolve in a
+  session buttons only log, since they need the composer's synthetic parts.
+  `git_view/identity.rs` is the identity menu: choosing one writes its
+  author (`set-identity`); its account and transfer half of the binding is
+  not applied. `git_view/repositories.rs` lists the repositories under the
+  directory and switches the surface between them. The Files tree remembers
+  its expanded folders and open file per runtime and root in `ui_memory.rs`,
+  and file links from the transcript open in Files, read-only outside the
+  session's directory. Hunk staging, stash, the walkthrough and worktree
+  removal from the Git surface are not ported.
 - `context_panel.rs` also reads the selected session's context fill against
   the limit `useContextWindowLimits` picks (the record's model, the newest
   answer's, the composer's) and draws its row and meter.
@@ -326,12 +335,21 @@ prompt. Attachments and worktree creation remain separate workflows.
   branch from these same retained readouts. Rendering the metadata starts no
   additional requests.
 - `project_section.rs` draws the card's Project section: the project's
-  label, the attention callout, the branch and changed-files rows from the
-  session directory's Git status, and the project action row. It reads the
-  status when the directory comes into view (again once five seconds old) and
-  after a burst of finished file-changing tool calls in an open session.
-  Nested repositories, pull request rows and running or choosing actions are
-  not ported yet.
+  label, the attention callout and the branch and changed-files rows from the
+  session directory's Git status. It reads the status when the directory
+  comes into view (again once five seconds old) and after a burst of
+  finished file-changing tool calls in an open session, and reads the
+  project's setup for the header's action button. Nested repositories and
+  pull request rows are not ported yet.
+- `project_action_run.rs` is the header's project action button
+  (`HeaderProjectControls.tsx`): it runs or stops the shown action, lists
+  every action on a secondary click, asks the shared-setup trust prompt
+  before a repository's action first runs, and runs auto-discovery's dev
+  server command. Runs are command-mode terminals in the terminal panel, one
+  tab per action, stopped with Ctrl+C and killed after a second. The pick is
+  kept per runtime and project in `ui_memory.rs`. Opening a run's announced
+  URL in a preview, custom open URLs, the Ctrl+Alt+R actions dialog and Add
+  new action are not ported.
 - `open_in_app.rs` finds the file manager's icon as Electron's Linux app
   discovery does, PNG files only, and opens the project folder with the
   platform's default handler; the control shows only for a server on this
@@ -1402,6 +1420,28 @@ the board reads the workspace's connection for every request so a reconnect
 or runtime switch is picked up. Reading it there would panic on the
 re-entrant read, so opening a project defers its first resolution until the
 update ends; the board shows its loading state meanwhile.
+
+### Why the project action lives in the header and not in the card
+
+The web moved the action button to the header because the card yields
+whenever a rail panel opens, so a run could not be stopped while reading a
+diff. The card here showed an action row from an earlier port; it now shows
+none and the header button carries run and stop, as the reference does.
+
+### Why action runs are observed only once the terminal panel exists
+
+Making the panel at render time to list runs opened a terminal socket in
+every connected window, tests included. The panel starts with the first run
+or the first time the terminal opens; before that a run another client
+started still cannot be duplicated, because the server answers a second
+create for the same action with the running one.
+
+### Why an identity writes only its author here
+
+The web's `applyIdentityToRepository` also rewrites the repository's
+provider and transport binding, a chain of guarded binding mutations. Native
+writes the author with `set-identity` and leaves the binding as it was, so
+choosing an identity changes who commits and not how pushes authenticate.
 
 ### Why the Files surface polls and does not watch
 
