@@ -253,6 +253,16 @@ const NATIVE_REVIEW_PROMPTS = [
   'session.implementationResponseToReviewer.visible',
 ] as const;
 
+/** The prompts Project knowledge sends a todo or a plan to a new session with. */
+const NATIVE_KNOWLEDGE_PROMPTS = [
+  'plan.todo.visible',
+  'plan.todo.instructions',
+  'plan.implement.visible',
+  'plan.implement.instructions',
+  'plan.improve.visible',
+  'plan.improve.instructions',
+] as const;
+
 /** Stands for the typed argument while a command's variables are exported. */
 const ARGUMENT_SENTINEL = '\u0000argument\u0000';
 
@@ -288,7 +298,7 @@ export const renderNativeMagicPrompts = (): string => {
       variables,
     };
   });
-  for (const id of NATIVE_REVIEW_PROMPTS) {
+  for (const id of [...NATIVE_REVIEW_PROMPTS, ...NATIVE_KNOWLEDGE_PROMPTS]) {
     templates[id] = getDefaultMagicPromptTemplate(id);
   }
   return `${JSON.stringify({ commands, templates }, null, 2)}\n`;

@@ -48,6 +48,7 @@ pub enum PopupMenuItem {
     },
     /// A menu item with custom element render.
     ElementItem {
+        aria_label: Option<SharedString>,
         icon: Option<Icon>,
         disabled: bool,
         checked: bool,
@@ -88,6 +89,7 @@ impl PopupMenuItem {
         E: IntoElement,
     {
         PopupMenuItem::ElementItem {
+            aria_label: None,
             icon: None,
             disabled: false,
             checked: false,
@@ -95,6 +97,17 @@ impl PopupMenuItem {
             render: Box::new(move |window, cx| builder(window, cx).into_any_element()),
             handler: None,
         }
+    }
+
+    /// Sets the accessible name of a custom-rendered menu item.
+    ///
+    /// Only works for [`PopupMenuItem::ElementItem`]. Visible content and
+    /// keyboard shortcut hints remain unchanged.
+    pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
+        if let Self::ElementItem { aria_label, .. } = &mut self {
+            *aria_label = Some(label.into());
+        }
+        self
     }
 
     /// Create a new submenu item that opens another popup menu.
@@ -274,7 +287,8 @@ impl PopupMenuItem {
             PopupMenuItem::Item { label, .. }
             | PopupMenuItem::Label(label)
             | PopupMenuItem::Submenu { label, .. } => Some(label.clone()),
-            PopupMenuItem::Separator | PopupMenuItem::ElementItem { .. } => None,
+            PopupMenuItem::ElementItem { aria_label, .. } => aria_label.clone(),
+            PopupMenuItem::Separator => None,
         }
     }
 }
@@ -1552,5 +1566,19 @@ mod tests {
         );
         assert_eq!(PopupMenuItem::separator().a11y_label(), None);
         assert_eq!(PopupMenuItem::element(|_, _| div()).a11y_label(), None);
+    }
+
+    #[gpui::test]
+    fn custom_item_label_preserves_disabled_and_checked_behavior(_cx: &mut gpui::TestAppContext) {
+        let item = PopupMenuItem::element(|_, _| div().child("Quit").child("Ctrl+Q"))
+            .aria_label("Quit")
+            .checked(true)
+            .disabled(true);
+        assert_eq!(item.a11y_label(), Some("Quit".into()));
+        assert!(item.is_checked());
+        assert!(!item.is_clickable());
+        let item = item.disabled(false);
+        assert!(item.is_clickable());
+        assert_eq!(item.a11y_label(), Some("Quit".into()));
     }
 }

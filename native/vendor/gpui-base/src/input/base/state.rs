@@ -4041,6 +4041,18 @@ impl<M: InputModeKind> InputBaseState<M> {
             );
         }
 
+        if self.validate.is_some() && !self.replaying_history && !self.validated_token_edit {
+            let mut pending = self.text.clone();
+            for (range, text) in &sorted {
+                pending.replace(range.clone(), text);
+            }
+            if !self.is_valid_input(&pending.to_string(), cx)
+                && self.is_valid_input(&self.text.to_string(), cx)
+            {
+                return;
+            }
+        }
+
         // Wrap multiple edits in one explicit transaction so they undo as a
         // unit. A single edit records directly, which keeps it eligible for
         // the undo manager's typing coalescing.
@@ -4592,7 +4604,7 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         self.mode.adjust_auto_closed_pair(&range, new_text.len());
         self.text.replace(range.clone(), new_text);
 
-        if self.is_single_line() {
+        if self.is_single_line() || self.validate.is_some() {
             let pending_text = self.text.to_string();
             // See the same NOTE in `replace_text_in_range`.
             if !self.replaying_history
@@ -11531,6 +11543,12 @@ impl InputBaseState<crate::input::TextareaMode> {
     /// default plain-text layout needs no adjustment here.
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self::new_in_mode(window, cx)
+    }
+
+    /// Set the validation function for non-empty text edits.
+    pub fn validate(mut self, f: impl Fn(&str, &mut App) -> bool + 'static) -> Self {
+        self.validate = Some(Box::new(f));
+        self
     }
 
     pub fn set_auto_grow(&mut self, min_rows: usize, max_rows: usize, cx: &mut Context<Self>) {

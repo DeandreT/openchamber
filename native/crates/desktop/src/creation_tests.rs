@@ -9,6 +9,9 @@ use crate::send_attempt::SendOrigin;
 
 use super::*;
 
+#[path = "unit_d_creation_close_tests.rs"]
+mod unit_d_close_tests;
+
 #[derive(Clone, Copy)]
 enum Outcome {
     Success,
@@ -19,6 +22,15 @@ enum Outcome {
 }
 
 fn creation_server(journal: PathBuf, outcome: Outcome, hold: bool) -> (Server, Arc<AtomicBool>) {
+    creation_server_with_holds(journal, outcome, hold, Vec::new())
+}
+
+fn creation_server_with_holds(
+    journal: PathBuf,
+    outcome: Outcome,
+    hold: bool,
+    holds: Vec<super::unit_d_close_support::HeldResponse>,
+) -> (Server, Arc<AtomicBool>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("listener");
     listener.set_nonblocking(true).expect("nonblocking");
     let endpoint = Endpoint::parse(&format!(
@@ -96,6 +108,9 @@ fn creation_server(journal: PathBuf, outcome: Outcome, hold: bool) -> (Server, A
             } else {
                 (404, json!({}))
             };
+            for gate in &holds {
+                gate.wait(&request.method, &request.path);
+            }
             recorded.lock().expect("requests").push(request);
             if create {
                 while !release.load(Ordering::Acquire) && !stopped.load(Ordering::Acquire) {
@@ -521,7 +536,7 @@ fn lost_creation_restarts_and_check_never_sends_before_explicit_retry(cx: &mut T
 }
 
 #[gpui_kit::test]
-fn closing_during_creation_restores_unknown_identity_without_resubmitting(cx: &mut TestAppContext) {
+fn lost_creation_callback_restores_unknown_identity_without_resubmitting(cx: &mut TestAppContext) {
     let fixture = Fixture::new();
     let key = tests::key("create-runtime", "ses_existing");
     let (server, _) = creation_server(fixture.journal(), Outcome::Success, true);
@@ -544,6 +559,18 @@ fn closing_during_creation_restores_unknown_identity_without_resubmitting(cx: &m
             .expect("captured")
             .0
             .clone()
+    });
+    // The server accepted the create and still holds its reply. Explicitly lose
+    // the foreground callback before normal close drains the remaining work.
+    cx.update(|cx| {
+        workspace.update(cx, |workspace, _| {
+            drop(
+                workspace
+                    .creation_tasks
+                    .remove(&captured)
+                    .expect("held creation owns its foreground callback"),
+            );
+        });
     });
     close(cx, window, &workspace);
     server.release_prompt.store(true, Ordering::Release);

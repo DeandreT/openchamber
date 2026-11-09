@@ -41,6 +41,7 @@ PyGObject with AT-SPI, `busctl`, `dbus-run-session`, `xsettingsd` and fontconfig
 | `native_files.py` | Connected Files checks on the Git fixture project: tree and gitignored entries, keyboard navigation, name and content search with an invalid pattern, CRLF edit and save, autosave, external changes to clean and dirty files, a deleted open file, a rename conflict and a large file, each checked on disk. |
 | `native_git.py`, `git_http_remote.py` | Connected Git and Diff checks: staged and unstaged scopes, stage, unstage, confirmed discard, a stage failing on `index.lock`, commit, branches, push, fetch and pull as planned operations and a cancelled push. The fixture's bare remote is served through `git http-backend` on loopback, because the server plans network operations only for http, https and ssh remotes. |
 | `native_source_board.py`, `github_fixture.py` | Connected source board checks against GitHub: the board before signing in, the server's device flow, the issue list and preview, search, an empty filter, a comment, a close held while pending, an approval, and a failed list read and a failed comment with their recovery, each checked in the fixture's repository. The real server reaches the fixture through its own `HTTPS_PROXY` support and trusts its throwaway CA through `NODE_EXTRA_CA_CERTS`; the fixture tunnels only github.com and api.github.com and answers the provider's REST and GraphQL calls from an in-memory `acme/widgets`. `github_fixture_test.py` checks its search, detail and REST shapes and that it tunnels nothing but GitHub. |
+| `native_knowledge_schedules.py` | Scheduled tasks and Project knowledge against an isolated server: an empty task list, a daily task saved in a fixed timezone, an invalid cron refused before any request, pause and resume, run now opening the run's session, delete; then a note written and edited, a todo added and completed, a plan written and implemented in a new session the plan links to, and search following to its matches. Every write is checked in the server's own records. |
 | `native_session_management.py` | Connected rename, pin, archive, restore and delete through the native session menu, with one injected write failure. |
 | `native_goals_review.py` | Session goals and the review loop on the `--workflows` fixture: arming through the target button, the goal saved before its prompt, running, the progress check, completion, Pause, recovery after a restart, Resume, a blocked goal and Remove goal; `/handoff-review` starting an automatic review that runs handoff, review, fixes and re-review to a clean end, Dismiss, and a second run stopped. Server reads confirm every state. |
 | `native_selections.py` | Real-pointer model, agent and effort selection, unsent restart persistence and exact completed-turn configuration. Server settings reads verify named effort and explicit Default while retaining another model's entry. |
@@ -59,7 +60,7 @@ PyGObject with AT-SPI, `busctl`, `dbus-run-session`, `xsettingsd` and fontconfig
 | `native_webview.py` | The Browser surface and its WebKit host: an address typed into the toolbar, page-initiated and typed navigations the policy refuses, a hostile page's attempts at message handlers, the server API and the shim scheme, the client's password variable kept out of WebKit processes, a dialog painted above the dimmed page with page input blocked, focus moving between page and address field, the browser profile's cookies kept across a restart under the client's config directory, and WebKit processes ending with the window. X11 only. |
 | `native_terminal.py` | Connected terminal checks behind a proxy that records terminal commands and severs the terminal socket: create and close, Unicode and IBus input, keys, resize, bracketed and large paste, scrollback, reconnect pacing, exit, lifetime and cleanup. Capture programs in the terminal record the exact bytes the PTY received. |
 | `native_attachments.py` | Native Attach-menu and clipboard-file checks, exact byte staging, failure/retry, removal and normal-restart capture. Reads unchanged attachment ownership in journal versions 7 and 8; queue metadata supplies no attachment-byte authority. Picker, drop, conversion and paired Electron parity require separate checks. |
-| `portal_fixture.py` | Direct GTK backend and portal frontend on the wrapper's private bus. Atomic glibc `pidfd_spawn` retains child custody through startup failure. Requires an active `Interrupts` scope through `close()`. Missing Documents or PermissionStore dependencies prevent readiness; no desktop activation or additional helpers are started. Service readiness alone does not qualify chooser interaction. |
+| `portal_fixture.py` | Direct GTK backend and portal frontend on the wrapper's private bus. Atomic glibc `pidfd_spawn` retains child custody through startup failure. Requires an active `Interrupts` scope through `close()`. Explicit Documents mode adds only the installed Documents and PermissionStore helpers, private data and an attested FUSE mount. No desktop activation or other helpers are allowed. Service readiness alone does not qualify chooser interaction. |
 | `compare.py` | Pixel, row and geometry comparison. |
 | `png.py` | PNG reading and writing with the standard library. |
 
@@ -122,8 +123,11 @@ Electron and `GPUI_X11_SCALE_FACTOR` for GPUI. Electron's DevTools endpoint
 cannot size its window; when its viewport differs from the requested size the
 bridge emulates it and the launch record says `emulated: true`.
 The native adapter resizes its owned X11 window and verifies the content
-dimensions after readiness. It accounts for the client-side frame and fails
-if the requested size cannot be reached.
+dimensions after the application's initial 2-second size hold. It observes
+content within the existing readiness budget while the application owns its
+startup size. Captures verify the requested physical content size both before
+and after reading the window, including fractional scale and client-side frame.
+A wrong-sized window cannot produce a successful checkpoint.
 
 ## The private display
 
@@ -141,6 +145,18 @@ bus socket inside it must stay within
 the 108-byte socket path limit whatever `TMPDIR` is. Xvfb has no window manager:
 OS-level minimize, maximize and window-decoration behavior requires separate
 isolated desktop checks.
+
+`OPENCHAMBER_PARITY_RUNTIME_ROOT` optionally names an existing, owned mode-0700
+absolute directory for private runtime files. Its resolved pathname must be at
+most 72 bytes to leave room for Unix socket names. The resolved path may contain
+only ASCII letters, digits, `/`, `.`, `_` and `-`, so it is safe in the private
+D-Bus address and configuration XML. A short directory under
+`native/target/tmp` can use the repository filesystem. The default remains
+`/tmp/opencode` when present. Xvfb still uses its normal `/tmp` lock and X11
+socket, and startup fails if either cannot initialize. Authentication, private
+bus isolation and process-ownership checks remain unchanged.
+The interaction server still requires its fresh root directly under
+`/tmp/opencode`; this option does not change server root admission.
 
 Xvfb readiness requires a successful `xdpyinfo` probe inside the 10-second
 startup budget. An individual timed-out probe can retry within that budget;
@@ -610,10 +626,24 @@ location entry takes one path, and CDP can answer an intercepted chooser but
 not dismiss it the way a user does. On Electron it covers HTML file inputs,
 which the composer's Attach files uses; pickers that go through the main
 process's `dialog.showOpenDialog` (directories, theme import) are not
-intercepted. On native it needs the portal fixture, whose frontend currently
-refuses readiness without the Documents portal that `portal_fixture.py`
-deliberately does not start, so native `pick` fails at fixture startup until
-that fixture is qualified with it.
+intercepted. Native `pick` enables the portal fixture's approved Documents mode.
+It starts only `/usr/lib/xdg-permission-store` and `/usr/lib/xdg-document-portal`
+in addition to the GTK backend and frontend, all with private data directories
+and exact pidfd custody. Documents must report the fixture's own `runtime/doc`
+mount, with a fresh same-user `fuse.portal` mount identity and a FUSE descriptor
+in its verified process. Cleanup records the mount identity and requires that
+mount to disappear after shutdown. A lingering or replaced mount is an explicit
+cleanup failure; the fixture performs no guessed or global unmount. The private
+bus keeps its empty activation directory. Unexpected portal services and helper
+warnings still prevent readiness. These checks require installed FUSE tooling
+and access to `/dev/fuse`; they never install packages or use the desktop portal.
+
+Without explicit Documents mode the fixture retains its two-process contract
+and rejects Documents and PermissionStore owners. A startup prerequisite failure
+does not establish that a chooser opened or failed during user interaction.
+Portal subprocess timeouts are reported as client failures, allowing later
+independent scenarios to run. Process, mount or shutdown errors still fail the
+cleanup verdict, including an unverified mount that disappears during shutdown.
 
 `ime: {"compose": "nihao", "preedit": "你好"}` leaves a composition open;
 with `preedit`, Electron ends on that marked text and both clients must show

@@ -3,8 +3,9 @@
 import itertools
 import subprocess
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from native_adapter import NativeClient
 
@@ -22,6 +23,99 @@ class SizedClient(NativeClient):
 
 
 class NativeSizeTest(unittest.TestCase):
+    def test_first_requested_size_does_not_outlive_the_startup_hold(self):
+        client = SizedClient()
+        client.content = SimpleNamespace(width=900, height=600)
+        clock = {'now': 0.0, 'restored': False}
+        size_times = []
+
+        def advance(seconds):
+            clock['now'] += seconds
+            if clock['now'] >= 0.1 and not clock['restored']:
+                clock['restored'] = True
+                client.content = SimpleNamespace(width=1280, height=800)
+
+        def run(command, **kwargs):
+            if command[1] == 'getwindowgeometry':
+                return subprocess.CompletedProcess(command, 0,
+                    stdout=f'WIDTH={client.content.width + 2}\nHEIGHT={client.content.height + 2}')
+            size_times.append(clock['now'])
+            client.content = SimpleNamespace(width=int(command[-2]) - 2, height=int(command[-1]) - 2)
+            return subprocess.CompletedProcess(command, 0)
+
+        with patch.object(client, 'wait_for_marker', return_value={}), \
+             patch.object(client, '_find_app', return_value=object()), \
+             patch.object(client, '_read_marks', side_effect=advance), \
+             patch('native_adapter.time.monotonic', side_effect=lambda: clock['now']), \
+             patch('native_adapter.time.sleep', side_effect=advance), \
+             patch('native_adapter.subprocess.run', side_effect=run):
+            client.wait_ready(3, connected=True)
+        self.assertTrue(clock['restored'], 'the fixture must observe the later startup restoration')
+        self.assertGreaterEqual(clock['now'], 2)
+        self.assertEqual((client.content.width, client.content.height), (900, 600))
+        self.assertTrue(size_times)
+        self.assertTrue(all(value >= 2 for value in size_times), 'startup owns its size during the hold')
+
+    def test_screenshot_rejects_wrong_requested_size_at_each_scale(self):
+        for scale in (1, 1.25, 1.5):
+            with self.subTest(scale=scale):
+                client = SizedClient(scale)
+                image = SimpleNamespace(width=1280, height=800)
+                with patch.object(client, '_activate'), \
+                     patch('native_adapter.subprocess.run', return_value=subprocess.CompletedProcess(
+                         [], 0, stdout='WIDTH=1280\nHEIGHT=800')), \
+                     patch('native_adapter.x11_capture.capture') as capture, \
+                     patch('native_adapter.png.read', return_value=image):
+                    with self.assertRaisesRegex(RuntimeError, 'wanted'):
+                        client.screenshot(Path('unused.png'))
+                capture.assert_not_called()
+
+    def test_startup_hold_still_respects_the_existing_readiness_deadline(self):
+        client = SizedClient()
+        client.content = SimpleNamespace(width=900, height=600)
+        client._initial_size_hold_until = 2.0
+        ticks = itertools.count(step=0.1)
+        with patch.object(client, '_read_marks'), \
+             patch('native_adapter.time.monotonic', side_effect=lambda: next(ticks)), \
+             patch('native_adapter.subprocess.run') as run:
+            with self.assertRaisesRegex(TimeoutError, 'wanted 900x600'):
+                client._resize_to_requested(0.5)
+        run.assert_not_called()
+
+    def test_screenshot_preserves_the_scaled_content_and_frame_crop(self):
+        for scale in (1, 1.25, 1.5):
+            with self.subTest(scale=scale):
+                client = SizedClient(scale)
+                width, height = round(900 * scale), round(600 * scale)
+                client.content = SimpleNamespace(width=width, height=height)
+                image = SimpleNamespace(width=width + 2, height=height + 2)
+                with patch.object(client, '_activate'), \
+                     patch('native_adapter.subprocess.run', return_value=subprocess.CompletedProcess(
+                         [], 0, stdout=f'WIDTH={width + 2}\nHEIGHT={height + 2}')), \
+                     patch('native_adapter.x11_capture.capture') as capture, \
+                     patch('native_adapter.png.read', return_value=image), \
+                     patch('native_adapter.png.crop', return_value=Mock()), \
+                     patch('native_adapter.png.write'):
+                    result = client.screenshot(Path('unused.png'))
+                self.assertEqual(result['crop'], [1, 1, width, height])
+                capture.assert_called_once_with('owned-window', width + 2, height + 2, Path('unused.png'))
+
+    def test_screenshot_rejects_a_size_change_during_capture(self):
+        client = SizedClient()
+        content = SimpleNamespace(width=900, height=600)
+        restored = SimpleNamespace(width=1280, height=800)
+        image = SimpleNamespace(width=902, height=602)
+        with patch.object(client, '_activate'), \
+             patch.object(client, '_content', side_effect=[content, restored]), \
+             patch('native_adapter.subprocess.run', return_value=subprocess.CompletedProcess(
+                 [], 0, stdout='WIDTH=902\nHEIGHT=602')), \
+             patch('native_adapter.x11_capture.capture'), \
+             patch('native_adapter.png.read', return_value=image), \
+             patch('native_adapter.png.crop', return_value=Mock()), \
+             patch('native_adapter.png.write'):
+            with self.assertRaisesRegex(RuntimeError, 'wanted'):
+                client.screenshot(Path('unused.png'))
+
     def test_accessibility_root_can_arrive_after_the_application_node(self):
         client = SizedClient()
         client.content = SimpleNamespace(width=900, height=600)

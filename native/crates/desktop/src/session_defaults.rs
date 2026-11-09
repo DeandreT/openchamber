@@ -3,7 +3,7 @@
 //! Both show what OpenCode reports, write one field at a time, and put a
 //! field back when its newest write fails.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use gpui_kit::component::searchable_list::{SearchableListItem, SearchableVec};
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
@@ -24,8 +24,8 @@ use crate::locale;
 use crate::logical::LogicalStyledExt;
 use crate::network::{Network, NetworkTask};
 use crate::settings_controls::{
-    Load, ServerTarget, checkbox_row, field_row, focus_handle, helper, load_failed, same_target,
-    section_with_info,
+    Load, ServerTarget, SettingsWrites, checkbox_row, field_row, focus_handle, helper, load_failed,
+    same_target, section_with_info,
 };
 use crate::theme::Palette;
 use crate::workspace::Workspace;
@@ -136,6 +136,13 @@ enum Field {
     Background,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+enum WriteField {
+    Mode,
+    Minutes,
+    Compaction(Field),
+}
+
 fn field_of(change: &CompactionChange) -> Field {
     match change {
         CompactionChange::Auto(_) => Field::Auto,
@@ -186,6 +193,12 @@ pub(crate) struct SessionDefaults {
     saved: Option<Compaction>,
     compaction_writes: u64,
     latest_field_write: HashMap<Field, u64>,
+    settled_field_write: HashMap<Field, u64>,
+    latest_mode_write: u64,
+    latest_minutes_write: u64,
+    settled_warming_write: u64,
+    failed_fields: HashSet<WriteField>,
+    writes: SettingsWrites,
     /// A failed write since the last success, shown as Save failed.
     failed: bool,
     duration_picker: Picker,
@@ -260,6 +273,12 @@ impl SessionDefaults {
             saved: None,
             compaction_writes: 0,
             latest_field_write: HashMap::new(),
+            settled_field_write: HashMap::new(),
+            latest_mode_write: 0,
+            latest_minutes_write: 0,
+            settled_warming_write: 0,
+            failed_fields: HashSet::new(),
+            writes: SettingsWrites::default(),
             failed: false,
             duration_picker,
             buffer_picker,
@@ -273,6 +292,9 @@ impl SessionDefaults {
     /// Reads OpenCode's config and the server's warming snapshot.
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
         let target = ServerTarget::capture(&self.owner, self.network.as_ref(), cx);
+        if same_target(self.target.as_ref(), target.as_ref()) && self.writes.is_pending() {
+            return;
+        }
         if !same_target(self.target.as_ref(), target.as_ref()) {
             self.global = Load::Loading;
             self.per_session = PerSession::Loading;
@@ -281,14 +303,18 @@ impl SessionDefaults {
             self.pending_mode = None;
             self.pending_minutes = None;
             self.failed = false;
+            self.failed_fields.clear();
+            self.latest_field_write.clear();
+            self.settled_field_write.clear();
+            self.settled_warming_write = 0;
         }
+        self.read_revision += 1;
         self.target = target.clone();
         let Some(target) = target else {
             self.reads.clear();
             cx.notify();
             return;
         };
-        self.read_revision += 1;
         let revision = self.read_revision;
         let (writes_at_read, warming_at_read) = (self.compaction_writes, self.warming_writes);
         let client = target.client.clone();
@@ -339,7 +365,10 @@ impl SessionDefaults {
                         return;
                     }
                     match result {
-                        Some(Ok(snapshot)) => this.adopt(&snapshot),
+                        Some(Ok(snapshot)) if this.warming_writes == warming_at_read => {
+                            this.adopt(&snapshot)
+                        }
+                        Some(Ok(_)) => {}
                         // A server without per-session warming offers the rest.
                         _ if this.per_session == PerSession::Loading => {
                             this.per_session = PerSession::Unavailable;
@@ -387,7 +416,10 @@ impl SessionDefaults {
     }
 
     fn set_mode(&mut self, mode: WarmingMode, cx: &mut Context<Self>) {
-        let (Some(current), Some(target)) = (self.mode(), self.target.clone()) else {
+        if self.writes.closing() {
+            return;
+        }
+        let (Some(current), Some(target)) = (self.mode(), self.write_target(cx)) else {
             return;
         };
         let unavailable = self.per_session == PerSession::Unavailable;
@@ -397,8 +429,9 @@ impl SessionDefaults {
         self.pending_mode = Some(mode);
         self.warming_writes += 1;
         let write = self.warming_writes;
-        let client = target.client;
-        let writing = NetworkTask::spawn_on(&target.network, async move {
+        self.latest_mode_write = write;
+        let client = target.client.clone();
+        let (id, writing) = self.writes.submit(&target, async move {
             if unavailable {
                 client
                     .save_opencode_warming(mode == WarmingMode::All)
@@ -408,41 +441,57 @@ impl SessionDefaults {
                 client.set_warming_mode(mode.wire()).await.map(Some)
             }
         });
-        cx.spawn(async move |this, cx| {
-            let result = writing.await;
+        let completion = cx.spawn(async move |this, cx| {
+            let result = writing.await.ok();
             let _ = this.update(cx, |this, cx| {
+                this.writes.finish(id);
+                if !this.owns(&target, cx) {
+                    return;
+                }
                 match result {
                     Some(Ok(snapshot)) => {
-                        if let Some(snapshot) = snapshot {
-                            this.adopt(&snapshot);
+                        if write >= this.settled_warming_write {
+                            this.settled_warming_write = write;
+                            if let Some(snapshot) = snapshot {
+                                this.adopt(&snapshot);
+                            }
+                            // Turning OpenCode's warming on keeps a duration it had.
+                            let minutes = this
+                                .global
+                                .ready()
+                                .and_then(|global| global.minutes)
+                                .or(Some(OPENCODE_DEFAULT_MINUTES));
+                            this.global = Load::Ready(GlobalWarming {
+                                on: mode == WarmingMode::All,
+                                minutes,
+                            });
                         }
-                        // Turning OpenCode's warming on keeps a duration it had.
-                        let minutes = this
-                            .global
-                            .ready()
-                            .and_then(|global| global.minutes)
-                            .or(Some(OPENCODE_DEFAULT_MINUTES));
-                        this.global = Load::Ready(GlobalWarming {
-                            on: mode == WarmingMode::All,
-                            minutes,
-                        });
-                        this.failed = false;
+                        if this.latest_mode_write == write {
+                            this.failed_fields.remove(&WriteField::Mode);
+                        }
                     }
-                    _ => this.failed = true,
+                    _ if this.latest_mode_write == write => {
+                        this.failed_fields.insert(WriteField::Mode);
+                    }
+                    _ => {}
                 }
                 // Only the newest write settles the chips.
-                if this.warming_writes == write {
+                if this.latest_mode_write == write {
                     this.pending_mode = None;
                 }
+                this.failed = !this.failed_fields.is_empty();
                 cx.notify();
             });
-        })
-        .detach();
+        });
+        self.writes.observe(id, completion);
         cx.notify();
     }
 
     fn set_minutes(&mut self, minutes: u32, _: &mut Window, cx: &mut Context<Self>) {
-        let (Some(mode), Some(target)) = (self.mode(), self.target.clone()) else {
+        if self.writes.closing() {
+            return;
+        }
+        let (Some(mode), Some(target)) = (self.mode(), self.write_target(cx)) else {
             return;
         };
         let scope = match mode {
@@ -456,39 +505,56 @@ impl SessionDefaults {
         self.pending_minutes = Some(minutes);
         self.warming_writes += 1;
         let write = self.warming_writes;
-        let client = target.client;
-        let writing = NetworkTask::spawn_on(&target.network, async move {
+        self.latest_minutes_write = write;
+        let client = target.client.clone();
+        let (id, writing) = self.writes.submit(&target, async move {
             client.set_warming_duration(scope, minutes).await
         });
-        cx.spawn(async move |this, cx| {
-            let result = writing.await;
+        let completion = cx.spawn(async move |this, cx| {
+            let result = writing.await.ok();
             let _ = this.update(cx, |this, cx| {
+                this.writes.finish(id);
+                if !this.owns(&target, cx) {
+                    return;
+                }
                 match result {
                     Some(Ok(snapshot)) => {
-                        this.adopt(&snapshot);
-                        if scope == "all" {
-                            this.global = Load::Ready(GlobalWarming {
-                                on: true,
-                                minutes: Some(minutes),
-                            });
+                        if write >= this.settled_warming_write {
+                            this.settled_warming_write = write;
+                            this.adopt(&snapshot);
+                            if scope == "all" {
+                                this.global = Load::Ready(GlobalWarming {
+                                    on: true,
+                                    minutes: Some(minutes),
+                                });
+                            }
                         }
-                        this.failed = false;
+                        if this.latest_minutes_write == write {
+                            this.failed_fields.remove(&WriteField::Minutes);
+                        }
                     }
-                    _ => this.failed = true,
+                    _ if this.latest_minutes_write == write => {
+                        this.failed_fields.insert(WriteField::Minutes);
+                    }
+                    _ => {}
                 }
-                if this.warming_writes == write {
+                if this.latest_minutes_write == write {
                     this.pending_minutes = None;
                 }
+                this.failed = !this.failed_fields.is_empty();
                 cx.notify();
             });
-        })
-        .detach();
+        });
+        self.writes.observe(id, completion);
         cx.notify();
     }
 
     /// Writes one field; the value shows at once and goes back if the write fails.
     fn save_compaction(&mut self, change: CompactionChange, cx: &mut Context<Self>) {
-        let Some(target) = self.target.clone() else {
+        if self.writes.closing() {
+            return;
+        }
+        let Some(target) = self.write_target(cx) else {
             return;
         };
         let Some(values) = self.compaction.ready_mut() else {
@@ -504,33 +570,88 @@ impl SessionDefaults {
         let write = self.compaction_writes;
         let field = field_of(&change);
         self.latest_field_write.insert(field, write);
-        let client = target.client;
+        let client = target.client.clone();
         let sent = change.clone();
-        let writing = NetworkTask::spawn_on(&target.network, async move {
-            client.save_compaction(&sent).await
-        });
-        cx.spawn(async move |this, cx| {
-            let result = writing.await;
+        let (id, writing) = self
+            .writes
+            .submit(&target, async move { client.save_compaction(&sent).await });
+        let completion = cx.spawn(async move |this, cx| {
+            let result = writing.await.ok();
             let _ = this.update(cx, |this, cx| {
+                this.writes.finish(id);
+                if !this.owns(&target, cx) {
+                    return;
+                }
                 if matches!(result, Some(Ok(()))) {
-                    if let Some(saved) = &mut this.saved {
+                    if this.settled_field_write.get(&field).copied().unwrap_or(0) <= write
+                        && let Some(saved) = &mut this.saved
+                    {
                         apply(saved, &change);
+                        this.settled_field_write.insert(field, write);
                     }
-                    this.failed = false;
-                } else {
-                    this.failed = true;
-                    if this.latest_field_write.get(&field) == Some(&write)
+                    if this.failed_fields.contains(&WriteField::Compaction(field))
                         && let (Some(saved), Some(values)) =
                             (this.saved.clone(), this.compaction.ready_mut())
                     {
                         restore(values, &saved, field);
                     }
+                    if this.latest_field_write.get(&field) == Some(&write) {
+                        this.failed_fields.remove(&WriteField::Compaction(field));
+                    }
+                } else {
+                    if this.latest_field_write.get(&field) == Some(&write)
+                        && let (Some(saved), Some(values)) =
+                            (this.saved.clone(), this.compaction.ready_mut())
+                    {
+                        restore(values, &saved, field);
+                        this.failed_fields.insert(WriteField::Compaction(field));
+                    }
                 }
+                this.failed = !this.failed_fields.is_empty();
                 cx.notify();
             });
-        })
-        .detach();
+        });
+        self.writes.observe(id, completion);
         cx.notify();
+    }
+
+    fn owns(&self, target: &ServerTarget, cx: &gpui_kit::App) -> bool {
+        same_target(self.target.as_ref(), Some(target))
+            && same_target(
+                ServerTarget::capture(&self.owner, self.network.as_ref(), cx).as_ref(),
+                Some(target),
+            )
+    }
+
+    fn write_target(&mut self, cx: &mut Context<Self>) -> Option<ServerTarget> {
+        let target = self.target.clone()?;
+        if !self.owns(&target, cx) {
+            self.refresh(cx);
+            return None;
+        }
+        Some(target)
+    }
+
+    pub(crate) fn take_pending_write(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<tokio::sync::oneshot::Receiver<()>> {
+        let pending = self.writes.take_pending_write();
+        cx.notify();
+        pending
+    }
+
+    pub(crate) fn has_failed_writes(&self) -> bool {
+        self.failed
+    }
+
+    pub(crate) fn cancel_close(&mut self, cx: &mut Context<Self>) {
+        self.writes.cancel_close();
+        cx.notify();
+    }
+
+    pub(crate) fn take_quit_write(&mut self, cx: &mut Context<Self>) -> Option<Task<()>> {
+        self.writes.take_quit_write(self.network.take(), cx)
     }
 
     /// Search targets this section owns.
@@ -606,7 +727,9 @@ impl SessionDefaults {
                 "settings.openchamber.defaults.sessionWarming.session",
             ),
         ] {
-            let disabled = mode.is_none() || (choice == WarmingMode::Session && unavailable);
+            let disabled = self.writes.closing()
+                || mode.is_none()
+                || (choice == WarmingMode::Session && unavailable);
             let selected = mode.unwrap_or(WarmingMode::Off) == choice;
             let id: SharedString = format!("sessions-warming-{}", choice.wire()).into();
             let focus = focus_handle(&mut self.focus, &id, cx);
@@ -696,7 +819,8 @@ impl Render for SessionDefaults {
             .map(|minutes| minutes.to_string());
         self.sync_picker("duration", durations, step, window, cx);
         let duration_disabled = matches!(mode, None | Some(WarmingMode::Off))
-            || self.per_session == PerSession::Unavailable;
+            || self.per_session == PerSession::Unavailable
+            || self.writes.closing();
         let chips = self.chips(mode, cx);
         let warming_controls = div()
             .flex_row_from(strings.direction())
@@ -730,7 +854,7 @@ impl Render for SessionDefaults {
         };
 
         // Compaction.
-        let loading = self.compaction.ready().is_none();
+        let loading = self.compaction.ready().is_none() || self.writes.closing();
         let values = self.compaction.ready().cloned().unwrap_or(Compaction {
             auto: true,
             buffer: None,
@@ -992,6 +1116,178 @@ mod tests {
                 .clone()
                 .expect("the Sessions page has its OpenCode sections")
         })
+    }
+
+    #[gpui_kit::test]
+    fn review_regression_a_warming_write_cannot_change_a_later_server(cx: &mut TestAppContext) {
+        use crate::settings_controls::tests::{ResponseGate, retarget};
+        let gate = ResponseGate::new();
+        let held = Arc::clone(&gate);
+        let first = Server::new(move |request| {
+            if request.is("GET", "/api/config") {
+                return (200, json!([]));
+            }
+            if request.is("PUT", "/api/session-warming/mode") {
+                held.hold();
+            }
+            if request.target.starts_with("/api/session-warming") {
+                return (
+                    200,
+                    json!({"revision": 1, "enabled": true, "minutes": 180, "sessions": []}),
+                );
+            }
+            (200, json!({}))
+        });
+        let (second, _) = server(true);
+        let (window, workspace) = open(&first, Page::Sessions, cx);
+        let page = defaults(&workspace, cx);
+        page.update(cx, |page, cx| page.set_mode(WarmingMode::All, cx));
+        gate.entered(cx);
+        retarget(&workspace, &second, cx);
+        settle(window, cx);
+        gate.release();
+        settle(window, cx);
+        cx.read(|cx| {
+            let page = page.read(cx);
+            assert_eq!(page.mode(), Some(WarmingMode::Session));
+            assert_eq!(page.minutes(), Some(60));
+        });
+    }
+
+    #[gpui_kit::test]
+    fn delayed_duration_and_compaction_results_stay_with_their_connection(cx: &mut TestAppContext) {
+        use crate::settings_controls::tests::{ResponseGate, retarget};
+        for duration in [true, false] {
+            let gate = ResponseGate::new();
+            let held = Arc::clone(&gate);
+            let first = Server::new(move |request| {
+                if request.is("GET", "/api/config") {
+                    return (200, json!([]));
+                }
+                if request.method == "PUT" {
+                    held.hold();
+                }
+                if request.target.starts_with("/api/session-warming") {
+                    return (
+                        200,
+                        json!({"revision": 1, "enabled": true, "minutes": 180, "sessions": []}),
+                    );
+                }
+                (200, json!({}))
+            });
+            let second = Server::new(|request| {
+                if request.is("GET", "/api/config") {
+                    return (
+                        200,
+                        json!([{"type": "document", "info": {"compaction": {"keep": {"tokens": 30000}}}}]),
+                    );
+                }
+                if request.is("PUT", "/api/config/compaction") {
+                    return (500, json!({}));
+                }
+                if request.target.starts_with("/api/session-warming") {
+                    return (
+                        200,
+                        json!({"revision": 1, "enabled": true, "minutes": 60, "sessions": []}),
+                    );
+                }
+                (200, json!({}))
+            });
+            let (window, workspace) = open(&first, Page::Sessions, cx);
+            let page = defaults(&workspace, cx);
+            cx.update_window(window, |_, window, cx| {
+                page.update(cx, |page, cx| {
+                    if duration {
+                        page.set_minutes(120, window, cx);
+                    } else {
+                        page.save_compaction(CompactionChange::KeepTokens(Some(50_000)), cx);
+                    }
+                });
+            })
+            .expect("test window");
+            gate.entered(cx);
+            retarget(&workspace, &second, cx);
+            settle(window, cx);
+            gate.release();
+            settle(window, cx);
+            page.update(cx, |page, cx| {
+                page.save_compaction(CompactionChange::KeepTokens(Some(100_000)), cx)
+            });
+            settle(window, cx);
+            cx.read(|cx| {
+                let page = page.read(cx);
+                assert_eq!(
+                    page.minutes(),
+                    Some(60),
+                    "an old duration never replaces B's value"
+                );
+                assert_eq!(
+                    page.compaction.ready().expect("B compaction").keep_tokens,
+                    Some(30_000),
+                    "a failed B edit rolls back to B's own acknowledged value"
+                );
+            });
+        }
+    }
+
+    #[gpui_kit::test]
+    fn app_quit_drains_every_accepted_session_default_write(cx: &mut TestAppContext) {
+        use crate::settings_controls::tests::ResponseGate;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let gate = ResponseGate::new();
+        let held = Arc::clone(&gate);
+        let first = AtomicBool::new(true);
+        let server = Server::new(move |request| {
+            if request.is("GET", "/api/config") {
+                return (200, json!([]));
+            }
+            if request.method == "PUT" && first.swap(false, Ordering::SeqCst) {
+                held.hold();
+            }
+            if request.target.starts_with("/api/session-warming") {
+                return (
+                    200,
+                    json!({"revision": 1, "enabled": true, "minutes": 60, "sessions": []}),
+                );
+            }
+            (200, json!({}))
+        });
+        let (window, workspace) = open(&server, Page::Sessions, cx);
+        let page = defaults(&workspace, cx);
+        page.update(cx, |page, cx| page.set_mode(WarmingMode::All, cx));
+        gate.entered(cx);
+        cx.update_window(window, |_, window, cx| {
+            page.update(cx, |page, cx| {
+                page.set_minutes(120, window, cx);
+                page.save_compaction(CompactionChange::KeepTokens(Some(50_000)), cx);
+            });
+        })
+        .expect("test window");
+        let settings = settings(&workspace, cx);
+        let _normal_close = settings.update(cx, |settings, cx| settings.take_pending_write(cx));
+        cx.update(|cx| {
+            cx.on_app_quit(move |cx| {
+                let pending = settings.update(cx, |settings, cx| settings.take_quit_write(cx));
+                gate.release();
+                async move {
+                    if let Some(pending) = pending {
+                        pending.await;
+                    }
+                }
+            })
+            .detach();
+        });
+        cx.executor().allow_parking();
+        cx.quit();
+        let writes = server.writes();
+        assert_eq!(
+            writes.len(),
+            3,
+            "quit drains all accepted settings writes after the foreground session stops"
+        );
+        assert!(writes[0].is("PUT", "/api/session-warming/mode"));
+        assert!(writes[1].is("PUT", "/api/session-warming/duration"));
+        assert!(writes[2].is("PUT", "/api/config/compaction"));
     }
 
     #[gpui_kit::test]

@@ -7,7 +7,7 @@ a relaunch. Native-only runtime evidence, not matched-client parity.
 """
 
 import argparse
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 import json
 from pathlib import Path
 import sys
@@ -17,12 +17,12 @@ import uuid
 
 import runner
 import virtual_display
-from native_adapter import NativeClient, accessibility_enabled, set_accessibility
+from native_adapter import NativeClient, _atspi, accessibility_enabled, set_accessibility
 from native_files import Session
 from native_general_settings import SETTINGS, SettingsFaults
 from native_hosts import HostFixture
 from native_interactions import Interrupts, until
-from native_platform import binary_info
+from native_platform import binary_info, command, wait_for
 
 # Native writes as the desktop surface; several of these keys are per surface.
 DESKTOP = SETTINGS + '?surface=desktop'
@@ -42,6 +42,87 @@ def put(fixture, values):
                                      headers={'Content-Type': 'application/json'}, method='PUT')
     with urllib.request.urlopen(request, timeout=10) as response:
         return json.load(response)
+
+
+def click_visible_deletion(client):
+    """Wheel over Sessions content until the whole deletion control is visible."""
+    virtual_display.verify_owned_display()
+    api = _atspi()
+
+    def bounds(target):
+        node = client._find(target)
+        node.clear_cache()
+        return node.get_extents(api.CoordType.WINDOW)
+
+    client._activate()
+    for wheel_steps in range(21):
+        control = bounds('sessions-deletion-dialog')
+        dialog = bounds('settings-dialog')
+        workspace = bounds('workspace')
+        left, top = max(dialog.x, workspace.x), max(dialog.y, workspace.y)
+        right = min(dialog.x + dialog.width, workspace.x + workspace.width)
+        bottom = min(dialog.y + dialog.height, workspace.y + workspace.height)
+        if (control.width > 0 and control.height > 0 and left <= control.x
+                and top <= control.y and control.x + control.width <= right
+                and control.y + control.height <= bottom):
+            client.click('sessions-deletion-dialog')
+            return
+        if (wheel_steps == 20 or right <= left or bottom <= top or control.width <= 0
+                or control.height <= 0 or control.x < left or control.x + control.width > right):
+            raise RuntimeError('deletion control did not become fully visible')
+        # AT-SPI rectangles and screen points are physical pixels at every scale.
+        # Keep x over the Sessions controls, away from the navigation scroller.
+        screen_x, screen_y = client._screen_point(client._find('settings-dialog'))
+        x = screen_x + control.x + control.width // 2 - dialog.x - dialog.width // 2
+        y = screen_y + (top + bottom) // 2 - dialog.y - dialog.height // 2
+        command(client.env, 'xdotool', 'mousemove', str(x), str(y))
+        command(client.env, 'xdotool', 'click', '5' if control.y + control.height > bottom else '4')
+        wait_for('scroll did not move the deletion control',
+                 lambda: bounds('sessions-deletion-dialog').y != control.y, timeout=3)
+
+
+@contextmanager
+def failure_evidence(client, output, report):
+    """Capture a failed check while its client is still registered for cleanup."""
+    try:
+        yield
+    except Exception as error:
+        report.setdefault('error', str(error))
+        # On relaunch, only the newest client should capture the failure.
+        if 'failureEvidence' not in report:
+            evidence = {'controls': [], 'captureErrors': []}
+            report['failureEvidence'] = evidence
+            try:
+                evidence['process'] = (None if client.process is None else {
+                    'pid': client.process.pid, 'exitCode': client.process.poll()})
+            except Exception as capture_error:  # Evidence must not replace the failed check.
+                evidence['captureErrors'].append({'stage': 'process', 'error': str(capture_error)})
+            try:
+                api = _atspi()
+                targets = {'settings-dialog', 'settings-current-page', 'settings-search',
+                           'sessions.permission-default-ask', 'sessions.permission-default-auto',
+                           'sessions.permission-default-safety', 'sessions-deletion-dialog',
+                           'sessions-work-enabled', 'sessions-show-chats'}
+                for node in client._walk():
+                    node.clear_cache()
+                    states = node.get_state_set()
+                    focused = states.contains(api.StateType.FOCUSED)
+                    if node.get_accessible_id() not in targets and not focused:
+                        continue
+                    box = node.get_extents(api.CoordType.WINDOW)
+                    evidence['controls'].append({
+                        'id': node.get_accessible_id(), 'name': node.get_name(),
+                        'role': node.get_role_name(), 'bounds': [box.x, box.y, box.width, box.height],
+                        'focused': focused, 'showing': states.contains(api.StateType.SHOWING),
+                        'checked': states.contains(api.StateType.CHECKED)})
+                evidence['inputSubstitutions'] = list(client.substitutions)
+            except Exception as capture_error:
+                evidence['captureErrors'].append({'stage': 'controls', 'error': str(capture_error)})
+            try:
+                client.screenshot(output / 'failed.png')
+            except Exception as capture_error:
+                evidence['captureErrors'].append({'stage': 'screenshot', 'error': str(capture_error)})
+        raise
 
 
 def qualify(args):
@@ -67,18 +148,20 @@ def qualify(args):
                 Path(folder).mkdir(parents=True, exist_ok=True)
 
             def launch(name):
-                log = cleanup.enter_context((args.output / f'native-{name}.log').open('w'))
+                client_cleanup = cleanup.enter_context(ExitStack())
+                log = client_cleanup.enter_context((args.output / f'native-{name}.log').open('w'))
                 virtual_display.verify_owned_display()
                 client = NativeClient(args.binary, env, args.scale, 1280, 800, stderr=log)
-                cleanup.callback(client.close)
+                client_cleanup.callback(client.close)
                 clients.append(client)
+                client_cleanup.enter_context(failure_evidence(client, args.output, report))
                 client.launch()
                 client.wait_ready(45, connected=True)
                 session = object.__new__(Session)
                 session.client, session.env, session.project, session.args = client, env, fixture.project, args
-                return client, session
+                return client, session, client_cleanup
 
-            client, session = launch('first')
+            client, session, client_cleanup = launch('first')
 
             def record(name):
                 client.screenshot(args.output / f'{name}.png')
@@ -152,14 +235,14 @@ def qualify(args):
             observed('sessionWorkEnabled', False)
             session.wait_gone('sessions-retry')
             record('retry-persists')
-            client.click('sessions-deletion-dialog')
+            click_visible_deletion(client)
             observed('showDeletionDialog', False)
             session.keys('Escape')
             session.wait_gone('settings-dialog')
 
             # Restored: a new process shows what the server saved.
-            client.close()
-            client, session = launch('relaunch')
+            client_cleanup.close()
+            client, session, client_cleanup = launch('relaunch')
             open_settings()
             client.click('settings-nav-sessions')
             page_is('Sessions')
@@ -177,19 +260,16 @@ def qualify(args):
         report['passed'] = True
     except Exception as error:
         traceback.print_exc()
-        report['error'] = str(error)
+        report.setdefault('error', str(error))
         report['settingsRequests'] = proxy.settings_requests if 'proxy' in locals() else None
-        if clients:
-            try:
-                clients[-1].screenshot(args.output / 'failed.png')
-            except Exception:
-                pass
     finally:
         set_accessibility(previous)
         report['nativeProcesses'] = [{'pid': client.process.pid, 'exitCode': client.process.poll()}
                                      for client in clients if client.process]
         if binary_info(args.binary) != identity or any(item['exitCode'] is None for item in report['nativeProcesses']):
-            report.update(passed=False, error='binary changed or a native process survived cleanup')
+            report['passed'] = False
+            report['cleanupError'] = 'binary changed or a native process survived cleanup'
+            report.setdefault('error', report['cleanupError'])
         (args.output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
     return 0 if report['passed'] else 1
 

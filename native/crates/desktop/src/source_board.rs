@@ -908,6 +908,7 @@ impl Workspace {
             return;
         }
         self.archive_open = false;
+        self.scheduled_tasks_open = false;
         if self
             .source_board
             .as_ref()

@@ -54,8 +54,19 @@ the pinned `gpui-kit` dependency.
   rejects notifications from a replaced root. The returned `Subscription` owns
   observation; dropping it stops callbacks. Close/open changes in one update
   deliver only the resulting authoritative coverage.
+- Custom-rendered `PopupMenuItem::ElementItem` rows may supply an explicit
+  `aria_label`. The menu-item role receives that name; visible content,
+  shortcut hints, activation and disabled/checked behavior stay unchanged.
+  Existing unlabeled custom items retain their default behavior.
 
 ## Decisions
+
+### Why custom menu rows accept an explicit name
+
+The menu-item role cannot derive a name from arbitrary rendered elements.
+Callers already own their translated action labels, so an optional name keeps
+custom shortcut layout intact without inferring text from descendants or
+changing existing icon-only custom menus.
 
 ### Why targeted dialog handles belong to the window root
 

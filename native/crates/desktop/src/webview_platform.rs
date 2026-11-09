@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
-use gpui_kit::{App, Global, Task, WeakEntity};
+use gpui_kit::{App, Global, Subscription, Task, WeakEntity, WindowId};
 use gtk::prelude::*;
 use gtk::{gio, glib};
 use webkit2gtk::{
@@ -55,6 +55,7 @@ pub(crate) struct WebPlatform {
     shims: Shims,
     hosts: Vec<WeakEntity<HostedWebView>>,
     pump: Option<Task<()>>,
+    _lifecycle: Vec<Subscription>,
 }
 
 impl Global for WebPlatform {}
@@ -109,6 +110,12 @@ impl WebPlatform {
         match Self::start() {
             Ok(platform) => {
                 cx.set_global(platform);
+                let closed = cx.on_window_closed(|cx, window| Self::close(Some(window), cx));
+                let quitting = cx.on_app_quit(|cx| {
+                    Self::close(None, cx);
+                    async {}
+                });
+                cx.global_mut::<WebPlatform>()._lifecycle = vec![closed, quitting];
                 Ok(())
             }
             Err(error) => {
@@ -139,6 +146,7 @@ impl WebPlatform {
             shims,
             hosts: Vec::new(),
             pump: None,
+            _lifecycle: Vec::new(),
         })
     }
 
@@ -199,6 +207,17 @@ impl WebPlatform {
 
     pub(crate) fn focus(cx: &App) -> Rc<XFocus> {
         cx.global::<WebPlatform>().focus.clone()
+    }
+
+    fn close(window: Option<WindowId>, cx: &mut App) {
+        let hosts = cx.global::<WebPlatform>().hosts.clone();
+        for host in hosts {
+            if let Some(host) = host.upgrade()
+                && window.is_none_or(|window| host.read(cx).window_id() == window)
+            {
+                host.update(cx, |host, _| host.close());
+            }
+        }
     }
 
     /// Lets `view` load the shim at `nonce` once.

@@ -31,6 +31,9 @@ import x11_capture
 MARK_PREFIX = "OPENCHAMBER_NATIVE_MARK "
 # Physical pixels a client-side frame line may add on each side of the content.
 MAX_FRAME_LINE = 4
+# chrome::INITIAL_SIZE_HOLD starts before the first content frame. Observing
+# that frame gives the fixture a conservative end for the application's hold.
+INITIAL_SIZE_HOLD_S = 2.0
 
 
 def _atspi():
@@ -121,6 +124,7 @@ class NativeClient:
     def wait_ready(self, timeout_s: float, connected: bool) -> None:
         """The first content frame, and with a server the painted session list."""
         self.wait_for_marker("content-painted", timeout_s)
+        self._initial_size_hold_until = time.monotonic() + INITIAL_SIZE_HOLD_S
         if connected:
             self.wait_for_marker("sessions-shown", timeout_s)
         self._app = self._find_app(timeout_s)
@@ -155,11 +159,14 @@ class NativeClient:
         target = (round(self.width * self.scale), round(self.height * self.scale))
         deadline = time.monotonic() + timeout_s
         content = None
-        while time.monotonic() < deadline:
+        while (now := time.monotonic()) < deadline:
             try:
                 content = self._content()
             except LookupError:
                 self._read_marks(0.05)
+                continue
+            if now < getattr(self, '_initial_size_hold_until', 0):
+                self._read_marks(min(0.05, self._initial_size_hold_until - now, deadline - now))
                 continue
             if (content.width, content.height) == target:
                 return
@@ -642,16 +649,25 @@ class NativeClient:
 
     # --- evidence --------------------------------------------------------
 
+    def _requested_content(self):
+        content = self._content()
+        target = (round(self.width * self.scale), round(self.height * self.scale))
+        if (content.width, content.height) != target:
+            raise RuntimeError(f'native capture content is {content.width}x{content.height}, '
+                               f'wanted {target[0]}x{target[1]} at scale {self.scale}')
+        return content
+
     def screenshot(self, path: Path) -> dict:
         """The application's content: the active window's client area, cut to
         the content root inside any client-side frame line."""
         self._activate()
+        self._requested_content()
         window = self._window()
         geometry = dict(line.split("=", 1) for line in subprocess.run(
             ["xdotool", "getwindowgeometry", "--shell", window], check=True, capture_output=True, text=True,
         ).stdout.split())
         x11_capture.capture(window, int(geometry["WIDTH"]), int(geometry["HEIGHT"]), path)
-        content = self._content()
+        content = self._requested_content()
         image = png.read(path)
         # The capture leaves out the frame's shadow band but keeps its line,
         # which surrounds the content evenly. AccessKit reports no frame

@@ -630,6 +630,19 @@ def uses(scenario: dict, kind: str) -> bool:
     return any(kind in step for step in scenario["steps"])
 
 
+class PortalCleanupError(RuntimeError):
+    def __init__(self, receipt):
+        super().__init__('private portal cleanup is incomplete; inspect portal/cleanup.json')
+        self.receipt = receipt
+
+
+def checked_portal_cleanup(portal):
+    receipt = portal.close()
+    if receipt['remainingPids'] or receipt['errors'] or receipt.get('mount', {}).get('remaining'):
+        raise PortalCleanupError(receipt)
+    return receipt
+
+
 def run_client(kind: str, scenario: dict, work: Path, args: argparse.Namespace) -> dict:
     """One client through the scenario. Services exist only for scenarios
     whose steps need them, so other scenarios launch exactly as before."""
@@ -640,6 +653,8 @@ def run_client(kind: str, scenario: dict, work: Path, args: argparse.Namespace) 
     started = time.monotonic()
     with contextlib.ExitStack() as services:
         try:
+            portal = None
+            portal_cleanup_error = None
             places = {"project": str(root / "project")}
             if "fixture" in scenario:
                 places["fixture"] = str(prepare_fixture(root, scenario["fixture"], state))
@@ -678,7 +693,8 @@ def run_client(kind: str, scenario: dict, work: Path, args: argparse.Namespace) 
                     from portal_fixture import PortalFixture
 
                     interrupts = services.enter_context(Interrupts())
-                    client.portal = PortalFixture(directory / "portal", env, interrupts)
+                    portal = PortalFixture(directory / "portal", env, interrupts, documents=True)
+                    client.portal = portal
                     services.callback(client.portal.close)
                     client.portal.start()
             else:
@@ -695,10 +711,21 @@ def run_client(kind: str, scenario: dict, work: Path, args: argparse.Namespace) 
                 checkpoints = perform(client, kind, scenario["steps"], args.targets, directory, args, context)
             finally:
                 closed = client.close()
+                try:
+                    portal_cleanup = checked_portal_cleanup(portal) if portal is not None else None
+                except PortalCleanupError as cleanup_error:
+                    portal_cleanup = cleanup_error.receipt
+                    portal_cleanup_error = str(cleanup_error)
+            if portal_cleanup_error is not None:
+                return {"error": portal_cleanup_error, "cleanupError": portal_cleanup_error,
+                        "portalCleanup": portal_cleanup}
             return {"launch": launched, "checkpoints": checkpoints, "close": closed, "seconds": round(time.monotonic() - started, 1),
-                    "waits": context.waits, "restarts": context.restarts}
-        except (RuntimeError, TimeoutError, LookupError, OSError, ValueError, subprocess.CalledProcessError) as error:
-            return {"error": str(error)}
+                    "waits": context.waits, "restarts": context.restarts, "portalCleanup": portal_cleanup}
+        except (RuntimeError, TimeoutError, LookupError, OSError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+            result = {"error": str(error)}
+            if portal_cleanup_error is not None:
+                result.update(cleanupError=portal_cleanup_error, portalCleanup=portal_cleanup)
+            return result
 
 
 def comparable_rows(rows: list[dict]) -> list[dict]:

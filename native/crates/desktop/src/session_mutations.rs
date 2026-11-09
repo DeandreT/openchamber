@@ -843,7 +843,7 @@ impl Workspace {
             // attempt locked and preserved; history never infers rejection.
             self.load_history(&key.session, cx);
             if admission.is_err() {
-                self.check_recovery(key, id, window, cx);
+                self.observe_recovery(key, id, window, cx);
             }
         }
         self.queue_persistence(cx);
@@ -915,6 +915,9 @@ impl Workspace {
     }
 
     pub(crate) fn abort_connected(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.close_in_progress() {
+            return;
+        }
         let Some(session) = self.selected.clone() else {
             return;
         };

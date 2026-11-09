@@ -14,6 +14,9 @@ use serde_json::json;
 
 use super::*;
 
+#[path = "unit_d_permission_close_tests.rs"]
+mod unit_d_close_tests;
+
 #[derive(Default)]
 struct Policy {
     modes: serde_json::Map<String, Value>,

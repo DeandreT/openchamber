@@ -5,17 +5,112 @@ import json
 import os
 import select
 import signal
+import stat
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 import time
 import unittest
 from unittest.mock import MagicMock, Mock, patch
+from types import SimpleNamespace
 
 import virtual_display
 
 
 class DisplayOwnershipTest(unittest.TestCase):
+    def test_custom_runtime_root_requires_private_owned_short_directory(self):
+        info = SimpleNamespace(st_uid=os.getuid(), st_mode=stat.S_IFDIR | 0o700)
+        with patch('pathlib.Path.resolve', lambda path, **_: path), patch('pathlib.Path.stat', return_value=info):
+            for size in (30, virtual_display.MAX_RUNTIME_ROOT_BYTES):
+                path = '/' + 'x' * (size - 1)
+                with patch.dict(os.environ, {virtual_display.RUNTIME_ROOT: path}):
+                    self.assertEqual(virtual_display.runtime_base(), (path, True))
+        for path, owner, mode in [
+            ('', os.getuid(), stat.S_IFDIR | 0o700),
+            ('relative', os.getuid(), stat.S_IFDIR | 0o700),
+            ('/' + 'x' * virtual_display.MAX_RUNTIME_ROOT_BYTES, os.getuid(), stat.S_IFDIR | 0o700),
+            ('/' + 'é' * 40, os.getuid(), stat.S_IFDIR | 0o700),
+            ('/owned-display-root', os.getuid() + 1, stat.S_IFDIR | 0o700),
+            ('/owned-display-root', os.getuid(), stat.S_IFDIR | 0o755),
+            ('/owned-display-root', os.getuid(), stat.S_IFREG | 0o700),
+        ]:
+            info = SimpleNamespace(st_uid=owner, st_mode=mode)
+            with self.subTest(path=path, owner=owner, mode=mode), \
+                 patch.dict(os.environ, {virtual_display.RUNTIME_ROOT: path}), \
+                 patch('pathlib.Path.resolve', lambda path, **_: path), \
+                 patch('pathlib.Path.stat', return_value=info), \
+                 patch('virtual_display.subprocess.Popen') as spawn:
+                with self.assertRaisesRegex(RuntimeError, 'private-display root'):
+                    virtual_display._run_inside(['fixture-client'], 1280, 800, lambda: False)
+                spawn.assert_not_called()
+
+    def test_missing_runtime_root_is_refused_before_launch(self):
+        with patch.dict(os.environ, {virtual_display.RUNTIME_ROOT: '/missing-display-root'}), \
+             patch('pathlib.Path.resolve', side_effect=FileNotFoundError), \
+             patch('virtual_display.subprocess.Popen') as spawn:
+            with self.assertRaisesRegex(RuntimeError, 'private-display root is unavailable'):
+                virtual_display._run_inside(['fixture-client'], 1280, 800, lambda: False)
+        spawn.assert_not_called()
+
+    def test_root_refuses_xml_and_dbus_address_characters_before_launch(self):
+        with tempfile.TemporaryDirectory(prefix='v-') as directory:
+            for name in ('a&b', 'a<b', 'a"b', 'a,b', 'a%b', 'a;b', 'a=b', 'a b', 'aéb', 'a\\b', 'a\nb'):
+                root = Path(directory) / name
+                root.mkdir(mode=0o700)
+                with self.subTest(name=name), \
+                     patch.dict(os.environ, {virtual_display.RUNTIME_ROOT: str(root)}), \
+                     patch('virtual_display.subprocess.run', return_value=Mock(returncode=0)), \
+                     patch('virtual_display.subprocess.Popen') as spawn, \
+                     patch('virtual_display.wait_for_display', return_value=False), \
+                     patch('virtual_display.stop_process'):
+                    with self.assertRaisesRegex(RuntimeError, 'root path may contain only ASCII'):
+                        virtual_display._run_inside(['fixture-client'], 1280, 800, lambda: False)
+                    spawn.assert_not_called()
+
+    def test_runtime_root_budget_uses_resolved_path(self):
+        with tempfile.TemporaryDirectory(prefix='v-') as directory:
+            root = Path(directory)
+            target = root / ('x' * virtual_display.MAX_RUNTIME_ROOT_BYTES)
+            target.mkdir(mode=0o700)
+            alias = root / 's'
+            alias.symlink_to(target, target_is_directory=True)
+            with patch.dict(os.environ, {virtual_display.RUNTIME_ROOT: str(alias)}):
+                with self.assertRaisesRegex(RuntimeError, 'resolved path'):
+                    virtual_display.runtime_base()
+
+    def test_default_runtime_root_is_unchanged(self):
+        with patch.dict(os.environ):
+            os.environ.pop(virtual_display.RUNTIME_ROOT, None)
+            with patch('pathlib.Path.is_dir', return_value=True):
+                self.assertEqual(virtual_display.runtime_base(), ('/tmp/opencode', False))
+            with patch('pathlib.Path.is_dir', return_value=False):
+                self.assertEqual(virtual_display.runtime_base(), (None, False))
+
+    def test_custom_root_keeps_xvfb_guards_and_refuses_failed_startup(self):
+        with tempfile.TemporaryDirectory(prefix='v-') as directory:
+            process = Mock()
+            with patch.dict(os.environ, {virtual_display.RUNTIME_ROOT: directory, 'WAYLAND_DISPLAY': 'personal', 'XDG_SESSION_TYPE': 'wayland'}), \
+                 patch('virtual_display.subprocess.run', return_value=Mock(returncode=0)), \
+                 patch('virtual_display.subprocess.Popen', return_value=process) as spawn, \
+                 patch('virtual_display.wait_for_display', return_value=False), \
+                 patch('virtual_display.stop_process'):
+                with self.assertRaisesRegex(RuntimeError, 'could not start a private Xvfb display'):
+                    virtual_display._run_inside(['fixture-client'], 1280, 800, lambda: False)
+            self.assertGreater(spawn.call_count, 0)
+            for call in spawn.call_args_list:
+                arguments = call.args[0]
+                self.assertEqual(arguments[0], 'Xvfb', 'no bus or client starts after Xvfb fails')
+                self.assertEqual(arguments[arguments.index('-nolisten') + 1], 'tcp')
+                self.assertIn('-auth', arguments)
+                self.assertNotIn('-nolock', arguments)
+                self.assertNotIn('-ac', arguments)
+                environment = call.kwargs['env']
+                self.assertTrue(environment['XDG_RUNTIME_DIR'].startswith(directory + '/d-'))
+                self.assertEqual(Path(environment['XAUTHORITY']).parent, Path(environment['XDG_RUNTIME_DIR']))
+                self.assertFalse(any(key in environment for key in ('WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'XDG_SESSION_TYPE')))
+            self.assertEqual(list(Path(directory).iterdir()), [], 'failed startup cleans its private runtime')
+
     def test_attached_pid_reuse_does_not_signal_replacement(self):
         pid = 424242
         address = 'unix:path=/private-fixture/bus'

@@ -8,6 +8,7 @@
 //! answers a request.
 
 use std::collections::HashMap;
+use std::mem;
 
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::notification::Notification;
@@ -79,6 +80,17 @@ struct ReplayGate {
 }
 
 impl PermissionModes {
+    /// Transfer unfinished handles without clearing their pending-write slots.
+    pub(crate) fn take_close_tasks(&mut self) -> Vec<Task<()>> {
+        let mut pending = Vec::new();
+        for task in self.writes.values_mut() {
+            if !task.is_ready() {
+                pending.push(mem::replace(task, Task::ready(())));
+            }
+        }
+        pending
+    }
+
     fn begin(&mut self) -> Operation {
         self.sequence += 1;
         self.latest_started = self.sequence;
@@ -227,7 +239,7 @@ impl Workspace {
 
     /// One press of the shield: the next mode, on the draft or the session.
     pub(crate) fn cycle_permission_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.permission_mode_interactive() {
+        if self.close_in_progress() || !self.permission_mode_interactive() {
             return;
         }
         let next = self

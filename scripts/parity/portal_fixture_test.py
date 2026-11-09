@@ -366,6 +366,160 @@ class PortalFixtureTests(unittest.TestCase):
         self.assertEqual(self.close_fd.call_count, 2)
 
 
+class DocumentPortalTests(unittest.TestCase):
+    setUp = PortalFixtureTests.setUp
+    patch = PortalFixtureTests.patch
+
+    def launch(self, process, executable, env, cwd, log):
+        pid = 1001 + len(self.processes)
+        process.fd.value = pid + 10000
+        self.processes.append(process)
+        self.identities[pid] = str(100000 + pid)
+        names = {portal_fixture.BACKEND: portal_fixture.BACKEND_NAME,
+                 portal_fixture.FRONTEND: portal_fixture.FRONTEND_NAME,
+                 portal_fixture.PERMISSIONS: portal_fixture.PERMISSIONS_NAME,
+                 portal_fixture.DOCUMENTS: portal_fixture.DOCUMENTS_NAME}
+        self.names[names[executable]] = pid
+        if executable == portal_fixture.DOCUMENTS:
+            self.mounts.append(self.mount())
+
+    def signal(self, pidfd, sig):
+        PortalFixtureTests.signal(self, pidfd, sig)
+        if pidfd == 11003:
+            self.mounts.clear()
+
+    def bus(self, argv, **kwargs):
+        if argv[-1] == 'ListNames':
+            value = {'type': 'as', 'data': [list(self.names)]}
+        elif argv[-1] == 'GetMountPoint':
+            value = {'type': 'ay', 'data': [list(os.fsencode(self.reported_mount)) + [0]]}
+        else:
+            return PortalFixtureTests.bus(self, argv, **kwargs)
+        return subprocess.CompletedProcess(argv, 0, stdout=json.dumps(value), stderr='')
+
+    def mount(self):
+        return {'id': 4042, 'path': str(self.fixture.mount_path), 'type': 'fuse.portal',
+                'source': 'portal', 'options': ['rw', f'user_id={os.getuid()}']}
+
+    def enable(self):
+        self.fixture._documents = True
+        self.mounts = []
+        self.reported_mount = self.fixture.mount_path
+        self.patch(patch.object(portal_fixture, 'mount_records', side_effect=lambda: list(self.mounts)))
+        self.fuse_fd = self.patch(patch.object(portal_fixture, 'fuse_descriptor', return_value=True))
+
+    def test_four_exact_owners_private_runtime_and_mount_cleanup(self):
+        self.enable()
+        receipt = self.fixture.start()
+        self.assertEqual([call.args[1] for call in self.spawn.call_args_list],
+                         [portal_fixture.BACKEND, portal_fixture.PERMISSIONS,
+                          portal_fixture.DOCUMENTS, portal_fixture.FRONTEND])
+        self.assertEqual(receipt['mount'], self.mount())
+        self.assertEqual(receipt['documents']['pid'], 1003)
+        self.assertEqual(self.fixture.env['XDG_RUNTIME_DIR'], str(self.fixture.root / 'runtime'))
+        self.assertEqual(self.fixture.env['DBUS_SESSION_BUS_ADDRESS'], self.address)
+        self.assertEqual(stat.S_IMODE((self.fixture.root / 'runtime').stat().st_mode), 0o700)
+        self.assertEqual(list((self.runtime / 'services').iterdir()), [])
+        cleanup = self.fixture.close()
+        self.assertEqual(cleanup['remainingPids'], [])
+        self.assertEqual(cleanup['errors'], [])
+        self.assertEqual(cleanup['mount']['remaining'], [])
+        self.assertEqual(cleanup['mount']['owned'], receipt['mount'])
+        self.assertEqual([call.args[0] for call in self.send_signal.call_args_list], [11004, 11003, 11002, 11001])
+
+    def test_reported_mount_cannot_escape_to_the_desktop(self):
+        self.enable()
+        self.reported_mount = Path('/not-the-private-runtime/doc')
+        with self.assertRaisesRegex(RuntimeError, 'escaped its private runtime'):
+            self.fixture.start()
+        self.assertEqual(self.fixture.close()['remainingPids'], [])
+        self.assertFalse((self.fixture.root / 'startup.json').exists())
+
+    def test_mount_point_timeout_retains_exact_cleanup_and_original_failure(self):
+        self.enable()
+        error = subprocess.TimeoutExpired(['busctl', 'GetMountPoint'], 1)
+
+        def timeout_mount(argv, **kwargs):
+            if argv[-1] == 'GetMountPoint':
+                raise error
+            return self.bus(argv, **kwargs)
+
+        self.run.side_effect = timeout_mount
+        with self.assertRaises(subprocess.TimeoutExpired) as caught:
+            self.fixture.start()
+        self.assertIs(caught.exception, error)
+        cleanup = json.loads((self.fixture.root / 'cleanup.json').read_text())
+        self.assertEqual(cleanup['remainingPids'], [])
+        self.assertEqual(cleanup['errors'], ['document mount identity is unverified or changed; no unmount authorized'])
+        self.assertEqual(cleanup['mount']['before'], [self.mount()])
+        self.assertIsNone(cleanup['mount']['owned'])
+        self.assertEqual(cleanup['mount']['remaining'], [])
+        self.assertEqual([(item['pid'], item['starttime']) for item in cleanup['processes']],
+                         [(1001, '101001'), (1002, '101002'), (1003, '101003')])
+        self.assertEqual([call.args[0] for call in self.send_signal.call_args_list], [11003, 11002, 11001])
+        self.assertEqual([call.args[0] for call in self.close_fd.call_args_list], [11003, 11002, 11001])
+        self.assertEqual(self.fixture.close(), cleanup)
+        self.assertIn('GetMountPoint', (self.fixture.root / 'startup-failed.txt').read_text())
+        self.assertFalse((self.fixture.root / 'startup.json').exists())
+
+    def test_unexpected_portal_service_is_still_rejected(self):
+        self.enable()
+        self.names['org.freedesktop.portal.Unapproved'] = 999
+        with self.assertRaisesRegex(RuntimeError, 'unapproved portal service'):
+            self.fixture.start()
+        self.assertNotIn(999, [process.pid for process in self.processes])
+        self.assertEqual(self.fixture.close()['remainingPids'], [])
+
+    def test_missing_fuse_descriptor_cannot_qualify_an_unowned_mount(self):
+        self.enable()
+        self.fuse_fd.return_value = False
+        with self.assertRaisesRegex(RuntimeError, 'has no FUSE descriptor'):
+            self.fixture.start()
+        self.assertEqual(self.fixture.close()['remainingPids'], [])
+
+    def test_existing_helper_owner_is_never_replaced(self):
+        self.enable()
+        self.names[portal_fixture.DOCUMENTS_NAME] = 999
+        with self.assertRaisesRegex(RuntimeError, 'already owned'):
+            self.fixture.start()
+        self.spawn.assert_not_called()
+        self.send_signal.assert_not_called()
+
+    def test_changed_document_pid_retains_its_custody_handle_and_mount_failure(self):
+        self.enable()
+        self.fixture.start()
+        self.identities[1003] = 'reused'
+        cleanup = self.fixture.close()
+        self.assertIn(1003, cleanup['remainingPids'])
+        self.assertNotIn(11003, [call.args[0] for call in self.send_signal.call_args_list])
+        self.assertTrue(cleanup['mount']['remaining'])
+        self.assertTrue(cleanup['errors'])
+
+    def test_replaced_or_lingering_mount_prevents_successful_cleanup(self):
+        self.enable()
+        self.fixture.start()
+        self.mounts[0] = {**self.mounts[0], 'id': 4043}
+        self.send_signal.side_effect = lambda fd, sig: PortalFixtureTests.signal(self, fd, sig)
+        cleanup = self.fixture.close()
+        self.assertTrue(any('identity is unverified or changed' in error for error in cleanup['errors']))
+        self.assertTrue(any('mount remains' in error for error in cleanup['errors']))
+        self.assertEqual(cleanup['mount']['remaining'][0]['id'], 4043)
+        self.assertFalse(any('umount' in str(call.args) or 'fusermount' in str(call.args)
+                             for call in self.run.call_args_list))
+
+    def test_missing_dependency_warning_is_not_ignored_in_approved_mode(self):
+        self.enable()
+        original = self.launch
+        def failed(process, executable, env, cwd, log):
+            original(process, executable, env, cwd, log)
+            if executable == portal_fixture.FRONTEND:
+                log.write(b'Document portal fuse mount point unknown: org.freedesktop.portal.Documents not provided\n')
+        self.spawn.side_effect = failed
+        with self.assertRaisesRegex(RuntimeError, 'requires unavailable org.freedesktop.portal.Documents'):
+            self.fixture.start()
+        self.assertFalse((self.fixture.root / 'startup.json').exists())
+
+
 class AtomicSpawnTests(unittest.TestCase):
     def setUp(self):
         self.interrupts = self.enterContext(portal_fixture.Interrupts())

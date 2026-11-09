@@ -320,6 +320,7 @@ pub(crate) struct HostedWebView {
     modal_generation: Rc<Cell<u64>>,
     last_press: Rc<Cell<Option<Instant>>>,
     popups: Rc<RefCell<Vec<gtk::Window>>>,
+    closed: bool,
 }
 
 impl EventEmitter<WebViewEvent> for HostedWebView {}
@@ -408,6 +409,7 @@ impl HostedWebView {
             modal_generation,
             last_press,
             popups,
+            closed: false,
         };
         let entity = cx.new(|_| hosted);
         WebPlatform::register(entity.downgrade(), cx);
@@ -496,6 +498,9 @@ impl HostedWebView {
     /// One pump step: delivers queued events and brings the native window
     /// up to date with the last frame.
     pub(crate) fn tick(this: &Entity<Self>, cx: &mut App) {
+        if this.read(cx).closed {
+            return;
+        }
         let window = this.read(cx).window;
         let _ = window.update(cx, |_, window, cx| {
             let inputs = this.update(cx, |host, cx| {
@@ -515,6 +520,30 @@ impl HostedWebView {
                 }
             }
         });
+    }
+
+    pub(crate) fn window_id(&self) -> gpui_kit::WindowId {
+        self.window.window_id()
+    }
+
+    /// Tears down the GTK child while its native parent still exists.
+    pub(crate) fn close(&mut self) {
+        if self.closed {
+            return;
+        }
+        self.closed = true;
+        self.release_page_focus();
+        self.view.terminate_web_process();
+        for popup in self.popups.borrow_mut().drain(..) {
+            popup.close();
+            popup.unrealize();
+        }
+        self.host.child.hide();
+        self.host.gtk_window.close();
+        self.host.gtk_window.unrealize();
+        // GPUI destroys the parent on another X connection. Complete GTK's
+        // unmap/destroy requests before that connection can remove the parent.
+        self.host.child.display().sync();
     }
 
     fn modal_open(window: &mut Window, cx: &mut App) -> bool {
@@ -1308,14 +1337,7 @@ fn connect_input(
 
 impl Drop for HostedWebView {
     fn drop(&mut self) {
-        self.release_page_focus();
-        // Dropping a view does not end its web process until the app exits.
-        self.view.terminate_web_process();
-        for popup in self.popups.borrow_mut().drain(..) {
-            popup.close();
-        }
-        self.host.child.hide();
-        self.host.gtk_window.close();
+        self.close();
     }
 }
 

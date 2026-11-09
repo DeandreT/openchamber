@@ -249,7 +249,7 @@
       "reference": ["packages/ui/src/components/chat/ModelControls.tsx", "packages/ui/src/components/chat/ChatInput.tsx"],
       "requiredBehaviors": ["appearance", "model and provider selection", "agent selection", "variant selection", "permission mode outcome", "persist and restore selection", "dispatch captures configuration"],
       "states": ["loading", "unselected", "menu open", "selected", "unavailable", "restored"],
-      "scenarios": ["composer.configuration.select-restore-dispatch", "composer.configuration.permission-mode", "composer.appearance"], "coverage": "automated"
+      "scenarios": ["composer.configuration.select-restore-dispatch", "composer.configuration.permission-mode", "composer.appearance", "composer.appearance.narrow-editor", "composer.appearance.project-draft-geometry"], "coverage": "automated"
     },
     {
       "id": "composer.queue-steer-starters", "group": "composer",

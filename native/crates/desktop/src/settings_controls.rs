@@ -2,11 +2,14 @@
 //! sections, field rows, info hints, checkbox rows and the load-failure line.
 //! The reference builds every page from `SettingsSection.tsx`.
 
+use std::collections::HashMap;
+use std::future::Future;
+
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyElement, App, Context, FocusHandle, FontWeight, InteractiveElement, IntoElement,
     ParentElement, Role, ScrollAnchor, ScrollHandle, SharedString, StatefulInteractiveElement,
-    Styled, WeakEntity, div, prelude::FluentBuilder, px,
+    Styled, Task, WeakEntity, div, prelude::FluentBuilder, px,
 };
 use openchamber_native_core::ids::RuntimeId;
 use openchamber_native_transport::client::ServerClient;
@@ -16,7 +19,7 @@ use crate::baseline::CssTextExt;
 use crate::chrome::glyph;
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
-use crate::network::Network;
+use crate::network::{Network, NetworkTask};
 use crate::settings_navigation::Page;
 use crate::theme::Palette;
 use crate::workspace::Workspace;
@@ -86,29 +89,121 @@ impl<T> Load<T> {
     }
 }
 
-/// Autosave's serial writes (`SettingsAutosave.tsx`): one write at a time,
-/// and a request during a write queues exactly one follow-up.
-#[derive(Debug, Default)]
-pub(crate) struct SerialSave {
-    running: bool,
-    queued: bool,
+struct PendingWrite {
+    runtime: RuntimeId,
+    io: NetworkTask<()>,
+    completion: Option<Task<()>>,
 }
 
-impl SerialSave {
-    /// Whether the caller starts a write now; otherwise one follow-up waits.
-    pub(crate) fn begin(&mut self) -> bool {
-        if self.running {
-            self.queued = true;
-            return false;
-        }
-        self.running = true;
-        true
+/// Accepted Settings writes outlive their foreground completions. Each
+/// captured runtime writes in acceptance order; other runtimes proceed
+/// independently. Normal close waits for presentation and rollback, while app
+/// quit transfers only I/O because GPUI stops foreground work during shutdown.
+#[derive(Default)]
+pub(crate) struct SettingsWrites {
+    next: u64,
+    pending: HashMap<u64, PendingWrite>,
+    tails: HashMap<RuntimeId, tokio::sync::oneshot::Receiver<()>>,
+    waiters: Vec<tokio::sync::oneshot::Sender<()>>,
+    closing: bool,
+}
+
+impl SettingsWrites {
+    pub(crate) fn closing(&self) -> bool {
+        self.closing
     }
 
-    /// Ends the running write; `true` when a queued follow-up should run.
-    pub(crate) fn finish(&mut self) -> bool {
-        self.running = false;
-        std::mem::take(&mut self.queued)
+    pub(crate) fn is_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    pub(crate) fn submit<T: Send + 'static>(
+        &mut self,
+        target: &ServerTarget,
+        work: impl Future<Output = T> + Send + 'static,
+    ) -> (u64, tokio::sync::oneshot::Receiver<T>) {
+        self.next += 1;
+        let id = self.next;
+        let runtime = target.runtime.clone();
+        let (done, tail) = tokio::sync::oneshot::channel();
+        let previous = self.tails.insert(runtime.clone(), tail);
+        let (completed, receipt) = tokio::sync::oneshot::channel();
+        let io = NetworkTask::spawn_on(&target.network, async move {
+            if let Some(previous) = previous {
+                let _ = previous.await;
+            }
+            let result = work.await;
+            let _ = completed.send(result);
+            let _ = done.send(());
+        });
+        self.pending.insert(
+            id,
+            PendingWrite {
+                runtime,
+                io,
+                completion: None,
+            },
+        );
+        (id, receipt)
+    }
+
+    pub(crate) fn observe(&mut self, id: u64, completion: Task<()>) {
+        self.pending
+            .get_mut(&id)
+            .expect("accepted write")
+            .completion = Some(completion);
+    }
+
+    pub(crate) fn finish(&mut self, id: u64) {
+        if let Some(write) = self.pending.remove(&id)
+            && !self
+                .pending
+                .values()
+                .any(|pending| pending.runtime == write.runtime)
+        {
+            self.tails.remove(&write.runtime);
+        }
+        if !self.is_pending() {
+            for waiter in self.waiters.drain(..) {
+                let _ = waiter.send(());
+            }
+        }
+    }
+
+    pub(crate) fn take_pending_write(&mut self) -> Option<tokio::sync::oneshot::Receiver<()>> {
+        self.closing = true;
+        if !self.is_pending() {
+            return None;
+        }
+        let (ready, waiting) = tokio::sync::oneshot::channel();
+        self.waiters.push(ready);
+        Some(waiting)
+    }
+
+    pub(crate) fn cancel_close(&mut self) {
+        self.closing = false;
+    }
+
+    pub(crate) fn take_quit_write(
+        &mut self,
+        network: Option<Network>,
+        cx: &App,
+    ) -> Option<Task<()>> {
+        self.closing = true;
+        self.waiters.clear();
+        self.tails.clear();
+        let pending = std::mem::take(&mut self.pending);
+        if pending.is_empty() {
+            return None;
+        }
+        // Cancel UI work now; the separately retained requests keep running.
+        let io: Vec<_> = pending.into_values().map(|write| write.io).collect();
+        Some(cx.background_executor().spawn(async move {
+            for write in io {
+                let _ = write.await;
+            }
+            drop(network);
+        }))
     }
 }
 
@@ -383,18 +478,72 @@ pub(crate) fn focus_handle<T: 'static>(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
+    use std::sync::{Arc, Condvar, Mutex, mpsc};
+    use std::time::Duration;
+
     use super::*;
 
-    #[test]
-    fn serial_save_runs_one_write_and_one_follow_up() {
-        let mut save = SerialSave::default();
-        assert!(save.begin(), "an idle autosave writes at once");
-        assert!(!save.begin(), "a request during a write waits");
-        assert!(!save.begin(), "further requests share one follow-up");
-        assert!(save.finish(), "the queued follow-up runs");
-        assert!(save.begin());
-        assert!(!save.finish(), "nothing else was requested");
-        assert!(save.begin(), "a finished write leaves the autosave idle");
+    /// Holds one fixture response until the test has changed the visible owner.
+    pub(crate) struct ResponseGate {
+        entered: Mutex<mpsc::Receiver<()>>,
+        arrival: mpsc::Sender<()>,
+        released: (Mutex<bool>, Condvar),
+    }
+
+    impl ResponseGate {
+        pub(crate) fn new() -> Arc<Self> {
+            let (arrival, entered) = mpsc::channel();
+            Arc::new(Self {
+                entered: Mutex::new(entered),
+                arrival,
+                released: (Mutex::new(false), Condvar::new()),
+            })
+        }
+
+        pub(crate) fn hold(&self) {
+            let _ = self.arrival.send(());
+            let (lock, signal) = &self.released;
+            let released = lock.lock().expect("response gate");
+            drop(
+                signal
+                    .wait_timeout_while(released, Duration::from_secs(10), |released| !*released)
+                    .expect("response gate"),
+            );
+        }
+
+        pub(crate) fn entered(&self, cx: &mut gpui_kit::TestAppContext) {
+            cx.executor().allow_parking();
+            cx.run_until_parked();
+            self.entered
+                .lock()
+                .expect("response gate")
+                .recv_timeout(Duration::from_secs(3))
+                .expect("request reached its held response");
+        }
+
+        pub(crate) fn release(&self) {
+            *self.released.0.lock().expect("response gate") = true;
+            self.released.1.notify_all();
+        }
+    }
+
+    pub(crate) fn retarget(
+        workspace: &gpui_kit::Entity<Workspace>,
+        server: &crate::settings_test_server::Server,
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use openchamber_native_transport::credential::Credential;
+
+        workspace.update(cx, |workspace, cx| {
+            let connection = workspace.connection.as_mut().expect("connection");
+            connection.generation += 1;
+            connection.client = Some(
+                ServerClient::new(server.endpoint.clone(), Credential::None)
+                    .expect("fixture client"),
+            );
+            workspace.runtime = RuntimeId::from(server.endpoint.as_str());
+            cx.notify();
+        });
     }
 }

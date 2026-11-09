@@ -32,9 +32,9 @@ use crate::general_settings::{
 };
 use crate::locale;
 use crate::logical::LogicalStyledExt;
-use crate::network::NetworkTask;
+use crate::network::{Network, NetworkTask};
 use crate::preference_pages::{CheckboxRow, Chip, PreferencePage};
-use crate::settings_controls::{info_hint, section};
+use crate::settings_controls::{ServerTarget, SettingsWrites, info_hint, same_target, section};
 use crate::theme::Palette;
 
 /// The search targets these pages answer to.
@@ -57,6 +57,263 @@ pub(crate) struct LocalSttModel {
     size: &'static str,
     /// The model takes the dictation language instead of detecting it.
     pub(crate) language_hint: bool,
+}
+
+#[cfg(test)]
+mod review_tests {
+    use super::*;
+    use crate::settings_controls::tests::retarget;
+    use crate::settings_navigation::Page;
+    use crate::settings_test_server::{Server, open, settings, settle};
+    use gpui_kit::TestAppContext;
+    use serde_json::json;
+    use std::sync::Arc;
+
+    fn held_key_server() -> (Server, Arc<crate::settings_controls::tests::ResponseGate>) {
+        let gate = crate::settings_controls::tests::ResponseGate::new();
+        let held = Arc::clone(&gate);
+        let server = Server::new(move |request| {
+            if request.is("PUT", "/api/voice/keys") {
+                held.hold();
+            }
+            if request.is("GET", "/api/voice/keys") || request.is("PUT", "/api/voice/keys") {
+                return (
+                    200,
+                    json!({"openai": false, "openaiCompatible": false, "stt": request.method == "PUT"}),
+                );
+            }
+            (
+                200,
+                json!({"dictationEnabled": true, "sttProvider": "openai-compatible"}),
+            )
+        });
+        (server, gate)
+    }
+
+    fn accept_key(
+        window: gpui_kit::AnyWindowHandle,
+        page: &Entity<PreferencePage>,
+        cx: &mut TestAppContext,
+    ) {
+        cx.update_window(window, |_, window, cx| {
+            page.update(cx, |page, cx| {
+                page.save_api_key(Some("synthetic-key-a".into()), window, cx)
+            });
+        })
+        .expect("test window");
+    }
+
+    #[gpui_kit::test]
+    fn accepted_lifecycle_voice_write_keeps_its_close_receipt_after_a_host_switch(
+        cx: &mut TestAppContext,
+    ) {
+        let (first, gate) = held_key_server();
+        let (second, _) = held_key_server();
+        let (window, workspace) = open(&first, Page::Voice, cx);
+        let settings = settings(&workspace, cx);
+        let page = cx.read(|cx| settings.read(cx).voice_for_test());
+        accept_key(window, &page, cx);
+        gate.entered(cx);
+        retarget(&workspace, &second, cx);
+        settle(window, cx);
+        let pending = settings.update(cx, |settings, cx| settings.take_pending_write(cx));
+        gate.release();
+        assert!(
+            pending.is_some(),
+            "normal close still waits for the accepted A key write"
+        );
+        cx.foreground_executor().block_test(async move {
+            pending.expect("close receipt").await;
+        });
+        assert_eq!(first.writes().len(), 1, "the captured A operation finishes");
+        assert!(second.writes().is_empty(), "B receives no key operation");
+    }
+
+    #[gpui_kit::test]
+    fn accepted_lifecycle_app_quit_drains_a_submitted_voice_key(cx: &mut TestAppContext) {
+        let (server, gate) = held_key_server();
+        let (window, workspace) = open(&server, Page::Voice, cx);
+        let settings = settings(&workspace, cx);
+        let page = cx.read(|cx| settings.read(cx).voice_for_test());
+        accept_key(window, &page, cx);
+        gate.entered(cx);
+        // This test owns the standalone Settings drain. The workspace's real
+        // quit observer must not consume that receipt before this observer.
+        workspace.update(cx, |workspace, _| workspace.settings = None);
+        cx.update(|cx| {
+            cx.on_app_quit(move |cx| {
+                let pending = settings.update(cx, |settings, cx| settings.take_quit_write(cx));
+                gate.release();
+                assert!(
+                    pending.is_some(),
+                    "quit retains the already submitted secret write"
+                );
+                async move {
+                    pending.expect("quit drain").await;
+                }
+            })
+            .detach();
+        });
+        cx.executor().allow_parking();
+        cx.quit();
+        assert_eq!(
+            server.writes().len(),
+            1,
+            "quit waits for the accepted write's response"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn workspace_quit_drains_a_submitted_voice_key(cx: &mut TestAppContext) {
+        let (server, gate) = held_key_server();
+        let (window, workspace) = open(&server, Page::Voice, cx);
+        let settings = settings(&workspace, cx);
+        let page = cx.read(|cx| settings.read(cx).voice_for_test());
+        accept_key(window, &page, cx);
+        gate.entered(cx);
+        assert!(
+            settings
+                .update(cx, |settings, cx| settings.take_pending_write(cx))
+                .is_some(),
+            "normal close exposes the accepted key's receipt before quit takes custody"
+        );
+        cx.update(|cx| {
+            cx.on_app_quit(move |_| {
+                gate.release();
+                async {}
+            })
+            .detach();
+        });
+        cx.executor().allow_parking();
+        cx.quit();
+        assert_eq!(
+            server.writes().len(),
+            1,
+            "the production workspace quit hook drains the submitted key exactly once"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn accepted_lifecycle_quit_never_submits_a_merely_typed_secret(cx: &mut TestAppContext) {
+        let (server, _) = held_key_server();
+        let (window, workspace) = open(&server, Page::Voice, cx);
+        let settings = settings(&workspace, cx);
+        let page = cx.read(|cx| settings.read(cx).voice_for_test());
+        cx.update_window(window, |_, window, cx| {
+            page.update(cx, |page, cx| {
+                let input = &page
+                    .extra
+                    .inputs
+                    .get("voice-stt-api-key")
+                    .expect("key input")
+                    .1;
+                input.update(cx, |input, cx| {
+                    input.set_value("synthetic-unsubmitted", window, cx)
+                });
+            });
+            // Quit captures ordinary text, but must never accept a secret implicitly.
+            settings.update(cx, |settings, cx| settings.prepare_close(window, cx));
+        })
+        .expect("test window");
+        cx.update(|cx| {
+            cx.on_app_quit(move |cx| {
+                let pending = settings.update(cx, |settings, cx| settings.take_quit_write(cx));
+                async move {
+                    if let Some(pending) = pending {
+                        pending.await;
+                    }
+                }
+            })
+            .detach();
+        });
+        cx.executor().allow_parking();
+        cx.quit();
+        assert!(
+            server.writes().is_empty(),
+            "a typed secret never enters a quit write"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn review_regression_a_failed_voice_key_never_follows_a_host_switch(cx: &mut TestAppContext) {
+        let first = Server::new(|request| {
+            if request.is("PUT", "/api/voice/keys") {
+                return (500, json!({}));
+            }
+            if request.is("GET", "/api/voice/keys") {
+                return (
+                    200,
+                    json!({"openai": false, "openaiCompatible": false, "stt": false}),
+                );
+            }
+            (
+                200,
+                json!({"dictationEnabled": true, "sttProvider": "openai-compatible"}),
+            )
+        });
+        let second = Server::new(|request| {
+            if request.is("GET", "/api/voice/keys") {
+                return (
+                    200,
+                    json!({"openai": false, "openaiCompatible": false, "stt": false}),
+                );
+            }
+            (
+                200,
+                json!({"dictationEnabled": true, "sttProvider": "openai-compatible"}),
+            )
+        });
+        let (window, workspace) = open(&first, Page::Voice, cx);
+        let settings = settings(&workspace, cx);
+        // Instantiate the same retained secret field the Voice page uses.
+        let page = cx.read(|cx| settings.read(cx).voice_for_test());
+        cx.update_window(window, |_, window, cx| {
+            page.update(cx, |page, cx| {
+                let _ = page.text_input(
+                    "voice-stt-api-key",
+                    Field::ApiKey,
+                    "".into(),
+                    true,
+                    window,
+                    cx,
+                );
+                let input = page
+                    .extra
+                    .inputs
+                    .get("voice-stt-api-key")
+                    .expect("key input")
+                    .1
+                    .clone();
+                input.update(cx, |input, cx| {
+                    input.set_value("synthetic-key-a", window, cx)
+                });
+                page.save_api_key(Some("synthetic-key-a".into()), window, cx);
+            });
+        })
+        .expect("test window");
+        settle(window, cx);
+        retarget(&workspace, &second, cx);
+        settle(window, cx);
+        cx.update_window(window, |_, window, cx| {
+            page.update(cx, |page, cx| {
+                let input = page
+                    .extra
+                    .inputs
+                    .get("voice-stt-api-key")
+                    .expect("key input")
+                    .1
+                    .clone();
+                input.update(cx, |_, cx| cx.emit(InputEvent::Blur));
+                let _ = window;
+            });
+        })
+        .expect("test window");
+        settle(window, cx);
+        assert!(
+            second.writes().is_empty(),
+            "blurring B never transmits A's retained key"
+        );
+    }
 }
 
 pub(crate) const LOCAL_STT_MODELS: [LocalSttModel; 5] = [
@@ -169,6 +426,9 @@ enum Field {
 /// The local model list as last read, and the work around it.
 #[derive(Default)]
 pub(crate) struct PageState {
+    target: Option<ServerTarget>,
+    network: Option<Network>,
+    writes: SettingsWrites,
     inputs: HashMap<SharedString, (Field, Entity<InputState>)>,
     models: Option<DictationStatus>,
     models_failed: bool,
@@ -179,10 +439,55 @@ pub(crate) struct PageState {
     key_saved: Option<bool>,
     key_task: Option<Task<()>>,
     key_saving: bool,
+    key_revision: u64,
+    key_failed: bool,
     test: Option<Task<()>>,
 }
 
 impl PreferencePage {
+    pub(crate) fn observe_voice_target(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.extra.network = Network::new().ok();
+        if let Some(owner) = self.owner.upgrade() {
+            self._subscriptions
+                .push(cx.observe_in(&owner, window, |this, _, window, cx| {
+                    this.sync_voice_target(window, cx);
+                }));
+        }
+    }
+
+    fn voice_target(&self, cx: &gpui_kit::App) -> Option<ServerTarget> {
+        let owner = self.owner.upgrade()?;
+        let owner = owner.read(cx);
+        let connection = owner.connection.as_ref()?;
+        Some(ServerTarget {
+            runtime: owner.runtime.clone(),
+            generation: connection.generation,
+            client: connection.client.clone()?,
+            network: self.extra.network.as_ref()?.handle(),
+        })
+    }
+
+    fn sync_voice_target(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let target = self.voice_target(cx);
+        if same_target(self.extra.target.as_ref(), target.as_ref()) {
+            return;
+        }
+        self.extra.target = target;
+        self.extra.key_task = None;
+        self.extra.key_saved = None;
+        self.extra.key_saving = false;
+        self.extra.key_failed = false;
+        self.extra.key_revision += 1;
+        if let Some((_, input)) = self.extra.inputs.get("voice-stt-api-key") {
+            input.update(cx, |input, cx| input.set_value("", window, cx));
+        }
+        self.extra.models = None;
+        self.extra.models_failed = false;
+        self.extra.models_read = None;
+        self.extra.requesting = None;
+        cx.notify();
+    }
+
     fn connected(&self, cx: &gpui_kit::App) -> Option<(ServerClient, tokio::runtime::Handle)> {
         let owner = self.owner.upgrade()?;
         let connection = owner.read(cx).connection.as_ref()?;
@@ -259,12 +564,16 @@ impl PreferencePage {
                     &input,
                     window,
                     move |this, input, event: &InputEvent, window, cx| match (event, field) {
-                        (InputEvent::Change, Field::ApiKey) => cx.notify(),
+                        (InputEvent::Change, Field::ApiKey) => {
+                            this.extra.key_revision += 1;
+                            cx.notify();
+                        }
                         (InputEvent::Change, _) => {
                             let value = input.read(cx).value().to_string();
                             this.text_changed(field, value, cx);
                         }
                         (InputEvent::PressEnter { .. } | InputEvent::Blur, Field::ApiKey) => {
+                            this.sync_voice_target(window, cx);
                             let value = input.read(cx).value().trim().to_owned();
                             if !value.is_empty() {
                                 this.save_api_key(Some(value), window, cx);
@@ -613,6 +922,7 @@ impl PreferencePage {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Vec<AnyElement> {
+        self.sync_voice_target(window, cx);
         let strings = locale::strings(cx).clone();
         let palette = cx.global::<Palette>().clone();
         let dictation = self.boolean(DICTATION_ENABLED, cx);
@@ -756,7 +1066,7 @@ impl PreferencePage {
                         "voice-stt-api-key",
                         Field::ApiKey,
                         placeholder,
-                        enabled && !self.extra.key_saving,
+                        enabled && !self.extra.key_saving && !self.extra.writes.closing(),
                         window,
                         cx,
                     );
@@ -1125,16 +1435,23 @@ impl PreferencePage {
     }
 
     fn read_key_once(&mut self, cx: &mut Context<Self>) {
-        if self.extra.key_saved.is_some() || self.extra.key_task.is_some() {
+        if self.extra.key_saved.is_some() || self.extra.key_task.is_some() || self.extra.key_saving
+        {
             return;
         }
-        let Some((client, network)) = self.connected(cx) else {
+        let Some(target) = self.extra.target.clone() else {
             return;
         };
-        let read = NetworkTask::spawn_on(&network, async move { client.voice_keys().await });
+        let client = target.client.clone();
+        let read = NetworkTask::spawn_on(&target.network, async move { client.voice_keys().await });
         self.extra.key_task = Some(cx.spawn(async move |this, cx| {
             let result = read.await;
             let _ = this.update(cx, |this, cx| {
+                if !same_target(this.extra.target.as_ref(), Some(&target))
+                    || !same_target(this.voice_target(cx).as_ref(), Some(&target))
+                {
+                    return;
+                }
                 this.extra.key_task = None;
                 if let Some(Ok(keys)) = result {
                     this.extra.key_saved = Some(keys.stt);
@@ -1146,26 +1463,42 @@ impl PreferencePage {
 
     /// Saves the key typed into the field, or removes the saved one.
     fn save_api_key(&mut self, key: Option<String>, window: &mut Window, cx: &mut Context<Self>) {
-        if self.extra.key_saving {
+        let current = self.voice_target(cx);
+        if !same_target(self.extra.target.as_ref(), current.as_ref()) {
+            self.sync_voice_target(window, cx);
             return;
         }
-        let Some((client, network)) = self.connected(cx) else {
+        if self.extra.key_saving || self.extra.writes.closing() {
+            return;
+        }
+        let Some(target) = current else {
             return;
         };
+        let client = target.client.clone();
+        let revision = self.extra.key_revision;
+        self.extra.key_task = None;
         self.extra.key_saving = true;
-        let save = NetworkTask::spawn_on(&network, async move {
+        let (id, save) = self.extra.writes.submit(&target, async move {
             client.set_voice_stt_key(key.as_deref()).await
         });
-        self.extra.key_task = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = save.await;
+        let completion = cx.spawn_in(window, async move |this, cx| {
+            let result = save.await.ok();
             let _ = this.update_in(cx, |this, window, cx| {
-                this.extra.key_task = None;
+                this.extra.writes.finish(id);
+                if !same_target(this.extra.target.as_ref(), Some(&target))
+                    || !same_target(this.voice_target(cx).as_ref(), Some(&target))
+                {
+                    return;
+                }
                 this.extra.key_saving = false;
+                this.extra.key_failed = !matches!(result, Some(Ok(_)));
                 match result {
                     Some(Ok(keys)) => {
                         this.extra.key_saved = Some(keys.stt);
                         // The typed key leaves the field once the server has it.
-                        if let Some((_, input)) = this.extra.inputs.get("voice-stt-api-key") {
+                        if this.extra.key_revision == revision
+                            && let Some((_, input)) = this.extra.inputs.get("voice-stt-api-key")
+                        {
                             input.update(cx, |input, cx| input.set_value("", window, cx));
                         }
                     }
@@ -1178,7 +1511,32 @@ impl PreferencePage {
                 }
                 cx.notify();
             });
-        }));
+        });
+        self.extra.writes.observe(id, completion);
         cx.notify();
+    }
+
+    pub(crate) fn take_voice_pending_write(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<tokio::sync::oneshot::Receiver<()>> {
+        let pending = self.extra.writes.take_pending_write();
+        cx.notify();
+        pending
+    }
+
+    pub(crate) fn voice_has_failed_writes(&self) -> bool {
+        self.extra.key_failed
+    }
+
+    pub(crate) fn cancel_voice_close(&mut self, cx: &mut Context<Self>) {
+        self.extra.writes.cancel_close();
+        cx.notify();
+    }
+
+    pub(crate) fn take_voice_quit_write(&mut self, cx: &mut Context<Self>) -> Option<Task<()>> {
+        self.extra
+            .writes
+            .take_quit_write(self.extra.network.take(), cx)
     }
 }

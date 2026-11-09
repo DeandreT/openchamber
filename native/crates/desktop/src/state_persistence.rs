@@ -1,6 +1,7 @@
 //! Hydration, save barriers and normal-close draining for private native state.
 
 use std::collections::{HashMap, HashSet};
+use std::mem;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -52,7 +53,10 @@ pub(crate) struct StatePersistence {
     debounce: Option<Task<()>>,
     saving: Option<Task<()>>,
     closing: Option<Task<()>>,
+    accepted_close: Option<Task<()>>,
     composer_close: Option<Task<()>>,
+    settings_close: Option<Task<()>>,
+    knowledge_close: Option<Task<()>>,
     composer_hydration_close: bool,
     native_root_close: bool,
 }
@@ -91,8 +95,11 @@ impl Workspace {
 
     pub(crate) fn close_in_progress(&self) -> bool {
         self.persistence_closing()
+            || self.persistence.accepted_close.is_some()
             || self.persistence.native_root_close
             || self.composer_close_in_progress()
+            || self.persistence.settings_close.is_some()
+            || self.persistence.knowledge_close.is_some()
             || self.general_close.is_some()
             || self.appearance_close.is_some()
             || self.host_close.is_some()
@@ -580,6 +587,45 @@ impl Workspace {
         general.update(cx, |general, cx| general.take_quit_write(cx))
     }
 
+    pub(crate) fn take_panel_quit_flush(
+        &mut self,
+        window: AnyWindowHandle,
+        cx: &mut Context<Self>,
+    ) -> Vec<Task<()>> {
+        self.persistence.settings_close = None;
+        self.persistence.knowledge_close = None;
+        let panels = self.panels.all_knowledge_views();
+        let client = self
+            .connection
+            .as_ref()
+            .and_then(|connection| connection.client.clone());
+        let _ = window.update(cx, |_, window, cx| {
+            if let Some(settings) = &self.settings {
+                settings.update(cx, |settings, cx| settings.prepare_close(window, cx));
+            }
+            for panel in &panels {
+                panel.update(cx, |panel, cx| {
+                    if let Some(client) = &client {
+                        panel.refresh_write_client(&self.runtime, client);
+                    }
+                    panel.prepare_close(window, cx);
+                });
+            }
+        });
+        let mut drains = Vec::new();
+        if let Some(settings) = &self.settings
+            && let Some(drain) = settings.update(cx, |settings, cx| settings.take_quit_write(cx))
+        {
+            drains.push(drain);
+        }
+        for panel in panels {
+            if let Some(drain) = panel.update(cx, |panel, cx| panel.take_quit_write(cx)) {
+                drains.push(drain);
+            }
+        }
+        drains
+    }
+
     pub(crate) fn take_profile_quit_flush(&mut self, cx: &mut Context<Self>) -> Option<Task<()>> {
         self.host_close = None;
         self.host_manager
@@ -594,9 +640,13 @@ impl Workspace {
         self.cancel_effort_close();
         self.attachment_storage.resume_accepting();
         if let Some(settings) = &self.settings {
+            settings.update(cx, |settings, cx| settings.cancel_close(cx));
             settings.read(cx).general.clone().update(cx, |general, cx| {
                 general.cancel_close(cx);
             });
+        }
+        for panel in self.panels.all_knowledge_views() {
+            panel.update(cx, |panel, cx| panel.cancel_close(cx));
         }
     }
 
@@ -609,9 +659,46 @@ impl Workspace {
         }
     }
 
-    /// Close controls wait for the last full snapshot and release the file lock.
+    /// Retain admission keys while joining accepted callbacks and their follow-ups.
+    fn drain_accepted_tasks(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let mut pending = Vec::new();
+        for tasks in [
+            &mut self.creation_tasks,
+            &mut self.mutation_tasks,
+            &mut self.abort_tasks,
+        ] {
+            for task in tasks.values_mut() {
+                if !task.is_ready() {
+                    pending.push(mem::replace(task, Task::ready(())));
+                }
+            }
+        }
+        pending.extend(self.permission_modes.take_close_tasks());
+        pending.extend(self.recovery.take_close_tasks());
+        if pending.is_empty() {
+            return false;
+        }
+        self.persistence.accepted_close = Some(cx.spawn_in(window, async move |this, cx| {
+            for task in pending {
+                task.await;
+            }
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.persistence.accepted_close = None;
+                // Callbacks may have installed a same-key successor or a first
+                // send. Its owner retains admission; the old waiter removes no key.
+                this.request_close(window, cx);
+            });
+        }));
+        cx.notify();
+        true
+    }
+
+    /// Close controls wait for accepted callbacks and the final durable snapshot.
     pub(crate) fn request_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.persistence_closing() || self.persistence.native_root_close {
+        if self.persistence_closing()
+            || self.persistence.native_root_close
+            || self.persistence.accepted_close.is_some()
+        {
             return;
         }
         if self.native_root_actors_pending() && !self.composer_submissions_pending() {
@@ -697,6 +784,9 @@ impl Workspace {
             cx.notify();
             return;
         }
+        if self.drain_accepted_tasks(window, cx) {
+            return;
+        }
         if self.effort_close.is_some() {
             return;
         }
@@ -711,6 +801,70 @@ impl Workspace {
             return;
         }
         if self.effort_preferences.has_failed_writes() {
+            self.unfreeze_general(cx);
+            self.notify_mutation_failure("settings.common.status.saveFailed", window, cx);
+            return;
+        }
+        if self.persistence.settings_close.is_some() {
+            return;
+        }
+        if let Some(settings) = &self.settings {
+            settings.update(cx, |settings, cx| settings.prepare_close(window, cx));
+            if let Some(pending) =
+                settings.update(cx, |settings, cx| settings.take_pending_write(cx))
+            {
+                self.persistence.settings_close =
+                    Some(cx.spawn_in(window, async move |this, cx| {
+                        pending.await;
+                        let _ = this.update_in(cx, |this, window, cx| {
+                            this.persistence.settings_close = None;
+                            this.request_close(window, cx);
+                        });
+                    }));
+                return;
+            }
+            if settings.read(cx).has_failed_writes(cx) {
+                self.unfreeze_general(cx);
+                self.notify_mutation_failure("settings.common.status.saveFailed", window, cx);
+                return;
+            }
+        }
+        if self.persistence.knowledge_close.is_some() {
+            return;
+        }
+        let panels = self.panels.all_knowledge_views();
+        let client = self
+            .connection
+            .as_ref()
+            .and_then(|connection| connection.client.clone());
+        let mut pending = Vec::new();
+        for panel in &panels {
+            panel.update(cx, |panel, cx| {
+                if let Some(client) = &client {
+                    panel.refresh_write_client(&self.runtime, client);
+                }
+                panel.prepare_close(window, cx);
+            });
+            if let Some(receipt) = panel.update(cx, |panel, cx| panel.take_pending_write(cx)) {
+                pending.push(receipt);
+            }
+        }
+        if !pending.is_empty() {
+            self.persistence.knowledge_close = Some(cx.spawn_in(window, async move |this, cx| {
+                for receipt in pending {
+                    let _ = receipt.await;
+                }
+                let _ = this.update_in(cx, |this, window, cx| {
+                    this.persistence.knowledge_close = None;
+                    this.request_close(window, cx);
+                });
+            }));
+            return;
+        }
+        if panels
+            .iter()
+            .any(|panel| panel.read(cx).has_failed_writes())
+        {
             self.unfreeze_general(cx);
             self.notify_mutation_failure("settings.common.status.saveFailed", window, cx);
             return;
@@ -973,14 +1127,16 @@ mod tests {
                 );
 
                 workspace.persistence.status = Status::Ready;
-                for phase in 0..5 {
+                for phase in 0..7 {
                     let barrier = cx.background_executor().spawn(async {});
                     match phase {
                         0 => workspace.general_close = Some(barrier),
                         1 => workspace.appearance_close = Some(barrier),
                         2 => workspace.host_close = Some(barrier),
                         3 => workspace.effort_close = Some(barrier),
-                        _ => workspace.persistence.composer_close = Some(barrier),
+                        4 => workspace.persistence.composer_close = Some(barrier),
+                        5 => workspace.persistence.settings_close = Some(barrier),
+                        _ => workspace.persistence.knowledge_close = Some(barrier),
                     }
                     workspace.open_settings(window, cx);
                     workspace.show_settings(None, window, cx);
@@ -997,6 +1153,8 @@ mod tests {
                     workspace.host_close = None;
                     workspace.effort_close = None;
                     workspace.persistence.composer_close = None;
+                    workspace.persistence.settings_close = None;
+                    workspace.persistence.knowledge_close = None;
                 }
                 assert!(
                     !workspace.close_in_progress(),
