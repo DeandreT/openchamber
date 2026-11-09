@@ -449,7 +449,8 @@ impl Workspace {
         match command {
             Command::About => self.open_about(window, cx),
             Command::Settings => self.open_settings(window, cx),
-            Command::Quit | Command::Close => self.request_close(window, cx),
+            Command::Quit => cx.quit(),
+            Command::Close => self.request_close(window, cx),
             Command::NewSession => self.show_new_session(window, cx),
             Command::ToggleRightSidebar => {
                 let surface = self.panels.open.unwrap_or(PanelSurface::Git);
@@ -519,6 +520,7 @@ fn menu_item(
     workspace: gpui_kit::WeakEntity<Workspace>,
     target: Option<FocusHandle>,
 ) -> PopupMenuItem {
+    let accessible_label = text.clone();
     PopupMenuItem::element(move |_, cx| {
         let palette = cx.global::<Palette>();
         let direction = locale::strings(cx).direction();
@@ -535,6 +537,7 @@ fn menu_item(
                     .child(accelerator)
             }))
     })
+    .aria_label(accessible_label)
     .disabled(!command.available())
     .on_click(move |_, window, cx| {
         if let Some(action) = edit_action(command) {
@@ -554,6 +557,53 @@ fn menu_item(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gpui_kit::AppContext;
+
+    #[gpui_kit::test]
+    fn custom_menu_rows_expose_the_localized_name_without_the_shortcut(
+        cx: &mut gpui_kit::TestAppContext,
+    ) {
+        use gpui_kit::test::TestWindowExt;
+
+        let (_, workspace) = crate::workspace_tests::open(cx);
+        let owner = workspace.downgrade();
+        let quit = label("de", "quit");
+        let unavailable = label("de", "newWindow");
+        let (menu_window, _) = cx.update(|cx| {
+            gpui_kit::open_window(gpui_kit::WindowOptions::default(), cx, |window, cx| {
+                PopupMenu::build(window, cx, |menu, _, _| {
+                    menu.item(menu_item(
+                        quit.clone(),
+                        Some("Ctrl+Q"),
+                        Command::Quit,
+                        owner.clone(),
+                        None,
+                    ))
+                    .item(menu_item(
+                        unavailable.clone(),
+                        Some("Ctrl+Shift+Alt+N"),
+                        Command::NewWindow,
+                        owner,
+                        None,
+                    ))
+                })
+            })
+            .expect("a standalone menu window opens")
+        });
+        cx.update_window(menu_window, |_, window, cx| {
+            window.render_frame(cx);
+            for (index, expected) in [(0usize, quit.as_ref()), (1usize, unavailable.as_ref())] {
+                let row = window.find(index);
+                assert_eq!(row.role(), Some(gpui_kit::Role::MenuItem));
+                assert_eq!(
+                    row.label(),
+                    Some(expected),
+                    "the native menu row owns its translated name"
+                );
+            }
+        })
+        .expect("the real menu rows render with accessible names");
+    }
 
     #[test]
     fn every_label_exists_in_every_locale() {
@@ -586,5 +636,246 @@ mod tests {
         assert!(!available(Command::NewWindow), "no second window yet");
         assert!(edit_action(Command::Copy).is_some());
         assert!(edit_action(Command::Settings).is_none());
+    }
+
+    #[gpui_kit::test]
+    fn close_keeps_the_other_workspace_open(cx: &mut gpui_kit::TestAppContext) {
+        let (first, workspace) = crate::workspace_tests::open(cx);
+        let (second, _) = crate::workspace_tests::open(cx);
+        cx.update_window(first, |_, window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.run_menu_command(Command::Close, window, cx);
+            });
+        })
+        .expect("the closing workspace is still live during its menu action");
+        cx.run_until_parked();
+        assert!(
+            first.update(cx, |_, _, _| ()).is_err(),
+            "Close removes its own window"
+        );
+        assert!(
+            second.update(cx, |_, _, _| ()).is_ok(),
+            "Close preserves the other window"
+        );
+        assert_eq!(
+            cx.platform_quit_count(),
+            0,
+            "Close never asks the platform to quit with another window open"
+        );
+    }
+
+    fn quit_after_last_window(cx: &mut gpui_kit::TestAppContext) -> Subscription {
+        cx.update(|cx| {
+            cx.set_quit_mode(gpui_kit::QuitMode::Explicit);
+            cx.on_window_closed(|cx, _| {
+                if cx.windows().is_empty() {
+                    cx.quit();
+                }
+            })
+        })
+    }
+
+    #[gpui_kit::test]
+    fn quit_closes_every_workspace(cx: &mut gpui_kit::TestAppContext) {
+        let (first, workspace) = crate::workspace_tests::open(cx);
+        let (second, _) = crate::workspace_tests::open(cx);
+        let _closed = quit_after_last_window(cx);
+        cx.update_window(first, |_, window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.run_menu_command(Command::Quit, window, cx);
+            });
+        })
+        .expect("application quit can start inside the owning workspace update");
+        cx.run_until_parked();
+        assert!(
+            first.update(cx, |_, _, _| ()).is_err(),
+            "Quit closes the initiating window"
+        );
+        assert!(
+            second.update(cx, |_, _, _| ()).is_err(),
+            "Quit reaches the other workspace's close guard"
+        );
+        assert_eq!(
+            cx.platform_quit_count(),
+            1,
+            "the application quits after the last workspace closes"
+        );
+        assert!(
+            cx.simulate_platform_quit(),
+            "the final platform callback accepts the completed preflight"
+        );
+    }
+
+    struct JournalFixture(std::path::PathBuf);
+
+    impl JournalFixture {
+        fn new() -> Self {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let directory = std::env::temp_dir().join(format!(
+                "openchamber-shell-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed),
+            ));
+            std::fs::create_dir(&directory).expect("unique private journal fixture");
+            Self(directory)
+        }
+
+        fn journal(&self) -> std::path::PathBuf {
+            self.0.join("drafts-and-sends.json")
+        }
+    }
+
+    impl Drop for JournalFixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn journal_window(
+        cx: &mut gpui_kit::TestAppContext,
+        fixture: &JournalFixture,
+        text: &str,
+    ) -> (gpui_kit::AnyWindowHandle, Entity<Workspace>) {
+        use crate::connection::{Connection, ServerConfig};
+        use openchamber_native_transport::endpoint::Endpoint;
+
+        let (window, workspace) = crate::workspace_tests::open(cx);
+        cx.update_window(window, |_, window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                // Only local journal I/O runs. No server request is started by this fixture.
+                workspace.connection = Some(
+                    Connection::new(ServerConfig::for_endpoint(
+                        Endpoint::parse("http://127.0.0.1:9").expect("unused test endpoint"),
+                    ))
+                    .expect("the test's network runtime starts"),
+                );
+                workspace.open_persistence(fixture.journal(), window, cx);
+            });
+        })
+        .expect("the journal opens in its workspace's window");
+        crate::recovery_tests::ready(cx, &workspace);
+        cx.update_window(window, |_, window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace
+                    .composer
+                    .update(cx, |input, cx| input.set_value(text.to_owned(), window, cx));
+            });
+        })
+        .expect("the live composer accepts its private fixture text");
+        (window, workspace)
+    }
+
+    fn wait_for(
+        cx: &mut gpui_kit::TestAppContext,
+        description: &str,
+        mut condition: impl FnMut(&mut gpui_kit::TestAppContext) -> bool,
+    ) {
+        let started = Instant::now();
+        loop {
+            cx.run_until_parked();
+            if condition(cx) {
+                return;
+            }
+            assert!(started.elapsed() < Duration::from_secs(10), "{description}");
+            std::thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    #[gpui_kit::test]
+    fn quit_waits_for_independent_workspace_journal_drains(cx: &mut gpui_kit::TestAppContext) {
+        cx.executor().allow_parking();
+        // Independent private journals qualify the window-close orchestration. Sharing a
+        // profile journal between editable windows requires its own mutation owner.
+        let first_fixture = JournalFixture::new();
+        let second_fixture = JournalFixture::new();
+        let (first, first_workspace) = journal_window(cx, &first_fixture, "first window draft");
+        let (second, second_workspace) = journal_window(cx, &second_fixture, "second window draft");
+        let _closed = quit_after_last_window(cx);
+        let first_gate = cx.read(|cx| {
+            first_workspace
+                .read(cx)
+                .attachment_worker()
+                .expect("first journal owner")
+                .hold_finish_reply_for_test()
+        });
+        let second_gate = cx.read(|cx| {
+            second_workspace
+                .read(cx)
+                .attachment_worker()
+                .expect("second journal owner")
+                .hold_finish_reply_for_test()
+        });
+
+        cx.update_window(first, |_, window, cx| {
+            first_workspace.update(cx, |workspace, cx| {
+                workspace.run_menu_command(Command::Quit, window, cx);
+            });
+        })
+        .expect("Quit starts from the first window's actual menu command");
+        wait_for(cx, "the initiating window starts its journal drain", |_| {
+            first_gate.has_reached()
+        });
+        assert!(
+            cx.read(|cx| second_workspace.read(cx).close_in_progress()),
+            "application Quit must also start the independent window's real close barrier"
+        );
+        wait_for(
+            cx,
+            "both independent journal finish receipts reach their gates",
+            |_| second_gate.has_reached(),
+        );
+        assert!(first.update(cx, |_, _, _| ()).is_ok());
+        assert!(second.update(cx, |_, _, _| ()).is_ok());
+        assert_eq!(
+            cx.platform_quit_count(),
+            0,
+            "held foreground drains veto platform shutdown"
+        );
+        // The gates hold replies from completed real I/O, not a timer or a mock save.
+        // Let the second window finish first while the initiating window stays held.
+        second_gate.release();
+        wait_for(cx, "the second window closes independently", |cx| {
+            second.update(cx, |_, _, _| ()).is_err()
+        });
+        assert!(first.update(cx, |_, _, _| ()).is_ok());
+        assert_eq!(
+            cx.platform_quit_count(),
+            0,
+            "one held drain still vetoes final shutdown"
+        );
+        cx.update(|cx| cx.quit());
+        cx.run_until_parked();
+        assert_eq!(
+            cx.platform_quit_count(),
+            0,
+            "repeated Quit cannot bypass the held first receipt"
+        );
+        first_gate.release();
+        wait_for(
+            cx,
+            "the initiating window closes after its own receipt",
+            |cx| first.update(cx, |_, _, _| ()).is_err(),
+        );
+        assert_eq!(cx.platform_quit_count(), 1);
+        assert!(cx.simulate_platform_quit());
+
+        for (fixture, expected) in [
+            (&first_fixture, "first window draft"),
+            (&second_fixture, "second window draft"),
+        ] {
+            let (_, loaded) = crate::mutation_journal::MutationJournal::open(&fixture.journal())
+                .expect("normal close released the actual journal lock");
+            let crate::mutation_journal::LoadedJournal::Present(snapshot) = loaded else {
+                panic!("each window saved its journal");
+            };
+            assert!(
+                snapshot
+                    .drafts
+                    .iter()
+                    .any(|(_, draft)| draft.text == expected),
+                "each window's own draft is durable after application Quit"
+            );
+        }
     }
 }

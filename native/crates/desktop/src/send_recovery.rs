@@ -3,6 +3,7 @@
 //! resends only the steps that check did not find, in their original order.
 
 use std::collections::HashMap;
+use std::mem;
 
 use gpui_kit::{Context, Task, Window};
 use openchamber_native_core::draft::DraftTarget;
@@ -56,6 +57,17 @@ pub(crate) struct RecoveryState {
 }
 
 impl RecoveryState {
+    /// Transfer unfinished checks while their existing admission keys stay present.
+    pub(crate) fn take_close_tasks(&mut self) -> Vec<Task<()>> {
+        let mut pending = Vec::new();
+        for task in self.tasks.values_mut() {
+            if !task.is_ready() {
+                pending.push(mem::replace(task, Task::ready(())));
+            }
+        }
+        pending
+    }
+
     pub(crate) fn clear_finished(&mut self, key: &SessionKey, id: &MessageId) {
         let attempt = (key.clone(), id.clone());
         self.checks.remove(&attempt);
@@ -336,6 +348,20 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.close_in_progress() {
+            return;
+        }
+        self.observe_recovery(key, id, window, cx);
+    }
+
+    /// An accepted send's observation can still publish recovery during close.
+    pub(crate) fn observe_recovery(
+        &mut self,
+        key: &SessionKey,
+        id: &MessageId,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if self.creations.get(key).is_some() {
             self.check_creation(key, false, window, cx);
             return;
@@ -358,7 +384,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.payload_local_send_blocks_session(&key.runtime, &key.session) {
+        if self.close_in_progress()
+            || self.payload_local_send_blocks_session(&key.runtime, &key.session)
+        {
             return;
         }
         if self.creations.get(key).is_some() {
@@ -410,7 +438,8 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         let attempt_key = (key.clone(), id.clone());
-        if key.runtime != self.runtime
+        if self.close_in_progress()
+            || key.runtime != self.runtime
             || self
                 .send_attempts
                 .attempt(key, id)

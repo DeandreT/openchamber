@@ -5,6 +5,7 @@
 //! toggles and the preset write at once, text writes when it loses focus.
 
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::input::{InputEvent, Textarea, TextareaState};
@@ -13,21 +14,22 @@ use gpui_kit::component::searchable_list::{SearchableListItem, SearchableVec};
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
 use gpui_kit::component::{Theme, WindowExt};
 use gpui_kit::{
-    AnyElement, AppContext, Context, Entity, FocusHandle, InteractiveElement, IntoElement,
-    ParentElement, Render, ScrollAnchor, ScrollHandle, SharedString, Styled, Subscription, Task,
-    WeakEntity, Window, div, px,
+    AnyElement, AppContext, Context, Entity, EntityInputHandler, FocusHandle, InteractiveElement,
+    IntoElement, ParentElement, Render, ScrollAnchor, ScrollHandle, SharedString, Styled,
+    Subscription, Task, WeakEntity, Window, div, px,
 };
 use openchamber_native_transport::behavior::{
     AgentsMd, AgentsMdError, BehaviorChanges, BehaviorSettings, RESPONSE_STYLE_PRESETS,
     response_style_instructions,
 };
+use openchamber_native_transport::client::ServerClient;
 use openchamber_native_transport::error::TransportError;
 
 use crate::baseline::CssTextExt;
 use crate::locale;
 use crate::network::{Network, NetworkTask};
 use crate::settings_controls::{
-    Load, SerialSave, ServerTarget, checkbox_row, field_row, focus_handle, helper, load_failed,
+    Load, ServerTarget, SettingsWrites, checkbox_row, field_row, focus_handle, helper, load_failed,
     page_frame, same_target, section_with_info,
 };
 use crate::settings_navigation::Page;
@@ -62,6 +64,86 @@ struct Loaded {
     /// `None` when the file did not exist or could not be read.
     on_disk: Option<String>,
     path: String,
+}
+
+struct SubmittedForm {
+    revision: u64,
+    form: Form,
+}
+
+/// One connection's autosave baseline and newest accepted follow-up. The I/O
+/// loop owns this state independently of the window and coalesces while busy.
+struct Writer {
+    loaded: Loaded,
+    pending: Option<SubmittedForm>,
+    running: bool,
+}
+
+struct WriteOutcome {
+    loaded: Loaded,
+    file_written: bool,
+    result: Result<(), SaveFailure>,
+}
+
+async fn write_form(client: &ServerClient, form: &Form, mut loaded: Loaded) -> WriteOutcome {
+    let prompt_changed = form.prompt != loaded.saved.prompt;
+    let settings_changed = form.enabled != loaded.saved.enabled
+        || form.preset != loaded.saved.preset
+        || form.custom != loaded.saved.custom;
+    let mut file_written = false;
+    let result = async {
+        if !prompt_changed && !settings_changed {
+            return Ok(());
+        }
+        let content = if prompt_changed {
+            normalize(&form.prompt)
+        } else {
+            loaded.saved.prompt.clone()
+        };
+        if prompt_changed {
+            match client
+                .save_agents_md(&content, loaded.on_disk.as_deref())
+                .await
+            {
+                Ok(()) => {
+                    file_written = true;
+                    loaded.on_disk = Some(content.clone());
+                }
+                Err(AgentsMdError::Conflict) => return Err(SaveFailure::ChangedOnDisk),
+                Err(error) => {
+                    return Err(error
+                        .message()
+                        .filter(|message| !message.trim().is_empty())
+                        .map_or(SaveFailure::Failed, |message| {
+                            SaveFailure::Server(message.to_owned())
+                        }));
+                }
+            }
+        }
+        let changes = BehaviorChanges {
+            global_behavior_prompt: prompt_changed.then(|| content.clone()),
+            response_style_enabled: form.enabled,
+            response_style_preset: form.preset.clone(),
+            response_style_custom_instructions: form.custom.clone(),
+        };
+        client
+            .save_behavior_settings(&changes)
+            .await
+            .map_err(|_| SaveFailure::Failed)?;
+        loaded.saved = Saved {
+            prompt: content,
+            enabled: form.enabled,
+            preset: form.preset.clone(),
+            custom: form.custom.clone(),
+        };
+        Ok(())
+    }
+    .await;
+    WriteOutcome {
+        loaded,
+        file_written,
+        result,
+    }
 }
 
 /// The prompt shown: an existing file wins even when empty; the persisted
@@ -130,7 +212,11 @@ pub(crate) struct BehaviorPage {
     prompt: Entity<TextareaState>,
     preview: Entity<TextareaState>,
     preset_picker: Entity<SelectState<SearchableVec<PresetOption>>>,
-    save: SerialSave,
+    writes: SettingsWrites,
+    writer: Option<Arc<Mutex<Writer>>>,
+    form_revision: u64,
+    applied_write: u64,
+    last_submitted: Option<Form>,
     /// The last save's failure, shown as a toast and kept for retry.
     failure: Option<SharedString>,
     /// Server values the text fields take on the next render, which has
@@ -139,7 +225,6 @@ pub(crate) struct BehaviorPage {
     pending_prompt: Option<String>,
     read_revision: u64,
     read: Option<Task<()>>,
-    write: Option<Task<()>>,
     scroll: ScrollHandle,
     anchors: [ScrollAnchor; 2],
     focus: HashMap<SharedString, FocusHandle>,
@@ -174,6 +259,10 @@ impl BehaviorPage {
         });
         let mut subscriptions = vec![
             cx.subscribe_in(&prompt, window, |this, _, event, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.read_revision += 1;
+                    this.pending_prompt = None;
+                }
                 if matches!(event, InputEvent::Blur) {
                     this.request_save(window, cx);
                 }
@@ -183,6 +272,7 @@ impl BehaviorPage {
                 window,
                 |this, input, event, window, cx| match event {
                     InputEvent::Change if this.preset == "custom" => {
+                        this.read_revision += 1;
                         this.custom = input.read(cx).value().to_string();
                     }
                     InputEvent::Blur => this.request_save(window, cx),
@@ -225,13 +315,16 @@ impl BehaviorPage {
             prompt,
             preview,
             preset_picker,
-            save: SerialSave::default(),
+            writes: SettingsWrites::default(),
+            writer: None,
+            form_revision: 0,
+            applied_write: 0,
+            last_submitted: None,
             failure: None,
             pending_values: None,
             pending_prompt: None,
             read_revision: 0,
             read: None,
-            write: None,
             anchors: std::array::from_fn(|_| ScrollAnchor::for_handle(scroll.clone())),
             scroll,
             focus: HashMap::new(),
@@ -275,9 +368,22 @@ impl BehaviorPage {
             // Another server's form and baseline never carry over.
             self.load = Load::Loading;
             self.failure = None;
-            self.write = None;
-            self.save = SerialSave::default();
+            self.writer = None;
+            self.last_submitted = None;
+            self.pending_values = None;
+            self.pending_prompt = None;
+        } else if self.load.ready().is_some_and(|loaded| {
+            let form = self.form(cx);
+            form.prompt != loaded.saved.prompt
+                || form.enabled != loaded.saved.enabled
+                || form.preset != loaded.saved.preset
+                || form.custom != loaded.saved.custom
+        }) || self.writes.is_pending()
+        {
+            // Revisiting Settings cannot erase an unconfirmed or failed edit.
+            return;
         }
+        self.read_revision += 1;
         self.target = target.clone();
         let Some(target) = target else {
             self.read = None;
@@ -287,7 +393,6 @@ impl BehaviorPage {
         if self.load == Load::Failed {
             self.load = Load::Loading;
         }
-        self.read_revision += 1;
         let revision = self.read_revision;
         let client = target.client.clone();
         let reading = NetworkTask::spawn_on(&target.network, async move {
@@ -333,6 +438,11 @@ impl BehaviorPage {
                 .unwrap_or_else(|| "AGENTS.md".to_owned()),
         };
         let saved = loaded.saved.clone();
+        self.writer = Some(Arc::new(Mutex::new(Writer {
+            loaded: loaded.clone(),
+            pending: None,
+            running: false,
+        })));
         self.load = Load::Ready(loaded);
         self.enabled = saved.enabled;
         self.preset = saved.preset.clone();
@@ -344,10 +454,15 @@ impl BehaviorPage {
     /// Coming back re-reads `AGENTS.md`; the editor follows only while it
     /// holds no edit of its own.
     fn reread_file(&mut self, cx: &mut Context<Self>) {
+        if self.writes.is_pending() {
+            return;
+        }
         let (Some(target), Some(_)) = (self.target.clone(), self.load.ready()) else {
             return;
         };
-        let client = target.client;
+        self.read_revision += 1;
+        let revision = self.read_revision;
+        let client = target.client.clone();
         let reading =
             NetworkTask::spawn_on(&target.network, async move { client.agents_md().await });
         cx.spawn(async move |this, cx| {
@@ -355,6 +470,15 @@ impl BehaviorPage {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
+                if this.read_revision != revision
+                    || !same_target(this.target.as_ref(), Some(&target))
+                    || !same_target(
+                        ServerTarget::capture(&this.owner, this.network.as_ref(), cx).as_ref(),
+                        Some(&target),
+                    )
+                {
+                    return;
+                }
                 let Some(content) = file.content else {
                     return;
                 };
@@ -369,6 +493,9 @@ impl BehaviorPage {
                 }
                 loaded.on_disk = Some(content.clone());
                 loaded.saved.prompt = content.clone();
+                if let Some(writer) = &this.writer {
+                    writer.lock().expect("Behavior writer").loaded = loaded.clone();
+                }
                 this.pending_prompt = Some(content);
                 cx.notify();
             });
@@ -386,7 +513,7 @@ impl BehaviorPage {
     }
 
     fn editable(&self) -> bool {
-        self.load.ready().is_some() && self.target.is_some()
+        self.load.ready().is_some() && self.target.is_some() && !self.writes.closing()
     }
 
     fn set_enabled(&mut self, enabled: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -421,101 +548,147 @@ impl BehaviorPage {
 
     /// Starts a save, or queues one follow-up behind the running one.
     fn request_save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(target), Some(loaded)) = (self.target.clone(), self.load.ready().cloned()) else {
+        if !self.editable() || self.pending_values.is_some() || self.pending_prompt.is_some() {
+            return;
+        }
+        let (Some(target), Some(writer)) = (self.target.clone(), self.writer.clone()) else {
             return;
         };
         let form = self.form(cx);
-        let prompt_changed = form.prompt != loaded.saved.prompt;
-        let settings_changed = form.enabled != loaded.saved.enabled
-            || form.preset != loaded.saved.preset
-            || form.custom != loaded.saved.custom;
-        if !prompt_changed && !settings_changed {
-            return;
-        }
-        if !self.save.begin() {
-            return;
-        }
-        let content = if prompt_changed {
-            normalize(&form.prompt)
-        } else {
-            loaded.saved.prompt.clone()
-        };
-        let changes = BehaviorChanges {
-            global_behavior_prompt: prompt_changed.then(|| content.clone()),
-            response_style_enabled: form.enabled,
-            response_style_preset: form.preset.clone(),
-            response_style_custom_instructions: form.custom.clone(),
-        };
-        let client = target.client.clone();
-        let expected = loaded.on_disk.clone();
-        let file_content = content.clone();
-        let writing = NetworkTask::spawn_on(&target.network, async move {
-            let mut file_written = false;
-            if prompt_changed {
-                match client
-                    .save_agents_md(&file_content, expected.as_deref())
-                    .await
-                {
-                    Ok(()) => file_written = true,
-                    Err(AgentsMdError::Conflict) => {
-                        return (file_written, Err(SaveFailure::ChangedOnDisk));
-                    }
-                    Err(error) => {
-                        let failure = error
-                            .message()
-                            .filter(|message| !message.trim().is_empty())
-                            .map_or(SaveFailure::Failed, |message| {
-                                SaveFailure::Server(message.to_owned())
-                            });
-                        return (file_written, Err(failure));
-                    }
-                }
+        {
+            let mut writer = writer.lock().expect("Behavior writer");
+            let saved = &writer.loaded.saved;
+            if !writer.running
+                && form.prompt == saved.prompt
+                && form.enabled == saved.enabled
+                && form.preset == saved.preset
+                && form.custom == saved.custom
+            {
+                return;
             }
-            let result = client
-                .save_behavior_settings(&changes)
-                .await
-                .map(|_| ())
-                .map_err(|_| SaveFailure::Failed);
-            (file_written, result)
+            self.form_revision += 1;
+            self.last_submitted = Some(form.clone());
+            writer.pending = Some(SubmittedForm {
+                revision: self.form_revision,
+                form,
+            });
+            if writer.running {
+                return;
+            }
+            writer.running = true;
+        }
+        let client = target.client.clone();
+        let (completed, mut outcomes) = tokio::sync::mpsc::unbounded_channel();
+        let (id, receipt) = self.writes.submit(&target, async move {
+            loop {
+                let next = {
+                    let mut writer = writer.lock().expect("Behavior writer");
+                    match writer.pending.take() {
+                        Some(form) => Some((form, writer.loaded.clone())),
+                        None => {
+                            writer.running = false;
+                            None
+                        }
+                    }
+                };
+                let Some((submitted, loaded)) = next else {
+                    break;
+                };
+                let outcome = write_form(&client, &submitted.form, loaded).await;
+                {
+                    let mut writer = writer.lock().expect("Behavior writer");
+                    writer.loaded = outcome.loaded.clone();
+                    // A queued toggle carries the same prompt until normalization.
+                    if outcome.file_written
+                        && let Some(queued) = &mut writer.pending
+                        && queued.form.prompt == submitted.form.prompt
+                        && let Some(content) = &outcome.loaded.on_disk
+                    {
+                        queued.form.prompt = content.clone();
+                    }
+                }
+                let _ = completed.send((submitted, outcome));
+            }
         });
-        let runtime = target.runtime.clone();
-        self.write = Some(cx.spawn_in(window, async move |this, cx| {
-            let outcome = writing.await;
+        let completion = cx.spawn_in(window, async move |this, cx| {
+            while let Some((submitted, outcome)) = outcomes.recv().await {
+                let _ = this.update_in(cx, |this, window, cx| {
+                    if !same_target(this.target.as_ref(), Some(&target))
+                        || !same_target(
+                            ServerTarget::capture(&this.owner, this.network.as_ref(), cx).as_ref(),
+                            Some(&target),
+                        )
+                        || submitted.revision < this.applied_write
+                    {
+                        return;
+                    }
+                    this.applied_write = submitted.revision;
+                    if outcome.file_written
+                        && this.prompt.read(cx).value().as_str() == submitted.form.prompt
+                        && let Some(content) = &outcome.loaded.on_disk
+                    {
+                        this.prompt
+                            .update(cx, |input, cx| input.set_value(content.clone(), window, cx));
+                        if let Some(last) = &mut this.last_submitted
+                            && last.prompt == submitted.form.prompt
+                        {
+                            last.prompt = content.clone();
+                        }
+                    }
+                    this.load = Load::Ready(outcome.loaded);
+                    match outcome.result {
+                        Ok(()) => this.failure = None,
+                        Err(failure) => this.fail(failure, window, cx),
+                    }
+                    cx.notify();
+                });
+            }
+            let result = receipt.await;
             let _ = this.update_in(cx, |this, window, cx| {
-                if this.target.as_ref().map(|target| &target.runtime) != Some(&runtime) {
-                    return;
+                if result.is_err() && same_target(this.target.as_ref(), Some(&target)) {
+                    this.fail(SaveFailure::Failed, window, cx);
                 }
-                this.write = None;
-                let (file_written, result) = outcome.unwrap_or((false, Err(SaveFailure::Failed)));
-                if let Some(loaded) = this.load.ready_mut() {
-                    if file_written {
-                        loaded.on_disk = Some(content.clone());
-                    }
-                    if result.is_ok() {
-                        loaded.saved = Saved {
-                            prompt: content.clone(),
-                            enabled: form.enabled,
-                            preset: form.preset.clone(),
-                            custom: form.custom.clone(),
-                        };
-                    }
-                }
-                // Normalize only the submitted draft; a newer edit survives.
-                if file_written && this.prompt.read(cx).value().as_str() == form.prompt {
-                    this.prompt
-                        .update(cx, |input, cx| input.set_value(content.clone(), window, cx));
-                }
-                match result {
-                    Ok(()) => this.failure = None,
-                    Err(failure) => this.fail(failure, window, cx),
-                }
-                if this.save.finish() {
-                    this.request_save(window, cx);
-                }
+                this.writes.finish(id);
                 cx.notify();
             });
-        }));
+        });
+        self.writes.observe(id, completion);
         cx.notify();
+    }
+
+    pub(crate) fn prepare_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let composing = self.prompt.update(cx, |input, cx| {
+            input.marked_text_range(window, cx).is_some()
+        }) || self.preview.update(cx, |input, cx| {
+            input.marked_text_range(window, cx).is_some()
+        });
+        if !composing
+            && (self.failure.is_none() || self.last_submitted.as_ref() != Some(&self.form(cx)))
+        {
+            self.request_save(window, cx);
+        }
+    }
+
+    pub(crate) fn take_pending_write(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<tokio::sync::oneshot::Receiver<()>> {
+        let pending = self.writes.take_pending_write();
+        cx.notify();
+        pending
+    }
+
+    pub(crate) fn has_failed_writes(&self) -> bool {
+        self.failure.is_some()
+    }
+
+    pub(crate) fn cancel_close(&mut self, cx: &mut Context<Self>) {
+        self.writes.cancel_close();
+        cx.notify();
+    }
+
+    pub(crate) fn take_quit_write(&mut self, cx: &mut Context<Self>) -> Option<Task<()>> {
+        self.writes.take_quit_write(self.network.take(), cx)
     }
 
     fn fail(&mut self, failure: SaveFailure, window: &mut Window, cx: &mut Context<Self>) {
@@ -742,6 +915,174 @@ mod tests {
         cx.read(|cx| settings.read(cx).behavior.clone())
     }
 
+    fn held_writer() -> (
+        Server,
+        Arc<crate::settings_controls::tests::ResponseGate>,
+        Arc<Mutex<Value>>,
+    ) {
+        use crate::settings_controls::tests::ResponseGate;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let gate = ResponseGate::new();
+        let held = Arc::clone(&gate);
+        let first = AtomicBool::new(true);
+        let document = Arc::new(Mutex::new(json!({})));
+        let saved = Arc::clone(&document);
+        let file = Mutex::new("Rules".to_owned());
+        let server = Server::new(move |request| {
+            if request.is("GET", "/api/behavior/agents-md") {
+                return (
+                    200,
+                    json!({"content": file.lock().expect("file").clone(), "exists": true}),
+                );
+            }
+            if request.is("PUT", "/api/behavior/agents-md") {
+                if first.swap(false, Ordering::SeqCst) {
+                    held.hold();
+                }
+                let mut file = file.lock().expect("file");
+                assert_eq!(
+                    request.body["expectedContent"].as_str(),
+                    Some(file.as_str()),
+                    "each queued save uses the previous write's conflict baseline"
+                );
+                *file = request.body["content"].as_str().expect("prompt").to_owned();
+                return (200, json!({"success": true}));
+            }
+            if request.is("PUT", "/api/config/settings") {
+                for (key, value) in request.body.as_object().expect("settings") {
+                    saved.lock().expect("settings")[key] = value.clone();
+                }
+            }
+            (200, saved.lock().expect("settings").clone())
+        });
+        (server, gate, document)
+    }
+
+    fn queue_prompt(
+        window: gpui_kit::AnyWindowHandle,
+        page: &Entity<BehaviorPage>,
+        value: &str,
+        cx: &mut TestAppContext,
+    ) {
+        let value = value.to_owned();
+        cx.update_window(window, |_, window, cx| {
+            page.update(cx, |page, cx| {
+                page.prompt
+                    .update(cx, |input, cx| input.set_value(value, window, cx));
+                page.request_save(window, cx);
+            });
+        })
+        .expect("test window");
+    }
+
+    #[gpui_kit::test]
+    fn close_waits_for_the_latest_coalesced_behavior_form(cx: &mut TestAppContext) {
+        let (server, gate, document) = held_writer();
+        let (window, workspace) = open(&server, Page::Behavior, cx);
+        let page = page(&workspace, cx);
+        queue_prompt(window, &page, "First", cx);
+        gate.entered(cx);
+        queue_prompt(window, &page, "Intermediate", cx);
+        queue_prompt(window, &page, "Latest", cx);
+        let settings = settings(&workspace, cx);
+        let pending = settings
+            .update(cx, |settings, cx| settings.take_pending_write(cx))
+            .expect("close waits");
+        gate.release();
+        cx.foreground_executor().block_test(async move {
+            pending.await;
+        });
+        settle(window, cx);
+        assert_eq!(
+            document.lock().expect("settings")["globalBehaviorPrompt"],
+            "Latest\n"
+        );
+        let writes: Vec<_> = server
+            .writes()
+            .into_iter()
+            .filter(|request| request.is("PUT", "/api/behavior/agents-md"))
+            .collect();
+        assert_eq!(
+            writes.len(),
+            2,
+            "the running form and newest follow-up are saved"
+        );
+        assert!(!cx.read(|cx| settings.read(cx).has_failed_writes(cx)));
+        cx.read(|cx| assert_eq!(page.read(cx).prompt.read(cx).value().as_str(), "Latest\n"));
+    }
+
+    #[gpui_kit::test]
+    fn app_quit_drains_behavior_forms_without_foreground_completions(cx: &mut TestAppContext) {
+        let (server, gate, document) = held_writer();
+        let (window, workspace) = open(&server, Page::Behavior, cx);
+        let page = page(&workspace, cx);
+        queue_prompt(window, &page, "First", cx);
+        gate.entered(cx);
+        queue_prompt(window, &page, "Latest", cx);
+        let settings = settings(&workspace, cx);
+        let _normal_close = settings.update(cx, |settings, cx| settings.take_pending_write(cx));
+        cx.update(|cx| {
+            cx.on_app_quit(move |cx| {
+                let pending = settings.update(cx, |settings, cx| settings.take_quit_write(cx));
+                gate.release();
+                async move {
+                    if let Some(pending) = pending {
+                        pending.await;
+                    }
+                }
+            })
+            .detach();
+        });
+        cx.executor().allow_parking();
+        cx.quit();
+        assert_eq!(
+            document.lock().expect("settings")["globalBehaviorPrompt"],
+            "Latest\n",
+            "quit returns only after the accepted form is saved"
+        );
+        assert_eq!(
+            server
+                .writes()
+                .iter()
+                .filter(|request| request.is("PUT", "/api/behavior/agents-md"))
+                .count(),
+            2
+        );
+    }
+
+    #[gpui_kit::test]
+    fn failed_behavior_edits_survive_close_and_revisit_without_automatic_retry(
+        cx: &mut TestAppContext,
+    ) {
+        let (server, _) = server(Some("Rules"), true, true);
+        let (window, workspace) = open(&server, Page::Behavior, cx);
+        let page = page(&workspace, cx);
+        edit_prompt(window, &page, "Retained", cx);
+        let settings = settings(&workspace, cx);
+        cx.update_window(window, |_, window, cx| {
+            settings.update(cx, |settings, cx| settings.prepare_close(window, cx));
+        })
+        .expect("test window");
+        assert!(
+            settings
+                .update(cx, |settings, cx| settings.take_pending_write(cx))
+                .is_none()
+        );
+        assert!(
+            cx.read(|cx| settings.read(cx).has_failed_writes(cx)),
+            "normal close must keep the failed form open"
+        );
+        settings.update(cx, |settings, cx| settings.cancel_close(cx));
+        page.update(cx, |page, cx| page.refresh(cx));
+        settle(window, cx);
+        assert_eq!(
+            server.writes().len(),
+            1,
+            "close and revisit do not replay a failed edit"
+        );
+        cx.read(|cx| assert_eq!(page.read(cx).prompt.read(cx).value().as_str(), "Retained"));
+    }
+
     fn edit_prompt(
         window: gpui_kit::AnyWindowHandle,
         page: &Entity<BehaviorPage>,
@@ -759,6 +1100,69 @@ mod tests {
         })
         .expect("test window");
         settle(window, cx);
+    }
+
+    #[gpui_kit::test]
+    fn review_regression_a_focus_read_cannot_replace_another_servers_prompt(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::settings_controls::tests::{ResponseGate, retarget};
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let gate = ResponseGate::new();
+        let held = Arc::clone(&gate);
+        let armed = Arc::new(AtomicBool::new(false));
+        let reading_armed = Arc::clone(&armed);
+        let first = Server::new(move |request| {
+            if request.is("GET", "/api/behavior/agents-md") {
+                if reading_armed.load(Ordering::SeqCst) {
+                    held.hold();
+                }
+                return (200, json!({"exists": true, "content": "A rules"}));
+            }
+            (200, json!({}))
+        });
+        let (second, _) = server(Some("B rules"), false, true);
+        let (window, workspace) = open(&first, Page::Behavior, cx);
+        let page = page(&workspace, cx);
+        armed.store(true, Ordering::SeqCst);
+        page.update(cx, |page, cx| page.reread_file(cx));
+        gate.entered(cx);
+        retarget(&workspace, &second, cx);
+        settle(window, cx);
+        gate.release();
+        settle(window, cx);
+        cx.read(|cx| {
+            let page = page.read(cx);
+            assert_eq!(page.prompt.read(cx).value().as_str(), "B rules");
+            assert_eq!(
+                page.load.ready().expect("B baseline").on_disk.as_deref(),
+                Some("B rules")
+            );
+        });
+    }
+
+    #[gpui_kit::test]
+    fn review_regression_close_captures_unblurred_behavior_text(cx: &mut TestAppContext) {
+        let (server, _) = server(Some("Rules"), false, true);
+        let (window, workspace) = open(&server, Page::Behavior, cx);
+        let page = page(&workspace, cx);
+        let settings = settings(&workspace, cx);
+        cx.update_window(window, |_, window, cx| {
+            page.update(cx, |page, cx| {
+                page.prompt
+                    .update(cx, |input, cx| input.set_value("Unblurred", window, cx));
+            });
+            settings.update(cx, |settings, cx| settings.prepare_close(window, cx));
+        })
+        .expect("test window");
+        settle(window, cx);
+        assert!(
+            server.writes().iter().any(|write| {
+                write.is("PUT", "/api/behavior/agents-md") && write.body["content"] == "Unblurred\n"
+            }),
+            "normal close accepts the retained editor text before draining"
+        );
     }
 
     #[gpui_kit::test]

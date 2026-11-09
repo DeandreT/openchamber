@@ -634,7 +634,17 @@ mod tests {
         let (window, workspace) = crate::workspace_tests::open(cx);
         cx.update_window(window, |_, window, cx| {
             window.activate_accessibility_for_test();
-            workspace.update(cx, |workspace, cx| setup(workspace, window, cx));
+            workspace.update(cx, |workspace, cx| {
+                setup(workspace, window, cx);
+                let connection = workspace.connection.as_mut().expect("test connection");
+                connection.client = Some(
+                    openchamber_native_transport::client::ServerClient::new(
+                        connection.config.endpoint.clone(),
+                        openchamber_native_transport::credential::Credential::None,
+                    )
+                    .expect("test client"),
+                );
+            });
             workspace.update(cx, |workspace, cx| {
                 workspace.open_persistence(fixture.journal(), window, cx)
             });

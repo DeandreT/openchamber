@@ -27,6 +27,14 @@ pub enum ControlEvent {
     SessionCreated,
     /// A terminal was created, closed or exited on the server.
     TerminalSessionsChanged,
+    /// A scheduled task of `project_id` started or finished a run.
+    ScheduledTaskRan {
+        project_id: String,
+    },
+    /// A client or an agent changed `project_id`'s notes, todos or plans.
+    ProjectContextChanged {
+        project_id: String,
+    },
 }
 
 /// A control connection outcome. Failure never means empty topology.
@@ -211,6 +219,22 @@ fn decode(data: &[u8]) -> Result<Option<ControlEvent>, TransportError> {
         "openchamber:event-stream-ready" => Ok(Some(ControlEvent::Connected)),
         "openchamber:session-created" => Ok(Some(ControlEvent::SessionCreated)),
         "openchamber:terminal-sessions-changed" => Ok(Some(ControlEvent::TerminalSessionsChanged)),
+        "openchamber:scheduled-task-ran" | "openchamber:project-context-changed" => {
+            let project_id = envelope
+                .properties
+                .as_ref()
+                .and_then(|properties| properties.get("projectId"))
+                .and_then(serde_json::Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(str::to_owned);
+            Ok(project_id.map(|project_id| {
+                if envelope.kind == "openchamber:scheduled-task-ran" {
+                    ControlEvent::ScheduledTaskRan { project_id }
+                } else {
+                    ControlEvent::ProjectContextChanged { project_id }
+                }
+            }))
+        }
         "openchamber:worktree-changed" => {
             #[derive(Deserialize)]
             struct Changed {
@@ -318,5 +342,25 @@ mod tests {
                 .is_empty()
         );
         assert!(decoder.push(&vec![b'x'; FRAME_LIMIT + 1]).is_err());
+    }
+
+    #[test]
+    fn task_runs_and_knowledge_changes_name_their_project() {
+        let mut decoder = Decoder::default();
+        let events = decoder
+            .push(b"data: {\"type\":\"openchamber:scheduled-task-ran\",\"properties\":{\"projectId\":\"p1\",\"taskId\":\"t\"}}\n\ndata: {\"type\":\"openchamber:project-context-changed\",\"properties\":{\"projectId\":\"path_x\"}}\n\ndata: {\"type\":\"openchamber:project-context-changed\",\"properties\":{}}\n\n")
+            .expect("valid SSE");
+        assert_eq!(
+            events,
+            [
+                ControlEvent::ScheduledTaskRan {
+                    project_id: "p1".into()
+                },
+                ControlEvent::ProjectContextChanged {
+                    project_id: "path_x".into()
+                },
+            ],
+            "an event without its project is dropped"
+        );
     }
 }

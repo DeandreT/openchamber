@@ -244,14 +244,18 @@ impl PreferencePage {
             self.tab = tab;
         }
         cx.notify();
-        cx.on_next_frame(window, move |this, window, cx| {
-            if let Some(anchor) = this.anchors.get(item) {
-                anchor.scroll_to(window, cx);
-            }
-            let focus = this.focus_target(item, cx);
-            if let Some(focus) = this.focus.get(&focus) {
-                window.focus(focus, cx);
-            }
+        // Native frame callbacks precede drawing. Let the first frame lay out
+        // a newly selected page or tab before using its anchors and handles.
+        cx.on_next_frame(window, move |_, window, cx| {
+            cx.on_next_frame(window, move |this, window, cx| {
+                if let Some(anchor) = this.anchors.get(item) {
+                    anchor.scroll_to(window, cx);
+                }
+                let focus = this.focus_target(item, cx);
+                if let Some(focus) = this.focus.get(&focus) {
+                    window.focus(focus, cx);
+                }
+            });
         });
     }
 
@@ -948,7 +952,7 @@ mod tests {
 
     use gpui_kit::test::TestWindowExt;
     use gpui_kit::{AnyWindowHandle, AppContext as _, TestAppContext};
-    use openchamber_native_transport::client::{ServerClient, ServerSettings};
+    use openchamber_native_transport::client::{ClientDescription, ServerClient, ServerSettings};
     use openchamber_native_transport::credential::Credential;
     use openchamber_native_transport::endpoint::Endpoint;
     use serde_json::{Value, json};
@@ -1083,9 +1087,12 @@ mod tests {
         let (window, workspace) = crate::workspace_tests::open(cx);
         cx.update_window(window, |_, window, cx| {
             workspace.update(cx, |workspace, cx| {
-                let mut connection =
-                    Connection::new(ServerConfig::for_endpoint(server.endpoint.clone()))
-                        .expect("network");
+                let mut connection = Connection::new(ServerConfig {
+                    endpoint: server.endpoint.clone(),
+                    password: None,
+                    client: ClientDescription::default(),
+                })
+                .expect("network");
                 connection.client = Some(
                     ServerClient::new(server.endpoint.clone(), Credential::None)
                         .expect("fixture client"),
@@ -1318,6 +1325,72 @@ mod tests {
             2,
             "retry sends the failed choice once"
         );
+    }
+
+    #[gpui_kit::test]
+    fn search_reveal_focuses_a_previously_unrendered_page(cx: &mut TestAppContext) {
+        use gpui_kit::InputEvent as _;
+
+        let server = Server::new(json!({"permissionDefaultMode": "ask"}));
+        let (window, workspace) = open(&server, Page::Chat, false, cx);
+        cx.update_window(window, |_, window, cx| {
+            let settings = workspace
+                .read(cx)
+                .settings
+                .clone()
+                .expect("settings dialog");
+            let sessions = settings.read(cx).sessions.clone();
+            assert!(
+                sessions.read(cx).focus.is_empty(),
+                "an unvisited Sessions page has not registered its rendered controls"
+            );
+            window.click("settings-search", cx);
+            window.input("safety net", cx);
+            assert!(
+                window
+                    .try_find("settings-result-sessions-permission-default")
+                    .is_some(),
+                "the normal Settings registry must expose its permission result"
+            );
+            let enter = gpui_kit::Keystroke::parse("enter").expect("Enter key");
+            window.dispatch_event(
+                gpui_kit::KeyDownEvent {
+                    keystroke: enter.clone(),
+                    is_held: false,
+                    prefer_character_input: false,
+                }
+                .to_platform_input(),
+                cx,
+            );
+            window.dispatch_event(
+                gpui_kit::KeyUpEvent { keystroke: enter }.to_platform_input(),
+                cx,
+            );
+            // Deliver Enter's emitted event and the frame callback before the
+            // test platform automatically draws the newly selected page.
+            let handle = window.window_handle();
+            cx.defer(move |cx| {
+                cx.update_window(handle, |_, window, cx| {
+                    assert!(
+                        sessions.read(cx).focus.is_empty(),
+                        "deliver the reveal callback before the destination page draws"
+                    );
+                    window.simulate_next_frame(cx);
+                    window.render_frame(cx);
+                    window.simulate_next_frame(cx);
+                    window.render_frame(cx);
+                    let page = sessions.read(cx);
+                    let target = SharedString::from("sessions.permission-default-ask");
+                    let focus = page.focus.get(&target).expect("rendered selected chip");
+                    assert!(
+                        focus.is_focused(window),
+                        "search must focus the selected chip on the first visit to its page"
+                    );
+                })
+                .expect("test window");
+            });
+        })
+        .expect("test window");
     }
 
     #[gpui_kit::test]

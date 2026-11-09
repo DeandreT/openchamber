@@ -189,6 +189,10 @@ pub struct Workspace {
     pub(crate) source_board_open: bool,
     /// The board, kept while the runtime stays so it reopens where it was left.
     pub(crate) source_board: Option<Entity<crate::source_board::SourceBoard>>,
+    /// The scheduled tasks page replaces the chat area while open.
+    pub(crate) scheduled_tasks_open: bool,
+    /// The page, kept while the runtime stays so it reopens on its scope.
+    pub(crate) scheduled_tasks: Option<Entity<crate::scheduled_tasks::ScheduledTasks>>,
     /// Whether the composer shows the short placeholder; unknown until the
     /// first frame measures it.
     pub(crate) composer_placeholder_compact: Option<bool>,
@@ -361,6 +365,8 @@ impl Workspace {
             archive_open: false,
             source_board_open: false,
             source_board: None,
+            scheduled_tasks_open: false,
+            scheduled_tasks: None,
             composer_placeholder_compact: None,
             playback: HashMap::new(),
             live_status: HashMap::new(),
@@ -485,6 +491,7 @@ impl Workspace {
         workspace
             ._subscriptions
             .push(cx.on_app_quit(move |workspace, cx| {
+                let panel_drains = workspace.take_panel_quit_flush(window_handle, cx);
                 let general = workspace.take_general_flush(cx);
                 let appearance = workspace.take_appearance_flush(window_handle, cx);
                 let hosts = workspace.take_profile_quit_flush(cx);
@@ -493,6 +500,9 @@ impl Workspace {
                 let active_network = workspace.connection.take().map(Connection::into_network);
                 let retired_networks = std::mem::take(&mut workspace.retired_networks);
                 async move {
+                    for drain in panel_drains {
+                        drain.await;
+                    }
                     if let Some(general) = general {
                         general.await;
                     }
@@ -682,6 +692,7 @@ impl Workspace {
         self.navigation_revision = self.navigation_revision.wrapping_add(1);
         self.archive_open = false;
         self.source_board_open = false;
+        self.scheduled_tasks_open = false;
         self.close_selected_session(window, cx);
         self.focus_composer(window, cx);
         cx.notify();
@@ -753,6 +764,7 @@ impl Workspace {
         // Selecting a session always leaves a full-page surface.
         self.archive_open = false;
         self.source_board_open = false;
+        self.scheduled_tasks_open = false;
         self.prompt_panel = None;
         self.prompt_hover_task = None;
         self.prompt_hover_suppressed = false;

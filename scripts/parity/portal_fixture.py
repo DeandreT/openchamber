@@ -1,15 +1,17 @@
-"""Own only the GTK file-chooser portal on the parity wrapper's private bus.
+"""Own the GTK chooser and explicitly enabled document helpers on a private bus.
 
 PortalFixture.start() proves service ownership, not a displayed or usable picker.
 The caller owns native input, chooser observations and screenshots. All profiles,
 logs and failure receipts remain under the new root after close(). No activation
-files or additional services are installed, started or removed.
+files are installed or changed. documents=True adds only the installed Documents
+and PermissionStore processes, with a verified FUSE mount in this fixture's runtime.
 """
 
 from dataclasses import dataclass
 import ctypes
 import json
 import os
+import re
 from pathlib import Path
 import select
 import shlex
@@ -25,15 +27,42 @@ import virtual_display
 
 BACKEND = Path('/usr/lib/xdg-desktop-portal-gtk')
 FRONTEND = Path('/usr/lib/xdg-desktop-portal')
+DOCUMENTS = Path('/usr/lib/xdg-document-portal')
+PERMISSIONS = Path('/usr/lib/xdg-permission-store')
 BUSCTL = Path('/usr/bin/busctl')
 BACKEND_NAME = 'org.freedesktop.impl.portal.desktop.gtk'
 FRONTEND_NAME = 'org.freedesktop.portal.Desktop'
-UNAPPROVED_HELPERS = ('org.freedesktop.impl.portal.PermissionStore',
-                      'org.freedesktop.portal.Documents')
+PERMISSIONS_NAME = 'org.freedesktop.impl.portal.PermissionStore'
+DOCUMENTS_NAME = 'org.freedesktop.portal.Documents'
+UNAPPROVED_HELPERS = (PERMISSIONS_NAME, DOCUMENTS_NAME)
 PORTALS_CONFIG = ('[preferred]\ndefault=none\n'
                   'org.freedesktop.impl.portal.FileChooser=gtk\n')
 READINESS_TIMEOUT = 15.0
 STOP_TIMEOUT = 5.0
+
+
+def mount_records():
+    """Read kernel mount identities without traversing any mounted directory."""
+    records = []
+    for line in Path('/proc/self/mountinfo').read_text().splitlines():
+        fields = line.split()
+        separator = fields.index('-')
+        unescape = lambda value: re.sub(r'\\([0-7]{3})', lambda match: chr(int(match[1], 8)), value)
+        records.append({'id': int(fields[0]), 'path': unescape(fields[4]),
+                        'type': fields[separator + 1], 'source': unescape(fields[separator + 2]),
+                        'options': fields[separator + 3].split(',')})
+    return records
+
+
+def fuse_descriptor(pid):
+    """Whether the already verified process still holds a FUSE device handle."""
+    for path in Path(f'/proc/{pid}/fd').iterdir():
+        try:
+            if os.readlink(path) == '/dev/fuse':
+                return True
+        except FileNotFoundError:
+            continue
+    return False
 
 
 def _require_interrupts(interrupts):
@@ -189,11 +218,12 @@ class _Service:
 
 
 class PortalFixture:
-    """Start two direct portal processes inside an existing owned display.
+    """Start the chooser on an owned display, optionally with approved Documents helpers.
 
     root must be a new absolute directory with an existing parent and no symlink
     components. env supplies only PATH and LANG; display and bus handles always
-    come from virtual_display.child_environment(). Linux glibc pidfd_spawn is
+    come from virtual_display.child_environment(). Approved document helpers get
+    a child runtime directory while retaining that exact private bus. Linux glibc pidfd_spawn is
     required so the child has an exact custody handle from creation. Call close()
     in the driver's finally block even when start() raises. Failed startup also
     attempts its own bounded shutdown, retaining handles for incomplete cleanup.
@@ -201,7 +231,7 @@ class PortalFixture:
     final close(). The fixture preserves those handlers and their cancellation.
     """
 
-    def __init__(self, root: Path, env: dict[str, str], interrupts: Interrupts):
+    def __init__(self, root: Path, env: dict[str, str], interrupts: Interrupts, *, documents=False):
         self.root = Path(root)
         self._source_env = {key: env[key] for key in ('PATH', 'LANG') if key in env}
         self.env = None
@@ -213,6 +243,13 @@ class PortalFixture:
         self._cleanup = None
         self._spawner = None
         self._interrupts = interrupts
+        self._documents = documents
+        self._mount = None
+        self._mount_baseline = None
+
+    @property
+    def mount_path(self):
+        return self.root / 'runtime' / 'doc'
 
     def _verify_bus(self):
         virtual_display.verify_owned_display()
@@ -230,8 +267,12 @@ class PortalFixture:
         if (runtime / 'bus').read_text() != address:
             raise RuntimeError('D-Bus address does not match the wrapper session record')
         if self.env is not None and any(self.env.get(key) != os.environ.get(key) for key in (
-                'DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS')):
+                'DISPLAY', 'XAUTHORITY', 'DBUS_SESSION_BUS_ADDRESS')):
             raise RuntimeError('portal display or bus handles changed after setup')
+        if self.env is not None:
+            expected_runtime = str(self.root / 'runtime') if self._documents else str(runtime)
+            if self.env.get('XDG_RUNTIME_DIR') != expected_runtime:
+                raise RuntimeError('portal runtime directory changed after setup')
 
     def _prepare(self):
         self._verify_bus()
@@ -240,7 +281,7 @@ class PortalFixture:
                 or not hasattr(signal, 'pidfd_send_signal')):
             raise RuntimeError('portal fixture requires Linux pidfd waiting and pidfd_send_signal')
         self._spawner = _PidfdSpawner()
-        for executable in (BACKEND, FRONTEND, BUSCTL):
+        for executable in (BACKEND, FRONTEND, BUSCTL, *((PERMISSIONS, DOCUMENTS) if self._documents else ())):
             if not executable.is_file() or not os.access(executable, os.X_OK):
                 raise RuntimeError(f'required installed executable is unavailable: {executable}')
         if not self.root.is_absolute() or self.root.resolve() != self.root:
@@ -248,6 +289,13 @@ class PortalFixture:
         self.root.mkdir(mode=0o700)
         self._created = True
         env = virtual_display.child_environment(self._source_env)
+        if self._documents:
+            runtime = self.root / 'runtime'
+            runtime.mkdir(mode=0o700)
+            env['XDG_RUNTIME_DIR'] = str(runtime)
+            self._mount_baseline = {record['id'] for record in mount_records()}
+            if any(record['path'] == str(self.mount_path) for record in mount_records()):
+                raise RuntimeError('document mount path is already mounted')
         for key, directory in (
                 ('HOME', 'home'), ('XDG_CONFIG_HOME', 'config'), ('XDG_DATA_HOME', 'data'),
                 ('XDG_CACHE_HOME', 'cache'), ('XDG_STATE_HOME', 'state'), ('TMPDIR', 'tmp')):
@@ -302,9 +350,71 @@ class PortalFixture:
         return True
 
     def _reject_helpers(self):
+        if self._documents:
+            self._verify_portal_names()
+            return
         for name in UNAPPROVED_HELPERS:
             if self._has_owner(name):
                 raise RuntimeError(f'unapproved helper owns {name} on the private bus')
+
+    def _verify_portal_names(self):
+        virtual_display.verify_owned_display()
+        result = subprocess.run([
+            str(BUSCTL), '--address=' + self.env['DBUS_SESSION_BUS_ADDRESS'],
+            '--json=short', 'call', 'org.freedesktop.DBus', '/org/freedesktop/DBus',
+            'org.freedesktop.DBus', 'ListNames',
+        ], env=self.env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=1)
+        if result.returncode:
+            raise RuntimeError('private D-Bus name enumeration failed')
+        value = json.loads(result.stdout)
+        if value.get('type') != 'as' or not isinstance(value.get('data'), list) or len(value['data']) != 1:
+            raise RuntimeError('malformed private D-Bus name enumeration')
+        names = value['data'][0]
+        if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
+            raise RuntimeError('malformed private D-Bus name enumeration')
+        allowed = {BACKEND_NAME, FRONTEND_NAME, PERMISSIONS_NAME, DOCUMENTS_NAME}
+        for name in names:
+            if name.startswith(('org.freedesktop.portal.', 'org.freedesktop.impl.portal.')) and name not in allowed:
+                raise RuntimeError(f'unapproved portal service owns {name} on the private bus')
+
+    def _verify_document_mount(self):
+        service = next(item for item in self._services if item.name == DOCUMENTS_NAME)
+        if not self._verify_owner(service):
+            return False
+        result = subprocess.run([
+            str(BUSCTL), '--address=' + self.env['DBUS_SESSION_BUS_ADDRESS'], '--json=short',
+            'call', DOCUMENTS_NAME, '/org/freedesktop/portal/documents', DOCUMENTS_NAME, 'GetMountPoint',
+        ], env=self.env, stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=1)
+        if result.returncode:
+            raise RuntimeError('owned Documents service did not report its mount point')
+        response = json.loads(result.stdout)
+        if response.get('type') != 'ay' or not isinstance(response.get('data'), list) or len(response['data']) != 1:
+            raise RuntimeError('malformed Documents mount point')
+        octets = response['data'][0]
+        if not isinstance(octets, list) or not octets or any(type(value) is not int or not 0 <= value <= 255 for value in octets):
+            raise RuntimeError('malformed Documents mount point')
+        expected = os.fsencode(self.mount_path)
+        if bytes(octets) not in (expected, expected + b'\0'):
+            raise RuntimeError('Documents mount point escaped its private runtime directory')
+        records = mount_records()
+        matches = [record for record in records if record['path'] == str(self.mount_path)]
+        if len(matches) != 1:
+            return False
+        mount = matches[0]
+        if (mount['id'] in self._mount_baseline or mount['type'] != 'fuse.portal'
+                or f'user_id={os.getuid()}' not in mount['options']):
+            raise RuntimeError('Documents mount has no fresh same-user FUSE ownership')
+        for record in records:
+            if record['id'] not in self._mount_baseline and record['type'].startswith('fuse') and record['path'] != str(self.mount_path):
+                raise RuntimeError('an unexpected FUSE mount appeared during Documents startup')
+        if not fuse_descriptor(service.process.pid):
+            raise RuntimeError('owned Documents process has no FUSE descriptor')
+        if not self._verify_owner(service):
+            raise RuntimeError('Documents owner changed during mount verification')
+        if self._mount is not None and self._mount != mount:
+            raise RuntimeError('Documents mount identity changed')
+        self._mount = mount
+        return True
 
     def _check_helper_errors(self):
         for log in self._logs:
@@ -357,6 +467,14 @@ class PortalFixture:
                 if self._has_owner(name):
                     raise RuntimeError(f'private portal bus name is already owned: {name}')
             self._launch('backend', BACKEND, BACKEND_NAME)
+            if self._documents:
+                self._launch('permissions', PERMISSIONS, PERMISSIONS_NAME)
+                self._launch('documents', DOCUMENTS, DOCUMENTS_NAME)
+                deadline = time.monotonic() + READINESS_TIMEOUT
+                while not self._verify_document_mount():
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError('Documents did not establish its private FUSE mount')
+                    time.sleep(0.1)
             self._launch('frontend', FRONTEND, FRONTEND_NAME)
             self._verify_bus()
             self._reject_helpers()
@@ -365,6 +483,8 @@ class PortalFixture:
                 raise RuntimeError('portal lost its bus name before startup completed')
             receipt = {'status': 'ready', 'scope': 'service ownership only; picker workflow unqualified',
                        **{service.label: service.identity() for service in self._services}}
+            if self._documents:
+                receipt['mount'] = self._mount
             (self.root / 'startup.json').write_text(json.dumps(receipt, indent=2) + '\n')
             self._ready = True
             return receipt
@@ -390,6 +510,10 @@ class PortalFixture:
         if not all(self._verify_owner(service) for service in self._services):
             raise RuntimeError('portal service no longer owns its bus name')
         self._check_helper_errors()
+        if self._documents:
+            self._verify_portal_names()
+            if not self._verify_document_mount():
+                raise RuntimeError('owned Documents mount disappeared')
         from native_adapter import _atspi
 
         desktop = _atspi().get_desktop(0)
@@ -406,6 +530,15 @@ class PortalFixture:
                                              for service in self._services):
             return self._cleanup
         errors = []
+        mount_before = None
+        if self._documents and self._created:
+            try:
+                matches = [record for record in mount_records() if record['path'] == str(self.mount_path)]
+                mount_before = matches
+                if matches and (self._mount is None or matches != [self._mount]):
+                    errors.append('document mount identity is unverified or changed; no unmount authorized')
+            except (OSError, ValueError) as error:
+                errors.append(str(error))
         for service in reversed(self._services):
             process = service.process
             if not process.started:
@@ -453,6 +586,14 @@ class PortalFixture:
                    'errors': errors,
                    'processes': [{**service.identity(), 'exitCode': service.process.returncode}
                                  for service in services]}
+        if self._documents and self._created:
+            try:
+                remaining = [record for record in mount_records() if record['path'] == str(self.mount_path)]
+                receipt['mount'] = {'before': mount_before, 'owned': self._mount, 'remaining': remaining}
+                if remaining:
+                    errors.append('document FUSE mount remains after owned process shutdown')
+            except (OSError, ValueError) as error:
+                errors.append(str(error))
         self._cleanup = receipt
         if self._created:
             (self.root / 'cleanup.json').write_text(json.dumps(receipt, indent=2) + '\n')

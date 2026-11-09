@@ -43,6 +43,7 @@ use crate::context_panel::{ROW_LINE, ROW_SIZE, XS_LINE, XS_SIZE};
 use crate::diff_view::DiffView;
 use crate::elevation;
 use crate::git_view::GitView;
+use crate::knowledge::KnowledgePanel;
 use crate::locale::{self, Direction, Strings};
 use crate::logical::LogicalStyledExt;
 use crate::network::NetworkTask;
@@ -138,6 +139,8 @@ pub(crate) enum PanelSurface {
     Browser,
     /// An extension's panel, the one `Panels::open_guest` names.
     Guest,
+    /// Project knowledge: notes, todos and plans.
+    Notes,
 }
 
 impl PanelSurface {
@@ -148,6 +151,7 @@ impl PanelSurface {
             Self::Diff => "contextPanel.mode.diff",
             Self::Browser => "contextPanel.mode.browser",
             Self::Guest => "settings.page.extensions.title",
+            Self::Notes => "contextRail.surface.notes",
         }
     }
 }
@@ -175,6 +179,25 @@ pub(crate) struct Panels {
     guest_catalog_task: Option<(RuntimeId, gpui_kit::Task<()>)>,
     #[cfg(target_os = "linux")]
     guests: HashMap<(RuntimeId, String, String), Entity<crate::guest_panel_view::GuestPanelView>>,
+    /// Knowledge panels by runtime and owner path, with the subscription
+    /// that carries their sends to the workspace.
+    notes: HashMap<ViewKey, (Entity<KnowledgePanel>, gpui_kit::Subscription)>,
+}
+
+impl Panels {
+    /// Every retained owner participates in the window's write barrier.
+    pub(crate) fn all_knowledge_views(&self) -> Vec<Entity<KnowledgePanel>> {
+        self.notes.values().map(|(view, _)| view.clone()).collect()
+    }
+
+    /// The retained knowledge panels of `runtime`.
+    pub(crate) fn knowledge_views(&self, runtime: &RuntimeId) -> Vec<Entity<KnowledgePanel>> {
+        self.notes
+            .iter()
+            .filter(|((owner, _), _)| owner == runtime)
+            .map(|(_, (view, _))| view.clone())
+            .collect()
+    }
 }
 
 impl Workspace {
@@ -266,6 +289,18 @@ impl Workspace {
                         let view = view.downgrade();
                         cx.defer(move |cx| {
                             let _ = view.update(cx, |view, cx| view.refresh(cx));
+                        });
+                    }
+                }
+                PanelSurface::Notes => {
+                    let owner = self.knowledge_owner(&scope.directory, cx);
+                    if let Some(owner) = owner
+                        && let Some((view, _)) =
+                            self.panels.notes.get(&(scope.runtime.clone(), owner.path))
+                    {
+                        let view = view.downgrade();
+                        cx.defer(move |cx| {
+                            let _ = view.update(cx, |view, cx| view.reload(cx));
                         });
                     }
                 }
@@ -391,6 +426,26 @@ impl Workspace {
                     palette,
                     cx,
                 ),
+                PanelSurface::Notes => match self.knowledge_owner(&scope.directory, cx) {
+                    Some(owner) => {
+                        let key = (scope.runtime.clone(), owner.path.clone());
+                        if !self.panels.notes.contains_key(&key) {
+                            let view = cx.new(|cx| KnowledgePanel::new(scope, owner, window, cx));
+                            let subscription =
+                                cx.subscribe_in(&view, window, |this, view, event, window, cx| {
+                                    this.on_knowledge_event(view, event, window, cx)
+                                });
+                            self.panels.notes.insert(key.clone(), (view, subscription));
+                        }
+                        self.panels.notes[&key].0.clone().into_any_element()
+                    }
+                    None => empty_state(
+                        locale::strings(cx)
+                            .get("rightSidebar.contextNotesTodo.empty.selectProject"),
+                        palette,
+                        cx,
+                    ),
+                },
             },
             _ => {
                 let strings = locale::strings(cx);
@@ -400,6 +455,7 @@ impl Workspace {
                     PanelSurface::Diff | PanelSurface::Browser | PanelSurface::Guest => {
                         "diffView.state.selectSessionDirectory"
                     }
+                    PanelSurface::Notes => "rightSidebar.contextNotesTodo.empty.selectProject",
                 };
                 empty_state(strings.get(key), palette, cx)
             }

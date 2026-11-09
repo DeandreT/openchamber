@@ -28,7 +28,7 @@ use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
 use crate::network::{Network, NetworkTask};
 use crate::settings_controls::{
-    Load, ServerTarget, confirm, focus_handle, helper, load_failed, same_target,
+    Load, ServerTarget, SettingsWrites, confirm, focus_handle, helper, load_failed, same_target,
 };
 use crate::settings_navigation::Page;
 use crate::theme::Palette;
@@ -79,6 +79,7 @@ enum SaveRefusal {
 
 /// One open editor: a saved snippet (by its file) or a draft.
 struct Editor {
+    generation: u64,
     /// The file it edits; `None` for a draft not yet created.
     file: Option<String>,
     /// The name the server knows it by, for a rename or a move.
@@ -130,9 +131,11 @@ pub(crate) struct SnippetsPage {
     /// The selected snippet's name, or the draft's.
     selected: Option<String>,
     editor: Option<Editor>,
+    editor_generation: u64,
     read_revision: u64,
     read: Option<Task<()>>,
-    write: Option<Task<()>>,
+    writes: SettingsWrites,
+    save_failed: bool,
     /// Feedback of the last action, kept for tests and the status line.
     notice: Option<SharedString>,
     list_scroll: ScrollHandle,
@@ -162,9 +165,11 @@ impl SnippetsPage {
             list: Load::Loading,
             selected: None,
             editor: None,
+            editor_generation: 0,
             read_revision: 0,
             read: None,
-            write: None,
+            writes: SettingsWrites::default(),
+            save_failed: false,
             notice: None,
             list_scroll: ScrollHandle::new(),
             scroll: ScrollHandle::new(),
@@ -182,7 +187,7 @@ impl SnippetsPage {
             self.list = Load::Loading;
             self.selected = None;
             self.editor = None;
-            self.write = None;
+            self.save_failed = false;
         }
         self.target = target.clone();
         self.directory = directory.clone();
@@ -420,7 +425,10 @@ impl SnippetsPage {
                 }
             }),
         ];
+        self.editor_generation += 1;
+        self.save_failed = false;
         self.editor = Some(Editor {
+            generation: self.editor_generation,
             file,
             saved_name,
             scope: form.scope,
@@ -524,6 +532,9 @@ impl SnippetsPage {
     }
 
     fn save(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.writes.closing() {
+            return;
+        }
         let (Some(form), Some(target)) = (self.form(cx), self.target.clone()) else {
             return;
         };
@@ -553,6 +564,7 @@ impl SnippetsPage {
         }
         let editor = self.editor.as_mut().expect("checked above");
         editor.saving = true;
+        let generation = editor.generation;
         let file = editor.file.clone();
         let saved_name = editor.saved_name.clone();
         let original_scope = editor.initial.scope;
@@ -562,9 +574,10 @@ impl SnippetsPage {
             description: form.description.clone(),
         };
         let directory = self.directory.clone();
-        let client = target.client;
+        let client = target.client.clone();
+        let write_directory = directory.clone();
         let write_name = name.clone();
-        let writing = NetworkTask::spawn_on(&target.network, async move {
+        let (id, writing) = self.writes.submit(&target, async move {
             match saved_name {
                 Some(saved) => client
                     .update_snippet(
@@ -572,33 +585,54 @@ impl SnippetsPage {
                         &fields,
                         (write_name != saved).then_some(write_name.as_str()),
                         (form.scope != original_scope).then_some(form.scope),
-                        directory.as_deref(),
+                        write_directory.as_deref(),
                     )
                     .await
                     .map(|_| ()),
                 None => {
                     client
-                        .create_snippet(&write_name, &fields, form.scope, directory.as_deref())
+                        .create_snippet(
+                            &write_name,
+                            &fields,
+                            form.scope,
+                            write_directory.as_deref(),
+                        )
                         .await
                 }
             }
         });
         let submitted = self.form(cx).expect("an editor is open");
-        self.write = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = writing.await;
+        let completion = cx.spawn_in(window, async move |this, cx| {
+            let result = writing.await.ok();
             let _ = this.update_in(cx, |this, window, cx| {
-                this.write = None;
-                let strings = locale::strings(cx).clone();
-                let same_editor = this
+                this.writes.finish(id);
+                if !same_target(this.target.as_ref(), Some(&target))
+                    || !same_target(
+                        ServerTarget::capture(&this.owner, this.network.as_ref(), cx).as_ref(),
+                        Some(&target),
+                    )
+                    || this.directory != directory
+                {
+                    return;
+                }
+                if !this
                     .editor
                     .as_ref()
-                    .is_some_and(|editor| editor.file == file);
-                if let Some(editor) = this.editor.as_mut().filter(|_| same_editor) {
+                    .is_some_and(|editor| editor.generation == generation)
+                {
+                    if matches!(result, Some(Ok(()))) {
+                        this.reload_after_write(None, cx);
+                    }
+                    return;
+                }
+                let strings = locale::strings(cx).clone();
+                if let Some(editor) = &mut this.editor {
                     editor.saving = false;
                 }
+                this.save_failed = !matches!(result, Some(Ok(())));
                 match result {
                     Some(Ok(())) => {
-                        if same_editor && let Some(editor) = &mut this.editor {
+                        if let Some(editor) = &mut this.editor {
                             // The saved fields are the new baseline; the
                             // editor now names the snippet's new file.
                             editor.initial = submitted.clone();
@@ -629,7 +663,8 @@ impl SnippetsPage {
                 }
                 cx.notify();
             });
-        }));
+        });
+        self.writes.observe(id, completion);
         cx.notify();
     }
 
@@ -682,24 +717,40 @@ impl SnippetsPage {
     }
 
     fn delete(&mut self, name: String, window: &mut Window, cx: &mut Context<Self>) {
+        if self.writes.closing() {
+            return;
+        }
         let Some(target) = self.target.clone() else {
             return;
         };
         let directory = self.directory.clone();
-        let client = target.client;
+        let client = target.client.clone();
+        let write_directory = directory.clone();
         let deleted = name.clone();
-        let writing = NetworkTask::spawn_on(&target.network, async move {
-            client.delete_snippet(&deleted, directory.as_deref()).await
+        let (id, writing) = self.writes.submit(&target, async move {
+            client
+                .delete_snippet(&deleted, write_directory.as_deref())
+                .await
         });
-        self.write = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = writing.await;
+        let completion = cx.spawn_in(window, async move |this, cx| {
+            let result = writing.await.ok();
             let _ = this.update_in(cx, |this, window, cx| {
-                this.write = None;
+                this.writes.finish(id);
+                if !same_target(this.target.as_ref(), Some(&target))
+                    || !same_target(
+                        ServerTarget::capture(&this.owner, this.network.as_ref(), cx).as_ref(),
+                        Some(&target),
+                    )
+                    || this.directory != directory
+                {
+                    return;
+                }
                 let strings = locale::strings(cx).clone();
                 if matches!(result, Some(Ok(()))) {
                     if this.selected.as_deref() == Some(name.as_str()) {
                         this.selected = None;
                         this.editor = None;
+                        this.save_failed = false;
                     }
                     this.toast(
                         strings.get("settings.snippets.sidebar.toast.deleted"),
@@ -718,7 +769,30 @@ impl SnippetsPage {
                 }
                 cx.notify();
             });
-        }));
+        });
+        self.writes.observe(id, completion);
+    }
+
+    pub(crate) fn take_pending_write(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<tokio::sync::oneshot::Receiver<()>> {
+        let pending = self.writes.take_pending_write();
+        cx.notify();
+        pending
+    }
+
+    pub(crate) fn has_failed_writes(&self) -> bool {
+        self.save_failed
+    }
+
+    pub(crate) fn cancel_close(&mut self, cx: &mut Context<Self>) {
+        self.writes.cancel_close();
+        cx.notify();
+    }
+
+    pub(crate) fn take_quit_write(&mut self, cx: &mut Context<Self>) -> Option<Task<()>> {
+        self.writes.take_quit_write(self.network.take(), cx)
     }
 
     fn toast(
@@ -1046,7 +1120,7 @@ impl SnippetsPage {
         let editor = self.editor.as_ref().expect("a form has an editor");
         let is_new = editor.file.is_none();
         let changed = form != editor.initial;
-        let can_save = !editor.saving && (is_new || changed);
+        let can_save = !self.writes.closing() && !editor.saving && (is_new || changed);
         let saving = editor.saving;
         let mode = editor.mode;
         let preview = editor.preview.clone();
@@ -1440,6 +1514,134 @@ mod tests {
         cx.read(|cx| settings.read(cx).snippets.clone())
     }
 
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum ClosePath {
+        Window,
+        StandaloneQuit,
+        WorkspaceQuit,
+    }
+
+    fn accepted_action(delete: bool, path: ClosePath, cx: &mut TestAppContext) {
+        use crate::settings_controls::tests::ResponseGate;
+        let gate = ResponseGate::new();
+        let held = Arc::clone(&gate);
+        let server = Server::new(move |request| {
+            if request.method == "GET" {
+                return (200, json!([entry("review", "global", "Review")]));
+            }
+            held.hold();
+            (200, json!({"success": true}))
+        });
+        let (window, workspace) = open(&server, Page::Snippets, cx);
+        let page = page(&workspace, cx);
+        cx.update_window(window, |_, window, cx| {
+            page.update(cx, |page, cx| {
+                if delete {
+                    page.delete("review".into(), window, cx);
+                } else {
+                    page.open_editor(
+                        None,
+                        None,
+                        Form {
+                            name: "accepted".into(),
+                            content: "Submitted content".into(),
+                            ..Form::default()
+                        },
+                        window,
+                        cx,
+                    );
+                    page.save(window, cx);
+                }
+            });
+        })
+        .expect("test window");
+        gate.entered(cx);
+        let settings = settings(&workspace, cx);
+        if path != ClosePath::Window {
+            if path == ClosePath::StandaloneQuit {
+                // Keep this standalone receipt out of the production workspace
+                // observer, which otherwise transfers the same I/O first.
+                workspace.update(cx, |workspace, _| workspace.settings = None);
+            } else {
+                assert!(
+                    settings
+                        .update(cx, |settings, cx| settings.take_pending_write(cx))
+                        .is_some(),
+                    "normal close exposes the accepted action before production quit takes custody"
+                );
+            }
+            cx.update(|cx| {
+                cx.on_app_quit(move |cx| {
+                    let pending = if path == ClosePath::StandaloneQuit {
+                        settings.update(cx, |settings, cx| settings.take_quit_write(cx))
+                    } else {
+                        None
+                    };
+                    gate.release();
+                    if path == ClosePath::StandaloneQuit {
+                        assert!(
+                            pending.is_some(),
+                            "quit retains the accepted explicit snippet action"
+                        );
+                    }
+                    async move {
+                        if let Some(pending) = pending {
+                            pending.await;
+                        }
+                    }
+                })
+                .detach();
+            });
+            cx.executor().allow_parking();
+            cx.quit();
+        } else {
+            let pending = settings.update(cx, |settings, cx| settings.take_pending_write(cx));
+            gate.release();
+            assert!(
+                pending.is_some(),
+                "normal close waits for the accepted explicit snippet action"
+            );
+            cx.foreground_executor().block_test(async move {
+                pending.expect("close receipt").await;
+            });
+        }
+        assert_eq!(
+            server.writes().len(),
+            1,
+            "the accepted action completes exactly once"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn accepted_lifecycle_snippet_save_waits_on_normal_close(cx: &mut TestAppContext) {
+        accepted_action(false, ClosePath::Window, cx);
+    }
+
+    #[gpui_kit::test]
+    fn accepted_lifecycle_snippet_delete_waits_on_normal_close(cx: &mut TestAppContext) {
+        accepted_action(true, ClosePath::Window, cx);
+    }
+
+    #[gpui_kit::test]
+    fn accepted_lifecycle_snippet_save_drains_on_app_quit(cx: &mut TestAppContext) {
+        accepted_action(false, ClosePath::StandaloneQuit, cx);
+    }
+
+    #[gpui_kit::test]
+    fn accepted_lifecycle_snippet_delete_drains_on_app_quit(cx: &mut TestAppContext) {
+        accepted_action(true, ClosePath::StandaloneQuit, cx);
+    }
+
+    #[gpui_kit::test]
+    fn workspace_quit_drains_an_accepted_snippet_save(cx: &mut TestAppContext) {
+        accepted_action(false, ClosePath::WorkspaceQuit, cx);
+    }
+
+    #[gpui_kit::test]
+    fn workspace_quit_drains_an_accepted_snippet_delete(cx: &mut TestAppContext) {
+        accepted_action(true, ClosePath::WorkspaceQuit, cx);
+    }
+
     fn act(
         window: AnyWindowHandle,
         page: &Entity<SnippetsPage>,
@@ -1462,6 +1664,258 @@ mod tests {
         let content = page.editor.as_ref().expect("editor").content.clone();
         let text = text.to_owned();
         content.update(cx, |input, cx| input.set_value(text, window, cx));
+    }
+
+    #[gpui_kit::test]
+    fn review_regression_a_new_save_cannot_attach_to_a_later_new_editor(cx: &mut TestAppContext) {
+        let (server, _) = server(false);
+        let (window, workspace) = open(&server, Page::Snippets, cx);
+        let page = page(&workspace, cx);
+        cx.update_window(window, |_, window, cx| {
+            page.update(cx, |page, cx| {
+                page.open_editor(
+                    None,
+                    None,
+                    Form {
+                        name: "first".into(),
+                        content: "First body".into(),
+                        ..Form::default()
+                    },
+                    window,
+                    cx,
+                );
+                page.save(window, cx);
+                // The discard confirmation opens a fresh editor before completion.
+                page.open_editor(
+                    None,
+                    None,
+                    Form {
+                        name: "second".into(),
+                        content: "Second body".into(),
+                        ..Form::default()
+                    },
+                    window,
+                    cx,
+                );
+                page.selected = Some("second".into());
+            });
+        })
+        .expect("test window");
+        settle(window, cx);
+        cx.read(|cx| {
+            let page = page.read(cx);
+            let editor = page.editor.as_ref().expect("second editor");
+            assert_eq!(
+                editor.saved_name, None,
+                "the second draft still creates its own file"
+            );
+            assert_eq!(page.selected.as_deref(), Some("second"));
+        });
+        act(window, &page, cx, |page, window, cx| page.save(window, cx));
+        assert!(
+            server
+                .writes()
+                .iter()
+                .any(|write| write.is("POST", "/api/config/snippets/second"))
+        );
+        assert!(
+            !server
+                .writes()
+                .iter()
+                .any(|write| write.is("PATCH", "/api/config/snippets/first"))
+        );
+    }
+
+    // The replacement happens in one foreground update, before Save's callback
+    // can run, just as the confirmed discard callback opens another editor.
+    fn assert_list_reconciles_after_editor_switch(rename: bool, cx: &mut TestAppContext) {
+        let (server, store) = server(false);
+        let (window, workspace) = open(&server, Page::Snippets, cx);
+        let page = page(&workspace, cx);
+        let saved_name = if rename { "renamed-review" } else { "created" };
+        cx.update_window(window, |_, window, cx| {
+            page.update(cx, |page, cx| {
+                if rename {
+                    page.select("review".into(), window, cx);
+                } else {
+                    page.create_new(window, cx);
+                }
+                let name = page.editor.as_ref().expect("submitted editor").name.clone();
+                name.update(cx, |input, cx| input.set_value(saved_name, window, cx));
+                set_content(page, "Submitted body", window, cx);
+                page.save(window, cx);
+
+                let next = page
+                    .snippets()
+                    .iter()
+                    .find(|snippet| snippet.name == "plan")
+                    .cloned()
+                    .expect("next saved snippet");
+                page.open_editor(
+                    Some(next.file_path.clone()),
+                    Some(next.name.clone()),
+                    Form::of(&next),
+                    window,
+                    cx,
+                );
+                page.selected = Some(next.name);
+                set_content(page, "Unsaved plan edit", window, cx);
+            });
+        })
+        .expect("test window");
+        settle(window, cx);
+        assert!(
+            store
+                .lock()
+                .expect("server store")
+                .iter()
+                .any(|snippet| snippet["name"] == saved_name),
+            "the captured write succeeded on the server before list reconciliation is checked"
+        );
+        cx.read(|cx| {
+            let page = page.read(cx);
+            assert!(
+                page.snippets()
+                    .iter()
+                    .any(|snippet| snippet.name == saved_name),
+                "a successful save reconciles its matching-target list after the editor changes"
+            );
+            if rename {
+                assert!(
+                    !page
+                        .snippets()
+                        .iter()
+                        .any(|snippet| snippet.name == "review"),
+                    "the list no longer shows the old name after a successful rename"
+                );
+            }
+            let editor = page.editor.as_ref().expect("retained second editor");
+            assert_eq!(page.selected.as_deref(), Some("plan"));
+            assert_eq!(editor.saved_name.as_deref(), Some("plan"));
+            assert_eq!(editor.initial.content, "Plan it");
+            assert_eq!(
+                page.form(cx).expect("retained form").content,
+                "Unsaved plan edit"
+            );
+            assert!(
+                page.has_unsaved_changes(cx),
+                "list reconciliation preserves the active unsaved editor"
+            );
+        });
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            let row = if rename {
+                "snippets-row-renamed-review"
+            } else {
+                "snippets-row-created"
+            };
+            assert!(
+                window.try_find(row).is_some(),
+                "the newly saved name appears in the visible list without a manual refresh"
+            );
+        })
+        .expect("test window");
+    }
+
+    #[gpui_kit::test]
+    fn completed_create_reconciles_the_list_after_switching_editors(cx: &mut TestAppContext) {
+        assert_list_reconciles_after_editor_switch(false, cx);
+    }
+
+    #[gpui_kit::test]
+    fn completed_rename_reconciles_the_list_after_switching_editors(cx: &mut TestAppContext) {
+        assert_list_reconciles_after_editor_switch(true, cx);
+    }
+
+    #[gpui_kit::test]
+    fn an_existing_editor_keeps_text_typed_after_save_started(cx: &mut TestAppContext) {
+        let (server, _) = server(false);
+        let (window, workspace) = open(&server, Page::Snippets, cx);
+        let page = page(&workspace, cx);
+        cx.update_window(window, |_, window, cx| {
+            page.update(cx, |page, cx| {
+                page.select("review".into(), window, cx);
+                set_content(page, "Submitted", window, cx);
+                page.save(window, cx);
+                set_content(page, "Newer typing", window, cx);
+            });
+        })
+        .expect("test window");
+        settle(window, cx);
+        cx.read(|cx| {
+            let page = page.read(cx);
+            assert_eq!(page.form(cx).expect("form").content, "Newer typing");
+            assert!(page.has_unsaved_changes(cx));
+        });
+        act(window, &page, cx, |page, window, cx| page.save(window, cx));
+        assert_eq!(
+            server.writes().last().expect("second save").body["content"],
+            "Newer typing"
+        );
+    }
+
+    #[gpui_kit::test]
+    fn changing_project_or_runtime_retires_a_pending_snippet_editor(cx: &mut TestAppContext) {
+        use crate::settings_controls::tests::retarget;
+        for runtime in [false, true] {
+            let (first, _) = server(false);
+            let (second, _) = server(false);
+            let (window, workspace) = open(&first, Page::Snippets, cx);
+            let page = page(&workspace, cx);
+            cx.update_window(window, |_, window, cx| {
+                page.update(cx, |page, cx| {
+                    page.open_editor(
+                        None,
+                        None,
+                        Form {
+                            name: "old-owner".into(),
+                            content: "Old content".into(),
+                            ..Form::default()
+                        },
+                        window,
+                        cx,
+                    );
+                    page.save(window, cx);
+                });
+                if !runtime {
+                    workspace.update(cx, |workspace, cx| {
+                        workspace.show_new_session(window, cx);
+                        let directory = workspace
+                            .topology
+                            .projects
+                            .iter()
+                            .map(|project| project.path.clone())
+                            .find(|path| Some(path) != workspace.config_directory().as_ref())
+                            .expect("fixture has another project");
+                        workspace.choose_draft_project(&directory, window, cx);
+                    });
+                }
+            })
+            .expect("test window");
+            if runtime {
+                retarget(&workspace, &second, cx);
+            }
+            settle(window, cx);
+            act(window, &page, cx, |page, window, cx| {
+                page.open_editor(
+                    None,
+                    None,
+                    Form {
+                        name: "new-owner".into(),
+                        content: "New content".into(),
+                        ..Form::default()
+                    },
+                    window,
+                    cx,
+                );
+                page.selected = Some("new-owner".into());
+            });
+            cx.read(|cx| {
+                let page = page.read(cx);
+                assert_eq!(page.editor.as_ref().expect("new editor").saved_name, None);
+                assert_eq!(page.form(cx).expect("new form").content, "New content");
+            });
+        }
     }
 
     #[gpui_kit::test]

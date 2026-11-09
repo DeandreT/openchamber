@@ -177,6 +177,29 @@ prompt. Attachments and worktree creation remain separate workflows.
   place of the chat; it lists archived sessions with Restore and Delete.
   The archive page's project buckets, search, dates and archived worktrees
   are not ported.
+- `scheduled_tasks.rs` is the scheduled tasks page the sidebar's button
+  opens in place of the chat; it, the source board and the archive close
+  each other. Scopes are Chats and every project; row actions write to the
+  scope whose list is shown, reads are numbered per scope, and a failed read
+  shows an error with Retry, never "no tasks". `TaskEditor` is the create and
+  edit dialog; a task moved to another scope is written there before it is
+  deleted from the old one. `time_zones.rs` reads the system zoneinfo for its
+  timezone list and cron preview. `scheduled_tasks_view.rs` draws both.
+  Not ported: prompt autocomplete, the date, time and branch pickers (typed
+  instead), opening a loop's file from Edit, the mobile layout.
+- `knowledge.rs` is the Project knowledge panel behind the rail's notes
+  button (`PanelSurface::Notes`), one entity per runtime and owner, the
+  owner being the Chats root or the project of the panel's directory. Todo
+   changes show at once and send one todo; notes and plans retain per-entry drafts
+   saved after a pause and on leaving, kept across entry switches when a save fails.
+   `knowledge_writes.rs` serializes accepted mutations on an independently owned
+   network executor. Note and plan
+  deletes wait out a five second undo window. Sends from a todo or a plan
+  start a session through the workspace on the composer's model and agent.
+  `knowledge_view.rs` draws it; `panel_controls.rs` holds the buttons,
+  checkboxes and selects both surfaces share. Not ported: agent memory,
+  session pins, plan import, formatted Markdown editing, drag reorder, the
+  wide split layout, the send dialog and sends to a new worktree.
 - `source_board.rs` is the issues and pull requests board the sidebar's
   Issues and PRs button opens in place of the chat (the work status card
   hides with the chat); it and the archive page close each other, and
@@ -314,13 +337,18 @@ prompt. Attachments and worktree creation remain separate workflows.
   changed.
 - `settings_controls.rs` holds the chrome the newer pages share (page frame,
   sections, field and checkbox rows, info hints, the load-failure line, the
-  confirm dialog), the captured `ServerTarget`, `Load` and the serial
-  autosave. `behavior_settings.rs` is Behavior: the global `AGENTS.md` guarded
+   confirm dialog), the captured `ServerTarget`, `Load` and the serial
+   autosave. `SettingsWrites` retains captured I/O separately from foreground
+   presentation, with an independent write chain per runtime.
+   `behavior_settings.rs` is Behavior: the global `AGENTS.md` guarded
   by the content last read, and the response style, with autosave on blur and
   on each toggle or preset. `snippets_settings.rs` is Snippets: the list
   grouped by scope and one editor with an explicit Save, a discard prompt
-  before leaving unsaved edits and a delete prompt. Each OpenCode config page
-  reads again on every visit and drops another server's or project's state.
+   before leaving unsaved edits and a delete prompt. Each OpenCode config page
+   reads again on every visit and drops another server's or project's state.
+   Accepted Voice key and Snippets Save/Delete actions join the close and quit
+   barriers; merely typed secrets and unsaved snippet drafts are never submitted
+   by those barriers. Snippet completions match a distinct editor generation.
 - `effort_preferences.rs` owns model-scoped effort memory in the server profile.
   Explicit effort choices update effective memory immediately. Serialized writes
   retain their original runtime and preserve other models. Incoming settings
@@ -649,6 +677,10 @@ prompt. Attachments and worktree creation remain separate workflows.
   inserted after the host's own is cut from its shape, full-window layers
   excepted. A host whose element was not painted in the last frame is unmapped.
 - A dropped host terminates its web process and closes its popups.
+- Window-close and final-quit observers close every retained GTK host before
+  GPUI destroys its native parent. Teardown is idempotent, unrealizes the GTK
+  child and synchronizes its X connection before parent destruction on GPUI's
+  separate connection. Later entity drops perform no second native-window I/O.
 - A page's `openchamber.submit` reaches the server only while its call waits,
   after a real press in the page within five seconds, with a summary.
 
@@ -707,18 +739,59 @@ prompt. Attachments and worktree creation remain separate workflows.
   for retry. A later host or journal failure releases the preference freeze.
   Settings cannot create new page owners during any active close barrier.
   A startup appearance read failure alone does not prevent closing an unedited app.
+  Search navigation draws a newly selected page or tab before resolving its
+  scroll anchor and focus handle. GPUI frame callbacks run before drawing, so
+  first-visit reveal uses a second frame callback to reach the laid-out controls.
   Before freezing, window close and app quit capture valid committed size input
   through its owning window. Marked IME text remains provisional and is not saved.
   App quit drains independent I/O receipts because GPUI blocks the foreground
   session during shutdown. These drains retain network/credential runtimes and
   captured writes without requiring entity updates. Normal close keeps its UI
-  failure/retry path; the toolkit's bounded shutdown deadline still applies to quit.
+   failure/retry path; the toolkit's bounded shutdown deadline still applies to quit.
+   Knowledge participates through every retained runtime and project owner.
+   Normal close captures committed editor values before freezing and waits for
+   entry follow-up writes. Quit transfers accepted work and newer captured text
+   to the background write drain before releasing connection runtimes.
   Appearance Retry moves its focus to the retained selected-mode control before
   saving removes the button. A retry activated without focus leaves the current
   focus alone, preserving keyboard routing inside the dialog.
+- Application-menu Quit requests GPUI's application preflight, which invokes every
+  live workspace's close guard while foreground work can still finish. Close
+  requests only its current workspace's normal close. Independent windows drain
+  independently, and a held or failed close prevents final application shutdown.
+- Custom application-menu rows expose the same translated action label to
+  accessibility as their visible text. Shortcut hints remain separate from the
+  accessible name; disabled state, layout and activation stay unchanged.
 - General setting reads carry per-field mutation revisions. Missing or invalid
-  fields cannot replace known consumer state. A failed write retains that field's
-  live choice for explicit retry while other fields and runtimes can proceed.
+   fields cannot replace known consumer state. A failed write retains that field's
+   live choice for explicit retry while other fields and runtimes can proceed.
+
+- Knowledge reads and mutations share revision ordering. A read begun before a
+  mutation cannot replace its result. Overlapping mutations retain their local
+  changes until a fresh read reconciles the settled writes. Each document owns
+  its saved baseline, current text and exact pending-save receipt; a superseded
+  completion cannot confirm a later write with identical text. Successful writes
+  advance the saved baseline in request order even when a newer save owns the
+  pending receipt; failed writes cannot erase that confirmed baseline. A plan document
+  read also captures that document's revision and cannot replace a completed save.
+  Completions cannot change another entry's editor or metadata. A plan dispatch waits for successful
+  persistence of the text captured by its action; a response with different
+  stored text cannot confirm that capture. Navigation saves retained committed
+  text without capturing IME preedit. Note creation and editing enforce the
+  reference's UTF-16 length bound without truncating submitted text.
+  Failed creations retain their input and refuse normal close until retried or
+  explicitly cleared. Externally deleted dirty documents remain available for
+  Copy or explicit local Discard; recovery never recreates the deleted entry.
+  Undo-window deletes capture their original client and cancel safely on close;
+  already-sent deletes participate in the write drain. Runtime, connection generation
+  and navigation identity guard session-opening completions.
+- Accepted knowledge sends join the panel's independent FIFO write owner.
+  Plan persistence and dispatch share a typed receipt, so dispatch never waits
+  for a foreground save callback and never queues its prerequisite behind itself.
+  The acceptance captures session/message IDs, owner, prompt and model/agent
+  selection once. Auto stays in the first prompt and is omitted only from session
+  creation. Normal close waits for accepted create/link/prompt work; final quit
+  transfers that work with the writer before releasing connection runtimes.
 
 - Switching away from a dirty file asks Save, Discard or Cancel. Only a
   successful save with no remaining edits or an explicit Discard replaces
@@ -1216,6 +1289,14 @@ prompt. Attachments and worktree creation remain separate workflows.
   Application-quit hooks also request a flush within GPUI's
   bounded shutdown window. Forced termination can lose the latest debounced
   draft edits, but every dispatched prompt already has a durable attempt.
+- Normal close joins accepted creation, send, abort, recovery observation and
+  permission-mode tasks before sealing the journal or removing a window without
+  a loaded journal. Their foreground callbacks can still persist rollback state,
+  bind a first send and install successor tasks. Close collects again after each
+  joined batch, then runs the remaining write drains and final durable snapshot.
+  Task-map entries remain present until their callbacks remove them. Fresh Stop,
+  recovery check/retry/restore and permission gestures are refused during close;
+  continuations of already accepted work remain eligible.
 - Queue captures retain their runtime, exact server directory, session, draft
   owner and frozen configuration. Version 7 loads with an empty queue ledger;
   older envelopes cannot carry version 8 fields. Hydration restores unresolved
@@ -1522,6 +1603,13 @@ confirmation is vetoed: single-line inputs propagate Enter after emitting their
 field event, and accepting that confirmation would dismiss Settings after a save.
 Explicit close and Escape keep the dialog's normal dismissal path.
 
+### Why menu Quit requests application preflight
+
+The Quit action must reach every workspace, including windows other than the
+one whose menu initiated it. GPUI defers preflight until that window's update
+returns, so all close guards can run without overlapping entity borrows. Their
+normal drains finish before the platform stops; final cleanup keeps its 200 ms cap.
+
 ### Why quit owns I/O separately from UI completion
 
 GPUI blocks the foreground session while awaiting quit observers. A foreground
@@ -1529,6 +1617,29 @@ save task cannot finish there, even when an observer awaits it. Preference and
 profile owners retain the raw I/O operation separately so quit can drain accepted
 work and coalesced choices after windows disappear. General's drain also owns its
 Tokio runtime; a cloned runtime handle alone cannot keep HTTP work running.
+
+### Why knowledge owns a captured write queue
+
+Each retained project panel serializes mutations on an independent executor.
+Entry buffers retain newer text while a save is pending, and quit can enqueue
+that text behind the accepted request without waiting for its foreground
+completion. Running writes as connection-owned UI tasks would cancel accepted
+work on host switches or leave quit waiting for callbacks GPUI cannot run.
+Plan sends share the exact save's typed receipt with presentation, so one
+persistence operation can authorize dispatch independently of its UI callback.
+An editor generation alone cannot distinguish older and newer writes with equal
+text; receipt identity keeps their acknowledgements separate.
+Successful acknowledgements advance the saved baseline by accepted write order
+before pending-receipt checks, preserving the server's last confirmed contents
+when a newer captured write fails.
+
+### Why deleted knowledge drafts have local recovery
+
+A document removed elsewhere cannot be saved back under its old identity.
+Keeping its unsaved text available for Copy and explicit Discard preserves the
+user's work without recreating deleted data or leaving an unreachable close
+barrier. Deletes still inside their Undo window cancel on close, matching the
+reference's safe cancellation contract.
 
 ### Why a failed Settings read shows Retry and not the empty form
 
@@ -1644,6 +1755,18 @@ The web's `applyIdentityToRepository` also rewrites the repository's
 provider and transport binding, a chain of guarded binding mutations. Native
 writes the author with `set-identity` and leaves the binding as it was, so
 choosing an identity changes who commits and not how pushes authenticate.
+
+### Why a failed task read shows an error and not the reference's empty list
+
+The web clears the list to empty after a failed read and toasts. Here the
+list area shows the failure with Retry, because an empty list reads as "this
+scope has no tasks", which the server never said.
+
+### Why the task editor reads its connection when it opens
+
+The editor is created inside the page's update, so it cannot read the page
+for its target-eligibility request; it takes the page's client and network
+at open instead.
 
 ### Why the Files surface polls and does not watch
 
@@ -1804,6 +1927,16 @@ A worker flush drains accepted I/O before foreground actor callbacks consume its
 receipts. Those callbacks can still release a removed attachment's last temporary
 root. Close waits for that ownership transition before sealing the worker, so the
 resulting named retirement request can retain its writer or reach durable custody.
+
+### Why close retains task-map admission
+
+Map membership excludes duplicate recovery and retains a captured session task's
+retired executor. Close transfers each unfinished handle into its waiter and
+leaves a ready placeholder in the existing map. The callback owns removal and can
+install another task under the same key. The waiter removes no keys and collects
+again after completion. A disk flush alone can finish before those foreground
+callbacks publish their journal changes, so the journal stays writable until the
+accepted callbacks and their continuations finish.
 
 ### Why one `ListState` per visited session
 

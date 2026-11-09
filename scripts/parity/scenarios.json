@@ -162,6 +162,13 @@
     "composer-model": {"electron": {"selector": ".model-controls__model-trigger"}, "native": "composer-model"},
     "composer-variant": {"electron": {"selector": ".model-controls__variant-trigger"}, "native": "composer-variant"},
     "composer-agent": {"electron": {"selector": "[role=button]:has(> .model-controls__agent-label)"}, "native": "composer-agent"},
+    "composer-dictation": {"electron": {"selector": "button[aria-label=\"Start dictation\"]"}, "native": "composer-dictation"},
+    "composer-files": {"electron": {"selector": "nav[aria-label=\"Panel surfaces\"] button[aria-label=\"Files\"]"}, "native": "rail-files"},
+    "composer-fixture-folder": {"electron": {"selector": ".oc-file-tree-row:has(span[title$=\"/perf-read\"])"}, "native": {"name": "perf-read"}},
+    "composer-fixture-file": {"electron": {"selector": ".oc-file-tree-row:has(span[title$=\"/perf-read/alpha.ts\"])"}, "native": {"name": "alpha.ts"}},
+    "composer-panel": {"electron": {"selector": "[data-context-zone=right]"}, "native": "side-panel"},
+    "composer-panel-card": {"electron": {"selector": "[data-context-zone=right] [data-zone-card]"}, "native": "files-panel"},
+    "goal-toggle": {"electron": {"selector": ".oc-composer-sheen button[aria-label=\"Start a goal with the next message\"], .oc-composer-sheen button[aria-label^=\"Goals need a Small Model\"]"}, "native": "composer-goal"},
     "composer-permissions": {"electron": {"selector": "button[aria-label^=\"Permissions\"]"}, "native": "composer-permissions"},
     "agent-option-plan": {"electron": {"selector": "[role=menuitem]", "button": "Plan"}, "native": "composer-agent-option:plan"},
     "variant-option-high": {"electron": {"selector": "[role=menuitem]", "button": "high"}, "native": "composer-variant-option:named:high"},
@@ -2026,6 +2033,59 @@
           "targets": ["composer", "composer-attach", "composer-submit", "composer-model", "composer-variant", "composer-agent", "composer-permissions"]
         },
         {"gate": "release"}
+      ]
+    },
+    {
+      "id": "composer.appearance.narrow-editor",
+      "feature": "composer.configuration",
+      "proofs": {"composer.configuration": {"behaviors": ["appearance"], "states": ["selected"]}},
+      "description": "At 1440x900 the Files editor leaves a narrow chat column. Composer labels truncate or collapse while model, effort, agent, microphone and send controls remain separate and the pickers still open.",
+      "steps": [
+        {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
+        {"clickTarget": "composer-files"},
+        {"wait": {"electron": {"expression": "!!document.querySelector('.oc-file-tree-row span[title$=\"/perf-read\"]')"}, "native": {"named": {"name": "perf-read"}}}},
+        {"clickTarget": "composer-fixture-folder"},
+        {"wait": {"electron": {"expression": "!!document.querySelector('.oc-file-tree-row span[title$=\"/perf-read/alpha.ts\"]')"}, "native": {"named": {"name": "alpha.ts"}}}},
+        {"clickTarget": "composer-fixture-file"},
+        {"wait": {"electron": {"expression": "[...document.querySelectorAll('[data-zone-card] .cm-content')].some(el => el.textContent.includes('resolveOwner'))"}, "native": {"elements": ["files-save"]}}},
+        {"capture": "session-editor", "targets": ["composer", "composer-model", "composer-variant", "composer-agent", "composer-dictation", "composer-submit"]},
+        {"clickTarget": "composer-model"},
+        {"wait": {"electron": {"expression": "document.activeElement?.getAttribute('placeholder') === 'Search models'"}, "native": {"named": {"name": "Search models", "role": "entry"}}}},
+        {"key": "Escape"},
+        {"clickTarget": "composer-variant"},
+        {"wait": {"electron": {"expression": "[...document.querySelectorAll('[role=menuitem]')].some(el => el.textContent.toLowerCase().includes('default'))"}, "native": {"elements": ["composer-variant-option:default"]}}},
+        {"key": "Escape"},
+        {"clickTarget": "composer-agent"},
+        {"wait": {"electron": {"expression": "[...document.querySelectorAll('[role=menu] input[placeholder=\"Search agents\"]')].some(el => el.getBoundingClientRect().width > 0) && [...document.querySelectorAll('[role=menuitem]')].some(el => el.textContent.includes('Plan'))"}, "native": {"named": {"name": "Search agents", "role": "entry"}}}},
+        {"key": "Escape"},
+        {"clickTarget": "new-session"},
+        {"capture": "draft-editor", "targets": ["composer", "composer-model", "composer-variant", "composer-agent", "composer-dictation", "composer-submit"]},
+        {"clickTarget": "composer-files"},
+        {"capture": "draft-wide", "targets": ["composer", "composer-model", "composer-variant", "composer-agent", "composer-dictation", "composer-submit"]}
+      ]
+    },
+    {
+      "id": "composer.appearance.project-draft-geometry",
+      "feature": "composer.configuration",
+      "proofs": {"composer.configuration": {"behaviors": ["appearance"], "states": ["selected"]}},
+      "description": "Choose the registered project through the ordinary draft chooser, then open its Files editor. Compare the same project draft with a wide chat and a ready narrow editor without changing generic New session behavior.",
+      "steps": [
+        {"clickTarget": "new-session"},
+        {"clickTarget": "choose-project"},
+        {"wait": {"electron": {"expression": "document.activeElement?.getAttribute('placeholder') === 'Search projects...'"}, "native": {"named": {"name": "Search projects...", "role": "entry"}}}},
+        {"type": "project"},
+        {"key": "Return"},
+        {"wait": {"electron": {"expression": "!document.querySelector('input[placeholder=\"Search projects...\"]') && [...document.querySelectorAll('button')].some(el => el.textContent.trim() === 'project')"}, "native": {"named": {"id": "choose-project", "name": "project"}}}},
+        {"capture": "project-draft-wide", "targets": ["composer", "choose-project", "composer-attach", "composer-permissions", "goal-toggle", "composer-model", "composer-variant", "composer-agent", "composer-dictation", "composer-submit"]},
+        {"clickTarget": "composer-files"},
+        {"wait": {"electron": {"expression": "!!document.querySelector('.oc-file-tree-row span[title$=\"/perf-read\"]')"}, "native": {"named": {"name": "perf-read"}}}},
+        {"clickTarget": "composer-fixture-folder"},
+        {"wait": {"electron": {"expression": "!!document.querySelector('.oc-file-tree-row span[title$=\"/perf-read/alpha.ts\"]')"}, "native": {"named": {"name": "alpha.ts"}}}},
+        {"clickTarget": "composer-fixture-file"},
+        {"wait": {"electron": {"expression": "[...document.querySelectorAll('[data-zone-card] .cm-content')].some(el => el.textContent.includes('resolveOwner'))"}, "native": {"elements": ["files-save"]}}},
+        {"capture": "project-draft-editor", "targets": ["composer", "choose-project", "composer-panel", "composer-panel-card", "composer-attach", "composer-permissions", "goal-toggle", "composer-model", "composer-variant", "composer-agent", "composer-dictation", "composer-submit"]},
+        {"clickTarget": "composer-files"},
+        {"capture": "project-draft-restored-wide", "targets": ["composer", "choose-project", "composer-model", "composer-variant", "composer-agent", "composer-dictation", "composer-submit"]}
       ]
     },
     {

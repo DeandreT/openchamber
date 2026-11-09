@@ -630,6 +630,19 @@ impl BlobJob {
 struct Barrier {
     reply: Waiter,
     blobs_through: u64,
+    #[cfg(test)]
+    reply_gate: Option<ReplyGateHandle<JournalResult>>,
+}
+
+impl Barrier {
+    fn complete(self, outcome: JournalResult) {
+        #[cfg(test)]
+        if let Some(gate) = self.reply_gate {
+            ReplyGate::hold(&gate, self.reply, outcome);
+            return;
+        }
+        let _ = self.reply.send(outcome);
+    }
 }
 
 struct ResolvedBarrier {
@@ -677,6 +690,8 @@ struct State {
     consumer_edit_verification_reply_gate: Option<ConsumerEditVerificationReplyGate>,
     #[cfg(test)]
     finish_reply_gate: Option<ReplyGateHandle<JournalResult>>,
+    #[cfg(test)]
+    snapshot_reply_gate: Option<ReplyGateHandle<JournalResult>>,
 }
 
 #[cfg(test)]
@@ -751,6 +766,8 @@ impl JournalWorker {
                 consumer_edit_verification_reply_gate: None,
                 #[cfg(test)]
                 finish_reply_gate: None,
+                #[cfg(test)]
+                snapshot_reply_gate: None,
             }),
             wake: Condvar::new(),
         });
@@ -811,6 +828,26 @@ impl JournalWorker {
         gate
     }
 
+    /// Holds one accepted snapshot's computed reply without delaying disk I/O,
+    /// later snapshots, flush checkpoints, or the real writer's finish.
+    #[cfg(test)]
+    pub(crate) fn hold_next_snapshot_reply_for_test(&self) -> ReplyGate<JournalResult> {
+        let gate = ReplyGate::new();
+        let mut state = self
+            .shared
+            .state
+            .lock()
+            .expect("journal state is not poisoned");
+        assert!(
+            state.snapshot_reply_gate.is_none()
+                && matches!(state.phase, Phase::Ready)
+                && !state.closing,
+            "arm one next-snapshot reply gate on the live hydrated worker"
+        );
+        state.snapshot_reply_gate = Some(gate.state.clone());
+        gate
+    }
+
     #[cfg(test)]
     pub(crate) fn hold_finish_reply_for_test(&self) -> ReplyGate<JournalResult> {
         let gate = ReplyGate::new();
@@ -842,6 +879,8 @@ impl JournalWorker {
         let waiter = Barrier {
             reply: waiter,
             blobs_through: 0,
+            #[cfg(test)]
+            reply_gate: state.snapshot_reply_gate.take(),
         };
         let replaced = if let Some(pending) = &mut state.pending {
             pending.waiters.push(waiter);
@@ -874,6 +913,8 @@ impl JournalWorker {
             let barrier = Barrier {
                 reply: waiter,
                 blobs_through: state.accepted_blobs,
+                #[cfg(test)]
+                reply_gate: None,
             };
             if let Some(pending) = &mut state.pending {
                 pending.waiters.push(barrier);
@@ -1455,7 +1496,7 @@ where
 fn resolve(state: &mut State, waiters: Vec<Barrier>, outcome: &JournalResult) {
     for barrier in waiters {
         if barrier.blobs_through <= state.completed_blobs {
-            let _ = barrier.reply.send(outcome.clone());
+            barrier.complete(outcome.clone());
         } else {
             state.drains.push(ResolvedBarrier {
                 barrier,
@@ -1470,7 +1511,7 @@ fn resolve_drains(state: &mut State) {
     while index < state.drains.len() {
         if state.drains[index].barrier.blobs_through <= state.completed_blobs {
             let resolved = state.drains.swap_remove(index);
-            let _ = resolved.barrier.reply.send(resolved.outcome);
+            resolved.barrier.complete(resolved.outcome);
         } else {
             index += 1;
         }
@@ -1495,14 +1536,14 @@ fn stop_failed(shared: &Shared, error: JournalFailure) {
         let _ = hydration.send(Err(error.clone()));
     }
     for barrier in active {
-        let _ = barrier.reply.send(Err(error.clone()));
+        barrier.complete(Err(error.clone()));
     }
     for resolved in drains {
-        let _ = resolved.barrier.reply.send(Err(error.clone()));
+        resolved.barrier.complete(Err(error.clone()));
     }
     if let Some(pending) = pending {
         for barrier in pending.waiters {
-            let _ = barrier.reply.send(Err(error.clone()));
+            barrier.complete(Err(error.clone()));
         }
     }
     for ReservedBlobJob { job, reservation } in blobs {
@@ -1522,6 +1563,10 @@ fn stop_failed(shared: &Shared, error: JournalFailure) {
         let _ = waiter.send(state.last.clone());
     }
 }
+
+#[cfg(test)]
+#[path = "unit_d_journal_gate_tests.rs"]
+mod unit_d_gate_tests;
 
 #[cfg(test)]
 mod tests {

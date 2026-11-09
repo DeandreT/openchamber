@@ -23,6 +23,10 @@ from pathlib import Path
 
 INSIDE = "OPENCHAMBER_PARITY_DISPLAY"
 XVFB_PID = "OPENCHAMBER_PARITY_XVFB_PID"
+RUNTIME_ROOT = "OPENCHAMBER_PARITY_RUNTIME_ROOT"
+# Leave 35 bytes for the generated directory and D-Bus/AT-SPI socket names
+# within Linux's 107-byte pathname budget.
+MAX_RUNTIME_ROOT_BYTES = 72
 MARGIN = 640
 SHUTDOWN_GRACE_S = 10.0
 AT_SPI_LAUNCHER = Path("/usr/lib/at-spi-bus-launcher")
@@ -149,9 +153,32 @@ def wait_for_display(xvfb, env, stopping) -> bool:
     return False
 
 
+def runtime_base() -> tuple[str | None, bool]:
+    """Validate an optional private root without changing Xvfb's /tmp locks."""
+    configured = os.environ.get(RUNTIME_ROOT)
+    if configured is None:
+        return ("/tmp/opencode" if Path("/tmp/opencode").is_dir() else None), False
+    path = Path(configured)
+    if not path.is_absolute():
+        raise RuntimeError("the private-display root must be an absolute directory")
+    try:
+        path = path.resolve(strict=True)
+        info = path.stat()
+    except OSError as error:
+        raise RuntimeError("the configured private-display root is unavailable") from error
+    if re.fullmatch(r"[A-Za-z0-9/_.-]+", str(path)) is None:
+        raise RuntimeError("the private-display root path may contain only ASCII letters, digits, '/', '.', '_' and '-'")
+    if (len(os.fsencode(path)) > MAX_RUNTIME_ROOT_BYTES
+            or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.getuid()
+            or stat.S_IMODE(info.st_mode) != 0o700):
+        raise RuntimeError(f"the private-display root must be an owned mode-0700 directory with a resolved path of at most {MAX_RUNTIME_ROOT_BYTES} bytes")
+    return str(path), True
+
+
 def _run_inside(command: list[str], width: int, height: int, stopping) -> int:
-    base = "/tmp/opencode" if Path("/tmp/opencode").is_dir() else None
-    with tempfile.TemporaryDirectory(prefix="openchamber-parity-display-", dir=base) as temporary, ExitStack() as cleanup:
+    base, custom_root = runtime_base()
+    prefix = "d-" if custom_root else "openchamber-parity-display-"
+    with tempfile.TemporaryDirectory(prefix=prefix, dir=base) as temporary, ExitStack() as cleanup:
         work = Path(temporary)
         work.chmod(0o700)
         env = {key: value for key, value in os.environ.items() if key not in SESSION_VARIABLES + INPUT_SESSION_VARIABLES}

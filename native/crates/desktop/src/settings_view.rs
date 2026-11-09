@@ -5,8 +5,8 @@ use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::{
     App, AppContext, Context, Entity, EntityInputHandler, FocusHandle, FontWeight,
     InteractiveElement, IntoElement, ParentElement, Render, Role, ScrollHandle, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, TestSupportExt, WeakEntity, Window, div,
-    prelude::FluentBuilder, px,
+    StatefulInteractiveElement, Styled, Subscription, Task, TestSupportExt, WeakEntity, Window,
+    div, prelude::FluentBuilder, px,
 };
 
 use crate::activation::on_activate;
@@ -42,10 +42,99 @@ pub(crate) struct Settings {
 }
 
 impl Settings {
+    #[cfg(test)]
+    pub(crate) fn voice_for_test(&self) -> Entity<PreferencePage> {
+        self.voice.clone()
+    }
+
     /// Captures valid retained editor text before preference writers are frozen.
     pub(crate) fn prepare_close(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.appearance
             .update(cx, |appearance, cx| appearance.commit_size(window, cx));
+        self.behavior
+            .update(cx, |page, cx| page.prepare_close(window, cx));
+    }
+
+    pub(crate) fn take_pending_write(&mut self, cx: &mut Context<Self>) -> Option<Task<()>> {
+        let behavior = self
+            .behavior
+            .update(cx, |page, cx| page.take_pending_write(cx));
+        let defaults = self
+            .sessions
+            .read(cx)
+            .defaults
+            .clone()
+            .and_then(|defaults| defaults.update(cx, |page, cx| page.take_pending_write(cx)));
+        let voice = self
+            .voice
+            .update(cx, |page, cx| page.take_voice_pending_write(cx));
+        let snippets = self
+            .snippets
+            .update(cx, |page, cx| page.take_pending_write(cx));
+        let pending: Vec<_> = [behavior, defaults, voice, snippets]
+            .into_iter()
+            .flatten()
+            .collect();
+        if pending.is_empty() {
+            return None;
+        }
+        Some(cx.spawn(async move |_, _| {
+            for pending in pending {
+                let _ = pending.await;
+            }
+        }))
+    }
+
+    pub(crate) fn has_failed_writes(&self, cx: &App) -> bool {
+        self.behavior.read(cx).has_failed_writes()
+            || self.voice.read(cx).voice_has_failed_writes()
+            || self.snippets.read(cx).has_failed_writes()
+            || self
+                .sessions
+                .read(cx)
+                .defaults
+                .as_ref()
+                .is_some_and(|defaults| defaults.read(cx).has_failed_writes())
+    }
+
+    pub(crate) fn cancel_close(&mut self, cx: &mut Context<Self>) {
+        self.behavior.update(cx, |page, cx| page.cancel_close(cx));
+        self.voice
+            .update(cx, |page, cx| page.cancel_voice_close(cx));
+        self.snippets.update(cx, |page, cx| page.cancel_close(cx));
+        if let Some(defaults) = self.sessions.read(cx).defaults.clone() {
+            defaults.update(cx, |page, cx| page.cancel_close(cx));
+        }
+    }
+
+    pub(crate) fn take_quit_write(&mut self, cx: &mut Context<Self>) -> Option<Task<()>> {
+        let behavior = self
+            .behavior
+            .update(cx, |page, cx| page.take_quit_write(cx));
+        let defaults = self
+            .sessions
+            .read(cx)
+            .defaults
+            .clone()
+            .and_then(|defaults| defaults.update(cx, |page, cx| page.take_quit_write(cx)));
+        let voice = self
+            .voice
+            .update(cx, |page, cx| page.take_voice_quit_write(cx));
+        let snippets = self
+            .snippets
+            .update(cx, |page, cx| page.take_quit_write(cx));
+        let pending: Vec<_> = [behavior, defaults, voice, snippets]
+            .into_iter()
+            .flatten()
+            .collect();
+        if pending.is_empty() {
+            return None;
+        }
+        Some(cx.background_executor().spawn(async move {
+            for pending in pending {
+                pending.await;
+            }
+        }))
     }
 
     pub(crate) fn general_preferences(
@@ -90,6 +179,7 @@ impl Settings {
             .new(|cx| PreferencePage::new(owner.clone(), general.clone(), Page::Notifications, cx));
         let voice =
             cx.new(|cx| PreferencePage::new(owner.clone(), general.clone(), Page::Voice, cx));
+        voice.update(cx, |voice, cx| voice.observe_voice_target(window, cx));
         let usage = cx.new(|_| crate::usage_page::UsagePage::new(owner.clone()));
         let behavior =
             cx.new(|cx| crate::behavior_settings::BehaviorPage::new(owner.clone(), window, cx));

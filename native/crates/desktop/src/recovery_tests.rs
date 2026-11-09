@@ -44,6 +44,8 @@ mod queue_tests;
 mod request_tests;
 #[path = "send_path_tests.rs"]
 mod send_path_tests;
+#[path = "unit_d_close_support.rs"]
+mod unit_d_close_support;
 
 pub(crate) struct Fixture(PathBuf);
 

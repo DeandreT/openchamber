@@ -11,6 +11,7 @@ import io
 import itertools
 import json
 import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -352,6 +353,138 @@ class RunnerStepTest(unittest.TestCase):
 
 
 class ScenarioSettingsTest(unittest.TestCase):
+    def test_portal_mount_timeout_is_reported_and_later_scenarios_continue(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / 'seed').mkdir()
+            scenarios = root / 'scenarios.json'
+            inventory = root / 'inventory.json'
+            scenarios.write_text(json.dumps({'targets': {}, 'scenarios': [
+                {'id': 'portal-timeout', 'feature': 'fixture', 'steps': [
+                    {'pick': {'files': [{'name': 'a.txt', 'text': 'bytes'}]}}]},
+                {'id': 'after-timeout', 'feature': 'fixture', 'steps': []},
+            ]}))
+            inventory.write_text(json.dumps({'features': [
+                {'id': 'fixture', 'scenarios': ['portal-timeout', 'after-timeout'],
+                 'coverage': 'automated', 'requiredBehaviors': ['appearance'], 'states': ['ready']},
+            ]}))
+            identities = {name: runner.artifact_identity(path) for name, path in (
+                ('scenarios', scenarios), ('inventory', inventory))}
+            args = argparse.Namespace(root=root, output=root / 'report', scenarios=None,
+                theme='openchamber-dark', timeout=1, native_binary=root / 'native',
+                electron_app=root / 'electron', scale=1, width=1280, height=800, tolerance=0)
+            native = Mock()
+            electron = Mock()
+            for client in (native, electron):
+                client.launch.return_value = {}
+                client.close.return_value = {'exitCode': 0}
+            portal = Mock()
+            portal.start.side_effect = subprocess.TimeoutExpired(['busctl', 'GetMountPoint'], 1)
+            cleanup = {'remainingPids': [], 'errors': [], 'mount': {'remaining': []}}
+            portal.close.return_value = cleanup
+            service = Mock(url='http://localhost', opencode_config={})
+            with patch.object(runner, 'SCENARIOS', scenarios), \
+                 patch.object(runner, 'INVENTORY', inventory), \
+                 patch.object(runner, 'input_identities', return_value=identities), \
+                 patch.object(runner, 'copy_seed', return_value=root), \
+                 patch.object(runner, 'native_env', return_value={}), \
+                 patch.object(runner, 'electron_env', return_value={}), \
+                 patch.object(runner, 'NativeClient', return_value=native), \
+                 patch.object(runner, 'ElectronClient', return_value=electron), \
+                 patch.object(runner, 'IsolatedServer', return_value=service), \
+                 patch.object(runner, 'FixtureProvider', return_value=service), \
+                 patch.object(runner, 'perform', return_value={}), \
+                 patch('portal_fixture.PortalFixture', return_value=portal), \
+                 patch.object(runner.native_adapter, 'accessibility_enabled', return_value=False), \
+                 patch.object(runner.native_adapter, 'set_accessibility'):
+                self.assertEqual(runner.run(args), 1)
+            report = json.loads((args.output / 'report.json').read_text())
+            self.assertTrue(report['inputsUnchanged'])
+            self.assertEqual(report['scenarios']['portal-timeout']['status'], 'failed')
+            self.assertIn('GetMountPoint', report['scenarios']['portal-timeout']['native']['error'])
+            self.assertEqual(report['scenarios']['after-timeout']['status'], 'passed')
+            portal.close.assert_called_once_with()
+            native.launch.assert_called_once_with()
+            native.close.assert_called_once_with()
+
+    def test_portal_cleanup_cannot_pass_with_a_process_mount_or_shutdown_error(self):
+        clean = {'remainingPids': [], 'errors': [], 'mount': {'remaining': []}}
+        self.assertEqual(runner.checked_portal_cleanup(Mock(close=lambda: clean)), clean)
+        for changes in ({'remainingPids': [123]}, {'errors': ['shutdown refused']},
+                        {'mount': {'remaining': [{'id': 4042}]}}):
+            receipt = {**clean, **changes}
+            with self.subTest(changes=changes), self.assertRaisesRegex(runner.PortalCleanupError, 'cleanup is incomplete') as caught:
+                runner.checked_portal_cleanup(Mock(close=lambda: receipt))
+            self.assertIs(caught.exception.receipt, receipt)
+
+    def test_portal_workflow_failure_keeps_cleanup_diagnostics_and_later_cases(self):
+        for label, workflow_failed, cleanup_failed in (
+                ('combined', True, True), ('cleanup-only', False, True),
+                ('workflow-only', True, False)):
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                (root / 'seed').mkdir()
+                scenarios, inventory = root / 'scenarios.json', root / 'inventory.json'
+                scenarios.write_text(json.dumps({'targets': {}, 'scenarios': [
+                    {'id': 'portal-case', 'feature': 'fixture', 'steps': [
+                        {'pick': {'files': [{'name': 'a.txt', 'text': 'bytes'}]}}]},
+                    {'id': 'later-case', 'feature': 'fixture', 'steps': []}]}))
+                inventory.write_text(json.dumps({'features': [
+                    {'id': 'fixture', 'scenarios': ['portal-case', 'later-case'],
+                     'coverage': 'automated', 'requiredBehaviors': ['appearance'], 'states': ['ready']}]}))
+                identities = {name: runner.artifact_identity(path) for name, path in (
+                    ('scenarios', scenarios), ('inventory', inventory))}
+                args = argparse.Namespace(root=root, output=root / 'report', scenarios=None,
+                    theme='openchamber-dark', timeout=1, native_binary=root / 'native',
+                    electron_app=root / 'electron', scale=1, width=1280, height=800, tolerance=0)
+                native, electron, portal = Mock(), Mock(), Mock()
+                for client in (native, electron):
+                    client.launch.return_value = {}
+                    client.close.return_value = {'exitCode': 0}
+                cleanup = {'remainingPids': [],
+                    'errors': ['synthetic unverified document mount'] if cleanup_failed else [],
+                    'processes': [{'pid': 4242, 'starttime': '123456', 'exitCode': 0}],
+                    'mount': {'before': [{'id': 4042}], 'owned': None, 'remaining': []}}
+                portal.close.return_value = cleanup
+                service = Mock(url='http://localhost', opencode_config={})
+
+                def perform(client, kind, steps, *_):
+                    if kind == 'native' and steps and workflow_failed:
+                        raise TimeoutError('original workflow timeout')
+                    return {}
+
+                with patch.object(runner, 'SCENARIOS', scenarios), \
+                     patch.object(runner, 'INVENTORY', inventory), \
+                     patch.object(runner, 'input_identities', return_value=identities), \
+                     patch.object(runner, 'copy_seed', return_value=root), \
+                     patch.object(runner, 'native_env', return_value={}), \
+                     patch.object(runner, 'electron_env', return_value={}), \
+                     patch.object(runner, 'NativeClient', return_value=native), \
+                     patch.object(runner, 'ElectronClient', return_value=electron), \
+                     patch.object(runner, 'IsolatedServer', return_value=service), \
+                     patch.object(runner, 'FixtureProvider', return_value=service), \
+                     patch.object(runner, 'perform', side_effect=perform), \
+                     patch('portal_fixture.PortalFixture', return_value=portal), \
+                     patch.object(runner.native_adapter, 'accessibility_enabled', return_value=False), \
+                     patch.object(runner.native_adapter, 'set_accessibility'):
+                    self.assertEqual(runner.run(args), 1)
+                report = json.loads((args.output / 'report.json').read_text())
+                result = report['scenarios']['portal-case']['native']
+                self.assertEqual(report['scenarios']['portal-case']['status'], 'failed')
+                self.assertEqual(report['scenarios']['later-case']['status'], 'passed')
+                self.assertTrue(report['inputsUnchanged'])
+                self.assertEqual(portal.close.call_count, 2)
+                self.assertEqual(native.close.call_count, 2)
+                if workflow_failed:
+                    self.assertEqual(result['error'], 'original workflow timeout')
+                else:
+                    self.assertIn('cleanup is incomplete', result['error'])
+                if cleanup_failed:
+                    self.assertEqual(result.get('portalCleanup'), cleanup)
+                    self.assertIn('cleanup is incomplete', result.get('cleanupError', ''))
+                else:
+                    self.assertEqual(result, {'error': 'original workflow timeout'})
+
     def test_model_pin_sets_only_the_copys_default_model_preference(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

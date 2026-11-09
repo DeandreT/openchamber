@@ -21,6 +21,11 @@ render. The engine supplies default text-input semantics to unstyled callers.
   support is enabled. A visual mask or secret content type suppresses the value.
 - Focus refuses disabled inputs. SetValue checks current editability and uses
   `replace_all`, preserving normal validation, undo and change notifications.
+- Ordinary textareas expose the engine's optional non-empty edit validator,
+  as single-line inputs do. Invalid edits are rejected before publishing their
+  text, including batched replacements and IME updates. A rejected batch changes
+  no text or edit history. Source-code editor APIs and default validation
+  behavior stay unchanged.
 - Non-secret inputs expose synthetic TextRun children and the active selection
   through AccessKit. Text runs use UTF-8 character lengths, keep CRLF atomic,
   preserve logical lines and link fragments of long visual lines. Empty documents

@@ -12,6 +12,9 @@ use openchamber_native_transport::prompt_parts::SyntheticContext;
 
 use super::*;
 
+#[path = "unit_d_send_close_tests.rs"]
+mod unit_d_close_tests;
+
 /// Inbox items and history records the scripted server reports.
 #[derive(Default)]
 struct Script {
@@ -36,6 +39,14 @@ struct Scripted {
 
 impl Scripted {
     fn new(journal: PathBuf, script: Script) -> Self {
+        Self::with_holds(journal, script, Vec::new())
+    }
+
+    fn with_holds(
+        journal: PathBuf,
+        script: Script,
+        holds: Vec<super::unit_d_close_support::HeldResponse>,
+    ) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").expect("loopback listener binds");
         listener.set_nonblocking(true).expect("nonblocking");
         let endpoint = Endpoint::parse(&format!(
@@ -68,6 +79,9 @@ impl Scripted {
                 }
                 let (status, body) = answer(&request, &scripted.lock().expect("script"));
                 let held = request.path.ends_with("/prompt");
+                for gate in &holds {
+                    gate.wait(&request.method, &request.path);
+                }
                 recorded.lock().expect("requests").push(request);
                 let deadline = Instant::now() + Duration::from_secs(5);
                 while held
