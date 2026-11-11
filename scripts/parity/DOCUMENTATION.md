@@ -32,7 +32,7 @@ PyGObject with AT-SPI, `busctl`, `dbus-run-session`, `xsettingsd` and fontconfig
 | `request_tracker.mjs` | Fetch/XHR ownership by frame and document loader, so a discarded document cannot keep a new one busy. |
 | `native_adapter.py` | The native window through AT-SPI: launch and restart, activation, generated pointer and key input, accessibility actions, rows, geometry, content capture, and the scenario services the runner attaches. |
 | `fault_proxy.py` | The native `fault` step: a loopback proxy applying scenario fault rules between the native client and its server. |
-| `ime_fixture.py` | A private IBus with libpinyin for native `ime` steps. |
+| `ime_fixture.py` | A private IBus with libpinyin for native `ime` steps. Its daemon listens on a socket under the display's runtime directory, because the default one sits under the profile's cache directory and a path past 107 bytes is cut short into a file that scenarios share. It records the bus's messages, so a commit step waits for the engine's `CommitText` before the engine changes back to Latin: changing it earlier drops a composition whose key the client has not delivered yet. |
 | `drop_source.py` | An XDND drag source window for native `drop` steps. |
 | `clipboard_probe.py` | Asynchronous clipboard ownership and exact text after a real copy action on the private display. |
 | `native_platform.py` | Synthetic native window-manager and IBus checks with private profiles and service logs. |
@@ -668,7 +668,11 @@ OpenCode configuration that asks permission for the fixture's shell command
 (`isolated-server.mjs --provider-mode interactions`). `"fixture": "git"` gives each client a fresh copy of
 `isolated-server.mjs --git-fixture`'s repository at one fixed path under the
 seed root (`fixtures/git/fixture-repo`, with its bare remote beside it) and
-makes it the active project. The path is the same for both clients, so
+makes it the active project. While the client runs, `git_http_remote.py`
+serves that bare remote on loopback and `origin` points at it: the server
+answers 400 for a repository whose remote is a `file://` URL, and the
+reference then shows "Couldn't read this repository" in Git and no view in
+Changes. The path is the same for both clients, so
 project IDs and row keys match; clients run serially and each starts from a
 new copy. `"model": "provider/model"` sets the profile's `defaultModel`
 preference in each copy, which new sessions start on. The server keeps that

@@ -39,6 +39,12 @@
       },
       "native": "new-session"
     },
+    "new-session-collapsed": {
+      "electron": {
+        "selector": "button[aria-label=\"New session\"]"
+      },
+      "native": "new-session"
+    },
     "source-board": {
       "electron": {
         "selector": "button[aria-label=\"Issues and PRs\"]"
@@ -286,10 +292,10 @@
         {"clickTarget": "fixture-project-trigger"},
         {"clickTarget": "fixture-project-option"},
         {"clickTarget": "git-rail"},
-        {"wait": {"electron": {"expression": "document.body.innerText.includes('src/app.txt')"}, "native": {"elements": ["git-panel", "git-change:unstaged:src/app.txt"]}}},
+        {"wait": {"electron": {"expression": "!!document.querySelector('[title=\"src/app.txt\"]')"}, "native": {"elements": ["git-panel", "git-change:unstaged:src/app.txt"]}}},
         {"capture": "git", "targets": ["git-rail"]},
         {"clickTarget": "changes-rail"},
-        {"wait": {"electron": {"expression": "document.body.innerText.includes('src/app.txt')"}, "native": {"elements": ["diff-panel", "diff-content"]}}},
+        {"wait": {"electron": {"expression": "!!document.querySelector('[title=\"src/app.txt\"]')"}, "native": {"elements": ["diff-panel", "diff-content"]}}},
         {"capture": "changes", "targets": ["changes-rail"]}
       ]
     },
@@ -2114,7 +2120,7 @@
       "id": "composer.appearance.narrow-editor",
       "feature": "composer.configuration",
       "proofs": {"composer.configuration": {"behaviors": ["appearance"], "states": ["selected"]}},
-      "description": "At 1440x900 the Files editor leaves a narrow chat column. Composer labels truncate or collapse while model, effort, agent, microphone and send controls remain separate and the pickers still open.",
+      "description": "At 1440x900 the Files editor leaves a narrow chat column. Composer labels truncate or collapse while model, effort, agent, microphone and send controls remain separate and the pickers still open. The open editor folds the reference sidebar, so New session is the title bar's icon button there.",
       "steps": [
         {"click": {"zone": "activity:work:session:", "title": "parity: short a"}},
         {"clickTarget": "composer-files"},
@@ -2133,7 +2139,7 @@
         {"clickTarget": "composer-agent"},
         {"wait": {"electron": {"expression": "[...document.querySelectorAll('[role=menu] input[placeholder=\"Search agents\"]')].some(el => el.getBoundingClientRect().width > 0) && [...document.querySelectorAll('[role=menuitem]')].some(el => el.textContent.includes('Plan'))"}, "native": {"named": {"name": "Search agents", "role": "entry"}}}},
         {"key": "Escape"},
-        {"clickTarget": "new-session"},
+        {"clickTarget": "new-session-collapsed"},
         {"capture": "draft-editor", "targets": ["composer", "composer-model", "composer-variant", "composer-agent", "composer-dictation", "composer-submit"]},
         {"clickTarget": "composer-files"},
         {"capture": "draft-wide", "targets": ["composer", "composer-model", "composer-variant", "composer-agent", "composer-dictation", "composer-submit"]}
