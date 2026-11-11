@@ -7,6 +7,10 @@ deterministic `NoopTextSystem` through `WindowTextSystem::shape_text`. They
 require no display server, font assets, GUI launch or extra test dependencies.
 Intrinsic text measurement checks fractional logical widths against the default
 rounded policy using the test platform's deterministic glyph advances.
+Auto-sized SharedString headings exercise the intrinsic-to-finite scale round
+trip with a contracting word and a fitting control. Definite narrow constraints
+cover ordinary words, spaces, RTL and mixed text, while fractional-height checks
+keep horizontal corrections independent of row measurement.
 
 Run from `native/`, so Cargo uses its pinned toolchain, after other native builds
 have finished:

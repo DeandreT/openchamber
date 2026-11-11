@@ -61,7 +61,7 @@ impl Workspace {
             .disabled(disabled)
             .accessibility_label(label.clone())
             .tooltip(label)
-            .child(crate::chrome::glyph("add-circle", 18.0, palette.foreground))
+            .child(crate::chrome::glyph("add-circle", 16.0, palette.foreground))
             .dropdown_menu_with_anchor(
                 if direction == Direction::RightToLeft {
                     Anchor::BottomRight

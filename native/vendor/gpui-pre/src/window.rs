@@ -68,7 +68,11 @@ use uuid::Uuid;
 pub(crate) mod a11y;
 mod prompts;
 
-pub use a11y::A11ySubtreeBuilder;
+pub use a11y::{A11yLinkFragment, A11yLinkFrame, A11yLinkSource, A11ySubtreeBuilder};
+#[cfg(feature = "test-support")]
+pub use a11y::{
+    A11yLinkTestCounters, A11yLinkTestObservation, A11yLinkTestRegistration, A11yTestTransition,
+};
 
 use self::a11y::A11y;
 #[cfg(not(target_family = "wasm"))]
@@ -1032,6 +1036,9 @@ pub(crate) struct DeferredDraw {
     absolute_offset: Point<Pixels>,
     prepaint_range: Range<PrepaintStateIndex>,
     paint_range: Range<PaintIndex>,
+    link_sources: SmallVec<[a11y::LinkSourceContext; 4]>,
+    link_cached_owners: SmallVec<[Rc<Cell<bool>>; 4]>,
+    has_registered_links: bool,
 }
 
 pub(crate) struct Frame {
@@ -1067,6 +1074,7 @@ pub(crate) struct PrepaintStateIndex {
     dispatch_tree_index: usize,
     accessed_element_states_index: usize,
     line_layout_index: LineLayoutIndex,
+    pub(crate) registered_links: u64,
 }
 
 #[derive(Clone, Default)]
@@ -1080,6 +1088,7 @@ pub(crate) struct PaintIndex {
     accessed_element_states_index: usize,
     tab_handle_index: usize,
     line_layout_index: LineLayoutIndex,
+    registered_links: usize,
 }
 
 impl Frame {
@@ -1304,6 +1313,11 @@ pub struct Window {
     #[cfg(feature = "profiler")]
     debug_frame_overlay: crate::debug_overlay::DebugFrameOverlay,
     pub(crate) a11y: A11y,
+    a11y_links: a11y::A11yLinks,
+    #[cfg(feature = "test-support")]
+    a11y_test_window: bool,
+    #[cfg(feature = "test-support")]
+    a11y_test_callbacks: Option<Arc<std::sync::Mutex<crate::A11yCallbacks>>>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1666,6 +1680,12 @@ impl Window {
 
         let accessibility_force_disabled = cx.accessibility_force_disabled;
         let a11y_active_flag = Arc::new(AtomicBool::new(false));
+        #[cfg(feature = "test-support")]
+        let a11y_test_window = cx.is_test() && platform_window.as_test().is_some();
+        #[cfg(all(feature = "test-support", not(target_family = "wasm")))]
+        let mut a11y_test_callbacks = None;
+        #[cfg(all(feature = "test-support", target_family = "wasm"))]
+        let a11y_test_callbacks = None;
 
         #[cfg(not(target_family = "wasm"))]
         if !accessibility_force_disabled {
@@ -1684,7 +1704,7 @@ impl Window {
             let (action_sender, action_receiver) =
                 async_channel::unbounded::<accesskit::ActionRequest>();
 
-            platform_window.a11y_init(crate::A11yCallbacks {
+            let callbacks = crate::A11yCallbacks {
                 activation: {
                     let active_flag = a11y_active_flag.clone();
                     Box::new(move || {
@@ -1705,7 +1725,35 @@ impl Window {
                         deactivation_sender.send_blocking(()).log_err();
                     })
                 },
-            });
+            };
+            #[cfg(feature = "test-support")]
+            let callbacks = if a11y_test_window {
+                let retained = Arc::new(std::sync::Mutex::new(callbacks));
+                a11y_test_callbacks = Some(retained.clone());
+                crate::A11yCallbacks {
+                    activation: {
+                        let retained = retained.clone();
+                        Box::new(move || {
+                            let callbacks = retained.lock().expect("test a11y callbacks poisoned");
+                            (callbacks.activation)()
+                        })
+                    },
+                    action: {
+                        let retained = retained.clone();
+                        Box::new(move |request| {
+                            let callbacks = retained.lock().expect("test a11y callbacks poisoned");
+                            (callbacks.action)(request);
+                        })
+                    },
+                    deactivation: Box::new(move || {
+                        let callbacks = retained.lock().expect("test a11y callbacks poisoned");
+                        (callbacks.deactivation)();
+                    }),
+                }
+            } else {
+                callbacks
+            };
+            platform_window.a11y_init(callbacks);
 
             // A11y can be activated at any time, and so we cannot compute a
             // correct `TreeUpdate` on-demand. When this happens, we return a
@@ -2202,6 +2250,11 @@ impl Window {
             inspector: None,
             #[cfg(feature = "profiler")]
             debug_frame_overlay: crate::debug_overlay::DebugFrameOverlay::new(),
+            a11y_links: a11y::A11yLinks::default(),
+            #[cfg(feature = "test-support")]
+            a11y_test_window,
+            #[cfg(feature = "test-support")]
+            a11y_test_callbacks,
             a11y: A11y::new(
                 a11y_active_flag,
                 accessibility_force_disabled,
@@ -2406,6 +2459,9 @@ impl Window {
 
     /// Move focus to the element associated with the given [`FocusHandle`].
     pub fn focus(&mut self, handle: &FocusHandle, cx: &mut App) {
+        if !self.a11y_link_focus_allowed(handle.id, cx) {
+            return;
+        }
         if !self.focus_enabled || self.focus == Some(handle.id) {
             return;
         }
@@ -2444,6 +2500,10 @@ impl Window {
             return;
         }
 
+        if self.has_accepted_a11y_links() {
+            self.focus_a11y_link_tab(false, cx);
+            return;
+        }
         if let Some(handle) = self.rendered_frame.tab_stops.next(self.focus.as_ref()) {
             self.focus(&handle, cx)
         }
@@ -2455,6 +2515,10 @@ impl Window {
             return;
         }
 
+        if self.has_accepted_a11y_links() {
+            self.focus_a11y_link_tab(true, cx);
+            return;
+        }
         if let Some(handle) = self.rendered_frame.tab_stops.prev(self.focus.as_ref()) {
             self.focus(&handle, cx)
         }
@@ -3489,6 +3553,12 @@ impl Window {
     /// the contents of the new [`Scene`], use [`Self::present`].
     #[profiling::function]
     pub fn draw(&mut self, cx: &mut App) -> ArenaClearNeeded {
+        if cx.mode.skip_drawing() {
+            self.invalidator.set_dirty(false);
+            let arena_scope = ElementArenaScope::enter(&cx.element_arena);
+            return arena_scope.exit(&cx.element_arena);
+        }
+
         // Drain every draw in profiler builds so a previous frame's
         // first-invalidation timestamp can't be attributed to this one.
         #[cfg(feature = "profiler")]
@@ -3526,18 +3596,13 @@ impl Window {
                 self.rendered_frame.input_handlers.push(Some(input_handler));
             }
         }
-        if !cx.mode.skip_drawing() {
-            self.draw_roots(cx);
-            #[cfg(feature = "profiler")]
-            {
-                let viewport_size = self.viewport_size;
-                let scale_factor = self.scale_factor();
-                self.debug_frame_overlay.paint(
-                    &mut self.next_frame.scene,
-                    viewport_size,
-                    scale_factor,
-                );
-            }
+        self.draw_roots(cx);
+        #[cfg(feature = "profiler")]
+        {
+            let viewport_size = self.viewport_size;
+            let scale_factor = self.scale_factor();
+            self.debug_frame_overlay
+                .paint(&mut self.next_frame.scene, viewport_size, scale_factor);
         }
         self.dirty_views.clear();
         self.next_frame.window_active = self.active.get();
@@ -3735,8 +3800,11 @@ impl Window {
     }
 
     fn draw_roots(&mut self, cx: &mut App) {
+        #[cfg(feature = "test-support")]
+        a11y::count_link_test!(self.a11y_links.test_counters(), draws_started);
         self.invalidator.set_phase(DrawPhase::Prepaint);
         self.tooltip_bounds.take();
+        self.begin_a11y_link_frame();
 
         self.a11y.sync_active_flag();
         if self.a11y.is_active() {
@@ -3837,6 +3905,8 @@ impl Window {
                 paint: Instant::now().duration_since(paint_start),
             });
 
+        self.complete_a11y_link_frame(cx);
+
         // a11y may have been activated/deactivated halfway through the frame
         let a11y_active_start_of_frame = self.a11y.is_active();
         self.a11y.sync_active_flag();
@@ -3860,9 +3930,13 @@ impl Window {
                     "Sending a11y tree update: {} nodes",
                     tree_update.nodes.len()
                 );
+                #[cfg(feature = "test-support")]
+                a11y::count_link_test!(self.a11y_links.test_counters(), tree_updates_sent);
                 self.platform_window.a11y_tree_update(tree_update);
             }
         }
+        #[cfg(feature = "test-support")]
+        self.finish_a11y_link_observation();
     }
 
     fn prepaint_tooltip(&mut self, cx: &mut App) -> Option<AnyElement> {
@@ -3963,7 +4037,18 @@ impl Window {
             traversal_order.sort_by_key(|ix| self.next_frame.deferred_draws[*ix].priority);
 
             for deferred_draw_ix in traversal_order {
-                let (element, parent_node, current_view, rem_size, absolute_offset, prepaint_range) = {
+                let (
+                    element,
+                    parent_node,
+                    current_view,
+                    rem_size,
+                    absolute_offset,
+                    prepaint_range,
+                    link_sources,
+                    link_cached_owners,
+                    content_mask,
+                    has_registered_links,
+                ) = {
                     let deferred_draw = &mut self.next_frame.deferred_draws[deferred_draw_ix];
                     self.element_id_stack
                         .clone_from(&deferred_draw.element_id_stack);
@@ -3976,24 +4061,61 @@ impl Window {
                         deferred_draw.rem_size,
                         deferred_draw.absolute_offset,
                         deferred_draw.prepaint_range.clone(),
+                        a11y::link_test_clone!(
+                            deferred_draw.link_sources,
+                            self.a11y_links.test_counters(),
+                            scope_visits
+                        ),
+                        a11y::link_test_clone!(
+                            deferred_draw.link_cached_owners,
+                            self.a11y_links.test_counters(),
+                            cache_owner_visits
+                        ),
+                        deferred_draw.content_mask,
+                        deferred_draw.has_registered_links,
                     )
                 };
                 self.next_frame.dispatch_tree.set_active_node(parent_node);
 
                 let prepaint_start = self.prepaint_index();
+                let linked_replay = element.is_none() && has_registered_links;
                 if let Some(mut element) = element {
-                    self.with_rendered_view(current_view, |window| {
-                        window.with_rem_size(Some(rem_size), |window| {
-                            window.with_absolute_element_offset(absolute_offset, |window| {
-                                element.prepaint(window, cx);
-                            });
-                        });
-                    });
+                    self.with_deferred_a11y_links(
+                        link_sources,
+                        link_cached_owners,
+                        content_mask,
+                        cx,
+                        |window, cx| {
+                            window.with_rendered_view(current_view, |window| {
+                                window.with_rem_size(Some(rem_size), |window| {
+                                    window.with_absolute_element_offset(
+                                        absolute_offset,
+                                        |window| {
+                                            element.prepaint(window, cx);
+                                        },
+                                    );
+                                });
+                            })
+                        },
+                    );
                     self.next_frame.deferred_draws[deferred_draw_ix].element = Some(element);
                 } else {
-                    self.reuse_prepaint(prepaint_range);
+                    #[cfg(feature = "test-support")]
+                    if has_registered_links {
+                        a11y::count_link_test!(self.a11y_links.test_counters(), raw_link_replays);
+                    }
+                    debug_assert!(
+                        !has_registered_links,
+                        "a linked deferred subtree cannot be replayed"
+                    );
+                    if !has_registered_links {
+                        self.reuse_prepaint(prepaint_range);
+                    }
                 }
                 let prepaint_end = self.prepaint_index();
+                self.next_frame.deferred_draws[deferred_draw_ix].has_registered_links =
+                    linked_replay
+                        || prepaint_start.registered_links != prepaint_end.registered_links;
                 self.next_frame.deferred_draws[deferred_draw_ix].prepaint_range =
                     prepaint_start..prepaint_end;
             }
@@ -4034,7 +4156,17 @@ impl Window {
                     })
                 })
             } else {
-                self.reuse_paint(deferred_draw.paint_range.clone());
+                #[cfg(feature = "test-support")]
+                if deferred_draw.has_registered_links {
+                    a11y::count_link_test!(self.a11y_links.test_counters(), raw_link_replays);
+                }
+                debug_assert!(
+                    !deferred_draw.has_registered_links,
+                    "a linked deferred paint cannot be replayed"
+                );
+                if !deferred_draw.has_registered_links {
+                    self.reuse_paint(deferred_draw.paint_range.clone());
+                }
             }
             let paint_end = self.paint_index();
             deferred_draw.paint_range = paint_start..paint_end;
@@ -4058,10 +4190,20 @@ impl Window {
             dispatch_tree_index: self.next_frame.dispatch_tree.len(),
             accessed_element_states_index: self.next_frame.accessed_element_states.len(),
             line_layout_index: self.text_system.layout_index(),
+            registered_links: self.a11y_links.next_nonce,
         }
     }
 
     pub(crate) fn reuse_prepaint(&mut self, range: Range<PrepaintStateIndex>) {
+        let link_free = range.start.registered_links == range.end.registered_links;
+        #[cfg(feature = "test-support")]
+        if !link_free {
+            a11y::count_link_test!(self.a11y_links.test_counters(), raw_link_replays);
+        }
+        debug_assert!(link_free, "registered link prepaint cannot be replayed");
+        if !link_free {
+            return;
+        }
         self.next_frame.hitboxes.extend(
             self.rendered_frame.hitboxes[range.start.hitboxes_index..range.end.hitboxes_index]
                 .iter()
@@ -4108,6 +4250,17 @@ impl Window {
                     absolute_offset: deferred_draw.absolute_offset,
                     prepaint_range: deferred_draw.prepaint_range.clone(),
                     paint_range: deferred_draw.paint_range.clone(),
+                    link_sources: a11y::link_test_clone!(
+                        deferred_draw.link_sources,
+                        self.a11y_links.test_counters(),
+                        scope_visits
+                    ),
+                    link_cached_owners: a11y::link_test_clone!(
+                        deferred_draw.link_cached_owners,
+                        self.a11y_links.test_counters(),
+                        cache_owner_visits
+                    ),
+                    has_registered_links: deferred_draw.has_registered_links,
                 }),
         );
     }
@@ -4123,10 +4276,20 @@ impl Window {
             accessed_element_states_index: self.next_frame.accessed_element_states.len(),
             tab_handle_index: self.next_frame.tab_stops.paint_index(),
             line_layout_index: self.text_system.layout_index(),
+            registered_links: self.a11y_links.painted_registrations,
         }
     }
 
     pub(crate) fn reuse_paint(&mut self, range: Range<PaintIndex>) {
+        let link_free = range.start.registered_links == range.end.registered_links;
+        #[cfg(feature = "test-support")]
+        if !link_free {
+            a11y::count_link_test!(self.a11y_links.test_counters(), raw_link_replays);
+        }
+        debug_assert!(link_free, "registered link paint cannot be replayed");
+        if !link_free {
+            return;
+        }
         // Cached elements still exist in the frame even when their paint methods don't run.
         #[cfg(any(test, feature = "test-support"))]
         for (selector, bounds) in &self.rendered_frame.debug_bounds_records
@@ -4303,7 +4466,9 @@ impl Window {
     pub fn transact<T, U>(&mut self, f: impl FnOnce(&mut Self) -> Result<T, U>) -> Result<T, U> {
         self.invalidator.debug_assert_prepaint();
         let index = self.prepaint_index();
+        let link_checkpoint = self.checkpoint_a11y_links();
         let result = f(self);
+        self.finish_a11y_link_transaction(link_checkpoint, result.is_err());
         if result.is_err() {
             self.next_frame.hitboxes.truncate(index.hitboxes_index);
             self.next_frame
@@ -4590,6 +4755,13 @@ impl Window {
             absolute_offset,
             prepaint_range: PrepaintStateIndex::default()..PrepaintStateIndex::default(),
             paint_range: PaintIndex::default()..PaintIndex::default(),
+            link_sources: self.a11y_link_sources_snapshot(),
+            link_cached_owners: a11y::link_test_clone!(
+                self.a11y_links.cached_owners,
+                self.a11y_links.test_counters(),
+                cache_owner_visits
+            ),
+            has_registered_links: false,
         });
     }
 
@@ -5418,6 +5590,9 @@ impl Window {
     /// This method should only be called as part of the prepaint phase of element drawing.
     pub fn set_focus_handle(&mut self, focus_handle: &FocusHandle, _: &App) {
         self.invalidator.debug_assert_prepaint();
+        if !self.capture_a11y_link_focus(focus_handle.id) {
+            return;
+        }
         if focus_handle.is_focused(self) {
             self.next_frame.focus = Some(focus_handle.id);
         }
@@ -7119,6 +7294,9 @@ impl Window {
 
     #[cfg(not(target_family = "wasm"))]
     pub(crate) fn handle_a11y_action(&mut self, request: accesskit::ActionRequest, cx: &mut App) {
+        let Some(link_frame) = self.a11y_link_action_frame(request.target_node, cx) else {
+            return;
+        };
         // Take listeners out temporarily so the closures can borrow Window
         // mutably, then restore them afterward.
         if let Some(mut listeners) = self.a11y.action_listeners.remove(&request.target_node) {
@@ -7126,13 +7304,30 @@ impl Window {
             let mut matched = false;
             for (action, listener) in &mut listeners {
                 if *action == request.action {
+                    if link_frame
+                        .as_ref()
+                        .is_some_and(|frame| frame.activation_bounds(self, cx).is_none())
+                    {
+                        matched = true;
+                        break;
+                    }
                     listener(extra_data, self, cx);
                     matched = true;
                 }
             }
-            self.a11y
-                .action_listeners
-                .insert(request.target_node, listeners);
+            if link_frame.is_none() {
+                self.a11y
+                    .action_listeners
+                    .insert(request.target_node, listeners);
+            } else if link_frame
+                .as_ref()
+                .is_some_and(|frame| frame.activation_bounds(self, cx).is_some())
+            {
+                self.a11y
+                    .action_listeners
+                    .entry(request.target_node)
+                    .or_insert(listeners);
+            }
             if matched {
                 return;
             }
@@ -7141,6 +7336,9 @@ impl Window {
         // Fall back to built-in action handling.
         match request.action {
             accesskit::Action::Click => {
+                if link_frame.is_some() {
+                    return;
+                }
                 if let Some(bounds) = self.a11y.node_bounds.get(&request.target_node).copied() {
                     let center = bounds.center();
                     let mouse_down = PlatformInput::MouseDown(crate::MouseDownEvent {

@@ -123,7 +123,15 @@ prompt. Attachments and worktree creation remain separate workflows.
   until its answer. `composer_autocomplete_view.rs` draws the list above the
   composer's start edge with its keyboard hint; the selected row is the
   editor's active descendant. Snippet creation from the `#` list (the web's
-  quick-create dialog) and the emoji picker are not ported.
+   quick-create dialog) and the emoji picker are not ported.
+  Composer label breakpoints use the chat width left by the actual side panel
+  or terminal before applying the reference's label collapse order. The fitted
+  side-panel slot includes its logical 8px/6px gutters and 8px bottom inset.
+  Its handle straddles the card's chat-facing edge outside the overflow clip;
+  the terminal keeps its own handle placement.
+  Startup content uses the session composer's centered 768px column cap while
+  its inline padding still resolves against the full chat parent. Picker
+  wrappers shrink labels while retaining full-width leading icons.
 - `composer_references.rs` resolves the session and message links in the
   composer's text before a send: sessions from the session index, messages by
   a whole-message read. A send waits for that read; each reference found joins
@@ -169,7 +177,10 @@ prompt. Attachments and worktree creation remain separate workflows.
   keeps the server's shared folders with this window's unsent changes over
   them and draws a folder's inline name field. `project_registration.rs`
   adds, renames and closes projects and draws the project header menu and
-  the Add project dialog. Open run overview, Open in side panel and Open
+  the Add project dialog. Its menu opens a new draft, the source board and
+  the worktree manager, reveals the server path and archives eligible trees.
+  Archive all keeps pinned, in-work and running trees.
+  Open run overview, Open in side panel and Open
   Mini Chat window are listed and only log that their feature is not
   ported; pin lists (custom sidebar sections), guest actions and the shared
   setup trust prompt are not ported either.
@@ -288,7 +299,8 @@ prompt. Attachments and worktree creation remain separate workflows.
   `appearance_view.rs` retains the controls; `settings_picker.rs` confirms only
   a selection gesture. A picker dismissal leaves its value unchanged.
 - `general_settings.rs` owns the server-backed Settings preferences: General's
-  autosave, terminal shell and close-on-exit, the Chat and Sessions fields
+  autosave, terminal shell and close-on-exit, the work-status section layout,
+  the Chat and Sessions fields
   (prompt navigator, follow-up behavior, starters, permission default, Chats
   section, In work, deletion dialog, finished-worktree archiving), the Notifications fields (the switch,
   `notificationMode`, the event toggles and the templates, written whole) and
@@ -414,18 +426,23 @@ prompt. Attachments and worktree creation remain separate workflows.
   create, rename, checkout and delete, fetch, pull and push as planned
   operations with cancel, staged and unstaged changes with stage, unstage and
   confirmed discard, the commit field and the selected change's diff.
-  `git_view/conflicts.rs` merges a branch or rebases onto it from its row,
+  `git_view/update_branch.rs` owns the local/remote target picker and its
+  Merge/Rebase run log, with a planned fetch before remote integration.
+  `git_view/conflicts.rs`
   shows the merge or rebase in progress with Abort and Continue, and the
-  conflict dialog with the server's conflict details; its Resolve in a
-  session buttons only log, since they need the composer's synthetic parts.
+  conflict dialog with the server's conflict details. Resolve places visible
+  instructions and hidden synthetic context through `composer_handoff.rs`
+  in the current session or a registered root/linked-worktree draft.
   `git_view/identity.rs` is the identity menu: choosing one writes its
   author (`set-identity`); its account and transfer half of the binding is
   not applied. `git_view/repositories.rs` lists the repositories under the
   directory and switches the surface between them. The Files tree remembers
   its expanded folders and open file per runtime and root in `ui_memory.rs`,
   and file links from the transcript open in Files, read-only outside the
-  session's directory. Hunk staging, stash, the walkthrough and worktree
-  removal from the Git surface are not ported.
+  session's directory. `diff_view/walkthrough.rs` reads cached walkthroughs,
+  explicitly generates or cancels them and navigates server-owned anchors.
+  The Git menu removes recognized linked worktrees through the retained
+  custody owner. Hunk staging and stash are not ported.
 - `context_panel.rs` also reads the selected session's context fill against
   the limit `useContextWindowLimits` picks (the record's model, the newest
   answer's, the composer's) and draws its row and meter.
@@ -435,6 +452,13 @@ prompt. Attachments and worktree creation remain separate workflows.
   While the inline card is hidden, the session header shows the project and
   branch from these same retained readouts. Rendering the metadata starts no
   additional requests.
+- `context_panel/work_status_sections.rs` owns the section manager's canonical
+  built-in keys, retained extension IDs, visibility and measured reordering.
+  It writes through the retained `Settings.general` owner without opening
+  Settings. Composition invokes available renderers in saved order, inserts
+  gaps between actual sections and reserves the first heading's logical control
+  inset. Choose sections remains reachable when all built-ins are hidden.
+  A stored section ID does not establish that its renderer is available.
 - `project_section.rs` draws the card's Project section: the project's
   label, the attention callout and the branch and changed-files rows from the
   session directory's Git status. It reads the status when the directory
@@ -765,6 +789,15 @@ prompt. Attachments and worktree creation remain separate workflows.
 - General setting reads carry per-field mutation revisions. Missing or invalid
    fields cannot replace known consumer state. A failed write retains that field's
    live choice for explicit retry while other fields and runtimes can proceed.
+- Work-status layout reads share a per-runtime read ticket across General's
+  refresh, topology reads and deletion-preference merged responses. Each captures
+  the exact owner, connection generation and three local field revisions before
+  dispatch. Stale responses cannot change layout or malformed-field status.
+  Raw fields reconcile before retained presentation and pending-choice overlays.
+  Malformed lists preserve validated presentation even before Settings exists;
+  a first malformed list grants no default-derived edit authority. Visibility
+  and order have independent authority, and hidden-list edits accept their
+  explicit marker in the same serialized write. Canceling a drag writes nothing.
 
 - Knowledge reads and mutations share revision ordering. A read begun before a
   mutation cannot replace its result. Overlapping mutations retain their local
@@ -828,6 +861,41 @@ prompt. Attachments and worktree creation remain separate workflows.
 - Every Git mutation ends in a status read, failed or not, and no row shows a
   state before the server reports it. Push, pull and fetch never retry:
   a lost execute answer is resolved by reading the same operation ID.
+- Worktree removal uses a complete host session read, archives the target's
+  active sessions before deleting its directory, and validates complete,
+  duplicate-free archive and restore receipts. A failed removal restores the
+  sessions this action archived. After a lost removal answer, an authoritative
+  worktree list establishes whether the directory remains before restoration.
+  A failed reconciliation preserves the uncertain outcome for explicit recovery.
+  Archive requests contain one active session at a time. The current requested
+  ID enters rollback ownership before I/O, including when its acknowledgement
+  is lost. This uses the server archive service's per-session sequencing to
+  order restoration after the matching archive without a batch's unstarted tail.
+  `worktree_removals.rs` retains accepted network tasks outside the dialog.
+   Receipts distinguish removed, safely failed and unresolved cleanup. UI
+   completion cannot release unresolved custody. It retains the captured server,
+   project, target and exact attempted session IDs. Normal close waits on running
+   receipts and refuses unresolved cleanup, reopening its manager if dismissed.
+   Retry reconciles the captured worktree and restores only those IDs; it never
+   repeats DELETE. Running and unresolved removals hold their captured network
+   runtime through host switches, including idle time before explicit retry.
+   Settled outcomes release that hold. App quit takes the
+  actual tasks and retains active and retired network runtimes until they settle.
+  The pinned GPUI final-quit budget is 200 ms. This transfer preserves independent
+  I/O ownership but cannot guarantee a longer transaction finishes during final
+  shutdown. Normal window close is the reliable draining path; the toolkit
+  timeout remains unchanged.
+- A remote integration retains its planned fetch ID through execute timeouts,
+  running snapshots and failed status reads. The form remains locked and the
+  same operation remains cancellable until an authoritative terminal state arrives.
+- Walkthrough reads never generate. Failed reads retain the last complete result;
+  generation and cancellation are separate user actions. Progress reads run only
+  while the source's walkthrough is visible. Hiding a panel does not cancel
+  the server's generation.
+- Hidden composer handoffs retain the original runtime and navigation owner.
+  They require safe persistence, keep visible attachments, replace older hidden
+  handoff parts, and never send automatically. A new-session destination must be
+  a registered project's root or one of its recognized linked worktrees.
 - Each surface's status line is one `Role::Status` node with the newest
   outcome, so accessibility clients and scripts read it; errors put the
   server's explanation after the localized title.
@@ -1537,6 +1605,33 @@ prompt. Attachments and worktree creation remain separate workflows.
 
 ## Decisions
 
+### Why branch-search navigation has its own key context
+
+The open Update branch picker binds Ctrl+N/P and Escape to `NoAction` in its own context,
+as the prompt list does. This suppresses ancestor configurable shortcuts before
+the existing navigation handler runs. Closing the picker removes that context
+and restores ordinary shortcut dispatch. Escape dismisses the picker and returns
+focus to its retained branch trigger without invoking the workspace Stop action.
+
+### Why worktree sessions are archived before directory removal
+
+OpenCode resolves a session through its location. Archiving while that directory
+exists preserves the session's original location and permits rollback when removal
+fails. An incomplete receipt grants no directory-removal authority.
+
+### Why failed cleanup stays owned after a dialog completes
+
+A completed network request can still leave sessions archived or the checkout's
+existence unknown. The workspace retains that recovery separately from the
+dialog and refuses normal close until reconciliation settles it. Explicit retry
+uses the original server and attempted session IDs without repeating deletion.
+
+### Why walkthrough anchors come from the server
+
+The walkthrough cache and current diff share opaque hunk identities. Keeping those
+IDs allows stale stops and uncovered changes to remain distinguishable without
+inventing client-side line-based matches.
+
 ### Why the managed server runs under the bundled Electron in Node mode
 
 The desktop hosts the server in its main process; the native client has no
@@ -1650,11 +1745,11 @@ the controls away until a read succeeds, because a fetch failure must not
 pass for an authoritative empty answer. A read that fails after one succeeded
 keeps what is shown.
 
-### Why Chat, Sessions, Notifications and Voice share General's settings model and not their own
+### Why server-backed preferences share General's settings model
 
-All these pages write fields of the same server settings document. One model
+These pages and the work-status manager write the same server settings document. One model
 per runtime gives them one serialized write chain, one failure and Retry state,
-and the close and quit drains General already proves; a second model would
+and shared close and quit drains; a second model would
 need its own drains and could race General's writes on the same document. The
 Settings dialog lists only pages with implemented controls, so no page opens
 empty.

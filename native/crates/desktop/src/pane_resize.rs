@@ -13,8 +13,8 @@ use std::path::{Path, PathBuf};
 
 use gpui_kit::{
     AppContext, Context, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, Role, StatefulInteractiveElement, Styled, Task, Window, div,
-    prelude::FluentBuilder, px,
+    MouseMoveEvent, MouseUpEvent, Role, StatefulInteractiveElement, Styled, Task, TestSupportExt,
+    Window, div, prelude::FluentBuilder, px,
 };
 use serde::{Deserialize, Serialize};
 
@@ -360,7 +360,7 @@ impl Workspace {
         palette: &Palette,
         direction: Direction,
         cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    ) -> impl IntoElement + Styled {
         let active = self.pane_sizes.dragging() == Some(pane);
         let border = palette.border;
         let id = match pane {
@@ -371,6 +371,7 @@ impl Workspace {
             .id(id)
             .role(Role::Splitter)
             .accessibility_id(id)
+            .test_support()
             .aria_label(label)
             .absolute()
             .top_0()

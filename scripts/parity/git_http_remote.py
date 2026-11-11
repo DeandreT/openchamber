@@ -30,6 +30,8 @@ class GitHttpRemote:
         self.held = threading.Event()
         self.held.set()
         self.holding = False
+        self.fetch_gate = threading.Event()
+        self.fetch_gate.set()
         self.requests = []
         remote = self
 
@@ -74,6 +76,16 @@ class GitHttpRemote:
         with self.lock:
             return sum(1 for method, path in self.requests if method == "POST" and path.endswith("git-receive-pack"))
 
+    def hold_fetches(self) -> None:
+        self.fetch_gate.clear()
+
+    def release_fetches(self) -> None:
+        self.fetch_gate.set()
+
+    def fetches(self) -> int:
+        with self.lock:
+            return sum(1 for method, path in self.requests if method == "POST" and path.endswith("git-upload-pack"))
+
     def serve(self, handler: BaseHTTPRequestHandler) -> None:
         split = urllib.parse.urlsplit(handler.path)
         with self.lock:
@@ -96,6 +108,10 @@ class GitHttpRemote:
             except (BrokenPipeError, ConnectionResetError):
                 pass
             return
+        if handler.command == "POST" and split.path.endswith("git-upload-pack"):
+            if not self.fetch_gate.wait(timeout=120):
+                handler.send_error(503, "Held fetch timed out")
+                return
         env = {
             "PATH": os.environ.get("PATH", ""),
             "GIT_PROJECT_ROOT": str(self.root),
@@ -138,6 +154,7 @@ class GitHttpRemote:
 
     def stop(self) -> None:
         self.release()
+        self.release_fetches()
         self.server.shutdown()
         self.server.server_close()
 

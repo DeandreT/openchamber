@@ -113,6 +113,8 @@ pub struct Branches {
     pub local: Vec<String>,
     /// Remote-tracking branches without their `remotes/` prefix.
     pub remote: Vec<String>,
+    /// Each remote's default branch, read from its `HEAD` symbolic ref.
+    pub default_branches: HashMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -245,9 +247,12 @@ struct CommitBody {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct BranchesBody {
     all: Vec<String>,
     current: Option<String>,
+    #[serde(default)]
+    default_branches: HashMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -458,6 +463,7 @@ impl ServerClient {
             git_json(self.git_request(Method::GET, "api/git/branches", directory)).await?;
         let mut branches = Branches {
             current: body.current.filter(|current| !current.is_empty()),
+            default_branches: body.default_branches,
             ..Branches::default()
         };
         for name in body.all {
@@ -500,6 +506,40 @@ impl ServerClient {
             .git_request(Method::DELETE, "api/git/branches", directory)
             .json(&json!({ "branch": name }));
         expect_success(request).await
+    }
+
+    /// The names of the repository's remotes (`GET /api/git/remotes`).
+    pub async fn remote_names(&self, directory: &str) -> Result<Vec<String>, GitError> {
+        #[derive(Deserialize)]
+        struct Remote {
+            name: String,
+        }
+        let remotes: Vec<Remote> =
+            git_json(self.git_request(Method::GET, "api/git/remotes", directory)).await?;
+        Ok(remotes.into_iter().map(|remote| remote.name).collect())
+    }
+
+    /// The commit `reference` points at (`GET /api/git/log` limited to one
+    /// entry), or `None` when the log is empty.
+    pub async fn latest_commit(
+        &self,
+        directory: &str,
+        reference: &str,
+    ) -> Result<Option<String>, GitError> {
+        #[derive(Deserialize)]
+        struct Log {
+            latest: Option<Entry>,
+        }
+        #[derive(Deserialize)]
+        struct Entry {
+            hash: String,
+        }
+        let mut url = self.git_url("api/git/log", Some(directory));
+        url.query_pairs_mut()
+            .append_pair("to", reference)
+            .append_pair("maxCount", "1");
+        let log: Log = git_json(self.authorized(Method::GET, url)).await?;
+        Ok(log.latest.map(|entry| entry.hash.trim().to_owned()))
     }
 
     /// The repositories under `root` (`GET /api/fs/git-dirs`). A server

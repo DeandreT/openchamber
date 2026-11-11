@@ -62,6 +62,7 @@ pub mod terminal;
 #[cfg(test)]
 mod test_server;
 mod tool_facts;
+pub mod walkthrough;
 pub mod web_content;
 mod wire;
 pub mod worktree;

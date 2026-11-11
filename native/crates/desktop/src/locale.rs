@@ -284,19 +284,20 @@ mod tests {
 
     use super::*;
 
-    /// String literals in `source`, without escape handling beyond `\"`.
-    fn string_literals(source: &str) -> Vec<String> {
+    /// String literals and their opening quote's byte offset, with the existing
+    /// one-character escape handling, including `\"`.
+    fn string_literals(source: &str) -> Vec<(usize, String)> {
         let mut literals = Vec::new();
-        let mut chars = source.chars();
-        while let Some(character) = chars.next() {
+        let mut chars = source.char_indices();
+        while let Some((offset, character)) = chars.next() {
             if character != '"' {
                 continue;
             }
             let mut literal = String::new();
-            while let Some(next) = chars.next() {
+            while let Some((_, next)) = chars.next() {
                 match next {
                     '\\' => {
-                        if let Some(escaped) = chars.next() {
+                        if let Some((_, escaped)) = chars.next() {
                             literal.push(escaped);
                         }
                     }
@@ -304,7 +305,7 @@ mod tests {
                     other => literal.push(other),
                 }
             }
-            literals.push(literal);
+            literals.push((offset, literal));
         }
         literals
     }
@@ -319,6 +320,39 @@ mod tests {
             && segments.iter().all(|segment| {
                 !segment.is_empty() && segment.chars().all(|c| c.is_ascii_alphanumeric())
             })
+    }
+
+    fn missing_resource_keys(
+        source: &str,
+        exported: &HashSet<&str>,
+        namespaces: &HashSet<&str>,
+    ) -> Vec<String> {
+        let templates = crate::starters::MagicCatalog::get().templates();
+        let mut missing = Vec::new();
+        for (offset, literal) in string_literals(source) {
+            // Current prompt APIs take an ID as the first literal argument to
+            // `.render`. This bounded spelling check does not resolve Rust types;
+            // escapes and expression continuations keep the ordinary locale check.
+            let first_render_argument = source[..offset]
+                .trim_end()
+                .strip_suffix('(')
+                .is_some_and(|prefix| prefix.trim_end().ends_with(".render"))
+                && source[offset + 1..]
+                    .split_once("\"")
+                    .is_some_and(|(raw, suffix)| {
+                        !raw.contains('\\')
+                            && matches!(suffix.trim_start().chars().next(), Some(',' | ')'))
+                    });
+            let unknown = if first_render_argument {
+                !templates.contains_key(&literal)
+            } else {
+                looks_like_key(&literal, namespaces) && !exported.contains(literal.as_str())
+            };
+            if unknown {
+                missing.push(literal);
+            }
+        }
+        missing
     }
 
     #[test]
@@ -340,16 +374,114 @@ mod tests {
                 continue;
             }
             let source = fs::read_to_string(&path).expect("sources are UTF-8");
-            for literal in string_literals(&source) {
-                if looks_like_key(&literal, &namespaces) && !exported.contains(literal.as_str()) {
-                    missing.push(format!("{}: {literal}", path.display()));
-                }
+            for literal in missing_resource_keys(&source, &exported, &namespaces) {
+                missing.push(format!("{}: {literal}", path.display()));
             }
         }
         assert!(
             missing.is_empty(),
-            "add these keys to resources/locale-keys.txt and run `bun run native:resources`: {missing:#?}"
+            "locale literals require resources/locale-keys.txt exports; first `.render` literals require registered magic-prompt IDs: {missing:#?}"
         );
+    }
+
+    #[test]
+    fn string_literals_preserve_byte_offsets_and_escape_handling() {
+        let source = "é \"say \\\"hello\\\"\" 中 \"path\\\\name\" \"line\\n\"";
+        assert_eq!(
+            string_literals(source),
+            vec![
+                (
+                    source.find("\"say").expect("first quote"),
+                    "say \"hello\"".to_owned()
+                ),
+                (
+                    source.find("\"path").expect("second quote"),
+                    "path\\name".to_owned()
+                ),
+                (
+                    source.find("\"line").expect("third quote"),
+                    "linen".to_owned()
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn registered_prompt_ids_are_scoped_to_first_render_arguments() {
+        let prompt = format!("{}.review.instructions", "session");
+        assert!(
+            crate::starters::MagicCatalog::get()
+                .templates()
+                .contains_key(&prompt)
+        );
+        let exported = HashSet::new();
+        let namespaces = HashSet::from(["session"]);
+        for source in [
+            format!(r#"prompts.render("{prompt}", &[]);"#),
+            format!("prompts.render \n ( \n \"{prompt}\", &[]);"),
+            format!("é \"say \\\"hello\\\"\"; prompts.render(\"{prompt}\", &[]);"),
+        ] {
+            assert!(
+                missing_resource_keys(&source, &exported, &namespaces).is_empty(),
+                "a registered first prompt argument is valid: {source}"
+            );
+        }
+        for source in [
+            format!(r#"strings.get("{prompt}");"#),
+            format!(r#"strings.format("{prompt}", &[]);"#),
+            format!(r#"let key = "{prompt}"; strings.get(key);"#),
+            format!(r#"prompts.render("{prompt}", &[]); strings.get("{prompt}");"#),
+            format!(r#"prompts.render("{prompt}", &[("value", "{prompt}")]);"#),
+            format!(r#"prompts.render(/* first */ "{prompt}", &[]);"#),
+            // The existing scanner approximates `\n` as `n`; that must not grant an exemption.
+            format!(
+                r#"prompts.render("{}", &[]);"#,
+                prompt.replace(".instructions", ".i\\nstructions")
+            ),
+            format!(r#"prompts.render("{prompt}".trim_end_matches(".instructions"), &[]);"#),
+        ] {
+            assert_eq!(
+                missing_resource_keys(&source, &exported, &namespaces),
+                vec![prompt.to_owned()],
+                "only the supported first prompt argument gets an exemption: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn resource_scan_rejects_unknown_prompts_and_missing_translations() {
+        let ui_key = "session.newWorktree.branchName";
+        let exported = HashSet::from([ui_key]);
+        let namespaces = HashSet::from(["session"]);
+        let unknown_prompt = ["unregistered", "prompt", "visible"].join(".");
+        let missing_locale = ["session", "missingTranslation", "label"].join(".");
+        for source in [
+            format!(r#"strings.get("{ui_key}");"#),
+            format!(r#"let labels = ["{ui_key}"]; strings.get(labels[0]);"#),
+        ] {
+            assert!(missing_resource_keys(&source, &exported, &namespaces).is_empty());
+        }
+        for (source, missing) in [
+            (
+                format!(r#"prompts.render("{unknown_prompt}", &[]);"#),
+                unknown_prompt.as_str(),
+            ),
+            (format!(r#"prompts.render("{ui_key}", &[]);"#), ui_key),
+            (
+                format!(r#"strings.get("{missing_locale}");"#),
+                missing_locale.as_str(),
+            ),
+            (
+                format!(r#"let labels = ["{missing_locale}"]; strings.get(labels[0]);"#),
+                missing_locale.as_str(),
+            ),
+        ] {
+            assert_eq!(
+                missing_resource_keys(&source, &exported, &namespaces),
+                vec![missing.to_owned()],
+                "each resource consumer requires its own catalog: {source}"
+            );
+        }
     }
 
     #[test]

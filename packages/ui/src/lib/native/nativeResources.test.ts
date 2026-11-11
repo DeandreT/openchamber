@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { getDefaultMagicPromptTemplate } from '@/lib/magicPrompts';
 
 import {
   NATIVE_DATE_FORMATS_PATH,
@@ -45,6 +46,13 @@ describe('native desktop resources', () => {
 
   test('the checked-in magic prompts match the built-in templates', () => {
     expect(checkedIn(NATIVE_MAGIC_PROMPTS_PATH)).toBe(renderNativeMagicPrompts());
+  });
+
+  test('conflict handoffs export both canonical prompt templates', () => {
+    const rendered = renderNativeMagicPrompts();
+    for (const id of ['git.conflict.resolve.visible', 'git.conflict.resolve.instructions'] as const) {
+      expect(rendered).toContain(`${JSON.stringify(id)}: ${JSON.stringify(getDefaultMagicPromptTemplate(id))}`);
+    }
   });
 
   test('the checked-in HTML page bootstrap matches the chat\'s', () => {

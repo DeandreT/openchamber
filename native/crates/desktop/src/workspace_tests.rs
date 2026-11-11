@@ -378,6 +378,58 @@ fn project_chooser_preserves_directory_drafts_and_catalog_scope(cx: &mut TestApp
 }
 
 #[gpui_kit::test]
+fn linked_worktree_drafts_keep_their_directory_and_require_registered_ownership(
+    cx: &mut TestAppContext,
+) {
+    use openchamber_native_core::ownership::{ProjectWorktrees, WorktreeInfo};
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let project = workspace.topology.projects[0].clone();
+            let directory = "/fixture-linked-worktree";
+            workspace.topology.worktrees.push(ProjectWorktrees {
+                project_path: project.path.clone(),
+                worktrees: vec![WorktreeInfo {
+                    path: directory.to_owned(),
+                    label: None,
+                    name: None,
+                    branch: Some("feature/fixture".to_owned()),
+                }],
+            });
+            workspace.choose_draft_project(directory, window, cx);
+            assert_eq!(
+                workspace
+                    .composer_key
+                    .as_ref()
+                    .expect("the worktree owns a draft")
+                    .directory(),
+                directory
+            );
+            assert_eq!(
+                workspace
+                    .draft_destination_project(directory)
+                    .map(|owner| &owner.id),
+                Some(&project.id)
+            );
+            assert!(
+                workspace
+                    .draft_destination_project("/fixture-linked-worktree/unregistered")
+                    .is_none()
+            );
+            workspace
+                .topology
+                .projects
+                .retain(|registered| registered.id != project.id);
+            assert!(
+                workspace.draft_destination_project(directory).is_none(),
+                "a worktree listing cannot register its absent project"
+            );
+        });
+    })
+    .expect("the window remains open");
+}
+
+#[gpui_kit::test]
 fn project_chooser_reselection_returns_to_the_composer(cx: &mut TestAppContext) {
     let (window, workspace) = open(cx);
     let directory = cx.read(|cx| workspace.read(cx).topology.projects[0].path.clone());

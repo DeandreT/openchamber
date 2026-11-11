@@ -466,6 +466,19 @@ impl Settings {
 }
 
 impl Workspace {
+    /// Retains the shared preference owner even when Settings is not visible.
+    pub(crate) fn ensure_settings_model(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Entity<Settings> {
+        let hosts = self.settings_host_manager(window, cx);
+        let owner = cx.weak_entity();
+        self.settings
+            .get_or_insert_with(|| cx.new(|cx| Settings::new(owner, hosts, window, cx)))
+            .clone()
+    }
+
     pub(crate) fn open_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.close_in_progress() {
             return;
@@ -484,12 +497,7 @@ impl Workspace {
         if self.close_in_progress() {
             return;
         }
-        let hosts = self.settings_host_manager(window, cx);
-        let owner = cx.weak_entity();
-        let settings = self
-            .settings
-            .get_or_insert_with(|| cx.new(|cx| Settings::new(owner, hosts, window, cx)))
-            .clone();
+        let settings = self.ensure_settings_model(window, cx);
         settings.update(cx, |settings, cx| {
             settings
                 .search

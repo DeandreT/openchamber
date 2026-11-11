@@ -46,6 +46,32 @@ class GitHttpRemoteTest(unittest.TestCase):
         run(self.root, "clone", "-q", f"{self.remote.url}/remote.git", str(self.root / "clone"))
         self.assertTrue((self.root / "clone" / "a.txt").exists())
 
+    def test_a_held_fetch_continues_on_the_same_request_after_release(self):
+        run(self.work, "push", "-q", "origin", "main")
+        self.remote.hold_fetches()
+        done = threading.Event()
+        outcomes = []
+        def clone():
+            try:
+                run(self.root, "clone", "-q", f"{self.remote.url}/remote.git", str(self.root / "held-clone"))
+                outcomes.append("accepted")
+            finally:
+                done.set()
+        worker = threading.Thread(target=clone, daemon=True)
+        worker.start()
+        try:
+            deadline = time.monotonic() + 15
+            while not self.remote.fetches() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertGreater(self.remote.fetches(), 0)
+            self.assertFalse(done.is_set(), "the fetch waits for the owned gate")
+        finally:
+            self.remote.release_fetches()
+        self.assertTrue(done.wait(15))
+        worker.join()
+        self.assertEqual(outcomes, ["accepted"])
+        self.assertEqual((self.root / "held-clone/a.txt").read_text(), "a\n")
+
     def test_chunked_gzip_reaches_backend_decoded(self):
         payload = b"Git protocol bytes\x00" * 50
         compressed = gzip.compress(payload)

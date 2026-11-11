@@ -3,7 +3,9 @@
 //! Each runtime serializes its writes. Failed fields retain their chosen value
 //! until an explicit retry; other fields can still save.
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::searchable_list::{SearchableListItem, SearchableVec};
@@ -17,7 +19,9 @@ use gpui_kit::{
 use openchamber_native_core::ids::RuntimeId;
 use openchamber_native_core::message_queue::FollowUpBehavior;
 use openchamber_native_core::permission_mode::PermissionMode;
-use openchamber_native_transport::client::{ServerClient, ServerSettings, SettingsChanges};
+use openchamber_native_transport::client::{
+    ServerClient, ServerSettings, SettingsChanges, WorkStatusSectionList,
+};
 use openchamber_native_transport::dictation::SttProvider;
 use openchamber_native_transport::notification::NotificationTemplates;
 use openchamber_native_transport::terminal::{TerminalApi, TerminalShell};
@@ -25,6 +29,7 @@ use openchamber_native_transport::terminal::{TerminalApi, TerminalShell};
 use crate::activation::on_activate;
 use crate::baseline::CssTextExt;
 use crate::chrome::glyph;
+use crate::context_panel::work_status_sections;
 use crate::locale;
 use crate::logical::LogicalStyledExt;
 use crate::network::{Network, NetworkTask};
@@ -61,7 +66,12 @@ pub(crate) const STT_LANGUAGE: usize = 26;
 pub(crate) const STT_CORRECT: usize = 27;
 pub(crate) const ARCHIVE_ON_DONE: usize = 28;
 pub(crate) const MERGED_CLEANUP: usize = 29;
-const FIELDS: usize = 30;
+const WORK_STATUS_ORDER: usize = 30;
+const WORK_STATUS_HIDDEN: usize = 31;
+const WORK_STATUS_EXPLICIT: usize = 32;
+const FIELDS: usize = 33;
+const WORK_STATUS_FIELDS: [usize; 3] =
+    [WORK_STATUS_ORDER, WORK_STATUS_HIDDEN, WORK_STATUS_EXPLICIT];
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Choice {
@@ -72,6 +82,7 @@ pub(crate) enum Choice {
     Text(String),
     Templates(NotificationTemplates),
     Provider(SttProvider),
+    Sections(Vec<String>),
 }
 
 type Values = [Option<Choice>; FIELDS];
@@ -131,6 +142,9 @@ impl Default for State {
                 Choice::Boolean(false),
                 // Both finished-worktree switches are off until chosen.
                 Choice::Boolean(false),
+                Choice::Boolean(false),
+                Choice::Sections(work_status_sections::sanitize_order(&[])),
+                Choice::Sections(Vec::new()),
                 Choice::Boolean(false),
             ],
             revisions: [0; FIELDS],
@@ -261,6 +275,13 @@ impl State {
         }
     }
 
+    fn sections(&self, field: usize) -> &[String] {
+        match &self.values[field] {
+            Choice::Sections(sections) => sections,
+            _ => unreachable!("section fields only accept section lists"),
+        }
+    }
+
     /// Known choices, or with `unsettled_only` only those the server has not confirmed.
     fn preferences(&self, unsettled_only: bool) -> GeneralPreferences {
         let include = |field| self.known[field] && (!unsettled_only || self.unsettled(field));
@@ -290,11 +311,17 @@ impl State {
             stt_correct_transcript: boolean(STT_CORRECT),
             worktree_archive_on_done: boolean(ARCHIVE_ON_DONE),
             merged_worktree_cleanup: boolean(MERGED_CLEANUP),
+            work_status_section_order: include(WORK_STATUS_ORDER)
+                .then(|| WorkStatusSectionList::Valid(self.sections(WORK_STATUS_ORDER).to_vec())),
+            work_status_hidden_sections: include(WORK_STATUS_HIDDEN)
+                .then(|| WorkStatusSectionList::Valid(self.sections(WORK_STATUS_HIDDEN).to_vec())),
+            work_status_hidden_sections_explicit: boolean(WORK_STATUS_EXPLICIT),
         }
     }
 }
 
 fn fields(settings: &ServerSettings) -> Values {
+    let [order, hidden, explicit] = work_status_fields(settings);
     [
         settings.auto_save_enabled.map(Choice::Boolean),
         settings.terminal_close_on_exit.map(Choice::Boolean),
@@ -331,6 +358,32 @@ fn fields(settings: &ServerSettings) -> Values {
         settings.stt_correct_transcript.map(Choice::Boolean),
         settings.worktree_archive_on_done.map(Choice::Boolean),
         settings.merged_worktree_cleanup.map(Choice::Boolean),
+        order,
+        hidden,
+        explicit,
+    ]
+}
+
+fn work_status_fields(settings: &ServerSettings) -> [Option<Choice>; 3] {
+    [
+        settings
+            .work_status_section_order
+            .as_ref()
+            .and_then(WorkStatusSectionList::entries)
+            .map(|order| Choice::Sections(work_status_sections::sanitize_order(order))),
+        settings
+            .work_status_hidden_sections
+            .as_ref()
+            .and_then(WorkStatusSectionList::entries)
+            .map(|hidden| {
+                Choice::Sections(work_status_sections::sanitize_hidden(
+                    hidden,
+                    settings.work_status_hidden_sections_explicit == Some(true),
+                ))
+            }),
+        settings
+            .work_status_hidden_sections_explicit
+            .map(Choice::Boolean),
     ]
 }
 
@@ -350,6 +403,10 @@ impl Write {
         };
         let text = |field| match &self.values[field] {
             Some(Choice::Text(text)) => Some(text.clone()),
+            _ => None,
+        };
+        let sections = |field| match &self.values[field] {
+            Some(Choice::Sections(sections)) => Some(sections.clone()),
             _ => None,
         };
         SettingsChanges {
@@ -399,6 +456,9 @@ impl Write {
             allow_prompting_subagent_sessions: boolean(SUBAGENT_PROMPTS),
             worktree_archive_on_done_enabled: boolean(ARCHIVE_ON_DONE),
             merged_worktree_cleanup_enabled: boolean(MERGED_CLEANUP),
+            work_status_section_order: sections(WORK_STATUS_ORDER),
+            work_status_hidden_sections: sections(WORK_STATUS_HIDDEN),
+            work_status_hidden_sections_explicit: boolean(WORK_STATUS_EXPLICIT),
             ..SettingsChanges::default()
         }
     }
@@ -430,12 +490,213 @@ struct RuntimeSettings {
     shells: Vec<TerminalShell>,
     shells_loaded: bool,
     read_failed: bool,
+    work_status_layout_admitted: bool,
+    work_status_order_malformed: bool,
+    work_status_hidden_malformed: bool,
     shells_failed: bool,
+}
+
+struct WorkStatusRead {
+    clock: Rc<Cell<u64>>,
+    ticket: u64,
+    revisions: Option<[Option<u64>; 3]>,
+}
+
+impl WorkStatusRead {
+    fn begin(clock: Rc<Cell<u64>>, revisions: Option<[Option<u64>; 3]>) -> Self {
+        let ticket = clock.get() + 1;
+        clock.set(ticket);
+        Self {
+            clock,
+            ticket,
+            revisions,
+        }
+    }
+
+    fn is_current(&self, clock: &Rc<Cell<u64>>) -> bool {
+        Rc::ptr_eq(&self.clock, clock) && self.ticket == clock.get()
+    }
+}
+
+impl RuntimeSettings {
+    fn preferences(&self, unsettled_only: bool) -> GeneralPreferences {
+        let mut preferences = self.state.preferences(unsettled_only);
+        for (list, malformed) in [
+            (
+                &mut preferences.work_status_section_order,
+                self.work_status_order_malformed,
+            ),
+            (
+                &mut preferences.work_status_hidden_sections,
+                self.work_status_hidden_malformed,
+            ),
+        ] {
+            if malformed && let Some(WorkStatusSectionList::Valid(entries)) = list.take() {
+                *list = Some(WorkStatusSectionList::MalformedWithPrior(entries));
+            }
+        }
+        preferences
+    }
+
+    fn work_status_read_revisions(&self) -> [Option<u64>; 3] {
+        let revisions = self.state.read_revisions();
+        WORK_STATUS_FIELDS.map(|field| revisions[field])
+    }
+
+    fn adopt_work_status(&mut self, read: &WorkStatusRead, settings: &ServerSettings) -> bool {
+        if read.ticket != read.clock.get() {
+            return false;
+        }
+        let Some(start_revisions) = read.revisions else {
+            return false;
+        };
+        let mut revisions = [None; FIELDS];
+        let mut values = std::array::from_fn(|_| None);
+        let incoming_fields = WORK_STATUS_FIELDS
+            .into_iter()
+            .zip(start_revisions)
+            .zip(work_status_fields(settings));
+        for ((field, revision), value) in incoming_fields {
+            revisions[field] = revision;
+            values[field] = value;
+        }
+        self.state.adopt(revisions, values);
+        self.work_status_order_malformed = settings
+            .work_status_section_order
+            .as_ref()
+            .is_some_and(WorkStatusSectionList::is_malformed);
+        self.work_status_hidden_malformed = settings
+            .work_status_hidden_sections
+            .as_ref()
+            .is_some_and(WorkStatusSectionList::is_malformed);
+        self.work_status_layout_admitted = true;
+        true
+    }
+}
+
+/// Authority captured before a Workspace settings request is dispatched.
+/// It never retains a preference owner that the workspace has replaced.
+pub(crate) struct WorkStatusSettingsRead {
+    runtime: RuntimeId,
+    generation: Option<u64>,
+    owner: Option<WeakEntity<GeneralSettings>>,
+    read: Option<WorkStatusRead>,
+}
+
+impl Workspace {
+    pub(crate) fn begin_work_status_settings_read(
+        &self,
+        cx: &mut Context<Self>,
+    ) -> WorkStatusSettingsRead {
+        let general = self
+            .settings
+            .as_ref()
+            .map(|settings| settings.read(cx).general.clone());
+        let can_dispatch = self
+            .connection
+            .as_ref()
+            .is_some_and(|connection| connection.client.is_some());
+        let revisions = general.as_ref().and_then(|general| {
+            general
+                .read(cx)
+                .runtimes
+                .get(&self.runtime)
+                .map(RuntimeSettings::work_status_read_revisions)
+        });
+        let read = can_dispatch.then(|| {
+            WorkStatusRead::begin(
+                Rc::clone(&self.send_catalog.work_status_read_clock),
+                revisions,
+            )
+        });
+        WorkStatusSettingsRead {
+            runtime: self.runtime.clone(),
+            generation: self
+                .connection
+                .as_ref()
+                .map(|connection| connection.generation),
+            owner: general.as_ref().map(Entity::downgrade),
+            read,
+        }
+    }
+
+    /// Consume the raw successful document before any fallback or optimistic
+    /// overlay. Only the layout fields enter the retained settings owner.
+    pub(crate) fn reconcile_work_status_settings(
+        &self,
+        read: &WorkStatusSettingsRead,
+        incoming: &mut ServerSettings,
+        cx: &mut Context<Self>,
+    ) {
+        let general = self
+            .settings
+            .as_ref()
+            .map(|settings| settings.read(cx).general.clone());
+        let same_scope = self.runtime == read.runtime
+            && self
+                .connection
+                .as_ref()
+                .map(|connection| connection.generation)
+                == read.generation
+            && read
+                .read
+                .as_ref()
+                .is_some_and(|token| token.is_current(&self.send_catalog.work_status_read_clock));
+        let same_owner = match (&read.owner, &general) {
+            (None, None) => true,
+            (Some(captured), Some(current)) => captured
+                .upgrade()
+                .is_some_and(|captured| captured.entity_id() == current.entity_id()),
+            _ => false,
+        };
+        let admitted = if same_scope && same_owner {
+            match (&general, read.read.as_ref()) {
+                (Some(general), Some(token)) => general.update(cx, |general, cx| {
+                    let adopted = general
+                        .runtimes
+                        .get_mut(&read.runtime)
+                        .is_some_and(|slot| slot.adopt_work_status(token, incoming));
+                    if adopted {
+                        cx.notify();
+                    }
+                    adopted
+                }),
+                (None, Some(_)) => true,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if admitted {
+            work_status_sections::retain_validated_layout(
+                incoming,
+                self.send_catalog.settings.as_ref(),
+            );
+        } else {
+            // An older read or a different owner has no layout publication
+            // authority, including no authority to change malformed flags.
+            let previous = self.send_catalog.settings.as_ref();
+            incoming.work_status_section_order =
+                previous.and_then(|settings| settings.work_status_section_order.clone());
+            incoming.work_status_hidden_sections =
+                previous.and_then(|settings| settings.work_status_hidden_sections.clone());
+            incoming.work_status_hidden_sections_explicit =
+                previous.and_then(|settings| settings.work_status_hidden_sections_explicit);
+        }
+        if let Some(general) = general {
+            general
+                .read(cx)
+                .overlay_work_status_settings(&self.runtime, incoming);
+        }
+    }
 }
 
 /// Known Settings choices. Missing fields leave the consumer's own state intact.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct GeneralPreferences {
+    pub(crate) work_status_section_order: Option<WorkStatusSectionList>,
+    pub(crate) work_status_hidden_sections: Option<WorkStatusSectionList>,
+    pub(crate) work_status_hidden_sections_explicit: Option<bool>,
     pub(crate) auto_save_enabled: Option<bool>,
     pub(crate) terminal_close_on_exit: Option<bool>,
     pub(crate) terminal_shell: Option<String>,
@@ -468,6 +729,18 @@ impl GeneralPreferences {
                 target.clone_from(value);
             }
         }
+        set(
+            &mut settings.work_status_section_order,
+            &self.work_status_section_order,
+        );
+        set(
+            &mut settings.work_status_hidden_sections,
+            &self.work_status_hidden_sections,
+        );
+        set(
+            &mut settings.work_status_hidden_sections_explicit,
+            &self.work_status_hidden_sections_explicit,
+        );
         set(&mut settings.auto_save_enabled, &self.auto_save_enabled);
         set(
             &mut settings.terminal_close_on_exit,
@@ -644,19 +917,36 @@ impl GeneralSettings {
             cx.notify();
             return;
         };
+        let Some(owner) = self.owner.upgrade() else {
+            return;
+        };
+        let clock = Rc::clone(&owner.read(cx).send_catalog.work_status_read_clock);
         self.current = Some(target.clone());
         let slot = self.runtimes.entry(target.runtime.clone()).or_default();
         slot.target = Some(target.clone());
         slot.read_revision += 1;
         let read_revision = slot.read_revision;
         let revisions = slot.state.read_revisions();
+        let work_status_read =
+            WorkStatusRead::begin(clock, Some(slot.work_status_read_revisions()));
         let client = target.client.clone();
         let reading =
             NetworkTask::spawn_on(&target.network, async move { client.settings().await });
         let runtime = target.runtime.clone();
+        let generation = target.generation;
         slot.read = Some(cx.spawn(async move |this, cx| {
             let result = reading.await;
             let _ = this.update(cx, |this, cx| {
+                let layout_scope_current = this.owner.upgrade().is_some_and(|owner| {
+                    let workspace = owner.read(cx);
+                    workspace.runtime == runtime
+                        && workspace
+                            .connection
+                            .as_ref()
+                            .is_some_and(|connection| connection.generation == generation)
+                        && work_status_read
+                            .is_current(&workspace.send_catalog.work_status_read_clock)
+                });
                 let Some(slot) = this.runtimes.get_mut(&runtime) else {
                     return;
                 };
@@ -666,7 +956,14 @@ impl GeneralSettings {
                 slot.read = None;
                 match result {
                     Some(Ok(settings)) => {
-                        slot.state.adopt(revisions, fields(&settings));
+                        let mut values = fields(&settings);
+                        for field in WORK_STATUS_FIELDS {
+                            values[field] = None;
+                        }
+                        slot.state.adopt(revisions, values);
+                        if layout_scope_current {
+                            slot.adopt_work_status(&work_status_read, &settings);
+                        }
                         slot.read_failed = false;
                         this.apply(&runtime, cx);
                     }
@@ -724,6 +1021,179 @@ impl GeneralSettings {
         cx.notify();
     }
 
+    /// One visibility edit accepts the hidden list and its migration marker
+    /// together. Both travel through the existing captured-runtime writer.
+    pub(crate) fn set_work_status_hidden(
+        &mut self,
+        runtime: &RuntimeId,
+        hidden: &[String],
+        cx: &mut Context<Self>,
+    ) {
+        self.change_work_status(
+            runtime,
+            &[
+                (
+                    WORK_STATUS_HIDDEN,
+                    Choice::Sections(work_status_sections::sanitize_hidden(hidden, true)),
+                ),
+                (WORK_STATUS_EXPLICIT, Choice::Boolean(true)),
+            ],
+            cx,
+        );
+    }
+
+    pub(crate) fn set_work_status_order(
+        &mut self,
+        runtime: &RuntimeId,
+        order: &[String],
+        cx: &mut Context<Self>,
+    ) {
+        self.change_work_status(
+            runtime,
+            &[(
+                WORK_STATUS_ORDER,
+                Choice::Sections(work_status_sections::sanitize_order(order)),
+            )],
+            cx,
+        );
+    }
+
+    fn change_work_status(
+        &mut self,
+        runtime: &RuntimeId,
+        fields: &[(usize, Choice)],
+        cx: &mut Context<Self>,
+    ) {
+        if self.closing {
+            return;
+        }
+        let Some(target) = self.capture(cx) else {
+            return;
+        };
+        if &target.runtime != runtime {
+            return;
+        }
+        if !same_target(self.current.as_ref(), Some(&target)) {
+            self.refresh(cx);
+            return;
+        }
+        let slot = self.runtimes.entry(runtime.clone()).or_default();
+        // A successful whole-document read can still have a superseded layout
+        // response. Only admitted layout data can authorize whole-list edits.
+        if !slot.work_status_layout_admitted {
+            return;
+        }
+        if fields.iter().any(|(field, _)| {
+            (*field == WORK_STATUS_ORDER
+                && slot.work_status_order_malformed
+                && !slot.state.known[WORK_STATUS_ORDER])
+                || (*field == WORK_STATUS_HIDDEN
+                    && slot.work_status_hidden_malformed
+                    && !slot.state.known[WORK_STATUS_HIDDEN])
+        }) {
+            return;
+        }
+        if fields
+            .iter()
+            .all(|(field, value)| slot.state.values[*field] == *value && !slot.state.failed[*field])
+        {
+            return;
+        }
+        slot.target = Some(target);
+        for (field, value) in fields {
+            slot.state.change(*field, value.clone());
+        }
+        self.apply(runtime, cx);
+        self.save(runtime, cx);
+        cx.notify();
+    }
+
+    /// A still-rendered dialog cannot submit an old runtime's layout on a
+    /// newly selected server, even before its observer has rerendered it.
+    pub(crate) fn work_status_editable(
+        &self,
+        runtime: &RuntimeId,
+        generation: Option<u64>,
+    ) -> bool {
+        self.editable()
+            && self
+                .runtimes
+                .get(runtime)
+                .is_some_and(|slot| slot.work_status_layout_admitted)
+            && self.current.as_ref().is_some_and(|target| {
+                &target.runtime == runtime && Some(target.generation) == generation
+            })
+    }
+
+    pub(crate) fn work_status_order_editable(
+        &self,
+        runtime: &RuntimeId,
+        generation: Option<u64>,
+    ) -> bool {
+        self.work_status_editable(runtime, generation)
+            && self.runtimes.get(runtime).is_some_and(|slot| {
+                !slot.work_status_order_malformed || slot.state.known[WORK_STATUS_ORDER]
+            })
+    }
+
+    pub(crate) fn work_status_visibility_editable(
+        &self,
+        runtime: &RuntimeId,
+        generation: Option<u64>,
+    ) -> bool {
+        self.work_status_editable(runtime, generation)
+            && self.runtimes.get(runtime).is_some_and(|slot| {
+                !slot.work_status_hidden_malformed || slot.state.known[WORK_STATUS_HIDDEN]
+            })
+    }
+
+    /// Reads only this layout's fields; streamed workspace renders do not clone
+    /// unrelated settings or their provider/project collections.
+    pub(crate) fn work_status_layout(
+        &self,
+        runtime: &RuntimeId,
+        fallback: Option<&ServerSettings>,
+    ) -> work_status_sections::Layout {
+        let state = self.runtimes.get(runtime).map(|slot| &slot.state);
+        let sections = |field| {
+            state
+                .filter(|state| state.known[field])
+                .map(|state| state.sections(field))
+        };
+        work_status_sections::Layout::from_settings(fallback)
+            .with_known_lists(sections(WORK_STATUS_ORDER), sections(WORK_STATUS_HIDDEN))
+    }
+
+    fn overlay_work_status_settings(&self, runtime: &RuntimeId, settings: &mut ServerSettings) {
+        let Some(slot) = self.runtimes.get(runtime) else {
+            return;
+        };
+        let sections = |field: usize, malformed: bool| {
+            slot.state.known[field].then(|| {
+                let entries = slot.state.sections(field).to_vec();
+                if malformed {
+                    WorkStatusSectionList::MalformedWithPrior(entries)
+                } else {
+                    WorkStatusSectionList::Valid(entries)
+                }
+            })
+        };
+        GeneralPreferences {
+            work_status_section_order: sections(
+                WORK_STATUS_ORDER,
+                slot.work_status_order_malformed,
+            ),
+            work_status_hidden_sections: sections(
+                WORK_STATUS_HIDDEN,
+                slot.work_status_hidden_malformed,
+            ),
+            work_status_hidden_sections_explicit: slot.state.known[WORK_STATUS_EXPLICIT]
+                .then(|| slot.state.boolean(WORK_STATUS_EXPLICIT)),
+            ..GeneralPreferences::default()
+        }
+        .apply_to(settings);
+    }
+
     fn save(&mut self, runtime: &RuntimeId, cx: &mut Context<Self>) {
         let Some(slot) = self.runtimes.get_mut(runtime) else {
             return;
@@ -774,10 +1244,21 @@ impl GeneralSettings {
         };
         let runtime = runtime.clone();
         let owner = self.owner.clone();
+        let layout_owner = cx.weak_entity();
         // Defer avoids reading this entity while its Workspace observer runs.
         cx.defer(move |cx| {
             let _ = owner.update(cx, |owner, cx| {
                 owner.apply_general_settings(&runtime, &preferences, cx);
+                // A topology read can settle newer layout fields before this
+                // deferred publication. Re-read only the three layout choices.
+                if owner.runtime == runtime
+                    && let Some(layout_owner) = layout_owner.upgrade()
+                    && let Some(settings) = owner.send_catalog.settings.as_mut()
+                {
+                    layout_owner
+                        .read(cx)
+                        .overlay_work_status_settings(&runtime, settings);
+                }
             });
         });
     }
@@ -786,14 +1267,14 @@ impl GeneralSettings {
     pub(crate) fn preferences(&self, runtime: &RuntimeId) -> Option<GeneralPreferences> {
         self.runtimes
             .get(runtime)
-            .map(|slot| slot.state.preferences(false))
+            .map(|slot| slot.preferences(false))
     }
 
     /// Choices the server has not confirmed, which a newer server read must not replace.
     pub(crate) fn unsettled_preferences(&self, runtime: &RuntimeId) -> Option<GeneralPreferences> {
         self.runtimes
             .get(runtime)
-            .map(|slot| slot.state.preferences(true))
+            .map(|slot| slot.preferences(true))
     }
 
     /// Writes dispatch immediately; normal close can await this without retrying failures.
@@ -898,8 +1379,15 @@ impl GeneralSettings {
     pub(crate) fn status(&self, shells: bool) -> (Option<&'static str>, bool) {
         let slot = self.current_slot();
         let failed = slot.is_some_and(|slot| slot.state.failed.iter().any(|failed| *failed));
-        let read_failed =
-            slot.is_some_and(|slot| slot.read_failed || (shells && slot.shells_failed));
+        let read_failed = slot.is_some_and(|slot| {
+            slot.read_failed
+                // A superseded first document leaves no layout authority.
+                // Keep the existing Retry reachable after that read finishes.
+                || (!slot.work_status_layout_admitted && slot.read.is_none())
+                || slot.work_status_order_malformed
+                || slot.work_status_hidden_malformed
+                || (shells && slot.shells_failed)
+        });
         let key = if failed {
             Some("settings.common.status.saveFailed")
         } else if read_failed {
@@ -1574,7 +2062,7 @@ mod tests {
 
     /// A server read carrying only `entries`.
     fn read(entries: &[(usize, Choice)]) -> Values {
-        let mut values: Values = Default::default();
+        let mut values: Values = std::array::from_fn(|_| None);
         for (field, choice) in entries {
             values[*field] = Some(choice.clone());
         }

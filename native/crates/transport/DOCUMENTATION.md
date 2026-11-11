@@ -25,6 +25,7 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `composer_catalog.rs` | The composer pickers' catalogs no send reads: the commands of a directory (`/api/command`, then each command's `/api/config/commands/:name/config` for its scope) and its snippets (`/api/config/snippets`). The `$` picker's skills come from `composer_preparation.rs`'s `skill_choices`, the same available skills a send resolves. |
 | `files.rs` | The Files surface's filesystem routes: folder listings, OpenCode's fuzzy file and folder search (`/api/fs/find`), ripgrep content search, stat, text and bounded raw reads, writes and renames, scoped to the workspace by the directory header. |
 | `git.rs` | The Git surface's routes: the full status, path and batch diffs, stage, unstage, discard, commit, branches, the repository's transport binding and planned network operations. |
+| `walkthrough.rs` | Cached walkthrough reads, explicit generation and cancellation, memory-only progress, and validated server-owned chapter, stop and hunk identities. |
 | `source_control.rs` | The source board's routes (`/api/source-control/*`): providers, instances, a host's auth status, the binding with its provider associations, reference pages, an item's detail, listed change requests' statuses, read-cache refresh, and comment, state and review mutations with their receipt checks. |
 | `scheduled_tasks.rs` | Scheduled tasks (`/api/projects/:projectId/scheduled-tasks`): the list, save, delete, run now with its busy answer, a loop file's enable and delete, and target eligibility in batches of 500. A task keeps its raw JSON so a toggle writes back fields this client does not know. |
 | `project_context.rs` | Project knowledge (`/api/project-context/:projectId`, a path-derived id): the context, one todo at a time, the whole todo list with plan links and dependencies, notes, plan Markdown by id, the plan's session and share moves. A gone entry answers `None`; a failed read is an error. |
@@ -87,6 +88,13 @@ counts and identifiers only.
   responses do not signal revocation. The desktop scopes the watch to the
   connection generation and endpoint, cancels that generation and returns to
   sign-in while retaining drafts and pending mutation identities.
+- Work-status settings lists distinguish omitted fields, validated arrays
+  including explicit empty arrays, and malformed values including JSON null.
+  A malformed layout field leaves unrelated valid settings usable. The
+  `MalformedWithPrior` projection holds native-retained presentation only;
+  `entries()` grants new list authority only to `Valid`. Raw wire parsing never
+  creates retained-prior metadata. Outgoing partial settings writes remain
+  plain arrays and omit untouched preferences.
 - Event and terminal WebSocket upgrades include the selected HTTP endpoint's
   origin along with the bearer. Password-protected servers check both; an
   absent origin is rejected even when the token is valid. Paths stay in the
@@ -130,6 +138,12 @@ counts and identifiers only.
   Execute, read and cancel send no body and address the operation by its ID.
   The legacy push, pull and fetch routes are never called. An operation with
   an unknown state or action is malformed.
+- A single-ref fetch carries `sourceRef` and `destinationRef`; a whole-remote
+  fetch carries `fetchScope: "remote"`. Integration resolves the fetched tracking
+  ref to a commit before merging or rebasing.
+- Walkthrough reads validate the requested source, complete hunk count and
+  unique chapter, stop and hunk identities. Failures never become an empty
+  walkthrough. Generation is explicit and is never retried automatically.
 - `repository_binding` derives an unconfigured repository's grants as ready
   System grants for every remote (`effectiveRepositoryBinding`). A bound
   grant takes the repository's current endpoints and is ready only while its

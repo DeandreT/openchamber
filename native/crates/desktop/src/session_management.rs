@@ -666,6 +666,61 @@ impl Workspace {
     }
 
     /// Archive or delete: asks first while the setting says so.
+    pub(crate) fn archive_project_sessions(
+        &mut self,
+        project: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.session_actions_available() {
+            return;
+        }
+        let mut targets = Vec::new();
+        for session in self.sessions.active() {
+            if session.parent_id.is_some()
+                || session.overlay.pinned_at.is_some()
+                || session.overlay.in_work
+            {
+                continue;
+            }
+            let Some(directory) = session.resolved_directory() else {
+                continue;
+            };
+            if self.project_of_directory(&directory).as_deref() != Some(project) {
+                continue;
+            }
+            let tree = session_actions::archive_targets(&self.sessions, &session.id);
+            if tree.iter().any(|id| {
+                matches!(
+                    self.live_status.get(id),
+                    Some(
+                        openchamber_native_core::session::LiveStatus::Busy
+                            | openchamber_native_core::session::LiveStatus::Retry
+                    )
+                )
+            }) {
+                continue;
+            }
+            for id in tree {
+                if !targets.contains(&id) {
+                    targets.push(id);
+                }
+            }
+        }
+        if targets.is_empty() {
+            let message = locale::strings(cx).get("sessions.sidebar.project.archiveAll.nothing");
+            self.push_notice(Notification::info(message.clone()), message, window, cx);
+            return;
+        }
+        let confirm = RemovalConfirm {
+            runtime: self.runtime.clone(),
+            title: self.project_display_label(project).to_string(),
+            targets,
+            hard_delete: false,
+        };
+        self.open_removal_dialog(confirm, window, cx);
+    }
+
     pub(crate) fn request_removal(
         &mut self,
         session_id: &SessionId,
@@ -750,6 +805,7 @@ impl Workspace {
 
     fn save_deletion_dialog(&mut self, show: bool, window: &mut Window, cx: &mut Context<Self>) {
         let runtime = self.runtime.clone();
+        let layout_read = self.begin_work_status_settings_read(cx);
         let effort_read = self.begin_effort_settings_read();
         let started = self.spawn_session_task(
             move |client| {
@@ -770,6 +826,7 @@ impl Workspace {
                 // The merged document is authoritative for this runtime.
                 let stored = match result {
                     Some(Ok(mut settings)) => {
+                        this.reconcile_work_status_settings(&layout_read, &mut settings, cx);
                         this.reconcile_effort_settings(&effort_read, &mut settings);
                         // This toggle is newer than an unconfirmed Settings choice.
                         let confirmed = settings.show_deletion_dialog;

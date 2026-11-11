@@ -23,6 +23,41 @@ class SizedClient(NativeClient):
 
 
 class NativeSizeTest(unittest.TestCase):
+    def test_close_refuses_a_different_display_before_loading_x11(self):
+        client = SizedClient()
+        client.env = {"DISPLAY": ":other"}
+        with patch("native_adapter.virtual_display.verify_owned_display"), \
+             patch.dict("native_adapter.os.environ", {"DISPLAY": ":owned"}), \
+             patch("native_adapter.ctypes.CDLL") as library:
+            with self.assertRaisesRegex(RuntimeError, "verified private display"):
+                client.request_window_close()
+        library.assert_not_called()
+
+
+    def test_close_sends_the_delete_protocol_without_destroying_the_window(self):
+        client = SizedClient()
+        client.env = {"DISPLAY": ":owned"}
+        x11 = Mock()
+        x11.XOpenDisplay.return_value = 1
+        x11.XInternAtom.side_effect = lambda display, name, only: 101 if name == b"WM_PROTOCOLS" else 102
+        sent = []
+        def send(display, window, propagate, mask, event):
+            message = event._obj.message
+            sent.append((display, window, propagate, mask, message.type, message.message_type, message.format, message.data.longs[0]))
+            return 1
+        x11.XSendEvent.side_effect = send
+        with patch("native_adapter.virtual_display.verify_owned_display"), \
+             patch.dict("native_adapter.os.environ", {"DISPLAY": ":owned"}), \
+             patch("native_adapter.ctypes.util.find_library", return_value="X11"), \
+             patch("native_adapter.ctypes.CDLL", return_value=x11), \
+             patch.object(client, "_window", return_value="123"):
+            client.request_window_close()
+        self.assertEqual(sent, [(1, 123, 0, 0, 33, 101, 32, 102)])
+        x11.XOpenDisplay.assert_called_once_with(b":owned")
+        x11.XCloseDisplay.assert_called_once_with(1)
+        x11.XDestroyWindow.assert_not_called()
+
+
     def test_first_requested_size_does_not_outlive_the_startup_hold(self):
         client = SizedClient()
         client.content = SimpleNamespace(width=900, height=600)

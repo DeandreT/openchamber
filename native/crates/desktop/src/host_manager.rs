@@ -524,6 +524,7 @@ impl Workspace {
                 || self.queue.prefixes.holds_runtime(runtime)
                 || self.queue.local_sends.holds_runtime(runtime)
                 || self.effort_preferences.holds_runtime(runtime)
+                || self.worktree_removals.holds_runtime(runtime)
                 || self
                     .mutation_tasks
                     .keys()

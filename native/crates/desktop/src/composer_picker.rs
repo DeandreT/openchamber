@@ -453,12 +453,20 @@ impl RenderOnce for SelectionControl {
         let placeholder = locale::strings(cx).get(self.kind.search());
         let empty = locale::strings(cx).get(self.empty_key);
         let muted = palette.muted_foreground;
-        div().key_context("ComposerPicker").h(px(32.0)).child(
+        let icon_width = if self.provider.is_some() { 17.0 } else { 16.0 };
+        // Kit leaves 4px after the trigger; its icon must remain a full target
+        // when the surrounding labels give up their width.
+        let control = div()
+            .key_context("ComposerPicker")
+            .min_w(px(icon_width + 4.0));
+        control.h(px(32.0)).child(
             Combobox::new(&self.state)
                 .appearance(false)
                 .border_0()
                 .p_0()
                 .w_auto()
+                .min_w_0()
+                .max_w_full()
                 .h(px(32.0))
                 .disabled(self.disabled)
                 .menu_width(px(320.0))
@@ -500,6 +508,7 @@ impl RenderOnce for SelectionControl {
                     let leading = if suffix && self.show_label {
                         Some(
                             div()
+                                .flex_shrink_0()
                                 .css_text(0.78125, 1.125, cx)
                                 .text_color(palette.muted_foreground.opacity(0.6))
                                 .child("/")
@@ -512,7 +521,11 @@ impl RenderOnce for SelectionControl {
                                 .render_provider_logo(provider, 17.0, 1.0, &palette)
                         })
                     } else {
-                        Some(glyph(self.icon, 16.0, self.color).into_any_element())
+                        Some(
+                            glyph(self.icon, 16.0, self.color)
+                                .flex_shrink_0()
+                                .into_any_element(),
+                        )
                     };
                     let shown = if suffix {
                         self.label.to_lowercase().into()
@@ -541,7 +554,8 @@ impl RenderOnce for SelectionControl {
                             }
                         })
                         .h(px(32.0))
-                        .min_w_0()
+                        .min_w(px(icon_width))
+                        .max_w_full()
                         .flex_row_from(self.direction)
                         .items_center()
                         .gap(px(if suffix { 4.0 } else { 6.0 }))
@@ -625,6 +639,84 @@ mod tests {
             .send_catalog
             .insert_test_directory(directory.clone(), catalog);
         workspace.choose_draft_project(&directory, window, cx);
+    }
+
+    #[gpui_kit::test]
+    fn a_narrow_panel_keeps_the_composer_controls_disjoint(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let fixture = crate::recovery_tests::Fixture::new();
+        let (window, workspace) = crate::workspace_tests::open(cx);
+        cx.simulate_window_resize(window, gpui_kit::size(px(1440.0), px(900.0)));
+        cx.update_window(window, |_, window, cx| {
+            window.activate_accessibility_for_test();
+            workspace.update(cx, |workspace, cx| {
+                setup(workspace, window, cx);
+                let path = workspace.topology.projects[0].path.clone();
+                let catalog = workspace
+                    .send_catalog
+                    .directory(&path)
+                    .expect("fixture catalog");
+                let agents = catalog.agents.ready().expect("fixture agents").clone();
+                let mut providers = catalog.providers.ready().expect("fixture models").clone();
+                providers[0].models[0].name =
+                    Some("A long model label beside the open editor".into());
+                let mut catalog = DirectoryCatalog::default();
+                catalog.agents = Load::Ready(agents);
+                catalog.providers = Load::Ready(providers);
+                catalog.opencode = Load::Ready(Default::default());
+                workspace.send_catalog.insert_test_directory(path, catalog);
+                workspace.panels.open = Some(crate::files_view::PanelSurface::Files);
+                workspace.pane_sizes.panel_width = Some(640.0);
+                workspace.open_persistence(fixture.journal(), window, cx);
+            });
+        })
+        .expect("narrow composer setup");
+        crate::recovery_tests::ready(cx, &workspace);
+        cx.update_window(window, |_, window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                let owner = workspace
+                    .selection_owner()
+                    .expect("fixture selection owner");
+                workspace.choose_composer_model(
+                    &owner,
+                    ModelChoice {
+                        provider_id: "provider".into(),
+                        model_id: "alpha".into(),
+                        variant: Some("low".into()),
+                    },
+                    cx,
+                );
+                workspace.choose_composer_agent(&owner, "build", cx);
+            });
+            window.render_frame(cx);
+            for (control, minimum) in [
+                ("composer-model", 17.0),
+                ("composer-variant", 16.0),
+                ("composer-agent", 16.0),
+            ] {
+                let bounds = window.find(control).bounds();
+                assert!(
+                    bounds.size.width >= px(minimum),
+                    "{control} must retain its full icon width: {bounds:?}"
+                );
+            }
+            let mut controls = vec!["composer-model", "composer-variant", "composer-agent"];
+            if window.try_find("composer-dictation").is_some() {
+                controls.push("composer-dictation");
+            }
+            controls.push("composer-submit");
+            for pair in controls.windows(2) {
+                let previous = window.find(pair[0]).bounds();
+                let next = window.find(pair[1]).bounds();
+                assert!(
+                    previous.right() <= next.left(),
+                    "{} overlaps {}: {previous:?}, {next:?}",
+                    pair[0],
+                    pair[1]
+                );
+            }
+        })
+        .expect("narrow composer bounds");
     }
 
     #[gpui_kit::test]

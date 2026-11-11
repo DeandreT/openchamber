@@ -11,7 +11,9 @@
 //! lazily and plugins register agents while it already serves, so the first
 //! directory is read again once startup has settled, as the web client does.
 
+use std::cell::Cell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui_kit::{Context, Task};
@@ -83,6 +85,8 @@ pub(crate) struct DirectoryCatalog {
 pub(crate) struct SendCatalog {
     /// Absent until the settings document was read.
     pub settings: Option<ServerSettings>,
+    /// One read-start clock for layout snapshots in this settings record.
+    pub(crate) work_status_read_clock: Rc<Cell<u64>>,
     pub settings_load: Load<()>,
     directories: HashMap<String, DirectoryCatalog>,
     recheck: Option<Task<()>>,

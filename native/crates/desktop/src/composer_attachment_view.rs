@@ -109,7 +109,12 @@ impl Workspace {
                     cx,
                 ));
             }
-            for context in &draft.content.context {
+            for context in draft
+                .content
+                .context
+                .iter()
+                .filter(|item| !item.is_hidden())
+            {
                 let name = context
                     .description
                     .as_deref()

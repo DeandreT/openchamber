@@ -18,6 +18,22 @@ pub struct DraftContent {
 }
 
 impl DraftContent {
+    /// Replaces the hidden parts with `parts`, keeping every visible item.
+    pub fn replace_hidden(&mut self, parts: Vec<String>) {
+        self.context.retain(|item| !item.is_hidden());
+        self.context.extend(
+            parts
+                .into_iter()
+                .enumerate()
+                .map(|(index, text)| DraftContext::hidden(index, text)),
+        );
+    }
+
+    /// Whether files or visible context would go out besides the text.
+    pub fn has_sendable_items(&self) -> bool {
+        !self.files.is_empty() || self.context.iter().any(|item| !item.is_hidden())
+    }
+
     /// Whether no semantic content is retained, including metadata and references.
     pub fn is_empty(&self) -> bool {
         self.files.is_empty()
@@ -91,6 +107,29 @@ pub struct DraftContext {
     pub description: Option<String>,
     pub metadata_json: Option<String>,
     pub instructions: Option<String>,
+}
+
+/// Context items whose ID starts with this go out with the next send like any
+/// other, but the composer neither lists them nor counts them as something to
+/// send (`pendingSyntheticParts`, as a conflict's hand-off fills them).
+pub const HIDDEN_CONTEXT_PREFIX: &str = "hidden-part:";
+
+impl DraftContext {
+    /// A hidden part carrying `text`, the `index`th of its hand-off.
+    pub fn hidden(index: usize, text: String) -> Self {
+        Self {
+            id: ContextItemId::from(format!("{HIDDEN_CONTEXT_PREFIX}{index}")),
+            text,
+            description: None,
+            metadata_json: None,
+            instructions: None,
+        }
+    }
+
+    /// Whether the composer leaves this item out of its list.
+    pub fn is_hidden(&self) -> bool {
+        self.id.as_str().starts_with(HIDDEN_CONTEXT_PREFIX)
+    }
 }
 
 impl fmt::Debug for DraftContext {
@@ -172,6 +211,43 @@ impl std::error::Error for ContentConflict {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidden_parts_replace_each_other_and_do_not_count_as_sendable() {
+        let visible = DraftContext {
+            id: ContextItemId::from("session-reference:a"),
+            text: "shown".to_owned(),
+            description: None,
+            metadata_json: None,
+            instructions: None,
+        };
+        let mut content = DraftContent {
+            context: vec![visible.clone()],
+            ..DraftContent::default()
+        };
+        content.replace_hidden(vec!["first".to_owned(), "second".to_owned()]);
+        content.replace_hidden(vec!["instructions".to_owned(), "payload".to_owned()]);
+        let texts: Vec<&str> = content
+            .context
+            .iter()
+            .map(|item| item.text.as_str())
+            .collect();
+        assert_eq!(
+            texts,
+            ["shown", "instructions", "payload"],
+            "a new hand-off replaces the old one"
+        );
+        assert!(
+            content.has_sendable_items(),
+            "the visible item still counts"
+        );
+        content.context.retain(DraftContext::is_hidden);
+        assert!(
+            !content.has_sendable_items(),
+            "hidden parts alone send nothing"
+        );
+        assert!(!content.is_empty(), "the draft still holds them");
+    }
 
     #[test]
     fn diagnostics_hide_semantic_payloads() {

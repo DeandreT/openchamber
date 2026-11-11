@@ -551,6 +551,16 @@ impl ServerClient {
             .json(&json!({ "oldPath": old_path, "newPath": new_path }));
         expect_success(request).await
     }
+
+    /// Reveals a path on the server's machine, as the web runtime does.
+    /// The client never interprets a remote path as a local filesystem path.
+    pub async fn reveal_path(&self, directory: &str, path: &str) -> Result<(), FilesError> {
+        expect_success(
+            self.files_request(Method::POST, "api/fs/reveal", directory, &[])
+                .json(&json!({ "path": path })),
+        )
+        .await
+    }
 }
 
 async fn files_json<T: DeserializeOwned>(request: RequestBuilder) -> Result<T, FilesError> {

@@ -340,7 +340,7 @@ impl Workspace {
     }
 
     /// The directory a panel surface shows.
-    fn panel_directory(&self) -> Option<String> {
+    pub(crate) fn panel_directory(&self) -> Option<String> {
         if self.selected.is_some() {
             path::normalize_optional(self.selected_session()?.directory.as_deref())
         } else {
@@ -646,9 +646,9 @@ impl Workspace {
             .w(px(self.fitted_panel_width(window)))
             .flex_shrink_0()
             .h_full()
-            .py(px(8.0))
-            .margin_start(direction, px(4.0))
-            .margin_end(direction, px(8.0))
+            .pb(px(8.0))
+            .padding_start(direction, px(8.0))
+            .padding_end(direction, px(6.0))
             .child(
                 div()
                     .size_full()
@@ -658,13 +658,19 @@ impl Workspace {
                     .shadow(elevation::panel_edge(palette))
                     .child(body),
             )
-            .child(self.render_resize_handle(
-                crate::pane_resize::Pane::Panel,
-                strings.get("contextPanel.actions.resizePanelAria"),
-                palette,
-                direction,
-                cx,
-            ))
+            .child(
+                self.render_resize_handle(
+                    crate::pane_resize::Pane::Panel,
+                    strings.get("contextPanel.actions.resizePanelAria"),
+                    palette,
+                    direction,
+                    cx,
+                )
+                // Straddle the card edge inside this frame's logical gutter.
+                // Keep the handle outside the card's overflow clip.
+                .inset_start(direction, px(4.0))
+                .bottom(px(8.0)),
+            )
             .into_any_element()
     }
 }
@@ -2381,5 +2387,135 @@ impl Render for FilesView {
                     .child(self.render_editor_column(&palette, direction, cx)),
             )
             .children(self.render_switch_dialog(&palette, direction, cx))
+    }
+}
+
+#[cfg(test)]
+mod resize_tests {
+    use super::*;
+    use gpui_kit::test::TestWindowExt;
+    use gpui_kit::{
+        MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, PlatformInput, Point,
+        TestAppContext, point, size,
+    };
+
+    fn drag(window: &mut Window, start: Point<Pixels>, delta: Pixels, cx: &mut gpui_kit::App) {
+        window.dispatch_event(
+            PlatformInput::MouseMove(MouseMoveEvent {
+                position: start,
+                ..Default::default()
+            }),
+            cx,
+        );
+        window.dispatch_event(
+            PlatformInput::MouseDown(MouseDownEvent {
+                position: start,
+                button: MouseButton::Left,
+                click_count: 1,
+                ..Default::default()
+            }),
+            cx,
+        );
+        let end = point(start.x + delta, start.y);
+        window.dispatch_event(
+            PlatformInput::MouseMove(MouseMoveEvent {
+                position: end,
+                pressed_button: Some(MouseButton::Left),
+                ..Default::default()
+            }),
+            cx,
+        );
+        window.dispatch_event(
+            PlatformInput::MouseUp(MouseUpEvent {
+                position: end,
+                button: MouseButton::Left,
+                click_count: 1,
+                ..Default::default()
+            }),
+            cx,
+        );
+        window.render_frame(cx);
+    }
+
+    fn check_handles(language: &str, cx: &mut TestAppContext) {
+        let (window, workspace) = crate::workspace_tests::open(cx);
+        cx.simulate_window_resize(window, size(px(1440.0), px(900.0)));
+        cx.update_window(window, |_, window, cx| {
+            cx.set_global(Strings::load(language));
+            workspace.update(cx, |workspace, cx| {
+                workspace.panels.open = Some(PanelSurface::Files);
+                workspace.pane_sizes.panel_width = Some(640.0);
+                cx.notify();
+            });
+            window.render_frame(cx);
+            let direction = locale::strings(cx).direction();
+            let rtl = direction == Direction::RightToLeft;
+            for change in [80.0, -80.0] {
+                let slot = window.find("side-panel").bounds();
+                let handle = window.find("panel-resize").bounds();
+                let edge = if rtl {
+                    slot.right() - px(8.0)
+                } else {
+                    slot.left() + px(8.0)
+                };
+                assert_eq!(
+                    handle.left(),
+                    edge - px(4.0),
+                    "handle straddles the card edge"
+                );
+                assert_eq!(handle.size.width, px(8.0));
+                assert_eq!(handle.top(), slot.top());
+                assert_eq!(handle.bottom(), slot.bottom() - px(8.0));
+                let start = point(edge, handle.center().y);
+                drag(window, start, px(if rtl { change } else { -change }), cx);
+                assert_eq!(
+                    workspace.read(cx).fitted_panel_width(window),
+                    f32::from(slot.size.width) + change,
+                    "real dispatch from the card-facing gutter resizes in {language}"
+                );
+                assert!(workspace.read(cx).pane_sizes.dragging().is_none());
+            }
+
+            workspace.update(cx, |workspace, cx| {
+                workspace.panels.open = None;
+                workspace.terminal_open = true;
+                cx.notify();
+            });
+            window.render_frame(cx);
+            let terminal = window.find("terminal-panel").bounds();
+            let handle = window.find("panel-resize").bounds();
+            let start = if rtl {
+                assert_eq!(handle.right(), terminal.right() + px(6.0));
+                terminal.right() - px(1.0)
+            } else {
+                assert_eq!(handle.left(), terminal.left() - px(6.0));
+                terminal.left() + px(1.0)
+            };
+            assert_eq!(handle.size.width, px(8.0));
+            assert_eq!(handle.top(), terminal.top());
+            assert_eq!(handle.bottom(), terminal.bottom());
+            drag(
+                window,
+                point(start, handle.center().y),
+                px(if rtl { -80.0 } else { 80.0 }),
+                cx,
+            );
+            assert_eq!(
+                workspace.read(cx).fitted_panel_width(window),
+                f32::from(terminal.size.width) - 80.0,
+                "the terminal retains its separate handle placement and dispatch"
+            );
+        })
+        .expect("resize test window remains open");
+    }
+
+    #[gpui_kit::test]
+    fn card_edge_and_terminal_handles_dispatch_in_ltr(cx: &mut TestAppContext) {
+        check_handles("en", cx);
+    }
+
+    #[gpui_kit::test]
+    fn card_edge_and_terminal_handles_dispatch_in_rtl(cx: &mut TestAppContext) {
+        check_handles("ar", cx);
     }
 }

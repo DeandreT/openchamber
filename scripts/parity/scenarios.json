@@ -1,6 +1,18 @@
 {
   "$comment": "Parity scenarios. proofs lists only required behaviors and states exercised by the steps and checked outcomes. A capture alone proves appearance, not control activation. Proofs count only when the whole scenario passes. Rows use key prefix and title, never seeded IDs. See scripts/parity/DOCUMENTATION.md.",
   "targets": {
+    "fixture-sidebar-open": {"electron": {"selector": "button[aria-label='Open sessions']"}, "native": "new-session"},
+    "fixture-project-trigger": {"electron": {"selector": ".chat-input-column button[aria-haspopup='dialog']"}, "native": "choose-project"},
+    "fixture-project-option": {"electron": {"selector": "[role='option'][data-value='{fixtureId}']"}, "native": "project-option:{fixture}"},
+    "files-board-launch": {"electron": {"selector": "button[aria-label='More']"}, "native": "source-board"},
+    "files-board-item": {"electron": {"selector": "[role='menuitem']:has(use[href='#oc-git-pull-request'])"}, "native": "source-board-kind:issue"},
+    "files-rail": {"electron": {"selector": "button[aria-label='Files']"}, "native": "rail-files"},
+    "git-rail": {"electron": {"selector": "button[aria-label='Git'],button[aria-label^='Git,']"}, "native": "rail-git"},
+    "changes-rail": {"electron": {"selector": "button[aria-label='Changes']"}, "native": "rail-diff"},
+    "files-search-field": {"electron": {"selector": "input[placeholder='Search files...']"}, "native": "files-search"},
+    "files-docs-folder": {"electron": {"selector": "button:has(span[title='{fixture}/docs'])"}, "native": "files-row:{fixture}/docs"},
+    "files-crlf-file": {"electron": {"selector": "button:has(span[title='{fixture}/docs/crlf.txt'])"}, "native": "files-row:{fixture}/docs/crlf.txt"},
+    "board-search-field": {"electron": {"selector": "input[aria-label='Search, or paste a link or #number']"}, "native": "source-board-search"},
     "prompt-indicator": {
       "electron": { "selector": "nav[aria-label='Prompt navigation'] button[aria-haspopup='listbox']" },
       "native": "prompt-indicator"
@@ -242,6 +254,69 @@
     "attachment-remove-dropped": {"electron": {"selector": "[data-remove-button][aria-label=\"Remove dropped.txt\"]"}, "native": {"name": "Remove dropped.txt", "role": "button"}}
   },
   "scenarios": [
+    {
+      "id": "files.navigation-editor",
+      "feature": "files.navigation-editor",
+      "fixture": "git",
+      "proofs": {"files.navigation-editor": {"behaviors": ["appearance", "tree and file search navigation"], "states": ["selected"]}},
+      "steps": [
+        {"clickTarget": "new-session"},
+        {"clickTarget": "fixture-project-trigger"},
+        {"clickTarget": "fixture-project-option"},
+        {"clickTarget": "files-rail"},
+        {"wait": {"electron": {"expression": "!!document.querySelector('input[placeholder=\"Search files...\"]')"}, "native": {"elements": ["files-panel"]}}},
+        {"capture": "tree", "targets": ["files-rail", "files-search-field"]},
+        {"clickTarget": "files-docs-folder"},
+        {"clickTarget": "files-crlf-file"},
+        {"wait": {"electron": {"expression": "!!document.querySelector('.cm-content') && document.body.innerText.includes('crlf.txt')"}, "native": {"elements": ["files-save-status"]}}},
+        {"capture": "file", "targets": ["files-rail", "files-search-field"]},
+        {"clickTarget": "files-search-field"},
+        {"type": "app.txt"},
+        {"wait": {"electron": {"expression": "document.body.innerText.includes('app.txt')"}, "native": {"elements": ["files-result:{fixture}/src/app.txt"]}}},
+        {"capture": "search", "targets": ["files-search-field"]}
+      ]
+    },
+    {
+      "id": "files.diff-git",
+      "feature": "files.diff-git",
+      "fixture": "git",
+      "proofs": {"files.diff-git": {"behaviors": ["appearance"], "states": ["changed"]}},
+      "steps": [
+        {"clickTarget": "new-session"},
+        {"clickTarget": "fixture-project-trigger"},
+        {"clickTarget": "fixture-project-option"},
+        {"clickTarget": "git-rail"},
+        {"wait": {"electron": {"expression": "document.body.innerText.includes('src/app.txt')"}, "native": {"elements": ["git-panel", "git-change:unstaged:src/app.txt"]}}},
+        {"capture": "git", "targets": ["git-rail"]},
+        {"clickTarget": "changes-rail"},
+        {"wait": {"electron": {"expression": "document.body.innerText.includes('src/app.txt')"}, "native": {"elements": ["diff-panel", "diff-content"]}}},
+        {"capture": "changes", "targets": ["changes-rail"]}
+      ]
+    },
+    {
+      "id": "files.issues-pull-requests",
+      "feature": "files.issues-pull-requests",
+      "fixture": "github",
+      "proofs": {"files.issues-pull-requests": {"behaviors": ["appearance", "list filter and open issue or PR"], "states": ["selected"]}},
+      "steps": [
+        {"clickTarget": "new-session"},
+        {"clickTarget": "fixture-project-trigger"},
+        {"clickTarget": "fixture-project-option"},
+        {"clickTarget": "files-board-launch"},
+        {"clickTarget": "files-board-item"},
+        {"wait": {"electron": {"expression": "document.body.innerText.includes('Crash on startup when the config is empty')"}, "native": {"named": {"id": "source-board-title", "name": "Crash on startup when the config is empty"}}}},
+        {"capture": "issue", "targets": ["board-search-field"]},
+        {"clickTarget": "board-search-field"},
+        {"type": "dark"},
+        {"wait": {"electron": {"expression": "document.body.innerText.includes('Add a dark theme')"}, "native": {"named": {"id": "source-board-title", "name": "Add a dark theme"}}}},
+        {"capture": "search", "targets": ["board-search-field"]},
+        {"key": "ctrl+a"},
+        {"key": "BackSpace"},
+        {"clickNamed": {"name": "Pull requests", "role": "tab"}},
+        {"wait": {"electron": {"expression": "document.body.innerText.includes('Fix the crash on an empty config')"}, "native": {"elements": ["source-board-row:github:acme/widgets!3"]}}},
+        {"capture": "pull-request", "targets": ["board-search-field"]}
+      ]
+    },
     {
       "id": "shell.startup",
       "feature": "shell.startup-view",

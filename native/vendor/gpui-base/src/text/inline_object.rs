@@ -271,7 +271,7 @@ impl Element for InlineObject {
                 cx,
             );
         }
-        if let Some(view) = GlobalState::global(cx).text_view_state() {
+        if let Some(view) = GlobalState::global(cx).line_span_text_view_state(cx) {
             let state = view.read(cx);
             if state.max_lines.is_some()
                 && let Ok(mut spans) = state.line_spans.lock()

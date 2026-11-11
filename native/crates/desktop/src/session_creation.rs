@@ -58,11 +58,7 @@ impl Workspace {
                 .draft_projects
                 .get(&self.runtime)
                 .is_some_and(|directory| directory == owner.directory())
-            && self
-                .topology
-                .projects
-                .iter()
-                .any(|project| project.path == owner.directory())
+            && self.draft_destination_project(owner.directory()).is_some()
             && self.creations.can_begin(owner)
             && self.send_selection().is_some_and(|(directory, selection)| {
                 directory == owner.directory() && selection.model.is_some()
@@ -95,12 +91,7 @@ impl Workspace {
         if starter.is_none() && !self.starters.captures.can_begin(&source) {
             return false;
         }
-        let Some(project) = self
-            .topology
-            .projects
-            .iter()
-            .find(|project| project.path == source.directory())
-        else {
+        let Some(project) = self.draft_destination_project(source.directory()) else {
             return false;
         };
         let project = project.id.to_string();
@@ -377,9 +368,8 @@ impl Workspace {
     }
 
     fn creation_project_registered(&self, attempt: &CreateAttempt) -> bool {
-        self.topology.projects.iter().any(|project| {
-            project.id.as_str() == attempt.project && project.path == attempt.request.directory()
-        })
+        self.draft_destination_project(attempt.request.directory())
+            .is_some_and(|project| project.id.as_str() == attempt.project)
     }
 
     pub(crate) fn check_creation(

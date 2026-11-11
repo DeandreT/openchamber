@@ -789,6 +789,83 @@ fn open_git(cx: &mut TestAppContext, harness: &Harness) -> (AnyWindowHandle, Ent
 }
 
 #[gpui_kit::test]
+fn update_branch_tiles_fit_equal_columns_and_wrap_in_both_directions(cx: &mut TestAppContext) {
+    let server = Scripted::new(git_world());
+    let harness = harness(&server);
+    let (window, _view) = open_git(cx, &harness);
+    wait_for_element(cx, window, "git-repository-views");
+    cx.update_window(window, |_, window, cx| {
+        window.click(name("git-repository-views"), cx);
+        window.render_frame(cx);
+        window.click(name("git-update-branch"), cx);
+    })
+    .expect("window is open");
+    wait_for_element(cx, window, "git-update-dialog");
+
+    let mut failures = Vec::new();
+    for language in ["en", "ar"] {
+        for width in [640.0, crate::pane_resize::PANEL_MIN_WIDTH] {
+            cx.simulate_window_resize(window, size(px(width), px(700.0)));
+            cx.update_window(window, |_, window, cx| {
+                cx.set_global(Strings::load(language));
+                window.refresh();
+                window.render_frame(cx);
+                let dialog = window.find("git-update-dialog").bounds();
+                let merge = window.find("git-update-merge").bounds();
+                let rebase = window.find("git-update-rebase").bounds();
+                let expected = (dialog.size.width - px(32.0 + 12.0)) / 2.0;
+                let line_height = px(
+                    crate::context_panel::XS_LINE * crate::appearance::root_font_size(cx),
+                );
+                for (id, tile, description) in [
+                    ("merge", merge, "gitView.branch.mergeDescription"),
+                    ("rebase", rebase, "gitView.branch.rebaseDescription"),
+                ] {
+                    let text = window.find(description).bounds();
+                    eprintln!("{language} {width}px {id}: dialog={dialog:?} tile={tile:?} description={text:?}");
+                    let checks = [
+                        (
+                            "equal column width",
+                            (f32::from(tile.size.width - expected)).abs() < 0.01,
+                        ),
+                        (
+                            "tile within dialog padding",
+                            tile.left() >= dialog.left() + px(16.0)
+                                && tile.right() <= dialog.right() - px(16.0),
+                        ),
+                        (
+                            "description within tile padding",
+                            text.left() >= tile.left() + px(12.0)
+                                && text.right() <= tile.right() - px(12.0)
+                                && text.bottom() <= tile.bottom() - px(12.0) + px(1.0),
+                        ),
+                        ("description wraps", text.size.height > line_height),
+                    ];
+                    for (check, passed) in checks {
+                        if !passed {
+                            failures.push(format!("{language} {width}px {id}: {check}"));
+                        }
+                    }
+                }
+                let gap = if language == "ar" {
+                    merge.left() - rebase.right()
+                } else {
+                    rebase.left() - merge.right()
+                };
+                assert_eq!(gap, px(12.0), "{language} preserves the mirrored tile gap");
+                assert_eq!(
+                    window.find("git-update-merge").checked(),
+                    Some(true),
+                    "layout and locale changes preserve the selected operation"
+                );
+            })
+            .expect("window is open");
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+#[gpui_kit::test]
 fn a_partly_staged_file_shows_in_both_scopes_and_staging_follows_the_server(
     cx: &mut TestAppContext,
 ) {

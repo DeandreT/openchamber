@@ -1,43 +1,38 @@
-use std::{
-    borrow::Cow,
-    collections::HashMap,
-    ops::Range,
-    sync::{Arc, Mutex, OnceLock, Weak},
-};
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::ops::Range;
+use std::sync::{Arc, Mutex, OnceLock, Weak};
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AnyElement, App, Axis, Bounds, DefiniteLength, Div, Element, ElementId, FontStyle, FontWeight,
     GlobalElementId, HighlightStyle, Hsla, Image, ImageFormat, ImageSource, InspectorElementId,
     InteractiveElement as _, IntoElement, IsZero as _, LayoutId, ObjectFit, Overflow,
     ParentElement, Pixels, Point, Refineable as _, Rems, ScrollHandle, SharedString, SharedUri,
     StatefulInteractiveElement, StyleRefinement, Styled, StyledImage as _, TextStyleRefinement,
-    WhiteSpace, Window, div, img, prelude::FluentBuilder as _, px, relative, rems,
+    WhiteSpace, Window, div, img, px, relative, rems,
 };
 use markdown::mdast;
 
-use crate::{
-    GlobalState, ScrollableMask, Scrollbar, StyledExt, h_flex,
-    scrollable_mask::horizontal_scroll_area,
-    text::{
-        CodeBlockActionsFn, CodeBlockHighlighterFn, LinkClickHandlerFn, MarkdownExtensions,
-        MarkdownNode, TableActionsFn,
-        document::{NodeRenderOptions, PrevBlock, flow_position},
-        inline::{
-            Inline, InlineHighlight, InlineState, combine_highlights, fade_highlights,
-            point_in_text_selection, text_runs, text_size_ranges,
-        },
-        inline_flow::{InlineFlow, InlineFlowItem, slice_ranges},
-        range_highlight::{RangeHighlightFrame, RevealAt, RevealRequest},
-        stream_fade::{StreamFadeFrame, TextLeafKey},
-        text_view::handle_link_click,
-    },
-    theme::ActiveTheme as _,
+use crate::scrollable_mask::horizontal_scroll_area;
+use crate::text::document::{NodeRenderOptions, PrevBlock, flow_position};
+use crate::text::inline::{
+    AccessibleLink, Inline, InlineHighlight, InlineState, combine_highlights, fade_highlights,
+    point_in_text_selection, text_runs, text_size_ranges,
 };
+use crate::text::inline_flow::{InlineFlow, InlineFlowItem, slice_ranges};
+use crate::text::range_highlight::{RangeHighlightFrame, RevealAt, RevealRequest};
+use crate::text::stream_fade::{StreamFadeFrame, TextLeafKey};
+use crate::text::text_view::handle_link_click;
+use crate::text::{
+    CodeBlockActionsFn, CodeBlockHighlighterFn, LinkClickHandlerFn, MarkdownExtensions,
+    MarkdownNode, TableActionsFn,
+};
+use crate::theme::ActiveTheme as _;
+use crate::{GlobalState, ScrollableMask, Scrollbar, StyledExt, h_flex};
 
-use super::{
-    SelectionFormat, TextViewStyle,
-    utils::{data_url_image, list_item_prefix, ordered_list_ordinal},
-};
+use super::utils::{data_url_image, list_item_prefix, ordered_list_ordinal};
+use super::{SelectionFormat, TextViewStyle};
 
 const CHECK_SVG_LIGHT: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><path d="m3.25 8.25 3 3 6.5-7" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>"#;
 const CHECK_SVG_DARK: &[u8] = br#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="none"><path d="m3.25 8.25 3 3 6.5-7" stroke="black" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>"#;
@@ -608,7 +603,7 @@ pub struct LinkMark {
     pub title: Option<SharedString>,
 }
 
-#[derive(Debug, Default, Clone, PartialEq)]
+#[derive(Debug, Default)]
 pub struct TextMark {
     pub bold: bool,
     pub italic: bool,
@@ -620,9 +615,123 @@ pub struct TextMark {
     /// `None` means the text is not highlighted.
     pub highlight: Option<Hsla>,
     pub link: Option<LinkMark>,
+    /// Retained identity of a parsed link across cloned typography/object marks.
+    ///
+    /// This is lazy so marks without a link allocate nothing. Callers construct
+    /// marks with `Default`; the renderer owns this field.
+    #[doc(hidden)]
+    pub link_owner: OnceLock<Arc<()>>,
+}
+
+#[cfg(test)]
+mod link_owner_tests {
+    use super::*;
+
+    #[test]
+    fn cloned_marks_share_a_link_owner_without_changing_mark_equality() {
+        let mark = TextMark::default().link(LinkMark {
+            url: "https://example.com".into(),
+            ..Default::default()
+        });
+        let cloned = mark.clone();
+        let separate = TextMark::default().link(LinkMark {
+            url: "https://example.com".into(),
+            ..Default::default()
+        });
+        assert_eq!(
+            mark, cloned,
+            "identity metadata must not change style equality"
+        );
+        assert_eq!(
+            mark, separate,
+            "equal styles still compare equal across parses"
+        );
+        assert!(Arc::ptr_eq(
+            &mark.link_owner().unwrap(),
+            &cloned.link_owner().unwrap()
+        ));
+        assert!(
+            !Arc::ptr_eq(&mark.link_owner().unwrap(), &separate.link_owner().unwrap()),
+            "equal destinations do not merge separate parsed links"
+        );
+        assert!(
+            TextMark::default().link_owner.get().is_none(),
+            "prose styles allocate no link owner"
+        );
+    }
+
+    #[test]
+    fn object_splits_share_one_owner_and_adjacent_links_remain_separate() {
+        let mark = TextMark::default().link(LinkMark {
+            url: "https://example.com".into(),
+            ..Default::default()
+        });
+        let paragraph = Paragraph {
+            children: vec![
+                InlineNode::new("before ").marks(vec![(0..7, mark.clone())]),
+                InlineNode::custom(MarkdownNode::new("math", ()).text("x²"))
+                    .marks(vec![(0.."x²".len(), mark.clone())]),
+                InlineNode::new(" after").marks(vec![(0..6, mark)]),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(paragraph.accessible_links(&NodeContext::default()).len(), 1);
+        let mut context = NodeContext::default();
+        let parsed = super::super::format::markdown::parse(
+            "[same](https://example.com)[same](https://example.com)",
+            &mut context,
+        )
+        .unwrap();
+        let BlockNode::Paragraph(paragraph) = &parsed.blocks[0] else {
+            panic!("expected paragraph")
+        };
+        assert_eq!(
+            paragraph.accessible_links(&context).len(),
+            2,
+            "adjacent identical links have distinct owners"
+        );
+        let parsed = super::super::format::markdown::parse("plain prose", &mut context).unwrap();
+        let BlockNode::Paragraph(paragraph) = &parsed.blocks[0] else {
+            panic!("expected paragraph")
+        };
+        assert!(paragraph.accessible_links(&context).is_empty());
+    }
+}
+
+impl Clone for TextMark {
+    fn clone(&self) -> Self {
+        Self {
+            bold: self.bold,
+            italic: self.italic,
+            strikethrough: self.strikethrough,
+            underline: self.underline,
+            code: self.code,
+            highlight: self.highlight,
+            link: self.link.clone(),
+            link_owner: self.link_owner().map(OnceLock::from).unwrap_or_default(),
+        }
+    }
+}
+
+impl PartialEq for TextMark {
+    fn eq(&self, other: &Self) -> bool {
+        self.bold == other.bold
+            && self.italic == other.italic
+            && self.strikethrough == other.strikethrough
+            && self.underline == other.underline
+            && self.code == other.code
+            && self.highlight == other.highlight
+            && self.link == other.link
+    }
 }
 
 impl TextMark {
+    fn link_owner(&self) -> Option<Arc<()>> {
+        self.link
+            .as_ref()
+            .map(|_| self.link_owner.get_or_init(|| Arc::new(())).clone())
+    }
+
     pub fn bold(mut self) -> Self {
         self.bold = true;
         self
@@ -656,6 +765,7 @@ impl TextMark {
 
     pub fn link(mut self, link: impl Into<LinkMark>) -> Self {
         self.link = Some(link.into());
+        self.link_owner = OnceLock::new();
         self
     }
 
@@ -668,8 +778,10 @@ impl TextMark {
         if other.highlight.is_some() {
             self.highlight = other.highlight;
         }
+        let link_owner = other.link_owner();
         if let Some(link) = other.link {
             self.link = Some(link);
+            self.link_owner = link_owner.map(OnceLock::from).unwrap_or_default();
         }
     }
 }
@@ -2437,6 +2549,46 @@ fn mark_highlight(mark: &TextMark, node_cx: &NodeContext, cx: &App) -> InlineHig
 }
 
 impl Paragraph {
+    /// Link ownership stays in parsed text space while the flow splits glyphs.
+    fn accessible_links(&self, node_cx: &NodeContext) -> Vec<AccessibleLink> {
+        let mut links: Vec<AccessibleLink> = Vec::new();
+        let mut offset = 0;
+        for child in &self.children {
+            for (range, mark) in &child.marks {
+                let Some(owner) = mark.link_owner() else {
+                    continue;
+                };
+                let Some(link) = mark.link.as_ref() else {
+                    continue;
+                };
+                let resolved = link
+                    .identifier
+                    .as_ref()
+                    .and_then(|id| node_cx.link_refs.get(id))
+                    .unwrap_or(link);
+                let Some(text) = child.text.get(range.clone()) else {
+                    continue;
+                };
+                if text.is_empty() || resolved.url.trim().is_empty() {
+                    continue;
+                }
+                let range = offset + range.start..offset + range.end;
+                if let Some(existing) = links.iter_mut().find(|link| link.owns(&owner)) {
+                    existing.append(range, text);
+                } else {
+                    links.push(AccessibleLink::new(
+                        owner,
+                        range,
+                        text,
+                        resolved.url.clone(),
+                    ));
+                }
+            }
+            offset += child.text.len();
+        }
+        links
+    }
+
     /// The highlights over [`Self::text`], for measuring the paragraph with
     /// the runs it renders with. Link colors are left out: they do not move
     /// glyphs.
@@ -2485,6 +2637,7 @@ impl Paragraph {
                 node_cx.link_click_handler.clone(),
             )
             .selection_leaf(fade_key)
+            .accessible_links(self.accessible_links(node_cx))
             .into_any_element();
         }
 
@@ -2515,6 +2668,7 @@ impl Paragraph {
                 highlights,
                 node_cx.link_click_handler.clone(),
             )
+            .accessible_links(self.accessible_links(node_cx))
             .range_backgrounds(backgrounds)
             .selection_leaf(fade_key, 0)
             .reveal(reveal)

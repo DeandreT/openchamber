@@ -529,6 +529,12 @@ const parseModel = (model) => {
  */
 const planResponse = (model, body, interactions = false, workflows = false) => {
   const messages = Array.isArray(body.messages) ? body.messages : []
+  const lastUser = messages.filter((message) => message?.role === "user").map(messageText).at(-1) ?? ""
+  if (lastUser.startsWith("files-link-proof: ")) return { delayMs: 0, charactersPerSecond: 20000,
+    text: `[Outside file](${lastUser.slice("files-link-proof: ".length).trim()})`, toolCalls: [] }
+  if (lastUser.startsWith("Investigate the ") && lastUser.includes("conflicts and concisely")) {
+    return { delayMs: 0, charactersPerSecond: 20000, text: "Conflict context received. Waiting for confirmation.", toolCalls: [] }
+  }
   if (workflows) {
     const audit = auditAnswer(messages)
     if (audit) return { delayMs: 0, charactersPerSecond: 20000, text: audit, toolCalls: [] }
@@ -716,6 +722,22 @@ export const startFixtureProvider = (port, { interactions = false, workflows = f
     }
     // Title generation and other auxiliary calls are not part of the stimulus.
     if (!body.stream) {
+      const messages = Array.isArray(body.messages) ? body.messages : []
+      const walkthrough = messages.some((message) => messageText(message).includes("You are writing a walkthrough of a code change"))
+      if (walkthrough) {
+        const prompt = messages.map(messageText).find((text) => text.includes("Change digest:\n")) ?? ""
+        const digest = JSON.parse(prompt.split("Change digest:\n").at(-1))
+        const hunks = digest.files.flatMap((file) => file.hunks.map((hunk) => ({ ...hunk, path: file.path })))
+        const content = JSON.stringify({ title: "Fixture changes", focus: "The fixture explains each changed hunk.",
+          chapters: hunks.slice(0, 2).map((hunk, index) => ({ title: `Chapter ${index + 1}`, icon: "path",
+            blurb: `Changes in ${hunk.path}.`, stops: [{ title: `Stop ${index + 1}`, hunks: [hunk.alias],
+              importance: "normal", prose: `This stop explains ${hunk.path}.`, observations: [] }] })), routine: [] })
+        await new Promise((done) => setTimeout(done, 2200))
+        response.writeHead(200, { "content-type": "application/json" })
+        response.end(JSON.stringify({ id: "chatcmpl-fixture-walkthrough", object: "chat.completion", created: 0,
+          model: body.model, choices: [{ index: 0, message: { role: "assistant", content }, finish_reason: "stop" }], usage: usageFor(content) }))
+        return
+      }
       response.writeHead(200, { "content-type": "application/json" })
       response.end(JSON.stringify({
         id: "chatcmpl-fixture",

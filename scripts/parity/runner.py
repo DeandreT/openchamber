@@ -71,7 +71,7 @@ def free_port() -> int:
 class IsolatedServer:
     """`scripts/perf/isolated-server.mjs` on a root this run owns."""
 
-    def __init__(self, root: Path, args: argparse.Namespace, provider: str | None = None):
+    def __init__(self, root: Path, args: argparse.Namespace, provider: str | None = None, github=None):
         self.root = root
         self.port = free_port()
         self.fixture_port = free_port()
@@ -80,6 +80,7 @@ class IsolatedServer:
             "--port", str(self.port), "--fixture-port", str(self.fixture_port),
             "--dist", str(args.dist), "--opencode-binary", str(args.opencode_binary),
             *(["--provider-mode", provider] if provider else []),
+            *(["--github-fixture", github.proxy_url, str(github.ca)] if github else []),
         ]
         self.log = open(root / "isolated-server.log", "w")
         self.process = subprocess.Popen(command, cwd=REPO_ROOT, stdout=self.log, stderr=subprocess.STDOUT, start_new_session=True)
@@ -213,7 +214,26 @@ def fixture_project(root: Path, kind: str) -> Path:
     return root / "fixtures" / kind / "fixture-repo"
 
 
-def prepare_fixture(root: Path, kind: str, state: Path) -> Path:
+def prepare_paired_git_stimulus(project: Path) -> None:
+    """Bind files.diff-git's approved dirty tracked-file input to this private copy."""
+    target = project / "src/app.txt"
+    if target.is_symlink() or not target.is_file():
+        raise RuntimeError("paired Git fixture requires the original tracked src/app.txt")
+    subprocess.run(
+        ["git", "ls-files", "--error-unmatch", "--", "src/app.txt"], cwd=project,
+        check=True, capture_output=True,
+        env={"PATH": os.environ.get("PATH", ""), "HOME": str(project.parent),
+             "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"},
+    )
+    original = target.read_bytes()
+    first, newline, remaining = original.partition(b"\n")
+    ending = b"\r" if first.endswith(b"\r") else b""
+    if not newline or first.removesuffix(ending) != b"line 1 changed":
+        raise RuntimeError("paired Git fixture requires the committed app baseline")
+    target.write_bytes(b"line 1 paired edit" + ending + newline + remaining)
+
+
+def prepare_fixture(root: Path, kind: str, state: Path, scenario_id: str | None = None) -> Path:
     """Recreates the fixture project and registers it as the copy's active
     project. `git` is `isolated-server.mjs --git-fixture`'s repository, with
     its bare remote beside it."""
@@ -229,6 +249,14 @@ def prepare_fixture(root: Path, kind: str, state: Path) -> Path:
     project.mkdir()
     subprocess.run(["node", "--input-type=module", "-e", script], cwd=REPO_ROOT, check=True, capture_output=True,
                    env={key: os.environ[key] for key in ("PATH", "LANG") if key in os.environ})
+    if kind == "github":
+        subprocess.run(["git", "remote", "set-url", "origin", "https://github.com/acme/widgets.git"], cwd=project,
+                       check=True, capture_output=True, env={"PATH": os.environ.get("PATH", ""), "HOME": str(state / "home"),
+                                                            "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"})
+    if scenario_id == "files.diff-git":
+        if kind != "git":
+            raise ValueError("files.diff-git requires the git fixture")
+        prepare_paired_git_stimulus(project)
     server_settings = state / "oc-data" / "settings.json"
     document = json.loads(server_settings.read_text())
     identifier = "path_" + base64.urlsafe_b64encode(str(project).encode()).decode().rstrip("=")
@@ -463,6 +491,17 @@ def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], dire
             context: StepContext | None = None) -> dict:
     """Runs the steps and returns the evidence of every checkpoint."""
     context = context or StepContext()
+    def expand(value):
+        if isinstance(value, str):
+            for name, path in context.places.items():
+                value = value.replace("{" + name + "}", path)
+            return value
+        if isinstance(value, dict):
+            return {key: expand(child) for key, child in value.items()}
+        if isinstance(value, list):
+            return [expand(child) for child in value]
+        return value
+    targets, steps = expand(targets), expand(steps)
     checkpoints: dict[str, dict] = {}
     waits = context.waits
 
@@ -643,6 +682,19 @@ def checked_portal_cleanup(portal):
     return receipt
 
 
+def sign_in_fixture_github(server_url: str) -> None:
+    """The real server's device flow against the loopback GitHub fake."""
+    def post(route, body):
+        request = urllib.request.Request(server_url + route, data=json.dumps(body).encode(),
+                                         headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(request, timeout=30) as answer:
+            return json.load(answer)
+    started = post("/api/source-control/github/auth/start?instance=github.com", {})
+    completed = post("/api/source-control/github/auth/complete?instance=github.com", {"flowId": started["flowId"]})
+    if completed.get("connected") is not True:
+        raise RuntimeError("the loopback GitHub device flow did not connect")
+
+
 def run_client(kind: str, scenario: dict, work: Path, args: argparse.Namespace) -> dict:
     """One client through the scenario. Services exist only for scenarios
     whose steps need them, so other scenarios launch exactly as before."""
@@ -656,8 +708,14 @@ def run_client(kind: str, scenario: dict, work: Path, args: argparse.Namespace) 
             portal = None
             portal_cleanup_error = None
             places = {"project": str(root / "project")}
+            github = None
+            if scenario.get("fixture") == "github":
+                from github_fixture import Fixture
+                github = Fixture(directory / "github-fixture")
+                services.callback(github.stop)
             if "fixture" in scenario:
-                places["fixture"] = str(prepare_fixture(root, scenario["fixture"], state))
+                places["fixture"] = str(prepare_fixture(root, scenario["fixture"], state, scenario_id=scenario.get("id")))
+                places["fixtureId"] = "path_" + base64.urlsafe_b64encode(places["fixture"].encode()).decode().rstrip("=")
             context = StepContext(places, inputs=directory / "inputs")
             # GTK starts before the client so its initialization cannot take focus.
             if uses(scenario, "paste"):
@@ -665,9 +723,11 @@ def run_client(kind: str, scenario: dict, work: Path, args: argparse.Namespace) 
 
                 context.clipboard = ClipboardProbe()
             if kind == "native":
-                server = IsolatedServer(directory, args, scenario.get("provider"))
+                server = IsolatedServer(directory, args, scenario.get("provider"), github)
                 services.callback(server.stop)
                 server.wait_ready(args.timeout)
+                if github:
+                    sign_in_fixture_github(server.url)
                 context.fixture_port = server.fixture_port
                 env = native_env(state, server.url, args.theme)
                 client = NativeClient(args.native_binary, env, args.scale, args.width, args.height)
@@ -698,11 +758,24 @@ def run_client(kind: str, scenario: dict, work: Path, args: argparse.Namespace) 
                     services.callback(client.portal.close)
                     client.portal.start()
             else:
-                fixture = FixtureProvider(directory, scenario.get("provider"))
-                services.callback(fixture.stop)
-                fixture.wait_ready(args.timeout)
-                context.fixture_port = fixture.port
-                client = ElectronClient(args.electron_app, electron_env(state, fixture.opencode_config), args.scale, args.width, args.height)
+                if scenario.get("fixture"):
+                    server = IsolatedServer(directory, args, scenario.get("provider"), github)
+                    services.callback(server.stop)
+                    server.wait_ready(args.timeout)
+                    if github:
+                        sign_in_fixture_github(server.url)
+                    context.fixture_port = server.fixture_port
+                    env = electron_env(state, "{}")
+                    env["OPENCHAMBER_SERVER_URL"] = server.url
+                    client = ElectronClient(args.electron_app, env, args.scale, args.width, args.height)
+                else:
+                    fixture = FixtureProvider(directory, scenario.get("provider"))
+                    services.callback(fixture.stop)
+                    fixture.wait_ready(args.timeout)
+                    context.fixture_port = fixture.port
+                    env = electron_env(state, fixture.opencode_config)
+                    env["OPENCODE_BINARY"] = str(args.opencode_binary)
+                    client = ElectronClient(args.electron_app, env, args.scale, args.width, args.height)
             try:
                 launched = client.launch()
                 client.wait_ready(args.timeout, connected=True)

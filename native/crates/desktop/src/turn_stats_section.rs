@@ -24,6 +24,7 @@ impl Workspace {
         &self,
         palette: &Palette,
         direction: Direction,
+        first_heading: bool,
         cx: &Context<Self>,
     ) -> Option<AnyElement> {
         let id = self.selected.as_ref()?;
@@ -53,6 +54,7 @@ impl Workspace {
             rows,
             palette,
             direction,
+            first_heading,
             cx,
         ))
     }

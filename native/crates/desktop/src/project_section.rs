@@ -15,7 +15,8 @@ use std::time::{Duration, Instant};
 
 use gpui_kit::{
     AnyElement, AppContext, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    Role, SharedString, StatefulInteractiveElement, Styled, TestSupportExt, div, img, px,
+    Role, SharedString, StatefulInteractiveElement, Styled, TestSupportExt, div, img,
+    prelude::FluentBuilder, px,
 };
 use openchamber_native_core::chat_roots;
 use openchamber_native_core::path;
@@ -175,7 +176,7 @@ impl Workspace {
     /// `resolveProjectForSessionDirectory`: the registered project the
     /// directory is in, or the one owning the worktree it is in, whichever
     /// matches the longer path.
-    fn project_of_directory(&self, directory: &str) -> Option<String> {
+    pub(crate) fn project_of_directory(&self, directory: &str) -> Option<String> {
         let direct = self
             .topology
             .projects
@@ -419,6 +420,7 @@ impl Workspace {
         &self,
         palette: &Palette,
         direction: Direction,
+        first_heading: bool,
         cx: &Context<Self>,
     ) -> Option<AnyElement> {
         let subject = self.project_subject()?;
@@ -453,7 +455,6 @@ impl Workspace {
             .flatten();
         Some(
             div()
-                .mt(px(context_panel::SECTION_GAP))
                 .flex()
                 .flex_col()
                 .child(
@@ -463,6 +464,9 @@ impl Workspace {
                         .flex_row_from(direction)
                         .items_center()
                         .gap(px(8.0))
+                        .when(first_heading, |heading| {
+                            heading.padding_end(direction, px(28.0))
+                        })
                         .child(
                             div()
                                 .flex_1()

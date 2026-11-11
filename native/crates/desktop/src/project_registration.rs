@@ -172,35 +172,69 @@ pub(crate) struct AddProject {
     _read: Option<Task<()>>,
 }
 
-/// An item of a project header's menu (`renderProjectMenuItems`). New
-/// session, worktree and space management, the source board, Reveal and
-/// Archive all are not part of the native menu yet.
+/// An item of a project header's menu (`renderProjectMenuItems`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ProjectMenuItem {
+    NewSession,
+    Worktrees,
+    SourceBoard,
+    Reveal,
     Edit,
+    ArchiveAll,
     Close,
 }
 
 impl ProjectMenuItem {
-    const ALL: [Self; 2] = [Self::Edit, Self::Close];
+    const ALL: [Self; 7] = [
+        Self::NewSession,
+        Self::Worktrees,
+        Self::SourceBoard,
+        Self::Reveal,
+        Self::Edit,
+        Self::ArchiveAll,
+        Self::Close,
+    ];
 
     fn id(self) -> &'static str {
         match self {
+            Self::NewSession => "new-session",
+            Self::Worktrees => "worktrees",
+            Self::SourceBoard => "source-board",
+            Self::Reveal => "reveal",
             Self::Edit => "edit",
+            Self::ArchiveAll => "archive-all",
             Self::Close => "close",
         }
     }
 
     fn label_key(self) -> &'static str {
         match self {
+            Self::NewSession => "sessions.sidebar.project.actions.newSession",
+            Self::Worktrees => "sessions.sidebar.project.actions.manageWorktrees",
+            Self::SourceBoard => "sourceBoard.title",
+            Self::Reveal => {
+                if cfg!(target_os = "macos") {
+                    "common.revealPath.finder"
+                } else if cfg!(target_os = "windows") {
+                    "common.revealPath.fileExplorer"
+                } else {
+                    "common.revealPath.fileManager"
+                }
+            }
             Self::Edit => "sessions.sidebar.project.actions.edit",
+            Self::ArchiveAll => "sessions.sidebar.project.actions.archiveAll",
             Self::Close => "sessions.sidebar.project.actions.closeProject",
         }
     }
 
     fn icon(self) -> &'static str {
         match self {
+            Self::NewSession => "add",
+            Self::Worktrees => "git-branch",
+            Self::SourceBoard => "git-pull-request",
+            Self::Reveal => "folder-received",
             Self::Edit => "pencil-ai",
+            Self::ArchiveAll => "archive",
             Self::Close => "close",
         }
     }
@@ -264,8 +298,51 @@ impl Workspace {
         let Some(menu) = self.session_management.project_menu.take() else {
             return;
         };
+        let Some(project) = self
+            .topology
+            .projects
+            .iter()
+            .find(|project| project.id == menu.project)
+            .cloned()
+        else {
+            return;
+        };
         match item {
+            ProjectMenuItem::NewSession => {
+                self.show_new_session(window, cx);
+                self.choose_draft_project(&project.path, window, cx);
+            }
+            ProjectMenuItem::Worktrees => self.open_project_worktrees(&project.path, window, cx),
+            ProjectMenuItem::SourceBoard => {
+                self.show_new_session(window, cx);
+                self.choose_draft_project(&project.path, window, cx);
+                self.source_board_open = false;
+                self.toggle_source_board(window, cx);
+            }
+            ProjectMenuItem::Reveal => {
+                let root = project.path;
+                self.spawn_session_task(
+                    move |client| Box::pin(async move { client.reveal_path(&root, &root).await }),
+                    |this, result, window, cx| {
+                        if !matches!(result, Some(Ok(()))) {
+                            let message =
+                                locale::strings(cx).get("sidebarFilesTree.toast.revealFailed");
+                            this.push_notice(
+                                gpui_kit::component::notification::Notification::error(
+                                    message.clone(),
+                                ),
+                                message,
+                                window,
+                                cx,
+                            );
+                        }
+                    },
+                    window,
+                    cx,
+                );
+            }
             ProjectMenuItem::Edit => self.open_edit_project(&menu.project, window, cx),
+            ProjectMenuItem::ArchiveAll => self.archive_project_sessions(&project.path, window, cx),
             ProjectMenuItem::Close => self.close_project(&menu.project, window, cx),
         }
         cx.notify();

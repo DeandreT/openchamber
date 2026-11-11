@@ -52,6 +52,7 @@ mod composer_delivery;
 mod composer_dictation;
 mod composer_document;
 mod composer_file_preparation;
+mod composer_handoff;
 mod composer_payload;
 mod composer_picker;
 mod composer_preparation;
@@ -129,6 +130,7 @@ mod project_action_run;
 mod project_chooser;
 mod project_registration;
 mod project_section;
+mod project_worktrees;
 mod prompt_rail;
 mod provider_logos;
 mod queue_capture;
@@ -218,6 +220,7 @@ mod workspace;
 mod workspace_tests;
 mod workspace_view;
 mod worktree_actions;
+mod worktree_removals;
 
 use gpui_kit::{
     AppContext, Bounds, TitlebarOptions, WindowAppearance, WindowBounds, WindowDecorations,

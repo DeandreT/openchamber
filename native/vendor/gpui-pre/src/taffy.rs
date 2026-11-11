@@ -170,12 +170,10 @@ impl TaffyLayoutEngine {
             mode: self.mode,
         };
         if stretch_width {
-            style.size.width =
-                taffy::style::Dimension::length(scale.length(size.width.0));
+            style.size.width = taffy::style::Dimension::length(scale.length(size.width.0));
         }
         if stretch_height {
-            style.size.height =
-                taffy::style::Dimension::length(scale.length(size.height.0));
+            style.size.height = taffy::style::Dimension::length(scale.length(size.height.0));
         }
         self.taffy.set_style(id.0, style).expect(EXPECT_MESSAGE);
     }
@@ -306,7 +304,19 @@ impl TaffyLayoutEngine {
 
                     let measured_size: Size<Pixels> =
                         (node_context.measure)(known_dimensions, available_space, window, cx);
-                    measured_size_to_device_pixels(measured_size, scale_factor, mode).into()
+                    let mut device_size =
+                        measured_size_to_device_pixels(measured_size, scale_factor, mode);
+                    if mode == LayoutMode::Logical
+                        && known_dimensions.width.is_none()
+                        && matches!(
+                            available_space.width,
+                            AvailableSpace::MinContent | AvailableSpace::MaxContent
+                        )
+                    {
+                        device_size.width =
+                            intrinsic_width_to_device_pixels(measured_size.width, scale_factor);
+                    }
+                    device_size.into()
                 },
             )
             .expect(EXPECT_MESSAGE);
@@ -471,6 +481,25 @@ fn measured_size_to_device_pixels(
     })
 }
 
+fn intrinsic_width_to_device_pixels(width: Pixels, scale_factor: f32) -> f32 {
+    let scaled = width.0.max(0.0) * scale_factor;
+    // An intrinsic advance becomes a later wrapping constraint. Preserve its
+    // lower bound across the device-space round trip without rounding heights.
+    if width.0 > 0.0
+        && width.0.is_finite()
+        && scale_factor > 0.0
+        && scale_factor.is_finite()
+        && scaled.is_finite()
+        && scaled / scale_factor < width.0
+    {
+        let expanded = scaled.next_up();
+        if expanded.is_finite() {
+            return expanded;
+        }
+    }
+    scaled
+}
+
 fn border_widths_to_taffy(
     widths: &Edges<AbsoluteLength>,
     rem_size: Pixels,
@@ -607,7 +636,11 @@ impl ToTaffy<taffy::style::Dimension> for Length {
 }
 
 impl ToTaffy<taffy::style::LengthPercentage> for DefiniteLength {
-    fn to_taffy(&self, rem_size: Pixels, scale_factor: LayoutScale) -> taffy::style::LengthPercentage {
+    fn to_taffy(
+        &self,
+        rem_size: Pixels,
+        scale_factor: LayoutScale,
+    ) -> taffy::style::LengthPercentage {
         match self {
             DefiniteLength::Absolute(length) => length.to_taffy(rem_size, scale_factor),
             DefiniteLength::Fraction(fraction) => {
@@ -642,7 +675,11 @@ impl ToTaffy<taffy::style::Dimension> for DefiniteLength {
 }
 
 impl ToTaffy<taffy::style::LengthPercentage> for AbsoluteLength {
-    fn to_taffy(&self, rem_size: Pixels, scale_factor: LayoutScale) -> taffy::style::LengthPercentage {
+    fn to_taffy(
+        &self,
+        rem_size: Pixels,
+        scale_factor: LayoutScale,
+    ) -> taffy::style::LengthPercentage {
         taffy::style::LengthPercentage::length(self.to_taffy(rem_size, scale_factor))
     }
 }
@@ -827,11 +864,17 @@ mod tests {
             style.border_widths = Edges::all(Pixels(1.0).into());
             let logical = style.to_taffy(
                 Pixels(16.0),
-                LayoutScale { factor, mode: LayoutMode::Logical },
+                LayoutScale {
+                    factor,
+                    mode: LayoutMode::Logical,
+                },
             );
             let device = style.to_taffy(
                 Pixels(16.0),
-                LayoutScale { factor, mode: LayoutMode::default() },
+                LayoutScale {
+                    factor,
+                    mode: LayoutMode::default(),
+                },
             );
             assert_eq!(
                 logical.size.height,
@@ -851,8 +894,14 @@ mod tests {
                 logical.inset.left,
                 taffy::style::LengthPercentageAuto::length(-factor)
             );
-            assert_eq!(logical.gap.height, taffy::style::LengthPercentage::length(factor));
-            assert_eq!(logical.flex_basis, taffy::style::Dimension::length(13.5 * factor));
+            assert_eq!(
+                logical.gap.height,
+                taffy::style::LengthPercentage::length(factor)
+            );
+            assert_eq!(
+                logical.flex_basis,
+                taffy::style::Dimension::length(13.5 * factor)
+            );
             assert_eq!(
                 logical.border, device.border,
                 "logical layout retains stroke policy"
@@ -878,10 +927,92 @@ mod tests {
             );
             assert_eq!(
                 measured_size_to_device_pixels(
-                    size(Pixels(-1.0), Pixels(0.0)), factor, LayoutMode::Logical,
+                    size(Pixels(-1.0), Pixels(0.0)),
+                    factor,
+                    LayoutMode::Logical,
                 ),
                 size(0.0, 0.0)
             );
+        }
+    }
+
+    #[test]
+    fn intrinsic_width_round_trip_preserves_the_shaped_advance() {
+        let reading = f32::from_bits(1_113_826_263);
+        let formatting = f32::from_bits(1_117_653_042);
+        for scale in [1.0, 1.25, 1.5] {
+            for width in [reading, formatting] {
+                let ordinary = width * scale;
+                let device = intrinsic_width_to_device_pixels(Pixels(width), scale);
+                assert!(
+                    device / scale >= width,
+                    "intrinsic width must survive at scale {scale}"
+                );
+                if ordinary / scale < width {
+                    assert_eq!(device.to_bits(), ordinary.next_up().to_bits());
+                } else {
+                    assert_eq!(
+                        device.to_bits(),
+                        ordinary.to_bits(),
+                        "exact round trips stay unchanged"
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            intrinsic_width_to_device_pixels(Pixels(reading), 1.25).to_bits(),
+            (reading * 1.25).next_up().to_bits(),
+            "the measured Reading contraction needs only the adjacent device value"
+        );
+    }
+
+    #[test]
+    fn intrinsic_width_correction_keeps_exceptional_values_safe() {
+        for width in [0.0, -0.0, -1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            for scale in [1.0, 1.25, 1.5] {
+                let ordinary = width.max(0.0) * scale;
+                let actual = intrinsic_width_to_device_pixels(Pixels(width), scale);
+                assert_eq!(
+                    actual.to_bits(),
+                    ordinary.to_bits(),
+                    "nonpositive/nonfinite input is unchanged"
+                );
+            }
+        }
+        for scale in [0.0, -0.0, -1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let ordinary = 13.5 * scale;
+            let actual = intrinsic_width_to_device_pixels(Pixels(13.5), scale);
+            assert_eq!(
+                actual.to_bits(),
+                ordinary.to_bits(),
+                "invalid scale is unchanged"
+            );
+        }
+        for (width, scale) in [
+            (f32::MAX, 2.0),
+            (f32::MAX, 1.0),
+            (f32::MIN_POSITIVE, 0.5),
+            (f32::from_bits(1), 0.5),
+            (f32::from_bits(3), 0.25),
+        ] {
+            let ordinary = width * scale;
+            let actual = intrinsic_width_to_device_pixels(Pixels(width), scale);
+            if ordinary.is_finite() {
+                assert!(
+                    actual.is_finite(),
+                    "a finite converted width must remain finite"
+                );
+                assert!(
+                    actual / scale >= width,
+                    "subnormal intrinsic bounds must survive"
+                );
+            } else {
+                assert_eq!(
+                    actual.to_bits(),
+                    ordinary.to_bits(),
+                    "overflow retains the existing result"
+                );
+            }
         }
     }
 
@@ -901,13 +1032,16 @@ mod tests {
                     wrapper.padding.top = Pixels(1.0).into();
                     wrapper.padding.bottom = Pixels(1.0).into();
                     let root = engine.request_layout(wrapper, Pixels(16.0), factor, &[child]);
-                    engine.taffy.compute_layout(
-                        root.into(),
-                        taffy::geometry::Size {
-                            width: TaffyAvailableSpace::MaxContent,
-                            height: TaffyAvailableSpace::MaxContent,
-                        },
-                    ).expect("row layout is valid");
+                    engine
+                        .taffy
+                        .compute_layout(
+                            root.into(),
+                            taffy::geometry::Size {
+                                width: TaffyAvailableSpace::MaxContent,
+                                height: TaffyAvailableSpace::MaxContent,
+                            },
+                        )
+                        .expect("row layout is valid");
                     let height = engine.layout_bounds(root, factor).size.height;
                     let expected = match mode {
                         LayoutMode::Logical => 34.0,
@@ -916,14 +1050,16 @@ mod tests {
                         }
                     };
                     assert_eq!(
-                        height, Pixels(expected),
+                        height,
+                        Pixels(expected),
                         "row metric must follow the selected mode"
                     );
                     total += height;
                 }
                 if mode == LayoutMode::Logical {
                     assert_eq!(
-                        total, Pixels(17_000.0),
+                        total,
+                        Pixels(17_000.0),
                         "independent roots must not accumulate snapping error"
                     );
                 }

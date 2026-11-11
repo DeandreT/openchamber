@@ -24,12 +24,17 @@ fn content_preview(draft: &Draft, cx: &App) -> Option<SharedString> {
                 .find_map(|file| file.name.as_deref().and_then(preview))
         })
         .or_else(|| {
-            draft.content.context.iter().find_map(|item| {
-                item.description
-                    .as_deref()
-                    .and_then(preview)
-                    .or_else(|| preview(&item.text))
-            })
+            draft
+                .content
+                .context
+                .iter()
+                .filter(|item| !item.is_hidden())
+                .find_map(|item| {
+                    item.description
+                        .as_deref()
+                        .and_then(preview)
+                        .or_else(|| preview(&item.text))
+                })
         })
         .or_else(|| {
             (!draft.is_empty())
