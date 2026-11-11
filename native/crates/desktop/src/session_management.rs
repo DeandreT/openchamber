@@ -65,11 +65,30 @@ pub(crate) struct SessionManagement {
     pub(crate) project_menu: Option<crate::project_registration::ProjectMenu>,
     pub(crate) search: Option<crate::sidebar_search::SidebarSearch>,
     pub(crate) display_menu: Option<crate::display_mode_view::DisplayMenu>,
+    /// The toolbar's open More menu.
+    pub(crate) more_menu: Option<crate::sidebar_more_menu::MoreMenu>,
+    /// The project order chosen in the Display mode menu while it saves.
+    pub(crate) project_sort: crate::display_mode_view::ProjectSortPreference,
+    /// The sidebar's Select sessions mode and its checked sessions.
+    pub(crate) selection: openchamber_native_core::session_multi_select::SessionMultiSelect,
+    /// The archive page's search field, chosen bucket and revealed rows.
+    pub(crate) archive: crate::archive_view::ArchivePage,
     tasks: HashMap<u64, Task<()>>,
     next_task: u64,
 }
 
 impl SessionManagement {
+    /// The session index, the topology or a setting the lists read changed:
+    /// sessions the server removed leave the selection, and the archive page
+    /// lists from the new state.
+    pub(crate) fn lists_changed(
+        &mut self,
+        sessions: &openchamber_native_core::session_index::SessionIndex,
+    ) {
+        self.selection.retain_known(sessions);
+        self.archive.invalidate();
+    }
+
     /// Forgets client-side overlays for a runtime switch. Requests in
     /// flight finish against their captured runtime. Returns whether a
     /// confirmation was open, so its dialog closes too.
@@ -79,6 +98,11 @@ impl SessionManagement {
         self.moves.switch_runtime();
         self.warming.switch_runtime();
         self.folder_rename = None;
+        // Another server's sessions are not this selection's, and a choice
+        // waiting on the old server is not the new one's.
+        self.selection.disable();
+        self.project_sort = Default::default();
+        self.archive.switch_runtime();
         self.ai_rename.switch_runtime();
         self.confirm.take().is_some()
     }
@@ -148,10 +172,33 @@ pub(crate) struct RemovalConfirm {
     /// The root first, then its descendants.
     pub(crate) targets: Vec<SessionId>,
     pub(crate) hard_delete: bool,
+    /// The sidebar's selection asked: the dialog counts sessions and names
+    /// none of them.
+    pub(crate) bulk: bool,
 }
 
 impl RemovalConfirm {
+    /// The dialog's title; a bulk action over several sessions asks in the
+    /// plural (`BulkSessionDeleteConfirmDialog`).
+    pub(crate) fn title_key(&self) -> &'static str {
+        match (self.hard_delete, self.bulk && self.targets.len() != 1) {
+            (true, true) => "sessions.sidebar.dialogs.deleteSessions.title",
+            (true, false) => "sessions.sidebar.dialogs.deleteSession.title",
+            (false, true) => "sessions.sidebar.dialogs.archiveSessions.title",
+            (false, false) => "sessions.sidebar.dialogs.archiveSession.title",
+        }
+    }
+
     pub(crate) fn description(&self, strings: &Strings) -> SharedString {
+        if self.bulk {
+            let key = match (self.hard_delete, self.targets.len() == 1) {
+                (true, true) => "sessions.sidebar.dialogs.deleteSessions.singleDescription",
+                (true, false) => "sessions.sidebar.dialogs.deleteSessions.pluralDescription",
+                (false, true) => "sessions.sidebar.dialogs.archiveSessions.singleDescription",
+                (false, false) => "sessions.sidebar.dialogs.archiveSessions.pluralDescription",
+            };
+            return strings.format(key, &[("count", &self.targets.len().to_string())]);
+        }
         let count = self.targets.len().saturating_sub(1);
         let count_text = count.to_string();
         let key = match (self.hard_delete, count) {
@@ -167,6 +214,17 @@ impl RemovalConfirm {
             &[("sessionTitle", &self.title), ("count", &count_text)],
         )
     }
+}
+
+/// What a bulk confirmation resolves to when its button is pressed.
+#[derive(Clone, Debug)]
+enum BulkConfirm {
+    /// Nothing changed since the dialog opened: run it.
+    Ready(RemovalConfirm),
+    /// The sessions or the action changed: ask again with these.
+    Changed(RemovalConfirm),
+    /// No session is left to act on.
+    Gone,
 }
 
 /// One sentence a person can act on when a session action fails
@@ -717,6 +775,7 @@ impl Workspace {
             title: self.project_display_label(project).to_string(),
             targets,
             hard_delete: false,
+            bulk: false,
         };
         self.open_removal_dialog(confirm, window, cx);
     }
@@ -751,6 +810,7 @@ impl Workspace {
             title,
             targets,
             hard_delete,
+            bulk: false,
         };
         if self.shows_deletion_dialog() {
             self.open_removal_dialog(confirm, window, cx);
@@ -764,11 +824,82 @@ impl Workspace {
         let Some(confirm) = self.session_management.confirm.take() else {
             return;
         };
-        window.close_dialog(cx);
-        if confirm.runtime == self.runtime {
-            self.execute_removal(confirm, window, cx);
+        if confirm.runtime != self.runtime {
+            window.close_dialog(cx);
+            cx.notify();
+            return;
+        }
+        match self.resolve_bulk_confirm(confirm) {
+            BulkConfirm::Ready(confirm) => {
+                window.close_dialog(cx);
+                self.execute_removal(confirm, window, cx);
+            }
+            // The dialog stays open and reads the new count and action.
+            BulkConfirm::Changed(confirm) => {
+                self.session_management.confirm = Some(confirm);
+            }
+            BulkConfirm::Gone => {
+                window.close_dialog(cx);
+            }
         }
         cx.notify();
+    }
+
+    /// `resolveBulkDeleteConfirmation`: what a bulk confirmation still means
+    /// when the button is pressed. Sessions the index no longer holds are
+    /// dropped, and so are archived ones from an archive, which never
+    /// restamps them; an archive whose every session is archived by now
+    /// becomes a delete. A changed set or action is shown again before
+    /// anything runs. A single row's confirmation is always ready: its
+    /// request answers for sessions that are gone.
+    fn resolve_bulk_confirm(&self, confirm: RemovalConfirm) -> BulkConfirm {
+        if !confirm.bulk {
+            return BulkConfirm::Ready(confirm);
+        }
+        let known: Vec<&SessionId> = confirm
+            .targets
+            .iter()
+            .filter(|id| self.sessions.get(id).is_some())
+            .collect();
+        let archived = |id: &SessionId| {
+            self.sessions
+                .get(id)
+                .is_some_and(|session| session.is_archived())
+        };
+        let hard_delete =
+            confirm.hard_delete || (!known.is_empty() && known.iter().all(|id| archived(id)));
+        let targets: Vec<SessionId> = known
+            .into_iter()
+            .filter(|id| hard_delete || !archived(id))
+            .cloned()
+            .collect();
+        if targets.is_empty() {
+            return BulkConfirm::Gone;
+        }
+        let ready = targets == confirm.targets && hard_delete == confirm.hard_delete;
+        let confirm = RemovalConfirm {
+            targets,
+            hard_delete,
+            ..confirm
+        };
+        if ready {
+            BulkConfirm::Ready(confirm)
+        } else {
+            BulkConfirm::Changed(confirm)
+        }
+    }
+
+    /// The targets of a bulk action that no request is already removing.
+    pub(crate) fn not_being_removed(&self, targets: Vec<SessionId>) -> Vec<SessionId> {
+        targets
+            .into_iter()
+            .filter(|id| {
+                !self
+                    .session_management
+                    .removing
+                    .contains(&self.mutation_key(id))
+            })
+            .collect()
     }
 
     pub(crate) fn cancel_removal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -850,12 +981,20 @@ impl Workspace {
         }
     }
 
-    fn execute_removal(
+    pub(crate) fn execute_removal(
         &mut self,
-        confirm: RemovalConfirm,
+        mut confirm: RemovalConfirm,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if confirm.bulk {
+            // A selection can overlap a request still in flight: only the
+            // sessions nothing is removing yet are asked for.
+            confirm.targets = self.not_being_removed(std::mem::take(&mut confirm.targets));
+            if confirm.targets.is_empty() {
+                return;
+            }
+        }
         let keys: Vec<SessionKey> = confirm
             .targets
             .iter()
@@ -989,15 +1128,25 @@ impl Workspace {
             return;
         }
         self.apply_confirmed_session_deletions(&deleted, window, cx);
-        let failed = targets.iter().any(|id| !deleted.contains(id));
+        self.session_management.selection.remove_many(&deleted);
+        let failed = targets.iter().filter(|id| !deleted.contains(id)).count();
         let strings = locale::strings(cx).clone();
-        if failed {
-            let detail = first_error.map(|error| describe_error(&strings, &error));
-            self.push_error("sessions.sidebar.session.delete.error", detail, window, cx);
-        } else if targets.len() == 1 {
-            let text = strings.get("sessions.sidebar.session.delete.success");
-            self.push_notice(Notification::success(text.clone()), text, window, cx);
-        } else {
+        let detail = first_error
+            .filter(|_| failed > 0)
+            .map(|error| describe_error(&strings, &error));
+        if targets.len() == 1 {
+            if failed > 0 {
+                self.push_error("sessions.sidebar.session.delete.error", detail, window, cx);
+            } else {
+                let text = strings.get("sessions.sidebar.session.delete.success");
+                self.push_notice(Notification::success(text.clone()), text, window, cx);
+            }
+            return;
+        }
+        // Several sessions: what went and what stayed are both said, so one
+        // failure never hides the deletions that worked.
+        let deleted_targets = targets.len() - failed;
+        if deleted_targets > 0 {
             let key = if deleted.len() == 1 {
                 "sessions.sidebar.bulkActions.deletedSingle"
             } else {
@@ -1005,6 +1154,19 @@ impl Workspace {
             };
             let text = strings.format(key, &[("count", &deleted.len().to_string())]);
             self.push_notice(Notification::success(text.clone()), text, window, cx);
+        }
+        if failed > 0 {
+            let key = if failed == 1 {
+                "sessions.sidebar.bulkActions.failedDeleteSingle"
+            } else {
+                "sessions.sidebar.bulkActions.failedDeletePlural"
+            };
+            let title = strings.format(key, &[("count", &failed.to_string())]);
+            let notification = match detail {
+                Some(detail) => Notification::error(detail).title(title.clone()),
+                None => Notification::error(title.clone()),
+            };
+            self.push_notice(notification, title, window, cx);
         }
     }
 
@@ -1057,6 +1219,7 @@ impl Workspace {
         self.apply_server_events(events, window, cx);
         let strings = locale::strings(cx).clone();
         let archived_ids: Vec<SessionId> = archived.into_iter().map(|(id, _)| id).collect();
+        self.session_management.selection.remove_many(&archived_ids);
         let failed = targets.len() - archived_ids.len();
         let detail = first_error.map(|error| describe_error(&strings, &error));
         if targets.len() == 1 {
@@ -1176,6 +1339,9 @@ impl Workspace {
             return false;
         }
         let mut order: Vec<SessionId> = Vec::new();
+        // The sessions asked on their own. `roots` may also name subsessions
+        // that come back with a parent in it; those are not roots here.
+        let mut asked_roots: Vec<SessionId> = Vec::new();
         for root in &roots {
             if order.contains(root) {
                 continue;
@@ -1189,8 +1355,13 @@ impl Workspace {
                 }
             }
             order.push(root.clone());
+            asked_roots.push(root.clone());
             if !undo {
-                order.extend(session_actions::archived_subsessions(&self.sessions, root));
+                for subsession in session_actions::archived_subsessions(&self.sessions, root) {
+                    if !order.contains(&subsession) {
+                        order.push(subsession);
+                    }
+                }
             }
         }
         if order.is_empty() {
@@ -1207,22 +1378,30 @@ impl Workspace {
         }
         let runtime = self.runtime.clone();
         let ids = order.clone();
-        let roots_requested = roots.clone();
+        let roots_requested = asked_roots;
         let started = self.spawn_session_task(
             move |client| {
                 Box::pin(async move {
                     // One by one, parents first: a root that fails keeps its
-                    // subsessions archived with it.
+                    // subsessions archived with it, and the next root still
+                    // runs.
                     let mut outcomes: Vec<(SessionId, Result<Restored, TransportError>)> =
                         Vec::new();
+                    let mut skipping = false;
                     for id in ids {
+                        let is_root = roots_requested.contains(&id);
+                        if is_root {
+                            skipping = false;
+                        } else if skipping {
+                            continue;
+                        }
                         let outcome = client.restore_sessions(std::slice::from_ref(&id)).await;
                         let failed_root = !undo
-                            && roots_requested.contains(&id)
+                            && is_root
                             && !matches!(&outcome, Ok(restored) if restored.restored.contains(&id));
                         outcomes.push((id, outcome));
                         if failed_root {
-                            break;
+                            skipping = true;
                         }
                     }
                     outcomes
@@ -1284,6 +1463,7 @@ impl Workspace {
                 })
                 .collect();
             self.apply_server_events(events, window, cx);
+            self.session_management.selection.remove_many(&restored);
         }
         let all_roots = !stale && roots.iter().all(|root| restored.contains(root));
         let all = !stale && requested.iter().all(|id| restored.contains(id));
@@ -1291,6 +1471,36 @@ impl Workspace {
             // An undo reports only what failed, as `undoArchive` does.
             if !all {
                 self.push_error("sessions.sidebar.session.restore.error", None, window, cx);
+            }
+        } else if roots.len() > 1 {
+            // Several sessions: what came back and what stayed archived are
+            // both said (`handleBulkRestore`). `roots` is every session the
+            // selection named, so a subsession skipped under a root that
+            // failed counts as failed and stays checked.
+            let strings = locale::strings(cx).clone();
+            let back = if stale {
+                0
+            } else {
+                roots.iter().filter(|root| restored.contains(root)).count()
+            };
+            let failed = roots.len() - back;
+            if back > 0 {
+                let key = if back == 1 {
+                    "sessions.sidebar.bulkActions.restoredSingle"
+                } else {
+                    "sessions.sidebar.bulkActions.restoredPlural"
+                };
+                let text = strings.format(key, &[("count", &back.to_string())]);
+                self.push_notice(Notification::success(text.clone()), text, window, cx);
+            }
+            if failed > 0 {
+                let key = if failed == 1 {
+                    "sessions.sidebar.bulkActions.failedRestoreSingle"
+                } else {
+                    "sessions.sidebar.bulkActions.failedRestorePlural"
+                };
+                let text = strings.format(key, &[("count", &failed.to_string())]);
+                self.push_notice(Notification::error(text.clone()), text, window, cx);
             }
         } else if all_roots {
             let text = locale::strings(cx).get("sessions.sidebar.session.restore.success");

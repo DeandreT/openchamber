@@ -707,6 +707,20 @@ mod tests {
         let (window, workspace) = crate::workspace_tests::open(cx);
         connect(&workspace, quotas, settings, cx);
         settings_test_server::settle(window, cx);
+        // The focused composer's caret blinks twice a second and every blink
+        // redraws the workspace. These tests advance the clock by minutes,
+        // so the workspace itself takes the focus. Only an active window
+        // reports the composer's blur, which stops the caret.
+        cx.update_window(window, |_, window, _| window.activate_window())
+            .expect("test window");
+        cx.run_until_parked();
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            workspace.update(cx, |workspace, cx| workspace.focus_handle.focus(window, cx));
+            window.render_frame(cx);
+        })
+        .expect("test window");
+        cx.run_until_parked();
         (window, workspace)
     }
 

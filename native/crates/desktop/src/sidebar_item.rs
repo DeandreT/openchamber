@@ -19,6 +19,8 @@ pub enum SidebarItem {
         draft: openchamber_native_core::draft::DraftKey,
         title: SharedString,
     },
+    /// A zone header, or the Projects caption (`ActivityKey::Projects`),
+    /// which is drawn and folds the same way.
     Zone {
         key: SharedString,
         activity: ActivityKey,
@@ -116,6 +118,11 @@ impl SidebarItem {
             } => Self::Zone {
                 key: key.clone().into(),
                 activity: *activity,
+                collapsed: *collapsed,
+            },
+            SidebarRow::Caption { key, collapsed } => Self::Zone {
+                key: key.clone().into(),
+                activity: ActivityKey::Projects,
                 collapsed: *collapsed,
             },
             SidebarRow::ProjectHeader {

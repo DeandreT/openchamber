@@ -287,18 +287,18 @@ fn the_sidebar_button_opens_the_board_in_place_of_the_archive(cx: &mut TestAppCo
     let (window, workspace) = crate::workspace_tests::open(cx);
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
-        window.click(name("source-board"), cx);
+        crate::sidebar_appearance_tests::click_more_page(window, "source-board", cx);
         window.render_frame(cx);
         assert!(window.try_find(name("source-board-page")).is_some());
-        window.click(name("archive"), cx);
+        crate::sidebar_appearance_tests::click_more_page(window, "archive", cx);
         window.render_frame(cx);
         assert!(window.try_find(name("source-board-page")).is_none());
         assert!(workspace.read(cx).archive_open);
-        window.click(name("source-board"), cx);
+        crate::sidebar_appearance_tests::click_more_page(window, "source-board", cx);
         window.render_frame(cx);
         assert!(!workspace.read(cx).archive_open);
         assert!(window.try_find(name("source-board-page")).is_some());
-        window.click(name("source-board"), cx);
+        crate::sidebar_appearance_tests::click_more_page(window, "source-board", cx);
         window.render_frame(cx);
         assert!(window.try_find(name("source-board-page")).is_none());
     })

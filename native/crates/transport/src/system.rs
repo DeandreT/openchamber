@@ -37,14 +37,17 @@ fn version(value: String) -> Result<String, TransportError> {
 }
 
 impl ServerClient {
+    /// The selected host's OpenChamber version (`GET /api/system/info`).
+    pub async fn openchamber_version(&self) -> Result<String, TransportError> {
+        let reply: AppVersion = self
+            .get_json(self.endpoint().url("api/system/info"), None)
+            .await?;
+        version(reply.version)
+    }
+
     /// Reads both versions independently; either endpoint may be unavailable.
     pub async fn system_versions(&self) -> SystemVersions {
-        let app = async {
-            let reply: AppVersion = self
-                .get_json(self.endpoint().url("api/system/info"), None)
-                .await?;
-            version(reply.version)
-        };
+        let app = self.openchamber_version();
         let engine = async {
             let reply: EngineVersion = self
                 .get_json(self.endpoint().url("api/opencode/upgrade-status"), None)

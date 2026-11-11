@@ -13,14 +13,18 @@ pub(crate) enum Page {
     Shortcuts,
     Voice,
     Usage,
+    About,
     Hosts,
+    Git,
     Behavior,
+    Commands,
+    MagicPrompts,
     Snippets,
 }
 
 impl Page {
     /// `pageOrder` in `SettingsView.tsx`, limited to implemented pages.
-    pub(crate) const ALL: [Self; 11] = [
+    pub(crate) const ALL: [Self; 15] = [
         Self::General,
         Self::Appearance,
         Self::Chat,
@@ -29,8 +33,12 @@ impl Page {
         Self::Shortcuts,
         Self::Voice,
         Self::Usage,
+        Self::About,
         Self::Hosts,
+        Self::Git,
         Self::Behavior,
+        Self::Commands,
+        Self::MagicPrompts,
         Self::Snippets,
     ];
 
@@ -44,8 +52,12 @@ impl Page {
             Self::Usage => "usage",
             Self::Sessions => "sessions",
             Self::Shortcuts => "shortcuts",
+            Self::About => "about",
             Self::Hosts => "remote-instances",
+            Self::Git => "git",
             Self::Behavior => "behavior",
+            Self::Commands => "commands",
+            Self::MagicPrompts => "magic-prompts",
             Self::Snippets => "snippets",
         }
     }
@@ -60,8 +72,12 @@ impl Page {
             Self::Usage => "settings.page.usage.title",
             Self::Sessions => "settings.page.sessions.title",
             Self::Shortcuts => "settings.page.shortcuts.title",
+            Self::About => "settings.page.about.title",
             Self::Hosts => "settings.page.remoteInstances.title",
+            Self::Git => "settings.page.git.title",
             Self::Behavior => "settings.page.behavior.title",
+            Self::Commands => "settings.page.commands.title",
+            Self::MagicPrompts => "settings.page.magicPrompts.title",
             Self::Snippets => "settings.page.snippets.title",
         }
     }
@@ -75,14 +91,16 @@ impl Page {
             | Self::Sessions
             | Self::Shortcuts
             | Self::Voice
-            | Self::Usage => "settings.view.nav.group.general",
-            Self::Hosts => "settings.view.nav.group.projects",
-            Self::Behavior => "settings.view.nav.group.opencode",
-            Self::Snippets => "settings.view.nav.group.content",
+            | Self::Usage
+            | Self::About => "settings.view.nav.group.general",
+            Self::Hosts | Self::Git => "settings.view.nav.group.projects",
+            Self::Behavior | Self::Commands => "settings.view.nav.group.opencode",
+            Self::MagicPrompts | Self::Snippets => "settings.view.nav.group.content",
         }
     }
 
-    /// The header's description; split pages such as Snippets have none.
+    /// The header's description; split pages such as Commands, Magic Prompts
+    /// and Snippets have none.
     pub(crate) fn description(self) -> Option<&'static str> {
         Some(match self {
             Self::General => "settings.page.general.description",
@@ -96,7 +114,10 @@ impl Page {
             Self::Shortcuts => "settings.page.shortcuts.description",
             Self::Hosts => "settings.remoteInstances.direct.description",
             Self::Behavior => "settings.page.behavior.description",
-            Self::Snippets => return None,
+            // About and Git have a title alone.
+            Self::About | Self::Git | Self::Commands | Self::MagicPrompts | Self::Snippets => {
+                return None;
+            }
         })
     }
 
@@ -110,8 +131,12 @@ impl Page {
             Self::Usage => "bar-chart-2",
             Self::Sessions => "chat-history",
             Self::Shortcuts => "command",
+            Self::About => "information",
             Self::Hosts => "computer",
+            Self::Git => "git-branch",
             Self::Behavior => "brain",
+            Self::Commands => "slash-commands-2",
+            Self::MagicPrompts => "ai-generate-2",
             Self::Snippets => "chat-thread",
         }
     }
@@ -346,6 +371,27 @@ pub(crate) const SEARCH_ITEMS: &[SearchItem] = &[
         keywords: "dictation voice input send submit automatic",
     },
     SearchItem {
+        id: "git.identities",
+        page: Page::Git,
+        title: "settings.gitIdentities.page.section.title",
+        description: Some("settings.gitIdentities.page.empty.description"),
+        keywords: "identity profile author email credentials account transport ssh ssh key signing commit signing ssh signing gpg",
+    },
+    SearchItem {
+        id: "git.changes-view",
+        page: Page::Git,
+        title: "settings.openchamber.git.changesViewTitle",
+        description: None,
+        keywords: "changes flat list tree view",
+    },
+    SearchItem {
+        id: "git.gitmoji",
+        page: Page::Git,
+        title: "settings.openchamber.git.enableGitmoji",
+        description: None,
+        keywords: "commit emoji",
+    },
+    SearchItem {
         id: "usage.model-quotas",
         page: Page::Usage,
         title: "settings.usage.page.section.modelQuotas",
@@ -367,6 +413,55 @@ pub(crate) const SEARCH_ITEMS: &[SearchItem] = &[
         keywords: "tone concise detailed custom instructions",
     },
     SearchItem {
+        id: "commands.create",
+        page: Page::Commands,
+        title: "settings.commands.page.title.new",
+        description: None,
+        keywords: "create add new command",
+    },
+    SearchItem {
+        id: "commands.name",
+        page: Page::Commands,
+        title: "settings.commands.page.field.commandName",
+        description: None,
+        keywords: "slash command name",
+    },
+    SearchItem {
+        id: "commands.agent",
+        page: Page::Commands,
+        title: "settings.commands.page.field.overrideAgent",
+        description: None,
+        keywords: "agent execution",
+    },
+    SearchItem {
+        id: "commands.model",
+        page: Page::Commands,
+        title: "settings.agents.page.field.overrideModel",
+        description: None,
+        keywords: "model provider",
+    },
+    SearchItem {
+        id: "commands.variant",
+        page: Page::Commands,
+        title: "settings.agents.page.field.variant",
+        description: None,
+        keywords: "variant reasoning thinking",
+    },
+    SearchItem {
+        id: "commands.subagent",
+        page: Page::Commands,
+        title: "settings.commands.page.field.subagent",
+        description: Some("settings.commands.page.field.subagentTooltip"),
+        keywords: "subagent background child session",
+    },
+    SearchItem {
+        id: "commands.template",
+        page: Page::Commands,
+        title: "settings.commands.page.section.template",
+        description: None,
+        keywords: "prompt template arguments shell file",
+    },
+    SearchItem {
         id: "snippets.create",
         page: Page::Snippets,
         title: "settings.snippets.sidebar.actions.create",
@@ -379,6 +474,34 @@ pub(crate) const SEARCH_ITEMS: &[SearchItem] = &[
         title: "settings.snippets.page.field.content",
         description: None,
         keywords: "markdown prompt template",
+    },
+    SearchItem {
+        id: "magic-prompts.scope",
+        page: Page::MagicPrompts,
+        title: "settings.magicPrompts.page.scope.label",
+        description: None,
+        keywords: "global project project overrides project.json inherit",
+    },
+    SearchItem {
+        id: "magic-prompts.visible-prompt",
+        page: Page::MagicPrompts,
+        title: "settings.magicPrompts.page.block.visiblePrompt",
+        description: None,
+        keywords: "prompt text user message template",
+    },
+    SearchItem {
+        id: "magic-prompts.instructions",
+        page: Page::MagicPrompts,
+        title: "settings.magicPrompts.page.block.instructions",
+        description: None,
+        keywords: "hidden prompt instructions template",
+    },
+    SearchItem {
+        id: "magic-prompts.reset-overrides",
+        page: Page::MagicPrompts,
+        title: "settings.magicPrompts.page.actions.resetAllOverrides",
+        description: None,
+        keywords: "reset default prompts overrides",
     },
     SearchItem {
         id: "remote-instances.direct-hosts",
@@ -428,6 +551,9 @@ mod tests {
         assert!(search("font nonexistent", &en).is_empty());
         assert_eq!(search("steer", &en)[0].id, "chat.follow-up-behavior");
         assert_eq!(search("safety net", &en)[0].page, Page::Sessions);
+        assert_eq!(search("child session", &en)[0].id, "commands.subagent");
+        assert_eq!(search("project.json", &en)[0].id, "magic-prompts.scope");
+        assert_eq!(search("gitmoji", &en)[0].page, Page::Git);
         for locale in ["ar", "he", "de"] {
             let strings = Strings::load(locale);
             let label = strings.get("settings.appearance.language.label");
@@ -450,6 +576,20 @@ mod tests {
             );
         }
         assert_eq!(Page::default(), Page::General);
+        let order: Vec<_> = Page::ALL.iter().map(|page| page.id()).collect();
+        assert_eq!(
+            order[8..],
+            [
+                "about",
+                "remote-instances",
+                "git",
+                "behavior",
+                "commands",
+                "magic-prompts",
+                "snippets"
+            ],
+            "new pages sit where the reference orders them"
+        );
         let groups: Vec<_> = Page::ALL.iter().map(|page| page.group()).collect();
         assert!(
             groups.windows(2).filter(|pair| pair[0] != pair[1]).count() + 1

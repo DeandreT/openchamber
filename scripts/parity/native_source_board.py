@@ -136,12 +136,19 @@ class Session:
         self.client.screenshot(self.args.output / f"{name}.png")
 
 
+def open_page(session: Session, line: str):
+    """Chooses a page's line in the sidebar's More menu, which toggles it."""
+    session.client.click("sidebar-more")
+    session.wait_id(line)
+    session.client.click(line)
+
+
 def board_steps(session: Session):
     client = session.client
     server = session.server.url
 
     def unauthenticated():
-        client.click("source-board")
+        open_page(session, "source-board")
         session.wait_id("source-board-page")
         session.wait_label("source-board-state", "Connect GitHub")
         assert session.repository()["writes"] == []
@@ -153,9 +160,9 @@ def board_steps(session: Session):
         if completed.get("connected") is not True:
             raise RuntimeError(f"the device flow did not connect: {completed}")
         # The board asks again when it opens on a project it could not read.
-        client.click("source-board")
+        open_page(session, "source-board")
         session.wait_gone("source-board-page")
-        client.click("source-board")
+        open_page(session, "source-board")
 
     def selected():
         session.wait_id(ISSUE_ROW.format(1))
@@ -262,7 +269,7 @@ def board_steps(session: Session):
             raise RuntimeError(f"the retried comment was not recorded once: {comments()}")
 
     def close_board():
-        client.click("source-board")
+        open_page(session, "source-board")
         session.wait_gone("source-board-page")
 
     return [

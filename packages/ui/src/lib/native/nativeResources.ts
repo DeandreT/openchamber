@@ -18,7 +18,7 @@ import { getReadableThemeColors } from '@/lib/theme/readableColors';
 import { agentColorPalette } from '@/lib/agentColorPalette';
 import { PROVIDER_LOGO_ALIASES } from '@/lib/providerLogoCandidates';
 import { getLocaleDirection, LOCALES, type Locale } from '@/lib/i18n/runtime';
-import { getDefaultMagicPromptTemplate } from '@/lib/magicPrompts';
+import { getDefaultMagicPromptTemplate, getMagicPromptDefinition } from '@/lib/magicPrompts';
 import { MAGIC_PROMPT_COMMANDS } from '@/components/chat/composer/submit/slashCommands';
 import { getIntlLocale } from '@/lib/i18n/intl';
 import { buildHtmlRenderDocument, htmlRenderTheme, type HtmlRenderMetrics } from '@/components/chat/message/parts/htmlRender';
@@ -53,6 +53,8 @@ export const NATIVE_ICONS_PATH = `${resourcesDirectory}/icons.json`;
 export const NATIVE_PROVIDER_LOGOS_PATH = `${resourcesDirectory}/provider-logos.json`;
 export const NATIVE_DATE_FORMATS_PATH = `${resourcesDirectory}/date-formats.json`;
 export const NATIVE_MAGIC_PROMPTS_PATH = `${resourcesDirectory}/magic-prompts.json`;
+/** What Settings → Magic Prompts says about each prompt it edits, with the built-in text. */
+export const NATIVE_MAGIC_PROMPT_SETTINGS_PATH = `${resourcesDirectory}/magic-prompt-settings.json`;
 /** The bootstrap and theme variables of pages agents show with `openchamber_render`. */
 export const NATIVE_HTML_RENDER_PATH = `${resourcesDirectory}/html-render.json`;
 /** The Electron application menu's labels, which the native app menu shows. */
@@ -310,6 +312,63 @@ export const renderNativeMagicPrompts = (): string => {
   return `${JSON.stringify({ commands, templates }, null, 2)}\n`;
 };
 
+/** The prompts Settings → Magic Prompts edits (`PROMPT_PAGE_MAP` in `MagicPromptsPage.tsx`). */
+const NATIVE_SETTINGS_PROMPTS = [
+  'git.commit.generate.visible',
+  'git.commit.generate.instructions',
+  'git.pr.generate.visible',
+  'git.pr.generate.instructions',
+  'walkthrough.instructions',
+  'git.conflict.resolve.visible',
+  'git.conflict.resolve.instructions',
+  'git.integrate.cherrypick.resolve.visible',
+  'git.integrate.cherrypick.resolve.instructions',
+  'plan.todo.visible',
+  'plan.todo.instructions',
+  'plan.improve.visible',
+  'plan.improve.instructions',
+  'plan.implement.visible',
+  'plan.implement.instructions',
+  'session.explore.visible',
+  'session.explore.instructions',
+  'session.summary.visible',
+  'session.summary.instructions',
+  'session.review.visible',
+  'session.review.instructions',
+  'session.plan.visible',
+  'session.plan.instructions',
+  'session.craftGoal.visible',
+  'session.craftGoal.instructions',
+  'session.catchup.visible',
+  'session.catchup.instructions',
+  'session.debug.visible',
+  'session.debug.instructions',
+  'session.weigh.visible',
+  'session.weigh.instructions',
+  'session.fusion.visible',
+  'session.fusion.instructions',
+  'session.fusion.codeInstructions',
+  'memory.tidy.visible',
+  'memory.tidy.instructions',
+] as const;
+
+/**
+ * Exports, for each prompt the Magic Prompts page edits, the description
+ * behind its info hint, its placeholder names and its built-in text.
+ */
+export const renderNativeMagicPromptSettings = (): string => {
+  const definitions: Record<string, { description: string; placeholders: string[]; template: string }> = {};
+  for (const id of NATIVE_SETTINGS_PROMPTS) {
+    const definition = getMagicPromptDefinition(id);
+    definitions[id] = {
+      description: definition.description,
+      placeholders: (definition.placeholders ?? []).map((placeholder) => placeholder.key),
+      template: definition.template,
+    };
+  }
+  return `${JSON.stringify({ definitions }, null, 2)}\n`;
+};
+
 /** The variables `htmlRenderTheme` derives from the app's metrics, filled in by the native client. */
 const HTML_RENDER_METRIC_VARIABLES = ['--oc-rem', '--oc-text', '--radius', '--font-sans', '--font-mono'];
 const HTML_RENDER_SAMPLE_METRICS: HtmlRenderMetrics = { rem: 16, text: 14, sans: '"Inter", sans-serif', mono: '"JetBrains Mono", monospace' };
@@ -402,6 +461,7 @@ const writeNativeResources = (): string[] => {
     [NATIVE_PROVIDER_LOGOS_PATH, renderNativeProviderLogos()],
     [NATIVE_DATE_FORMATS_PATH, renderNativeDateFormats()],
     [NATIVE_MAGIC_PROMPTS_PATH, renderNativeMagicPrompts()],
+    [NATIVE_MAGIC_PROMPT_SETTINGS_PATH, renderNativeMagicPromptSettings()],
     [NATIVE_HTML_RENDER_PATH, renderNativeHtmlRender()],
     [NATIVE_MENU_LOCALES_PATH, renderNativeMenuLocales()],
   ];

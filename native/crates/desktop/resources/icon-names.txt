@@ -186,3 +186,8 @@ edit-2
 pulse
 more-fill
 gift
+arrow-up-down
+checkbox-multiple
+donut-chart-fill
+slash-commands-2
+restart

@@ -120,6 +120,7 @@ pub fn bind_keys(cx: &mut gpui_kit::App) {
         ),
     ]);
     crate::shortcuts_settings::bind_keys(cx);
+    crate::command_palette::bind_keys(cx);
     // The configurable shortcuts and, after them, the terminal's `NoAction`
     // bindings: a later `NoAction` cancels a pending chord.
     crate::shortcuts::bind(&Default::default(), cx);
@@ -493,6 +494,8 @@ impl Workspace {
                             .flex_row_from(direction)
                             .items_center()
                             .gap(px(8.0))
+                            .children(self.render_header_context_usage(palette, direction, cx))
+                            .children(self.render_header_open_in(palette, cx))
                             .children(self.render_project_action(palette, direction, cx))
                             .child(
                                 IconButton::new(

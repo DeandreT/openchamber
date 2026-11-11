@@ -4,8 +4,8 @@
     "fixture-sidebar-open": {"electron": {"selector": "button[aria-label='Open sessions']"}, "native": "new-session"},
     "fixture-project-trigger": {"electron": {"selector": ".chat-input-column button[aria-haspopup='dialog']"}, "native": "choose-project"},
     "fixture-project-option": {"electron": {"selector": "[role='option'][data-value='{fixtureId}']"}, "native": "project-option:{fixture}"},
-    "files-board-launch": {"electron": {"selector": "button[aria-label='More']"}, "native": "source-board"},
-    "files-board-item": {"electron": {"selector": "[role='menuitem']:has(use[href='#oc-git-pull-request'])"}, "native": "source-board-kind:issue"},
+    "files-board-launch": {"electron": {"selector": "button[aria-label='More']"}, "native": "sidebar-more"},
+    "files-board-item": {"electron": {"selector": "[role='menuitem']:has(use[href='#oc-git-pull-request'])"}, "native": "source-board"},
     "files-rail": {"electron": {"selector": "button[aria-label='Files']"}, "native": "rail-files"},
     "git-rail": {"electron": {"selector": "button[aria-label='Git'],button[aria-label^='Git,']"}, "native": "rail-git"},
     "changes-rail": {"electron": {"selector": "button[aria-label='Changes']"}, "native": "rail-diff"},
@@ -45,11 +45,11 @@
       },
       "native": "new-session"
     },
-    "source-board": {
+    "sidebar-more": {
       "electron": {
-        "selector": "button[aria-label=\"Issues and PRs\"]"
+        "selector": "button[aria-label='More']"
       },
-      "native": "source-board"
+      "native": "sidebar-more"
     },
     "display-mode": {
       "electron": {
@@ -360,7 +360,7 @@
             "app-menu",
             "sidebar-toggle",
             "new-session",
-            "source-board",
+            "sidebar-more",
             "display-mode",
             "settings",
             "instance-switcher",

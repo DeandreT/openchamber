@@ -502,6 +502,8 @@ impl Workspace {
         }
         self.reset_session_admission(window, cx);
         self.clear_host_authentication(window, cx);
+        // The palette searches files through the connection being replaced.
+        self.close_command_palette(window, cx);
         if let Some(previous) = self.connection.take() {
             self.retired_networks
                 .push((self.runtime.clone(), previous.into_network()));

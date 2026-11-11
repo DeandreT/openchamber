@@ -32,7 +32,14 @@ pub(crate) struct Settings {
     shortcuts: Entity<crate::shortcuts_settings::ShortcutsPage>,
     pub(crate) behavior: Entity<crate::behavior_settings::BehaviorPage>,
     pub(crate) snippets: Entity<crate::snippets_settings::SnippetsPage>,
+    pub(crate) commands: Entity<crate::commands_settings::CommandsPage>,
+    pub(crate) about: Entity<crate::about_settings::AboutPage>,
+    pub(crate) git: Entity<crate::git_settings::GitSettingsPage>,
+    pub(crate) magic_prompts: Entity<crate::magic_prompts_settings::MagicPromptsPage>,
     page: Page,
+    /// Counts openings, so a dialog that closes after a newer one opened
+    /// does not hide the newer one's page.
+    shows: u64,
     search: Entity<InputState>,
     active_result: usize,
     navigation_scroll: ScrollHandle,
@@ -53,6 +60,8 @@ impl Settings {
             .update(cx, |appearance, cx| appearance.commit_size(window, cx));
         self.behavior
             .update(cx, |page, cx| page.prepare_close(window, cx));
+        self.commands
+            .update(cx, |page, cx| page.prepare_close(window, cx));
     }
 
     pub(crate) fn take_pending_write(&mut self, cx: &mut Context<Self>) -> Option<Task<()>> {
@@ -71,10 +80,25 @@ impl Settings {
         let snippets = self
             .snippets
             .update(cx, |page, cx| page.take_pending_write(cx));
-        let pending: Vec<_> = [behavior, defaults, voice, snippets]
-            .into_iter()
-            .flatten()
-            .collect();
+        let commands = self
+            .commands
+            .update(cx, |page, cx| page.take_pending_write(cx));
+        let magic_prompts = self
+            .magic_prompts
+            .update(cx, |page, cx| page.take_pending_write(cx));
+        let git = self.git.update(cx, |page, cx| page.take_pending_write(cx));
+        let pending: Vec<_> = [
+            behavior,
+            defaults,
+            voice,
+            snippets,
+            commands,
+            magic_prompts,
+            git,
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         if pending.is_empty() {
             return None;
         }
@@ -89,6 +113,9 @@ impl Settings {
         self.behavior.read(cx).has_failed_writes()
             || self.voice.read(cx).voice_has_failed_writes()
             || self.snippets.read(cx).has_failed_writes()
+            || self.commands.read(cx).has_failed_writes()
+            || self.magic_prompts.read(cx).has_failed_writes()
+            || self.git.read(cx).has_failed_writes()
             || self
                 .sessions
                 .read(cx)
@@ -102,6 +129,10 @@ impl Settings {
         self.voice
             .update(cx, |page, cx| page.cancel_voice_close(cx));
         self.snippets.update(cx, |page, cx| page.cancel_close(cx));
+        self.commands.update(cx, |page, cx| page.cancel_close(cx));
+        self.magic_prompts
+            .update(cx, |page, cx| page.cancel_close(cx));
+        self.git.update(cx, |page, cx| page.cancel_close(cx));
         if let Some(defaults) = self.sessions.read(cx).defaults.clone() {
             defaults.update(cx, |page, cx| page.cancel_close(cx));
         }
@@ -123,10 +154,25 @@ impl Settings {
         let snippets = self
             .snippets
             .update(cx, |page, cx| page.take_quit_write(cx));
-        let pending: Vec<_> = [behavior, defaults, voice, snippets]
-            .into_iter()
-            .flatten()
-            .collect();
+        let commands = self
+            .commands
+            .update(cx, |page, cx| page.take_quit_write(cx));
+        let magic_prompts = self
+            .magic_prompts
+            .update(cx, |page, cx| page.take_quit_write(cx));
+        let git = self.git.update(cx, |page, cx| page.take_quit_write(cx));
+        let pending: Vec<_> = [
+            behavior,
+            defaults,
+            voice,
+            snippets,
+            commands,
+            magic_prompts,
+            git,
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
         if pending.is_empty() {
             return None;
         }
@@ -184,7 +230,16 @@ impl Settings {
         let behavior =
             cx.new(|cx| crate::behavior_settings::BehaviorPage::new(owner.clone(), window, cx));
         let snippets = cx.new(|cx| crate::snippets_settings::SnippetsPage::new(owner.clone(), cx));
+        let commands = cx.new(|cx| crate::commands_settings::CommandsPage::new(owner.clone(), cx));
+        let magic_prompts =
+            cx.new(|cx| crate::magic_prompts_settings::MagicPromptsPage::new(owner.clone(), cx));
+        let about = cx.new(|cx| crate::about_settings::AboutPage::new(owner.clone(), cx));
+        let git = cx.new(|cx| crate::git_settings::GitSettingsPage::new(owner.clone(), cx));
         Self {
+            about,
+            git,
+            commands,
+            magic_prompts,
             shortcuts,
             behavior,
             snippets,
@@ -198,6 +253,7 @@ impl Settings {
             voice,
             usage,
             page: Page::default(),
+            shows: 0,
             search,
             active_result: 0,
             navigation_scroll: ScrollHandle::new(),
@@ -249,7 +305,32 @@ impl Settings {
                 let _ = snippets.update(cx, |page, cx| page.refresh(cx));
             });
         }
+        // These pages read only while they are the visible one.
+        self.show_pages(Some(page), cx);
         cx.notify();
+    }
+
+    /// Tells the pages that read on visit which one is shown; `None` when the
+    /// dialog closed. Deferred, because a page may be mid-update.
+    fn show_pages(&self, shown: Option<Page>, cx: &mut Context<Self>) {
+        let (about, git, commands, magic_prompts) = (
+            self.about.downgrade(),
+            self.git.downgrade(),
+            self.commands.downgrade(),
+            self.magic_prompts.downgrade(),
+        );
+        cx.defer(move |cx| {
+            let _ = about.update(cx, |page, cx| {
+                page.set_shown(shown == Some(Page::About), cx)
+            });
+            let _ = git.update(cx, |page, cx| page.set_shown(shown == Some(Page::Git), cx));
+            let _ = commands.update(cx, |page, cx| {
+                page.set_shown(shown == Some(Page::Commands), cx)
+            });
+            let _ = magic_prompts.update(cx, |page, cx| {
+                page.set_shown(shown == Some(Page::MagicPrompts), cx)
+            });
+        });
     }
 
     fn open_result(&mut self, item: &SearchItem, window: &mut Window, cx: &mut Context<Self>) {
@@ -273,12 +354,21 @@ impl Settings {
             Page::Voice => self
                 .voice
                 .update(cx, |page, cx| page.reveal(item.id, window, cx)),
-            Page::Shortcuts | Page::Usage => {}
+            Page::Shortcuts | Page::Usage | Page::About => {}
+            Page::Git => self
+                .git
+                .update(cx, |page, cx| page.reveal(item.id, window, cx)),
             Page::Behavior => self
                 .behavior
                 .update(cx, |page, cx| page.reveal(item.id, window, cx)),
             Page::Snippets => self
                 .snippets
+                .update(cx, |page, cx| page.reveal(item.id, window, cx)),
+            Page::Commands => self
+                .commands
+                .update(cx, |page, cx| page.reveal(item.id, window, cx)),
+            Page::MagicPrompts => self
+                .magic_prompts
                 .update(cx, |page, cx| page.reveal(item.id, window, cx)),
             Page::Hosts => {
                 self.hosts
@@ -499,6 +589,7 @@ impl Workspace {
         }
         let settings = self.ensure_settings_model(window, cx);
         settings.update(cx, |settings, cx| {
+            settings.shows += 1;
             settings
                 .search
                 .update(cx, |input, cx| input.set_value("", window, cx));
@@ -516,10 +607,13 @@ impl Workspace {
 fn show(settings: Entity<Settings>, window: &mut Window, cx: &mut App) {
     window.close_dialog(cx);
     let owner = settings.read(cx).owner.clone();
+    let shows = settings.read(cx).shows;
+    let closing = settings.downgrade();
     window.open_dialog(cx, move |dialog, window, _| {
         let viewport = window.viewport_size();
         let height = viewport.height * 0.85;
         let owner = owner.clone();
+        let closing = closing.clone();
         dialog
             .w(viewport.width * 0.9)
             .h(height)
@@ -528,6 +622,12 @@ fn show(settings: Entity<Settings>, window: &mut Window, cx: &mut App) {
             .on_ok(|_, _, _| false)
             .on_close(move |_, window, cx| {
                 let _ = owner.update(cx, |owner, cx| owner.focus_composer(window, cx));
+                // A closed dialog shows no page, so none of them reads.
+                let _ = closing.update(cx, |settings, cx| {
+                    if settings.shows == shows {
+                        settings.show_pages(None, cx);
+                    }
+                });
             })
             .content({
                 let settings = settings.clone();
@@ -564,6 +664,10 @@ impl Render for Settings {
             Page::Usage => self.usage.clone().into_any_element(),
             Page::Behavior => self.behavior.clone().into_any_element(),
             Page::Snippets => self.snippets.clone().into_any_element(),
+            Page::Commands => self.commands.clone().into_any_element(),
+            Page::About => self.about.clone().into_any_element(),
+            Page::Git => self.git.clone().into_any_element(),
+            Page::MagicPrompts => self.magic_prompts.clone().into_any_element(),
             Page::Hosts => {
                 let scroll = self.hosts.read(cx).settings_scroll.clone();
                 div()

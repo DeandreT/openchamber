@@ -43,7 +43,7 @@ const REQUIRED_CHAT_AREA_WIDTH: f32 = PANEL_WIDTH + 560.0;
 pub const RAIL_WIDTH: f32 = 44.0;
 const CARD_RADIUS: f32 = 12.0;
 const RAIL_BUTTON: f32 = 28.0;
-const RAIL_GLYPH: f32 = 18.0;
+const RAIL_GLYPH: f32 = 17.0;
 /// `text-xs` of the design system, in rems of the 16 px root.
 pub(crate) const XS_SIZE: f32 = 0.75;
 pub(crate) const XS_LINE: f32 = 1.0;
@@ -68,9 +68,13 @@ const RAIL_SURFACES: &[(&str, &str, &str)] = &[
     ("rail-walkthrough", "route", "contextPanel.mode.walkthrough"),
     ("rail-files", "file-edit", "contextPanel.mode.files"),
     ("rail-terminal", "terminal-box", "layout.mainTab.terminal"),
-    ("rail-notes", "book-marked", "contextRail.surface.notes"),
     ("rail-browser", "global", "contextPanel.mode.browser"),
+    ("rail-notes", "book-marked", "contextRail.surface.notes"),
 ];
+/// The surfaces that open a group (`BUILT_IN_SURFACE_GROUPS`): the session's
+/// changes, the tools that work on the project and the session's workspace.
+/// A divider precedes each, the first one after the session's context.
+const RAIL_GROUP_STARTS: [&str; 3] = ["rail-git", "rail-files", "rail-notes"];
 
 impl Workspace {
     pub(crate) fn work_status_fits(&self, window: &gpui_kit::Window) -> bool {
@@ -356,7 +360,7 @@ impl Workspace {
     /// The fill of the selected session's window, measured against the
     /// context limit `useContextWindowLimits` picks: the record's model, then
     /// the newest answer's, then the composer's.
-    fn session_context_usage(&self) -> Option<ContextUsage> {
+    pub(crate) fn session_context_usage(&self) -> Option<ContextUsage> {
         let session = self.selected_session()?;
         let open = self.open_sessions.get(&session.id)?;
         let directory = self.config_directory()?;
@@ -502,16 +506,9 @@ impl Workspace {
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
-                // The context usage ring, empty until a session reports usage.
                 .child(
-                    div()
-                        .size(px(RAIL_GLYPH))
-                        .rounded_full()
-                        .border_2()
-                        .border_color(palette.muted_foreground.opacity(0.3))
-                        .group_hover("rail-context", move |style| {
-                            style.border_color(foreground.opacity(0.3))
-                        }),
+                    glyph("donut-chart-fill", RAIL_GLYPH, palette.muted_foreground)
+                        .group_hover("rail-context", move |style| style.text_color(foreground)),
                 ),
             cx,
             // The session context replaces an open server surface.
@@ -537,7 +534,10 @@ impl Workspace {
             .items_center()
             .gap(px(8.0))
             .child(context)
-            .children(RAIL_SURFACES.iter().map(|(id, icon, key)| {
+            .children(RAIL_SURFACES.iter().flat_map(|(id, icon, key)| {
+                let divider = RAIL_GROUP_STARTS
+                    .contains(id)
+                    .then(|| rail_divider(palette));
                 let surface = match *id {
                     "rail-files" => Some(PanelSurface::Files),
                     "rail-git" => Some(PanelSurface::Git),
@@ -563,7 +563,7 @@ impl Workspace {
                         }
                     });
                 if *id != "rail-diff" {
-                    return button;
+                    return divider.into_iter().chain([button]);
                 }
                 // The changes surface tints its start column removed and its
                 // end column added.
@@ -571,7 +571,7 @@ impl Workspace {
                     Direction::LeftToRight => (palette.status_error, palette.status_success),
                     Direction::RightToLeft => (palette.status_success, palette.status_error),
                 };
-                div()
+                let button = div()
                     .relative()
                     .child(button)
                     .child(
@@ -585,9 +585,17 @@ impl Workspace {
                             .child(tint(start).left(px(RAIL_GLYPH * 0.2)))
                             .child(tint(end).right(px(RAIL_GLYPH * 0.2))),
                     )
-                    .into_any_element()
+                    .into_any_element();
+                divider.into_iter().chain([button])
             }))
-            .children(self.render_guest_rail(palette, cx))
+            // Installed extensions are a group of their own.
+            .children({
+                let guests = self.render_guest_rail(palette, cx);
+                (!guests.is_empty())
+                    .then(|| rail_divider(palette))
+                    .into_iter()
+                    .chain(guests)
+            })
             .child(
                 IconButton::new(
                     "rail-configure",
@@ -598,6 +606,16 @@ impl Workspace {
                 .render(palette, cx, |_, _, _| {}),
             )
     }
+}
+
+/// The line between two groups of the rail (`h-px w-4 bg-edge-strong`).
+fn rail_divider(palette: &Palette) -> AnyElement {
+    div()
+        .h(px(1.0))
+        .w(px(16.0))
+        .flex_shrink_0()
+        .bg(palette.border)
+        .into_any_element()
 }
 
 impl Workspace {

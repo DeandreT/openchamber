@@ -49,6 +49,7 @@ pub enum PopupMenuItem {
     /// A menu item with custom element render.
     ElementItem {
         aria_label: Option<SharedString>,
+        accessibility_id: Option<SharedString>,
         icon: Option<Icon>,
         disabled: bool,
         checked: bool,
@@ -90,6 +91,7 @@ impl PopupMenuItem {
     {
         PopupMenuItem::ElementItem {
             aria_label: None,
+            accessibility_id: None,
             icon: None,
             disabled: false,
             checked: false,
@@ -106,6 +108,20 @@ impl PopupMenuItem {
     pub fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
         if let Self::ElementItem { aria_label, .. } = &mut self {
             *aria_label = Some(label.into());
+        }
+        self
+    }
+
+    /// Sets the stable accessibility identifier of a custom-rendered menu
+    /// item, for assistive technology and automation.
+    ///
+    /// Only works for [`PopupMenuItem::ElementItem`].
+    pub fn accessibility_id(mut self, id: impl Into<SharedString>) -> Self {
+        if let Self::ElementItem {
+            accessibility_id, ..
+        } = &mut self
+        {
+            *accessibility_id = Some(id.into());
         }
         self
     }
@@ -279,6 +295,15 @@ impl PopupMenuItem {
             PopupMenuItem::Item { checked, .. } => *checked,
             PopupMenuItem::ElementItem { checked, .. } => *checked,
             _ => false,
+        }
+    }
+
+    fn a11y_id(&self) -> Option<SharedString> {
+        match self {
+            PopupMenuItem::ElementItem {
+                accessibility_id, ..
+            } => accessibility_id.clone(),
+            _ => None,
         }
     }
 
@@ -1278,7 +1303,8 @@ impl PopupMenu {
 
                 cx.notify();
             }))
-            .when_some(item.a11y_label(), |this, label| this.aria_label(label));
+            .when_some(item.a11y_label(), |this, label| this.aria_label(label))
+            .when_some(item.a11y_id(), |this, id| this.accessibility_id(id));
 
         match item {
             PopupMenuItem::Separator => this

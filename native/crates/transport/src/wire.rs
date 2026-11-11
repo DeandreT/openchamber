@@ -296,6 +296,7 @@ pub(crate) struct Settings {
     pub code_block_line_wrap: Option<Value>,
     pub message_search_enabled: Option<Value>,
     pub sidebar_grouping: Option<Value>,
+    pub sidebar_project_sort_order: Option<Value>,
     pub sidebar_view_mode: Option<Value>,
     pub sidebar_list_session_grouping: Option<Value>,
     pub sidebar_show_chats_section: Option<Value>,

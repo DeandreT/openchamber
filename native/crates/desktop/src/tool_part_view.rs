@@ -7,15 +7,25 @@
 //! click to the call's input, result and error beside the block line. A
 //! result a history page left out is read with its whole message when the
 //! row opens; the row shows the read's progress and a Retry after a failure.
+//!
+//! A row that changed a file opens it in the Files surface from its header,
+//! and each file of its diff does from the opened body. The opened body also
+//! draws what a result means where the call says so: a file's LSP errors, a
+//! web search's hits, and a question's answers or the questions asked.
+
+use std::rc::Rc;
 
 use gpui_kit::component::Theme;
 use gpui_kit::{
     AnyElement, App, ClipboardItem, Context, ElementId, Entity, FontWeight, Hsla,
-    InteractiveElement, IntoElement, ParentElement, Role, SharedString, StatefulInteractiveElement,
-    Styled, TestSupportExt, Window, div, prelude::FluentBuilder, px, rems,
+    InteractiveElement, IntoElement, MouseButton, ParentElement, PromptLevel, Role, SharedString,
+    StatefulInteractiveElement, Styled, TestSupportExt, Window, div, prelude::FluentBuilder, px,
+    rems,
 };
 use openchamber_native_core::ids::{MessageId, PartId, SessionId};
-use openchamber_native_core::tool_shells::{self, ToolDescription, ToolFacts};
+use openchamber_native_core::tool_shells::{
+    self, ToolDescription, ToolFacts, diagnostics, question, quick_open, web_search,
+};
 use openchamber_native_core::transcript::ToolStatus;
 use openchamber_native_core::{tool_names, transcript::PartContent};
 
@@ -28,17 +38,40 @@ use crate::markdown_view::{self, Author};
 use crate::part_state::HydrationView;
 use crate::reasoning_view::{ROW_LINE_HEIGHT, block_body, toggle_icon};
 use crate::server_sync::apply_list_change;
-use crate::theme::Palette;
+use crate::theme::{Appearance, Palette};
 use crate::transcript_clock::now_millis;
 use crate::transcript_view::META_SIZE;
 use crate::workspace::Workspace;
 
+mod diagnostics_section;
+mod question_content;
+mod web_search_results;
+#[cfg(test)]
+mod window_tests;
+
+use web_search_results::{SearchCache, SearchView};
+
+/// What an opened row keeps between frames.
+struct Opened {
+    /// Whether the result was just copied.
+    copied: Option<Entity<bool>>,
+    /// A finished web search's hits, parsed once per result; `None` for any
+    /// other row and for a result that does not read as hits.
+    search: Option<Rc<SearchView>>,
+}
+
+/// `--text-micro`.
+const MICRO_SIZE: f32 = 0.75;
 /// Input and generic output boxes: `max-h-60`.
 const INPUT_MAX_HEIGHT: f32 = 240.0;
 /// Shell output: `max-h-[46vh]` of a typical window.
 const SHELL_OUTPUT_MAX_HEIGHT: f32 = 400.0;
 /// Diffs and results without their own cap.
 const RESULT_MAX_HEIGHT: f32 = 320.0;
+/// A question's answers or questions: `max-h-[40vh]` of a typical window.
+const QUESTION_MAX_HEIGHT: f32 = 348.0;
+/// Web search hits: `max-h-[50vh]` of a typical window.
+const SEARCH_MAX_HEIGHT: f32 = 435.0;
 
 /// One tool call as a row draws it.
 pub(crate) struct ToolRow<'a> {
@@ -108,6 +141,24 @@ impl Workspace {
                 |_, _| false,
             )
         });
+        let search = (row.expanded
+            && row.elided.is_none()
+            && row.status == ToolStatus::Completed
+            && web_search::is_web_search(row.tool))
+        .then(|| {
+            let cache = window.use_keyed_state(
+                ElementId::Name(format!("tool:{}:search", row.part).into()),
+                cx,
+                |_, _| SearchCache::default(),
+            );
+            // Reads the cache and fills it for a new result; nothing is
+            // notified, so drawing stays the only effect of a frame.
+            cache.update(cx, |cache, cx| {
+                cache.refresh(row.output(), locale::strings(cx))
+            })
+        })
+        .flatten();
+        let opened = Opened { copied, search };
         let cx: &Context<Self> = cx;
         let strings = locale::strings(cx);
         let failed = row.failed();
@@ -154,11 +205,21 @@ impl Workspace {
                 )
             })
             .child(
+                // The name and its open action sit 4 px apart (`gap-1`).
                 div()
+                    .flex()
+                    .flex_row_from(direction)
                     .flex_shrink_0()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(title_color)
-                    .child(tool_shells::display_name(row.tool)),
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(title_color)
+                            .child(tool_shells::display_name(row.tool)),
+                    )
+                    .children(quick_open_button(&row, strings, palette, cx)),
             )
             .children(row.controls.take())
             .when_some(duration, |this, duration| {
@@ -203,7 +264,7 @@ impl Workspace {
                 direction,
                 cx,
                 toggle,
-                self.tool_body(&row, strings, palette, direction, copied, cx),
+                self.tool_body(&row, strings, palette, direction, &opened, cx),
             )
         });
         div()
@@ -321,7 +382,7 @@ impl Workspace {
         strings: &Strings,
         palette: &Palette,
         direction: Direction,
-        copied: Option<Entity<bool>>,
+        opened: &Opened,
         cx: &Context<Self>,
     ) -> AnyElement {
         let column = div().flex().flex_col().gap_2();
@@ -423,7 +484,14 @@ impl Workspace {
                 );
             }
         }
-        if let Some(input) = tool_shells::input_text(tool, row.facts) {
+        // A question row's content is its answers or its questions; printing
+        // the input above either would list the questions twice.
+        let answers = (tool_shells::is_question(tool) && row.status == ToolStatus::Completed)
+            .then(|| question::answers(row.output()))
+            .flatten();
+        let lists_questions = tool_shells::is_question(tool)
+            && (answers.is_some() || !row.facts.input.asked.is_empty());
+        if !lists_questions && let Some(input) = tool_shells::input_text(tool, row.facts) {
             let input = if tool_names::normalize(tool) == "write" {
                 added_lines(&input, &mono, palette)
             } else if tool_shells::is_subagent(tool) {
@@ -442,23 +510,57 @@ impl Workspace {
             ));
         }
         if tool_shells::is_question(tool) {
-            column = column.child(match row.status {
-                ToolStatus::Completed if !row.output().trim().is_empty() => output_box(
+            let asked = &row.facts.input.asked;
+            let output = row.output();
+            let has_output = !output.trim().is_empty();
+            column = column.child(if let Some(answers) = answers {
+                scroll_box(
+                    format!("tool:{}:result", row.part),
+                    QUESTION_MAX_HEIGHT,
+                    question_content::answered(row.part, &answers, palette),
+                )
+            } else if row.failed() && (row.facts.error.is_some() || has_output) {
+                // The failure's own message, else the result that reports it.
+                error_box(row, strings, palette)
+            } else if !asked.is_empty() {
+                // Asked, unanswered, or answered in a shape the row cannot read.
+                scroll_box(
+                    format!("tool:{}:result", row.part),
+                    QUESTION_MAX_HEIGHT,
+                    question_content::asked(row.part, asked, palette, direction),
+                )
+            } else if row.status == ToolStatus::Completed && has_output {
+                // No question reads from the input, so the result is all the
+                // row has to show.
+                output_box(
                     row,
-                    row.output(),
+                    output,
                     RESULT_MAX_HEIGHT,
                     &mono,
                     strings,
                     palette,
                     direction,
-                    copied,
+                    opened.copied.clone(),
                     cx,
-                ),
-                ToolStatus::Error => error_box(row, strings, palette),
-                _ => meta_text(
-                    strings.get("chat.toolPart.awaitingResponse"),
-                    palette.muted_foreground,
-                ),
+                )
+            } else {
+                match row.status {
+                    ToolStatus::Error => error_box(row, strings, palette),
+                    ToolStatus::Completed => meta_text(
+                        strings.get("chat.toolPart.noOutputProduced"),
+                        palette.muted_foreground,
+                    ),
+                    ToolStatus::Pending | ToolStatus::Running => div()
+                        .id(ElementId::Name(
+                            format!("tool:{}:awaiting", row.part).into(),
+                        ))
+                        .child(meta_text(
+                            strings.get("chat.toolPart.awaitingResponse"),
+                            palette.muted_foreground,
+                        ))
+                        .test_support()
+                        .into_any_element(),
+                }
             });
             return column.into_any_element();
         }
@@ -467,7 +569,7 @@ impl Workspace {
             || (tool_shells::is_shell(tool) && !output.trim().is_empty());
         if shows_result {
             column =
-                column.child(self.tool_result(row, &mono, strings, palette, direction, copied, cx));
+                column.child(self.tool_result(row, &mono, strings, palette, direction, opened, cx));
             if row.facts.metadata.truncated {
                 let note = strings.get("chat.toolPart.outputTruncated");
                 column = column.child(meta_text(
@@ -493,7 +595,7 @@ impl Workspace {
         strings: &Strings,
         palette: &Palette,
         direction: Direction,
-        copied: Option<Entity<bool>>,
+        opened: &Opened,
         cx: &Context<Self>,
     ) -> AnyElement {
         let tool = row.tool;
@@ -526,31 +628,76 @@ impl Workspace {
                     .map(|patch| (row.facts.input.path.as_deref().unwrap_or_default(), patch)),
             )
             .collect();
-        if tool_shells::is_file_change(tool) && !diffs.is_empty() {
+        let errors = diagnostics::section(tool, row.facts, row.directory);
+        if tool_shells::is_file_change(tool) && (!diffs.is_empty() || errors.is_some()) {
             let mut files = div().flex().flex_col().gap_3();
-            for (file, patch) in diffs {
+            for (index, (file, patch)) in diffs.into_iter().enumerate() {
+                let open = quick_open::absolute_path(file, row.directory).map(|path| {
+                    IconButton::new(
+                        format!("tool:{}:open-file:{index}", row.part),
+                        "file-edit",
+                        strings.get("chat.toolPart.openFileAtFirstChange"),
+                    )
+                    .render(palette, cx, move |this, window, cx| {
+                        this.open_tool_file(path.clone(), window, cx);
+                    })
+                });
                 files = files.child(
                     div()
                         .flex()
                         .flex_col()
-                        .gap_1()
                         .child(
                             div()
-                                .text_size(rems(META_SIZE))
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(palette.muted_foreground)
-                                .truncate()
+                                .mb_1()
+                                .py_1()
+                                .flex()
+                                .flex_row_from(direction)
+                                .items_center()
+                                .gap_1()
+                                .min_w_0()
                                 .child(
-                                    tool_shells::relative_path(file, row.directory).into_owned(),
-                                ),
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_size(rems(META_SIZE))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(palette.muted_foreground)
+                                        .truncate()
+                                        .child(
+                                            tool_shells::relative_path(file, row.directory)
+                                                .into_owned(),
+                                        ),
+                                )
+                                .children(open),
                         )
                         .child(plain_diff(patch, mono, palette)),
                 );
+            }
+            if let Some(errors) = errors {
+                files = files.child(diagnostics_section::diagnostics_section(
+                    row.part, &errors, strings, palette, direction,
+                ));
             }
             return scroll_box(format!("tool:{}:diff", row.part), RESULT_MAX_HEIGHT, files);
         }
         if tool_names::normalize(tool) == "write" {
             return div().into_any_element();
+        }
+        // A result in another shape keeps the text below.
+        if let Some(found) = opened.search.as_deref() {
+            return scroll_box(
+                format!("tool:{}:result", row.part),
+                SEARCH_MAX_HEIGHT,
+                web_search_results::web_search_results(
+                    row.part,
+                    found,
+                    row.facts.metadata.provider.as_deref(),
+                    strings,
+                    palette,
+                    direction,
+                    cx,
+                ),
+            );
         }
         if !output.trim().is_empty() {
             let height = if tool_shells::is_shell(tool) {
@@ -559,13 +706,45 @@ impl Workspace {
                 RESULT_MAX_HEIGHT
             };
             return output_box(
-                row, output, height, mono, strings, palette, direction, copied, cx,
+                row,
+                output,
+                height,
+                mono,
+                strings,
+                palette,
+                direction,
+                opened.copied.clone(),
+                cx,
             );
         }
         meta_text(
             strings.get("chat.toolPart.noOutputProduced"),
             palette.muted_foreground,
         )
+    }
+
+    /// Opens the file a tool row names in the Files surface. Without a
+    /// server to read it from, a prompt says so and nothing else changes.
+    pub(crate) fn open_tool_file(
+        &mut self,
+        path: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.open_context_file(path, cx) {
+            return;
+        }
+        let strings = locale::strings(cx);
+        let title = strings.get("common.unavailable");
+        let detail = strings.get("mobile.files.error.readUnavailable");
+        let close = strings.get("dialog.common.actions.close");
+        drop(window.prompt(
+            PromptLevel::Info,
+            &title,
+            Some(&detail),
+            &[close.as_ref()],
+            cx,
+        ));
     }
 
     /// Opens or folds a tool row; opening a row whose result a history page
@@ -744,6 +923,53 @@ fn describe(described: &ToolDescription, directory: &str, strings: &Strings) -> 
     }
 }
 
+/// The header's open action for a row that changed a file (`quickOpenTarget`):
+/// a 16 px button with a 12 px glyph beside the tool's name.
+fn quick_open_button(
+    row: &ToolRow<'_>,
+    strings: &Strings,
+    palette: &Palette,
+    cx: &Context<Workspace>,
+) -> Option<AnyElement> {
+    // The Files surface opens a path only, so the line is not worked out here.
+    let path = quick_open::primary_path(row.tool, row.facts)
+        .and_then(|path| quick_open::absolute_path(path, row.directory))?;
+    let id: SharedString = format!("tool:{}:open-file", row.part).into();
+    let hover = palette.hover;
+    let button = div()
+        .id(ElementId::Name(id.clone()))
+        .role(Role::Button)
+        .accessibility_id(id)
+        .aria_label(strings.get("chat.toolPart.openFile"))
+        .flex_shrink_0()
+        .size(px(16.0))
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(4.0))
+        .cursor_pointer()
+        .opacity(0.6)
+        .hover(move |style| style.opacity(1.0).bg(hover))
+        // A press here opens the file, never the row around it.
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(glyph("external-link", 12.0, palette.tools_icon));
+    Some(
+        on_activate(button, cx, move |this, window, cx| {
+            this.open_tool_file(path.clone(), window, cx);
+        })
+        .test_support()
+        .into_any_element(),
+    )
+}
+
+/// `oc-tile-inset`: a block one tone step into the surface it sits on.
+fn tile_inset(palette: &Palette) -> Hsla {
+    palette.foreground.opacity(match palette.appearance {
+        Appearance::Light => 0.06,
+        Appearance::Dark => 0.045,
+    })
+}
+
 fn meta_text(text: SharedString, color: Hsla) -> AnyElement {
     div()
         .text_size(rems(META_SIZE))
@@ -783,6 +1009,7 @@ fn scroll_box(
         .max_h(px(max_height))
         .overflow_y_scroll()
         .child(content)
+        .test_support()
         .into_any_element()
 }
 
@@ -855,6 +1082,7 @@ fn error_box(row: &ToolRow<'_>, strings: &Strings, palette: &Palette) -> AnyElem
         .or_else(|| row.output.map(str::to_owned))
         .unwrap_or_default();
     div()
+        .id(ElementId::Name(format!("tool:{}:error", row.part).into()))
         .child(label(strings.get("chat.toolPart.error"), palette))
         .child(
             div()
@@ -865,6 +1093,7 @@ fn error_box(row: &ToolRow<'_>, strings: &Strings, palette: &Palette) -> AnyElem
                 .text_color(palette.status_error)
                 .child(message),
         )
+        .test_support()
         .into_any_element()
 }
 

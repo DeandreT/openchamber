@@ -57,6 +57,19 @@ rendering asks for a projection and dispatches an action.
   name, icon, description, justification, diff and line counts, duration,
   which tools draw the compact static row, the input the expanded row prints,
   and the folded reasoning preview.
+  `tool_shells/` holds what an opened row reads from a result's own shape:
+  `quick_open.rs` (the file and first changed line a row opens),
+  `diagnostics.rs` (a changed file's LSP errors), `question.rs` (a question's
+  answers) and `web_search.rs` (a search's hits). Each returns `None` for a
+  shape it does not read, and the row falls back to text. A search hit whose
+  address the client would refuse to open leaves the whole result as text.
+- `project_sort.rs` ports `projectSort.ts`: the registered order is the
+  manual order. `session_multi_select.rs` ports
+  `useSessionMultiSelectStore.ts`; a selection lives in one scope, rows
+  without a scope join one selection, and `bulk_targets` skips sessions the
+  index no longer holds. `archive_page.rs` ports the archive page's buckets,
+  search and row order from `ArchiveView.tsx`; the caller resolves a
+  session's project.
 - `rendered_page.rs` decides whether an `openchamber_render` call shows its
   page in place of its row and where the page stands on the user's answer
   (`renderedPage`), including the title read from the page's own markup.
@@ -118,7 +131,10 @@ rendering asks for a projection and dispatches an action.
   collection in `sessionCollection.ts`. `sidebar_rows.rs` builds the normal Works view
    of `sessionSidebarRowModel.ts`, grouping worktree, space and session works under
   projects, with the section gaps of
-  `sessionSidebarVirtualization.ts`; `grouping.rs` ports
+  `sessionSidebarVirtualization.ts` and the Projects caption
+  (`caption:projects`) over the project headers whenever a zone lists above
+  them; `ActivityKey::Projects` is its collapse key and never has an activity
+  header; `grouping.rs` ports
   `buildGroupedSessions` and `buildSidebarChatGroup`; `ordering.rs` ports
   `session-ordering.ts`; `relative_time.rs` ports the sidebar's compact ages.
 - The sidebar collection filters registered project/worktree and valid space

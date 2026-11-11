@@ -96,7 +96,6 @@ impl Command {
             Self::CheckForUpdates
                 | Self::ReloadWebview
                 | Self::Restart
-                | Self::OpenCommandPalette
                 | Self::NewWindow
                 | Self::NewWorktree
                 | Self::AddWorkspace
@@ -377,6 +376,7 @@ impl Workspace {
                                     accelerator,
                                     command,
                                 } => submenu.item(menu_item(
+                                    key,
                                     label(&locale, key),
                                     accelerator,
                                     command,
@@ -449,6 +449,7 @@ impl Workspace {
         match command {
             Command::About => self.open_about(window, cx),
             Command::Settings => self.open_settings(window, cx),
+            Command::OpenCommandPalette => self.toggle_command_palette(window, cx),
             Command::Quit => cx.quit(),
             Command::Close => self.request_close(window, cx),
             Command::NewSession => self.show_new_session(window, cx),
@@ -513,7 +514,10 @@ fn edit_action(command: Command) -> Option<Box<dyn gpui_kit::Action>> {
     })
 }
 
+/// A row of a submenu. `key` is its label key in the template; the row's
+/// accessibility ID is `app-menu-<key>`.
 fn menu_item(
+    key: &'static str,
     text: SharedString,
     accelerator: Option<&'static str>,
     command: Command,
@@ -538,6 +542,7 @@ fn menu_item(
             }))
     })
     .aria_label(accessible_label)
+    .accessibility_id(format!("app-menu-{key}"))
     .disabled(!command.available())
     .on_click(move |_, window, cx| {
         if let Some(action) = edit_action(command) {
@@ -558,6 +563,7 @@ fn menu_item(
 mod tests {
     use super::*;
     use gpui_kit::AppContext;
+    use gpui_kit::test::TestWindowExt;
 
     #[gpui_kit::test]
     fn custom_menu_rows_expose_the_localized_name_without_the_shortcut(
@@ -573,6 +579,7 @@ mod tests {
             gpui_kit::open_window(gpui_kit::WindowOptions::default(), cx, |window, cx| {
                 PopupMenu::build(window, cx, |menu, _, _| {
                     menu.item(menu_item(
+                        "quit",
                         quit.clone(),
                         Some("Ctrl+Q"),
                         Command::Quit,
@@ -580,6 +587,7 @@ mod tests {
                         None,
                     ))
                     .item(menu_item(
+                        "newWindow",
                         unavailable.clone(),
                         Some("Ctrl+Shift+Alt+N"),
                         Command::NewWindow,
@@ -603,6 +611,38 @@ mod tests {
             }
         })
         .expect("the real menu rows render with accessible names");
+    }
+
+    #[gpui_kit::test]
+    fn the_command_palette_item_opens_the_palette(cx: &mut gpui_kit::TestAppContext) {
+        assert!(Command::OpenCommandPalette.available());
+        let (window, workspace) = crate::workspace_tests::open(cx);
+        cx.update_window(window, |_, window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.toggle_app_menu(window, cx);
+                assert!(workspace.app_menu.is_open());
+                // A click on the item closes the menu, then runs its command.
+                workspace.close_app_menu(window, cx);
+                workspace.run_menu_command(Command::OpenCommandPalette, window, cx);
+                assert!(
+                    workspace.command_palette.is_some(),
+                    "the menu item opens the palette"
+                );
+            });
+        })
+        .expect("the workspace window is open");
+        cx.run_until_parked();
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            workspace.update(cx, |workspace, cx| {
+                workspace.run_menu_command(Command::OpenCommandPalette, window, cx);
+                assert!(
+                    workspace.command_palette.is_none(),
+                    "the item closes an open palette, as the web toggles it"
+                );
+            });
+        })
+        .expect("the workspace window is open");
     }
 
     #[test]

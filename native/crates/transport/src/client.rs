@@ -11,6 +11,7 @@ use openchamber_native_core::message_queue::FollowUpBehavior;
 use openchamber_native_core::message_time::ClockPreference;
 use openchamber_native_core::ownership::{self, ConfiguredProject, WorktreeInfo};
 use openchamber_native_core::permission_mode::PermissionMode;
+use openchamber_native_core::project_sort::ProjectSortOrder;
 use openchamber_native_core::session::{LiveStatus, SessionRecord};
 use openchamber_native_core::session_goal::{DEFAULT_TOKEN_BUDGET, GoalChecker};
 use openchamber_native_core::shortcuts::{self, Overrides};
@@ -91,6 +92,10 @@ pub struct SettingsChanges {
     /// `project` or `time`: how the sidebar lists sessions.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sidebar_grouping: Option<&'static str>,
+    /// `manual`, `a-z`, `z-a`, `date-added` or `recent`: the order of the
+    /// sidebar's projects.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidebar_project_sort_order: Option<&'static str>,
     /// The global starters; written with both offered-starter markers set,
     /// so a removed built-in stays removed.
     #[serde(
@@ -297,6 +302,8 @@ pub struct ServerSettings {
     pub message_search_enabled: Option<bool>,
     /// Sidebar preferences; omitted values preserve the client's defaults.
     pub sidebar_view: Option<SidebarViewMode>,
+    /// `sidebarProjectSortOrder`; absent keeps the registered order.
+    pub project_sort: Option<ProjectSortOrder>,
     pub show_chats: Option<bool>,
     pub show_pinned: Option<bool>,
     pub show_work: Option<bool>,
@@ -328,6 +335,9 @@ pub struct ServerSettings {
     pub project_defaults: Vec<ProjectDefaults>,
     /// The display labels of registered projects that set one.
     pub project_labels: Vec<ProjectLabel>,
+    /// When registered projects were added and last opened, for those that
+    /// carry either time.
+    pub project_times: Vec<ProjectTimes>,
     /// `followUpBehavior`, or the legacy `queueModeEnabled` it absorbs.
     pub follow_up_behavior: Option<FollowUpBehavior>,
     /// The global starters as saved, built-ins the user was never offered
@@ -412,6 +422,15 @@ pub struct ProjectLabel {
     pub label: String,
 }
 
+/// A registered project's `addedAt` and `lastOpenedAt`, in milliseconds.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProjectTimes {
+    /// The project's normalized path, as in `ServerSettings::projects`.
+    pub path: String,
+    pub added_at: Option<i64>,
+    pub last_opened_at: Option<i64>,
+}
+
 /// A registered project's own model defaults, trimmed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProjectDefaults {
@@ -457,6 +476,7 @@ impl ServerSettings {
         let projects = ownership::configured_projects(paths, home_directory.as_deref());
         let mut project_defaults: Vec<ProjectDefaults> = Vec::new();
         let mut project_labels: Vec<ProjectLabel> = Vec::new();
+        let mut project_times: Vec<ProjectTimes> = Vec::new();
         for entry in &settings.projects {
             let Some(raw) = entry.get("path").and_then(Value::as_str) else {
                 continue;
@@ -487,6 +507,15 @@ impl ServerSettings {
                     label,
                 });
             }
+            let time = |key: &str| entry.get(key).and_then(Value::as_i64);
+            let (added_at, last_opened_at) = (time("addedAt"), time("lastOpenedAt"));
+            if added_at.is_some() || last_opened_at.is_some() {
+                project_times.push(ProjectTimes {
+                    path: project.path.clone(),
+                    added_at,
+                    last_opened_at,
+                });
+            }
             project_defaults.push(ProjectDefaults {
                 path: project.path,
                 agent: field("defaultAgent"),
@@ -513,6 +542,7 @@ impl ServerSettings {
             ),
             project_defaults,
             project_labels,
+            project_times,
             home_directory,
             last_directory: non_empty_string(settings.last_directory),
             active_project_id: non_empty_string(settings.active_project_id),
@@ -591,6 +621,11 @@ impl ServerSettings {
                     _ => None,
                 },
             },
+            project_sort: settings
+                .sidebar_project_sort_order
+                .as_ref()
+                .and_then(Value::as_str)
+                .and_then(ProjectSortOrder::from_setting),
             show_chats: settings
                 .sidebar_show_chats_section
                 .as_ref()
@@ -1956,6 +1991,50 @@ mod tests {
             })
             .expect("one field serializes"),
             json!({"autoSaveEnabled": true})
+        );
+    }
+
+    #[test]
+    fn the_project_sort_order_and_project_times_are_read_and_written() {
+        let settings = ServerSettings::from_wire(
+            serde_json::from_value(json!({
+                "sidebarProjectSortOrder": "date-added",
+                "projects": [
+                    {"path": "/work/a", "addedAt": 20, "lastOpenedAt": 30},
+                    {"path": "/work/b", "addedAt": "soon"},
+                    {"path": "/work/c", "lastOpenedAt": 5},
+                ],
+            }))
+            .expect("settings"),
+        );
+        assert_eq!(settings.project_sort, Some(ProjectSortOrder::DateAdded));
+        assert_eq!(
+            settings.project_times,
+            [
+                ProjectTimes {
+                    path: "/work/a".to_owned(),
+                    added_at: Some(20),
+                    last_opened_at: Some(30),
+                },
+                ProjectTimes {
+                    path: "/work/c".to_owned(),
+                    added_at: None,
+                    last_opened_at: Some(5),
+                },
+            ]
+        );
+        for document in [json!({}), json!({"sidebarProjectSortOrder": "newest"})] {
+            let settings =
+                ServerSettings::from_wire(serde_json::from_value(document).expect("settings"));
+            assert_eq!(settings.project_sort, None, "an unknown order is no choice");
+        }
+        let changes = SettingsChanges {
+            sidebar_project_sort_order: Some(ProjectSortOrder::ZToA.as_setting()),
+            ..SettingsChanges::default()
+        };
+        assert_eq!(
+            serde_json::to_value(&changes).expect("changes"),
+            json!({"sidebarProjectSortOrder": "z-a"})
         );
     }
 

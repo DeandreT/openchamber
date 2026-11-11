@@ -16,7 +16,7 @@ from clipboard_probe import ClipboardProbe
 from native_adapter import NativeClient
 from native_hosts import HostFixture
 from native_interactions import Interrupts, Interaction, accessibility_enabled, set_accessibility, until
-from native_platform import binary_info, command, editable_text
+from native_platform import binary_info, choose_app_menu_row, command, editable_text
 from workflow_proxy import FaultProxy
 
 
@@ -71,7 +71,7 @@ def qualify(args):
             draft = 'Keep this draft while About is open.'
             probe.paste(composer, draft)
             until('draft not entered', lambda: editable_text(probe.composer()) == draft, 10)
-            client.click('about')
+            choose_app_menu_row(client, 'about')
             if not client.wait_for({'elements': ['about-dialog', 'about-app-version', 'about-engine-version']}, 15):
                 raise RuntimeError('About did not open')
             def app_version_matches():
@@ -116,7 +116,7 @@ def qualify(args):
             if editable_text(probe.composer()) != draft:
                 raise RuntimeError('About changed the composer draft')
             proxy.fail_app = True
-            client.activate('about')
+            choose_app_menu_row(client, 'about', activate=True)
             if not client.wait_for({'elements': ['about-dialog']}, 15):
                 raise RuntimeError('About accessibility activation failed')
             native_version = tomllib.loads((runner.REPO_ROOT / 'native/Cargo.toml').read_text())['workspace']['package']['version']

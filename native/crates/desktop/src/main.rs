@@ -6,6 +6,7 @@
 //! provider calls.
 
 mod about;
+mod about_settings;
 mod activation;
 mod app_menu;
 mod appearance;
@@ -42,6 +43,10 @@ mod chrome;
 mod clipboard_attachment;
 mod code_card;
 mod code_wrap_state;
+mod command_palette;
+#[cfg(test)]
+mod command_palette_tests;
+mod commands_settings;
 mod compatibility_view;
 mod composer_attachment_input;
 mod composer_attachment_view;
@@ -80,9 +85,11 @@ mod fonts;
 mod form_copy;
 mod form_input;
 mod general_settings;
+mod git_settings;
 mod git_view;
 #[cfg(target_os = "linux")]
 mod guest_panel_view;
+mod header_controls;
 mod heic_worker;
 mod host_manager;
 mod host_profiles;
@@ -100,6 +107,7 @@ mod knowledge_writes;
 mod legacy_queue_reservation;
 mod locale;
 mod logical;
+mod magic_prompts_settings;
 mod managed_host;
 mod managed_host_lifecycle;
 mod managed_host_supervisor;
@@ -175,6 +183,7 @@ mod session_menu;
 #[cfg(test)]
 mod session_menu_tests;
 mod session_mutations;
+mod session_selection;
 mod session_warming;
 mod settings_controls;
 mod settings_navigation;
@@ -183,7 +192,10 @@ mod settings_test_server;
 mod settings_view;
 mod shortcuts;
 mod shortcuts_settings;
+#[cfg(test)]
+mod sidebar_appearance_tests;
 mod sidebar_item;
+mod sidebar_more_menu;
 mod sidebar_search;
 mod sidebar_view;
 mod snippets_settings;

@@ -605,7 +605,16 @@ mod tests {
             (PolicyStatus::CLOSED, false),
         ] {
             cx.update_window(window, |_, window, cx| {
-                workspace.update(cx, |workspace, _| workspace.enterprise.status = status);
+                workspace.update(cx, |workspace, _| {
+                    workspace.enterprise.status = status;
+                    // The catalog is a line of the toolbar's More menu.
+                    workspace.session_management.more_menu = None;
+                });
+                window.render_frame(cx);
+                window.click(
+                    ElementId::Name(crate::sidebar_more_menu::TRIGGER_ID.into()),
+                    cx,
+                );
                 window.render_frame(cx);
                 assert_eq!(
                     window
