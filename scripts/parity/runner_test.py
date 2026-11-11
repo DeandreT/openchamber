@@ -516,6 +516,28 @@ class ScenarioSettingsTest(unittest.TestCase):
             self.assertEqual([entry["id"] for entry in settings["projects"]], ["seed", identifier])
             self.assertEqual((settings["activeProjectId"], settings["lastDirectory"]), (identifier, str(project)))
 
+    def test_git_fixture_origin_is_served_over_loopback_http(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "fixture-repo"
+            env = {"PATH": os.environ.get("PATH", ""), "HOME": temporary, "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"}
+
+            def git(*arguments: str, cwd: Path = project) -> str:
+                return subprocess.run(["git", *arguments], cwd=cwd, env=env, check=True, capture_output=True, text=True).stdout
+
+            project.mkdir()
+            git("init", "-q", "-b", "main")
+            git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "commit", "-q", "--allow-empty", "-m", "Initial")
+            git("init", "-q", "--bare", "-b", "main", "remote.git", cwd=project.parent)
+            git("remote", "add", "origin", (project.parent / "remote.git").as_uri())
+            git("push", "-q", "-u", "origin", "main")
+            remote = runner.serve_fixture_remote(project)
+            try:
+                url = git("remote", "get-url", "origin").strip()
+                self.assertRegex(url, r"^http://127\.0\.0\.1:\d+/remote\.git$")
+                self.assertIn("refs/heads/main", git("ls-remote", "origin"))
+            finally:
+                remote.stop()
+
     def test_electron_uses_simple_gtk_without_changing_native_ime_setup(self):
         with patch.dict(os.environ, {"GTK_IM_MODULE": "ibus"}, clear=True):
             electron = runner.electron_env(Path("state"), "synthetic-config")

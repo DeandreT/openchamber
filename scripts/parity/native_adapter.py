@@ -565,7 +565,12 @@ class NativeClient:
         """Space takes the engine's first candidate; Return commits the raw keys."""
         self._input_mark = len(self.marks)
         self._activate()
+        mark = self.ibus.commit_mark()
         self._xdotool("key", "space" if mode == "candidate" else "Return")
+        # Changing the engine drops a composition still open. A client busy
+        # with a streaming answer takes the key late, so the engine's commit
+        # comes first.
+        self.ibus.wait_commit(mark)
         self.ibus.select(ime_fixture.LATIN)
 
     def drop(self, accessible_id: str, files: list[Path]) -> dict:

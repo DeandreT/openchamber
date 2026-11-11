@@ -233,6 +233,24 @@ def prepare_paired_git_stimulus(project: Path) -> None:
     target.write_bytes(b"line 1 paired edit" + ending + newline + remaining)
 
 
+def serve_fixture_remote(project: Path):
+    """Points the fixture's `origin` at its bare remote served over loopback
+    HTTP, and returns the running remote. The server refuses to describe a
+    repository whose remote is a `file://` URL, which leaves the Git panel
+    saying it cannot read the repository and Changes without a view."""
+    from git_http_remote import GitHttpRemote
+
+    remote = GitHttpRemote(project.parent)
+    try:
+        subprocess.run(["git", "remote", "set-url", "origin", f"{remote.url}/remote.git"], cwd=project, check=True,
+                       capture_output=True, env={"PATH": os.environ.get("PATH", ""), "HOME": str(project.parent),
+                                                 "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": "/dev/null"})
+    except BaseException:
+        remote.stop()
+        raise
+    return remote
+
+
 def prepare_fixture(root: Path, kind: str, state: Path, scenario_id: str | None = None) -> Path:
     """Recreates the fixture project and registers it as the copy's active
     project. `git` is `isolated-server.mjs --git-fixture`'s repository, with
@@ -716,6 +734,8 @@ def run_client(kind: str, scenario: dict, work: Path, args: argparse.Namespace) 
             if "fixture" in scenario:
                 places["fixture"] = str(prepare_fixture(root, scenario["fixture"], state, scenario_id=scenario.get("id")))
                 places["fixtureId"] = "path_" + base64.urlsafe_b64encode(places["fixture"].encode()).decode().rstrip("=")
+                if scenario["fixture"] == "git":
+                    services.callback(serve_fixture_remote(Path(places["fixture"])).stop)
             context = StepContext(places, inputs=directory / "inputs")
             # GTK starts before the client so its initialization cannot take focus.
             if uses(scenario, "paste"):
