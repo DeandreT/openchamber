@@ -154,7 +154,12 @@ impl Workspace {
             let DraftTarget::NewSession(id) = draft.target() else {
                 continue;
             };
-            let after = spacing[index].take();
+            // The header's gap moves to the draft, which is a row of an open
+            // project: before the next project it takes the wider gap.
+            let after = spacing[index].take().map(|gap| match gap {
+                SectionSpacing::ClosedProject => SectionSpacing::Project,
+                gap => gap,
+            });
             items.insert(
                 index + 1,
                 SidebarItem::Draft {

@@ -5,6 +5,7 @@
 //! filesystem dependency: callers pass trusted, explicit inputs and receive
 //! owned values, stable identifiers or borrowed views.
 
+pub mod archive_page;
 pub mod auto_review;
 pub mod autocomplete;
 pub mod branch_integration;
@@ -40,6 +41,7 @@ pub mod pending_requests;
 pub mod permission;
 pub mod permission_mode;
 pub mod project_actions;
+pub mod project_sort;
 pub mod provider_logo;
 pub mod relative_time;
 pub mod rendered_page;
@@ -57,6 +59,7 @@ pub mod session_goal;
 pub mod session_index;
 pub mod session_markdown;
 pub mod session_moves;
+pub mod session_multi_select;
 pub mod session_reference;
 pub mod session_search;
 pub mod shortcuts;

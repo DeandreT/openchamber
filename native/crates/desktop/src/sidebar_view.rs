@@ -1,10 +1,11 @@
 //! The sidebar column: title row, toolbar, session list and footer.
 //!
 //! Geometry follows the web client's timeline sidebar
-//! (`packages/ui/src/components/session/sidebar/`): rows keep a 262 px slot
-//! inside the list's `ps-2.5 pe-2` padding while zone and project headers
-//! paint across the full width, compact rows retain their kind slot, and the
-//! gap that opens each section comes from the core row model.
+//! (`packages/ui/src/components/session/sidebar/`): rows keep a 256 px slot
+//! inside the list's `ps-2.5 pe-2` padding and the scroller's 6 px thumb
+//! gutter, while captions and project headers paint across the padding,
+//! compact rows retain their kind slot, and the gap that opens each section
+//! comes from the core row model.
 
 use gpui_kit::{
     AnyElement, Context, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Role,
@@ -33,12 +34,22 @@ const FOOTER_HEIGHT: f32 = 40.0;
 /// The list's inline padding (`ps-2.5 pe-2`); row slots span the rest.
 const LIST_PADDING_START: f32 = 10.0;
 const LIST_PADDING_END: f32 = 8.0;
+/// The room every overlay scroller keeps for its thumb, on the physical right
+/// in every language (`.overlay-scrollbar-wrapper`).
+const LIST_GUTTER: f32 = 6.0;
+/// A project header: `py-1` around the 22 px section line.
 const HEADER_HEIGHT: f32 = 30.0;
-/// Zone and project headers: text after a 16 px inset, a 14 px glyph and a
-/// 6 px gap.
+/// A caption (Chats, Pinned, In work, Projects): `py-1` around the 20 px
+/// label line.
+const CAPTION_HEIGHT: f32 = 28.0;
+/// Captions and project headers start 16 px in (`ps-4`); a project's label
+/// follows its 14 px glyph and a 6 px gap.
 const HEADER_INSET_START: f32 = 16.0;
 const HEADER_GLYPH: f32 = 14.0;
-const SESSION_HEIGHT: f32 = 32.0;
+/// A session or draft row box: `py-[5px]` around the 20 px label line.
+const SESSION_HEIGHT: f32 = 30.0;
+/// Worktree, folder and group rows.
+const CONTAINER_HEIGHT: f32 = 32.0;
 /// `my-px` around every session row.
 const SESSION_MARGIN: f32 = 1.0;
 /// Trailing inset of compact rows and leading inset of flat notices.
@@ -93,6 +104,7 @@ impl Workspace {
             )
             .child(self.render_sidebar_toolbar(&strings, palette, direction, cx))
             .children(self.render_sidebar_search(palette, direction, cx))
+            .children(self.render_bulk_bar(palette, direction, cx))
             .when_some(status, |this, status| {
                 this.child(
                     div()
@@ -116,10 +128,15 @@ impl Workspace {
                     .accessibility_id("sidebar")
                     .flex_1()
                     .min_h_0()
-                    .padding_start(direction, px(LIST_PADDING_START))
-                    .padding_end(direction, px(LIST_PADDING_END))
-                    .pb_1()
-                    .child(rows),
+                    .pr(px(LIST_GUTTER))
+                    .child(
+                        div()
+                            .size_full()
+                            .padding_start(direction, px(LIST_PADDING_START))
+                            .padding_end(direction, px(LIST_PADDING_END))
+                            .pb_1()
+                            .child(rows),
+                    ),
             )
             .child(self.render_sidebar_footer(&strings, palette, direction, cx))
             .child(
@@ -167,7 +184,10 @@ impl Workspace {
             .accessibility_id("new-session")
             .aria_label(new_session_label.clone())
             .h(px(24.0))
-            .px(px(6.0))
+            // `ps-1 pe-1.5`: the glyph sits where an icon-only button
+            // centres it.
+            .padding_start(direction, px(4.0))
+            .padding_end(direction, px(6.0))
             .margin_start(direction, px(-4.0))
             .rounded(px(CONTROL_RADIUS))
             .flex_row_from(direction)
@@ -223,6 +243,9 @@ impl Workspace {
             )
     }
 
+    /// The list's own controls, then one menu with the pages the sidebar
+    /// opens (`SidebarHeader.tsx`). The first glyph sits 16 px from the
+    /// sidebar's edge, in line with the title row's.
     fn render_sidebar_toolbar(
         &self,
         strings: &Strings,
@@ -231,131 +254,97 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let display_menu = self.render_display_menu(palette, direction, cx);
-        let button = |id: &'static str, icon: &'static str, key: &str| {
-            IconButton::new(id, icon, strings.get(key)).render(palette, cx, |_, _, _| {})
-        };
+        let more_menu = self.render_more_menu(palette, direction, cx);
+        let searching = self.session_management.search.is_some();
+        let search = toolbar_button(
+            "search-sessions",
+            "search",
+            strings.get("sessions.sidebar.header.actions.searchSessions"),
+            if searching {
+                ToolbarTone::Pressed
+            } else {
+                ToolbarTone::Idle
+            },
+            palette,
+        )
+        .aria_expanded(searching);
         div()
             .id("sidebar-toolbar")
             .h(px(TOOLBAR_HEIGHT))
             .flex_shrink_0()
             .flex_row_from(direction)
             .items_center()
-            .justify_between()
+            .gap(px(6.0))
             .padding_start(direction, px(13.0))
             .padding_end(direction, px(10.0))
             .child(
-                div()
-                    .flex_row_from(direction)
-                    .gap(px(6.0))
-                    .child(
-                        IconButton::new(
-                            "source-board",
-                            "git-pull-request",
-                            strings.get("sourceBoard.title"),
-                        )
-                        .tone(if self.source_board_open {
-                            ButtonTone::Active
-                        } else {
-                            ButtonTone::Quiet
-                        })
-                        .render(palette, cx, |this, window, cx| {
-                            this.toggle_source_board(window, cx)
-                        }),
-                    )
-                    .child(
-                        IconButton::new(
-                            "scheduled-tasks",
-                            "calendar-schedule",
-                            strings.get("sessions.sidebar.header.actions.scheduledTasks"),
-                        )
-                        .tone(if self.scheduled_tasks_open {
-                            ButtonTone::Active
-                        } else {
-                            ButtonTone::Quiet
-                        })
-                        .render(palette, cx, |this, window, cx| {
-                            this.toggle_scheduled_tasks(window, cx)
-                        }),
-                    )
-                    .child(
-                        IconButton::new(
-                            "archive",
-                            "archive",
-                            strings.get("sessions.sidebar.nav.archive"),
-                        )
-                        .tone(if self.archive_open {
-                            ButtonTone::Active
-                        } else {
-                            ButtonTone::Quiet
-                        })
-                        .render(palette, cx, |this, window, cx| {
-                            this.toggle_archive_page(window, cx)
-                        }),
-                    )
-                    // The bundled catalog offers outside services; enterprise
-                    // mode waits for administrator-curated sources instead.
-                    .when(!self.enterprise.enterprise_mode(), |row| {
-                        row.child(button(
-                            "integrations",
-                            "store-2",
-                            "integrationsCatalog.sidebar.open",
-                        ))
-                    }),
+                on_activate(search, cx, |this, window, cx| {
+                    this.toggle_sidebar_search(window, cx)
+                })
+                .test_support(),
+            )
+            .child(
+                on_activate(
+                    toolbar_button(
+                        "add-project",
+                        "folder-add",
+                        strings.get("sessions.sidebar.header.actions.addProject"),
+                        ToolbarTone::Idle,
+                        palette,
+                    ),
+                    cx,
+                    |this, window, cx| this.open_add_project(None, window, cx),
+                )
+                .test_support(),
             )
             .child(
                 div()
-                    .flex_row_from(direction)
-                    .gap(px(6.0))
+                    .relative()
                     .child(
-                        IconButton::new(
-                            "search-sessions",
-                            "search",
-                            strings.get("sessions.sidebar.header.actions.searchSessions"),
+                        on_activate(
+                            toolbar_button(
+                                "display-mode",
+                                "equalizer-2",
+                                strings.get("sessions.sidebar.header.displayMode.label"),
+                                ToolbarTone::Idle,
+                                palette,
+                            ),
+                            cx,
+                            |this, window, cx| this.toggle_display_menu(window, cx),
                         )
-                        .tone(if self.session_management.search.is_some() {
-                            ButtonTone::Active
-                        } else {
-                            ButtonTone::Quiet
-                        })
-                        .render(palette, cx, |this, window, cx| {
-                            this.toggle_sidebar_search(window, cx)
-                        }),
+                        .test_support(),
                     )
+                    .children(display_menu),
+            )
+            .child(
+                div()
+                    .relative()
                     .child(
-                        IconButton::new(
-                            "add-project",
-                            "folder-add",
-                            strings.get("sessions.sidebar.header.actions.addProject"),
-                        )
-                        .render(palette, cx, |this, window, cx| {
-                            this.open_add_project(None, window, cx)
-                        }),
-                    )
-                    .child(
-                        div()
-                            .relative()
-                            .child(
-                                IconButton::new(
-                                    "display-mode",
-                                    "equalizer-2",
-                                    strings.get("sessions.sidebar.header.displayMode.label"),
-                                )
-                                .tone(if self.session_management.display_menu.is_some() {
-                                    ButtonTone::Active
+                        on_activate(
+                            toolbar_button(
+                                crate::sidebar_more_menu::TRIGGER_ID,
+                                "more",
+                                strings.get("sessions.sidebar.header.actions.more"),
+                                // A page from the menu is open: the trigger
+                                // says where it came from.
+                                if self.more_page_open() {
+                                    ToolbarTone::Lit
                                 } else {
-                                    ButtonTone::Quiet
-                                })
-                                .render(
-                                    palette,
-                                    cx,
-                                    |this, window, cx| this.toggle_display_menu(window, cx),
-                                ),
-                            )
-                            .children(display_menu),
-                    ),
+                                    ToolbarTone::Idle
+                                },
+                                palette,
+                            ),
+                            cx,
+                            |this, window, cx| this.toggle_more_menu(window, cx),
+                        )
+                        .test_support(),
+                    )
+                    .children(more_menu),
             )
     }
 
+    /// Settings and the instance switcher (`SidebarFooter.tsx`). Usage lives
+    /// in the toolbar's More menu; shortcuts and About in the app menu.
     fn render_sidebar_footer(
         &self,
         strings: &Strings,
@@ -363,11 +352,6 @@ impl Workspace {
         direction: Direction,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        let button = |id: &'static str, icon: &'static str, key: &str| {
-            IconButton::new(id, icon, strings.get(key))
-                .tone(ButtonTone::QuietFilled)
-                .render(palette, cx, |_, _, _| {})
-        };
         let instance = self.instance_name(strings);
         let hover_fill = palette.hover.opacity(0.5);
         let foreground = palette.foreground;
@@ -401,22 +385,7 @@ impl Workspace {
                             ),
                         cx,
                         |this, window, cx| this.open_settings(window, cx),
-                    ))
-                    .child(button("usage-stats", "bar-chart", "usageStats.openAction"))
-                    .child(button(
-                        "shortcuts",
-                        "command",
-                        "sessions.sidebar.footer.actions.shortcuts",
-                    ))
-                    .child(
-                        IconButton::new(
-                            "about",
-                            "information",
-                            strings.get("sessions.sidebar.footer.actions.aboutOpenChamber"),
-                        )
-                        .tone(ButtonTone::QuietFilled)
-                        .render(palette, cx, |this, window, cx| this.open_about(window, cx)),
-                    ),
+                    )),
             )
             .child(div().flex_1())
             .child(
@@ -512,12 +481,8 @@ impl Workspace {
         let Some(item) = self.sidebar_items.get(index).cloned() else {
             return div().into_any_element();
         };
-        let spacing = match self.sidebar_spacing.get(index).copied().flatten() {
-            Some(SectionSpacing::Project) => 16.0,
-            Some(SectionSpacing::Section) => 8.0,
-            Some(SectionSpacing::Group) => 6.0,
-            None => 0.0,
-        };
+        let gap = self.sidebar_spacing.get(index).copied().flatten();
+        let spacing = gap.map_or(0.0, SectionSpacing::pixels);
         let palette = cx.global::<Palette>().clone();
         let strings = locale::strings(cx).clone();
         let direction = strings.direction();
@@ -585,7 +550,7 @@ impl Workspace {
                         .aria_label(strings.get("sessions.sidebar.draft.discard"))
                         .absolute()
                         .inset_end(direction, px(4.0))
-                        .top(px(8.0))
+                        .top(px((SESSION_HEIGHT - 16.0) / 2.0))
                         .size(px(16.0))
                         .flex()
                         .items_center()
@@ -604,14 +569,15 @@ impl Workspace {
                     .role(Role::Group)
                     .accessibility_id(key.clone())
                     .aria_label(title.clone())
-                    .h(px(36.0))
+                    // `my-0.5` around the row box.
+                    .h(px(SESSION_HEIGHT + 4.0))
                     .py(px(2.0))
                     .child(
                         div()
                             .relative()
                             .tab_group()
                             .group(group)
-                            .h(px(32.0))
+                            .h(px(SESSION_HEIGHT))
                             .px(px(8.0))
                             .rounded(px(6.0))
                             .cursor_pointer()
@@ -633,18 +599,12 @@ impl Workspace {
                 activity,
                 collapsed,
             } => {
-                let icon = match activity {
-                    ActivityKey::Chats => "chat-4",
-                    ActivityKey::Pinned => "pushpin",
-                    ActivityKey::Work => "eye",
-                    ActivityKey::Timeline => "folder",
-                };
                 let toggled = item.clone();
                 self.header_row(
                     HeaderRow {
                         key,
                         label: zone_label(&strings, *activity),
-                        icon,
+                        style: HeaderStyle::Caption,
                         collapsed: *collapsed,
                         expandable: true,
                         spacing,
@@ -666,7 +626,7 @@ impl Workspace {
                     HeaderRow {
                         key,
                         label: label.clone(),
-                        icon: "folder",
+                        style: HeaderStyle::Project,
                         collapsed: *collapsed,
                         expandable: false,
                         spacing,
@@ -706,7 +666,7 @@ impl Workspace {
                     .role(Role::Button)
                     .aria_label(text.clone())
                     .aria_expanded(!*collapsed)
-                    .h(px(SESSION_HEIGHT))
+                    .h(px(CONTAINER_HEIGHT))
                     .font_weight(FontWeight::MEDIUM)
                     .child(glyph(icon, 16.0, palette.muted_foreground))
                     .child(row_text(text, container_title(&palette), cx));
@@ -735,7 +695,7 @@ impl Workspace {
                     .role(Role::TreeItem)
                     .aria_label(name.clone())
                     .aria_expanded(!*collapsed)
-                    .h(px(SESSION_HEIGHT))
+                    .h(px(CONTAINER_HEIGHT))
                     .child(glyph(
                         if *collapsed { "folder" } else { "folder-open" },
                         14.0,
@@ -798,7 +758,7 @@ impl Workspace {
                     .aria_label(text.clone())
                     .aria_expanded(*expanded)
                     .aria_selected(selected)
-                    .h(px(SESSION_HEIGHT))
+                    .h(px(CONTAINER_HEIGHT))
                     .font_weight(FontWeight::MEDIUM)
                     .child(glyph(icon, 14.0, palette.muted_foreground))
                     .child(row_text(
@@ -834,6 +794,10 @@ impl Workspace {
                 let selected = self.selected.as_ref() == Some(session_id);
                 let streaming = self.is_streaming(session_id);
                 let id = session_id.clone();
+                // Select sessions: the row checks instead of opening.
+                let selecting = self.session_management.selection.is_enabled();
+                let checked =
+                    selecting && self.session_management.selection.is_selected(session_id);
                 let slot = if *has_children {
                     let expansion_key = expansion_key.clone();
                     let label = if *expanded {
@@ -871,6 +835,13 @@ impl Workspace {
                     .aria_label(title.clone())
                     .aria_selected(selected)
                     .aria_level(depth + 1)
+                    .when(selecting, |this| {
+                        this.aria_toggled(if checked {
+                            gpui_kit::Toggled::True
+                        } else {
+                            gpui_kit::Toggled::False
+                        })
+                    })
                     .when(*has_children, |this| this.aria_expanded(*expanded))
                     .pt(px(SESSION_MARGIN))
                     .pb(px(SESSION_MARGIN + spacing));
@@ -907,6 +878,21 @@ impl Workspace {
                             .flex_row_from(direction)
                             .items_center()
                             .gap(px(4.0))
+                            .when(selecting, |this| {
+                                this.child(glyph(
+                                    if checked {
+                                        "checkbox"
+                                    } else {
+                                        "checkbox-blank"
+                                    },
+                                    14.0,
+                                    if checked {
+                                        palette.primary
+                                    } else {
+                                        palette.muted_foreground
+                                    },
+                                ))
+                            })
                             .child(row_text(title, text_color, cx))
                             .when(*pinned, |this| {
                                 this.child(glyph("pushpin", 12.0, palette.primary))
@@ -930,12 +916,20 @@ impl Workspace {
                             );
                         }),
                     );
+                let toggled_key = key.clone();
                 let (node, row) = on_activate_split(node, row, cx, move |this, window, cx| {
-                    this.select_session(id.clone(), window, cx);
+                    if this.session_management.selection.is_enabled() {
+                        let range = window.modifiers().shift;
+                        this.toggle_row_selected(&toggled_key, range, cx);
+                    } else {
+                        this.select_session(id.clone(), window, cx);
+                    }
                 });
                 let row = row.on_click(cx.listener(
-                    move |_, event: &gpui_kit::ClickEvent, window, cx| {
-                        if event.click_count() >= 2 {
+                    move |this, event: &gpui_kit::ClickEvent, window, cx| {
+                        if event.click_count() >= 2
+                            && !this.session_management.selection.is_enabled()
+                        {
                             // After the click's selection has moved focus.
                             let (key, id) = (rename_key.clone(), rename_id.clone());
                             cx.defer_in(window, move |this, window, cx| {
@@ -1045,25 +1039,21 @@ impl Workspace {
             SidebarItem::Session { .. } => row,
             _ => div().pb(px(spacing)).child(row).into_any_element(),
         };
-        // The web paints this inside the existing trailing gap. The first
-        // project has no divider unless another row precedes it.
-        if spacing > 0.0
-            && matches!(
-                self.sidebar_items.get(index + 1),
-                Some(SidebarItem::Project { .. })
-            )
-        {
+        // `PROJECT_DIVIDER_CLASS`: a hairline in the gap that closes an open
+        // project before the next one. A caption or a closed project above a
+        // project header takes another gap and no line.
+        if gap == Some(SectionSpacing::Project) {
             div()
                 .relative()
                 .child(row)
                 .child(
                     div()
                         .absolute()
-                        .inset_start(direction, px(8.0))
-                        .inset_end(direction, px(8.0))
-                        .bottom(px(8.0))
+                        .inset_start(direction, px(6.0))
+                        .inset_end(direction, px(6.0))
+                        .bottom(px(5.5))
                         .h(px(1.0))
-                        .bg(palette.border.mix_oklab(palette.foreground, 0.90)),
+                        .bg(palette.foreground.opacity(0.08)),
                 )
                 .into_any_element()
         } else {
@@ -1071,8 +1061,8 @@ impl Workspace {
         }
     }
 
-    /// A zone or project header: its accessible node keeps the row's slot
-    /// while its fill and pointer target span the sidebar.
+    /// A caption or project header: its accessible node keeps the row's slot
+    /// while its fill and pointer target span the list's padding.
     fn header_row(
         &self,
         header: HeaderRow<'_>,
@@ -1082,7 +1072,6 @@ impl Workspace {
         action: impl Fn(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static,
     ) -> AnyElement {
         let group: SharedString = format!("{}:hover", header.key).into();
-        let icon_color = palette.muted_foreground;
         let node = div()
             .id(header.key.clone())
             .role(Role::Button)
@@ -1095,44 +1084,71 @@ impl Workspace {
         let target = div()
             .id(SharedString::from(format!("{}:target", header.key)))
             .group(group.clone())
-            .h(px(HEADER_HEIGHT))
             .margin_start(direction, px(-LIST_PADDING_START))
             .margin_end(direction, px(-LIST_PADDING_END))
             .bg(palette.muted)
             .flex_row_from(direction)
             .items_center()
-            .gap(px(6.0))
             .padding_start(direction, px(HEADER_INSET_START))
             .padding_end(direction, px(14.0))
-            .cursor_pointer()
-            .child(
-                div()
-                    .size(px(HEADER_GLYPH))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        glyph(header.icon, HEADER_GLYPH, icon_color)
-                            .group_hover(group.clone(), |style| style.invisible()),
-                    )
-                    .child(
-                        div()
-                            .absolute()
-                            .invisible()
-                            .group_hover(group, |style| style.visible())
-                            .child(chevron(header.collapsed, direction, palette)),
-                    ),
-            )
-            .child(
-                div()
-                    .min_w_0()
-                    .truncate()
-                    .css_text(HEADER_SIZE, HEADER_LINE, cx)
-                    .font_weight(FontWeight::BOLD)
-                    .text_color(palette.foreground)
-                    .child(header.label),
-            );
+            .cursor_pointer();
+        let target = match header.style {
+            // A bare muted word at the row's size. The chevron follows it:
+            // always while the section is closed, on hover while it is open.
+            HeaderStyle::Caption => target
+                .h(px(CAPTION_HEIGHT))
+                .gap(px(4.0))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .css_text(LABEL_SIZE, LABEL_LINE, cx)
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(palette.muted_foreground)
+                        .child(header.label),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .when(!header.collapsed, |this| {
+                            this.invisible().group_hover(group, |style| style.visible())
+                        })
+                        .child(chevron(header.collapsed, direction, palette)),
+                ),
+            // The project's glyph, which the chevron replaces on hover, then
+            // its name a step larger than the rows under it.
+            HeaderStyle::Project => target
+                .h(px(HEADER_HEIGHT))
+                .gap(px(6.0))
+                .child(
+                    div()
+                        .size(px(HEADER_GLYPH))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            glyph("folder", HEADER_GLYPH, palette.muted_foreground)
+                                .group_hover(group.clone(), |style| style.invisible()),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                .invisible()
+                                .group_hover(group, |style| style.visible())
+                                .child(chevron(header.collapsed, direction, palette)),
+                        ),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .css_text(HEADER_SIZE, HEADER_LINE, cx)
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(palette.foreground)
+                        .child(header.label),
+                ),
+        };
         let (node, target) = on_activate_split(node, target, cx, action);
         node.child(target.test_support())
             .test_support()
@@ -1140,13 +1156,68 @@ impl Workspace {
     }
 }
 
-/// What a zone or project header shows.
+/// How a sidebar toolbar button shows its state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ToolbarTone {
+    /// Muted glyph that turns foreground on hover, with no fill.
+    Idle,
+    /// Foreground glyph: a page this button's menu opened is on screen.
+    Lit,
+    /// The selection fill: what the button opened is on screen and the next
+    /// click closes it.
+    Pressed,
+}
+
+/// A 24 px toolbar button around a 16 px glyph (`headerActionButtonClass`
+/// with the idle or pressed page class).
+fn toolbar_button(
+    id: &'static str,
+    icon: &'static str,
+    label: SharedString,
+    tone: ToolbarTone,
+    palette: &Palette,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    let foreground = palette.foreground;
+    let rest = match tone {
+        ToolbarTone::Idle => palette.muted_foreground,
+        ToolbarTone::Lit => palette.foreground,
+        ToolbarTone::Pressed => palette.selection_foreground,
+    };
+    let pressed = tone == ToolbarTone::Pressed;
+    // A pressed button keeps its selection colours under the pointer.
+    let hover = if pressed { rest } else { foreground };
+    div()
+        .id(id)
+        .group(id)
+        .role(Role::Button)
+        .accessibility_id(id)
+        .aria_label(label)
+        .size(px(24.0))
+        .flex_shrink_0()
+        .rounded(px(CONTROL_RADIUS))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .when(pressed, |this| this.bg(palette.selection))
+        .child(glyph(icon, 16.0, rest).group_hover(id, move |style| style.text_color(hover)))
+}
+
+/// How a header is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HeaderStyle {
+    /// Chats, Pinned, In work, the list by time and Projects.
+    Caption,
+    Project,
+}
+
+/// What a caption or project header shows.
 struct HeaderRow<'a> {
     key: &'a SharedString,
     label: SharedString,
-    icon: &'static str,
+    style: HeaderStyle,
     collapsed: bool,
-    /// Zones report their disclosure state; project headers do not.
+    /// Captions report their disclosure state; project headers do not.
     expandable: bool,
     /// The gap below that opens the next section.
     spacing: f32,
@@ -1165,7 +1236,9 @@ fn zone_label(strings: &Strings, activity: ActivityKey) -> SharedString {
         ActivityKey::Chats => strings.get("sessions.sidebar.activity.chatsTitle"),
         ActivityKey::Pinned => strings.get("sessions.sidebar.activity.pinnedTitle"),
         ActivityKey::Work => strings.get("sessions.sidebar.work.title"),
-        ActivityKey::Timeline => strings.get("sessions.sidebar.activity.projectsTitle"),
+        ActivityKey::Timeline | ActivityKey::Projects => {
+            strings.get("sessions.sidebar.activity.projectsTitle")
+        }
     }
 }
 

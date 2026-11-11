@@ -9,6 +9,7 @@ import {
   NATIVE_HTML_RENDER_PATH,
   NATIVE_ICONS_PATH,
   NATIVE_LOCALES_PATH,
+  NATIVE_MAGIC_PROMPT_SETTINGS_PATH,
   NATIVE_MAGIC_PROMPTS_PATH,
   NATIVE_MENU_LOCALES_PATH,
   NATIVE_PROVIDER_LOGOS_PATH,
@@ -17,6 +18,7 @@ import {
   renderNativeHtmlRender,
   renderNativeIcons,
   renderNativeLocales,
+  renderNativeMagicPromptSettings,
   renderNativeMagicPrompts,
   renderNativeMenuLocales,
   renderNativeProviderLogos,
@@ -46,6 +48,10 @@ describe('native desktop resources', () => {
 
   test('the checked-in magic prompts match the built-in templates', () => {
     expect(checkedIn(NATIVE_MAGIC_PROMPTS_PATH)).toBe(renderNativeMagicPrompts());
+  });
+
+  test('the checked-in magic prompt settings match the built-in definitions', () => {
+    expect(checkedIn(NATIVE_MAGIC_PROMPT_SETTINGS_PATH)).toBe(renderNativeMagicPromptSettings());
   });
 
   test('conflict handoffs export both canonical prompt templates', () => {

@@ -265,6 +265,10 @@ impl Workspace {
         {
             preferences.apply_to(settings);
         }
+        // The sidebar's project order while its save is unanswered.
+        if let Some(order) = self.session_management.project_sort.requested() {
+            settings.project_sort = Some(order);
+        }
     }
 
     /// Opens `surface`, or closes it when it is the open one.

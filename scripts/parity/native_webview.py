@@ -33,7 +33,7 @@ import time
 import urllib.parse
 
 from native_files import Session, parse_args, run_checks
-from native_platform import editable_text, wait_for
+from native_platform import choose_app_menu_row, editable_text, wait_for
 import png
 import runner
 import virtual_display
@@ -243,7 +243,7 @@ def webview_steps(session: Session, fixture: PageFixture, state: dict):
 
     def overlay():
         presses = len(fixture.reports("press"))
-        client.click("about")
+        choose_app_menu_row(client, "about")
         session.wait_id("about-dialog")
         time.sleep(1.0)  # Kit dialogs slide in
         path = session.args.output / "overlay-open.png"

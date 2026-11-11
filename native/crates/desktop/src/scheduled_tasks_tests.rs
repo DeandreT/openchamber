@@ -247,17 +247,17 @@ fn the_sidebar_button_opens_the_page_in_place_of_the_board(cx: &mut TestAppConte
     let (window, workspace) = crate::workspace_tests::open(cx);
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
-        window.click(name("scheduled-tasks"), cx);
+        crate::sidebar_appearance_tests::click_more_page(window, "scheduled-tasks", cx);
         window.render_frame(cx);
         assert!(window.try_find(name("scheduled-tasks-page")).is_some());
-        window.click(name("source-board"), cx);
+        crate::sidebar_appearance_tests::click_more_page(window, "source-board", cx);
         window.render_frame(cx);
         assert!(window.try_find(name("scheduled-tasks-page")).is_none());
-        window.click(name("scheduled-tasks"), cx);
+        crate::sidebar_appearance_tests::click_more_page(window, "scheduled-tasks", cx);
         window.render_frame(cx);
         assert!(!workspace.read(cx).source_board_open);
         assert!(window.try_find(name("scheduled-tasks-page")).is_some());
-        window.click(name("scheduled-tasks"), cx);
+        crate::sidebar_appearance_tests::click_more_page(window, "scheduled-tasks", cx);
         window.render_frame(cx);
         assert!(window.try_find(name("scheduled-tasks-page")).is_none());
     })

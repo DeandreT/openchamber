@@ -70,6 +70,26 @@ def wait_for(description, check, timeout=15):
     raise TimeoutError(description)
 
 
+def choose_app_menu_row(client, key, activate=False):
+    """Opens the application menu's first submenu from the keyboard and
+    chooses its row `key` (accessibility ID `app-menu-<key>`): with a pointer
+    click, or with the row's accessibility action when `activate` is set."""
+    row = f"app-menu-{key}"
+
+    def listed():
+        return any((node.get_accessible_id() or "") == row for node in client._walk())
+
+    client.click("app-menu")
+    time.sleep(0.2)
+    client.key("Down")
+    client.key("Right")
+    wait_for(f"the application menu did not list {row}", listed)
+    if activate:
+        client.activate(row)
+    else:
+        client.click(row)
+
+
 def isolated_environment(profile):
     keep = ("PATH", "USER", "LOGNAME", "SHELL", "TMPDIR", "LD_LIBRARY_PATH", "VK_ICD_FILENAMES", "LIBGL_DRIVERS_PATH", "MESA_LOADER_DRIVER_OVERRIDE")
     env = {key: os.environ[key] for key in keep if key in os.environ}

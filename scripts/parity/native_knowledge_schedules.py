@@ -123,12 +123,19 @@ class Session:
         self.client.screenshot(self.args.output / f"{name}.png")
 
 
+def open_page(session: Session, line: str):
+    """Chooses a page's line in the sidebar's More menu, which toggles it."""
+    session.client.click("sidebar-more")
+    session.wait_id(line)
+    session.client.click(line)
+
+
 def steps(session: Session):
     client = session.client
     task = {}
 
     def schedules_empty():
-        client.click("scheduled-tasks")
+        open_page(session, "scheduled-tasks")
         session.wait_id("scheduled-tasks-page")
         client.click(f"scheduled-tasks-scope:{session.project_id}")
         session.wait_id("scheduled-tasks-empty")
@@ -203,7 +210,7 @@ def steps(session: Session):
         session.wait_gone("scheduled-tasks-page", timeout=60)
         wait_for("the run recorded no session",
                  lambda: bool(session.tasks()[0].get("state", {}).get("lastSessionId")), timeout=60)
-        client.click("scheduled-tasks")
+        open_page(session, "scheduled-tasks")
         session.wait_id(f"scheduled-task-open:{task['id']}")
 
     def delete():
@@ -213,7 +220,7 @@ def steps(session: Session):
         session.wait_id("scheduled-tasks-empty")
         if session.tasks():
             raise RuntimeError("the task was not deleted")
-        client.click("scheduled-tasks")
+        open_page(session, "scheduled-tasks")
         session.wait_gone("scheduled-tasks-page")
 
     def notes():

@@ -187,6 +187,8 @@ pub struct Workspace {
     pub(crate) project_chooser: Option<crate::project_chooser::ProjectChooser>,
     pub(crate) session_menu: Option<crate::session_menu::SessionMenu>,
     pub(crate) app_menu: crate::app_menu::AppMenuState,
+    /// The command palette while its dialog is open.
+    pub(crate) command_palette: Option<crate::command_palette::OpenPalette>,
     pub(crate) session_rename: Option<crate::session_menu::SessionRename>,
     pub(crate) session_management: crate::session_management::SessionManagement,
     pub(crate) branching: crate::session_branching::Branching,
@@ -390,6 +392,7 @@ impl Workspace {
             project_chooser: None,
             session_menu: None,
             app_menu: Default::default(),
+            command_palette: None,
             session_rename: None,
             session_management: Default::default(),
             branching: Default::default(),
@@ -688,6 +691,7 @@ impl Workspace {
             .get(top.item_ix)
             .map(|item| item.key().to_owned());
         let count = items.len();
+        self.session_management.lists_changed(&self.sessions);
         self.sidebar_items = items;
         self.sidebar_spacing = spacing;
         self.sidebar_list.reset(count);
@@ -1474,7 +1478,12 @@ fn build_sidebar_items(
         branches: &branches,
     };
     let mut sections = Vec::with_capacity(topology.projects.len());
-    for project in &topology.projects {
+    let projects = crate::display_mode_view::projects_in_sidebar_order(
+        &topology.projects,
+        settings,
+        &ownership,
+    );
+    for project in projects {
         // `partitionSidebarSessions`: a `/btw` fork never reaches a project.
         let mut sessions: Vec<&SessionRecord> = ownership
             .sessions_by_project()

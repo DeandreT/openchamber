@@ -108,8 +108,13 @@ def qualify(args):
                 before = proxy.count()
                 client.launch()
                 client.wait_ready(45, connected=True)
+                # Integrations is a line of the sidebar's More menu.
+                client.click('sidebar-more')
+                until('the More menu did not open', lambda: present(client, 'sidebar-more-menu'), 10)
                 until('the sidebar did not settle on the policy',
                       lambda: present(client, 'integrations') != restricted, 20)
+                client.key('Escape')
+                until('the More menu did not close', lambda: not present(client, 'sidebar-more-menu'), 10)
                 if args.expect_assets or not restricted:
                     until('normal public asset request did not reach the proxy', lambda: proxy.count() > before, 30)
                 else:

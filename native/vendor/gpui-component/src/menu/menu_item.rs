@@ -11,6 +11,7 @@ use smallvec::SmallVec;
 pub(crate) struct MenuItemElement {
     id: ElementId,
     aria_label: Option<SharedString>,
+    accessibility_id: Option<SharedString>,
     style: StyleRefinement,
     disabled: bool,
     selected: bool,
@@ -26,6 +27,7 @@ impl MenuItemElement {
         Self {
             id: id.clone(),
             aria_label: None,
+            accessibility_id: None,
             style: StyleRefinement::default(),
             disabled: false,
             selected: false,
@@ -44,6 +46,12 @@ impl MenuItemElement {
     /// Set the accessible label for the menu item.
     pub(crate) fn aria_label(mut self, label: impl Into<SharedString>) -> Self {
         self.aria_label = Some(label.into());
+        self
+    }
+
+    /// Set the stable accessibility identifier for the menu item.
+    pub(crate) fn accessibility_id(mut self, id: impl Into<SharedString>) -> Self {
+        self.accessibility_id = Some(id.into());
         self
     }
 
@@ -96,6 +104,7 @@ impl RenderOnce for MenuItemElement {
             .test_support()
             .role(Role::MenuItem)
             .when_some(self.aria_label, |this, label| this.aria_label(label))
+            .when_some(self.accessibility_id, |this, id| this.accessibility_id(id))
             .aria_selected(self.selected)
             .gap_x_1()
             .py_1()
@@ -144,5 +153,12 @@ mod tests {
         let item = MenuItemElement::new("open").aria_label("Open");
 
         assert_eq!(item.aria_label, Some("Open".into()));
+    }
+
+    #[gpui::test]
+    fn accessibility_id_sets_the_stable_identifier(_cx: &mut gpui::TestAppContext) {
+        let item = MenuItemElement::new("open").accessibility_id("menu-open");
+
+        assert_eq!(item.accessibility_id, Some("menu-open".into()));
     }
 }

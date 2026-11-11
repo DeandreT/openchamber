@@ -62,6 +62,54 @@ struct ActionScope {
     untrusted: Option<SharedTrust>,
 }
 
+/// A project action as the command palette offers it: what the row does
+/// (Stop while the action runs, Run otherwise) and the project and session
+/// directory it was listed for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct PaletteProjectAction {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) glyph: &'static str,
+    pub(crate) running: bool,
+    pub(crate) project: String,
+    pub(crate) directory: String,
+}
+
+/// How an action stands when a palette row is chosen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RunState {
+    Idle,
+    Running,
+    Stopping,
+}
+
+/// What a chosen palette row does to its action.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PaletteStep {
+    Run,
+    Stop,
+}
+
+/// The step a palette row may still take: the one it showed, in the project
+/// and directory it showed it for. A Stop row whose action has ended starts
+/// nothing, a Run row whose action started meanwhile stops nothing, and a
+/// row from another project or directory does nothing.
+fn palette_step(
+    row: &PaletteProjectAction,
+    project: &str,
+    directory: &str,
+    state: RunState,
+) -> Option<PaletteStep> {
+    if row.project != project || row.directory != directory {
+        return None;
+    }
+    match (row.running, state) {
+        (true, RunState::Running) => Some(PaletteStep::Stop),
+        (false, RunState::Idle) => Some(PaletteStep::Run),
+        _ => None,
+    }
+}
+
 impl ActionScope {
     /// `runIn: 'parent'` runs in the project's checkout; everything else in
     /// the session's directory.
@@ -152,6 +200,77 @@ impl Workspace {
         project_actions::shown(&scope.actions, picked, |action| {
             self.run_of(scope, action, cx).is_some()
         })
+    }
+
+    /// The shown project's actions as the command palette lists them. An
+    /// action that is stopping is left out: there is nothing to do with it.
+    pub(crate) fn palette_project_actions(&self, cx: &gpui_kit::App) -> Vec<PaletteProjectAction> {
+        let strings = locale::strings(cx).clone();
+        let Some(scope) = self.action_scope(&strings) else {
+            return Vec::new();
+        };
+        scope
+            .actions
+            .iter()
+            .filter_map(|action| {
+                let run = self.run_of(&scope, action, cx);
+                if run.as_ref().is_some_and(|run| run.stopping) {
+                    return None;
+                }
+                Some(PaletteProjectAction {
+                    id: action.id.clone(),
+                    name: action.name.clone(),
+                    glyph: if run.is_some() {
+                        "stop"
+                    } else {
+                        action.glyph()
+                    },
+                    running: run.is_some(),
+                    project: scope.project.clone(),
+                    directory: scope.directory.clone(),
+                })
+            })
+            .collect()
+    }
+
+    /// Runs or stops the action of a chosen palette row, when the row still
+    /// says what would happen (`palette_step`).
+    pub(crate) fn run_palette_project_action(
+        &mut self,
+        row: &PaletteProjectAction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let strings = locale::strings(cx).clone();
+        let Some(scope) = self.action_scope(&strings) else {
+            return;
+        };
+        let Some(action) = scope
+            .actions
+            .iter()
+            .find(|action| action.id == row.id)
+            .cloned()
+        else {
+            return;
+        };
+        let state = match self.run_of(&scope, &action, cx) {
+            Some(run) if run.stopping => RunState::Stopping,
+            Some(_) => RunState::Running,
+            None => RunState::Idle,
+        };
+        match palette_step(row, &scope.project, &scope.directory, state) {
+            Some(PaletteStep::Stop) => {
+                let directory = scope.directory_of(&action).to_owned();
+                if let Some(panel) = &self.terminal_panel {
+                    panel.update(cx, |panel, cx| {
+                        panel.stop_action(&directory, &action.id, cx)
+                    });
+                }
+            }
+            Some(PaletteStep::Run) => self.run_with_trust(&scope, action, window, cx),
+            None => return,
+        }
+        cx.notify();
     }
 
     /// Stops a running action, runs an idle one, and ignores one already
@@ -737,6 +856,66 @@ fn execution_id() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn palette_row(running: bool) -> PaletteProjectAction {
+        PaletteProjectAction {
+            id: "dev".to_owned(),
+            name: "Dev server".to_owned(),
+            glyph: "play",
+            running,
+            project: "/work/app".to_owned(),
+            directory: "/work/app-worktree".to_owned(),
+        }
+    }
+
+    #[test]
+    fn a_palette_row_does_only_what_it_showed() {
+        let step = |running, state| {
+            palette_step(
+                &palette_row(running),
+                "/work/app",
+                "/work/app-worktree",
+                state,
+            )
+        };
+        assert_eq!(step(false, RunState::Idle), Some(PaletteStep::Run));
+        assert_eq!(step(true, RunState::Running), Some(PaletteStep::Stop));
+        assert_eq!(
+            step(true, RunState::Idle),
+            None,
+            "a Stop row whose action has ended starts nothing"
+        );
+        assert_eq!(
+            step(false, RunState::Running),
+            None,
+            "a Run row whose action started meanwhile stops nothing"
+        );
+        assert_eq!(step(true, RunState::Stopping), None);
+        assert_eq!(step(false, RunState::Stopping), None);
+    }
+
+    #[test]
+    fn a_palette_row_does_nothing_in_another_project_or_directory() {
+        for running in [false, true] {
+            let state = if running {
+                RunState::Running
+            } else {
+                RunState::Idle
+            };
+            let row = palette_row(running);
+            assert_eq!(
+                palette_step(&row, "/work/other", "/work/app-worktree", state),
+                None,
+                "the shown project changed"
+            );
+            assert_eq!(
+                palette_step(&row, "/work/app", "/work/app", state),
+                None,
+                "the session directory changed"
+            );
+            assert!(palette_step(&row, "/work/app", "/work/app-worktree", state).is_some());
+        }
+    }
 
     #[test]
     fn execution_ids_are_distinct_and_within_the_server_limit() {

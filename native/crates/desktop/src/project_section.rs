@@ -256,7 +256,7 @@ impl Workspace {
     }
 
     /// Whether the server runs on this machine, so its paths open here.
-    fn desktop_local(&self) -> bool {
+    pub(crate) fn desktop_local(&self) -> bool {
         self.connection
             .as_ref()
             .is_some_and(|connection| connection.config.endpoint.is_loopback())

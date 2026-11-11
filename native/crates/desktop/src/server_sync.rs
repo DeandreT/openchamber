@@ -210,6 +210,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // The palette lists the outgoing runtime's sessions, files and client.
+        self.close_command_palette(window, cx);
         self.effort_preferences.activate(&runtime);
         self.reset_session_admission(window, cx);
         self.navigation_revision = self.navigation_revision.wrapping_add(1);

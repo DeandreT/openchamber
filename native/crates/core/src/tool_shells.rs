@@ -10,6 +10,11 @@ use std::borrow::Cow;
 
 use crate::tool_names::normalize;
 
+pub mod diagnostics;
+pub mod question;
+pub mod quick_open;
+pub mod web_search;
+
 /// The fields of a call's input the rows read (`inputSchema` in `tools.ts`).
 /// Empty strings are absent, as `optionalText` reads them.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -36,6 +41,9 @@ pub struct ToolInput {
     pub content: Option<String>,
     /// How many questions a `question` call asks.
     pub questions: usize,
+    /// Those questions as the opened row prints them. An entry that is not a
+    /// record is counted above and left out here.
+    pub asked: Vec<question::AskedQuestion>,
     /// OpenChamber's own tools: the `action` they ran.
     pub action: Option<String>,
     /// The detail of an OpenChamber tool's `parameters` that tells calls apart.
@@ -51,6 +59,9 @@ pub struct ToolFileDiff {
     pub patch: Option<String>,
     pub additions: Option<u64>,
     pub deletions: Option<u64>,
+    /// The call deleted this file (`status: "deleted"` or `type: "delete"`),
+    /// so there is nothing to open.
+    pub deleted: bool,
 }
 
 /// A tool an `execute` script called.
@@ -74,6 +85,10 @@ pub struct ToolMetadata {
     pub tool_calls: Vec<ExecuteToolCall>,
     pub truncated: bool,
     pub output_path: Option<String>,
+    /// LSP errors by file, in the order `metadata.diagnostics` lists them.
+    pub diagnostics: Vec<diagnostics::FileDiagnostics>,
+    /// The provider a `websearch` call searched with (`metadata.provider`).
+    pub provider: Option<String>,
     /// OpenChamber's result for a render call: accepted, and the answer.
     pub page_result: crate::rendered_page::PageResult,
 }

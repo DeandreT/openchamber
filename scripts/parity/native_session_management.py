@@ -278,6 +278,9 @@ def qualify(args):
                 wait_for("the archived row stayed in the sidebar", lambda: row_key(other) is None)
 
             def restore():
+                # The archive page is a line of the sidebar's More menu.
+                client.click("sidebar-more")
+                wait_for("the More menu did not list the archive", lambda: "archive" in ids())
                 client.click("archive")
                 wait_for("the archive page did not open", lambda: "archive-page" in ids())
                 wait_for("the archived session is not listed", lambda: f"archive-restore:{other}" in ids())
@@ -285,6 +288,9 @@ def qualify(args):
                 client.click(f"archive-restore:{other}")
                 wait_for("the server did not restore the session", lambda: not ((record(other) or {}).get("time") or {}).get("archived"), timeout=20)
                 wait_for("the restored session left the archive page", lambda: f"archive-restore:{other}" not in ids())
+                # The archive page is a line of the sidebar's More menu.
+                client.click("sidebar-more")
+                wait_for("the More menu did not list the archive", lambda: "archive" in ids())
                 client.click("archive")
                 wait_for("the restored row did not return", lambda: row_key(other) is not None)
 

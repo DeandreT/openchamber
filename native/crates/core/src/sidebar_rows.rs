@@ -4,7 +4,8 @@
 //! `packages/ui/src/components/session/sidebar/sessionSidebarRowModel.ts` in
 //! the Works view: Chats, Pinned and In work above projects, each listing
 //! session works, linked worktrees and isolated spaces in lifecycle order. Group works expand
-//! to their sessions. The earlier tree and timeline projections remain
+//! to their sessions. The projects sit under the Projects caption whenever a
+//! zone lists above them. The earlier tree and timeline projections remain
 //! explicit modes for their callers. Stable keys retain row state.
 
 use std::collections::{HashMap, HashSet};
@@ -20,13 +21,17 @@ const CHATS_INCREMENT: usize = 7;
 const SESSIONS_INITIAL_LIMIT: usize = 7;
 const SESSIONS_INCREMENT: usize = 7;
 
-/// A zone above the projects.
+/// A zone above the projects, or the caption over them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ActivityKey {
     Chats,
     Pinned,
     Work,
     Timeline,
+    /// The Projects caption (`PROJECTS_CAPTION_COLLAPSE_KEY`). It folds every
+    /// project at once and has a [`SidebarRow::Caption`] row, never an
+    /// activity header.
+    Projects,
 }
 
 impl ActivityKey {
@@ -36,6 +41,7 @@ impl ActivityKey {
             Self::Pinned => "pinned",
             Self::Work => "work",
             Self::Timeline => "timeline",
+            Self::Projects => "projects",
         }
     }
 }
@@ -133,6 +139,9 @@ pub enum SidebarRow<'a> {
         activity: ActivityKey,
         collapsed: bool,
     },
+    /// The Projects caption: a zone's label over the project headers, shown
+    /// when something lists above them. Collapsed, it hides every project.
+    Caption { key: String, collapsed: bool },
     ProjectHeader {
         key: String,
         project_id: ProjectId,
@@ -214,6 +223,7 @@ impl SidebarRow<'_> {
     pub fn key(&self) -> &str {
         match self {
             Self::ActivityHeader { key, .. }
+            | Self::Caption { key, .. }
             | Self::ProjectHeader { key, .. }
             | Self::GroupHeader { key, .. }
             | Self::FolderHeader { key, .. }
@@ -609,10 +619,29 @@ impl<'i, 'v, 'a, 'o> RowBuilder<'i, 'v, 'a, 'o> {
             .filter(|_| !inputs.keep_work_in_place)
             .map(SidebarWork::key)
             .collect();
+        // `appendProjectSections`: the caption stands over the first project
+        // when rows list above it; a list that opens with the projects has
+        // none.
+        let mut captioned = self.model.rows.is_empty();
         for section in inputs.sections {
             let project_id = &section.project.id;
             let collapsed = !inputs.state.search.is_some()
                 && inputs.state.collapsed_projects.contains(project_id);
+            if !captioned {
+                captioned = true;
+                let caption_collapsed = !inputs.state.search.is_some()
+                    && inputs
+                        .state
+                        .collapsed_activities
+                        .contains(&ActivityKey::Projects);
+                self.push(SidebarRow::Caption {
+                    key: "caption:projects".to_owned(),
+                    collapsed: caption_collapsed,
+                });
+                if caption_collapsed {
+                    break;
+                }
+            }
             self.model.sticky_headers.push(self.model.rows.len());
             self.push(SidebarRow::ProjectHeader {
                 key: format!("project:{project_id}:header"),
@@ -1380,12 +1409,27 @@ fn group_descriptors<'s, 'a>(
 /// sets it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum SectionSpacing {
-    /// Before a project header (`pb-4`), with room for its divider.
-    Project,
-    /// Before a zone header (`pb-2`).
+    /// Before a zone header or the Projects caption (`pb-4`).
     Section,
+    /// Before a project header that follows rows (`pb-3`), with room for the
+    /// divider between open projects.
+    Project,
+    /// Between two project headers, the first of them closed (`pb-0.5`).
+    ClosedProject,
     /// Before a worktree header inside its project (`pb-1.5`).
     Group,
+}
+
+impl SectionSpacing {
+    /// The gap in logical pixels.
+    pub fn pixels(self) -> f32 {
+        match self {
+            Self::Section => 16.0,
+            Self::Project => 12.0,
+            Self::Group => 6.0,
+            Self::ClosedProject => 2.0,
+        }
+    }
 }
 
 /// The gap below `row` when `next` follows it.
@@ -1394,8 +1438,15 @@ pub fn section_spacing_after(
     next: Option<&SidebarRow<'_>>,
 ) -> Option<SectionSpacing> {
     match next? {
-        SidebarRow::ProjectHeader { .. } => Some(SectionSpacing::Project),
-        SidebarRow::ActivityHeader { .. } => Some(SectionSpacing::Section),
+        SidebarRow::ProjectHeader { .. } => match row {
+            // The caption and its first project read as one heading.
+            SidebarRow::Caption { .. } => None,
+            SidebarRow::ProjectHeader { .. } => Some(SectionSpacing::ClosedProject),
+            _ => Some(SectionSpacing::Project),
+        },
+        SidebarRow::ActivityHeader { .. } | SidebarRow::Caption { .. } => {
+            Some(SectionSpacing::Section)
+        }
         SidebarRow::GroupHeader { .. } if !matches!(row, SidebarRow::ProjectHeader { .. }) => {
             Some(SectionSpacing::Group)
         }
@@ -1532,6 +1583,9 @@ mod tests {
                 SidebarRow::ActivityHeader { activity, .. } => {
                     format!("zone:{}", activity.as_str())
                 }
+                SidebarRow::Caption { collapsed, .. } => {
+                    format!("caption{}", if *collapsed { "+" } else { "" })
+                }
                 SidebarRow::ProjectHeader { project_id, .. } => format!("project:{project_id}"),
                 SidebarRow::GroupHeader { group_key, .. } => format!("group:{group_key}"),
                 SidebarRow::Worktree { group_key, .. } => format!("worktree:{group_key}"),
@@ -1633,6 +1687,7 @@ mod tests {
                 "worktree:app:feature",
                 "s01@1",
                 "s02@1",
+                "caption",
                 "project:app",
                 "s00@0",
                 "worktree:app:empty"
@@ -1830,7 +1885,89 @@ mod tests {
         input.pinned = &pinned;
         assert_eq!(
             kinds(&build(&input, &mut SessionOrdering::new())),
-            ["zone:pinned", "project:app", "s01@0"]
+            ["zone:pinned", "caption", "project:app", "s01@0"]
+        );
+    }
+
+    #[test]
+    fn the_projects_caption_stands_over_the_projects_only_under_a_zone() {
+        let records = sessions(3);
+        let (first, second) = (
+            ConfiguredProject {
+                id: ProjectId::from("app"),
+                path: "/p".to_owned(),
+            },
+            ConfiguredProject {
+                id: ProjectId::from("lib"),
+                path: "/q".to_owned(),
+            },
+        );
+        let sections = [
+            ProjectSection {
+                project: &first,
+                groups: vec![group(
+                    "root",
+                    true,
+                    vec![node(&records[0]), node(&records[1])],
+                )],
+            },
+            ProjectSection {
+                project: &second,
+                groups: vec![group("root", true, vec![node(&records[2])])],
+            },
+        ];
+        let statuses = HashMap::new();
+        let state = SidebarState::default();
+        let mut input = timeline_inputs(&sections, &[], &[], &state, &statuses);
+        input.view_mode = SidebarViewMode::Works;
+        assert_eq!(
+            kinds(&build(&input, &mut SessionOrdering::new())),
+            ["project:app", "s00@0", "s01@0", "project:lib", "s02@0"],
+            "a list that opens with the projects has no caption"
+        );
+
+        let work = [ZoneItem {
+            node: node(&records[0]),
+            project_id: Some(first.id.clone()),
+        }];
+        input.work = &work;
+        let model = build(&input, &mut SessionOrdering::new());
+        assert_eq!(
+            kinds(&model),
+            [
+                "zone:work",
+                "s00@0",
+                "caption",
+                "project:app",
+                "s01@0",
+                "project:lib",
+                "s02@0"
+            ]
+        );
+        assert_eq!(model.rows[2].key(), "caption:projects");
+        assert_eq!(
+            model.sticky_headers,
+            [0, 3, 5],
+            "the caption scrolls away; zone and project headers stick"
+        );
+
+        let mut folded = state.clone();
+        folded.collapsed_activities.insert(ActivityKey::Projects);
+        input.state = &folded;
+        assert_eq!(
+            kinds(&build(&input, &mut SessionOrdering::new())),
+            ["zone:work", "s00@0", "caption+"],
+            "the folded caption hides every project"
+        );
+
+        let mut searching = folded.clone();
+        searching.search = crate::session_search::SearchQuery::parse("s", "Untitled");
+        input.state = &searching;
+        assert!(
+            kinds(&build(&input, &mut SessionOrdering::new()))
+                .iter()
+                .any(|kind| kind == "caption"),
+            "a search opens the caption"
         );
     }
 
@@ -1956,9 +2093,38 @@ mod tests {
             depth: 0,
             flat: false,
         };
+        let caption = SidebarRow::Caption {
+            key: "caption:projects".to_owned(),
+            collapsed: false,
+        };
         assert_eq!(
             section_spacing_after(&zone_header, Some(&project_header)),
             Some(SectionSpacing::Project)
+        );
+        assert_eq!(
+            section_spacing_after(&status, Some(&project_header)),
+            Some(SectionSpacing::Project)
+        );
+        assert_eq!(
+            section_spacing_after(&project_header, Some(&project_header)),
+            Some(SectionSpacing::ClosedProject),
+            "a run of closed projects reads as a list"
+        );
+        assert_eq!(section_spacing_after(&caption, Some(&project_header)), None);
+        assert_eq!(
+            section_spacing_after(&status, Some(&caption)),
+            Some(SectionSpacing::Section)
+        );
+        assert_eq!(
+            [
+                SectionSpacing::Section,
+                SectionSpacing::Project,
+                SectionSpacing::Group,
+                SectionSpacing::ClosedProject
+            ]
+            .map(SectionSpacing::pixels),
+            [16.0, 12.0, 6.0, 2.0],
+            "pb-4, pb-3, pb-1.5 and pb-0.5"
         );
         assert_eq!(
             section_spacing_after(&status, Some(&zone_header)),

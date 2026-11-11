@@ -5,6 +5,8 @@
 //! rest of a row.
 
 use openchamber_native_core::rendered_page::{PageAnswer, PageInput, PageResult};
+use openchamber_native_core::tool_shells::diagnostics::{FileDiagnostics, ToolDiagnostic};
+use openchamber_native_core::tool_shells::question::AskedQuestion;
 use openchamber_native_core::tool_shells::{
     ExecuteToolCall, ToolFacts, ToolFileDiff, ToolInput, ToolMetadata,
 };
@@ -67,12 +69,91 @@ fn read_input(input: &Value) -> ToolInput {
             .get("questions")
             .and_then(Value::as_array)
             .map_or(0, Vec::len),
+        asked: read_questions(input),
         action: text(input, "action"),
         parameter_detail: parameters
             .and_then(parameter_detail)
             .or_else(|| text(input, "title")),
         page: read_page(input, parameters),
     }
+}
+
+/// A `question` call's questions (`questionInput` in `ToolPart.tsx`). Each
+/// field is read on its own: a question without options keeps its text, and
+/// an option without a text label is left out.
+fn read_questions(input: &Value) -> Vec<AskedQuestion> {
+    let Some(questions) = input.get("questions").and_then(Value::as_array) else {
+        return Vec::new();
+    };
+    questions
+        .iter()
+        .filter(|question| question.is_object())
+        .map(|question| AskedQuestion {
+            header: text(question, "header"),
+            question: question
+                .get("question")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            options: question
+                .get("options")
+                .and_then(Value::as_array)
+                .map(|options| {
+                    options
+                        .iter()
+                        .filter_map(|option| text(option, "label"))
+                        .collect()
+                })
+                .unwrap_or_default(),
+        })
+        .collect()
+}
+
+/// `metadata.diagnostics`: LSP diagnostics by file path
+/// (`normalizeToolDiagnostic`). Only errors are kept, severity 1 or none
+/// given, at 1-based positions. A key keeps its place even when nothing
+/// under it is an error, so a later key never stands in for it.
+fn read_diagnostics(metadata: &Value) -> Vec<FileDiagnostics> {
+    let Some(by_file) = metadata.get("diagnostics").and_then(Value::as_object) else {
+        return Vec::new();
+    };
+    by_file
+        .iter()
+        .filter(|(_, listed)| !listed.is_null())
+        .map(|(path, listed)| FileDiagnostics {
+            path: path.clone(),
+            diagnostics: listed
+                .as_array()
+                .map(|listed| listed.iter().filter_map(read_diagnostic).collect())
+                .unwrap_or_default(),
+        })
+        .collect()
+}
+
+fn read_diagnostic(diagnostic: &Value) -> Option<ToolDiagnostic> {
+    let message = text(diagnostic, "message")?;
+    if let Some(severity) = diagnostic.get("severity").and_then(Value::as_f64)
+        && severity.is_finite()
+        && severity.trunc() != 1.0
+    {
+        return None;
+    }
+    let start = diagnostic.get("range").and_then(|range| range.get("start"));
+    // Zero-based on the wire; a missing or negative position reads as zero.
+    let position = |key: &str| -> u32 {
+        let raw = start
+            .and_then(|start| start.get(key))
+            .and_then(Value::as_f64)
+            .filter(|value| value.is_finite())
+            .map_or(0.0, |value| value.trunc().max(0.0));
+        // `as` saturates, and the row's position is 1-based.
+        (raw as u32).saturating_add(1)
+    };
+    Some(ToolDiagnostic {
+        message,
+        line: position("line"),
+        character: position("character"),
+    })
 }
 
 /// A render call's page fields, `parameters` first and field by field
@@ -172,6 +253,8 @@ fn read_metadata(metadata: &Value) -> ToolMetadata {
                         patch: text(entry, "patch"),
                         additions: count(entry, "additions"),
                         deletions: count(entry, "deletions"),
+                        deleted: entry.get("status").and_then(Value::as_str) == Some("deleted")
+                            || entry.get("type").and_then(Value::as_str) == Some("delete"),
                     })
                 })
                 .collect()
@@ -221,6 +304,12 @@ fn read_metadata(metadata: &Value) -> ToolMetadata {
         tool_calls,
         truncated: metadata.get("truncated").and_then(Value::as_bool) == Some(true),
         output_path: text(metadata, "outputPath"),
+        diagnostics: read_diagnostics(metadata),
+        provider: metadata
+            .get("provider")
+            .and_then(Value::as_str)
+            .filter(|provider| !provider.is_empty())
+            .map(str::to_owned),
         page_result: read_page_result(metadata),
     }
 }
@@ -295,6 +384,103 @@ mod tests {
             Some(r#"{"q":"y"}"#)
         );
         assert!(facts.metadata.truncated);
+    }
+
+    #[test]
+    fn questions_keep_what_reads_and_drop_what_does_not() {
+        let input = json!({"questions": [
+            {"header": " Scope ", "question": "Which **one**?", "options": [
+                {"label": "First", "description": "d"}, {"label": 2}, "bare", {"label": "Second"}
+            ]},
+            {"question": 7, "options": "none"},
+            "not a record",
+        ]});
+        let facts = tool_facts(Some(&input), None, None);
+        assert_eq!(facts.input.questions, 3, "the row still counts every entry");
+        assert_eq!(
+            facts.input.asked,
+            [
+                AskedQuestion {
+                    header: Some("Scope".to_owned()),
+                    question: "Which **one**?".to_owned(),
+                    options: vec!["First".to_owned(), "Second".to_owned()],
+                },
+                AskedQuestion::default(),
+            ]
+        );
+        assert!(
+            tool_facts(Some(&json!({"questions": "x"})), None, None)
+                .input
+                .asked
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn diagnostics_keep_errors_at_one_based_positions() {
+        let metadata = json!({
+            "provider": "exa",
+            "files": [{"file": "gone.rs", "status": "deleted"}, {"file": "old.rs", "type": "delete"}, {"file": "a.rs"}],
+            "diagnostics": {
+                "/repo/a.rs": [
+                    {"message": " unresolved name ", "severity": 1, "range": {"start": {"line": 4, "character": 2}}},
+                    {"message": "unused", "severity": 2, "range": {"start": {"line": 9, "character": 0}}},
+                    {"message": "no severity or range"},
+                    {"message": "   ", "severity": 1},
+                    {"message": "odd position", "range": {"start": {"line": -3, "character": "x"}}},
+                    "not a record",
+                ],
+                "/repo/warnings.rs": [{"message": "unused", "severity": 2}],
+                "/repo/broken.rs": "not a list",
+                "/repo/null.rs": null,
+            },
+        });
+        let facts = tool_facts(None, Some(&metadata), None);
+        assert_eq!(facts.metadata.provider.as_deref(), Some("exa"));
+        let deleted: Vec<bool> = facts
+            .metadata
+            .files
+            .iter()
+            .map(|file| file.deleted)
+            .collect();
+        assert_eq!(deleted, [true, true, false]);
+        let listed = &facts.metadata.diagnostics;
+        let entry = |path: &str| {
+            listed
+                .iter()
+                .find(|entry| entry.path == path)
+                .map(|entry| entry.diagnostics.clone())
+        };
+        assert_eq!(
+            entry("/repo/a.rs").expect("the file is listed"),
+            [
+                ToolDiagnostic {
+                    message: "unresolved name".to_owned(),
+                    line: 5,
+                    character: 3,
+                },
+                ToolDiagnostic {
+                    message: "no severity or range".to_owned(),
+                    line: 1,
+                    character: 1,
+                },
+                ToolDiagnostic {
+                    message: "odd position".to_owned(),
+                    line: 1,
+                    character: 1,
+                },
+            ]
+        );
+        assert_eq!(entry("/repo/warnings.rs"), Some(Vec::new()));
+        assert_eq!(
+            entry("/repo/broken.rs"),
+            Some(Vec::new()),
+            "one malformed file does not drop the others"
+        );
+        assert_eq!(entry("/repo/null.rs"), None);
+        let none = tool_facts(None, Some(&json!({"diagnostics": []})), None);
+        assert!(none.metadata.diagnostics.is_empty());
+        assert_eq!(none.metadata.provider, None);
     }
 
     #[test]

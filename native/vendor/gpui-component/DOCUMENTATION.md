@@ -57,7 +57,9 @@ the pinned `gpui-kit` dependency.
 - Custom-rendered `PopupMenuItem::ElementItem` rows may supply an explicit
   `aria_label`. The menu-item role receives that name; visible content,
   shortcut hints, activation and disabled/checked behavior stay unchanged.
-  Existing unlabeled custom items retain their default behavior.
+  Existing unlabeled custom items retain their default behavior. They may
+  also supply an `accessibility_id`, which the menu-item node carries as its
+  stable identifier; items without one are unchanged.
 
 ## Decisions
 

@@ -36,6 +36,7 @@ pub(crate) const NATIVE_ACTIONS: &[&str] = &[
     "toggle_terminal",
     "toggle_sidebar",
     "toggle_prompt_navigator",
+    "open_command_palette",
     "open_settings",
     "cycle_theme",
 ];
@@ -213,6 +214,7 @@ impl Workspace {
             "toggle_terminal" => self.toggle_terminal(window, cx),
             "toggle_sidebar" => self.toggle_sidebar(cx),
             "toggle_prompt_navigator" => self.toggle_prompt_navigator(window, cx),
+            crate::command_palette::SHORTCUT => self.toggle_command_palette(window, cx),
             "open_settings" => self.open_settings(window, cx),
             "cycle_theme" => cycle_theme(cx),
             // The reference's fixed Ctrl+F searches the open conversation here.

@@ -184,10 +184,13 @@ prompt. Attachments and worktree creation remain separate workflows.
   Mini Chat window are listed and only log that their feature is not
   ported; pin lists (custom sidebar sections), guest actions and the shared
   setup trust prompt are not ported either.
-  `archive_view.rs` is the archive page the toolbar's Archive button opens in
-  place of the chat; it lists archived sessions with Restore and Delete.
-  The archive page's project buckets, search, dates and archived worktrees
-  are not ported.
+  `archive_view.rs` is the archive page the More menu's Archive line opens in
+  place of the chat: a bucket panel (All, each registered project, Other), a
+  search across every archived session and rows with their archive date,
+  Restore and Delete. Each opening starts fresh. Its listing is cached and
+  dropped when the index, the topology, the query or the bucket changes.
+  Opening a session from its row, deleting a bucket, archived worktrees and
+  deleted spaces' chats are not ported.
 - `scheduled_tasks.rs` is the scheduled tasks page the sidebar's button
   opens in place of the chat; it, the source board and the archive close
   each other. Scopes are Chats and every project; row actions write to the
@@ -230,11 +233,39 @@ prompt. Attachments and worktree creation remain separate workflows.
   toolbar, the match count and the filter that narrows the grouped sections
   and Chats before the row model runs (`core::session_search`). While a query
   is active the row model opens every container, applies no reveal limit and
-  leaves drafts out. `display_mode_view.rs` draws the Display mode menu: the
-  Sessions grouping submenu, saved as `sidebarGrouping`, and Collapse all and
-  Expand all. Project sorting and display, detailed rows, branch names for
-  worktrees, the sections manager, Select sessions and Mark all read are not
-  ported. Drag reordering of projects, folders and sessions is not ported.
+  leaves drafts out. `display_mode_view.rs` draws the Display mode menu: Select
+  sessions, the Sessions grouping submenu, saved as `sidebarGrouping`, the
+  project order submenu, saved as `sidebarProjectSortOrder` and hidden while
+  grouped by time, and Collapse all and Expand all. It anchors to its
+  button's start. `projects_in_sidebar_order` is the one place that orders
+  registered projects for the sidebar. The project order's save is serialized
+  by `ProjectSortPreference`: the list follows the newest choice, one save
+  runs at a time, and a failed save returns the list to the order the server
+  last confirmed. `overlay_unsettled_settings` keeps the unconfirmed choice
+  over a settings read. `session_selection.rs` owns the Select sessions mode:
+  rows check instead of opening, a shift click checks a range, and the bar
+  archives, restores or deletes the checked sessions through the single-row
+  paths, each session asked on its own and each outcome counted.
+  `SessionManagement::lists_changed`, called from `rebuild_sidebar`, drops
+  removed sessions from the selection and the archive page's cached listing.
+  The project display choice, detailed rows, branch names for worktrees, the
+  sections manager, Mark all read, bulk move to a folder and the mode's
+  keyboard shortcuts are not ported. Drag reordering of projects, folders and
+  sessions is not ported.
+- `sidebar_more_menu.rs` is the toolbar's More menu (`sidebar-more`): the
+  pages the sidebar opens, each line a toggle with a check while its page is
+  open. A line keeps the control name its toolbar button had. Pages without a
+  native surface (usage statistics, the integrations catalog) stay listed and
+  disabled, and enterprise mode lists no Integrations line. The footer holds
+  Settings and the instance switcher only. `header_controls.rs` draws the
+  header's context fill and Open In button, each only with its data; the work
+  status card keeps its own Open In control.
+- `command_palette.rs`: the command palette dialog (`CommandPalette.tsx`): the
+  lists the workspace hands it when it opens, their ranking and grouping, its
+  keys, and the focus it returns. The commands themselves stay with the
+  modules that own them; the palette lists a command only when this client
+  can run it. Its page commands call the page toggles directly, so they do
+  not depend on the More menu being open.
 - `legacy_queue_reservation.rs` preserves exact text-only reservation recovery
   for retained journal attempts. It compares the original composer, ordered item
   identities and complete prompt configuration before allowing dispatch.
@@ -262,7 +293,7 @@ prompt. Attachments and worktree creation remain separate workflows.
   can install, Check again, the guide link and Switch instance). A failed or
   unknown check keeps what was known. The gate lives on its connection, so a
   host switch drops it; a recovered host reconnects from the start.
-- `about.rs` owns the footer's About dialog and its independent version reads.
+- `about.rs` owns the About dialog the application menu opens and its independent version reads.
   Reads use the captured connection generation; closing the dialog cancels its
   work. Unavailable OpenCode versions remain unknown, and an unavailable server
   version falls back to the native package version. Public project links use
@@ -283,7 +314,8 @@ prompt. Attachments and worktree creation remain separate workflows.
   document. `shortcuts_settings.rs` is the Shortcuts page and its recording
   dialog. `app_menu.rs` is Electron's Windows and Linux application menu
   behind the title row's menu button, labelled from Electron's own menu
-  dictionaries (`resources/menu-locales.json`).
+  dictionaries (`resources/menu-locales.json`). Each row carries the
+  accessibility ID `app-menu-<label key>`; submenu headings carry none.
 - `pane_resize.rs` owns the sidebar's and the context panel's widths, their
   drag handles and the device-local `layout.json` (sidebar open, sidebar
   width, panel width) that restores them. The Files, Git, Diff and terminal
@@ -293,6 +325,27 @@ prompt. Attachments and worktree creation remain separate workflows.
   reference's `pageOrder`, and indexes only implemented targets. General is
   the first page; reopening keeps the selected page and clears the search.
   Each page owns its scroll container and search anchors.
+  Magic prompts, Commands, About and Git read only while they are the visible
+  Settings page. Settings tells them through `set_shown`; a hidden page that
+  sees the connection or directory change drops the old state and reads on
+  its next visit.
+- `magic_prompts_settings.rs` keeps drafts, the last read and the one write
+  in flight per context, a scope on one runtime. A failed read shows its
+  reason and Retry and never renders editors over built-in text. Closing is
+  blocked only by a draft whose last save failed and that still differs from
+  its baseline. The project scope resolves through the project that owns the
+  selected directory, so a linked worktree edits its owning project.
+- `commands_settings.rs` autosaves an existing command. Each changed form is
+  an accepted write of its own, in order, so an edit made during a write is
+  in custody on close, quit and switch. A command with a delete queued takes
+  no save. A draft is written only by Create.
+- `about_settings.rs` tracks an OpenCode install per runtime outside the
+  close barrier: the server finishes it regardless. Only the server's answer
+  counts as a failure; a lost answer is unknown until the status is read
+  again.
+- `git_settings.rs` reads identities, the machine's author and the Git
+  preferences as one load; any of them failing fails the page. A failed
+  preference write restores that field from the last server-confirmed value.
 - `appearance.rs` owns process-local live theme, language, installed-font and
   interface-size preferences. `appearance_storage.rs` owns the validated v1
   `appearance.json` snapshot, atomic writes and compare-and-swap authority.
@@ -570,9 +623,11 @@ prompt. Attachments and worktree creation remain separate workflows.
   requested. Legacy Tree/List preferences resolve to the same grouping as
   the web client. Missing preference fields retain the previous value.
   Compact sessions use a shared leading kind/chevron slot and trailing pin
-  and running-state marks. Resting rows show no recency date. The project
-  separator paints inside a 16 px preceding gap; zone headers use 8 px gaps.
-  The divider sits 8 px above the gap's end and mixes 10% foreground into border.
+  and running-state marks. Resting rows show no recency date. Gaps come
+  from the core row model: 16 px before a caption, 12 px before a project
+  header that follows rows, 2 px between closed projects. The divider between
+  open projects sits 5.5 px above a 12 px gap's end, 6 px in from each end,
+  in 8% foreground.
 - `workspace_view.rs` lays out the frameless window: the sidebar column, the
   header with the window controls, the chat, the work status panel and the
   rail. `sidebar_view.rs`, `startup_view.rs`, `transcript_view.rs`,
@@ -594,10 +649,15 @@ prompt. Attachments and worktree creation remain separate workflows.
   Markdown, file diffs as plain colored lines, text output with Copy),
   truncation note and error beside the block line. Opening a row whose result
   a history page left out reads the whole message; the row says so after
-  500 ms and offers Retry after a failure. Background shells' live output and
-  Stop, file open actions, question cards, web search results, LSP
-  diagnostics, guest tool presentations and pages drawn in place are not
-  ported.
+  500 ms and offers Retry after a failure. A row that changed a file opens it
+  in the Files surface from its header, and each file of its diff does from
+  the opened body; a failed open raises the prompt a file link raises. The
+  opened body draws a file's LSP errors, a `websearch` result as hit cards
+  that open like links in text, and a `question` call's answers or the
+  questions asked, in place of its input preview; a result in another shape
+  keeps its text. Its modules are under `tool_part_view/`. Background shells'
+  live output and Stop, opening a file's diff or at a line, a site's own icon
+  on a search hit and guest tool presentations are not ported.
 - `reasoning_view.rs` draws reasoning blocks (`ReasoningTimelineBlock`):
   folded to a line with the title, busy dots while streaming and a one-line
   preview once settled; opened to the text in a 320 px scroll box.
@@ -1624,8 +1684,10 @@ prompt. Attachments and worktree creation remain separate workflows.
 - Layout uses logical sides: English is laid out as measured from the
   reference and right-to-left locales mirror it. Window controls keep their
   physical order and the right edge in every language, as in the web client.
-- Sidebar section headers use the reference's 15 px bold type and 22 px line
-  inside a 30 px row. Resting session titles and container labels use opaque
+- Captions (Chats, Pinned, In work, Projects) are a muted medium word at the
+  row's size in a 28 px row, with their chevron after the word. Project
+  headers use 15 px medium type on a 22 px line in a 30 px row, with their
+  glyph. Resting session titles and container labels use opaque
   Oklab mixes of foreground and muted foreground, matching `oc-title-rest` and
   `oc-title-container`; transparency would change their color with the row fill.
 - The main window selects `LayoutMode::Logical` before its first layout. Lists
@@ -1742,6 +1804,27 @@ prompt. Attachments and worktree creation remain separate workflows.
   the server. A failed switch shows no notice.
 - A server waiting for sign-in is never connected from the card; the card
   says where to sign in.
+- A command palette row acts only on the runtime and directory it was listed
+  for. A runtime switch or a replaced connection closes the palette, and a
+  row or file result that outlives either does nothing.
+- The command palette lists no command, Settings page or group this client
+  cannot act on. A reference command without a native feature is absent,
+  never disabled.
+- Closing the command palette returns focus to what had it when the palette
+  opened, or to the workspace. A chosen row runs after that, so a command
+  that moves focus keeps it.
+- A project action row does what it showed: Stop only stops a running action
+  and Run only starts an idle one, in the project and directory the row was
+  listed for.
+- File results show only for the query they were searched for. Their arrival
+  never moves the palette's selection or scroll position; only a query change
+  selects the first row.
+- A session selection's scope comes from the row's header: project rows carry
+  their project, and Zone, Chats and time-list rows carry none, so a range
+  there crosses projects.
+- A bulk confirmation is resolved again when its button is pressed: sessions
+  the index no longer holds are dropped, and a changed set or action is shown
+  again before anything runs.
 
 ## Decisions
 
@@ -2580,3 +2663,66 @@ The reference keeps them in the section's component, which unmounts with the
 card, so a failed read is tried again the next time the card shows. Keeping
 them for the session would turn one failed read into a placeholder for as
 long as the session stays open.
+
+### Why the command palette ranks its own list and not the Kit's Command
+
+GPUI Kit has a `Command` component with a query field, groups and keyboard
+selection. The palette draws its own rows in a Kit dialog: the Kit's list
+colours the selected row with the hover token, clears the query on the first
+Escape, and offers no match marks, while the reference selects with the
+selection tokens, closes on the first Escape and marks matched letters.
+
+### Why Ctrl+P moves the selection inside the open palette
+
+The shortcut that opens the palette defaults to Ctrl+P, which is also
+"previous row" in every picker. Inside the palette the selection key wins, as
+cmdk takes it first in the web client; a binding other than Ctrl+N or Ctrl+P
+closes the palette. The dialog carries a copy of the workspace key context
+for that one shortcut, because a dialog is outside the workspace's element
+tree.
+
+### Why the palette reads the workspace once, when it opens
+
+The lists are taken as one snapshot on open and filtered from it on each
+keystroke, so typing never walks the session index. A session renamed or
+created while the palette is open shows the next time it opens.
+
+### Why the palette's dialog does not close on Escape itself
+
+The Kit dialog closes on any Escape that reaches it, and the field lets
+Escape through after it ends an IME composition. The palette turns the
+dialog's keyboard handling off and closes on its own Escape capture, which
+skips an Escape that ends a composition.
+
+### Why the archive listing is cached and not built per frame
+
+Placing each archived session in its project compares its directory with
+every project and worktree. The listing is built once and dropped when the
+index, the topology, the query or the bucket changes; a frame drawn for any
+other reason reuses it.
+
+### Why a selection's scope comes from the row's header and not the session's project
+
+Zone, Chats and time-list rows mix projects and carry no scope in the
+reference, so a range there crosses projects. Deriving the scope from the
+session's directory would cut those ranges at project boundaries.
+
+### Why a failed restore root skips its subsessions and not the rest
+
+A root that fails keeps its archived subsessions with it, so they are
+skipped. Stopping the whole request would let one session block a bulk
+restore.
+
+### Why the sidebar pages are menu lines and not toolbar buttons
+
+The reference keeps a rest budget of three list controls plus More. A page's
+line carries the control name its button had, so automation opens the menu
+and then finds the same name. Usage statistics and the integrations catalog
+stay disabled lines: the reference opens pages the native client does not
+have, and Settings' Usage page shows provider quotas, a different surface.
+
+### Why app-menu rows carry accessibility IDs
+
+The About dialog is reached only from the application menu, whose rows the
+Kit draws. The vendored Kit menu item takes an optional accessibility ID, so
+automation finds a row by a stable name in every language.

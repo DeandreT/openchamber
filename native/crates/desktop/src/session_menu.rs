@@ -1078,11 +1078,7 @@ impl Workspace {
             let palette = cx.global::<Palette>().clone();
             let strings = locale::strings(cx).clone();
             let direction = strings.direction();
-            let title_key = if confirm.hard_delete {
-                "sessions.sidebar.dialogs.deleteSession.title"
-            } else {
-                "sessions.sidebar.dialogs.archiveSession.title"
-            };
+            let title_key = confirm.title_key();
             let action_key = if confirm.hard_delete {
                 "sessions.sidebar.bulkActions.delete"
             } else {

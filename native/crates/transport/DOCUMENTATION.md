@@ -15,6 +15,10 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `endpoint.rs` | The user-selected base URL, its path prefix and the `ws`/`wss` form of a route. |
 | `identity.rs` | `/health` parsing, API compatibility and capabilities. |
 | `system.rs` | Independent OpenChamber and OpenCode version readouts from the host's system and upgrade-status routes. |
+| `magic_prompts.rs` | The magic prompt overrides of a scope. A failed read is an error. |
+| `commands.rs` | The commands of a directory with each one's stored entry, and their create, update and delete. A failed list read is an error; a failed read of one command's stored entry keeps that command as OpenCode listed it. |
+| `git_settings.rs` | Git identities, the machine's author and a narrow view of the settings document's Git preferences. |
+| `opencode_upgrade.rs` | The OpenCode upgrade status and the install the server runs itself. `upgrade_opencode` waits up to 30 minutes, and a transport error from it says nothing about the install. |
 | `compatibility.rs` | The host's OpenCode compatibility (`GET /api/opencode/compatibility`) and its recovery requests: install v2 (`POST /api/opencode/install-v2`) and reload (`POST /api/config/reload`). |
 | `credential.rs` | The credential a client sends; its `Debug` output is redacted. |
 | `authentication.rs` | Exact bearer status at `/auth/session`, password exchange with explicit session/device trust, bounded response parsing and login rate limits. |
