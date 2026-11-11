@@ -319,12 +319,23 @@ prompt. Attachments and worktree creation remain separate workflows.
   polled while one downloads) and the transcription key, which goes to the
   server and never into the settings document. The browser's push section and
   Voice's read-aloud section are not drawn: native has neither.
+- `usage_quota.rs` owns the selected runtime's provider quotas, one entity on
+  the workspace that Settings' Usage page and the work status card both read.
+  Each provider is read on its own and a read in flight is shared. A failed
+  read keeps the last answer and records why; another runtime starts empty.
+  It reads the providers the saved `usageDropdownProviders` select when the
+  card's Usage section comes on screen, when the window is presented again,
+  and every three minutes while both hold. It stops once the runtime answered
+  with nothing configured. A provider the selection gains is read at once. A
+  new connection to the same runtime keeps the samples and asks again.
 - `usage_page.rs` is the Usage page: every quota provider with its fullest
-  window's tone, each read on its own, and the selected provider's windows
-  and model windows. A refresh that fails keeps the last usage and says it is
-  stale. Provider logos, credential forms, Claude Code sign-in, gift resets,
-  console budgets, the work status toggle, model families and the persisted
-  display mode are not ported.
+  window's tone and the selected provider's windows and model windows, read
+  once per runtime when the page opens and again on its refresh button. A
+  refresh that fails keeps the last usage and says it is stale. Its display
+  mode starts from the saved `usageDisplayMode` and a change lasts for the
+  run. Provider logos, credential forms, Claude Code sign-in, gift resets,
+  console budgets, the work status toggle and model families are not ported
+  to the page, and it writes no usage preference.
 - `desktop_notifications.rs` shows the server's `openchamber:notification`
   events through `org.freedesktop.Notifications` on the session bus, as
   Electron's `maybeShowNativeNotification` does: skipped while the window has
@@ -459,6 +470,27 @@ prompt. Attachments and worktree creation remain separate workflows.
   gaps between actual sections and reserves the first heading's logical control
   inset. Choose sections remains reachable when all built-ins are hidden.
   A stored section ID does not establish that its renderer is available.
+- `context_panel/pinned_section.rs` draws the card's Pinned messages section
+  and owns pinning a message into the context. The pins are the selected
+  session record's; a row's line comes from the transcript, and a pin whose
+  message is not loaded reads that one message whole. Unpin and the footer's
+  pin button write through the transport's fresh-read merge patch and show
+  the server's answer.
+- `message_focus.rs` holds the one standing request to show a message in its
+  transcript and carries it out: it reveals a loaded message, and reaches an
+  older one through `load_earlier_prompts`, page by page, after one
+  whole-message read ruled out a message the server does not know. The pinned
+  rows raise it; transcript search and deep links do not use it yet. The
+  revealed message is scrolled into view without the web's highlight.
+- `context_panel/work_status_usage.rs` draws the card's Usage section from
+  `usage_quota.rs`: the selected providers that are configured, or whose
+  first read failed, each with its windows in the server's order and one
+  window per shown model (`usageSelectedModels`). Folded, its heading shows
+  the shortest window of the composer's provider. The heading's refresh and a
+  window's gift reset are its actions. A gift reset is sent once; unless the
+  server rejected the request itself, its provider is read again in place of
+  any earlier read. It tells the quotas when the section is mounted. The
+  section's folded state is `workStatusExpandedSections` in `ui_memory.rs`.
 - `project_section.rs` draws the card's Project section: the project's
   label, the attention callout and the branch and changed-files rows from the
   session directory's Git status. It reads the status when the directory
@@ -483,6 +515,34 @@ prompt. Attachments and worktree creation remain separate workflows.
   `turn_stats`, recomputed while the session is idle and kept while it
   works; `context_panel.rs` holds the card's shared collapsible section and
   readout row.
+- `context_panel/subagents_section.rs` draws the card's Subagents section:
+  the selected session's child sessions from the live session list, each with
+  its state glyph, trimmed title, what waits on the user or how long its turn
+  has run, and its subtree's cost. It gathers the facts the core's
+  `subagents` module ranks: pending requests from `BlockingRequests`, running
+  state from `Workspace::live_status`, and turn outcomes, turn starts and
+  snapshot coverage from `Workspace::session_activity`. `server_sync.rs`
+  writes `session_activity` at the same four points that write `live_status`:
+  a status event, a deletion, the host snapshot and a runtime switch. The
+  section's folded state is `workStatusExpandedSections` in `ui_memory.rs`.
+- `workflow_runs.rs` holds the runtime's workflow runs over the core's
+  `WorkflowRunStore`, sends approve, decline, stop and resume, and opens a
+  run agent's session through `open_subtask`. A session's
+  runs are read when the work status card first shows it, the control
+  stream's run events keep them current, and every control connection reads
+  the asked sessions again. `Workspace::workflow_agent_sessions` names the
+  sessions of a parent's run agents, which the Subagents section leaves out.
+  `context_panel/workflows_section.rs` draws the card's Workflows section.
+- `mcp_status.rs` holds each asked directory's MCP servers with their
+  connection status (`useMcpStore`) and runs the on/off switch.
+  `context_panel/mcp_section.rs` draws the card's MCP section, and
+  `assets.rs` serves the MCP mark the icon sprite lacks.
+- `context_panel.rs` holds the pill a row ends in when its state is the
+  control to press (`row_action`), and `section_expanded` and
+  `toggle_section`, which read and flip a section's folded state in
+  `workStatusExpandedSections` by its web section ID. Usage, Subagents,
+  Workflows and MCP all keep their fold there, each with its own default:
+  Subagents and Workflows start open, Usage and MCP folded.
 - `prompt_rail.rs` draws the corner prompt indicator and the prompt-list
   panel. The indicator follows `scrollSpy.ts`'s reading line. Hover, click
   and the keyboard shortcut open the panel; arrows, Ctrl+N/P, Home and End
@@ -547,8 +607,10 @@ prompt. Attachments and worktree creation remain separate workflows.
   (every assistant text of the turn, in order), Continue with Fork from
   here, and More with Copy link (`openchamber://session/<id>?message=<id>`).
   They show with the pointer over the message and while a menu is open; the
-  menus take the session menu's keys. Pin into context, Start new session
-  and the More menu's export, read-aloud and plan items are not ported.
+  menus take the session menu's keys. Between the two menus sits Pin into
+  context, drawn by `context_panel/pinned_section.rs`. Start new session and
+  the More menu's export, read-aloud and plan items are not ported, and a
+  prompt's own row has no pin.
 - `transcript_search.rs` is Ctrl+F's search bar while the server setting
   `messageSearchEnabled` is on (off by default, as on the web). Queries go to
   the server's message index after 200 ms, five pages of 200 at most, and
@@ -962,6 +1024,30 @@ prompt. Attachments and worktree creation remain separate workflows.
   A child shown under its parent still replies to the child. Location-owned forms
   keep the `global` sentinel and their captured directory. New-session drafts
   never show the request dock. Session moves hide stale old-directory cards.
+- The Subagents section reads no server route and no transcript. A child is
+  Done only after an observed idle or clean end, or when the applied host
+  snapshot covers it: the snapshot was read on this runtime, the child was
+  not archived since, and both the child and the selected session lie in
+  host directories. Every other child that is not reported busy shows the
+  neutral clock. A space's sessions are never certified idle by the host's
+  snapshot.
+- Snapshot coverage is withdrawn when `reconcile` starts a reread (the first
+  connection of a generation, or a reconnect whose replay did not resume)
+  and when a session load's status read fails. It returns only when a status
+  snapshot applies. Outcomes observed from status reports stay through both.
+- A usage update's cost reaches the Subagents rows at once and rebuilds no
+  sidebar: the session index stores it without reporting a list change.
+- A row's duration counts from a start this device saw
+  (`session.execution.started`, stamped on arrival) or the host reported
+  beside a running status. A running child with neither shows no duration.
+- Rows keep their order while children work: blockers, running, unknown,
+  finished, newest creation first inside each group. One child's missing or
+  failed facts change that child's row only.
+- The section opens itself only when children appear where the last drawn
+  section had none. Folding and unfolding are the user's and are remembered
+  across restarts. The fold toggle flips the state on screen, including on
+  the frames between the section opening itself and that reaching the stored
+  state.
 - The host status snapshot supplies optional identity hints only. Full lists are
   read for the selected session's directory and descendant directories with known
   pending requests; hints in unopened unrelated projects start no location. Global
@@ -1083,6 +1169,30 @@ prompt. Attachments and worktree creation remain separate workflows.
   A failed revert restores only text it actually replaced, using its captured
   draft key even after a runtime switch. Cross-runtime completions do not
   change markers or show notifications in the current runtime.
+- Context pins are read from the session record and changed only by the
+  server's answer to a pin or unpin; no optimistic copy exists. A failed
+  change leaves the row and says so. The section runs one unpin at a time
+  and presses on other pins meanwhile do nothing, as in the reference.
+- Every context-pin change rewrites the whole stored list from a fresh read,
+  so the changes of one session, from the section and from the footer alike,
+  go to the server one after another in press order. A failed or unstartable
+  change frees its control and the next one still runs.
+- A pinned row's fetched line belongs to a runtime, session and directory. A
+  read started under another one, or before the section left the screen, does
+  not publish. A read that fails or finds no text is remembered and not
+  repeated until the section is shown again. While the connection has no
+  client nothing is read or recorded, and the answer of a read whose
+  connection restarted meanwhile is dropped unrecorded, so a reconnect never
+  turns a line into a lasting placeholder.
+- A message-focus request ends when its message is revealed or proves
+  missing, when another session or the new-session view is entered, on a
+  runtime switch, or after 60 seconds. A repeated press replaces it with a
+  new serial, and completions of a replaced request change nothing. It starts
+  older-history reads only through `load_earlier_prompts`, one page after the
+  previous page landed, and a page read that fails ends the request. While
+  the connection has no client the request stands and reports nothing.
+- Going to a pinned message closes the work status card when it lies over
+  the transcript as an overlay.
 - Fork events for locally creating parents do not read the raw fork. Other
   fork reads track intervening patches and read once more before publishing;
   patches received during that follow-up read apply in arrival order to its
@@ -1602,8 +1712,57 @@ prompt. Attachments and worktree creation remain separate workflows.
 - Sidebar widths stay within 264 to 500 px. The panel keeps at least 320 px
   and leaves the chat 320 px. Layout writes run one at a time, so the last
   change is the one on disk; an unreadable or newer file reads the defaults.
+- Workflow runs are read only while workflows are shown
+  (`ServerSettings::workflows_shown`) and only for a session the work status
+  card shows. A failed read keeps the runs held and is tried again when the
+  card shows the session again, the control stream reconnects, or a run event
+  lands on the session while the card shows it, never on every frame. A
+  runtime switch forgets every run, and a read started before it cannot land.
+- A run's row holds its actions while one is in flight, and no second action
+  is sent for that run until the first is answered; other runs stay free. A
+  held pill takes the press and does nothing, the row under it included. The
+  run's new state comes only from the server's event; a refusal shows the
+  server's reason and changes no run.
+- Opening a run agent's session closes the card where it floats over the
+  chat.
+- MCP status is read and changed only for the directory that runs the turn:
+  the selected session's, or the draft's chosen project. An unresolved draft
+  reads nothing. A status is read when the card's MCP section starts showing
+  the directory and the last successful read is missing or older than a
+  minute; a failed read holds nothing new, keeps the servers already held and
+  shows no error.
+- An `mcp.status.changed` announcement re-reads a directory only when its
+  status is held, once per 250 ms burst. A stopped directory other than the
+  one on screen is forgotten, and a read started before the stop or before a
+  runtime switch cannot write its status back.
+- A server's switch holds while its change is in flight, and no second
+  switch is sent for that server until the first is answered; other servers
+  stay free. Every outcome, failure and cancellation included, re-reads the
+  directory's status, because any step may have written the config or reached
+  the server. A failed switch shows no notice.
+- A server waiting for sign-in is never connected from the card; the card
+  says where to sign in.
 
 ## Decisions
+
+### Why the quotas are a workspace entity and not the Usage page's state
+
+The Usage page lives inside the Settings model, which exists only after
+Settings or the section manager was opened, and it kept one sample map per
+visited runtime. The card needs the same samples without Settings, and two
+owners would read each provider twice and disagree after a failed refresh.
+One entity on the workspace serves both and keeps only the selected runtime.
+
+### Why the workspace render tells the quotas what is on screen
+
+Whether the card is mounted is decided while the workspace renders: a side
+panel, a full-page surface, the overlay and the section manager all take
+part. Deriving it again elsewhere would drift from what is drawn. The render
+passes that decision and the connection to the quotas, which change only when
+an input did; reads and the timer start from the quotas, never from a draw.
+The window's visibility comes from `Context::observe_window_visibility`
+and not from the render, because a hidden window draws no frame that could
+report it or its return.
 
 ### Why branch-search navigation has its own key context
 
@@ -2277,6 +2436,47 @@ a rebound shortcut does not change the menu, as in Electron. Items whose
 feature is not ported stay in the menu, disabled, so its structure matches
 the reference.
 
+### Why turn observations sit beside `live_status` and not inside it
+
+`live_status` holds only running sessions and many callers read it as that.
+The Subagents section also needs how a turn ended, when it began and whether
+the host snapshot may certify a session idle. Widening the map's value would
+have made every reader handle states it does not care about, so a second
+owner, `SessionActivity`, records those facts at the same write points and
+answers nothing about running state.
+
+### Why a Subagents row selects the child instead of opening it beside the chat
+
+The reference opens a deduplicated read-only chat tab for the child next to
+the parent's chat. The native context panel hosts server surfaces only and
+the transcript is drawn by the workspace for its one selected session, so a
+second transcript beside the chat needs its own design. Until then the row
+calls `open_subtask`, as the transcript's subagent card does, and Return to
+parent leads back.
+
+### Why the section reopens from a draw-time edge
+
+The reference detects children appearing in an effect of the mounted
+section. Native has no mount, so the section compares each draw with the
+previous one through `Workspace::subagents_present` and schedules the stored
+state change after the frame. Until that write runs,
+`Workspace::subagents_reopened` makes the section draw expanded, and the
+toggle reads and clears it, so a click in between folds what is shown and
+the late write does nothing. The comparison survives the card being covered
+by another surface, so children that arrive meanwhile reopen a folded
+section when the card returns; the reference leaves it folded there.
+
+### Why a reread withdraws snapshot coverage and the reference keeps it
+
+The reference sets `sessionStatusReady` when a directory's status read
+succeeds and never clears it: a failed read returns `null` and leaves the
+store as it was, and a reconnect does not reset the flag. A child that went
+busy during a gap can therefore read as done there until the next
+successful read. Native treats "not listed, so idle" as an answer only
+while the snapshot is known to be current, so a reread and a failed status
+read both withdraw it and the affected rows show the neutral clock until a
+snapshot applies. A failed read must not stand in for an empty snapshot.
+
 ### Why the layout lives on the device
 
 The web keeps the sidebar and panel sizes in its persisted UI store, outside
@@ -2329,8 +2529,54 @@ the user's browsing, opaque-origin content and the desktop's own storage.
 cross-origin child in WebKit. GTK sees only real presses, so a press in the
 view within five seconds stands in for the reference's activation check.
 
+### Why the Workflows section unfolds runs in the card
+
+The web draws a run as one row that opens the Workflows panel where that panel
+exists, and unfolds a run into its phases and agents where it does not. This
+client has no Workflows panel, so it draws the second layout: it is the only
+one in which a running run can be stopped and its agents reached. The one-row
+layout replaces it when the panel exists here.
+
+### Why the card asks for a session's runs once per showing
+
+The card's sections are drawn every frame, while the web's section reads when
+it mounts. Asking whenever the read had failed would repeat a failing request
+every frame, so the owner remembers which session the card last asked about
+and asks again only when that changes.
+
+### Why MCP status has its own owner beside the catalog's count
+
+The catalog reads how many servers are connected for the Context sources
+count, in the composer's config directory, which falls back to the last
+directory for a draft without a project. The MCP section lists and switches
+servers and must never read for an unresolved draft, so it keeps the servers
+by the directory that runs the turn. Folding the count into this owner would
+change which directory the count reads.
+
+### Why a dormant directory wakes on the next frame
+
+The web re-reads a stopped directory when the window regains focus. This
+client has no focus hook for locations, so a directory stopped while the
+window was inactive is re-read by the first frame drawn while the window is
+active, which the activation itself causes.
+
 ### Why extension requests answer `UNSUPPORTED`
 
 No host service is ported yet. Answering each request with the SDK's explicit
 `UNSUPPORTED` code, as VS Code and mobile do, keeps panels running and gives
 them no workspace, file, network or credential access.
+
+### Why the message-focus search advances before each frame
+
+The older-history loader finishes without a window and notifies the
+workspace. A search driven from the loader's completion would need a second
+continuation inside the loader and a window to report a missing message.
+Looking at the loader's state before each frame adds no code to the loader,
+sees every page once, and stops by itself when the request ends.
+
+### Why fetched pin lines are dropped when the section leaves the screen
+
+The reference keeps them in the section's component, which unmounts with the
+card, so a failed read is tried again the next time the card shows. Keeping
+them for the session would turn one failed read into a placeholder for as
+long as the session stays open.

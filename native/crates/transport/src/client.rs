@@ -284,6 +284,10 @@ pub struct ServerSettings {
     /// `(providerID, modelID)` pairs hidden from the picker.
     pub hidden_models: Vec<(String, String)>,
     pub routing_feature_available: Option<bool>,
+    /// `selectWorkflowsShown`: the server backs agent workflows
+    /// (`agentWorkflowFeatureAvailable`) and the user turned the workflow
+    /// tool on (`agentWorkflowToolEnabled`). Either one absent means off.
+    pub workflows_shown: bool,
     /// `timeFormatPreference`: the clock message times use.
     pub clock: ClockPreference,
     /// `codeBlockLineWrap`, when the document carries it.
@@ -353,6 +357,15 @@ pub struct ServerSettings {
     pub stt_local_model: Option<String>,
     pub stt_language: Option<String>,
     pub stt_correct_transcript: Option<bool>,
+    /// `usageDisplayMode` is `remaining`: quota readouts show what is left.
+    /// Absent, or any other value, shows what was used.
+    pub usage_remaining: Option<bool>,
+    /// `usageDropdownProviders`: the providers the compact usage readouts
+    /// show. Absent means every quota provider; an empty list means none.
+    pub usage_providers: Option<Vec<String>>,
+    /// `usageSelectedModels`: per provider, the models the compact readouts
+    /// show, by their full quota names. A provider without names shows all.
+    pub usage_selected_models: Vec<(String, Vec<String>)>,
 }
 
 /// A present layout list. A malformed field grants no list authority while
@@ -519,6 +532,8 @@ impl ServerSettings {
                 .routing_feature_available
                 .as_ref()
                 .and_then(Value::as_bool),
+            workflows_shown: boolean(&settings.agent_workflow_feature_available) == Some(true)
+                && boolean(&settings.agent_workflow_tool_enabled) == Some(true),
             clock: settings
                 .time_format_preference
                 .as_ref()
@@ -714,6 +729,36 @@ impl ServerSettings {
             stt_local_model: text(&settings.stt_local_model, 256),
             stt_language: text(&settings.stt_language, 64),
             stt_correct_transcript: boolean(&settings.stt_correct_transcript),
+            usage_remaining: settings
+                .usage_display_mode
+                .as_ref()
+                .and_then(Value::as_str)
+                .map(|mode| mode == "remaining"),
+            usage_providers: settings
+                .usage_dropdown_providers
+                .as_ref()
+                .and_then(Value::as_array)
+                .map(|providers| {
+                    providers
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                }),
+            usage_selected_models: settings
+                .usage_selected_models
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|(provider, models)| {
+                    let models: Vec<String> = models
+                        .as_array()?
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect();
+                    Some((provider, models))
+                })
+                .collect(),
             permission_default_mode: match settings
                 .permission_default_mode
                 .as_ref()
@@ -837,6 +882,10 @@ pub struct PendingRequestStub {
 pub struct HostSessionStatus {
     pub statuses: HashMap<SessionId, LiveStatus>,
     pub pending: Option<Vec<PendingRequestStub>>,
+    /// How long each running turn had run when the host answered, in
+    /// milliseconds: its clock minus the turn's start on that clock. Absent
+    /// for a session whose start the host did not report.
+    pub turn_elapsed: HashMap<SessionId, i64>,
 }
 
 impl ServerClient {
@@ -1251,20 +1300,38 @@ impl ServerClient {
                 }
                 stubs
             });
-        let statuses = snapshot
-            .sessions
-            .into_iter()
-            .filter_map(|(id, entry)| {
-                let status = match entry.status.as_str() {
-                    "busy" => LiveStatus::Busy,
-                    "retry" => LiveStatus::Retry,
-                    "idle" => LiveStatus::Idle,
-                    _ => return None,
-                };
-                Some((SessionId::new(id), status))
-            })
-            .collect();
-        Ok(HostSessionStatus { statuses, pending })
+        let server_time = snapshot
+            .server_time
+            .as_ref()
+            .and_then(serde_json::Value::as_f64)
+            .filter(|time| time.is_finite());
+        let mut statuses = HashMap::new();
+        let mut turn_elapsed = HashMap::new();
+        for (id, entry) in snapshot.sessions {
+            let status = match entry.status.as_str() {
+                "busy" => LiveStatus::Busy,
+                "retry" => LiveStatus::Retry,
+                "idle" => LiveStatus::Idle,
+                _ => continue,
+            };
+            let id = SessionId::new(id);
+            let started = entry
+                .turn_started_at
+                .as_ref()
+                .and_then(serde_json::Value::as_f64)
+                .filter(|time| time.is_finite());
+            if let (true, Some(now), Some(started)) =
+                (status != LiveStatus::Idle, server_time, started)
+            {
+                turn_elapsed.insert(id.clone(), (now - started).max(0.0) as i64);
+            }
+            statuses.insert(id, status);
+        }
+        Ok(HostSessionStatus {
+            statuses,
+            pending,
+            turn_elapsed,
+        })
     }
 
     /// The server's home directory and managed Chats roots.
@@ -1454,6 +1521,7 @@ mod tests {
             ]
         );
         assert_eq!(settings.routing_feature_available, None);
+        assert!(!settings.workflows_shown, "absent flags mean off");
         assert_eq!(settings.clock, ClockPreference::TwentyFourHour);
         assert_eq!(settings.code_block_line_wrap, Some(false));
         assert_eq!(settings.message_search_enabled, None, "absent means off");
@@ -1668,6 +1736,49 @@ mod tests {
         );
         assert_eq!(absent.work_status_section_order, None);
         assert_eq!(absent.work_status_hidden_sections, None);
+    }
+
+    #[test]
+    fn usage_preferences_read_field_by_field() {
+        let settings = ServerSettings::from_wire(
+            serde_json::from_value(json!({
+                "usageDisplayMode": "remaining",
+                "usageDropdownProviders": ["codex", 7, "claude"],
+                "usageSelectedModels": {"google": ["gemini/pro", false], "codex": "all"},
+            }))
+            .expect("usage fields decode"),
+        );
+        assert_eq!(settings.usage_remaining, Some(true));
+        assert_eq!(
+            settings.usage_providers,
+            Some(vec!["codex".to_owned(), "claude".to_owned()])
+        );
+        assert_eq!(
+            settings.usage_selected_models,
+            vec![("google".to_owned(), vec!["gemini/pro".to_owned()])],
+            "a provider whose value is no list is left out"
+        );
+        let none_selected = ServerSettings::from_wire(
+            serde_json::from_value(json!({
+                "usageDisplayMode": "usage",
+                "usageDropdownProviders": [],
+                "usageSelectedModels": null,
+            }))
+            .expect("usage fields decode"),
+        );
+        assert_eq!(none_selected.usage_remaining, Some(false));
+        assert_eq!(
+            none_selected.usage_providers,
+            Some(Vec::new()),
+            "an empty list is no providers, not every provider"
+        );
+        assert!(none_selected.usage_selected_models.is_empty());
+        let absent = ServerSettings::from_wire(
+            serde_json::from_value(json!({"usageDropdownProviders": "codex"}))
+                .expect("omitted settings decode"),
+        );
+        assert_eq!(absent.usage_remaining, None);
+        assert_eq!(absent.usage_providers, None);
     }
 
     #[test]

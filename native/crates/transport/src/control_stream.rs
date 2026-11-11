@@ -5,6 +5,8 @@
 
 use std::time::Duration;
 
+use openchamber_native_core::ids::SessionId;
+use openchamber_native_core::workflow_runs::{WorkflowRun, WorkflowRunId};
 use reqwest::{Method, StatusCode};
 use serde::Deserialize;
 use tokio::sync::mpsc;
@@ -34,6 +36,14 @@ pub enum ControlEvent {
     /// A client or an agent changed `project_id`'s notes, todos or plans.
     ProjectContextChanged {
         project_id: String,
+    },
+    /// A workflow run was proposed or changed. The event carries the whole
+    /// summary and no revision, and no other stream repeats it.
+    WorkflowRun(Box<WorkflowRun>),
+    /// The user deleted a finished workflow run.
+    WorkflowRunRemoved {
+        parent_session_id: SessionId,
+        run_id: WorkflowRunId,
     },
 }
 
@@ -258,6 +268,23 @@ fn decode(data: &[u8]) -> Result<Option<ControlEvent>, TransportError> {
                 directories: changed.directories,
             }))
         }
+        // A malformed summary changes nothing; the next read corrects it.
+        "openchamber:workflow-run" => Ok(envelope
+            .properties
+            .as_ref()
+            .and_then(|properties| properties.get("run"))
+            .and_then(crate::workflows::decode_run)
+            .map(|run| ControlEvent::WorkflowRun(Box::new(run)))),
+        "openchamber:workflow-run-removed" => Ok(envelope
+            .properties
+            .as_ref()
+            .and_then(crate::workflows::decode_removed)
+            .map(
+                |(parent_session_id, run_id)| ControlEvent::WorkflowRunRemoved {
+                    parent_session_id,
+                    run_id,
+                },
+            )),
         _ => Ok(None),
     }
 }
@@ -361,6 +388,54 @@ mod tests {
                 },
             ],
             "an event without its project is dropped"
+        );
+    }
+
+    #[test]
+    fn workflow_runs_and_removals_decode_and_malformed_ones_are_dropped() {
+        let run = serde_json::json!({
+            "id": "run_1", "parentSessionId": "ses_parent", "directory": "/repo",
+            "name": "Audit", "description": "", "state": "awaiting-approval", "attempt": 1,
+            "createdAt": 5, "currentPhase": null, "phases": [], "agents": [], "logs": []
+        });
+        let mut unknown_state = run.clone();
+        unknown_state["state"] = serde_json::json!("paused");
+        let frames = [
+            serde_json::json!({"type": "openchamber:workflow-run", "properties": {"run": run}}),
+            serde_json::json!({"type": "openchamber:workflow-run", "properties": {"run": unknown_state}}),
+            serde_json::json!({"type": "openchamber:workflow-run", "properties": {}}),
+            serde_json::json!({
+                "type": "openchamber:workflow-run-removed",
+                "properties": {"runId": "run_1", "parentSessionId": "ses_parent"}
+            }),
+            serde_json::json!({
+                "type": "openchamber:workflow-run-removed",
+                "properties": {"runId": "run_1"}
+            }),
+        ];
+        let mut decoder = Decoder::default();
+        let mut events = Vec::new();
+        for frame in frames {
+            events.extend(
+                decoder
+                    .push(format!("data: {frame}\n\n").as_bytes())
+                    .expect("valid SSE"),
+            );
+        }
+        assert_eq!(events.len(), 2, "malformed events change nothing");
+        match &events[0] {
+            ControlEvent::WorkflowRun(run) => {
+                assert_eq!(run.id, WorkflowRunId::from("run_1"));
+                assert_eq!(run.parent_session_id, SessionId::from("ses_parent"));
+            }
+            other => panic!("expected a workflow run, got {other:?}"),
+        }
+        assert_eq!(
+            events[1],
+            ControlEvent::WorkflowRunRemoved {
+                parent_session_id: SessionId::from("ses_parent"),
+                run_id: WorkflowRunId::from("run_1"),
+            }
         );
     }
 }

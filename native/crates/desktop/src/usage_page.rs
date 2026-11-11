@@ -2,24 +2,20 @@
 //! provider in a list with its fullest window's tone, and the selected
 //! provider's windows and per-model windows.
 //!
-//! Each provider is read on its own (`GET /api/quota/:providerId`), so one
-//! failing provider leaves the others' answers. A refresh that fails keeps
-//! the last answer on screen and says so, as `useQuotaStore` does. Provider
-//! logos, credential forms, Claude Code sign-in, gift resets, console
-//! budgets, the work status toggle and model family grouping are not ported.
-
-use std::collections::HashMap;
-use std::time::SystemTime;
+//! The quotas live in `usage_quota.rs`, shared with the work status card: a
+//! refresh that fails keeps the last answer on screen and says so, and one
+//! failing provider leaves the others' answers. Provider logos, credential
+//! forms, Claude Code sign-in, gift resets, console budgets, the work status
+//! toggle and model family grouping are not ported to this page.
 
 use gpui_kit::{
-    AnyElement, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Render, Role,
-    ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Task, TestSupportExt,
-    WeakEntity, Window, div, prelude::FluentBuilder, px,
+    AnyElement, App, Context, Entity, FontWeight, InteractiveElement, IntoElement, ParentElement,
+    Render, Role, ScrollHandle, SharedString, StatefulInteractiveElement, Styled, Subscription,
+    TestSupportExt, WeakEntity, Window, div, prelude::FluentBuilder, px,
 };
-use openchamber_native_core::ids::RuntimeId;
 use openchamber_native_core::message_time::ClockPreference;
 use openchamber_native_transport::quota::{
-    QUOTA_PROVIDERS, QuotaResult, UsageTone, UsageWindow, WindowValue, usage_tone,
+    QUOTA_PROVIDERS, UsageTone, UsageWindow, WindowValue, usage_tone,
 };
 
 use crate::activation::on_activate;
@@ -27,83 +23,15 @@ use crate::baseline::CssTextExt;
 use crate::chrome::IconButton;
 use crate::locale::{self, Direction, Strings};
 use crate::logical::LogicalStyledExt;
-use crate::network::NetworkTask;
 use crate::theme::Palette;
+use crate::usage_quota::{DisplayMode, ProviderState, UsageQuota};
 use crate::workspace::Workspace;
-
-/// Whether bars show the used or the remaining share (`usageDisplayMode`).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum DisplayMode {
-    #[default]
-    Usage,
-    Remaining,
-}
-
-/// One provider's last answer and its newest refresh failure.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct ProviderState {
-    pub(crate) result: Option<QuotaResult>,
-    pub(crate) refresh_error: Option<String>,
-}
-
-impl ProviderState {
-    /// `fetchProviderQuota`: a failed provider answer keeps the last sample.
-    pub(crate) fn apply(&mut self, answer: Result<QuotaResult, String>) {
-        match answer {
-            Ok(result) if !result.ok && result.configured => {
-                self.refresh_error = Some(
-                    result
-                        .error
-                        .clone()
-                        .unwrap_or_else(|| "Failed to fetch quota".into()),
-                );
-                match &mut self.result {
-                    Some(previous) => previous.configured = true,
-                    None => self.result = Some(result),
-                }
-            }
-            Ok(result) => {
-                self.refresh_error = None;
-                self.result = Some(result);
-            }
-            Err(error) => self.refresh_error = Some(error),
-        }
-    }
-
-    /// The panel's error line: stale usage says it is stale.
-    pub(crate) fn error_line(&self, strings: &Strings) -> Option<String> {
-        let usage = self
-            .result
-            .as_ref()
-            .is_some_and(|result| result.windows.is_some());
-        match &self.refresh_error {
-            Some(error) if usage => Some(
-                strings
-                    .format(
-                        "header.services.usageRefreshFailedStale",
-                        &[("error", error)],
-                    )
-                    .to_string(),
-            ),
-            Some(error) => Some(error.clone()),
-            None => None,
-        }
-    }
-}
-
-#[derive(Default)]
-struct RuntimeUsage {
-    providers: HashMap<&'static str, ProviderState>,
-    pending: usize,
-    last_updated: Option<i64>,
-    tasks: Vec<Task<()>>,
-}
 
 pub(crate) struct UsagePage {
     owner: WeakEntity<Workspace>,
-    runtimes: HashMap<RuntimeId, RuntimeUsage>,
+    /// The workspace's quotas, observed from the page's first opening.
+    quota: Option<(Entity<UsageQuota>, Subscription)>,
     selected: Option<&'static str>,
-    mode: DisplayMode,
     scroll: ScrollHandle,
 }
 
@@ -111,18 +39,13 @@ impl UsagePage {
     pub(crate) fn new(owner: WeakEntity<Workspace>) -> Self {
         Self {
             owner,
-            runtimes: HashMap::new(),
+            quota: None,
             selected: None,
-            mode: DisplayMode::default(),
             scroll: ScrollHandle::new(),
         }
     }
 
-    fn runtime(&self, cx: &gpui_kit::App) -> Option<RuntimeId> {
-        Some(self.owner.upgrade()?.read(cx).runtime.clone())
-    }
-
-    fn clock(&self, cx: &gpui_kit::App) -> ClockPreference {
+    fn clock(&self, cx: &App) -> ClockPreference {
         self.owner
             .upgrade()
             .and_then(|owner| {
@@ -136,78 +59,85 @@ impl UsagePage {
             .unwrap_or_default()
     }
 
-    /// Opening the page reads every provider once per runtime.
+    /// Opening the page reads every provider once per runtime. The workspace
+    /// opens Settings from its own update, so its quotas are reached after.
     pub(crate) fn open(&mut self, cx: &mut Context<Self>) {
-        let Some(runtime) = self.runtime(cx) else {
-            return;
-        };
-        if !self.runtimes.contains_key(&runtime) {
-            self.refresh(cx);
+        let page = cx.weak_entity();
+        cx.defer(move |cx| {
+            let _ = page.update(cx, |page, cx| {
+                if let Some(quota) = page.attach(cx) {
+                    quota.update(cx, |quota, cx| quota.ensure_all(cx));
+                }
+            });
+        });
+    }
+
+    fn attach(&mut self, cx: &mut Context<Self>) -> Option<Entity<UsageQuota>> {
+        if self.quota.is_none() {
+            let quota = self.owner.upgrade()?.read(cx).usage_quota.clone();
+            let subscription = cx.observe(&quota, |page, quota, cx| {
+                let quota = quota.read(cx);
+                // Another runtime's providers are not this selection's.
+                if page.selected.is_none() || quota.provider_count() == 0 {
+                    page.selected = first_configured(quota);
+                }
+                cx.notify();
+            });
+            self.quota = Some((quota, subscription));
         }
+        self.quota.as_ref().map(|(quota, _)| quota.clone())
     }
 
     /// The sidebar's refresh: every provider again.
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
-        let Some(owner) = self.owner.upgrade() else {
-            return;
-        };
-        let workspace = owner.read(cx);
-        let runtime = workspace.runtime.clone();
-        let Some((client, network)) = workspace
-            .connection
-            .as_ref()
-            .and_then(|connection| Some((connection.client.clone()?, connection.network.handle())))
-        else {
-            return;
-        };
-        let slot = self.runtimes.entry(runtime.clone()).or_default();
-        if slot.pending > 0 {
-            return;
+        if let Some(quota) = self.attach(cx) {
+            quota.update(cx, |quota, cx| quota.refresh_all(cx));
         }
-        slot.tasks.clear();
-        slot.pending = QUOTA_PROVIDERS.len();
-        for (provider, _) in QUOTA_PROVIDERS {
-            let client = client.clone();
-            let read = NetworkTask::spawn_on(&network, async move { client.quota(provider).await });
-            let runtime = runtime.clone();
-            slot.tasks.push(cx.spawn(async move |this, cx| {
-                let answer = match read.await {
-                    Some(Ok(result)) => Ok(result),
-                    Some(Err(error)) => Err(error.to_string()),
-                    None => Err("Failed to fetch quota".to_owned()),
-                };
-                let _ = this.update(cx, |this, cx| {
-                    let Some(slot) = this.runtimes.get_mut(&runtime) else {
-                        return;
-                    };
-                    slot.providers.entry(provider).or_default().apply(answer);
-                    slot.pending = slot.pending.saturating_sub(1);
-                    if slot.pending == 0 {
-                        slot.last_updated = SystemTime::now()
-                            .duration_since(SystemTime::UNIX_EPOCH)
-                            .ok()
-                            .map(|elapsed| elapsed.as_millis() as i64);
-                    }
-                    if this.selected.is_none() {
-                        this.selected = first_configured(slot);
-                    }
-                    cx.notify();
-                });
-            }));
-        }
-        cx.notify();
     }
 
-    fn slot(&self, cx: &gpui_kit::App) -> Option<&RuntimeUsage> {
-        self.runtimes.get(&self.runtime(cx)?)
+    fn quota<'a>(&self, cx: &'a App) -> Option<&'a UsageQuota> {
+        self.quota.as_ref().map(|(quota, _)| quota.read(cx))
+    }
+
+    /// The mode chosen here in this run, else the saved `usageDisplayMode`.
+    fn mode(&self, cx: &App) -> DisplayMode {
+        let saved = self.owner.upgrade().and_then(|owner| {
+            owner
+                .read(cx)
+                .send_catalog
+                .settings
+                .as_ref()
+                .and_then(|settings| settings.usage_remaining)
+        });
+        let saved = match saved {
+            Some(true) => DisplayMode::Remaining,
+            _ => DisplayMode::Usage,
+        };
+        self.quota(cx)
+            .map_or(saved, |quota| quota.display_mode(saved))
+    }
+
+    fn set_mode(&mut self, mode: DisplayMode, cx: &mut Context<Self>) {
+        if let Some(quota) = self.attach(cx) {
+            quota.update(cx, |quota, cx| quota.set_display_mode(mode, cx));
+        }
+        cx.notify();
     }
 
     fn sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let strings = locale::strings(cx).clone();
         let palette = cx.global::<Palette>().clone();
         let direction = strings.direction();
-        let slot = self.slot(cx);
-        let loading = slot.is_some_and(|slot| slot.pending > 0);
+        let loading = self.quota(cx).is_some_and(UsageQuota::is_loading);
+        let mode = self.mode(cx);
+        // Whether each provider is configured, with its fullest window.
+        let answers: Vec<Option<(bool, Option<f64>)>> = QUOTA_PROVIDERS
+            .iter()
+            .map(|(provider, _)| {
+                let result = self.quota(cx)?.provider(provider)?.result.as_ref()?;
+                Some((result.configured, result.highest_used_percent()))
+            })
+            .collect();
         let mut list = div()
             .id("usage-providers")
             .role(Role::List)
@@ -219,14 +149,12 @@ impl UsagePage {
             .flex_col()
             .gap(px(2.0))
             .p(px(8.0));
-        for (provider, name) in QUOTA_PROVIDERS {
-            let state = slot.and_then(|slot| slot.providers.get(provider));
-            let result = state.and_then(|state| state.result.as_ref());
-            let configured = result.is_some_and(|result| result.configured);
+        for ((provider, name), answer) in QUOTA_PROVIDERS.into_iter().zip(answers) {
+            let configured = answer.is_some_and(|(configured, _)| configured);
             let dot = if !configured {
                 palette.muted_foreground.opacity(0.4)
             } else {
-                match usage_tone(result.and_then(QuotaResult::highest_used_percent)) {
+                match usage_tone(answer.and_then(|(_, highest)| highest)) {
                     UsageTone::Critical => palette.status_error,
                     UsageTone::Warn => palette.status_warning,
                     UsageTone::Safe => palette.status_success,
@@ -261,7 +189,7 @@ impl UsagePage {
                                 .bg(dot),
                         )
                         .child(div().flex_1().min_w_0().truncate().child(name))
-                        .when(result.is_some_and(|result| !result.configured), |row| {
+                        .when(answer.is_some_and(|(configured, _)| !configured), |row| {
                             row.child(
                                 div()
                                     .text_size(gpui_kit::rems(0.75))
@@ -278,8 +206,8 @@ impl UsagePage {
                 .test_support(),
             );
         }
-        let mode_chip = |mode: DisplayMode, key: &'static str, id: &'static str| {
-            let selected = self.mode == mode;
+        let mode_chip = |chip: DisplayMode, key: &'static str, id: &'static str| {
+            let selected = mode == chip;
             on_activate(
                 div()
                     .id(id)
@@ -300,10 +228,7 @@ impl UsagePage {
                     .when(selected, |chip| chip.bg(palette.background))
                     .child(strings.get(key)),
                 cx,
-                move |this, _, cx| {
-                    this.mode = mode;
-                    cx.notify();
-                },
+                move |this, _, cx| this.set_mode(chip, cx),
             )
             .test_support()
         };
@@ -397,15 +322,13 @@ impl UsagePage {
         title: String,
         subtitle: Option<String>,
         window: &UsageWindow,
+        mode: DisplayMode,
         cx: &Context<Self>,
     ) -> AnyElement {
         let strings = locale::strings(cx);
         let palette = cx.global::<Palette>();
         let direction = strings.direction();
-        let percent = match self.mode {
-            DisplayMode::Usage => window.used_percent,
-            DisplayMode::Remaining => window.remaining_percent,
-        };
+        let percent = mode.percent(window);
         let value = value_label(window, percent, strings);
         let reset = reset_label(window, self.clock(cx), cx);
         let reset = reset.map(|time| {
@@ -456,7 +379,7 @@ impl UsagePage {
         };
         if let Some(percent) = percent {
             let fill = (percent / 100.0).clamp(0.0, 1.0) as f32;
-            let bar_label = match self.mode {
+            let bar_label = match mode {
                 DisplayMode::Usage => strings.get("settings.usage.card.bar.used"),
                 DisplayMode::Remaining => strings.get("settings.usage.card.bar.remaining"),
             };
@@ -510,12 +433,16 @@ impl UsagePage {
             .iter()
             .find(|(id, _)| *id == provider)
             .map_or(provider, |(_, name)| *name);
-        let slot = self.slot(cx);
-        let state = slot.and_then(|slot| slot.providers.get(provider));
+        let mode = self.mode(cx);
+        let state: Option<ProviderState> = self
+            .quota(cx)
+            .and_then(|quota| quota.provider(provider).cloned());
+        let state = state.as_ref();
         let result = state.and_then(|state| state.result.as_ref());
-        let loading = slot.is_some_and(|slot| slot.pending > 0);
-        let time = slot
-            .and_then(|slot| slot.last_updated)
+        let loading = self.quota(cx).is_some_and(UsageQuota::is_loading);
+        let time = self
+            .quota(cx)
+            .and_then(UsageQuota::last_updated)
             .and_then(|at| crate::turn_footer::message_time(at, self.clock(cx), cx))
             .map_or_else(|| "-".to_owned(), |time| time.to_string());
         let description = if loading {
@@ -618,6 +545,7 @@ impl UsagePage {
                 window_label(label, &strings),
                 None,
                 window,
+                mode,
                 cx,
             ));
         }
@@ -640,6 +568,7 @@ impl UsagePage {
                     window_label(label, &strings),
                     Some(model.clone()),
                     window,
+                    mode,
                     cx,
                 ));
             }
@@ -665,12 +594,12 @@ impl UsagePage {
     }
 }
 
-fn first_configured(slot: &RuntimeUsage) -> Option<&'static str> {
+fn first_configured(quota: &UsageQuota) -> Option<&'static str> {
     QUOTA_PROVIDERS
         .iter()
         .find(|(provider, _)| {
-            slot.providers
-                .get(provider)
+            quota
+                .provider(provider)
                 .and_then(|state| state.result.as_ref())
                 .is_some_and(|result| result.configured)
         })
@@ -743,10 +672,10 @@ pub(crate) fn value_label(window: &UsageWindow, percent: Option<f64>, strings: &
 
 /// `formatQuotaResetLabel`: the reset's time, with its day when not today,
 /// else the server's own text.
-fn reset_label(
+pub(crate) fn reset_label<V>(
     window: &UsageWindow,
     clock: ClockPreference,
-    cx: &Context<UsagePage>,
+    cx: &Context<V>,
 ) -> Option<String> {
     match window.reset_at {
         Some(at) if at.is_finite() => {
@@ -782,6 +711,8 @@ impl Render for UsagePage {
 
 #[cfg(test)]
 mod tests {
+    use openchamber_native_transport::quota::QuotaResult;
+
     use super::*;
 
     fn result(configured: bool, ok: bool, used: Option<f64>) -> QuotaResult {

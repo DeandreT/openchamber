@@ -21,6 +21,8 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `request.rs` | The private authenticated request builder, preserving reqwest serialization and publishing a content-free signal on HTTP 401. |
 | `client.rs` | `ServerClient`: identity probe, password login, session pages, message pages, whole messages, running status, settings reads and writes (including the whole `shortcutOverrides` map), Chats roots, projects and worktrees. |
 | `catalog.rs` | Routing readiness (Auto and the safety net) and the composer's catalogs in one directory: agents, the flat model catalog with OpenCode's default model, folded config defaults, the skill count and the connected MCP count. |
+| `mcp.rs` | One directory's MCP servers with their connection status (`GET /api/mcp`), OpenCode's connect and disconnect (`POST /api/experimental/mcp/:server/connect`, `/disconnect`), and the on/off switch, which first writes `disabled` into the config file that defines the server (`GET /api/config/mcp`, `PATCH /api/config/mcp/:name`) and stops at the first failed step. |
+| `workflows.rs` | The workflow runs a session proposed (`GET /api/openchamber/workflows?sessionId=`) and the user's approve, decline, stop and resume (`POST /api/openchamber/workflows/:runId/:action`), whose refusal keeps the server's reason. `control_stream.rs` decodes the run and removal events with the same summary decoder; a list with one unreadable run is a failed read. |
 | `project.rs` | A directory's Git status (`GET /api/git/status`) and a project's configured actions (`GET /api/projects/:projectId/config`, the path-derived ID). |
 | `composer_catalog.rs` | The composer pickers' catalogs no send reads: the commands of a directory (`/api/command`, then each command's `/api/config/commands/:name/config` for its scope) and its snippets (`/api/config/snippets`). The `$` picker's skills come from `composer_preparation.rs`'s `skill_choices`, the same available skills a send resolves. |
 | `files.rs` | The Files surface's filesystem routes: folder listings, OpenCode's fuzzy file and folder search (`/api/fs/find`), ripgrep content search, stat, text and bounded raw reads, writes and renames, scoped to the workspace by the directory header. |
@@ -31,7 +33,7 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `project_context.rs` | Project knowledge (`/api/project-context/:projectId`, a path-derived id): the context, one todo at a time, the whole todo list with plan links and dependencies, notes, plan Markdown by id, the plan's session and share moves. A gone entry answers `None`; a failed read is an error. |
 | `prompt.rs` | Prompt submission with its synthetic context, resumption of an uncertain send, slash commands, ordered session model/agent selection, inbox admission receipts, observation and interruption of one named session. |
 | `prompt_parts.rs` | What a prompt carries besides text (file references, agent and skill references, metadata, synthetic context), the command request, and their private request bodies. |
-| `session_actions.rs` | Rename (`PATCH /api/session/:id`, then a read back and a best-effort user-title note), delete (`DELETE`, 404 is already gone), archive and restore (`POST /api/openchamber/sessions/archive` and `/unarchive`), and pin and work state as merge patches to `/api/openchamber/sessions/:id/metadata` computed from a fresh read; fork (`POST /api/session/:id/fork`) and the fork's source-owned link cleanup, revert stage and clear (`POST .../revert/stage`, `DELETE .../revert`), the `/btw` marker, link, unlink and promotion, and stopping a subagent (a non-resuming synthetic note, then the child's interrupt). |
+| `session_actions.rs` | Rename (`PATCH /api/session/:id`, then a read back and a best-effort user-title note), delete (`DELETE`, 404 is already gone), archive and restore (`POST /api/openchamber/sessions/archive` and `/unarchive`), and pin, work state and the context pins of a message (`context_obligatory_messages`) as merge patches to `/api/openchamber/sessions/:id/metadata` computed from a fresh read; fork (`POST /api/session/:id/fork`) and the fork's source-owned link cleanup, revert stage and clear (`POST .../revert/stage`, `DELETE .../revert`), the `/btw` marker, link, unlink and promotion, and stopping a subagent (a non-resuming synthetic note, then the child's interrupt). |
 | `session_warming.rs` | Per-session warming: the snapshot (with its duration), one session's switch, and Settings' mode and duration writes (`/api/session-warming/mode`, `/duration`). |
 | `session_goal.rs` | The session goal's writes as merge patches of `metadata.openchamber.goal` (new goal, edit in place, Pause and Resume, removal), the objective file (`/api/goals/objective/:sessionId`, written before the metadata, falling back to the inline objective; a 404 read is a missing file, not a failure), the non-resuming first-turn reminder and `GET /api/small-model`. |
 | `review.rs` | Auto-review runs (`GET /api/auto-review`, `POST /api/auto-review/runs`, `DELETE /api/auto-review/runs/:id`) routed to an isolated space's own server by the directory header, the `openchamber:auto-review.updated` broadcast, and the review session a review creates or reuses: a stale link is dropped, a new session is created with the review marker and linked, and deleted again when the link cannot be written. A malformed run makes the whole answer malformed, as the web's schema does. |
@@ -52,7 +54,7 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `tool_facts.rs` | A tool call's input and metadata read into the core's `ToolFacts`, field by field as `lib/opencode/tools.ts` reads them; history records and live transitions share it. Private. |
 | `notification.rs` | `openchamber:notification` events as `event-pipeline.ts` validates them (every field optional, a wrong type rejects the event; a plugin's notice is always background-only) and the `notificationTemplates` settings field. |
 | `dictation.rs` | Dictation against the server's transcription: the `/api/dictation/ws` stream (bearer upgrade, `start` and `ack`, numbered chunks kept until the dictation ends, `finish`, `final`, `cancel` on drop), the start retried every few seconds while the local model downloads and once more at finish, `GET /api/dictation/status`, model download and delete, and the voice key routes (`/api/voice/keys`), which answer only whether a key is saved. |
-| `quota.rs` | One provider's quota (`GET /api/quota/:providerId`) as `fetchQuota.ts` validates it: a malformed window, or another provider's answer, rejects the whole answer. |
+| `quota.rs` | One provider's quota (`GET /api/quota/:providerId`) as `fetchQuota.ts` validates it: a malformed window, or another provider's answer, rejects the whole answer. Windows and models keep the server's order, decoded from the response body before any sorted map. `POST /api/quota/:providerId/gift-reset/use` spends a gift limit reset; only a `success: true` answer is a success, a declined one keeps the server's `error` text, and only a 4xx answer says nothing was spent. |
 | `event.rs` | Bridge frames to `ServerEvent`s, mirroring `lib/opencode/events.ts` and `sync/event-pipeline.ts`. |
 | `stream.rs` | `EventStream`: the reconnecting WebSocket subscription. |
 | `terminal.rs` | Server terminals: `TerminalApi` (shells, list, touch, create, restart, resize, close, terminal settings) and `TerminalSocket`, the reconnecting protocol v3 socket with its binary codec and input splitting. |
@@ -154,7 +156,19 @@ counts and identifiers only.
   of the whole pending field means unsupported. Hints grant neither action nor
   removal authority. Desktop resolves relevant directories and reads full requests
   before exposing actions. The existing `session_statuses` convenience method
-  continues to return only live statuses.
+  continues to return only live statuses. For a running entry with a
+  `turnStartedAt` and a snapshot with a `serverTime`, the read also returns
+  how long the turn had run on the host's clock; a malformed time loses only
+  that entry's elapsed time.
+- A session record carries `cost` from the session payload, and
+  `session.usage.updated` patches it. A missing, negative or non-numeric cost
+  is no cost and leaves the known one in place.
+- `session.execution.started` and `session.execution.failed` emit a
+  `SessionExecution` edge beside their status event; the failure's edge comes
+  first in its frame. `session.execution.succeeded`, a real interruption and
+  plain status events emit no edge.
+- `metadata.openchamber.kind == "workflow-agent"` projects as
+  `SessionKind::WorkflowAgent`, with the exact spelling only.
 - Session projection recognizes reviews only through the explicit OpenChamber
   metadata marker and an original session identity nonblank under ECMAScript
   trimming. Full metadata updates replace that classification, including when

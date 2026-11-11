@@ -7,7 +7,7 @@
 //! falling between the two. Every result checks the connection generation
 //! that requested it and is dropped when a newer attempt replaced it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use gpui_kit::{Context, ListOffset, Window, px};
@@ -16,6 +16,7 @@ use openchamber_native_core::ordering::{ActivityPhase, OrderingMutation};
 use openchamber_native_core::ownership::ProjectWorktrees;
 use openchamber_native_core::scroll_memory::{ScrollKey, ScrollPosition};
 use openchamber_native_core::session::{LiveStatus, SessionRecord};
+use openchamber_native_core::session_activity::SessionActivity;
 use openchamber_native_core::session_index::{IndexUpdate, SessionIndex};
 use openchamber_native_core::tool_names;
 use openchamber_native_core::transcript::{
@@ -24,7 +25,7 @@ use openchamber_native_core::transcript::{
 use openchamber_native_transport::client::{MessagePage, SettingsChanges};
 use openchamber_native_transport::control_stream::{ControlEvent, ControlItem, ControlStream};
 use openchamber_native_transport::error::TransportError;
-use openchamber_native_transport::event::ServerEvent;
+use openchamber_native_transport::event::{ExecutionEdge, ServerEvent};
 use openchamber_native_transport::stream::{EventStream, StreamItem};
 
 use crate::authentication::{ConnectOutcome, RememberedCredential, connect_server};
@@ -231,6 +232,8 @@ impl Workspace {
         self.session_menu = None;
         self.session_rename = None;
         self.branching.switch_runtime();
+        self.context_pins.switch_runtime();
+        self.message_focus.clear();
         if self.session_management.switch_runtime() {
             gpui_kit::component::WindowExt::close_dialog(window, cx);
         }
@@ -254,8 +257,13 @@ impl Workspace {
         self.reset_send_catalog();
         self.permission_modes.reset();
         self.reset_project_readouts();
+        self.reset_workflow_runs();
+        self.reset_mcp_status();
         self.open_sessions.clear();
         self.live_status.clear();
+        self.session_activity = SessionActivity::new();
+        self.subagents_present.set(None);
+        self.subagents_reopened.set(false);
         self.selected = None;
         self.project_chooser = None;
         self.composer_key = self.new_session_draft_key();
@@ -312,6 +320,8 @@ impl Workspace {
                             ControlItem::Event(ControlEvent::Connected) => {
                                 this.load_topology(window, cx);
                                 this.refresh_terminal_sessions(cx);
+                                // Workflow run events are not replayed.
+                                this.reload_workflow_runs(cx);
                             }
                             ControlItem::Event(ControlEvent::TerminalSessionsChanged) => {
                                 this.refresh_terminal_sessions(cx)
@@ -333,6 +343,13 @@ impl Workspace {
                             ControlItem::Event(ControlEvent::ProjectContextChanged {
                                 project_id,
                             }) => this.project_context_changed(&project_id, cx),
+                            ControlItem::Event(ControlEvent::WorkflowRun(run)) => {
+                                this.apply_workflow_run(*run, cx)
+                            }
+                            ControlItem::Event(ControlEvent::WorkflowRunRemoved {
+                                parent_session_id,
+                                run_id,
+                            }) => this.remove_workflow_run(&parent_session_id, &run_id, cx),
                             ControlItem::Disconnected(error) => {
                                 tracing::warn!(%error, "the topology control stream dropped")
                             }
@@ -453,9 +470,12 @@ impl Workspace {
 
     /// Rereads everything live state may have missed: sessions, topology,
     /// running state and every visited transcript.
-    fn reconcile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn reconcile(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         // A gap may have lost the report that would reveal a held request.
         self.permission_modes.holds.release_all();
+        // It may have lost status reports too: the snapshot read before it
+        // certifies no session idle until this reread's own one applies.
+        self.session_activity.withdraw_snapshot();
         self.invalidate_blocking(None);
         self.refresh_blocking_requests(window, cx);
         tracing::info!(
@@ -552,6 +572,12 @@ impl Workspace {
                 {
                     return;
                 }
+                // A failed status read is not an empty snapshot: nothing it
+                // would have listed is known, so the earlier one stops
+                // certifying sessions idle.
+                if statuses.is_none() {
+                    this.session_activity.withdraw_snapshot();
+                }
                 if !complete {
                     this.sessions.fail_load(ticket);
                     cx.notify();
@@ -567,7 +593,7 @@ impl Workspace {
                     if let Some(pending) = statuses.pending {
                         this.blocking.seeds.insert(this.runtime.clone(), pending);
                     }
-                    this.apply_status_snapshot(statuses.statuses);
+                    this.apply_status_snapshot(statuses.statuses, statuses.turn_elapsed);
                     this.refresh_blocking_requests(window, cx);
                 }
                 this.after_index_update(update, window, cx);
@@ -579,13 +605,26 @@ impl Workspace {
     }
 
     /// Replaces running state with the host's snapshot. A failed read keeps
-    /// what the live channel established.
-    fn apply_status_snapshot(&mut self, statuses: HashMap<SessionId, LiveStatus>) {
+    /// what the live channel established. `turn_elapsed` is how long each
+    /// running turn had run when the host answered; it becomes a start on
+    /// this device's clock.
+    pub(crate) fn apply_status_snapshot(
+        &mut self,
+        statuses: HashMap<SessionId, LiveStatus>,
+        turn_elapsed: HashMap<SessionId, i64>,
+    ) {
         let known: Vec<SessionId> = self.live_status.keys().cloned().collect();
         self.live_status = statuses
             .into_iter()
             .filter(|(_, status)| *status != LiveStatus::Idle)
             .collect();
+        let now = now_ms();
+        let running: HashSet<SessionId> = self.live_status.keys().cloned().collect();
+        let host_starts: Vec<(SessionId, i64)> = turn_elapsed
+            .into_iter()
+            .map(|(id, elapsed)| (id, now.saturating_sub(elapsed)))
+            .collect();
+        self.session_activity.apply_snapshot(&running, &host_starts);
         let active: Vec<&SessionId> = self.live_status.keys().collect();
         self.ordering
             .reconcile_snapshot(active, known.iter(), now_ms());
@@ -1155,6 +1194,11 @@ impl Workspace {
                 if let Some(read) = self.branching.fork_reads.get_mut(&key) {
                     read.patches.push(patch.clone());
                 }
+                // Archiving discards the session's status: an earlier
+                // snapshot cannot certify it idle after a restore.
+                if matches!(patch.archived, Some(Some(_))) {
+                    self.session_activity.invalidate(session_id);
+                }
             }
             if let Some(change) = event.session_change() {
                 changes.push(change);
@@ -1172,7 +1216,8 @@ impl Workspace {
                     self.refresh_blocking_requests(window, cx);
                 }
                 ServerEvent::LocationShutdown { directory } => {
-                    self.invalidate_blocking(Some(&directory))
+                    self.invalidate_blocking(Some(&directory));
+                    self.mcp_location_shutdown(&directory, window, cx);
                 }
                 ServerEvent::SessionStatus { session_id, status } => {
                     let phase = match status {
@@ -1184,8 +1229,17 @@ impl Workspace {
                     } else {
                         self.live_status.insert(session_id.clone(), status);
                     }
+                    self.session_activity.observe_status(&session_id, status);
                     ordering.push(OrderingMutation::Observe { session_id, phase });
                 }
+                // Stamped on arrival: the event's own time is the server's
+                // clock, not this device's.
+                ServerEvent::SessionExecution { session_id, edge } => match edge {
+                    ExecutionEdge::Started => {
+                        self.session_activity.turn_started(&session_id, now_ms())
+                    }
+                    ExecutionEdge::Failed => self.session_activity.turn_failed(&session_id),
+                },
                 ServerEvent::SessionDeleted { session_id } => {
                     self.branching
                         .fork_reads
@@ -1204,6 +1258,7 @@ impl Workspace {
                         ),
                     }
                     self.live_status.remove(&session_id);
+                    self.session_activity.forget(&session_id);
                     ordering.push(OrderingMutation::Remove { session_id });
                 }
                 ServerEvent::SessionForked {
@@ -1219,6 +1274,12 @@ impl Workspace {
                 }
                 ServerEvent::CatalogUpdated { kind, directory } => {
                     self.refresh_send_catalog(kind, directory.as_deref(), cx);
+                    if matches!(
+                        kind,
+                        openchamber_native_transport::event::CatalogKind::McpStatus
+                    ) {
+                        self.mcp_status_changed(directory.as_deref(), cx);
+                    }
                 }
                 ServerEvent::PermissionPolicy(snapshot) => self.apply_permission_policy(snapshot),
                 ServerEvent::PermissionLeftForUser {

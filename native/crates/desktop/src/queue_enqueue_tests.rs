@@ -1278,6 +1278,8 @@ mod compound_workspace {
                             }
                             // The rail's extension panels.
                             "/api/guests" => r#"{"guests":[]}"#,
+                            // The work status card's MCP section.
+                            "/api/mcp" => r#"{"location":{},"data":[]}"#,
                             _ => panic!("unsupported fixture request {method} {path}"),
                         };
                         recorded_reads
@@ -1433,7 +1435,13 @@ mod compound_workspace {
                 workspace
                     .send_catalog
                     .insert_test_directory("/project".into(), catalog);
-                workspace.send_catalog.settings = Some(Default::default());
+                // No usage provider is selected, so the work status card
+                // reads no quota from this fixture.
+                workspace.send_catalog.settings =
+                    Some(openchamber_native_transport::client::ServerSettings {
+                        usage_providers: Some(Vec::new()),
+                        ..Default::default()
+                    });
                 let mut connection = Connection::new(ServerConfig {
                     endpoint: server.endpoint.clone(),
                     password: None,
@@ -1460,7 +1468,7 @@ mod compound_workspace {
         cx.update_window(window, |_, window, cx| window.render_frame(cx))
             .expect("render the connected selected session before editing");
         cx.condition(&workspace, |_, _| {
-            server.reads.lock().expect("supported render reads").len() >= 4
+            server.reads.lock().expect("supported render reads").len() >= 5
         })
         .await;
         let mut reads = server
@@ -1474,6 +1482,7 @@ mod compound_workspace {
             vec![
                 "/api/git/status?directory=%2Fproject",
                 "/api/guests",
+                "/api/mcp",
                 "/api/permission-auto-accept",
                 "/api/routing"
             ],

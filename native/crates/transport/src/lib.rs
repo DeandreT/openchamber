@@ -24,6 +24,7 @@ pub mod event;
 pub mod files;
 pub mod git;
 pub mod identity;
+pub mod mcp;
 pub mod message_queue;
 pub mod message_search;
 pub mod notification;
@@ -65,6 +66,7 @@ mod tool_facts;
 pub mod walkthrough;
 pub mod web_content;
 mod wire;
+pub mod workflows;
 pub mod worktree;
 
 /// WHATWG URL parsing, for callers that judge addresses the way browsers do.

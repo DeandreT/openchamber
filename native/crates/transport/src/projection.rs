@@ -5,6 +5,7 @@
 //! history the native client loads lines up with the live deltas that later
 //! address the same parts.
 
+use openchamber_native_core::context_pins::{ContextPin, PinRole, PinTime};
 use openchamber_native_core::ids::{MessageId, OpenCodeProjectId, PartId, SessionId};
 use openchamber_native_core::send_config::{
     AgentEntry, AgentMode, FlatModel, FlatProvider, ModelChoice,
@@ -52,6 +53,7 @@ pub(crate) fn session(wire: wire::Session) -> SessionRecord {
         kind,
         btw,
         goal,
+        context_pins,
     } = metadata_facts(wire.metadata.as_ref());
     SessionRecord {
         id: SessionId::new(wire.id),
@@ -80,6 +82,8 @@ pub(crate) fn session(wire: wire::Session) -> SessionRecord {
             .map(MessageId::new),
         btw,
         goal,
+        cost: wire.cost.and_then(Usd::from_dollars),
+        context_pins,
     }
 }
 
@@ -141,6 +145,11 @@ pub(crate) fn metadata_facts(metadata: Option<&Value>) -> MetadataFacts {
                 .is_some_and(|original| !js_trim(original).is_empty())
     }) {
         SessionKind::Review
+    } else if openchamber
+        .is_some_and(|value| value.get("kind").and_then(Value::as_str) == Some("workflow-agent"))
+    {
+        // `sessionWorkflowMetadata.ts`: the mark alone identifies the agent.
+        SessionKind::WorkflowAgent
     } else {
         SessionKind::Conversation
     };
@@ -151,7 +160,43 @@ pub(crate) fn metadata_facts(metadata: Option<&Value>) -> MetadataFacts {
         goal: openchamber
             .and_then(|value| value.get("goal"))
             .and_then(session_goal),
+        context_pins: context_pins(openchamber),
     }
+}
+
+/// The entries of `context_obligatory_messages` that
+/// `getContextObligatoryMessages` accepts before it looks at the session: a
+/// record with a string `id`, a finite numeric `createdAt` and a `user` or
+/// `assistant` role. Any other entry is left out on its own. A `sessionID`
+/// that is not a string reads as absent.
+fn context_pins(openchamber: Option<&Value>) -> Vec<ContextPin> {
+    let Some(entries) = openchamber
+        .and_then(|value| value.get("context_obligatory_messages"))
+        .and_then(Value::as_array)
+    else {
+        return Vec::new();
+    };
+    entries
+        .iter()
+        .filter_map(|entry| {
+            let entry = entry.as_object()?;
+            Some(ContextPin {
+                id: MessageId::from(entry.get("id")?.as_str()?),
+                created_at: entry
+                    .get("createdAt")
+                    .and_then(Value::as_f64)
+                    .and_then(PinTime::new)?,
+                role: entry
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .and_then(PinRole::from_wire)?,
+                session_id: entry
+                    .get("sessionID")
+                    .and_then(Value::as_str)
+                    .map(SessionId::from),
+            })
+        })
+        .collect()
 }
 
 /// `String.prototype.trim`, which strips ECMAScript whitespace.
@@ -327,6 +372,45 @@ mod prompt_policy_tests {
                 SessionKind::Conversation
             );
         }
+    }
+
+    #[test]
+    fn workflow_agents_are_identified_by_their_exact_mark() {
+        let marked = json!({"openchamber":{"kind":"workflow-agent"}});
+        assert_eq!(
+            metadata_facts(Some(&marked)).kind,
+            SessionKind::WorkflowAgent
+        );
+        for metadata in [
+            json!({"openchamber":{"kind":"workflow"}}),
+            json!({"openchamber":{"kind":"Workflow-Agent"}}),
+            json!({"kind":"workflow-agent"}),
+            json!({"openchamber":["workflow-agent"]}),
+        ] {
+            assert_eq!(
+                metadata_facts(Some(&metadata)).kind,
+                SessionKind::Conversation
+            );
+        }
+    }
+
+    #[test]
+    fn a_session_record_carries_its_aggregate_cost() {
+        let record = |cost: serde_json::Value| {
+            let mut raw = json!({
+                "id": "ses_1",
+                "location": {"directory": "/repo"},
+                "time": {"created": 1, "updated": 2},
+            });
+            if !cost.is_null() {
+                raw["cost"] = cost;
+            }
+            session(serde_json::from_value(raw).expect("a valid session"))
+        };
+        assert_eq!(record(json!(0.125)).cost, Usd::from_dollars(0.125));
+        assert_eq!(record(json!(0)).cost, Usd::from_dollars(0.0));
+        assert_eq!(record(serde_json::Value::Null).cost, None);
+        assert_eq!(record(json!(-1)).cost, None, "a negative cost is no cost");
     }
 }
 
@@ -806,6 +890,55 @@ mod tests {
             &serde_json::json!({"openchamber":{"btwSessionID":"  "}}),
         ));
         assert_eq!(blank.btw.link, None);
+    }
+
+    #[test]
+    fn context_pins_keep_stored_order_and_drop_invalid_entries_one_by_one() {
+        let facts = metadata_facts(Some(&serde_json::json!({ "openchamber": {
+            "pinned": { "at": 4 },
+            "context_obligatory_messages": [
+                { "id": "msg_b", "createdAt": 20, "role": "assistant", "sessionID": "ses_1" },
+                { "id": 7, "createdAt": 1, "role": "user" },
+                { "id": "msg_text_time", "createdAt": "1", "role": "user" },
+                { "id": "msg_role", "createdAt": 1, "role": "system" },
+                { "id": "msg_null_time", "createdAt": null, "role": "user" },
+                "msg_string",
+                null,
+                ["msg_list"],
+                { "id": "msg_a", "createdAt": 10.5, "role": "user", "sessionID": 3 },
+            ],
+        } })));
+        let pins: Vec<(&str, f64, PinRole, Option<&str>)> = facts
+            .context_pins
+            .iter()
+            .map(|pin| {
+                (
+                    pin.id.as_str(),
+                    pin.created_at.as_f64(),
+                    pin.role,
+                    pin.session_id.as_ref().map(SessionId::as_str),
+                )
+            })
+            .collect();
+        assert_eq!(
+            pins,
+            [
+                ("msg_b", 20.0, PinRole::Assistant, Some("ses_1")),
+                ("msg_a", 10.5, PinRole::User, None),
+            ]
+        );
+        assert_eq!(
+            facts.overlay.pinned_at,
+            Some(4),
+            "the sidebar pin is read from its own key"
+        );
+        for metadata in [
+            serde_json::json!({ "openchamber": { "context_obligatory_messages": {} } }),
+            serde_json::json!({ "openchamber": [] }),
+            serde_json::json!({}),
+        ] {
+            assert!(metadata_facts(Some(&metadata)).context_pins.is_empty());
+        }
     }
 
     #[test]

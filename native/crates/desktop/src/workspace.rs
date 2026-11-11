@@ -25,6 +25,7 @@ use openchamber_native_core::ownership::{
 };
 use openchamber_native_core::scroll_memory::{ScrollKey, ScrollMemory, ScrollPosition};
 use openchamber_native_core::session::{LiveStatus, SessionRecord};
+use openchamber_native_core::session_activity::SessionActivity;
 use openchamber_native_core::session_index::SessionIndex;
 use openchamber_native_core::sidebar_collection::SidebarCollection;
 use openchamber_native_core::sidebar_rows::{self, SectionSpacing, SidebarInputs, SidebarState};
@@ -158,6 +159,9 @@ pub struct Workspace {
     pub(crate) work_status_context_open: bool,
     /// Turn stats start expanded.
     pub(crate) work_status_telemetry_open: bool,
+    /// The selected runtime's provider quotas, shared by the work status
+    /// card's Usage section and Settings' Usage page.
+    pub(crate) usage_quota: Entity<crate::usage_quota::UsageQuota>,
     /// A press in a title row that moves the window once the pointer moves.
     pub(crate) title_drag_armed: bool,
     pub(crate) selected: Option<SessionId>,
@@ -202,8 +206,23 @@ pub struct Workspace {
     playback: HashMap<SessionId, Task<()>>,
     /// Running state per session, from the live channel only.
     pub(crate) live_status: HashMap<SessionId, LiveStatus>,
+    /// How turns ended, when the running ones began and what the host's
+    /// status snapshot covers. Written wherever `live_status` is.
+    pub(crate) session_activity: SessionActivity,
+    /// Whether the Subagents section listed children at its last render;
+    /// unknown before its first one. Its empty-to-present edge reopens it.
+    pub(crate) subagents_present: Cell<Option<bool>>,
+    /// The Subagents section opened itself over a stored fold and that has
+    /// not reached the stored state yet. The section draws expanded while
+    /// this is set, and the fold toggle reads it, so a click flips what is
+    /// on screen.
+    pub(crate) subagents_reopened: Cell<bool>,
     pub(crate) transcript_clock: crate::transcript_clock::TranscriptClock,
     pub(crate) message_actions: crate::message_actions::MessageActions,
+    /// The Pinned messages section's fetched lines and changes in flight.
+    pub(crate) context_pins: crate::context_panel::pinned_section::PinnedMessages,
+    /// The standing request to show one message in its transcript.
+    pub(crate) message_focus: crate::message_focus::MessageFocus,
     pub(crate) transcript_search: Option<crate::transcript_search::TranscriptSearch>,
     /// Present when the source is a server.
     pub(crate) connection: Option<Connection>,
@@ -221,6 +240,10 @@ pub struct Workspace {
     pub(crate) general_close: Option<Task<()>>,
     /// The composer's catalogs and defaults; empty for synthetic data.
     pub(crate) send_catalog: SendCatalog,
+    /// The workflow runs of the sessions on screen.
+    pub(crate) workflow_runs: crate::workflow_runs::WorkflowRuns,
+    /// The MCP servers of the directories being worked in.
+    pub(crate) mcp_status: crate::mcp_status::McpStatus,
     pub(crate) effort_preferences: crate::effort_preferences::EffortPreferences,
     pub(crate) effort_close: Option<Task<()>>,
     pub(crate) composer_selections: openchamber_native_core::composer_selection::ComposerSelections,
@@ -317,6 +340,7 @@ impl Workspace {
         let committed_subscription =
             cx.subscribe_in(&composer, window, Self::on_committed_composer_edit);
 
+        let usage_quota = cx.new(|_| crate::usage_quota::UsageQuota::new(window.is_visible()));
         let mut workspace = Self {
             topology,
             sessions,
@@ -341,6 +365,7 @@ impl Workspace {
             prompt_hover_suppressed: false,
             work_status_context_open: false,
             work_status_telemetry_open: true,
+            usage_quota: usage_quota.clone(),
             title_drag_armed: false,
             selected: None,
             open_sessions: HashMap::new(),
@@ -376,8 +401,13 @@ impl Workspace {
             composer_placeholder_compact: None,
             playback: HashMap::new(),
             live_status: HashMap::new(),
+            session_activity: SessionActivity::new(),
+            subagents_present: Cell::new(None),
+            subagents_reopened: Cell::new(false),
             transcript_clock: Default::default(),
             message_actions: Default::default(),
+            context_pins: Default::default(),
+            message_focus: Default::default(),
             transcript_search: None,
             connection,
             retired_networks: Vec::new(),
@@ -392,6 +422,8 @@ impl Workspace {
             appearance_close: None,
             general_close: None,
             send_catalog: SendCatalog::default(),
+            workflow_runs: Default::default(),
+            mcp_status: Default::default(),
             effort_preferences: Default::default(),
             effort_close: None,
             composer_selections:
@@ -449,6 +481,20 @@ impl Workspace {
             _subscriptions: vec![subscription, committed_subscription],
         };
         workspace.rebuild_sidebar();
+        // The card draws the quotas, so their answers redraw the workspace.
+        workspace
+            ._subscriptions
+            .push(cx.observe(&usage_quota, |_, _, cx| cx.notify()));
+        // A hidden window draws no frame, so its visibility reaches the
+        // quotas from the platform's own report.
+        workspace._subscriptions.push(cx.observe_window_visibility(
+            window,
+            |workspace, visibility, _, cx| {
+                workspace.usage_quota.update(cx, |quota, cx| {
+                    quota.set_window_visible(visibility.is_visible(), cx);
+                });
+            },
+        ));
         if let Some(appearance) = cx.try_global::<crate::appearance_view::AppearanceOwner>() {
             let appearance = appearance.0.clone();
             let mut previous = appearance.read(cx).preferences().clone();
@@ -735,6 +781,7 @@ impl Workspace {
         if self.selected.is_some() {
             self.save_composer_draft(cx);
             self.save_scroll_position();
+            self.message_focus.clear();
             self.selected = None;
             self.blocking.presented = None;
             self.composer_key = self.new_session_draft_key();
@@ -813,6 +860,7 @@ impl Workspace {
         let started = Instant::now();
         self.save_composer_draft(cx);
         self.save_scroll_position();
+        self.message_focus.release_outside(&id);
         self.selected = Some(id.clone());
         self.ensure_open(&id, cx);
         self.open_btw_fork(cx);

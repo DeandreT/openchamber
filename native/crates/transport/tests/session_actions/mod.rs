@@ -1,6 +1,7 @@
 //! Session management against the scripted authenticated HTTP server.
 
-use openchamber_native_core::ids::SessionId;
+use openchamber_native_core::context_pins::{ContextPin, PinRole, PinTime};
+use openchamber_native_core::ids::{MessageId, SessionId};
 use openchamber_native_transport::session_actions::{Deleted, WorkState};
 
 use super::*;
@@ -143,6 +144,81 @@ async fn archive_and_restore_keep_partial_results_and_reject_malformed_answers()
     assert_eq!(
         requests[1].target,
         "/prefix/api/openchamber/sessions/unarchive"
+    );
+}
+
+#[tokio::test]
+async fn context_pins_patch_from_a_fresh_read_and_report_a_refused_write() {
+    let stored = json!({ "id": "msg_old", "createdAt": 4, "role": "user", "sessionID": SESSION });
+    let read = stored.clone();
+    let server = Server::start(
+        move |request| match request.method.as_str() {
+            "GET" => Reply::json(session_record(json!({ "openchamber": {
+                "pinned": { "at": 3 },
+                "context_obligatory_messages": [read.clone()],
+            } }))),
+            _ if request.json()["patch"]["openchamber"]["context_obligatory_messages"]
+                == json!([]) =>
+            {
+                Reply::with_status(500, "application/json", "{}")
+            }
+            _ => Reply::json(json!({ "metadata": { "openchamber": {
+                "pinned": { "at": 3 },
+                "context_obligatory_messages": [
+                    { "id": "msg_old", "createdAt": 4, "role": "user", "sessionID": SESSION },
+                    { "id": "msg_new", "createdAt": 9, "role": "assistant", "sessionID": SESSION },
+                ],
+            } } })),
+        },
+        vec![],
+    )
+    .await;
+    let client = ServerClient::new(server.endpoint(), Credential::None).expect("client");
+    let session = SessionId::new(SESSION);
+    let facts = client
+        .pin_context_message(
+            &session,
+            &ContextPin {
+                id: MessageId::from("msg_new"),
+                created_at: PinTime::from_millis(9),
+                role: PinRole::Assistant,
+                session_id: None,
+            },
+        )
+        .await
+        .expect("pinned");
+    assert_eq!(
+        facts
+            .context_pins
+            .iter()
+            .map(|pin| pin.id.as_str())
+            .collect::<Vec<_>>(),
+        ["msg_old", "msg_new"]
+    );
+    assert_eq!(facts.overlay.pinned_at, Some(3));
+    let refused = client
+        .unpin_context_message(&session, &MessageId::from("msg_old"))
+        .await;
+    assert!(
+        matches!(refused, Err(TransportError::Http { status: 500 })),
+        "a refused write is a failure, never an empty success: {refused:?}"
+    );
+    let requests = server.requests();
+    assert_eq!(requests[0].method, "GET");
+    assert_eq!(
+        requests[1].json(),
+        json!({ "patch": { "openchamber": { "context_obligatory_messages": [
+            stored,
+            { "id": "msg_new", "createdAt": 9, "role": "assistant", "sessionID": SESSION },
+        ] } } })
+    );
+    assert_eq!(
+        requests[2].method, "GET",
+        "every change starts from a fresh read"
+    );
+    assert_eq!(
+        requests[3].json(),
+        json!({ "patch": { "openchamber": { "context_obligatory_messages": [] } } })
     );
 }
 

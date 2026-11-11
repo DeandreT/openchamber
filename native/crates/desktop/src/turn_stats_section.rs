@@ -49,7 +49,9 @@ impl Workspace {
                     .and_then(|stats| stats.response_tokens_per_second)
                     .map(|rate| turn_stats::format_rate(rate).into()),
                 expanded: self.work_status_telemetry_open,
-                toggle: |this| this.work_status_telemetry_open = !this.work_status_telemetry_open,
+                toggle: |this, _| {
+                    this.work_status_telemetry_open = !this.work_status_telemetry_open
+                },
             },
             rows,
             palette,

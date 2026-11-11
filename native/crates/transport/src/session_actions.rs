@@ -1,6 +1,7 @@
 //! Session management from the sidebar menu: rename, delete, archive,
-//! restore, pin and work state; and the branching actions of the chat: fork,
-//! staged revert, the `/btw` metadata links and stopping a subagent.
+//! restore, pin and work state; the branching actions of the chat: fork,
+//! staged revert, the `/btw` metadata links and stopping a subagent; and
+//! pinning a message into a session's context.
 //!
 //! Rename and delete are OpenCode's `session.update` and `session.remove`
 //! (`PATCH` and `DELETE /api/session/:id`). Archive state and metadata are
@@ -10,6 +11,7 @@
 //! retries; a lost answer leaves its outcome to the next authoritative read
 //! or event.
 
+use openchamber_native_core::context_pins::{ContextPin, PinTime};
 use openchamber_native_core::ids::{MessageId, SessionId};
 use openchamber_native_core::session::{MetadataFacts, SessionRecord};
 use reqwest::{Method, StatusCode, Url};
@@ -292,6 +294,31 @@ impl ServerClient {
         now: i64,
     ) -> Result<MetadataFacts, TransportError> {
         self.patch_metadata(id, |metadata| with_pinned(metadata, pinned, now))
+            .await
+    }
+
+    /// Pins a message into the session's context for every client
+    /// (`setContextObligatoryMessage`). The stored entry replaces an earlier
+    /// one for the same message and names `id` as its session, whatever
+    /// `pin` carries.
+    pub async fn pin_context_message(
+        &self,
+        id: &SessionId,
+        pin: &ContextPin,
+    ) -> Result<MetadataFacts, TransportError> {
+        self.patch_metadata(id, |metadata| {
+            with_context_message(metadata, &pin.id, Some(context_pin_entry(pin, id)))
+        })
+        .await
+    }
+
+    /// Takes a message out of the session's pinned context.
+    pub async fn unpin_context_message(
+        &self,
+        id: &SessionId,
+        message: &MessageId,
+    ) -> Result<MetadataFacts, TransportError> {
+        self.patch_metadata(id, |metadata| with_context_message(metadata, message, None))
             .await
     }
 
@@ -631,6 +658,63 @@ fn with_pinned(metadata: &Map<String, Value>, pinned: bool, now: i64) -> Map<Str
     with_namespace(metadata, space)
 }
 
+/// `withContextObligatoryMessage`: the stored list without `message`, with
+/// `entry` at its end when pinning. The rewrite keeps only entries that are
+/// records with a string `id`, as the reference's does, and always writes the
+/// list, so unpinning from a session without one stores an empty list.
+fn with_context_message(
+    metadata: &Map<String, Value>,
+    message: &MessageId,
+    entry: Option<Value>,
+) -> Map<String, Value> {
+    let mut space = namespace(metadata);
+    let mut messages: Vec<Value> = space
+        .get("context_obligatory_messages")
+        .and_then(Value::as_array)
+        .map(|entries| {
+            entries
+                .iter()
+                .filter(|entry| {
+                    entry
+                        .as_object()
+                        .and_then(|entry| entry.get("id"))
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| id != message.as_str())
+                })
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    messages.extend(entry);
+    space.insert(
+        "context_obligatory_messages".to_owned(),
+        Value::Array(messages),
+    );
+    with_namespace(metadata, space)
+}
+
+fn context_pin_entry(pin: &ContextPin, session: &SessionId) -> Value {
+    json!({
+        "id": pin.id.as_str(),
+        "createdAt": pin_time(pin.created_at),
+        "role": pin.role.as_wire(),
+        "sessionID": session.as_str(),
+    })
+}
+
+/// A whole number of milliseconds is written without a fraction, as
+/// JavaScript writes it.
+fn pin_time(time: PinTime) -> Value {
+    /// 2^53: every whole number below it is exact in a double.
+    const EXACT_INTEGERS_BELOW: f64 = 9_007_199_254_740_992.0;
+    let millis = time.as_f64();
+    if millis.fract() == 0.0 && millis.abs() < EXACT_INTEGERS_BELOW {
+        json!(millis as i64)
+    } else {
+        json!(millis)
+    }
+}
+
 /// `withSessionWorkState`: Track opens the work as the user's; Done keeps
 /// when and by whom it was opened and drops Jev's hints.
 fn with_work_state(
@@ -915,6 +999,92 @@ mod tests {
             with_pinned(&pinned, true, 9),
             pinned,
             "a pin keeps its time"
+        );
+    }
+
+    #[test]
+    fn context_pins_rewrite_only_their_list() {
+        use openchamber_native_core::context_pins::PinRole;
+
+        let session = SessionId::from("ses_1");
+        let pin = |id: &str, created_at: f64| ContextPin {
+            id: MessageId::from(id),
+            created_at: PinTime::new(created_at).expect("fixture time is finite"),
+            role: PinRole::Assistant,
+            session_id: Some(SessionId::from("ses_elsewhere")),
+        };
+        let current = object(json!({ "openchamber": { "pinned": { "at": 3 } }, "other": 1 }));
+        let first = pin("msg_a", 1_700_000_000_000.0);
+        let pinned = with_context_message(
+            &current,
+            &first.id,
+            Some(context_pin_entry(&first, &session)),
+        );
+        assert_eq!(
+            Value::Object(merge_patch(&current, &pinned)),
+            json!({ "openchamber": { "context_obligatory_messages": [
+                { "id": "msg_a", "createdAt": 1_700_000_000_000_i64, "role": "assistant", "sessionID": "ses_1" }
+            ] } }),
+            "the entry names the session it was pinned in and a whole time has no fraction"
+        );
+        // Pinning again moves the entry to the end with its new facts.
+        let second = pin("msg_b", 2.5);
+        let both = with_context_message(
+            &pinned,
+            &second.id,
+            Some(context_pin_entry(&second, &session)),
+        );
+        let again = with_context_message(
+            &both,
+            &first.id,
+            Some(context_pin_entry(&pin("msg_a", 9.0), &session)),
+        );
+        assert_eq!(
+            again["openchamber"]["context_obligatory_messages"],
+            json!([
+                { "id": "msg_b", "createdAt": 2.5, "role": "assistant", "sessionID": "ses_1" },
+                { "id": "msg_a", "createdAt": 9, "role": "assistant", "sessionID": "ses_1" }
+            ])
+        );
+        let unpinned = with_context_message(&again, &MessageId::from("msg_b"), None);
+        assert_eq!(
+            Value::Object(merge_patch(&again, &unpinned)),
+            json!({ "openchamber": { "context_obligatory_messages": [
+                { "id": "msg_a", "createdAt": 9, "role": "assistant", "sessionID": "ses_1" }
+            ] } })
+        );
+        assert_eq!(
+            unpinned["openchamber"]["pinned"],
+            json!({ "at": 3 }),
+            "the sidebar pin is another key"
+        );
+        assert!(
+            merge_patch(
+                &unpinned,
+                &with_context_message(&unpinned, &MessageId::from("msg_gone"), None)
+            )
+            .is_empty(),
+            "unpinning an absent message changes nothing"
+        );
+    }
+
+    #[test]
+    fn a_context_pin_rewrite_drops_entries_without_a_string_id() {
+        let current = object(json!({ "openchamber": { "context_obligatory_messages": [
+            { "id": "msg_keep", "createdAt": "odd", "role": "other" },
+            { "id": 4, "createdAt": 1, "role": "user" },
+            "msg_text",
+            ["msg_list"]
+        ] } }));
+        let next = with_context_message(&current, &MessageId::from("msg_gone"), None);
+        assert_eq!(
+            next["openchamber"]["context_obligatory_messages"],
+            json!([{ "id": "msg_keep", "createdAt": "odd", "role": "other" }])
+        );
+        let empty = with_context_message(&Map::new(), &MessageId::from("msg_gone"), None);
+        assert_eq!(
+            Value::Object(empty),
+            json!({ "openchamber": { "context_obligatory_messages": [] } })
         );
     }
 

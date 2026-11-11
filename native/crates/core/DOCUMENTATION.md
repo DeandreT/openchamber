@@ -107,6 +107,12 @@ rendering asks for a projection and dispatches an action.
   archive page's list and the pending pin overlay. Track and Done belong to
   root work rows outside archives and Chats; `SidebarRow::Session::owns_work`
   is false inside worktree and space works.
+- `context_pins.rs` owns the messages pinned into a session's context
+  (`contextObligatoryMessages.ts`): which stored entries a session shows, their
+  conversation order, and the one line a pin shows (`firstText` of
+  `WorkStatusPinnedSection.tsx`). `SessionRecord::context_pins` holds the
+  valid stored entries in stored order. They are unrelated to the sidebar's
+  session pin in `SessionOverlay::pinned_at`.
 - `ownership.rs` and `sidebar_collection.rs` own directory ownership and sidebar
   membership. Their reference is `sessionOwnership.ts` and the production
   collection in `sessionCollection.ts`. `sidebar_rows.rs` builds the normal Works view
@@ -151,7 +157,16 @@ rendering asks for a projection and dispatches an action.
 - `session.rs` retains an explicit review kind and the reference prompt-readonly
   policy. Review metadata overrides a stale parent ID; an ordinary child's
   prompting preference overrides the surface readonly flag. Root and review
-  sessions retain the surface flag.
+  sessions retain the surface flag. A record also carries the workflow-agent
+  kind and the session's aggregate cost as the server last reported it.
+- `session_activity.rs` owns what status reports and the host snapshot
+  established beyond running state: how each session's last observed turn
+  ended, when its running turn began on this device's clock, and which
+  sessions the applied snapshot may certify idle.
+- `subagents.rs` ports the Subagents section's rows
+  (`WorkStatusSubagentsSection.tsx`, `subagentCost.ts`,
+  `useSubagentCostRollup.ts`): membership, state precedence, order, the
+  heading summary, the recursive subtree cost and its format.
 - `sidebar_work.rs` assigns sessions to Works entries from the project
    sections. A linked worktree or isolated space is one group work, even empty;
   elsewhere each root and its descendants form one work. Archives are
@@ -175,6 +190,12 @@ rendering asks for a projection and dispatches an action.
   setting. `draft_starters.rs` ports the starter lists of
   `draftStarters.ts` and `useDraftStarters.ts`; `magic_prompt.rs` ports the
   prompt-pair commands' parsing, variables and template rendering.
+- `workflow_runs.rs` ports the workflow run summary (`lib/workflows/model.ts`:
+  phase grouping, a running run's progress) and the per-session run store
+  (`lib/workflows/store.ts`). Run events carry no revision, so the store
+  orders them against reads itself: a run an event touched after a read
+  started keeps its state, a deleted run stays out, and a superseded or
+  pre-reset read changes nothing. A failed read keeps the runs held.
 - `session_goal.rs` ports the goal's validation, presentation and first-turn
   reminder (`sessionGoalMetadata.ts`, `sessionGoalPresentation.ts`,
   `sessionGoalActions.ts`); objective lengths count UTF-16 units as the web
@@ -286,6 +307,10 @@ crate owns wire parsing and authority checks, and hands the core records and
   its own session's request. Reports that precede their request are kept in a
   bounded queue of 100 and consumed once.
 
+- A root session shows every stored context pin. A child session shows the
+  pins that name it, and a pin without a session only when the pin is newer
+  than the child. Pins order by `createdAt`, then by message ID in UTF-16 code
+  units.
 - Display ownership never rewrites a session's real directory. Routing, pin
   identity and drafts use `SessionRecord::directory`.
 - OpenCode's `global` project ID never bridges to a configured root, and
@@ -386,6 +411,26 @@ crate owns wire parsing and authority checks, and hands the core records and
   value removes a binding; internal actions ignore overrides. Every declared
   default is valid and no two defaults collide (`shortcuts::tests`).
 
+- `SessionActivity` never reports a session idle on its own. A failure
+  outlives the idle report of its turn and ends at the next running report. A
+  running report is not a turn start. Invalidating a session withdraws
+  snapshot coverage from that session only, until its next status report or
+  the next snapshot. Withdrawing the snapshot removes coverage from every
+  session until the next snapshot applies and keeps every observed outcome
+  and start.
+- `SessionIndex` stores a usage update's cost in the record at once and
+  reports no list change for it. The update time of the same patch waits for
+  the turn to settle, as every recency-only update does, and the record that
+  lands then keeps the stored cost. The in-place cost write counts as a
+  mutation, so a list read that began before it keeps the newer cost.
+- `subagents::format_cost` rounds as `toFixed(4)` rounds the `f64` that
+  `Usd::dollars` yields: to the nearest four-decimal number by the float's
+  exact value, and to the larger one on an exact tie.
+- `subagents::rows` lists direct children of one parent from the given live
+  list, without workflow agents. Its order depends on state rank and
+  creation time only, so activity never moves a row inside its group. A
+  subtree's cost counts each session once, whatever the parent links say.
+
 ## Decisions
 
 ### Why typed tool facts and not raw JSON in the core
@@ -460,3 +505,46 @@ describes.
 The reference matches pins by a runtime, directory and session key built from
 the session's own metadata. The core reads `SessionOverlay::pinned_at` from the
 same record, which yields the same membership without rebuilding the key set.
+
+### Why the session cost is an optional `Usd`
+
+A record created from a `session.created` event carries no cost, and a usage
+update may omit it. `None` keeps "not reported" apart from a reported zero,
+and a patch without a cost keeps the known one. `Usd` adds exactly and keeps
+`SessionRecord` comparable, which the index's no-change detection needs.
+
+### Why a workflow agent is a session kind
+
+`metadata.openchamber.kind` holds one string, so `btw`, `review` and
+`workflow-agent` exclude each other on the wire. One more `SessionKind`
+variant carries the mark through every full-metadata update without a
+second flag that could disagree with the kind.
+
+### Why the cost is outside the index's recency test
+
+The reference's structural signature of a session leaves the cost out, so a
+usage update never republishes its global list, while its directory stores
+apply the cost at once for the views that show it. Native has one index for
+both jobs. It therefore splits a usage patch: the cost goes into the stored
+record immediately and silently, and the update time is held until the turn
+settles. Comparing whole records instead would rebuild the sidebar on every
+usage event of a running turn.
+
+### Why cost text goes through the float and not integer rounding
+
+Rounding the integer billionths half up gives `$12.3457` for a cost of
+12.34565, where the reference shows `$12.3456`: the `f64` nearest to
+12.34565 lies just under the midpoint, and `toFixed` rounds the float.
+`Usd::dollars` returns the same `f64` the server's number parsed to for any
+cost with up to nine decimals, so formatting that float reproduces the
+reference's text. Only exact binary ties, such as 0.03125, need their own
+rule, because Rust's formatter sends those to the even digit and `toFixed`
+to the larger number.
+
+
+### Why a context pin's time is a number and not whole milliseconds
+
+The reference accepts any finite `createdAt`, and a child session compares it
+with its own creation time. Rounding to `i64` would drop or reorder entries
+another client wrote with a fraction. `PinTime` keeps the stored number and
+gives it a total order, so the record stays `Eq`.
