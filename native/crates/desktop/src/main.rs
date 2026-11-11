@@ -109,7 +109,9 @@ mod markdown_links;
 mod markdown_list;
 mod markdown_math;
 mod markdown_view;
+mod mcp_status;
 mod message_actions;
+mod message_focus;
 mod message_id;
 mod message_queue;
 mod model_controls;
@@ -209,12 +211,14 @@ mod turn_footer;
 mod turn_stats_section;
 mod ui_memory;
 mod usage_page;
+mod usage_quota;
 mod web_policy;
 mod web_shim;
 #[cfg(target_os = "linux")]
 mod webview_host;
 #[cfg(target_os = "linux")]
 mod webview_platform;
+mod workflow_runs;
 mod workspace;
 #[cfg(test)]
 mod workspace_tests;

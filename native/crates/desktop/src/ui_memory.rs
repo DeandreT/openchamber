@@ -1,9 +1,10 @@
-//! Device-local interface memory that outlives a restart, per runtime: the
+//! Device-local interface memory that outlives a restart: per runtime, the
 //! project action each project's button last ran
 //! (`lib/projectActionSelection.ts`) and each root's file tree
-//! (`useFilesViewTabsStore.ts`). The web keeps both in local storage and
-//! never sends them to the server; here they live in `ui-memory.json` beside
-//! the layout file.
+//! (`useFilesViewTabsStore.ts`); for every runtime, the work status sections
+//! the user folded or unfolded (`workStatusExpandedSections`). The web keeps
+//! them in local storage and never sends them to the server; here they live
+//! in `ui-memory.json` beside the layout file.
 //!
 //! The file is read once at startup and written off the UI thread, one write
 //! at a time, so the last change is the one kept. A missing, oversized or
@@ -48,6 +49,11 @@ struct MemoryFile {
     /// Runtime, then root directory.
     #[serde(default)]
     file_trees: BTreeMap<String, BTreeMap<String, TreeMemory>>,
+    /// The work status sections the user folded or unfolded, by section ID
+    /// (`workStatusExpandedSections`). The web keeps one map for every
+    /// runtime, so this one is not keyed by runtime either.
+    #[serde(default)]
+    work_status_expanded_sections: BTreeMap<String, bool>,
 }
 
 /// The application's interface memory. Tests and synthetic runs keep it in
@@ -106,6 +112,25 @@ impl UiMemory {
     pub(crate) fn tree(&self, runtime: &str, root: &str) -> Option<&TreeMemory> {
         self.file.file_trees.get(runtime)?.get(root)
     }
+
+    /// Whether the user left the work status section `id` expanded; `None`
+    /// until they fold or unfold it, when the section's default applies.
+    pub(crate) fn work_status_section_expanded(&self, id: &str) -> Option<bool> {
+        self.file.work_status_expanded_sections.get(id).copied()
+    }
+}
+
+/// Remembers whether the work status section `id` is expanded.
+pub(crate) fn set_work_status_section_expanded(id: &str, expanded: bool, cx: &mut App) {
+    let memory = cx.default_global::<UiMemory>();
+    if memory.file.work_status_expanded_sections.get(id) == Some(&expanded) {
+        return;
+    }
+    memory
+        .file
+        .work_status_expanded_sections
+        .insert(id.to_owned(), expanded);
+    save(cx);
 }
 
 /// Remembers `action` as `project`'s pick on `runtime`.
@@ -313,6 +338,67 @@ mod tests {
             "outside paths and repeats are dropped"
         );
         assert_eq!(tree.selected.as_deref(), Some("/p/src/main.rs"));
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[gpui_kit::test]
+    fn folded_work_status_sections_survive_a_restart(cx: &mut TestAppContext) {
+        let directory = scratch("sections");
+        cx.update(|cx| {
+            cx.set_global(UiMemory::load(&directory));
+            assert_eq!(
+                cx.global::<UiMemory>()
+                    .work_status_section_expanded("subagents"),
+                None,
+                "an untouched section keeps its default"
+            );
+            set_work_status_section_expanded("subagents", false, cx);
+        });
+        cx.run_until_parked();
+        let loaded = UiMemory::load(&directory);
+        assert_eq!(
+            loaded.work_status_section_expanded("subagents"),
+            Some(false)
+        );
+        assert_eq!(loaded.work_status_section_expanded("telemetry"), None);
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn a_file_without_section_states_still_loads() {
+        let directory = scratch("legacy");
+        fs::create_dir_all(&directory).expect("scratch folder");
+        fs::write(
+            directory.join(FILE_NAME),
+            br#"{"version":1,"actionPicks":{"rt":{"/p":"dev"}},"fileTrees":{}}"#,
+        )
+        .expect("legacy file");
+        let loaded = UiMemory::load(&directory);
+        assert_eq!(loaded.action_pick("rt", "/p"), Some("dev"));
+        assert_eq!(loaded.work_status_section_expanded("subagents"), None);
+        let _ = fs::remove_dir_all(&directory);
+    }
+
+    #[gpui_kit::test]
+    fn each_section_keeps_its_own_state_across_a_restart(cx: &mut TestAppContext) {
+        let directory = scratch("section-states");
+        cx.update(|cx| {
+            cx.set_global(UiMemory::load(&directory));
+            assert_eq!(
+                cx.global::<UiMemory>()
+                    .work_status_section_expanded("usage"),
+                None,
+                "an untouched section keeps its own default"
+            );
+            set_work_status_section_expanded("usage", true, cx);
+            set_work_status_section_expanded("mcp", false, cx);
+        });
+        cx.run_until_parked();
+        let loaded = UiMemory::load(&directory);
+        assert_eq!(loaded.work_status_section_expanded("usage"), Some(true));
+        assert_eq!(loaded.work_status_section_expanded("mcp"), Some(false));
+        assert_eq!(loaded.work_status_section_expanded("pinned"), None);
+        assert_eq!(loaded.action_pick("rt", "/p"), None);
         let _ = fs::remove_dir_all(&directory);
     }
 

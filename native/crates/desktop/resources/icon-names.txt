@@ -64,6 +64,8 @@ pencil-ai
 picture-in-picture-2
 play
 pushpin
+pushpin-2
+pushpin-2-fill
 robot
 robot-2
 rocket
@@ -183,3 +185,4 @@ chat-thread
 edit-2
 pulse
 more-fill
+gift

@@ -81,6 +81,12 @@ pub enum ServerEvent {
         session_id: SessionId,
         status: LiveStatus,
     },
+    /// A turn boundary `SessionStatus` cannot express. It accompanies the
+    /// status event of the same frame and never replaces it.
+    SessionExecution {
+        session_id: SessionId,
+        edge: ExecutionEdge,
+    },
     Transcript {
         session_id: SessionId,
         event: TranscriptEvent,
@@ -126,6 +132,16 @@ pub enum ServerEvent {
     Unsupported {
         kind: String,
     },
+}
+
+/// A turn boundary of one session's execution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ExecutionEdge {
+    /// `session.execution.started`: the one event that marks where a turn
+    /// begins. A busy status repeats at every step and marks nothing.
+    Started,
+    /// `session.execution.failed`: the turn ended with an error.
+    Failed,
 }
 
 /// Which catalog an update rebuilt, as `catalog.updated` kinds in
@@ -463,6 +479,8 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                 revert: None,
                 btw: facts.btw,
                 goal: facts.goal,
+                cost: None,
+                context_pins: facts.context_pins,
             })]
         }
         "session.deleted" => vec![ServerEvent::SessionDeleted { session_id }],
@@ -536,6 +554,10 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
             session_id: session_id.clone(),
             patch: SessionPatch {
                 updated: Some(created),
+                cost: data
+                    .get("cost")
+                    .and_then(Value::as_f64)
+                    .and_then(Usd::from_dollars),
                 ..SessionPatch::default()
             },
         }],
@@ -608,12 +630,32 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
             Some(instructions) => vec![notice(Role::System, Some(instructions))],
             None => Vec::new(),
         },
-        "session.execution.started" => vec![status(LiveStatus::Busy)],
-        "session.execution.succeeded" | "session.execution.failed" => settled(SessionPatch {
+        "session.execution.started" => vec![
+            ServerEvent::SessionExecution {
+                session_id: session_id.clone(),
+                edge: ExecutionEdge::Started,
+            },
+            status(LiveStatus::Busy),
+        ],
+        "session.execution.succeeded" => settled(SessionPatch {
             idle: Some(created),
             updated: Some(created),
             ..SessionPatch::default()
         }),
+        // The failure precedes the idle status of the same frame, so no
+        // consumer sees the turn as settled cleanly in between.
+        "session.execution.failed" => {
+            let mut events = vec![ServerEvent::SessionExecution {
+                session_id: session_id.clone(),
+                edge: ExecutionEdge::Failed,
+            }];
+            events.extend(settled(SessionPatch {
+                idle: Some(created),
+                updated: Some(created),
+                ..SessionPatch::default()
+            }));
+            events
+        }
         // `shutdown` is OpenCode going away mid-turn; it resumes on restart, so
         // the status snapshot after reconnect is the authority.
         "session.execution.interrupted" if text("reason") == Some("shutdown") => Vec::new(),
@@ -1431,6 +1473,84 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    #[test]
+    fn execution_edges_accompany_their_status_events() {
+        let decode = |kind: &str| {
+            decode_frame(&format!(
+                r#"{{"type":"event","payload":{{"id":"evt_1","created":5,"type":"{kind}","data":{{"sessionID":"s1"}}}}}}"#
+            ))
+            .expect("valid")
+            .events
+        };
+        let session_id = SessionId::from("s1");
+        let status = |status: LiveStatus| ServerEvent::SessionStatus {
+            session_id: session_id.clone(),
+            status,
+        };
+        let edge = |edge: ExecutionEdge| ServerEvent::SessionExecution {
+            session_id: session_id.clone(),
+            edge,
+        };
+        let settled = ServerEvent::SessionPatched {
+            session_id: session_id.clone(),
+            patch: SessionPatch {
+                idle: Some(5),
+                updated: Some(5),
+                ..SessionPatch::default()
+            },
+        };
+        assert_eq!(
+            decode("session.execution.started"),
+            [edge(ExecutionEdge::Started), status(LiveStatus::Busy)]
+        );
+        assert_eq!(
+            decode("session.execution.failed"),
+            [
+                edge(ExecutionEdge::Failed),
+                settled.clone(),
+                status(LiveStatus::Idle)
+            ]
+        );
+        assert_eq!(
+            decode("session.execution.succeeded"),
+            [settled, status(LiveStatus::Idle)],
+            "a clean end carries no edge"
+        );
+        assert!(
+            decode("session.status").is_empty(),
+            "a status without a type marks nothing"
+        );
+    }
+
+    #[test]
+    fn usage_updates_carry_the_session_cost() {
+        let decode = |cost: &str| {
+            decode_frame(&format!(
+                r#"{{"type":"event","payload":{{"id":"evt_1","created":5,"type":"session.usage.updated","data":{{"sessionID":"s1"{cost}}}}}}}"#
+            ))
+            .expect("valid")
+            .events
+        };
+        let patched = |cost: Option<Usd>| {
+            [ServerEvent::SessionPatched {
+                session_id: SessionId::from("s1"),
+                patch: SessionPatch {
+                    updated: Some(5),
+                    cost,
+                    ..SessionPatch::default()
+                },
+            }]
+        };
+        assert_eq!(decode(r#","cost":0.25"#), patched(Usd::from_dollars(0.25)));
+        assert_eq!(decode(r#","cost":0"#), patched(Usd::from_dollars(0.0)));
+        assert_eq!(
+            decode(""),
+            patched(None),
+            "a missing cost keeps the known one"
+        );
+        assert_eq!(decode(r#","cost":"1""#), patched(None));
     }
 
     #[test]

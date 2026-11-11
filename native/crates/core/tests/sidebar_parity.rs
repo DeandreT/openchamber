@@ -165,6 +165,8 @@ fn session(fixture: &FixtureSession) -> SessionRecord {
         revert: None,
         btw: Default::default(),
         goal: None,
+        cost: None,
+        context_pins: Vec::new(),
     }
 }
 

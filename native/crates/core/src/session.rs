@@ -1,9 +1,11 @@
 //! Session records as the application model sees them.
 
+use crate::context_pins::ContextPin;
 use crate::ids::{MessageId, OpenCodeProjectId, SessionId};
 use crate::path;
 use crate::send_config::ModelChoice;
 use crate::session_goal::SessionGoal;
+use crate::transcript::Usd;
 
 /// What kind of conversation a session is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
@@ -18,6 +20,10 @@ pub enum SessionKind {
     Btw,
     /// An independent review identified by explicit OpenChamber metadata.
     Review,
+    /// A workflow run's agent (`metadata.openchamber.kind == "workflow-agent"`),
+    /// a child of the session that proposed the run. The run lists it; the
+    /// Subagents section does not.
+    WorkflowAgent,
 }
 
 /// OpenCode's project metadata attached to a session record.
@@ -74,6 +80,13 @@ pub struct SessionRecord {
     pub btw: BtwMetadata,
     /// `metadata.openchamber.goal`, when it holds a valid goal.
     pub goal: Option<SessionGoal>,
+    /// `cost`: what the session's own turns have cost so far, as the server
+    /// last reported it. Absent until a read or a usage event carries it.
+    pub cost: Option<Usd>,
+    /// The valid entries of `metadata.openchamber.context_obligatory_messages`
+    /// in stored order. [`crate::context_pins::owned`] decides which of them
+    /// this session shows.
+    pub context_pins: Vec<ContextPin>,
 }
 
 /// The `/btw` links in a session's `metadata.openchamber`, as
@@ -97,6 +110,8 @@ pub struct MetadataFacts {
     pub kind: SessionKind,
     pub btw: BtwMetadata,
     pub goal: Option<SessionGoal>,
+    /// Messages pinned into the context, in stored order.
+    pub context_pins: Vec<ContextPin>,
 }
 
 /// A change to fields of one session record, as live events report it.
@@ -119,6 +134,8 @@ pub struct SessionPatch {
     pub agent: Option<String>,
     /// `Some(None)` clears a staged revert.
     pub revert: Option<Option<MessageId>>,
+    /// The session's aggregate cost after a usage update.
+    pub cost: Option<Usd>,
 }
 
 impl SessionPatch {
@@ -172,6 +189,11 @@ impl SessionRecord {
         self.kind == SessionKind::Btw
     }
 
+    /// Whether a workflow run started this session as one of its agents.
+    pub fn is_workflow_agent(&self) -> bool {
+        self.kind == SessionKind::WorkflowAgent
+    }
+
     pub fn is_root(&self) -> bool {
         self.parent_id.is_none()
     }
@@ -215,6 +237,7 @@ impl SessionRecord {
             next.kind = facts.kind;
             next.btw.clone_from(&facts.btw);
             next.goal.clone_from(&facts.goal);
+            next.context_pins.clone_from(&facts.context_pins);
         }
         if let Some(revert) = &patch.revert {
             next.revert.clone_from(revert);
@@ -224,6 +247,9 @@ impl SessionRecord {
         }
         if let Some(agent) = &patch.agent {
             next.agent = Some(agent.clone());
+        }
+        if let Some(cost) = patch.cost {
+            next.cost = Some(cost);
         }
         next
     }

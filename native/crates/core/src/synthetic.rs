@@ -203,6 +203,8 @@ impl SyntheticWorkspace {
                 revert: None,
                 btw: Default::default(),
                 goal: None,
+                cost: None,
+                context_pins: Vec::new(),
             });
         }
 

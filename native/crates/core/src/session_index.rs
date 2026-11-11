@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use crate::ids::SessionId;
 use crate::path;
 use crate::session::{SessionPatch, SessionRecord};
+use crate::transcript::Usd;
 
 /// A load of the whole list. Only the newest load may complete.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,7 +62,8 @@ pub struct SessionMove {
 #[derive(Debug, Default, PartialEq, Eq)]
 #[must_use]
 pub struct IndexUpdate {
-    /// The active or archived list changed.
+    /// The active or archived list changed. A cost a usage update wrote
+    /// into a stored record does not count: no list is built from it.
     pub changed: bool,
     /// Sessions whose directory changed, with their destination.
     pub moves: Vec<SessionMove>,
@@ -211,8 +213,15 @@ impl SessionIndex {
                 if next.recency() < current.recency() {
                     return IndexUpdate::default();
                 }
-                if is_recency_only(current, &next) {
-                    self.deferred.insert(session_id, next);
+                // Token traffic: the update time waits for the turn to end,
+                // the cost is stored at once, and neither rebuilds a list.
+                let recency_only = is_recency_only(current, &next);
+                if recency_only || is_cost_only(current, &next) {
+                    let cost = next.cost;
+                    if recency_only {
+                        self.deferred.insert(session_id.clone(), next);
+                    }
+                    self.store_cost(&session_id, cost);
                     return IndexUpdate::default();
                 }
                 let moved = patch
@@ -246,7 +255,7 @@ impl SessionIndex {
                 }
             }
             SessionChange::Settled(session_id) => {
-                let Some(deferred) = self.deferred.remove(&session_id) else {
+                let Some(mut deferred) = self.deferred.remove(&session_id) else {
                     return IndexUpdate::default();
                 };
                 let Some(current) = self.get(&session_id) else {
@@ -255,6 +264,9 @@ impl SessionIndex {
                 if deferred.recency() < current.recency() || !is_recency_only(current, &deferred) {
                     return IndexUpdate::default();
                 }
+                // The stored cost is the newest one; the held record's may
+                // predate it.
+                deferred.cost = current.cost;
                 self.upsert(deferred)
             }
         }
@@ -294,6 +306,20 @@ impl SessionIndex {
             changed: true,
             moves: Vec::new(),
         }
+    }
+
+    /// Writes a usage update's cost into the stored record in place. The
+    /// write counts as a mutation, so a list read that started before it
+    /// cannot bring the older cost back.
+    fn store_cost(&mut self, id: &SessionId, cost: Option<Usd>) {
+        let Some((bucket, index)) = self.slots.get(id).copied() else {
+            return;
+        };
+        if self.list(bucket)[index].cost == cost {
+            return;
+        }
+        self.list_mut(bucket)[index].cost = cost;
+        self.record_mutation(id);
     }
 
     fn record_mutation(&mut self, id: &SessionId) {
@@ -374,13 +400,27 @@ impl SessionIndex {
     }
 }
 
-/// `isGlobalSessionRecencyOnlyUpdate`: only the update time moved.
+/// `isGlobalSessionRecencyOnlyUpdate`: the update time moved and nothing
+/// in the reference's structural signature did. The cost is outside that
+/// signature, so it may differ.
 fn is_recency_only(current: &SessionRecord, next: &SessionRecord) -> bool {
     if current.time.updated == next.time.updated {
         return false;
     }
     let mut merged = keep_directory_metadata(next.clone(), current);
     merged.time.updated = current.time.updated;
+    merged.cost = current.cost;
+    current == &merged
+}
+
+/// Only the cost differs: a usage update stamped with the update time the
+/// record already has.
+fn is_cost_only(current: &SessionRecord, next: &SessionRecord) -> bool {
+    if current.cost == next.cost {
+        return false;
+    }
+    let mut merged = keep_directory_metadata(next.clone(), current);
+    merged.cost = current.cost;
     current == &merged
 }
 
@@ -701,6 +741,100 @@ mod tests {
         let update = index.apply([SessionChange::Settled(id.clone())]);
         assert!(update.changed);
         assert_eq!(index.get(&id).map(|a| a.time.updated), Some(5));
+    }
+
+    fn usage(id: &SessionId, updated: Option<i64>, dollars: f64) -> SessionChange {
+        SessionChange::Patched {
+            session_id: id.clone(),
+            patch: SessionPatch {
+                updated,
+                cost: Usd::from_dollars(dollars),
+                ..SessionPatch::default()
+            },
+        }
+    }
+
+    #[test]
+    fn a_cost_update_is_stored_at_once_without_a_list_change() {
+        let mut index = SessionIndex::new();
+        let ticket = index.begin_load();
+        let _ = index.complete_load(ticket, vec![session("a", "/p", 1)]);
+        let id = SessionId::from("a");
+        let update = index.apply([usage(&id, Some(5), 0.25)]);
+        assert!(!update.changed, "a cost does not rebuild the sidebar");
+        let stored = index.get(&id).expect("listed");
+        assert_eq!(stored.cost, Usd::from_dollars(0.25));
+        assert_eq!(stored.time.updated, 1, "recency waits for the turn");
+
+        // The same update time again, or none: still only the cost.
+        let update = index.apply([usage(&id, Some(1), 0.5)]);
+        assert!(!update.changed);
+        let update = index.apply([usage(&id, None, 0.75)]);
+        assert!(!update.changed);
+        let stored = index.get(&id).expect("listed");
+        assert_eq!(stored.cost, Usd::from_dollars(0.75));
+        assert_eq!(stored.time.updated, 1);
+
+        let update = index.apply([SessionChange::Settled(id.clone())]);
+        assert!(update.changed, "the held update time lands");
+        let stored = index.get(&id).expect("listed");
+        assert_eq!(stored.time.updated, 5);
+        assert_eq!(
+            stored.cost,
+            Usd::from_dollars(0.75),
+            "the held record's older cost does not come back"
+        );
+    }
+
+    #[test]
+    fn a_repeated_cost_changes_nothing() {
+        let mut index = SessionIndex::new();
+        let ticket = index.begin_load();
+        let _ = index.complete_load(ticket, vec![session("a", "/p", 1)]);
+        let id = SessionId::from("a");
+        let _ = index.apply([usage(&id, Some(5), 0.25)]);
+        let update = index.apply([usage(&id, Some(6), 0.25)]);
+        assert!(!update.changed);
+        let _ = index.apply([SessionChange::Settled(id.clone())]);
+        let stored = index.get(&id).expect("listed");
+        assert_eq!(stored.time.updated, 6, "the newest held time lands");
+        assert_eq!(stored.cost, Usd::from_dollars(0.25));
+    }
+
+    #[test]
+    fn a_cost_beside_a_structural_change_applies_with_it() {
+        let mut index = SessionIndex::new();
+        let ticket = index.begin_load();
+        let _ = index.complete_load(ticket, vec![session("a", "/p", 1)]);
+        let id = SessionId::from("a");
+        let update = index.apply([SessionChange::Patched {
+            session_id: id.clone(),
+            patch: SessionPatch {
+                title: Some("renamed".to_owned()),
+                updated: Some(5),
+                cost: Usd::from_dollars(0.25),
+                ..SessionPatch::default()
+            },
+        }]);
+        assert!(update.changed);
+        let stored = index.get(&id).expect("listed");
+        assert_eq!(stored.time.updated, 5);
+        assert_eq!(stored.cost, Usd::from_dollars(0.25));
+    }
+
+    #[test]
+    fn a_list_read_started_before_a_cost_update_keeps_the_newer_cost() {
+        let mut index = SessionIndex::new();
+        let ticket = index.begin_load();
+        let _ = index.complete_load(ticket, vec![session("a", "/p", 1)]);
+        let id = SessionId::from("a");
+        let reload = index.begin_load();
+        let _ = index.apply([usage(&id, Some(5), 0.25)]);
+        let _ = index.complete_load(reload, vec![session("a", "/p", 1)]);
+        assert_eq!(
+            index.get(&id).expect("listed").cost,
+            Usd::from_dollars(0.25)
+        );
     }
 
     #[test]

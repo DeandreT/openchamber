@@ -1,11 +1,12 @@
 //! The actions under a turn's last assistant message (`MessageBody.tsx`'s
-//! footer): Copy the turn's answer, Continue (fork from here) and More (copy
-//! a link to the message).
+//! footer): Copy the turn's answer, Continue (fork from here), Pin into
+//! context and More (copy a link to the message).
 //!
 //! The row appears with the pointer over the message and stays while one of
 //! its menus is open. Menus take the arrow keys, Ctrl+N/P, Home, End, Enter,
-//! Space and Escape, and close on an outside press. Pin into context, Start
-//! new session and the More menu's export, read-aloud and plan items are not
+//! Space and Escape, and close on an outside press. The pin button is drawn
+//! by `context_panel/pinned_section.rs`, which owns the change. Start new
+//! session and the More menu's export, read-aloud and plan items are not
 //! ported.
 
 use std::time::Duration;
@@ -155,6 +156,11 @@ impl Workspace {
             );
         }
         for kind in [MenuKind::Continue, MenuKind::More] {
+            // The pin sits between the two menus and, as Copy does, needs an
+            // answer with text.
+            if kind == MenuKind::More && copyable {
+                buttons = buttons.child(self.render_context_pin_button(&session, &id, palette, cx));
+            }
             let (icon, label, name) = match kind {
                 MenuKind::Continue => (
                     "chat-forward",

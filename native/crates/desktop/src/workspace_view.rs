@@ -135,6 +135,10 @@ impl Render for Workspace {
             self.initial_size = None;
         }
         self.sync_composer_placeholder(window, cx);
+        if self.usage_quota_gated() {
+            // A screen that stands in for the workspace shows no usage.
+            self.synchronize_usage_quota(false, cx);
+        }
         if self.host_recovery.is_some() {
             let palette = cx.global::<Palette>().clone();
             return self
@@ -188,11 +192,14 @@ impl Render for Workspace {
         self.sync_shortcut_bindings(cx);
         self.ensure_provider_logos(cx);
         self.ensure_project_readouts(cx);
+        self.ensure_workflow_runs(window, cx);
+        self.ensure_mcp_status(window, cx);
         self.ensure_project_action_runs(cx);
         self.ensure_space_queue(cx);
         self.ensure_project_starters(cx);
         self.ensure_goal_reads(window, cx);
         self.ensure_space_auto_reviews(cx);
+        self.advance_message_focus(window, cx);
         let palette = cx.global::<Palette>().clone();
         let direction = locale::strings(cx).direction();
         let source_board = if self.source_board_open {
@@ -227,6 +234,14 @@ impl Render for Workspace {
             .render_side_panel(&palette, direction, window, cx)
             .or_else(|| self.render_terminal_panel(window, cx));
         let work_status = side_panel.is_none() && !chat_covered;
+        self.ensure_pinned_messages(
+            work_status && (self.work_status_inline(window) || self.work_status_overlay),
+            cx,
+        );
+        self.synchronize_usage_quota(
+            work_status && (self.work_status_inline(window) || self.work_status_overlay),
+            cx,
+        );
         div()
             .id("workspace")
             .role(Role::Group)

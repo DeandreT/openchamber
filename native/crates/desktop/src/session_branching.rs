@@ -983,6 +983,7 @@ impl Workspace {
                             kind: fork.kind,
                             btw: fork.btw.clone(),
                             goal: fork.goal.clone(),
+                            context_pins: fork.context_pins.clone(),
                         }),
                         ..SessionPatch::default()
                     },

@@ -4,10 +4,17 @@
 //! surfaces of `packages/ui/src/lib/surfaces/registry.ts` and the docked work
 //! status card (`.oc-panel-edge`).
 
+mod mcp_section;
+pub(crate) mod pinned_section;
+#[cfg(test)]
+mod pinned_section_tests;
+pub(crate) mod subagents_section;
 pub(crate) mod work_status_sections;
+mod work_status_usage;
+mod workflows_section;
 
 use gpui_kit::{
-    AnyElement, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Role,
+    AnyElement, App, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Role,
     SharedString, StatefulInteractiveElement, Styled, TestSupportExt, div, prelude::FluentBuilder,
     px,
 };
@@ -25,6 +32,7 @@ use crate::logical::LogicalStyledExt;
 use crate::send_catalog::ModelControl;
 use crate::sidebar_view;
 use crate::theme::Palette;
+use crate::ui_memory::{self, UiMemory};
 use crate::workspace::Workspace;
 
 /// Width of the docked work status panel.
@@ -101,9 +109,11 @@ impl Workspace {
                 "contextSources" => {
                     self.render_context_sources(palette, direction, first_heading, cx)
                 }
-                // These five content renderers are separate parity units. Their
-                // canonical layout keys remain in the manager and persistence.
-                "usage" | "subagents" | "workflows" | "mcp" | "pinned" => continue,
+                "usage" => self.render_work_status_usage(palette, direction, first_heading, cx),
+                "subagents" => self.render_subagents(palette, direction, first_heading, cx),
+                "workflows" => self.render_workflows_section(palette, direction, first_heading, cx),
+                "mcp" => self.render_mcp_section(palette, direction, first_heading, cx),
+                "pinned" => self.render_pinned_messages(palette, direction, first_heading, cx),
                 _ => unreachable!("visible_builtin_order yields only canonical built-ins"),
             };
             if let Some(section) = section {
@@ -452,7 +462,7 @@ impl Workspace {
                 title: strings.get("chat.workStatus.section.contextBreakdown"),
                 summary: Some(SharedString::from(summary.join(" · "))),
                 expanded: self.work_status_context_open,
-                toggle: |this| this.work_status_context_open = !this.work_status_context_open,
+                toggle: |this, _| this.work_status_context_open = !this.work_status_context_open,
             },
             rows,
             palette,
@@ -639,7 +649,22 @@ pub(crate) struct Section {
     /// Shown at the heading's end, in muted text.
     pub summary: Option<SharedString>,
     pub expanded: bool,
-    pub toggle: fn(&mut Workspace),
+    /// Flips the section's stored state; the heading redraws afterwards.
+    pub toggle: fn(&mut Workspace, &mut Context<Workspace>),
+}
+
+/// Whether the work status section `id` shows its rows: the user's stored
+/// choice (`workStatusExpandedSections`), or `default` before they made one.
+pub(crate) fn section_expanded(id: &str, default: bool, cx: &App) -> bool {
+    cx.try_global::<UiMemory>()
+        .and_then(|memory| memory.work_status_section_expanded(id))
+        .unwrap_or(default)
+}
+
+/// Stores the opposite of what [`section_expanded`] reports for `id`.
+pub(crate) fn toggle_section(id: &str, default: bool, cx: &mut App) {
+    let expanded = section_expanded(id, default, cx);
+    ui_memory::set_work_status_section_expanded(id, !expanded, cx);
 }
 
 /// The section's 24 px heading (its glyph, title, chevron and summary) and,
@@ -695,7 +720,7 @@ pub(crate) fn collapsible_section(
             })),
         cx,
         move |this, _, cx| {
-            toggle(this);
+            toggle(this, cx);
             cx.notify();
         },
     )
@@ -805,4 +830,68 @@ pub(crate) fn icon_row(
         )
         .children(values)
         .into_any_element()
+}
+
+/// How a row's trailing pill reads (`WorkStatusRowAction`'s `tone`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ActionTone {
+    Default,
+    Info,
+    Warning,
+    Error,
+}
+
+/// A row's trailing control shaped like a badge (`WorkStatusRowAction`): a
+/// status that is also the thing to press. A press never reaches the row
+/// under it. While `disabled` the pill is dimmed and a press on it does
+/// nothing, the row included.
+pub(crate) fn row_action(
+    id: impl Into<SharedString>,
+    label: SharedString,
+    tone: ActionTone,
+    disabled: bool,
+    palette: &Palette,
+    cx: &Context<Workspace>,
+    action: impl Fn(&mut Workspace, &mut gpui_kit::Window, &mut Context<Workspace>) + 'static,
+) -> AnyElement {
+    let id: SharedString = id.into();
+    let color = match tone {
+        ActionTone::Default => None,
+        ActionTone::Info => Some(palette.status_info),
+        ActionTone::Warning => Some(palette.status_warning),
+        ActionTone::Error => Some(palette.status_error),
+    };
+    let pill = div()
+        .id(id.clone())
+        .role(Role::Button)
+        .accessibility_id(id)
+        .aria_label(label.clone())
+        .flex_shrink_0()
+        .px(px(6.0))
+        .py(px(1.0))
+        .rounded_full()
+        .font_weight(FontWeight::MEDIUM)
+        .text_color(color.unwrap_or(palette.muted_foreground))
+        // `color-mix(in srgb, <tone> 18%, transparent)`.
+        .bg(color.map_or(palette.hover, |color| color.opacity(0.18)))
+        .child(div().css_text(CAPTION_SIZE, CAPTION_LINE, cx).child(label));
+    if disabled {
+        return pill
+            .opacity(0.5)
+            // The press stops here, as a disabled button's does in the web.
+            .on_click(|_, _, cx| cx.stop_propagation())
+            .a11y_synthetic_children(|builder| builder.parent_node().set_disabled())
+            .test_support()
+            .into_any_element();
+    }
+    on_activate(
+        pill.cursor_pointer().hover(|style| style.opacity(0.8)),
+        cx,
+        move |this, window, cx| {
+            cx.stop_propagation();
+            action(this, window, cx);
+        },
+    )
+    .test_support()
+    .into_any_element()
 }

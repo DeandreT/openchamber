@@ -48,6 +48,8 @@ pub(crate) struct Session {
     pub model: Option<AgentModel>,
     pub agent: Option<String>,
     pub revert: Option<Revert>,
+    /// What the session's own turns have cost, in dollars.
+    pub cost: Option<f64>,
 }
 
 /// `Session.Revert`: a staged revert's marker. Its file diffs are not read.
@@ -288,6 +290,8 @@ pub(crate) struct Settings {
     pub last_used_efforts: Option<Vec<(String, Value)>>,
     pub hidden_models: Option<Value>,
     pub routing_feature_available: Option<Value>,
+    pub agent_workflow_feature_available: Option<Value>,
+    pub agent_workflow_tool_enabled: Option<Value>,
     pub time_format_preference: Option<Value>,
     pub code_block_line_wrap: Option<Value>,
     pub message_search_enabled: Option<Value>,
@@ -333,6 +337,10 @@ pub(crate) struct Settings {
     pub stt_local_model: Option<Value>,
     pub stt_language: Option<Value>,
     pub stt_correct_transcript: Option<Value>,
+    pub usage_display_mode: Option<Value>,
+    pub usage_dropdown_providers: Option<Value>,
+    #[serde(default, deserialize_with = "selected_models")]
+    pub usage_selected_models: Option<Vec<(String, Value)>>,
 }
 
 // A present null is a malformed collection, not an omitted preference.
@@ -341,6 +349,18 @@ where
     D: serde::Deserializer<'de>,
 {
     Value::deserialize(deserializer).map(Some)
+}
+
+// `usageSelectedModels` is read as its own entries; another shape is ignored
+// with the rest of the document intact, as the web's `?? {}` leaves it.
+fn selected_models<'de, D>(deserializer: D) -> Result<Option<Vec<(String, Value)>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Ok(match Value::deserialize(deserializer)? {
+        Value::Object(entries) => Some(entries.into_iter().collect()),
+        _ => None,
+    })
 }
 
 // A JSON object's encounter order is the profile's effort-recency order.
@@ -506,11 +526,18 @@ pub(crate) struct StatusSnapshot {
     pub sessions: std::collections::HashMap<String, StatusEntry>,
     #[serde(default)]
     pub pending: Option<serde_json::Value>,
+    /// The host's clock when it answered, in milliseconds. Kept as a value
+    /// so a malformed one loses only the turn starts.
+    #[serde(default, rename = "serverTime")]
+    pub server_time: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct StatusEntry {
     pub status: String,
+    /// When the session's latest turn began, on the host's clock.
+    #[serde(default, rename = "turnStartedAt")]
+    pub turn_started_at: Option<serde_json::Value>,
 }
 
 /// `POST /api/git/project-worktrees`.
