@@ -1,9 +1,7 @@
+use std::cell::{Cell, RefCell};
+use std::rc::{Rc, Weak};
 #[cfg(not(target_family = "wasm"))]
 use std::time::Instant;
-use std::{
-    cell::{Cell, RefCell},
-    rc::{Rc, Weak},
-};
 #[cfg(target_family = "wasm")]
 use web_time::Instant;
 
@@ -103,6 +101,17 @@ impl GlobalState {
 
     pub(crate) fn text_view_state(&self) -> Option<Entity<TextViewState>> {
         self.text_view_state_stack.borrow().last().cloned()
+    }
+
+    /// The nearest capped owner receives metrics through uncapped descendants.
+    /// Link and selection ownership continues to use the actual leaf above.
+    pub(crate) fn line_span_text_view_state(&self, cx: &App) -> Option<Entity<TextViewState>> {
+        self.text_view_state_stack
+            .borrow()
+            .iter()
+            .rev()
+            .find(|state| state.read(cx).collects_line_spans())
+            .cloned()
     }
 
     pub(crate) fn push_text_view_state(&self, state: Entity<TextViewState>) {

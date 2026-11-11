@@ -2,8 +2,8 @@
 //! (`InProgressOperationBanner.tsx`, `ConflictDialog.tsx` and the branch
 //! integration in `GitView.tsx`).
 //!
-//! A branch row merges that branch into the current one or rebases onto it.
-//! A run that stops on conflicts opens the conflict dialog, which reads the
+//! A merge or rebase from the Update branch dialog (`update_branch.rs`) that
+//! stops on conflicts opens the conflict dialog, which reads the
 //! server's conflict details. While the status reports a merge or rebase in
 //! progress the banner offers Abort and, once no path is conflicted,
 //! Continue. Every one of these ends in a status read, as index mutations do.
@@ -16,8 +16,14 @@ use gpui_kit::{
 use openchamber_native_core::git_changes::{GitChanges, Integration};
 use openchamber_native_transport::git::{ConflictDetails, IntegrationOutcome};
 
+use std::collections::HashMap;
+
+use openchamber_native_core::magic_prompt::MagicPrompts;
+use serde::Serialize;
+
 use super::GitView;
 use crate::baseline::CssTextExt;
+use crate::composer_handoff::{HandoffRefusal, HandoffTarget};
 use crate::context_panel::{ROW_LINE, ROW_SIZE, XS_LINE, XS_SIZE};
 use crate::elevation;
 use crate::files_view::{Notice, text_button};
@@ -31,6 +37,8 @@ pub(super) struct Conflicts {
     dialog: Option<ConflictDialog>,
     /// A merge, rebase, continue or abort is running.
     running: Option<Task<()>>,
+    /// The prompts for a hand-off to a session are being read.
+    handoff: Option<Task<()>>,
 }
 
 struct ConflictDialog {
@@ -54,82 +62,8 @@ impl GitView {
         self.conflicts.running.is_some()
     }
 
-    /// Merges `branch` into the current branch or rebases onto it.
-    pub(super) fn integrate(
-        &mut self,
-        operation: Integration,
-        branch: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if self.conflicts.running.is_some() {
-            return;
-        }
-        let Some(client) = self.scope.client(cx) else {
-            return;
-        };
-        let current = self
-            .changes()
-            .and_then(|changes| changes.branch.clone())
-            .unwrap_or_default();
-        let directory = self.git_directory();
-        let target = branch.clone();
-        let task = self
-            .scope
-            .run(async move { client.integrate(&directory, operation, &target).await });
-        self.conflicts.running = Some(cx.spawn_in(window, async move |this, cx| {
-            let result = task.await;
-            let _ = this.update_in(cx, |this, window, cx| {
-                this.conflicts.running = None;
-                let strings = locale::strings(cx).clone();
-                match result {
-                    Some(Ok(IntegrationOutcome {
-                        conflict: true,
-                        conflict_files,
-                    })) => {
-                        this.notice = Some(Notice::error(
-                            strings.get(match operation {
-                                Integration::Merge => "gitView.toast.mergeConflictsDetected",
-                                Integration::Rebase => "gitView.toast.rebaseConflictsDetected",
-                            }),
-                            None,
-                        ));
-                        this.open_conflict(operation, conflict_files, window, cx);
-                    }
-                    Some(Ok(_)) => {
-                        let text = match operation {
-                            Integration::Merge => strings.format(
-                                "gitView.toast.mergedIntoBranch",
-                                &[("branch", &branch), ("currentBranch", &current)],
-                            ),
-                            Integration::Rebase => strings.format(
-                                "gitView.toast.rebasedOntoBranch",
-                                &[("branch", &branch), ("currentBranch", &current)],
-                            ),
-                        };
-                        this.notice = Some(Notice::info(text));
-                    }
-                    Some(Err(error)) => {
-                        this.notice = Some(Notice::error(
-                            strings.get(match operation {
-                                Integration::Merge => "gitView.toast.mergeConflictsDetected",
-                                Integration::Rebase => "gitView.toast.rebaseConflictsDetected",
-                            }),
-                            error.message(),
-                        ));
-                    }
-                    None => {}
-                }
-                this.read_branches(cx);
-                this.refresh(cx);
-                cx.notify();
-            });
-        }));
-        cx.notify();
-    }
-
     /// Opens the dialog and reads the conflict details for it.
-    fn open_conflict(
+    pub(super) fn open_conflict(
         &mut self,
         operation: Integration,
         files: Vec<String>,
@@ -258,6 +192,104 @@ impl GitView {
             });
         }));
         cx.notify();
+    }
+
+    /// Hands the conflict to a session (`handleResolveInNewSession` and
+    /// `handleResolveInCurrentSession`): the visible prompt goes into the
+    /// composer and the instructions and the conflict's JSON go hidden
+    /// beside it. A new session opens in the surface's project.
+    fn resolve_in_session(
+        &mut self,
+        target: HandoffTarget,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(dialog) = self.conflicts.dialog.as_ref() else {
+            return;
+        };
+        let strings = locale::strings(cx).clone();
+        let Some(Ok(details)) = dialog.details.clone() else {
+            self.notice = Some(Notice::error(
+                strings.get("gitView.conflict.noDetailsAvailable"),
+                None,
+            ));
+            cx.notify();
+            return;
+        };
+        let operation = dialog.operation;
+        let Some(client) = self.scope.client(cx) else {
+            return;
+        };
+        let directory = self.git_directory();
+        let target = match target {
+            HandoffTarget::NewSession(_) => HandoffTarget::NewSession(self.scope.directory.clone()),
+            current => current,
+        };
+        let read_directory = directory.clone();
+        let runtime = self.scope.runtime.clone();
+        let Some(owner) = self.scope.owner.as_ref().and_then(|owner| owner.upgrade()) else {
+            return;
+        };
+        let navigation = owner.read(cx).navigation_revision;
+        let overrides = self
+            .scope
+            .run(async move { client.magic_prompt_overrides(Some(&read_directory)).await });
+        self.conflicts.handoff = Some(cx.spawn_in(window, async move |this, cx| {
+            let overrides = overrides.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.conflicts.handoff = None;
+                let overrides = match overrides {
+                    Some(Ok(overrides)) => overrides,
+                    Some(Err(error)) => {
+                        this.notice = Some(Notice::error(
+                            strings.get("magicPrompts.toast.loadFailed"),
+                            Some(&error.to_string()),
+                        ));
+                        cx.notify();
+                        return;
+                    }
+                    None => return,
+                };
+                let prompts = MagicPrompts {
+                    overrides: &overrides,
+                    defaults: crate::starters::MagicCatalog::get().templates(),
+                };
+                let handoff = conflict_handoff(&details, &directory, operation, &prompts);
+                let Some(workspace) = this.scope.owner.as_ref().and_then(|owner| owner.upgrade())
+                else {
+                    return;
+                };
+                let placed = workspace.update(cx, |workspace, cx| {
+                    if workspace.runtime != runtime || workspace.navigation_revision != navigation {
+                        return Err(HandoffRefusal::Unavailable);
+                    }
+                    workspace.hand_off_to_composer(
+                        target,
+                        handoff.visible,
+                        vec![handoff.instructions, handoff.payload],
+                        window,
+                        cx,
+                    )
+                });
+                match placed {
+                    Ok(()) => this.conflicts.dialog = None,
+                    Err(HandoffRefusal::NoActiveSession) => {
+                        this.notice = Some(Notice::error(
+                            strings.get("gitView.conflict.noActiveSession"),
+                            Some(&strings.get("gitView.conflict.noActiveSessionDescription")),
+                        ));
+                    }
+                    Err(HandoffRefusal::UnknownProject) => {}
+                    Err(HandoffRefusal::Unavailable) => {
+                        this.notice = Some(Notice::error(
+                            strings.get("chat.nativeRecovery.storageFailed"),
+                            None,
+                        ));
+                    }
+                }
+                cx.notify();
+            });
+        }));
     }
 
     /// The banner while a merge or rebase is in progress.
@@ -437,13 +469,6 @@ impl GitView {
                 .bg(palette.muted)
                 .child(child)
         };
-        let not_ported = |this: &mut Self, _: &mut Window, cx: &mut Context<Self>| {
-            // Handing the conflict to a session needs the composer's
-            // synthetic parts, which are not ported yet.
-            tracing::info!("resolving a conflict in a session is not ported");
-            cx.notify();
-            let _ = this;
-        };
         Some(
             div()
                 .id("git-conflict-backdrop")
@@ -543,11 +568,14 @@ impl GitView {
                                             .flex()
                                             .flex_col()
                                             .children(files.iter().map(|file| {
+                                                let id = SharedString::from(format!(
+                                                    "git-conflict-file:{file}"
+                                                ));
                                                 div()
-                                                    .id(SharedString::from(format!(
-                                                        "git-conflict-file:{file}"
-                                                    )))
+                                                    .id(id.clone())
                                                     .role(Role::ListItem)
+                                                    .accessibility_id(id)
+                                                    .test_support()
                                                     .aria_label(SharedString::from(file.clone()))
                                                     .truncate()
                                                     .font_family(mono.clone())
@@ -592,7 +620,13 @@ impl GitView {
                             None,
                             palette,
                             cx,
-                            not_ported,
+                            |this: &mut Self, window, cx| {
+                                this.resolve_in_session(
+                                    HandoffTarget::NewSession(String::new()),
+                                    window,
+                                    cx,
+                                )
+                            },
                         ))
                         .child(text_button(
                             "git-conflict-current-session",
@@ -600,7 +634,9 @@ impl GitView {
                             None,
                             palette,
                             cx,
-                            not_ported,
+                            |this: &mut Self, window, cx| {
+                                this.resolve_in_session(HandoffTarget::CurrentSession, window, cx)
+                            },
                         ))
                         .child(
                             div()
@@ -635,5 +671,135 @@ impl GitView {
                 )
                 .into_any_element(),
         )
+    }
+}
+
+/// The three texts a conflict's hand-off carries (`buildConflictContext`).
+struct ConflictHandoff {
+    visible: String,
+    instructions: String,
+    payload: String,
+}
+
+/// The conflict's state as the hidden JSON part lists it, in the reference's
+/// key order.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConflictPayload<'a> {
+    directory: &'a str,
+    operation: Option<&'static str>,
+    head_info: &'a str,
+    status_porcelain: &'a str,
+    unmerged_files: &'a [String],
+    diff: &'a str,
+}
+
+fn operation_word(operation: Integration) -> &'static str {
+    match operation {
+        Integration::Merge => "merge",
+        Integration::Rebase => "rebase",
+    }
+}
+
+fn conflict_handoff(
+    details: &ConflictDetails,
+    directory: &str,
+    operation: Integration,
+    prompts: &MagicPrompts<'_>,
+) -> ConflictHandoff {
+    let label = operation_word(operation);
+    let head_ref = if details.head_info.is_empty() {
+        match operation {
+            Integration::Merge => "MERGE_HEAD",
+            Integration::Rebase => "REBASE_HEAD",
+        }
+    } else {
+        details.head_info.as_str()
+    };
+    let continue_command = match operation {
+        Integration::Merge => "git commit --no-edit",
+        Integration::Rebase => "git rebase --continue",
+    };
+    let variables = |pairs: &[(&str, &str)]| -> HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(key, value)| ((*key).to_owned(), (*value).to_owned()))
+            .collect()
+    };
+    let visible = prompts
+        .render(
+            "git.conflict.resolve.visible",
+            &variables(&[("operation_label", label), ("head_ref", head_ref)]),
+        )
+        .unwrap_or_default();
+    let head_info = if details.head_info.is_empty() {
+        "N/A"
+    } else {
+        details.head_info.as_str()
+    };
+    let instructions = prompts
+        .render(
+            "git.conflict.resolve.instructions",
+            &variables(&[
+                ("operation_label", label),
+                ("directory", directory),
+                ("operation", label),
+                ("head_info", head_info),
+                ("continue_cmd", continue_command),
+            ]),
+        )
+        .unwrap_or_default();
+    let payload = ConflictPayload {
+        directory,
+        operation: details.operation.map(operation_word),
+        head_info: &details.head_info,
+        status_porcelain: &details.status_porcelain,
+        unmerged_files: &details.unmerged_files,
+        diff: &details.diff,
+    };
+    let json = serde_json::to_string_pretty(&payload).expect("the conflict payload serializes");
+    ConflictHandoff {
+        visible,
+        instructions,
+        payload: format!("{label} conflict context (JSON)\n{json}"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_handoff_renders_the_prompts_and_the_reference_json() {
+        let details = ConflictDetails {
+            operation: Some(Integration::Merge),
+            head_info: String::new(),
+            status_porcelain: "UU a.txt".to_owned(),
+            unmerged_files: vec!["a.txt".to_owned()],
+            diff: "diff".to_owned(),
+        };
+        let defaults = HashMap::from([
+            (
+                "git.conflict.resolve.visible".to_owned(),
+                "Fix the {{operation_label}} from {{head_ref}}".to_owned(),
+            ),
+            (
+                "git.conflict.resolve.instructions".to_owned(),
+                "{{directory}} {{head_info}} {{continue_cmd}}".to_owned(),
+            ),
+        ]);
+        let overrides = HashMap::new();
+        let prompts = MagicPrompts {
+            overrides: &overrides,
+            defaults: &defaults,
+        };
+        let handoff = conflict_handoff(&details, "/repo", Integration::Merge, &prompts);
+        assert_eq!(handoff.visible, "Fix the merge from MERGE_HEAD");
+        assert_eq!(handoff.instructions, "/repo N/A git commit --no-edit");
+        assert_eq!(
+            handoff.payload,
+            "merge conflict context (JSON)\n{\n  \"directory\": \"/repo\",\n  \"operation\": \"merge\",\n  \"headInfo\": \"\",\n  \"statusPorcelain\": \"UU a.txt\",\n  \"unmergedFiles\": [\n    \"a.txt\"\n  ],\n  \"diff\": \"diff\"\n}",
+            "the JSON matches JSON.stringify(value, null, 2)"
+        );
     }
 }

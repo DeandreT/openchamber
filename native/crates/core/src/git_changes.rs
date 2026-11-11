@@ -524,6 +524,40 @@ pub fn network_request(
     }
 }
 
+/// A fetch of one remote branch into its tracking ref, as the Update branch
+/// dialog runs before integrating a remote-tracking branch
+/// (`buildBoundGitNetworkOperationRequest` with a `fetchTarget`).
+pub fn ref_fetch_request(
+    directory: &str,
+    binding: &RepositoryBinding,
+    remote_name: &str,
+    branch: &str,
+) -> Result<NetworkRequest, NetworkRefusal> {
+    if branch.trim().is_empty() || branch == "HEAD" {
+        return Err(NetworkRefusal::BranchRequired);
+    }
+    let remote = binding
+        .remotes
+        .iter()
+        .find(|remote| remote.name == remote_name)
+        .ok_or(NetworkRefusal::RemoteMissing)?;
+    if !remote.ready {
+        return Err(NetworkRefusal::NeedsAttention);
+    }
+    Ok(NetworkRequest {
+        action: NetworkAction::Fetch,
+        directory: directory.to_owned(),
+        repository_id: binding.repository_id.clone(),
+        binding_revision: binding.revision,
+        config_revision: binding.config_revision.clone(),
+        remote: remote.name.clone(),
+        endpoint: remote.fetch.clone(),
+        source_ref: Some(format!("refs/heads/{branch}")),
+        destination_ref: Some(format!("refs/remotes/{remote_name}/{branch}")),
+        transport: remote.mode,
+    })
+}
+
 /// Where a network operation stands.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum OperationState {
@@ -783,6 +817,34 @@ mod tests {
             .expect("a detached checkout still fetches");
         assert_eq!((fetch.source_ref, fetch.destination_ref), (None, None));
         assert_eq!(fetch.transport, TransportMode::Anonymous);
+    }
+
+    #[test]
+    fn a_ref_fetch_moves_one_branch_into_its_tracking_ref() {
+        let ready = binding(&[
+            ("origin", TransportMode::System, true),
+            ("fork", TransportMode::System, false),
+        ]);
+        let fetch = ref_fetch_request("/p", &ready, "origin", "feature/x")
+            .expect("a ready remote fetches one branch");
+        assert_eq!(fetch.endpoint, endpoint("origin-fetch"));
+        assert_eq!(fetch.source_ref.as_deref(), Some("refs/heads/feature/x"));
+        assert_eq!(
+            fetch.destination_ref.as_deref(),
+            Some("refs/remotes/origin/feature/x")
+        );
+        assert_eq!(
+            ref_fetch_request("/p", &ready, "fork", "main").err(),
+            Some(NetworkRefusal::NeedsAttention)
+        );
+        assert_eq!(
+            ref_fetch_request("/p", &ready, "upstream", "main").err(),
+            Some(NetworkRefusal::RemoteMissing)
+        );
+        assert_eq!(
+            ref_fetch_request("/p", &ready, "origin", "").err(),
+            Some(NetworkRefusal::BranchRequired)
+        );
     }
 
     #[test]

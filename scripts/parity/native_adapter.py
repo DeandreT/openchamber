@@ -13,6 +13,8 @@ measured from the same origin, as a web page measures from its viewport.
 from __future__ import annotations
 
 import json
+import ctypes
+import ctypes.util
 import os
 import selectors
 import signal
@@ -646,6 +648,49 @@ class NativeClient:
         self.process.stdout.close()
         self.marks, self._buffer, self._input_mark, self._app = [], "", 0, None
         return {"closed": closed, "launch": self.launch()}
+
+    def request_window_close(self) -> None:
+        """Send the owned X11 window's normal WM_DELETE_WINDOW request.
+
+        Unlike destroying the window, this respects GPUI's close barrier and
+        remains reachable while an application-modal dialog covers its chrome.
+        """
+        virtual_display.verify_owned_display()
+        if self.env.get("DISPLAY") != os.environ.get("DISPLAY"):
+            raise RuntimeError("the close request does not target the verified private display")
+        class Data(ctypes.Union):
+            _fields_ = [("bytes", ctypes.c_char * 20), ("shorts", ctypes.c_short * 10), ("longs", ctypes.c_long * 5)]
+        class Message(ctypes.Structure):
+            _fields_ = [("type", ctypes.c_int), ("serial", ctypes.c_ulong), ("send_event", ctypes.c_int),
+                        ("display", ctypes.c_void_p), ("window", ctypes.c_ulong), ("message_type", ctypes.c_ulong),
+                        ("format", ctypes.c_int), ("data", Data)]
+        class Event(ctypes.Union):
+            _fields_ = [("message", Message), ("padding", ctypes.c_long * 24)]
+        library = ctypes.util.find_library("X11")
+        if library is None:
+            raise RuntimeError("X11 is unavailable")
+        x11 = ctypes.CDLL(library)
+        x11.XOpenDisplay.argtypes, x11.XOpenDisplay.restype = [ctypes.c_char_p], ctypes.c_void_p
+        x11.XInternAtom.argtypes, x11.XInternAtom.restype = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int], ctypes.c_ulong
+        x11.XSendEvent.argtypes, x11.XSendEvent.restype = [ctypes.c_void_p, ctypes.c_ulong, ctypes.c_int, ctypes.c_long, ctypes.POINTER(Event)], ctypes.c_int
+        x11.XFlush.argtypes, x11.XCloseDisplay.argtypes = [ctypes.c_void_p], [ctypes.c_void_p]
+        display = x11.XOpenDisplay(self.env["DISPLAY"].encode())
+        if not display:
+            raise RuntimeError("the owned display is unavailable")
+        try:
+            window = int(self._window())
+            event = Event()
+            event.message.type, event.message.send_event = 33, 1
+            event.message.display, event.message.window = display, window
+            event.message.message_type = x11.XInternAtom(display, b"WM_PROTOCOLS", 0)
+            event.message.format = 32
+            event.message.data.longs[0] = x11.XInternAtom(display, b"WM_DELETE_WINDOW", 0)
+            if not x11.XSendEvent(display, window, 0, 0, ctypes.byref(event)):
+                raise RuntimeError("the window-close protocol request was refused")
+            x11.XFlush(display)
+        finally:
+            x11.XCloseDisplay(display)
+
 
     # --- evidence --------------------------------------------------------
 

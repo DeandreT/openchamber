@@ -297,7 +297,7 @@
       "reference": ["packages/ui/src/components/views/FilesView.tsx"],
       "requiredBehaviors": ["appearance", "tree and file search navigation", "open preview and source", "edit and save", "dirty state and conflict recovery", "keyboard and accessibility navigation"],
       "states": ["loading", "empty", "selected", "dirty", "saving", "failed", "read-only"],
-      "scenarios": [], "coverage": "automated"
+      "scenarios": ["files.navigation-editor"], "coverage": "automated"
     },
     {
       "id": "files.diff-git", "group": "files",
@@ -305,7 +305,7 @@
       "reference": ["packages/ui/src/components/views/DiffView.tsx", "packages/ui/src/components/views/GitView.tsx", "packages/ui/src/lib/projectActionTerminal.ts"],
       "requiredBehaviors": ["appearance", "diff and walkthrough navigation", "stage unstage and discard", "commit and sync outcome", "branch selection and management", "identity selection", "nested repository ownership", "project action execution and stop", "failure recovery"],
       "states": ["loading", "clean", "changed", "staged", "conflicted", "running", "failed", "restored"],
-      "scenarios": [], "coverage": "automated"
+      "scenarios": ["files.diff-git"], "coverage": "automated"
     },
     {
       "id": "files.issues-pull-requests", "group": "files",
@@ -313,7 +313,7 @@
       "reference": ["packages/ui/src/components/sourceBoard", "packages/ui/src/components/views/git/PullRequestSection.tsx"],
       "requiredBehaviors": ["appearance", "list filter and open issue or PR", "provider authentication and repository selection", "create and update outcomes", "review and checkout outcomes", "failed provider request recovery"],
       "states": ["loading", "empty", "selected", "unauthenticated", "pending", "failed", "updated"],
-      "scenarios": [], "coverage": "automated"
+      "scenarios": ["files.issues-pull-requests"], "coverage": "automated"
     },
     {
       "id": "browser-terminal.terminal", "group": "browser-terminal",

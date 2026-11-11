@@ -956,7 +956,7 @@ export const dict: Record<I18nKey, string> = {
   "sessions.sidebar.sessionDialogs.actions.deleteLocalBranch": "Excluir branch local",
   "sessions.sidebar.sessionDialogs.actions.deleting": "Excluindo…",
   "sessions.sidebar.sessionDialogs.actions.deleteWorktree": "Excluir worktree",
-  "gitView.branch.branchToMergeInto": "Branch de destino do merge",
+  "gitView.branch.branchToMergeInto": "Branch a ser mesclada em {branch}",
   "gitView.branch.branchToRebaseOnto": "branch de destino do rebase",
   "gitView.branch.create": "Criar nova branch...",
   "gitView.branch.currentBadge": "Atual",

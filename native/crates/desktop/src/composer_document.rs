@@ -1228,9 +1228,10 @@ impl Workspace {
                     !matches!(&source.key, ComposerSourceKey::Native)
                         && source.has_sendable_references()
                 })
-                || self.drafts.get(owner).is_some_and(|draft| {
-                    !draft.content.files.is_empty() || !draft.content.context.is_empty()
-                }),
+                || self
+                    .drafts
+                    .get(owner)
+                    .is_some_and(|draft| draft.content.has_sendable_items()),
         )
     }
     #[cfg(test)]

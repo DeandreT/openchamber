@@ -1,40 +1,35 @@
 use futures::Stream as _;
+use std::ops::{Range, RangeInclusive};
+use std::pin::Pin;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::task::Poll;
+use std::time::Duration;
 #[cfg(not(target_family = "wasm"))]
 use std::time::Instant;
-use std::{
-    ops::{Range, RangeInclusive},
-    pin::Pin,
-    sync::{Arc, Mutex, OnceLock},
-    task::Poll,
-    time::Duration,
-};
 #[cfg(target_family = "wasm")]
 use web_time::Instant;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     App, AppContext as _, Bounds, Context, EntityId, FocusHandle, IntoElement, KeyBinding,
     ListState, ParentElement as _, Pixels, Point, Render, SharedString, Styled as _, Task, Window,
-    prelude::FluentBuilder as _, px,
+    px,
 };
 
-use crate::{
-    AutoScroll, ElementExt, TextSelection,
-    async_util::{Receiver, Sender, unbounded},
-    input::{self, SelectAll},
-    text::{
-        CodeBlockActionsFn, CodeBlockHighlighterFn, LinkClickHandlerFn, MarkdownExtensions,
-        RangeHighlight, RangeHighlightError, RenderedText, TableActionsFn, TextViewStyle,
-        document::ParsedDocument,
-        format,
-        node::{self, NodeContext},
-        range_highlight::{
-            LeafRemap, PendingReveal, RangeHighlightFrame, RenderedIndex, RevealRequest,
-        },
-        selection_adapter::TextViewSelectionAdapter,
-        stream_fade::{StreamFadeTracker, TextViewMotion},
-    },
-    v_flex,
+use crate::async_util::{Receiver, Sender, unbounded};
+use crate::input::{self, SelectAll};
+use crate::text::document::ParsedDocument;
+use crate::text::node::{self, NodeContext};
+use crate::text::range_highlight::{
+    LeafRemap, PendingReveal, RangeHighlightFrame, RenderedIndex, RevealRequest,
 };
+use crate::text::selection_adapter::TextViewSelectionAdapter;
+use crate::text::stream_fade::{StreamFadeTracker, TextViewMotion};
+use crate::text::{
+    CodeBlockActionsFn, CodeBlockHighlighterFn, LinkClickHandlerFn, MarkdownExtensions,
+    RangeHighlight, RangeHighlightError, RenderedText, TableActionsFn, TextViewStyle, format,
+};
+use crate::{AutoScroll, ElementExt, TextSelection, v_flex};
 
 const CONTEXT: &'static str = "TextView";
 // Keep coalescing bounded so sustained streams still render intermediate updates.
@@ -273,6 +268,14 @@ impl TextViewState {
     /// Get the text content.
     pub(crate) fn source(&self) -> SharedString {
         self.parsed_content.document.source.clone()
+    }
+
+    pub(super) fn link_source_is_current(&self) -> bool {
+        self.parsed_error.is_none() && self.committed_revision >= self.full_update_revision
+    }
+
+    pub(crate) fn collects_line_spans(&self) -> bool {
+        self.max_lines.is_some()
     }
 
     /// Set whether the text is selectable, default false.
@@ -1412,17 +1415,16 @@ fn parse_content(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::text::{
-        MarkdownNode,
-        node::{BlockNode, Span},
-    };
+    use crate::text::MarkdownNode;
+    use crate::text::node::{BlockNode, Span};
     use gpui::{Entity, TestAppContext};
 
     /// A view reading a text view state, inside a view notified on every
     /// frame, counting its renders.
     #[cfg(feature = "gpui-fast")]
     mod parse_ack {
-        use std::{cell::Cell, rc::Rc};
+        use std::cell::Cell;
+        use std::rc::Rc;
 
         use gpui::{
             AppContext as _, Context, Entity, IntoElement, ParentElement as _, Render,
@@ -1476,12 +1478,16 @@ mod tests {
     }
 
     mod stream_fade {
-        use std::{cell::Cell, ops::Range, rc::Rc, time::Duration};
+        use std::cell::Cell;
+        use std::ops::Range;
+        use std::rc::Rc;
+        use std::time::Duration;
 
         use gpui::{Entity, TestAppContext};
 
         use super::super::*;
-        use crate::{motion::Easing, text::stream_fade::TextLeafKey};
+        use crate::motion::Easing;
+        use crate::text::stream_fade::TextLeafKey;
 
         /// Long enough that a debug test cannot outrun the fade before it
         /// samples the first frame.

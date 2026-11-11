@@ -292,7 +292,7 @@ SESSION_PLACEHOLDER = re.compile(r"\{session:([^{}]+)\}")
 
 STEP_KINDS = ("wait", "click", "clickTarget", "clickNamed", "hover", "key", "type", "paste", "settle", "capture",
               "restart", "expect", "fault", "release", "drop", "pick", "ime", "gate", "drag")
-FIXTURES = ("git",)
+FIXTURES = ("git", "github")
 # Fixture provider modes: `interactions` adds the shell and question models
 # and asks permission for the shell fixture command.
 PROVIDERS = ("interactions",)

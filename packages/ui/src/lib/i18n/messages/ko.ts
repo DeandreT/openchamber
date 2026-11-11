@@ -952,7 +952,7 @@ export const dict: Record<I18nKey, string> = {
   'sessions.sidebar.sessionDialogs.actions.deleteLocalBranch': '로컬 브랜치 삭제',
   'sessions.sidebar.sessionDialogs.actions.deleting': '삭제 중…',
   'sessions.sidebar.sessionDialogs.actions.deleteWorktree': '워크트리 삭제',
-  'gitView.branch.branchToMergeInto': '병합 대상 브랜치',
+  'gitView.branch.branchToMergeInto': '{branch}에 병합할 브랜치',
   'gitView.branch.branchToRebaseOnto': '리베이스 대상 브랜치',
   'gitView.branch.create': '새 브랜치 생성...',
   'gitView.branch.currentBadge': '현재',

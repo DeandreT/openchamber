@@ -267,6 +267,11 @@ pub(crate) struct HomeInfo {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Settings {
+    #[serde(default, deserialize_with = "present_setting_list")]
+    pub work_status_section_order: Option<Value>,
+    #[serde(default, deserialize_with = "present_setting_list")]
+    pub work_status_hidden_sections: Option<Value>,
+    pub work_status_hidden_sections_explicit: Option<Value>,
     pub auto_save_enabled: Option<Value>,
     pub terminal_close_on_exit: Option<Value>,
     pub terminal_shell: Option<Value>,
@@ -328,6 +333,14 @@ pub(crate) struct Settings {
     pub stt_local_model: Option<Value>,
     pub stt_language: Option<Value>,
     pub stt_correct_transcript: Option<Value>,
+}
+
+// A present null is a malformed collection, not an omitted preference.
+fn present_setting_list<'de, D>(deserializer: D) -> Result<Option<Value>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    Value::deserialize(deserializer).map(Some)
 }
 
 // A JSON object's encounter order is the profile's effort-recency order.

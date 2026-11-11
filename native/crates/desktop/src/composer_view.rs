@@ -31,7 +31,7 @@ pub(crate) const BOX_RADIUS: f32 = 12.0;
 const EDITOR_MIN_HEIGHT: f32 = 52.0;
 pub(crate) const TOOLBAR_HEIGHT: f32 = 44.0;
 const ACTION_SIZE: f32 = 24.0;
-const ACTION_GLYPH: f32 = 18.0;
+const ACTION_GLYPH: f32 = 16.0;
 /// The toolbar's `px-2.5`, the start actions' and the groups' `gap-x-1.5`,
 /// and the end controls' `md:gap-x-3`.
 pub(crate) const TOOLBAR_PADDING_X: f32 = 10.0;
@@ -104,11 +104,13 @@ impl Workspace {
     /// The chat area's width: the content between the sidebar and the work
     /// status panel and rail.
     pub(crate) fn chat_area_width(&self, window: &Window) -> f32 {
-        let mut area = f32::from(chrome::content_size(window).width) - context_panel::RAIL_WIDTH;
-        if self.sidebar_open {
-            area -= self.pane_sizes.sidebar_width();
-        }
-        if self.work_status_inline(window) {
+        let mut area = self.panel_area(window);
+        if self.panels.open.is_some() {
+            // The fitted slot already includes side_panel_frame's gutters.
+            area -= self.fitted_panel_width(window);
+        } else if self.terminal_open && self.terminal_panel.is_some() {
+            area -= self.fitted_panel_width(window);
+        } else if self.work_status_inline(window) {
             area -= context_panel::PANEL_WIDTH;
         }
         area

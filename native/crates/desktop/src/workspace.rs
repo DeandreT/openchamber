@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use gpui_kit::component::input::{InputEvent, TextareaState};
 use gpui_kit::{
     App, AppContext, Context, Entity, FocusHandle, FollowMode, ListAlignment, ListOffset,
-    ListState, SharedString, Subscription, Task, Window, px,
+    ListState, SharedString, Subscription, Task, WeakEntity, Window, px,
 };
 use openchamber_native_core::chat_roots::ChatRoots;
 use openchamber_native_core::draft::{Draft, DraftKey, DraftStore, DraftTarget};
@@ -143,6 +143,9 @@ pub struct Workspace {
     pub(crate) work_status_overlay: bool,
     /// The terminal panel, kept while hidden so its terminals keep parsing.
     pub(crate) terminal_panel: Option<Entity<crate::terminal_view::TerminalPanel>>,
+    pub(crate) worktree_removals: crate::worktree_removals::Removals,
+    pub(crate) worktree_manager: Option<WeakEntity<crate::project_worktrees::Manager>>,
+    pub(crate) worktree_close: Option<Task<()>>,
     pub(crate) terminal_open: bool,
     /// The panel shows this directory's terminals instead of the host
     /// directory's, as `(host, target)`: a project action revealed its run
@@ -328,6 +331,9 @@ impl Workspace {
             work_status_open: true,
             work_status_overlay: false,
             terminal_panel: None,
+            worktree_removals: crate::worktree_removals::Removals::default(),
+            worktree_manager: None,
+            worktree_close: None,
             terminal_open: false,
             terminal_target: None,
             prompt_panel: None,
@@ -492,6 +498,7 @@ impl Workspace {
             ._subscriptions
             .push(cx.on_app_quit(move |workspace, cx| {
                 let panel_drains = workspace.take_panel_quit_flush(window_handle, cx);
+                let worktrees = std::mem::take(&mut workspace.worktree_removals).into_tasks();
                 let general = workspace.take_general_flush(cx);
                 let appearance = workspace.take_appearance_flush(window_handle, cx);
                 let hosts = workspace.take_profile_quit_flush(cx);
@@ -502,6 +509,9 @@ impl Workspace {
                 async move {
                     for drain in panel_drains {
                         drain.await;
+                    }
+                    for worktree in worktrees {
+                        let _ = worktree.await;
                     }
                     if let Some(general) = general {
                         general.await;
@@ -660,19 +670,26 @@ impl Workspace {
     }
 
     /// Changes only the client draft target, after checking registered topology.
+    pub(crate) fn draft_destination_project(&self, directory: &str) -> Option<&ConfiguredProject> {
+        self.topology.projects.iter().find(|project| {
+            project.path == directory
+                || self.topology.worktrees.iter().any(|group| {
+                    group.project_path == project.path
+                        && group
+                            .worktrees
+                            .iter()
+                            .any(|worktree| worktree.path == directory)
+                })
+        })
+    }
+
     pub(crate) fn choose_draft_project(
         &mut self,
         directory: &str,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.selected.is_some()
-            || !self
-                .topology
-                .projects
-                .iter()
-                .any(|project| project.path == directory)
-        {
+        if self.selected.is_some() || self.draft_destination_project(directory).is_none() {
             return;
         }
         self.save_composer_draft(cx);
@@ -1055,9 +1072,7 @@ impl Workspace {
                 .composer_key
                 .as_ref()
                 .and_then(|key| self.drafts.get(key))
-                .is_some_and(|draft| {
-                    !draft.content.files.is_empty() || !draft.content.context.is_empty()
-                })
+                .is_some_and(|draft| draft.content.has_sendable_items())
     }
 
     pub(crate) fn consume_draft_capture(

@@ -105,6 +105,7 @@ impl Workspace {
             || self.host_close.is_some()
             || self.attachment_storage_close.is_some()
             || self.effort_close.is_some()
+            || self.worktree_close.is_some()
             || self.effort_preferences.is_closing()
     }
 
@@ -699,6 +700,25 @@ impl Workspace {
             || self.persistence.native_root_close
             || self.persistence.accepted_close.is_some()
         {
+            return;
+        }
+        if self.worktree_close.is_some() {
+            return;
+        }
+        let worktrees = self.worktree_removals.receipts();
+        if !worktrees.is_empty() {
+            self.worktree_close = Some(cx.spawn_in(window, async move |this, cx| {
+                let settled = crate::worktree_removals::wait(worktrees).await.is_ok();
+                let _ = this.update_in(cx, |workspace, window, cx| {
+                    workspace.worktree_close = None;
+                    if settled {
+                        workspace.request_close(window, cx);
+                    } else {
+                        workspace.show_worktree_recovery(window, cx);
+                    }
+                });
+            }));
+            cx.notify();
             return;
         }
         if self.native_root_actors_pending() && !self.composer_submissions_pending() {

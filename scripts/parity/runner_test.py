@@ -372,7 +372,8 @@ class ScenarioSettingsTest(unittest.TestCase):
                 ('scenarios', scenarios), ('inventory', inventory))}
             args = argparse.Namespace(root=root, output=root / 'report', scenarios=None,
                 theme='openchamber-dark', timeout=1, native_binary=root / 'native',
-                electron_app=root / 'electron', scale=1, width=1280, height=800, tolerance=0)
+                electron_app=root / 'electron', opencode_binary=root / 'opencode',
+                scale=1, width=1280, height=800, tolerance=0)
             native = Mock()
             electron = Mock()
             for client in (native, electron):
@@ -436,7 +437,8 @@ class ScenarioSettingsTest(unittest.TestCase):
                     ('scenarios', scenarios), ('inventory', inventory))}
                 args = argparse.Namespace(root=root, output=root / 'report', scenarios=None,
                     theme='openchamber-dark', timeout=1, native_binary=root / 'native',
-                    electron_app=root / 'electron', scale=1, width=1280, height=800, tolerance=0)
+                    electron_app=root / 'electron', opencode_binary=root / 'opencode',
+                    scale=1, width=1280, height=800, tolerance=0)
                 native, electron, portal = Mock(), Mock(), Mock()
                 for client in (native, electron):
                     client.launch.return_value = {}
@@ -567,18 +569,21 @@ class ScenarioSettingsTest(unittest.TestCase):
                 client.launch.side_effect = RuntimeError("launch failed")
                 service = Mock(url="http://localhost", opencode_config={})
                 args = argparse.Namespace(root=Path(temporary), theme="test", timeout=1,
-                    native_binary=Path("native"), electron_app=Path("electron"), scale=1, width=1280, height=800)
+                    native_binary=Path("native"), electron_app=Path("electron"),
+                    opencode_binary=Path("opencode"), scale=1, width=1280, height=800)
                 with patch.object(runner, "copy_seed", return_value=Path(temporary)), \
                      patch.object(runner, "native_env", return_value={}), \
                      patch.object(runner, "electron_env", return_value={}), \
                      patch.object(runner, "NativeClient", return_value=client), \
-                     patch.object(runner, "ElectronClient", return_value=client), \
+                     patch.object(runner, "ElectronClient", return_value=client) as electron_client, \
                      patch.object(runner, "IsolatedServer", return_value=service), \
                      patch.object(runner, "FixtureProvider", return_value=service):
                     result = runner.run_client(kind, {"steps": []}, Path(temporary), args)
                 self.assertEqual(result, {"error": "launch failed"})
                 client.close.assert_called_once_with()
                 service.stop.assert_called_once_with()
+                if kind == "electron":
+                    self.assertEqual(electron_client.call_args.args[1]["OPENCODE_BINARY"], str(args.opencode_binary))
 
     def test_unknown_click_targets_are_rejected_before_launch(self):
         scenarios = [{"id": "check", "feature": "feature", "steps": [{"clickTarget": "missing"}]}]

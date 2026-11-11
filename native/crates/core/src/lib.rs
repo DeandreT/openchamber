@@ -7,6 +7,7 @@
 
 pub mod auto_review;
 pub mod autocomplete;
+pub mod branch_integration;
 pub mod branching;
 pub mod chat_roots;
 pub mod composer_selection;

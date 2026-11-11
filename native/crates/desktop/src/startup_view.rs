@@ -121,6 +121,8 @@ impl Workspace {
             .child(
                 div()
                     .w_full()
+                    .max_w(px(chrome::CHAT_COLUMN_MAX_WIDTH))
+                    .mx_auto()
                     .pb(px(16.0))
                     .flex()
                     .flex_col()
@@ -402,5 +404,82 @@ impl Workspace {
                 .title(strings.get("chat.draftStarters.add"))
                 .child(body)
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gpui_kit::test::TestWindowExt;
+    use gpui_kit::{TestAppContext, size};
+
+    fn check_startup_column(language: &str, cx: &mut TestAppContext) {
+        let (window, workspace) = crate::workspace_tests::open(cx);
+        for (width, panel_open) in [(1440.0, false), (1440.0, true), (1920.0, false)] {
+            cx.simulate_window_resize(window, size(px(width), px(900.0)));
+            cx.update_window(window, |_, window, cx| {
+                cx.set_global(locale::Strings::load(language));
+                window.activate_accessibility_for_test();
+                workspace.update(cx, |workspace, _| {
+                    workspace.panels.open =
+                        panel_open.then_some(crate::files_view::PanelSurface::Files);
+                    workspace.pane_sizes.panel_width = Some(640.0);
+                });
+                window.render_frame(cx);
+                let state = workspace.read(cx);
+                let composer = window.find("composer").bounds();
+                let rail = window.find("rail-files").bounds();
+                let area = state.chat_area_width(window);
+                let reserved = state.panel_area(window) - area;
+                let direction = locale::strings(cx).direction();
+                let rail_center = rail.left() + rail.size.width / 2.0;
+                let offset = px(crate::context_panel::RAIL_WIDTH / 2.0 + reserved + area / 2.0);
+                let center = if direction == Direction::LeftToRight {
+                    rail_center - offset
+                } else {
+                    rail_center + offset
+                };
+                assert_eq!(
+                    composer.size.width,
+                    px(state.composer_width(window)),
+                    "the startup composer uses the same capped column as the session composer"
+                );
+                assert_eq!(
+                    composer.left() + composer.size.width / 2.0,
+                    center,
+                    "the capped startup column stays centered in {language}"
+                );
+                if panel_open {
+                    let panel = window.find("side-panel").bounds();
+                    assert_eq!(panel.size.width, px(640.0), "the slot includes its gutters");
+                    let gap = if direction == Direction::LeftToRight {
+                        panel.left() - composer.right()
+                    } else {
+                        composer.left() - panel.right()
+                    };
+                    assert_eq!(
+                        gap,
+                        chrome::chat_column_padding(window, area),
+                        "the panel adds no outer margin to the chat column"
+                    );
+                } else {
+                    assert!(
+                        area > chrome::CHAT_COLUMN_MAX_WIDTH,
+                        "the wide case reaches the cap"
+                    );
+                }
+            })
+            .expect("startup layout window remains open");
+        }
+    }
+
+    #[gpui_kit::test]
+    fn startup_column_matches_the_capped_composer_and_panel_slot(cx: &mut TestAppContext) {
+        check_startup_column("en", cx);
+    }
+
+    #[gpui_kit::test]
+    fn startup_column_and_panel_slot_mirror_in_rtl(cx: &mut TestAppContext) {
+        check_startup_column("ar", cx);
     }
 }

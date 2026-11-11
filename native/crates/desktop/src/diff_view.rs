@@ -22,6 +22,8 @@ use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
 use crate::theme::Palette;
 
+mod walkthrough;
+
 /// What a diff shows.
 enum DiffLoad {
     Idle,
@@ -209,6 +211,7 @@ pub(crate) struct DiffView {
     wrap: bool,
     notice: Option<Notice>,
     task: Option<Task<()>>,
+    walkthrough: walkthrough::WalkthroughPanel,
 }
 
 impl DiffView {
@@ -221,6 +224,7 @@ impl DiffView {
             wrap: false,
             notice: None,
             task: None,
+            walkthrough: walkthrough::WalkthroughPanel::new(cx),
         };
         let entity = cx.entity().downgrade();
         cx.defer(move |cx| {
@@ -231,6 +235,10 @@ impl DiffView {
 
     /// Reads the status, then the patches of every path in the scope.
     pub(crate) fn refresh(&mut self, cx: &mut Context<Self>) {
+        if self.walkthrough.open {
+            self.load_walkthrough(cx);
+            return;
+        }
         let ticket = self.status.begin();
         let Some(client) = self.scope.client(cx) else {
             self.status.complete(ticket, Err(()));
@@ -274,12 +282,16 @@ impl DiffView {
                 this.task = None;
                 match result {
                     Ok((status, diffs)) => {
-                        this.status.complete(ticket, Ok(status));
+                        if !this.status.complete(ticket, Ok(status)) {
+                            return;
+                        }
                         this.pane.apply(Ok(diffs), cx);
                         this.notice = None;
                     }
                     Err(error) => {
-                        this.status.complete(ticket, Err(()));
+                        if !this.status.complete(ticket, Err(())) {
+                            return;
+                        }
                         let message = error.message().map(str::to_owned);
                         this.pane.load = DiffLoad::Failed(message);
                     }
@@ -293,6 +305,9 @@ impl DiffView {
     fn set_scope(&mut self, scope: ChangeScope, cx: &mut Context<Self>) {
         if self.change_scope != scope {
             self.change_scope = scope;
+            let open = self.walkthrough.open;
+            self.walkthrough = walkthrough::WalkthroughPanel::new(cx);
+            self.walkthrough.open = open;
             self.refresh(cx);
         }
     }
@@ -304,17 +319,21 @@ impl Render for DiffView {
         let strings = locale::strings(cx);
         let direction: Direction = strings.direction();
         let split = self.pane.is_split(cx);
-        let body = match self.status.current() {
-            Some(ChangesRead::NotRepository) => {
-                empty_state(strings.get("diffView.state.notGitRepository"), &palette, cx)
+        let body = if self.walkthrough.open {
+            self.render_walkthrough(&palette, direction, cx)
+        } else {
+            match self.status.current() {
+                Some(ChangesRead::NotRepository) => {
+                    empty_state(strings.get("diffView.state.notGitRepository"), &palette, cx)
+                }
+                None if self.status.failed() => self.pane.render(self.wrap, &palette, cx),
+                None => empty_state(
+                    strings.get("diffView.state.loadingRepositoryStatus"),
+                    &palette,
+                    cx,
+                ),
+                Some(ChangesRead::Repository(_)) => self.pane.render(self.wrap, &palette, cx),
             }
-            None if self.status.failed() => self.pane.render(self.wrap, &palette, cx),
-            None => empty_state(
-                strings.get("diffView.state.loadingRepositoryStatus"),
-                &palette,
-                cx,
-            ),
-            Some(ChangesRead::Repository(_)) => self.pane.render(self.wrap, &palette, cx),
         };
         div()
             .id("diff-panel")
@@ -351,6 +370,14 @@ impl Render for DiffView {
                         |this: &mut Self, _, cx| this.set_scope(ChangeScope::Staged, cx),
                     ))
                     .child(div().flex_1())
+                    .child(text_button(
+                        "diff-walkthrough",
+                        strings.get("walkthrough.action.open"),
+                        Some(self.walkthrough.open),
+                        &palette,
+                        cx,
+                        |this: &mut Self, _, cx| this.toggle_walkthrough(cx),
+                    ))
                     .child(
                         IconButton::new(
                             "diff-wrap",

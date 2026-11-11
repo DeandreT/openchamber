@@ -4,6 +4,8 @@
 //! surfaces of `packages/ui/src/lib/surfaces/registry.ts` and the docked work
 //! status card (`.oc-panel-edge`).
 
+pub(crate) mod work_status_sections;
+
 use gpui_kit::{
     AnyElement, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Role,
     SharedString, StatefulInteractiveElement, Styled, TestSupportExt, div, prelude::FluentBuilder,
@@ -85,6 +87,29 @@ impl Workspace {
         cx: &Context<Self>,
     ) -> impl IntoElement {
         let strings = locale::strings(cx);
+        let layout = work_status_sections::Layout::for_workspace(self, cx);
+        let foreground = palette.foreground;
+        let mut sections = Vec::new();
+        for id in layout.visible_builtin_order() {
+            let first_heading = sections.is_empty();
+            let section = match id {
+                "session" => {
+                    Some(self.render_work_status_session(palette, direction, first_heading, cx))
+                }
+                "repository" => self.render_project_section(palette, direction, first_heading, cx),
+                "telemetry" => self.render_turn_stats(palette, direction, first_heading, cx),
+                "contextSources" => {
+                    self.render_context_sources(palette, direction, first_heading, cx)
+                }
+                // These five content renderers are separate parity units. Their
+                // canonical layout keys remain in the manager and persistence.
+                "usage" | "subagents" | "workflows" | "mcp" | "pinned" => continue,
+                _ => unreachable!("visible_builtin_order yields only canonical built-ins"),
+            };
+            if let Some(section) = section {
+                sections.push(section);
+            }
+        }
         div()
             .id("work-status-panel")
             .w(px(PANEL_WIDTH))
@@ -111,39 +136,83 @@ impl Workspace {
                     .flex_col()
                     .child(
                         div()
-                            .flex_row_from(direction)
-                            .items_center()
-                            .mb(px(2.0))
-                            .px(px(4.0))
-                            .padding_end(direction, px(28.0))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .css_text(XS_SIZE, XS_LINE, cx)
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(palette.foreground)
-                                    .child(strings.get("chat.workStatus.section.session")),
-                            ),
+                            .flex()
+                            .flex_col()
+                            .gap(px(SECTION_GAP))
+                            .children(sections),
                     )
-                    .children(self.render_context_usage(palette, direction, cx))
-                    .children(self.render_project_section(palette, direction, cx))
-                    .children(self.render_turn_stats(palette, direction, cx))
-                    .children(self.render_context_sources(palette, direction, cx))
+                    .when(layout.all_hidden(), |card| {
+                        card.child(
+                            div()
+                                .id("work-status-all-hidden")
+                                .accessibility_id("work-status-all-hidden")
+                                .flex()
+                                .flex_col()
+                                .items_center()
+                                .justify_center()
+                                .text_center()
+                                .px(px(16.0))
+                                .py(px(32.0))
+                                .css_text(0.875, 1.25, cx)
+                                .text_color(palette.muted_foreground)
+                                .child(strings.get("chat.workStatus.sections.allHidden"))
+                                .child(
+                                    on_activate(
+                                        div()
+                                            .id("work-status-sections-reopen")
+                                            .accessibility_id("work-status-sections-reopen")
+                                            .role(Role::Button)
+                                            .aria_label(
+                                                strings.get("chat.workStatus.sections.open"),
+                                            )
+                                            .tab_index(0)
+                                            .mt(px(8.0))
+                                            .css_text(0.75, 1.0, cx)
+                                            .cursor_pointer()
+                                            .hover(move |style| style.text_color(foreground))
+                                            .child(strings.get("chat.workStatus.sections.open")),
+                                        cx,
+                                        |this, window, cx| {
+                                            this.open_work_status_sections(window, cx)
+                                        },
+                                    )
+                                    .test_support(),
+                                ),
+                        )
+                    })
                     .child(
                         div()
                             .absolute()
                             .top(px(6.0))
                             .inset_end(direction, px(8.0))
                             .child(
-                                IconButton::new(
-                                    "work-status-sections",
-                                    "equalizer-2",
-                                    strings.get("chat.workStatus.sections.open"),
+                                on_activate(
+                                    div()
+                                        .id("work-status-sections")
+                                        .group("work-status-sections-trigger")
+                                        .accessibility_id("work-status-sections")
+                                        .role(Role::Button)
+                                        .aria_label(strings.get("chat.workStatus.sections.open"))
+                                        .tab_index(0)
+                                        .size(px(20.0))
+                                        .rounded(px(CONTROL_RADIUS))
+                                        .flex()
+                                        .items_center()
+                                        .justify_center()
+                                        .cursor_pointer()
+                                        .text_color(palette.muted_foreground)
+                                        .hover(move |style| style.text_color(foreground))
+                                        .child(
+                                            glyph("equalizer-2", 16.0, palette.muted_foreground)
+                                                .group_hover(
+                                                    "work-status-sections-trigger",
+                                                    move |style| style.text_color(foreground),
+                                                ),
+                                        ),
+                                    cx,
+                                    |this, window, cx| this.open_work_status_sections(window, cx),
                                 )
-                                .size(20.0, 16.0)
-                                .render(palette, cx, |_, _, _| {}),
+                                .test_support(),
                             ),
                     )
                     // The ring sits above the content, as `::after` does.
@@ -155,6 +224,40 @@ impl Workspace {
                             .shadow(elevation::panel_edge_ring(palette)),
                     ),
             )
+    }
+
+    fn render_work_status_session(
+        &self,
+        palette: &Palette,
+        direction: Direction,
+        first_heading: bool,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        div()
+            .flex()
+            .flex_col()
+            .child(
+                div()
+                    .flex_row_from(direction)
+                    .items_center()
+                    .mb(px(2.0))
+                    .px(px(4.0))
+                    .when(first_heading, |heading| {
+                        heading.padding_end(direction, px(28.0))
+                    })
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .truncate()
+                            .css_text(XS_SIZE, XS_LINE, cx)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(palette.foreground)
+                            .child(locale::strings(cx).get("chat.workStatus.section.session")),
+                    ),
+            )
+            .children(self.render_context_usage(palette, direction, cx))
+            .into_any_element()
     }
 
     /// The selected session's context window: a row with its fill and a meter
@@ -297,6 +400,7 @@ impl Workspace {
         &self,
         palette: &Palette,
         direction: Direction,
+        first_heading: bool,
         cx: &Context<Self>,
     ) -> Option<AnyElement> {
         let (skills, mcp) = self.context_counts()?;
@@ -353,6 +457,7 @@ impl Workspace {
             rows,
             palette,
             direction,
+            first_heading,
             cx,
         ))
     }
@@ -538,12 +643,13 @@ pub(crate) struct Section {
 }
 
 /// The section's 24 px heading (its glyph, title, chevron and summary) and,
-/// while expanded, its rows; `mt-5` above.
+/// while expanded, its rows. The containing list owns section spacing.
 pub(crate) fn collapsible_section(
     section: Section,
     rows: Vec<AnyElement>,
     palette: &Palette,
     direction: Direction,
+    first_heading: bool,
     cx: &Context<Workspace>,
 ) -> AnyElement {
     let foreground = palette.foreground;
@@ -595,7 +701,6 @@ pub(crate) fn collapsible_section(
     )
     .test_support();
     div()
-        .mt(px(SECTION_GAP))
         .flex()
         .flex_col()
         .child(
@@ -604,6 +709,9 @@ pub(crate) fn collapsible_section(
                 .mb(px(2.0))
                 .flex_row_from(direction)
                 .items_center()
+                .when(first_heading, |heading| {
+                    heading.padding_end(direction, px(28.0))
+                })
                 .child(heading),
         )
         .when(section.expanded, |this| this.children(rows))

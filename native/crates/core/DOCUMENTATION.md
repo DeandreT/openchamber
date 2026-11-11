@@ -73,6 +73,9 @@ rendering asks for a projection and dispatches an action.
   with its conflicted paths. `git_identity.rs` decides which commit
   identities are offered and which one a repository acts as;
   `nested_repositories.rs` which repository a Git surface opens and lists.
+  `branch_integration.rs` derives local and remote-tracking integration targets,
+  ranks target searches and chooses the default base branch. Remote names are
+  matched longest-first so a remote containing `/` retains its own refs.
 - `source_board.rs` ports the repository source of the issues and pull
   requests board: kinds, state and people filters
   (`referencePickerItems.ts`), item keys and state looks, the read context

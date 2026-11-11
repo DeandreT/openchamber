@@ -114,6 +114,35 @@ test('existing agent and auxiliary responses keep their behavior', async () => {
   });
 });
 
+test('file-link and conflict replies apply only to their explicit fixture turns', async () => {
+  await withProvider(false, async (request) => {
+    const body = { model: 'stream-20000cps', stream: true,
+      messages: [{ role: 'user', content: 'files-link-proof: file:///fixture/outside.txt' }] };
+    const text = async (value) => (await frames(await request(value))).map((frame) => frame.choices[0].delta.content ?? '').join('');
+    assert.equal(await text(body), '[Outside file](file:///fixture/outside.txt)');
+    body.messages.push({ role: 'user', content: 'Investigate the merge conflicts and concisely report the intended resolution strategy.' });
+    assert.equal(await text(body), 'Conflict context received. Waiting for confirmation.');
+    body.messages.push({ role: 'user', content: 'An ordinary fixture turn' });
+    assert.doesNotMatch(await text(body), /Outside file|Conflict context received/);
+  });
+});
+
+test('walkthrough fixtures preserve aliases supplied by the server digest', async () => {
+  await withProvider(false, async (request) => {
+    const digest = { files: [
+      { path: 'a.rs', hunks: [{ alias: 'h1' }] },
+      { path: 'b.rs', hunks: [{ alias: 'h2' }] },
+    ] };
+    const response = await request({ model: 'stream-20000cps', stream: false, messages: [
+      { role: 'system', content: 'You are writing a walkthrough of a code change' },
+      { role: 'user', content: 'Change digest:\n' + JSON.stringify(digest) },
+    ] });
+    assert.equal(response.status, 200);
+    const result = JSON.parse((await response.json()).choices[0].message.content);
+    assert.deepEqual(result.chapters.flatMap((chapter) => chapter.stops.flatMap((stop) => stop.hunks)), ['h1', 'h2']);
+  });
+});
+
 const user = (content) => ({ role: 'user', content });
 const intro = user('<system-reminder>\nGoal mode is active for this session. The user message above defines the goal objective.\n</system-reminder>');
 const continuation = user('The session goal is still open. Take it through to the end in this run.\n<objective>\nShip [turns:3]\n</objective>');

@@ -11,6 +11,223 @@ use gpui::{
 };
 
 #[gpui::test]
+fn intrinsic_heading_round_trip_keeps_fitting_words_on_one_line(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    for scale in [1.0, 1.25, 1.5] {
+        cx.update(|window, _| {
+            window.set_layout_mode(LayoutMode::Logical);
+            window.set_scale_factor(scale);
+        });
+        cx.draw(
+            point(px(0.), px(0.)),
+            size(px(300.), px(100.)),
+            |window, cx| {
+                for (text, expected_width_bits) in
+                    [("Reading", 1_114_321_716), ("Formatting", 1_118_306_305)]
+                {
+                    let runs = [window.text_style().to_run(text.len())];
+                    let lines = window
+                        .text_system()
+                        .shape_text(text.into(), px(14.), &runs, None, None)
+                        .expect("the deterministic heading must shape");
+                    assert_eq!(
+                        f32::from(lines[0].unwrapped_layout.width).to_bits(),
+                        expected_width_bits,
+                        "the test font must exercise the measured contraction for {text}"
+                    );
+                    let mut heading = div()
+                        .w(px(300.))
+                        .flex()
+                        .items_center()
+                        .text_size(px(14.))
+                        .line_height(px(20.))
+                        .child(div().child(text))
+                        .into_any();
+                    let measured = heading.layout_as_root(
+                        size(
+                            AvailableSpace::Definite(px(300.)),
+                            AvailableSpace::MaxContent,
+                        ),
+                        window,
+                        cx,
+                    );
+                    assert_eq!(
+                        measured.height,
+                        px(20.),
+                        "{text} must keep one line after scale {scale} measurement"
+                    );
+                }
+                div()
+            },
+        );
+    }
+}
+
+#[gpui::test]
+fn definite_text_constraints_keep_real_wrapping(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    for scale in [1.0, 1.25, 1.5] {
+        cx.update(|window, _| {
+            window.set_layout_mode(LayoutMode::Logical);
+            window.set_scale_factor(scale);
+        });
+        cx.draw(
+            point(px(0.), px(0.)),
+            size(px(300.), px(200.)),
+            |window, cx| {
+                for text in ["Reading", "Formatting", "read words", "قراءة", "read אבג"] {
+                    for known_width in [false, true] {
+                        let calls = Rc::new(RefCell::new(Vec::new()));
+                        let recorded = calls.clone();
+                        let mut style = Style::default();
+                        if known_width {
+                            style.size.width = px(16.).into();
+                        }
+                        let id = window.request_measured_layout(
+                            style,
+                            move |known, available, window, _| {
+                                let width = known.width.or(match available.width {
+                                    AvailableSpace::Definite(width) => Some(width),
+                                    _ => None,
+                                });
+                                let lines = window
+                                    .text_system()
+                                    .shape_text(
+                                        text.into(),
+                                        px(14.),
+                                        &[window.text_style().to_run(text.len())],
+                                        width,
+                                        None,
+                                    )
+                                    .expect("constrained text must shape");
+                                let mut measured = size(px(0.), px(0.));
+                                let mut line_count = 0;
+                                for line in lines {
+                                    let line_size = line.size(px(17.25));
+                                    measured.width = measured.width.max(line_size.width);
+                                    measured.height += line_size.height;
+                                    line_count += line.wrap_boundaries().len() + 1;
+                                }
+                                recorded.borrow_mut().push((
+                                    known.width,
+                                    available.width,
+                                    width,
+                                    line_count,
+                                ));
+                                measured
+                            },
+                        );
+                        let root = if known_width {
+                            // Flex cross-size measurement passes its resolved main
+                            // width as a known dimension before final leaf layout.
+                            let mut parent = Style::default();
+                            parent.display = gpui::Display::Flex;
+                            parent.size.width = px(16.).into();
+                            window.request_layout(parent, [id], cx)
+                        } else {
+                            id
+                        };
+                        window.compute_layout(
+                            root,
+                            size(
+                                AvailableSpace::Definite(px(16.)),
+                                AvailableSpace::MaxContent,
+                            ),
+                            cx,
+                        );
+                        let calls = calls.borrow();
+                        let line_count = calls
+                            .iter()
+                            .find_map(|(_, _, width, count)| {
+                                (*width == Some(px(16.))).then_some(*count)
+                            })
+                            .expect("the actual caller's narrow constraint must reach shaping");
+                        if known_width {
+                            assert!(
+                                calls.iter().any(|(known, _, _, _)| *known == Some(px(16.))),
+                                "the flex child must receive a known width: {calls:?}"
+                            );
+                        } else {
+                            assert!(
+                                calls.iter().all(|(known, _, _, _)| known.is_none()),
+                                "the separate root must have unknown width: {calls:?}"
+                            );
+                            assert!(
+                                calls.iter().any(|(_, available, _, _)| {
+                                    matches!(available, AvailableSpace::Definite(width) if *width == px(16.))
+                                }),
+                                "a definite available width must reach the root: {calls:?}"
+                            );
+                        }
+                        for (_, _, width, count) in calls.iter() {
+                            if width.is_some() {
+                                assert_eq!(
+                                    *width,
+                                    Some(px(16.)),
+                                    "every actual finite caller width stays authoritative"
+                                );
+                                assert!(
+                                    *count > 1,
+                                    "{text:?} must still wrap at a real narrow constraint"
+                                );
+                                assert_eq!(
+                                    *count, line_count,
+                                    "both finite measurement phases keep the same line count"
+                                );
+                            }
+                        }
+                        assert_eq!(
+                            window.layout_bounds(id).size.height,
+                            px(17.25 * line_count as f32),
+                            "fractional line heights remain exact at scale {scale}"
+                        );
+                    }
+                }
+                div()
+            },
+        );
+    }
+}
+
+#[gpui::test]
+fn intrinsic_width_correction_preserves_fractional_measured_height(cx: &mut TestAppContext) {
+    let cx = cx.add_empty_window();
+    for scale in [1.0, 1.25, 1.5] {
+        cx.update(|window, _| {
+            window.set_layout_mode(LayoutMode::Logical);
+            window.set_scale_factor(scale);
+        });
+        cx.draw(
+            point(px(0.), px(0.)),
+            size(px(100.), px(100.)),
+            |window, cx| {
+                for available_width in [AvailableSpace::MinContent, AvailableSpace::MaxContent] {
+                    let id = window.request_measured_layout(Style::default(), |_, _, _, _| {
+                        size(px(f32::from_bits(1_113_826_263)), px(17.25))
+                    });
+                    window.compute_layout(
+                        id,
+                        size(available_width, AvailableSpace::MaxContent),
+                        cx,
+                    );
+                    let measured = window.layout_bounds(id).size;
+                    assert!(
+                        measured.width >= px(f32::from_bits(1_113_826_263)),
+                        "intrinsic conversion must not contract the measured width"
+                    );
+                    assert_eq!(
+                        measured.height,
+                        px(17.25),
+                        "height conversion stays unchanged"
+                    );
+                }
+                div()
+            },
+        );
+    }
+}
+
+#[gpui::test]
 fn intrinsic_text_width_obeys_the_layout_policy(cx: &mut TestAppContext) {
     let cx = cx.add_empty_window();
     for scale in [1.0, 1.25, 1.5] {

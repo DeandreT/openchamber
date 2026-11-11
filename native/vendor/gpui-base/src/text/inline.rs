@@ -1,32 +1,272 @@
-use gpui::Corners;
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    mem,
-    ops::Range,
-    rc::Rc,
-    sync::{Arc, Mutex, Weak},
-};
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::mem;
+use std::ops::Range;
+use std::rc::Rc;
+use std::sync::{Arc, Mutex, Weak};
 
 use gpui::{
-    App, BorderStyle, Bounds, ClickEvent, CursorStyle, Edges, Element, ElementId, GlobalElementId,
-    Half, HighlightStyle, Hitbox, HitboxBehavior, Hsla, InspectorElementId, IntoElement, LayoutId,
-    MouseButton, MouseClickEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point,
-    SharedString, StyledText, TextAlign, TextLayout, TextRun, TextStyle, Window, point, px, quad,
-    size,
+    A11yLinkFragment, A11yLinkFrame, AnyElement, App, AvailableSpace, BorderStyle, Bounds,
+    ClickEvent, Corners, CursorStyle, Edges, Element, ElementId, GlobalElementId, Half,
+    HighlightStyle, Hitbox, HitboxBehavior, Hsla, InspectorElementId, InteractiveElement as _,
+    IntoElement, KeyboardButton, KeyboardClickEvent, LayoutId, MouseButton, MouseClickEvent,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, SharedString,
+    StatefulInteractiveElement as _, Styled, StyledText, TextAlign, TextLayout, TextRun, TextStyle,
+    Window, div, point, px, quad, size,
 };
 
-use crate::{
-    GlobalState, TextSelection,
-    input::Selection,
-    text::TextViewMultiClickKind,
-    text::node::LinkMark,
-    text::range_highlight::RevealAt,
-    text::selection::word_range_at,
-    text::state::LineSpan,
-    text::text_view::{LinkClickHandlerFn, handle_link_click},
-    text_selection::text_rows_extent,
-};
+use crate::input::Selection;
+use crate::text::TextViewMultiClickKind;
+use crate::text::node::LinkMark;
+use crate::text::range_highlight::RevealAt;
+use crate::text::selection::word_range_at;
+use crate::text::state::LineSpan;
+use crate::text::text_view::{LinkClickHandlerFn, handle_link_click};
+use crate::text_selection::text_rows_extent;
+use crate::{GlobalState, TextSelection};
+
+/// A parsed link, before line wrapping and inline-object splitting.
+pub(super) struct AccessibleLink {
+    owner: Arc<()>,
+    ranges: Vec<Range<usize>>,
+    label: String,
+    url: SharedString,
+    fragments: Vec<LinkCandidate>,
+}
+
+/// A real prepaint candidate keeps its hit-test layout until final clipping.
+#[derive(Clone)]
+struct LinkCandidate {
+    key: usize,
+    bounds: Bounds<Pixels>,
+    mask: Bounds<Pixels>,
+    text: Option<(TextLayout, Range<usize>)>,
+}
+
+pub(super) struct LinkElement {
+    element: AnyElement,
+    frame: A11yLinkFrame,
+}
+
+impl LinkElement {
+    pub(super) fn paint(&mut self, window: &mut Window, cx: &mut App) {
+        let element = &mut self.element;
+        _ = window.paint_a11y_link_subtree(&self.frame, cx, |window, cx| element.paint(window, cx));
+    }
+}
+
+impl AccessibleLink {
+    pub(super) fn new(owner: Arc<()>, range: Range<usize>, text: &str, url: SharedString) -> Self {
+        Self {
+            owner,
+            ranges: vec![range],
+            label: text.into(),
+            url,
+            fragments: Vec::new(),
+        }
+    }
+
+    pub(super) fn owns(&self, owner: &Arc<()>) -> bool {
+        Arc::ptr_eq(&self.owner, owner)
+    }
+
+    pub(super) fn append(&mut self, range: Range<usize>, text: &str) {
+        self.ranges.push(range);
+        self.label.push_str(text);
+    }
+}
+
+/// Geometry belongs to this render only. Flow children contribute their actual
+/// shaped fragments; their parent emits one link after all children prepaint.
+pub(super) type LinkFrame = Rc<RefCell<Vec<AccessibleLink>>>;
+
+pub(super) fn reset_link_frame(frame: &LinkFrame) {
+    for link in frame.borrow_mut().iter_mut() {
+        link.fragments.clear();
+    }
+}
+
+fn physical_rect(bounds: Bounds<Pixels>, scale: f32) -> gpui::accesskit::Rect {
+    gpui::accesskit::Rect::new(
+        f64::from(f32::from(bounds.left()) * scale),
+        f64::from(f32::from(bounds.top()) * scale),
+        f64::from(f32::from(bounds.right()) * scale),
+        f64::from(f32::from(bounds.bottom()) * scale),
+    )
+}
+
+pub(super) fn add_link_object(
+    frame: &LinkFrame,
+    range: Range<usize>,
+    bounds: Bounds<Pixels>,
+    mask: Bounds<Pixels>,
+) {
+    let bounds = bounds.intersect(&mask);
+    if bounds.size.width <= px(0.) || bounds.size.height <= px(0.) {
+        return;
+    }
+    for link in frame.borrow_mut().iter_mut() {
+        if link
+            .ranges
+            .iter()
+            .any(|part| part.start < range.end && range.start < part.end)
+        {
+            link.fragments.push(LinkCandidate {
+                key: link.fragments.len(),
+                bounds,
+                mask,
+                text: None,
+            });
+        }
+    }
+}
+
+#[derive(Clone)]
+struct LinkActivation {
+    // Keep the identity allocated for as long as this frame's handlers live.
+    _owner: Arc<()>,
+    frame: A11yLinkFrame,
+    url: SharedString,
+    handler: Option<Arc<LinkClickHandlerFn>>,
+}
+
+impl LinkActivation {
+    fn activate(&self, button: KeyboardButton, window: &mut Window, cx: &mut App) {
+        let Some(bounds) = self.frame.activation_bounds(window, cx) else {
+            return;
+        };
+        TextSelection::end(window, cx);
+        handle_link_click(
+            &self.handler,
+            self.url.clone(),
+            ClickEvent::Keyboard(KeyboardClickEvent { button, bounds }),
+            window,
+            cx,
+        );
+    }
+}
+
+pub(super) fn prepaint_link_elements(
+    frame: &LinkFrame,
+    handler: &Option<Arc<LinkClickHandlerFn>>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Vec<LinkElement> {
+    // Only TextView-owned links may register. Core also enforces the enclosing
+    // source scope, including ancestry inherited by deferred custom content.
+    if GlobalState::global(cx).text_view_state().is_none() {
+        return Vec::new();
+    }
+    let scale = window.scale_factor();
+    let mut elements = Vec::new();
+    for link in frame.borrow().iter() {
+        let Some(first) = link.fragments.first().map(|candidate| candidate.bounds) else {
+            continue;
+        };
+        if link.label.trim().is_empty() || link.url.trim().is_empty() {
+            continue;
+        }
+        let union = link
+            .fragments
+            .iter()
+            .map(|candidate| candidate.bounds)
+            .reduce(|a, b| {
+                Bounds::from_corners(
+                    point(a.left().min(b.left()), a.top().min(b.top())),
+                    point(a.right().max(b.right()), a.bottom().max(b.bottom())),
+                )
+            })
+            .expect("a visible link has at least one fragment");
+        let candidates = link.fragments.clone();
+        let fragments: Vec<_> = candidates
+            .iter()
+            .map(|candidate| A11yLinkFragment::new(candidate.key, candidate.bounds))
+            .collect();
+        let leaves = fragments.clone();
+        let clip = move |mask: gpui::ContentMask<Pixels>| {
+            candidates
+                .into_iter()
+                .filter_map(|candidate| {
+                    let bounds = candidate
+                        .bounds
+                        .intersect(&candidate.mask)
+                        .intersect(&mask.bounds);
+                    if bounds.size.width <= px(0.) || bounds.size.height <= px(0.) {
+                        return None;
+                    }
+                    if let Some((layout, range)) = &candidate.text
+                        && !layout
+                            .index_for_position(bounds.center())
+                            .ok()
+                            .is_some_and(|index| range.contains(&index))
+                    {
+                        return None;
+                    }
+                    Some(A11yLinkFragment::new(candidate.key, bounds))
+                })
+                .collect()
+        };
+        let element = window.with_a11y_link_subtree(fragments, clip, cx, |frame, window, cx| {
+            let activation = LinkActivation {
+                _owner: link.owner.clone(),
+                frame: frame.clone(),
+                url: link.url.clone(),
+                handler: handler.clone(),
+            };
+            let keyboard = activation.clone();
+            let url = link.url.clone();
+            let label = link.label.clone();
+            // A zero-area focus host contributes no pointer target or painted
+            // content. Link/fragment bounds come solely from the shaped text.
+            let mut element = div()
+                .id(ElementId::Name(
+                    format!("markdown-link:{:x}", Arc::as_ptr(&link.owner) as usize).into(),
+                ))
+                .role(gpui::accesskit::Role::Link)
+                .aria_label(link.label.clone())
+                .tab_index(0)
+                .w(px(0.))
+                .h(px(0.))
+                .on_click(move |event, window, cx| {
+                    if let ClickEvent::Keyboard(event) = event {
+                        cx.stop_propagation();
+                        keyboard.activate(event.button, window, cx);
+                    }
+                })
+                .on_a11y_action(gpui::accesskit::Action::Click, move |_, window, cx| {
+                    activation.activate(KeyboardButton::Enter, window, cx);
+                })
+                .a11y_synthetic_children(move |builder| {
+                    builder.parent_node().set_url(url.as_ref());
+                    builder
+                        .parent_node()
+                        .set_bounds(physical_rect(union, scale));
+                    for candidate in &leaves {
+                        let mut node = gpui::accesskit::Node::new(gpui::accesskit::Role::Label);
+                        node.set_read_only();
+                        node.set_author_id(format!("markdown-link-fragment:{}", candidate.key()));
+                        node.set_label(label.clone());
+                        node.set_bounds(physical_rect(candidate.bounds(), scale));
+                        let id = builder.synthetic_node_id(candidate.key());
+                        builder.push_child(id, node);
+                    }
+                })
+                .into_any_element();
+            element.prepaint_as_root(
+                first.origin,
+                size(
+                    AvailableSpace::Definite(px(0.)),
+                    AvailableSpace::Definite(px(0.)),
+                ),
+                window,
+                cx,
+            );
+            LinkElement { element, frame }
+        });
+        elements.push(element);
+    }
+    elements
+}
 
 /// The style applied to one range of inline text.
 ///
@@ -232,6 +472,13 @@ pub(super) struct Inline {
     handed_over: bool,
 
     state: Arc<Mutex<InlineState>>,
+    link_frame: Option<(LinkFrame, usize)>,
+    owns_links: bool,
+}
+
+pub(super) struct InlinePrepaintState {
+    hitbox: Hitbox,
+    links: Vec<LinkElement>,
 }
 
 /// The inline text state, used RefCell to keep the selection state.
@@ -318,6 +565,62 @@ impl InlineState {
 }
 
 impl Inline {
+    pub(super) fn accessible_links(mut self, links: Vec<AccessibleLink>) -> Self {
+        if !links.is_empty() {
+            self.link_frame = Some((Rc::new(RefCell::new(links)), 0));
+            self.owns_links = true;
+        }
+        self
+    }
+
+    pub(super) fn accessible_fragments(mut self, frame: LinkFrame, offset: usize) -> Self {
+        self.link_frame = Some((frame, offset));
+        self
+    }
+
+    fn register_link_fragments(&self, window: &Window) {
+        let Some((frame, offset)) = &self.link_frame else {
+            return;
+        };
+        let layout = self.styled_text.layout();
+        let glyphs = glyph_boxes(
+            layout,
+            window.text_style().text_align,
+            layout.bounds().size.width,
+        );
+        let origin = layout.bounds().origin;
+        let line_height = layout.line_height();
+        let mask = window.content_mask().bounds;
+        for link in frame.borrow_mut().iter_mut() {
+            for range in &link.ranges {
+                let start = range.start.max(*offset) - offset;
+                let end = range
+                    .end
+                    .min(offset + self.text.len())
+                    .saturating_sub(*offset);
+                if start >= end {
+                    continue;
+                }
+                let local = start..end;
+                for (row, left, right) in range_boxes(&glyphs, local.clone()) {
+                    let bounds = Bounds::from_corners(
+                        point(origin.x + left, origin.y + line_height * row as f32),
+                        point(origin.x + right, origin.y + line_height * (row + 1) as f32),
+                    )
+                    .intersect(&mask);
+                    if bounds.size.width > px(0.) && bounds.size.height > px(0.) {
+                        link.fragments.push(LinkCandidate {
+                            key: link.fragments.len(),
+                            bounds,
+                            mask,
+                            text: Some((layout.clone(), local.clone())),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
     /// Hands the shaped text to the next frame (see [`RetainedLayout`]).
     /// Called after prepaint, so an element that is laid out but never
     /// painted (scrolled out of view) keeps its layout too; paint takes it
@@ -389,6 +692,8 @@ impl Inline {
             retained_key: None,
             handed_over: false,
             state,
+            link_frame: None,
+            owns_links: false,
         }
     }
 
@@ -889,7 +1194,7 @@ impl IntoElement for Inline {
 
 impl Element for Inline {
     type RequestLayoutState = ();
-    type PrepaintState = Hitbox;
+    type PrepaintState = InlinePrepaintState;
 
     fn id(&self) -> Option<ElementId> {
         None
@@ -945,9 +1250,8 @@ impl Element for Inline {
 
         // Report this element's laid-out extent so an ancestor TextView with
         // `max_lines` can snap its clip to a whole-line boundary. The state
-        // stack only holds an entry during prepaint when that view set
-        // `max_lines`, so this is a no-op otherwise.
-        if let Some(text_view_state) = GlobalState::global(cx).text_view_state() {
+        // stack tracks all TextViews; metrics go only to its nearest capped owner.
+        if let Some(text_view_state) = GlobalState::global(cx).line_span_text_view_state(cx) {
             let state = text_view_state.read(cx);
             if state.max_lines.is_some()
                 && let Ok(mut line_spans) = state.line_spans.lock()
@@ -955,7 +1259,7 @@ impl Element for Inline {
                 line_spans.push(LineSpan {
                     top: bounds.top(),
                     bottom: bounds.bottom(),
-                    line_height: window.line_height(),
+                    line_height: self.styled_text.layout().line_height(),
                 });
             }
         }
@@ -963,8 +1267,25 @@ impl Element for Inline {
         self.request_reveal(window);
 
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+        if self.owns_links {
+            reset_link_frame(&self.link_frame.as_ref().expect("link owner has a frame").0);
+        }
+        self.register_link_fragments(window);
+        let links = if self.owns_links {
+            let frame = self
+                .link_frame
+                .as_ref()
+                .expect("link owner has its current frame")
+                .0
+                .clone();
+            window.with_element_namespace(("inline-links", state_key(&self.state)), |window| {
+                prepaint_link_elements(&frame, &self.link_click_handler, window, cx)
+            })
+        } else {
+            Vec::new()
+        };
         self.retain_styled_text();
-        hitbox
+        InlinePrepaintState { hitbox, links }
     }
 
     fn paint(
@@ -979,7 +1300,7 @@ impl Element for Inline {
     ) {
         let bounds = Bounds::new(self.paint_origin.unwrap_or(bounds.origin), bounds.size);
         let current_view = window.current_view();
-        let hitbox = prepaint;
+        let hitbox = &prepaint.hitbox;
         if !self.reclaim_styled_text() {
             // Cannot happen (only this element takes what it handed over,
             // and a live state is never swept); skip the frame rather than
@@ -1252,6 +1573,11 @@ impl Element for Inline {
 
         drop(state);
         self.retain_styled_text();
+        window.with_element_namespace(("inline-links", state_key(&self.state)), |window| {
+            for element in &mut prepaint.links {
+                element.paint(window, cx);
+            }
+        });
     }
 }
 
@@ -1449,6 +1775,141 @@ pub(super) fn point_in_text_selection(
 }
 
 #[cfg(test)]
+mod link_accessibility_tests {
+    use super::*;
+
+    #[test]
+    fn absent_geometry_and_empty_destinations_expose_no_activation_host() {
+        let mut app = gpui::TestApp::new();
+        test_draw::in_prepaint(&mut app, |window, cx| {
+            GlobalState::init(cx);
+            let frame = Rc::new(RefCell::new(vec![AccessibleLink::new(
+                Arc::new(()),
+                0..4,
+                "link",
+                "https://example.com".into(),
+            )]));
+            assert!(prepaint_link_elements(&frame, &None, window, cx).is_empty());
+            frame.borrow_mut()[0].fragments.push(LinkCandidate {
+                key: 0,
+                bounds: Bounds::new(point(px(5.), px(5.)), size(px(30.), px(20.))),
+                mask: Bounds::new(point(px(0.), px(0.)), size(px(100.), px(100.))),
+                text: None,
+            });
+            frame.borrow_mut()[0].url = " ".into();
+            assert!(prepaint_link_elements(&frame, &None, window, cx).is_empty());
+            frame.borrow_mut().clear();
+            assert!(prepaint_link_elements(&frame, &None, window, cx).is_empty());
+        });
+    }
+
+    #[test]
+    fn shaped_link_fragments_reflow_and_clip_without_retaining_old_bounds() {
+        use super::test_draw::in_prepaint;
+        use super::test_fonts::{BODY, WideMonoTextSystem};
+        use gpui::Refineable as _;
+        let mut app = gpui::TestApp::with_text_system(Arc::new(WideMonoTextSystem));
+        in_prepaint(&mut app, |window, cx| {
+            GlobalState::init(cx);
+            let text = "first second third fourth";
+            let frame = Rc::new(RefCell::new(vec![AccessibleLink::new(
+                Arc::new(()),
+                0..text.len(),
+                text,
+                "https://example.com".into(),
+            )]));
+            let style = TextStyle {
+                font_family: BODY.into(),
+                font_size: px(16.).into(),
+                ..Default::default()
+            };
+            let origin = point(px(7.), px(11.));
+            let measure = |width, mask, frame: &LinkFrame, window: &mut Window, cx: &mut App| {
+                reset_link_frame(frame);
+                let state = Arc::new(Mutex::new(InlineState {
+                    text: text.into(),
+                    ..Default::default()
+                }));
+                let mut element = Inline::new(state, vec![], vec![], None)
+                    .accessible_fragments(frame.clone(), 0)
+                    .into_any_element();
+                window.with_text_style(
+                    Some(style.clone().subtract(&Default::default())),
+                    |window| {
+                        element.layout_as_root(
+                            size(
+                                AvailableSpace::Definite(px(width)),
+                                AvailableSpace::MinContent,
+                            ),
+                            window,
+                            cx,
+                        );
+                        window.with_content_mask(
+                            Some(gpui::ContentMask { bounds: mask }),
+                            |window| {
+                                element.prepaint_at(origin, window, cx);
+                            },
+                        );
+                    },
+                );
+                frame.borrow()[0]
+                    .fragments
+                    .iter()
+                    .map(|candidate| candidate.bounds)
+                    .collect::<Vec<_>>()
+            };
+            let mask = Bounds::new(point(px(0.), px(0.)), size(px(500.), px(500.)));
+            let narrow = measure(55., mask, &frame, window, cx);
+            let wide = measure(400., mask, &frame, window, cx);
+            assert!(
+                narrow.len() > wide.len(),
+                "reflow exposes the new shaped rows"
+            );
+            assert_eq!(wide.len(), 1, "the wider frame must discard all old rows");
+            let clipped = Bounds::new(origin + point(px(5.), px(1.)), size(px(50.), px(10.)));
+            let visible = measure(400., clipped, &frame, window, cx);
+            assert!(
+                !visible.is_empty(),
+                "partially visible glyphs remain addressable"
+            );
+            for bounds in visible {
+                assert!(bounds.left() >= clipped.left() && bounds.right() <= clipped.right());
+                assert!(bounds.top() >= clipped.top() && bounds.bottom() <= clipped.bottom());
+            }
+            let hidden = Bounds::new(point(px(450.), px(450.)), size(px(1.), px(1.)));
+            assert!(
+                measure(400., hidden, &frame, window, cx).is_empty(),
+                "a hidden frame must grant no old target"
+            );
+        });
+    }
+
+    #[test]
+    fn object_fragments_are_clipped_and_scaled_only_at_accessibility_emission() {
+        let frame = Rc::new(RefCell::new(vec![AccessibleLink::new(
+            Arc::new(()),
+            2..5,
+            "x²",
+            "https://example.com".into(),
+        )]));
+        let bounds = Bounds::new(point(px(10.5), px(20.25)), size(px(30.), px(15.)));
+        let mask = Bounds::new(point(px(15.), px(20.)), size(px(100.), px(100.)));
+        add_link_object(&frame, 2..5, bounds, mask);
+        let visible = frame.borrow()[0].fragments[0].bounds;
+        assert_eq!(visible.left(), px(15.));
+        let physical = physical_rect(visible, 1.25);
+        assert_eq!(physical.x0, 18.75);
+        assert_eq!(physical.y0, 25.3125);
+        reset_link_frame(&frame);
+        add_link_object(&frame, 7..9, bounds, mask);
+        assert!(
+            frame.borrow()[0].fragments.is_empty(),
+            "an unrelated object does not become a link"
+        );
+    }
+}
+
+#[cfg(test)]
 mod fade_highlights_tests {
     use super::*;
 
@@ -1509,11 +1970,9 @@ mod fade_highlights_tests {
 
 #[cfg(test)]
 mod line_bounds_tests {
+    use super::test_draw::in_prepaint;
+    use super::test_fonts::{BODY, WideMonoTextSystem};
     use super::*;
-    use super::{
-        test_draw::in_prepaint,
-        test_fonts::{BODY, WideMonoTextSystem},
-    };
     use gpui::{AvailableSpace, TestApp, size};
 
     /// The character walk this replaced, kept as the oracle: one box per
@@ -1649,11 +2108,9 @@ mod line_bounds_tests {
 
 #[cfg(test)]
 mod range_highlight_tests {
+    use super::test_draw::in_prepaint;
+    use super::test_fonts::{BODY, WideMonoTextSystem};
     use super::*;
-    use super::{
-        test_draw::in_prepaint,
-        test_fonts::{BODY, WideMonoTextSystem},
-    };
     use gpui::{AvailableSpace, TestApp, size};
 
     /// Lays `text` out at `wrap_width` and returns the highlight boxes of
@@ -1821,7 +2278,8 @@ mod range_highlight_tests {
 #[cfg(test)]
 pub(super) mod test_draw {
     use gpui::{App, Context, IntoElement, Render, Styled as _, TestApp, Window, canvas, px};
-    use std::{cell::RefCell, rc::Rc};
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     struct Probe {
         body: Option<Box<dyn FnOnce(&mut Window, &mut App)>>,
@@ -1873,7 +2331,8 @@ pub(super) mod test_fonts {
         Pixels, PlatformTextSystem, RenderGlyphParams, ShapedGlyph, ShapedRun, Size,
         TextRenderingMode, point, px, size,
     };
-    use std::{borrow::Cow, cell::RefCell};
+    use std::borrow::Cow;
+    use std::cell::RefCell;
 
     pub(crate) const BODY: &str = "Body";
     pub(crate) const MONO: &str = "Mono";

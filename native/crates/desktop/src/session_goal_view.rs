@@ -25,7 +25,7 @@ use crate::theme::Palette;
 use crate::workspace::Workspace;
 
 const ACTION_SIZE: f32 = 24.0;
-const ACTION_GLYPH: f32 = 18.0;
+const ACTION_GLYPH: f32 = 16.0;
 const ROW_HEIGHT: f32 = 36.0;
 
 /// `sessionGoalStatusColor`.

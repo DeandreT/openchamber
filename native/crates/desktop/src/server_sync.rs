@@ -472,7 +472,7 @@ impl Workspace {
         }
     }
 
-    fn load_sessions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn load_sessions(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(connection) = self.connection.as_mut() else {
             return;
         };
@@ -721,6 +721,11 @@ impl Workspace {
                         .timer(Duration::from_secs(1 << (attempt - 1)))
                         .await;
                 }
+                let Ok(layout_read) = this.update_in(cx, |this, _, cx| {
+                    need_settings.then(|| this.begin_work_status_settings_read(cx))
+                }) else {
+                    return;
+                };
                 let client = client.clone();
                 let requested_paths = paths.clone();
                 let task = crate::network::NetworkTask::spawn_on(&handle, async move {
@@ -797,6 +802,13 @@ impl Workspace {
                         }
                         match settings {
                             Some(Ok(mut settings)) => {
+                                if let Some(layout_read) = &layout_read {
+                                    this.reconcile_work_status_settings(
+                                        layout_read,
+                                        &mut settings,
+                                        cx,
+                                    );
+                                }
                                 // A registry read started before admission owns no removal of
                                 // that confirmed append. A later fresh read can remove it.
                                 this.session_admission

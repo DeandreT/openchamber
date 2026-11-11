@@ -1,36 +1,43 @@
-use std::{
-    cell::RefCell,
-    ops::Range,
-    rc::Rc,
-    sync::{Arc, Mutex},
-};
+use std::cell::RefCell;
+use std::ops::Range;
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 use unicode_segmentation::UnicodeSegmentation as _;
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::{
     AbsoluteLength, AnyElement, App, AvailableSpace, Bounds, DefiniteLength, Element, ElementId,
     GlobalElementId, Hsla, ImageSource, InspectorElementId, InteractiveElement as _, IntoElement,
     LayoutId, LineFragment as WrapLineFragment, ObjectFit, Pixels, Refineable as _, ShapedLine,
     SharedString, Size, StatefulInteractiveElement as _, Styled, StyledImage as _, TextRun,
-    TextStyle, WhiteSpace, Window, img, point, prelude::FluentBuilder as _, px, relative, size,
+    TextStyle, WhiteSpace, Window, img, point, px, relative, size,
 };
 
 use crate::text::text_view::{LinkClickHandlerFn, handle_link_click};
 
-use super::{
-    inline::{Inline, InlineHighlight, InlineState, text_runs, text_size_ranges},
-    inline_object::{InlineObject, MeasuredInlineObject},
-    node::LinkMark,
-    range_highlight::RevealAt,
+use super::inline::{
+    AccessibleLink, Inline, InlineHighlight, InlineState, LinkElement, LinkFrame, add_link_object,
+    prepaint_link_elements, reset_link_frame, text_runs, text_size_ranges,
 };
+use super::inline_object::{InlineObject, MeasuredInlineObject};
+use super::node::LinkMark;
+use super::range_highlight::RevealAt;
 
 const IMAGE_LEN: usize = 1;
 pub(super) const INLINE_CODE_PADDING: f32 = 4.;
+
+#[derive(Default)]
+pub(super) struct InlineFlowPrepaintState {
+    elements: Vec<(AnyElement, Option<(Bounds<Pixels>, gpui::Hsla)>)>,
+    links: Vec<LinkElement>,
+}
 
 pub(super) struct InlineFlow {
     id: ElementId,
     items: Vec<InlineFlowItem>,
     link_click_handler: Option<Arc<LinkClickHandlerFn>>,
     selection_leaf: Option<super::stream_fade::TextLeafKey>,
+    accessible_links: Option<LinkFrame>,
 }
 
 pub(super) type InlineRenderer = dyn Fn(&super::InlineRenderContext, &mut Window, &mut App) -> Option<super::InlineElement>
@@ -243,6 +250,13 @@ enum LineFragmentKind {
 }
 
 impl InlineFlow {
+    pub(super) fn accessible_links(mut self, links: Vec<AccessibleLink>) -> Self {
+        if !links.is_empty() {
+            self.accessible_links = Some(Rc::new(RefCell::new(links)));
+        }
+        self
+    }
+
     pub(super) fn selection_leaf(mut self, key: Option<super::stream_fade::TextLeafKey>) -> Self {
         self.selection_leaf = key;
         self
@@ -258,6 +272,7 @@ impl InlineFlow {
             id: id.into(),
             items,
             link_click_handler,
+            accessible_links: None,
         }
     }
 
@@ -306,6 +321,179 @@ impl InlineFlow {
     }
 }
 
+#[cfg(test)]
+mod accessible_link_tests {
+    use super::super::{TextView, TextViewState};
+    use super::*;
+    use gpui::prelude::FluentBuilder as _;
+    use gpui::{AppContext as _, Context, Entity, ParentElement as _, Render, TestApp};
+
+    struct Links {
+        state: Entity<TextViewState>,
+        width: Pixels,
+        shown: bool,
+        clicks: Arc<Mutex<Vec<SharedString>>>,
+    }
+
+    impl Render for Links {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let clicks = self.clicks.clone();
+            gpui::div().w(self.width).when(self.shown, |this| {
+                this.child(
+                    TextView::new(&self.state).on_link_click(move |url, event, _, _| {
+                        assert!(matches!(event, gpui::ClickEvent::Keyboard(_)));
+                        clicks.lock().expect("test click log").push(url.clone());
+                    }),
+                )
+            })
+        }
+    }
+
+    #[test]
+    fn flow_emits_one_actionable_owner_across_reflow_and_retires_removed_links() {
+        use gpui::accesskit::{Action, ActionRequest, Role, TreeId};
+        let mut app = TestApp::new();
+        let clicks = Arc::new(Mutex::new(Vec::new()));
+        let captured = clicks.clone();
+        let mut window = app.open_window(move |window, cx| {
+            crate::init(cx);
+            window.activate_accessibility_for_test();
+            Links {
+                state: cx.new(|cx| {
+                    TextViewState::markdown(
+                        "[a `code` ending](https://example.com) [same](https://example.com)",
+                        cx,
+                    )
+                }),
+                width: px(65.),
+                shown: true,
+                clicks,
+            }
+        });
+        window.draw();
+        let before = window.update(|_, window, _| {
+            window
+                .accessibility_tree_for_test()
+                .expect("link tree")
+                .clone()
+        });
+        let links = before
+            .nodes
+            .iter()
+            .filter(|(_, node)| node.role() == Role::Link)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            links.len(),
+            2,
+            "typography and row fragments must not add link/tab owners"
+        );
+        let id = links
+            .iter()
+            .find(|(_, node)| node.label() == Some("a code ending"))
+            .expect("complete link label")
+            .0;
+        let link = &before
+            .nodes
+            .iter()
+            .find(|(node_id, _)| *node_id == id)
+            .unwrap()
+            .1;
+        assert!(link.supports_action(Action::Click) && link.supports_action(Action::Focus));
+        assert_eq!(link.url(), Some("https://example.com"));
+        assert!(
+            link.children().len() > 1,
+            "the wrapped link must expose real fragments"
+        );
+        for child in link.children() {
+            let fragment = &before
+                .nodes
+                .iter()
+                .find(|(node_id, _)| node_id == child)
+                .unwrap()
+                .1;
+            assert!(
+                !fragment.supports_action(Action::Focus),
+                "fragments are not tab stops"
+            );
+            let bounds = fragment.bounds().expect("visible fragment geometry");
+            assert!(bounds.x1 > bounds.x0 && bounds.y1 > bounds.y0);
+        }
+        window.update(|root, window, _| {
+            root.width = px(600.);
+            window.refresh();
+        });
+        window.draw();
+        window.update(|_, window, cx| {
+            let after = window.accessibility_tree_for_test().unwrap();
+            assert!(
+                after
+                    .nodes
+                    .iter()
+                    .any(|(node_id, node)| *node_id == id && node.role() == Role::Link),
+                "reflow must retain the original owner"
+            );
+            window.dispatch_accessibility_action_for_test(
+                ActionRequest {
+                    action: Action::Click,
+                    target_tree: TreeId::ROOT,
+                    target_node: id,
+                    data: None,
+                },
+                cx,
+            );
+        });
+        assert_eq!(
+            captured.lock().unwrap().len(),
+            1,
+            "the advertised action must reach the existing callback"
+        );
+        window.update(|root, window, cx| {
+            root.state
+                .update(cx, |state, cx| state.set_text("plain prose", cx));
+            window.refresh();
+        });
+        window.draw();
+        window.update(|root, window, cx| {
+            assert!(
+                window
+                    .accessibility_tree_for_test()
+                    .unwrap()
+                    .nodes
+                    .iter()
+                    .all(|(_, node)| node.role() != Role::Link)
+            );
+            window.dispatch_accessibility_action_for_test(
+                ActionRequest {
+                    action: Action::Click,
+                    target_tree: TreeId::ROOT,
+                    target_node: id,
+                    data: None,
+                },
+                cx,
+            );
+            root.shown = false;
+            window.refresh();
+        });
+        window.draw();
+        window.update(|_, window, cx| {
+            window.dispatch_accessibility_action_for_test(
+                ActionRequest {
+                    action: Action::Click,
+                    target_tree: TreeId::ROOT,
+                    target_node: id,
+                    data: None,
+                },
+                cx,
+            )
+        });
+        assert_eq!(
+            captured.lock().unwrap().len(),
+            1,
+            "replaced and unmounted owners must grant no stale action"
+        );
+    }
+}
+
 impl IntoElement for InlineFlow {
     type Element = Self;
 
@@ -316,7 +504,7 @@ impl IntoElement for InlineFlow {
 
 impl Element for InlineFlow {
     type RequestLayoutState = InlineFlowLayoutState;
-    type PrepaintState = Vec<(AnyElement, Option<(Bounds<Pixels>, gpui::Hsla)>)>;
+    type PrepaintState = InlineFlowPrepaintState;
 
     fn id(&self) -> Option<ElementId> {
         Some(self.id.clone())
@@ -434,9 +622,12 @@ impl Element for InlineFlow {
         window: &mut Window,
         cx: &mut App,
     ) -> Self::PrepaintState {
+        if let Some(frame) = &self.accessible_links {
+            reset_link_frame(frame);
+        }
         let frame_state = request_layout.frame_state.clone();
         let Some(layout) = request_layout.current.borrow().clone() else {
-            return Vec::new();
+            return InlineFlowPrepaintState::default();
         };
         let typography = request_layout.typography.clone();
         let text_style = &typography.text_style;
@@ -471,6 +662,21 @@ impl Element for InlineFlow {
             .map(|(ix, _)| ix);
 
         let mut text_fragment_count = 0;
+        let mut offset = 0;
+        let item_offsets = self
+            .items
+            .iter()
+            .map(|item| {
+                let start = offset;
+                offset += match item {
+                    InlineFlowItem::Text { text, .. } | InlineFlowItem::Object { text, .. } => {
+                        text.len()
+                    }
+                    InlineFlowItem::Image { .. } => 0,
+                };
+                start
+            })
+            .collect::<Vec<_>>();
         for (fragment_ix, fragment) in layout.fragments.iter().enumerate() {
             match fragment {
                 PositionedFragment::Object {
@@ -491,6 +697,15 @@ impl Element for InlineFlow {
                         continue;
                     };
                     let object_size = object.metrics.size;
+                    if let Some(frame) = &self.accessible_links {
+                        let offset = item_offsets[*item_ix];
+                        add_link_object(
+                            frame,
+                            offset..offset + text.len(),
+                            Bounds::new(bounds.origin + *origin, object_size),
+                            window.content_mask().bounds,
+                        );
+                    }
                     let mut element = InlineObject::new(
                         ("inline-object", *id),
                         text.clone(),
@@ -566,14 +781,7 @@ impl Element for InlineFlow {
                     fragment_style.font_size = font_size.into();
                     fragment_style.line_height = fragment_size.height.into();
                     fragment_style.white_space = WhiteSpace::Nowrap;
-                    let logical_offset: usize = self.items[..*item_ix]
-                        .iter()
-                        .map(|item| match item {
-                            InlineFlowItem::Text { text, .. }
-                            | InlineFlowItem::Object { text, .. } => text.len(),
-                            InlineFlowItem::Image { .. } => 0,
-                        })
-                        .sum();
+                    let logical_offset = item_offsets[*item_ix];
                     let mut element = Inline::new(
                         state,
                         links.clone(),
@@ -599,8 +807,14 @@ impl Element for InlineFlow {
                         point(bounds.left(), bounds.top() + selection_bounds.top()),
                         size(bounds.size.width, selection_bounds.size.height),
                     ))
-                    .paint_origin(bounds.origin + origin + point(padding, Pixels::ZERO))
-                    .into_any_element();
+                    .paint_origin(bounds.origin + origin + point(padding, Pixels::ZERO));
+                    if let Some(frame) = &self.accessible_links {
+                        element = element.accessible_fragments(
+                            frame.clone(),
+                            logical_offset + source_range.start,
+                        );
+                    }
+                    let mut element = element.into_any_element();
                     // The `Inline` is its own layout root, with no box around
                     // it: its text measures with the window's text style, so
                     // the fragment's style is pushed for the layout.
@@ -666,7 +880,13 @@ impl Element for InlineFlow {
             .fragment_states
             .truncate(text_fragment_count);
 
-        elements
+        let links = self
+            .accessible_links
+            .as_ref()
+            .map(|frame| prepaint_link_elements(frame, &self.link_click_handler, window, cx))
+            .unwrap_or_default();
+
+        InlineFlowPrepaintState { elements, links }
     }
 
     fn paint(
@@ -691,11 +911,14 @@ impl Element for InlineFlow {
             }
         }
         let radius = crate::Theme::global(cx).tokens.radius.sm;
-        for (element, background) in prepaint {
+        for (element, background) in &mut prepaint.elements {
             if let Some((bounds, color)) = background {
                 window.paint_quad(gpui::fill(*bounds, *color).corner_radii(radius));
             }
             element.paint(window, cx);
+        }
+        for link in &mut prepaint.links {
+            link.paint(window, cx);
         }
     }
 }

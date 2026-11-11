@@ -45,6 +45,13 @@ const PART_SHELLS_VERSION: &str = "v1";
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SettingsChanges {
+    /// Work-status profile layout. Omission preserves each stored field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work_status_section_order: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work_status_hidden_sections: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work_status_hidden_sections_explicit: Option<bool>,
     /// The profile's complete effort map, oldest choice first. Each null value
     /// is explicit Default. Omission leaves server memory unchanged.
     #[serde(
@@ -252,6 +259,11 @@ pub struct MessagePage {
 /// out, never the whole document.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ServerSettings {
+    /// Work-status profile layout, unknown until a valid field was read.
+    /// Section-id normalization belongs to the view's layout owner.
+    pub work_status_section_order: Option<WorkStatusSectionList>,
+    pub work_status_hidden_sections: Option<WorkStatusSectionList>,
+    pub work_status_hidden_sections_explicit: Option<bool>,
     /// General settings; absent or malformed values preserve native defaults.
     pub auto_save_enabled: Option<bool>,
     pub terminal_close_on_exit: Option<bool>,
@@ -343,6 +355,42 @@ pub struct ServerSettings {
     pub stt_correct_transcript: Option<bool>,
 }
 
+/// A present layout list. A malformed field grants no list authority while
+/// leaving unrelated fields of a successful settings document usable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WorkStatusSectionList {
+    /// A valid array, with non-string entries independently discarded.
+    Valid(Vec<String>),
+    /// A present value that is not an array, including JSON null.
+    Malformed,
+    /// A malformed refresh with a retained, previously validated display list.
+    /// Created by the desktop publication boundary, never by wire decoding.
+    MalformedWithPrior(Vec<String>),
+}
+
+impl WorkStatusSectionList {
+    /// The validated entries. A malformed field supplies no collection authority.
+    pub fn entries(&self) -> Option<&[String]> {
+        match self {
+            Self::Valid(entries) => Some(entries),
+            Self::Malformed | Self::MalformedWithPrior(_) => None,
+        }
+    }
+
+    /// The last validated list for presentation, preserving malformed provenance.
+    pub fn last_valid_entries(&self) -> Option<&[String]> {
+        match self {
+            Self::Valid(entries) | Self::MalformedWithPrior(entries) => Some(entries),
+            Self::Malformed => None,
+        }
+    }
+
+    /// Whether the latest document supplied a malformed field.
+    pub fn is_malformed(&self) -> bool {
+        !matches!(self, Self::Valid(_))
+    }
+}
+
 /// A registered project's display label, trimmed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ProjectLabel {
@@ -364,6 +412,21 @@ pub struct ProjectDefaults {
 impl ServerSettings {
     fn from_wire(settings: wire::Settings) -> Self {
         let boolean = |value: &Option<Value>| value.as_ref().and_then(Value::as_bool);
+        // The reference's list parsers reject a non-array field and discard
+        // invalid entries independently. A successful empty array is explicit.
+        let section_list = |value: &Option<Value>| {
+            value.as_ref().map(|value| match value.as_array() {
+                Some(entries) => WorkStatusSectionList::Valid(
+                    entries
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .filter(|entry| !entry.is_empty())
+                        .map(str::to_owned)
+                        .collect(),
+                ),
+                None => WorkStatusSectionList::Malformed,
+            })
+        };
         // `parseTrimmedStringUpTo`: trimmed, and dropped past the limit.
         let text = |value: &Option<Value>, limit: usize| {
             value
@@ -430,6 +493,11 @@ impl ServerSettings {
             });
         Self {
             projects,
+            work_status_section_order: section_list(&settings.work_status_section_order),
+            work_status_hidden_sections: section_list(&settings.work_status_hidden_sections),
+            work_status_hidden_sections_explicit: boolean(
+                &settings.work_status_hidden_sections_explicit,
+            ),
             project_defaults,
             project_labels,
             home_directory,
@@ -1529,6 +1597,114 @@ mod tests {
             serde_json::to_value(SettingsChanges::default()).expect("serializes"),
             json!({})
         );
+    }
+
+    #[test]
+    fn work_status_retained_display_entries_do_not_grant_collection_authority() {
+        let prior = WorkStatusSectionList::MalformedWithPrior(vec!["ext:paused".to_owned()]);
+        assert_eq!(
+            prior.entries(),
+            None,
+            "retained display is not a newly validated array"
+        );
+        assert_eq!(
+            prior.last_valid_entries(),
+            Some(["ext:paused".to_owned()].as_slice())
+        );
+        assert!(
+            prior.is_malformed(),
+            "retaining a valid presentation cannot clear malformed status"
+        );
+    }
+
+    #[test]
+    fn work_status_settings_keep_unknown_fields_distinct_from_empty_lists() {
+        for value in [
+            json!(null),
+            json!(false),
+            json!(42),
+            json!({}),
+            json!("session"),
+        ] {
+            let settings = ServerSettings::from_wire(
+                serde_json::from_value(json!({
+                    "workStatusSectionOrder": value.clone(),
+                    "workStatusHiddenSections": value,
+                    "workStatusHiddenSectionsExplicit": "true",
+                    "autoSaveEnabled": false,
+                }))
+                .expect("a malformed field leaves the rest of the document usable"),
+            );
+            assert_eq!(
+                settings.work_status_section_order,
+                Some(WorkStatusSectionList::Malformed)
+            );
+            assert_eq!(
+                settings.work_status_hidden_sections,
+                Some(WorkStatusSectionList::Malformed)
+            );
+            assert_eq!(settings.work_status_hidden_sections_explicit, None);
+            assert_eq!(settings.auto_save_enabled, Some(false));
+        }
+        let settings = ServerSettings::from_wire(
+            serde_json::from_value(json!({
+                "workStatusSectionOrder": [],
+                "workStatusHiddenSections": [],
+                "workStatusHiddenSectionsExplicit": true,
+            }))
+            .expect("explicit empty lists decode"),
+        );
+        assert_eq!(
+            settings.work_status_section_order,
+            Some(WorkStatusSectionList::Valid(Vec::new()))
+        );
+        assert_eq!(
+            settings.work_status_hidden_sections,
+            Some(WorkStatusSectionList::Valid(Vec::new()))
+        );
+        assert_eq!(settings.work_status_hidden_sections_explicit, Some(true));
+        let absent = ServerSettings::from_wire(
+            serde_json::from_value(json!({})).expect("omitted settings decode"),
+        );
+        assert_eq!(absent.work_status_section_order, None);
+        assert_eq!(absent.work_status_hidden_sections, None);
+    }
+
+    #[test]
+    fn work_status_profile_lists_round_trip_without_replacing_unrelated_settings() {
+        let settings = ServerSettings::from_wire(
+            serde_json::from_value(json!({
+                "workStatusSectionOrder": ["ext:paused", "telemetry", 7, "session", ""],
+                "workStatusHiddenSections": ["ext:paused", false, "telemetry"],
+                "workStatusHiddenSectionsExplicit": true,
+                "terminalShell": "fish",
+            }))
+            .expect("invalid list entries are independently ignored"),
+        );
+        let changes = SettingsChanges {
+            work_status_section_order: settings
+                .work_status_section_order
+                .as_ref()
+                .and_then(WorkStatusSectionList::entries)
+                .map(<[String]>::to_vec),
+            work_status_hidden_sections: settings
+                .work_status_hidden_sections
+                .as_ref()
+                .and_then(WorkStatusSectionList::entries)
+                .map(<[String]>::to_vec),
+            work_status_hidden_sections_explicit: settings.work_status_hidden_sections_explicit,
+            ..SettingsChanges::default()
+        };
+        assert_eq!(
+            serde_json::to_value(changes).expect("layout fields serialize"),
+            json!({
+                "workStatusSectionOrder": ["ext:paused", "telemetry", "session"],
+                "workStatusHiddenSections": ["ext:paused", "telemetry"],
+                "workStatusHiddenSectionsExplicit": true,
+            }),
+            "layout writes retain extension positions and omit unrelated fields"
+        );
+        assert_eq!(settings.terminal_shell.as_deref(), Some("fish"));
     }
 
     #[test]

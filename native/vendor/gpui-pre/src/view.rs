@@ -14,6 +14,7 @@ use std::{
     fmt,
     ops::Range,
 };
+use std::{cell::Cell, rc::Rc};
 
 /// A dynamically-typed view handle that can be downcast to a specific `Entity<V>`.
 ///
@@ -317,6 +318,8 @@ struct ViewElementState {
     paint_range: Range<PaintIndex>,
     cache_key: ViewElementCacheKey,
     accessed_entities: FxHashSet<EntityId>,
+    link_marker: Rc<Cell<bool>>,
+    refresh_descendants: bool,
 }
 
 struct ViewElementCacheKey {
@@ -527,13 +530,20 @@ fn prepaint_view(
                 let content_mask = window.content_mask();
                 let text_style = window.text_style();
 
-                if let Some(mut element_state) = element_state
-                    && element_state.cache_key.bounds == bounds
-                    && element_state.cache_key.content_mask == content_mask
-                    && element_state.cache_key.text_style == text_style
-                    && !window.dirty_views.contains(&entity_id)
-                    && !window.refreshing
-                {
+                let ordinary_hit = element_state.as_ref().is_some_and(|state| {
+                    state.cache_key.bounds == bounds
+                        && state.cache_key.content_mask == content_mask
+                        && state.cache_key.text_style == text_style
+                        && !window.dirty_views.contains(&entity_id)
+                        && !window.refreshing
+                });
+                let has_links = element_state.as_ref().is_some_and(|state| {
+                    state.link_marker.get()
+                        || state.prepaint_range.start.registered_links
+                            != state.prepaint_range.end.registered_links
+                });
+                if ordinary_hit && !has_links {
+                    let mut element_state = element_state.expect("cache hit state");
                     let prepaint_start = window.prepaint_index();
                     window.reuse_prepaint(element_state.prepaint_range.clone());
                     cx.entities
@@ -544,14 +554,27 @@ fn prepaint_view(
                     return (None, element_state);
                 }
 
-                let refreshing = mem::replace(&mut window.refreshing, true);
+                let marker = element_state
+                    .as_ref()
+                    .map(|state| state.link_marker.clone())
+                    .unwrap_or_else(|| Rc::new(Cell::new(false)));
+                window.set_a11y_link_cache_marker(&marker, false);
+                let refresh_descendants = !ordinary_hit;
+                let refreshing = mem::replace(&mut window.refreshing, refresh_descendants);
                 let prepaint_start = window.prepaint_index();
-                let (element, accessed_entities) = cx.detect_accessed_entities(|cx| {
-                    let mut element = render(window, cx);
-                    element.layout_as_root(Size::<AvailableSpace>::from(bounds.size), window, cx);
-                    element.prepaint_at(bounds.origin, window, cx);
-                    element
-                });
+                let (element, accessed_entities) =
+                    window.with_a11y_link_cached_owner(marker.clone(), |window| {
+                        cx.detect_accessed_entities(|cx| {
+                            let mut element = render(window, cx);
+                            element.layout_as_root(
+                                Size::<AvailableSpace>::from(bounds.size),
+                                window,
+                                cx,
+                            );
+                            element.prepaint_at(bounds.origin, window, cx);
+                            element
+                        })
+                    });
 
                 let prepaint_end = window.prepaint_index();
                 window.refreshing = refreshing;
@@ -560,6 +583,8 @@ fn prepaint_view(
                     Some(element),
                     ViewElementState {
                         accessed_entities,
+                        link_marker: marker,
+                        refresh_descendants,
                         prepaint_range: prepaint_start..prepaint_end,
                         paint_range: PaintIndex::default()..PaintIndex::default(),
                         cache_key: ViewElementCacheKey {
@@ -607,7 +632,8 @@ fn paint_view(
                     let paint_start = window.paint_index();
 
                     if let Some(element) = element {
-                        let refreshing = mem::replace(&mut window.refreshing, true);
+                        let refreshing =
+                            mem::replace(&mut window.refreshing, element_state.refresh_descendants);
                         element.paint(window, cx);
                         window.refreshing = refreshing;
                     } else {

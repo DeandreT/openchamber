@@ -263,6 +263,12 @@ const NATIVE_KNOWLEDGE_PROMPTS = [
   'plan.improve.instructions',
 ] as const;
 
+/** The visible prompt and hidden instructions of a Git conflict handoff. */
+const NATIVE_CONFLICT_PROMPTS = [
+  'git.conflict.resolve.instructions',
+  'git.conflict.resolve.visible',
+] as const;
+
 /** Stands for the typed argument while a command's variables are exported. */
 const ARGUMENT_SENTINEL = '\u0000argument\u0000';
 
@@ -298,7 +304,7 @@ export const renderNativeMagicPrompts = (): string => {
       variables,
     };
   });
-  for (const id of [...NATIVE_REVIEW_PROMPTS, ...NATIVE_KNOWLEDGE_PROMPTS]) {
+  for (const id of [...NATIVE_REVIEW_PROMPTS, ...NATIVE_KNOWLEDGE_PROMPTS, ...NATIVE_CONFLICT_PROMPTS]) {
     templates[id] = getDefaultMagicPromptTemplate(id);
   }
   return `${JSON.stringify({ commands, templates }, null, 2)}\n`;

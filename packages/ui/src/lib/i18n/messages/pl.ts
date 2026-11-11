@@ -2476,7 +2476,7 @@ export const dict: Record<I18nKey, string> = {
   'filesView.unsaved.title': 'Niezapisane zmiany',
   'filesView.warning.largeFilePreviewLimited': 'Ten plik jest duży ({sizeKb}KB). Podgląd może być ograniczony.',
   'gitView.branch.actionsUnavailable': 'Akcje gałęzi są niedostępne w tym stanie repozytorium',
-  'gitView.branch.branchToMergeInto': 'Gałąź docelowa scalenia',
+  'gitView.branch.branchToMergeInto': 'Gałąź do scalenia z {branch}',
   'gitView.branch.branchToRebaseOnto': 'Gałąź docelowa rebase',
   'gitView.branch.create': 'Utwórz nową gałąź...',
   'gitView.branch.currentBadge': 'Bieżący',

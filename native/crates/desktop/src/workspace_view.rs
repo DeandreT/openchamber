@@ -96,6 +96,21 @@ pub fn bind_keys(cx: &mut gpui_kit::App) {
             gpui_kit::NoAction,
             Some(crate::prompt_rail::LIST_CONTEXT),
         ),
+        KeyBinding::new(
+            "ctrl-n",
+            gpui_kit::NoAction,
+            Some(crate::git_view::UPDATE_PICKER_CONTEXT),
+        ),
+        KeyBinding::new(
+            "ctrl-p",
+            gpui_kit::NoAction,
+            Some(crate::git_view::UPDATE_PICKER_CONTEXT),
+        ),
+        KeyBinding::new(
+            "escape",
+            gpui_kit::NoAction,
+            Some(crate::git_view::UPDATE_PICKER_CONTEXT),
+        ),
         KeyBinding::new("tab", gpui_kit::base::actions::Cancel, menu),
         KeyBinding::new("shift-tab", gpui_kit::base::actions::Cancel, menu),
         KeyBinding::new(
@@ -495,5 +510,77 @@ impl Workspace {
                     .child(div().w(px(12.0)).flex_shrink_0()),
             )
             .child(chrome::window_controls(window, &strings, palette, cx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::{KeyContext, Keystroke, TestAppContext};
+    use openchamber_native_core::shortcuts::{self as shortcut_schema, Overrides, Platform};
+
+    use super::{KEY_CONTEXT, StopGenerating, bind_keys};
+    use crate::git_view::UPDATE_PICKER_CONTEXT;
+    use crate::shortcuts::{self, RunShortcut};
+
+    #[gpui_kit::test]
+    fn update_picker_keymap_shadows_ancestor_actions_only_while_open(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            gpui_kit::init(cx);
+            bind_keys(cx);
+            for overrides in [
+                Overrides::new(),
+                Overrides::from([("new_chat".to_owned(), "mod+p".to_owned())]),
+            ] {
+                shortcuts::bind(&overrides, cx);
+                let contexts = |open: bool| {
+                    let mut names = vec!["Root", KEY_CONTEXT];
+                    if open {
+                        names.push(UPDATE_PICKER_CONTEXT);
+                    }
+                    names.push("Input");
+                    names
+                        .into_iter()
+                        .map(|name| KeyContext::parse(name).expect("valid application context"))
+                        .collect::<Vec<_>>()
+                };
+                let bindings = cx.key_bindings();
+                let bindings = bindings.borrow();
+                for key in ["ctrl-n", "ctrl-p", "escape"] {
+                    let key = Keystroke::parse(key).expect("valid picker key");
+                    let (actions, pending) = bindings.bindings_for_input(&[key], &contexts(true));
+                    assert!(!pending, "picker keys must not start an ancestor chord");
+                    assert!(
+                        actions.iter().all(|binding| {
+                            !binding.action().as_any().is::<StopGenerating>()
+                                && !binding.action().as_any().is::<RunShortcut>()
+                        }),
+                        "an open picker must suppress ancestor Stop and configurable actions"
+                    );
+                }
+                let escape = Keystroke::parse("escape").expect("valid Escape key");
+                let (actions, _) = bindings.bindings_for_input(&[escape], &contexts(false));
+                assert!(
+                    actions
+                        .iter()
+                        .any(|binding| binding.action().as_any().is::<StopGenerating>()),
+                    "closing the picker must retain the workspace Escape action"
+                );
+                let combo = shortcut_schema::effective_combo("new_chat", &overrides);
+                let key = shortcuts::keystrokes(&combo, Platform::current())
+                    .expect("New session has a native binding");
+                let key = Keystroke::parse(&key).expect("valid New session key");
+                let (actions, _) = bindings.bindings_for_input(&[key], &contexts(false));
+                assert!(
+                    actions.iter().any(|binding| {
+                        binding
+                            .action()
+                            .as_any()
+                            .downcast_ref::<RunShortcut>()
+                            .is_some_and(|action| action.id == "new_chat")
+                    }),
+                    "closing the picker must retain the effective New session binding"
+                );
+            }
+        });
     }
 }

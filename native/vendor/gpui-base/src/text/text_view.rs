@@ -1,21 +1,22 @@
-use std::{ops::Range, rc::Rc, sync::Arc};
+use std::ops::Range;
+use std::rc::Rc;
+use std::sync::Arc;
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::{
-    AnyElement, App, Bounds, ClickEvent, ContentMask, Element, ElementId, Entity, Global,
-    GlobalElementId, Hitbox, HitboxBehavior, InspectorElementId, InteractiveElement, IntoElement,
-    LayoutId, MouseButton, ParentElement, Pixels, Refineable as _, SharedString, StyleRefinement,
-    Styled, Window, div, point, px,
+    A11yLinkSource, AnyElement, AnyEntity, AnyWeakEntity, App, Bounds, ClickEvent, ContentMask,
+    Element, ElementId, Entity, Global, GlobalElementId, Hitbox, HitboxBehavior,
+    InspectorElementId, InteractiveElement, IntoElement, LayoutId, MouseButton, ParentElement,
+    Pixels, Refineable as _, SharedString, StyleRefinement, Styled, Window, div, point, px,
 };
 
-use crate::StyledExt;
-use crate::text::TextViewFormat;
 use crate::text::markdown_ext::{MarkdownExtensions, MarkdownNode, MarkdownPlugin};
 use crate::text::node::{CodeBlock, TableData};
 use crate::text::range_highlight::{PendingReveal, RevealProgress};
 use crate::text::state::{LineSpan, SelectionFormat, TextViewState};
 use crate::text::stream_fade::TextViewMotion;
-use crate::{GlobalState, TextSelection, text::TextViewStyle};
+use crate::text::{TextViewFormat, TextViewStyle};
+use crate::{GlobalState, StyledExt, TextSelection};
 
 /// Type for code block actions generator function.
 pub(crate) type CodeBlockActionsFn =
@@ -98,6 +99,14 @@ pub(crate) type ImageSourceFn = dyn Fn(&gpui::SharedUri) -> gpui::ImageSource + 
 
 pub(crate) type LinkClickHandlerFn =
     dyn Fn(&SharedString, &ClickEvent, &mut Window, &mut App) + Send + Sync;
+
+fn validate_link_source(owner: AnyEntity, incarnation: usize, cx: &App) -> bool {
+    let Ok(owner) = owner.downcast::<TextViewState>() else {
+        return false;
+    };
+    let state = owner.read(cx);
+    state.selection_revision == incarnation && state.link_source_is_current()
+}
 
 /// Kept by the element only, so unlike the handlers the state carries, it
 /// may hold a `ScrollHandle`.
@@ -764,44 +773,53 @@ impl Element for TextView {
             if let Ok(mut line_spans) = state.read(cx).line_spans.lock() {
                 line_spans.clear();
             }
-            // Descendant `Inline`s report their line spans through the state
-            // stack during prepaint (in addition to the paint-time push below).
+        }
+        let source = A11yLinkSource::new(
+            AnyWeakEntity::from(state.downgrade()),
+            state.read(cx).selection_revision,
+            validate_link_source,
+        );
+        let clip_bottom = window.with_a11y_link_clip_scope(source, cx, |window, cx| {
             GlobalState::global(cx).push_text_view_state(state.clone());
-        }
-        request_layout.element.prepaint(window, cx);
-        if max_lines_active {
+            request_layout.element.prepaint(window, cx);
             GlobalState::global(cx).pop_text_view_state();
-        }
 
-        let mut clip_bottom = None;
-        if max_lines_active {
-            let (line_spans, content_bottom) = {
-                let state = state.read(cx);
-                (
-                    state
-                        .line_spans
-                        .lock()
-                        .map(|spans| spans.clone())
-                        .unwrap_or_default(),
-                    state.bounds().bottom(),
-                )
-            };
-            // The content keeps its natural height inside the capped box, so
-            // this sees everything the box cannot show — including a tall image
-            // that reports no lines of its own.
-            let clipped = content_bottom > bounds.bottom() + px(1.);
-            // Notify on change so observers (e.g. an "expand" button gated on
-            // `is_clamped`) re-render once the flag flips.
-            if state.read(cx).clamped != clipped {
-                state.update(cx, |state, cx| {
-                    state.clamped = clipped;
-                    cx.notify();
-                });
+            let mut clip_bottom = None;
+            if max_lines_active {
+                let (line_spans, content_bottom) = {
+                    let state = state.read(cx);
+                    (
+                        state
+                            .line_spans
+                            .lock()
+                            .map(|spans| spans.clone())
+                            .unwrap_or_default(),
+                        state.bounds().bottom(),
+                    )
+                };
+                // The content keeps its natural height inside the capped box, so
+                // this sees everything the box cannot show — including a tall image
+                // that reports no lines of its own.
+                let clipped = content_bottom > bounds.bottom() + px(1.);
+                // Notify on change so observers (e.g. an "expand" button gated on
+                // `is_clamped`) re-render once the flag flips.
+                if state.read(cx).clamped != clipped {
+                    state.update(cx, |state, cx| {
+                        state.clamped = clipped;
+                        cx.notify();
+                    });
+                }
+                if clipped {
+                    clip_bottom =
+                        line_safe_clip_bottom(&line_spans, bounds.bottom(), content_bottom);
+                }
             }
-            if clipped {
-                clip_bottom = line_safe_clip_bottom(&line_spans, bounds.bottom(), content_bottom);
-            }
-        }
+
+            let mask = clip_bottom.map(|bottom| ContentMask {
+                bounds: Bounds::from_corners(bounds.origin, point(bounds.right(), bottom)),
+            });
+            (clip_bottom, mask)
+        });
 
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
         // Over the text, so after its hitbox.
@@ -899,19 +917,17 @@ impl Element for TextView {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
-    };
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     use super::{TextView, TextViewPlugin};
     use crate::text::{TableData, TextViewState, TextViewStyle};
+    use gpui::prelude::FluentBuilder as _;
     use gpui::{
         AppContext as _, Bounds, ClickEvent, Context, Entity, InteractiveElement as _, IntoElement,
         Modifiers, MouseButton, MouseDownEvent, MouseUpEvent, Overflow, ParentElement as _, Pixels,
         Render, SharedString, StatefulInteractiveElement as _, StyleRefinement, Styled as _,
-        TestAppContext, VisualTestContext, Window, div, point, prelude::FluentBuilder as _, px,
-        rems,
+        TestAppContext, VisualTestContext, Window, div, point, px, rems,
     };
 
     struct TextViewTestRoot {

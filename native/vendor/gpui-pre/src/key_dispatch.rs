@@ -223,6 +223,16 @@ impl DispatchTree {
         self.focusable_node_ids.insert(focus_id, node_id);
     }
 
+    /// Retire only this focus association, preserving the dispatch subtree.
+    pub(crate) fn remove_focus_id(&mut self, focus_id: FocusId) {
+        if let Some(node_id) = self.focusable_node_ids.remove(&focus_id)
+            && let Some(node) = self.nodes.get_mut(node_id.0)
+            && node.focus_id == Some(focus_id)
+        {
+            node.focus_id = None;
+        }
+    }
+
     pub fn set_view_id(&mut self, view_id: EntityId) {
         if self.view_stack.last().copied() != Some(view_id) {
             let node_id = *self.node_stack.last().unwrap();
