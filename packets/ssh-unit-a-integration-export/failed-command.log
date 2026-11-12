@@ -1,0 +1,120 @@
+Running fixture-contracts : python3 -m unittest discover -s /home/deandre/projects/rust/oc-wt/native-hosts-relay/scripts/parity -p ssh_fixture_test.py
+......
+----------------------------------------------------------------------
+Ran 6 tests in 0.606s
+
+OK
+Running clean-before-focused-tests : cargo clean --offline --locked --manifest-path /home/deandre/projects/rust/oc-wt/native-hosts-relay/native/Cargo.toml --profile dev -p openchamber-native-core -p openchamber-native-transport -p openchamber-native-desktop -p gpui-base -p gpui-component -p gpui-pre
+     Removed 342 files, 3.2GiB total
+Running focused-tests : cargo nextest run --offline --locked --manifest-path /home/deandre/projects/rust/oc-wt/native-hosts-relay/native/Cargo.toml --cargo-profile dev -p openchamber-native-desktop -j4 -E test(ssh_)
+   Compiling gpui-pre v0.3.9 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/vendor/gpui-pre)
+   Compiling gpui-component v0.7.3 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/vendor/gpui-component)
+   Compiling libghostty-vt-sys v0.2.0 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/vendor/libghostty-vt-sys)
+   Compiling openchamber-native-core v0.1.0 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/core)
+   Compiling openchamber-native-transport v0.1.0 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/transport)
+   Compiling libghostty-vt v0.2.0
+   Compiling gpui-pre-wgpu v0.3.9
+   Compiling gpui-kit-assets v0.7.3
+   Compiling gpui-base v0.7.3 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/vendor/gpui-base)
+   Compiling gpui-pre-linux v0.3.9 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/vendor/gpui-pre-linux)
+   Compiling gpui-pre-platform v0.3.9
+   Compiling gpui-kit v0.7.3
+   Compiling openchamber-native-desktop v0.1.0 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/desktop)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3m 12s
+────────────
+ Nextest run ID fe543ca9-8d8c-437c-babb-50169d984a72 with nextest profile: default
+    Starting 14 tests across 1 binary (1068 tests skipped)
+        PASS [   0.080s] ( 1/14) openchamber-native-desktop::bin/openchamber-native ssh_cleanup::tests::a_reaped_leader_and_failed_group_signal_do_not_confirm_helpers
+        PASS [   0.081s] ( 2/14) openchamber-native-desktop::bin/openchamber-native ssh_cleanup::tests::missing_or_changed_identity_and_unknown_serve_ack_grant_no_authority
+        PASS [   0.113s] ( 3/14) openchamber-native-desktop::bin/openchamber-native ssh_cleanup::tests::zero_exit_warning_is_a_failed_stop_and_unknown_replies_stay_uncertain
+        PASS [   0.115s] ( 4/14) openchamber-native-desktop::bin/openchamber-native host_profiles::tests::ssh_and_relay_profiles_round_trip_without_credentials_or_temporary_ports
+        PASS [   0.088s] ( 5/14) openchamber-native-desktop::bin/openchamber-native ssh_command::tests::commands_keep_connection_options_and_their_order
+        PASS [   0.090s] ( 6/14) openchamber-native-desktop::bin/openchamber-native ssh_command::tests::options_that_belong_to_the_manager_or_run_commands_are_refused
+        PASS [   0.091s] ( 7/14) openchamber-native-desktop::bin/openchamber-native ssh_command::tests::shell_quoting_survives_single_quotes
+        PASS [   0.092s] ( 8/14) openchamber-native-desktop::bin/openchamber-native ssh_host::tests::profiles_and_extra_forwards_reject_unusable_or_exposed_ports
+        PASS [   0.100s] ( 9/14) openchamber-native-desktop::bin/openchamber-native ssh_host::tests::reaped_group_leader_does_not_prove_its_live_helper_was_cleaned_up
+        FAIL [   0.811s] (10/14) openchamber-native-desktop::bin/openchamber-native ssh_host::tests::cleanup_reports_real_cli_outcomes_without_requiring_remote_success
+  stdout ───
+
+    running 1 test
+    test ssh_host::tests::cleanup_reports_real_cli_outcomes_without_requiring_remote_success ... FAILED
+
+    failures:
+
+    failures:
+        ssh_host::tests::cleanup_reports_real_cli_outcomes_without_requiring_remote_success
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1081 filtered out; finished in 0.72s
+
+  stderr ───
+
+    thread 'ssh_host::tests::cleanup_reports_real_cli_outcomes_without_requiring_remote_success' (1190561) panicked at crates/desktop/src/ssh_host.rs:1077:18:
+    adopt confined daemon: Unavailable
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+  Cancelling due to test failure: 3 tests still running
+        FAIL [   0.810s] (11/14) openchamber-native-desktop::bin/openchamber-native ssh_host::tests::managed_ssh_installs_the_matching_version_reuses_and_stops_only_the_daemon
+  stdout ───
+
+    running 1 test
+    test ssh_host::tests::managed_ssh_installs_the_matching_version_reuses_and_stops_only_the_daemon ... FAILED
+
+    failures:
+
+    failures:
+        ssh_host::tests::managed_ssh_installs_the_matching_version_reuses_and_stops_only_the_daemon
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1081 filtered out; finished in 0.71s
+
+  stderr ───
+
+    thread 'ssh_host::tests::managed_ssh_installs_the_matching_version_reuses_and_stops_only_the_daemon' (1190564) panicked at crates/desktop/src/ssh_host.rs:971:14:
+    managed setup: Unavailable
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.865s] (12/14) openchamber-native-desktop::bin/openchamber-native ssh_host::tests::cleanup_receipt_outlives_the_last_session_and_api_runtime
+  stdout ───
+
+    running 1 test
+    test ssh_host::tests::cleanup_receipt_outlives_the_last_session_and_api_runtime ... FAILED
+
+    failures:
+
+    failures:
+        ssh_host::tests::cleanup_receipt_outlives_the_last_session_and_api_runtime
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1081 filtered out; finished in 0.77s
+
+  stderr ───
+
+    thread 'ssh_host::tests::cleanup_receipt_outlives_the_last_session_and_api_runtime' (1190558) panicked at crates/desktop/src/ssh_host.rs:1031:14:
+    managed connection: Unavailable
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+        FAIL [   0.763s] (13/14) openchamber-native-desktop::bin/openchamber-native ssh_host::tests::system_ssh_forwards_a_real_loopback_connection_and_stops_its_listener
+  stdout ───
+
+    running 1 test
+    test ssh_host::tests::system_ssh_forwards_a_real_loopback_connection_and_stops_its_listener ... FAILED
+
+    failures:
+
+    failures:
+        ssh_host::tests::system_ssh_forwards_a_real_loopback_connection_and_stops_its_listener
+
+    test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1081 filtered out; finished in 0.66s
+
+  stderr ───
+
+    thread 'ssh_host::tests::system_ssh_forwards_a_real_loopback_connection_and_stops_its_listener' (1190586) panicked at crates/desktop/src/ssh_host.rs:926:14:
+    real ssh forward: Unavailable
+    note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+────────────
+     Summary [   1.161s] 13/14 tests run: 9 passed, 4 failed, 1068 skipped
+        FAIL [   0.811s] (10/14) openchamber-native-desktop::bin/openchamber-native ssh_host::tests::cleanup_reports_real_cli_outcomes_without_requiring_remote_success
+        FAIL [   0.810s] (11/14) openchamber-native-desktop::bin/openchamber-native ssh_host::tests::managed_ssh_installs_the_matching_version_reuses_and_stops_only_the_daemon
+        FAIL [   0.865s] (12/14) openchamber-native-desktop::bin/openchamber-native ssh_host::tests::cleanup_receipt_outlives_the_last_session_and_api_runtime
+        FAIL [   0.763s] (13/14) openchamber-native-desktop::bin/openchamber-native ssh_host::tests::system_ssh_forwards_a_real_loopback_connection_and_stops_its_listener
+warning: 1/14 tests were not run due to test failure (run with --no-fail-fast to run all tests, or run with --max-fail)
+error: test run failed

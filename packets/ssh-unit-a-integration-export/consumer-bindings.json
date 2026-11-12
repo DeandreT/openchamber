@@ -1,0 +1,191 @@
+{
+  "scope": "artifact-only consumer/prerequisite companion; original archive unchanged",
+  "qualifiedWorktree": "/home/deandre/projects/rust/oc-wt/native-hosts-relay",
+  "sourceManifest": {
+    "path": "/home/deandre/projects/rust/OpenChamber/native/.cache/unit-a-cleanup-6p4vyw3z/integration-export/qualified-source.json",
+    "sha256": "40e90f4f30cab25a2e19186627468f9564b3c149bd11e0f177d3f3c950fe308d",
+    "entries": 1027
+  },
+  "retainedSourceBindings": [
+    {
+      "relativePath": "native/crates/desktop/src/ssh_host.rs",
+      "retainedPath": "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/desktop/src/ssh_host.rs",
+      "sha256": "2b34d41e3fad83c0da01ea42c9734aafde93d6f184e82e42d8a2ae7226dcff42",
+      "qualifiedManifestMatch": true,
+      "payload": true
+    },
+    {
+      "relativePath": "native/crates/desktop/src/ssh_view.rs",
+      "retainedPath": "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/desktop/src/ssh_view.rs",
+      "sha256": "459f44d4f0c14d7bbdb48f9880512eb24c9794a79c1ab3ee66d74652d3c3f4b9",
+      "qualifiedManifestMatch": true,
+      "payload": true
+    },
+    {
+      "relativePath": "native/crates/desktop/src/workspace.rs",
+      "retainedPath": "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/desktop/src/workspace.rs",
+      "sha256": "de47a5e09e71b11ffc3b3b638f9d2f98e3536ee13efafcdb459bee1fb2f40d4d",
+      "qualifiedManifestMatch": true,
+      "payload": true
+    },
+    {
+      "relativePath": "native/crates/desktop/DOCUMENTATION.md",
+      "retainedPath": "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/desktop/DOCUMENTATION.md",
+      "sha256": "af6f35c51eb3409ff761b0f77023da6da37f3c1d182e17b4352472fd541161f7",
+      "qualifiedManifestMatch": true,
+      "payload": true
+    },
+    {
+      "relativePath": "scripts/parity/ssh_fixture.py",
+      "retainedPath": "/home/deandre/projects/rust/oc-wt/native-hosts-relay/scripts/parity/ssh_fixture.py",
+      "sha256": "4bba9b4d15bd2a67774e269bfe69e2127e104f95b424af07f9220d09597d7d6e",
+      "qualifiedManifestMatch": true,
+      "payload": true
+    },
+    {
+      "relativePath": "scripts/parity/ssh_fixture_test.py",
+      "retainedPath": "/home/deandre/projects/rust/oc-wt/native-hosts-relay/scripts/parity/ssh_fixture_test.py",
+      "sha256": "171cdce15d7bbc930e094876d5c01721bc4359ff4c7f04c7b630687c0c2678d1",
+      "qualifiedManifestMatch": true,
+      "payload": true
+    },
+    {
+      "relativePath": "native/crates/desktop/src/main.rs",
+      "retainedPath": "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/desktop/src/main.rs",
+      "sha256": "1d758756b5fb98e4550a1e9bbbf73267649e804cdf4d4606cf3fd393be54862f",
+      "qualifiedManifestMatch": true,
+      "payload": true
+    },
+    {
+      "relativePath": "native/crates/desktop/src/ssh_cleanup.rs",
+      "retainedPath": "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/desktop/src/ssh_cleanup.rs",
+      "sha256": "f7862108d2386595a304b24c951e918cdf9984c2630dee5eff21040f2eef2b09",
+      "qualifiedManifestMatch": true,
+      "payload": true
+    },
+    {
+      "relativePath": "native/crates/desktop/src/owned_process.rs",
+      "retainedPath": "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/desktop/src/owned_process.rs",
+      "sha256": "9a7c438315fff478ec1dbc0e4a79b7784346a123dc0fd7c86f46c003ffbb5073",
+      "qualifiedManifestMatch": true,
+      "payload": false
+    },
+    {
+      "relativePath": "native/crates/desktop/src/ssh_command.rs",
+      "retainedPath": "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/desktop/src/ssh_command.rs",
+      "sha256": "278d16b6193eff3c2b429fc531521c009ea2118d224306ce2091040d89299191",
+      "qualifiedManifestMatch": true,
+      "payload": false
+    },
+    {
+      "relativePath": "native/crates/desktop/src/ssh_prompt.rs",
+      "retainedPath": "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/desktop/src/ssh_prompt.rs",
+      "sha256": "b08130d567fa1db146d03933c1d4ca425ed394d97ed60b2f0633e711ba6170e1",
+      "qualifiedManifestMatch": true,
+      "payload": false
+    },
+    {
+      "relativePath": "native/crates/desktop/src/network.rs",
+      "retainedPath": "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/desktop/src/network.rs",
+      "sha256": "2ffa0b6685903ff8b15d27bdf19403c881f79f94dd48c9d246dbfc703827bafa",
+      "qualifiedManifestMatch": true,
+      "payload": false
+    },
+    {
+      "relativePath": "native/crates/desktop/src/connection.rs",
+      "retainedPath": "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/desktop/src/connection.rs",
+      "sha256": "8ba04e81742399064822fa929c6eb9a3ffbc714e455746da0b0de037fbf6d245",
+      "qualifiedManifestMatch": true,
+      "payload": false
+    },
+    {
+      "relativePath": "native/crates/desktop/src/host_profiles.rs",
+      "retainedPath": "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/desktop/src/host_profiles.rs",
+      "sha256": "32077a229c10c20b812e7fe8eaacc944670bf909b0c9dc0a48ea05a32eae6f0d",
+      "qualifiedManifestMatch": true,
+      "payload": false
+    },
+    {
+      "relativePath": "native/crates/transport/src/endpoint.rs",
+      "retainedPath": "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/transport/src/endpoint.rs",
+      "sha256": "41c8f9dc4f0e291fb67ab60c8b51b2c7b4b65886fadbbc84ab8edcd64b15e445",
+      "qualifiedManifestMatch": true,
+      "payload": false
+    },
+    {
+      "relativePath": "native/Cargo.toml",
+      "retainedPath": "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/Cargo.toml",
+      "sha256": "7606ac68d8762805b09b88e5edad852ed8439c51505756fe87364aa4a007bff9",
+      "qualifiedManifestMatch": true,
+      "payload": false
+    },
+    {
+      "relativePath": "native/Cargo.lock",
+      "retainedPath": "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/Cargo.lock",
+      "sha256": "7cf4af28be3847be618b14aa8df352eced27418887f551bb5da381680ab1dd64",
+      "qualifiedManifestMatch": true,
+      "payload": false
+    },
+    {
+      "relativePath": "native/crates/desktop/Cargo.toml",
+      "retainedPath": "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/desktop/Cargo.toml",
+      "sha256": "584ccff46574bfe9cdcf7d0ca4d7141de369ef74559a150438a9872dcf20a2ca",
+      "qualifiedManifestMatch": true,
+      "payload": false
+    }
+  ],
+  "externalInspectedReference": {
+    "path": "/home/deandre/projects/rust/oc-wt/native-hosts-relay/packages/electron/package.json",
+    "sha256": "f8338624550726f66d99140d370be2af7d4331f2e40ff87f09000a4f308f2b52",
+    "inQualifiedNativeManifest": false
+  },
+  "reconciliationNote": {
+    "path": "/home/deandre/projects/rust/OpenChamber/native/target/tmp/ssh-terminal-reconcile-96ac884e7d/boundaries.md",
+    "sha256": "8c902c57c69bc041d22b9ba50de079892d73f6996ef956dcdad1b07be3b9fbaa"
+  },
+  "consumerContract": {
+    "path": "/home/deandre/projects/rust/OpenChamber/native/.cache/unit-a-cleanup-6p4vyw3z/integration-export/consumer-contracts.md",
+    "sha256": "66ce197139b4b0379de36cd34b98f514f08b9e51bac54c24d3936d91a51fbd7f"
+  },
+  "storedArtifactChecks": {
+    "archive": {
+      "path": "/home/deandre/projects/rust/OpenChamber/native/.cache/unit-a-cleanup-6p4vyw3z/unit-a-qualified-integration.tar",
+      "sha256": "2cba6bba60b831d97748bc9bd8e50d44cd33d6ad969145df5586259f87cd767b",
+      "bytes": 1503641600,
+      "matchesStoredIdentity": true
+    },
+    "candidate": {
+      "path": "/home/deandre/projects/rust/OpenChamber/native/.cache/unit-a-cleanup-6p4vyw3z/candidate",
+      "sha256": "b75c1a609f426d11f3347ee0160928d281b09c9b1e46e1d30c11f46bea4ee4c2",
+      "bytes": 1503143616,
+      "matchesStoredIdentity": true
+    },
+    "previousCandidate": {
+      "path": "/home/deandre/projects/rust/OpenChamber/native/.cache/unit-a-cleanup-6p4vyw3z/attempt-2/candidate",
+      "sha256": "c8d5282707132e492205a5b9b09f2a0802ca3b1e9aaf698b6e0b67a26b82ba7a",
+      "bytes": 1503070112,
+      "matchesStoredIdentity": true
+    },
+    "patch": {
+      "path": "/home/deandre/projects/rust/OpenChamber/native/.cache/unit-a-cleanup-6p4vyw3z/integration-export/unit-a.patch",
+      "sha256": "5adc7729f82e8cd99b489cfbae0ec040ca66c846558c02e8c26682580117f948",
+      "bytes": 36113,
+      "matchesStoredIdentity": true
+    },
+    "qualifyingReceipt": {
+      "path": "/home/deandre/projects/rust/OpenChamber/native/.cache/unit-a-cleanup-6p4vyw3z/integration-export/qualifying-receipt.json",
+      "sha256": "997b8cf6ef2dff52579ff6e2851065e7a67c11cb1bcd171b16544e9ceb2079c1",
+      "bytes": 563,
+      "matchesStoredIdentity": true
+    }
+  },
+  "guard": {
+    "floorBytes": 18253611008,
+    "availableBytes": 40013885440
+  },
+  "qualificationRerun": false,
+  "sourceEdited": false,
+  "archiveRepacked": false,
+  "protectedBaselineTouched": false,
+  "knowledgeBaseCapture": "deferred by artifact-only write authorization"
+}

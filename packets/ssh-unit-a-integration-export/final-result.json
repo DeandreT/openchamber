@@ -1,0 +1,51 @@
+{
+  "status": "qualified bounded Unit A; parent review/integration separate",
+  "scope": [
+    "native/crates/desktop/src/ssh_host.rs",
+    "native/crates/desktop/src/ssh_view.rs",
+    "native/crates/desktop/src/workspace.rs",
+    "native/crates/desktop/DOCUMENTATION.md",
+    "scripts/parity/ssh_fixture.py",
+    "scripts/parity/ssh_fixture_test.py",
+    "native/crates/desktop/src/main.rs",
+    "native/crates/desktop/src/ssh_cleanup.rs"
+  ],
+  "sourceInputsUnchanged": true,
+  "inputCount": 1027,
+  "originalArtifactsUnchanged": {
+    "candidate": true,
+    "originalSnapshot": true,
+    "originalHandoff": true
+  },
+  "dependencyInputsUnchanged": {
+    "native/Cargo.toml": true,
+    "native/Cargo.lock": true,
+    "native/crates/desktop/Cargo.toml": true
+  },
+  "focusedNativeTestsPassed": 15,
+  "unchangedFixtureContractsPassed": 6,
+  "clippyPassed": true,
+  "debugBuildPassed": true,
+  "finalReceipt": "/home/deandre/projects/rust/OpenChamber/native/target/tmp/unit-a-not-found-5xtrkk05/receipt.json",
+  "beforeReceipt": "/home/deandre/projects/rust/OpenChamber/native/target/tmp/unit-a-before-nphn_6bq/receipt.json",
+  "previousCandidatePreserved": true,
+  "candidateSha256": "b75c1a609f426d11f3347ee0160928d281b09c9b1e46e1d30c11f46bea4ee4c2",
+  "previousCandidateSha256": "c8d5282707132e492205a5b9b09f2a0802ca3b1e9aaf698b6e0b67a26b82ba7a",
+  "patchSha256": "5adc7729f82e8cd99b489cfbae0ec040ca66c846558c02e8c26682580117f948",
+  "privateCompilerTmp": {
+    "path": "/tmp/opencode/ua-tc5pdldf",
+    "mode": "0o700",
+    "reason": "short owned Unix socket path; private compiler/test TMPDIR"
+  },
+  "minimumSampledAvailableBytes": 50562965504,
+  "safetyStopBytes": 18253611008,
+  "signals": [],
+  "limits": [
+    "remote stop is best effort",
+    "helpers remain unconfirmed",
+    "status/stop is not atomic and PID reuse is not proven away",
+    "no GUI/quit/held>200ms/aggregate-deadline proof",
+    "no new lifecycle wiring or switch policy",
+    "no independent agent review; parent reviewed parser correction"
+  ]
+}

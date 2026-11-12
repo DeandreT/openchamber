@@ -1,0 +1,65 @@
+{
+  "stages": [
+    {
+      "stage": "fixture-contracts",
+      "command": [
+        "python3",
+        "-m",
+        "unittest",
+        "discover",
+        "-s",
+        "/home/deandre/projects/rust/oc-wt/native-hosts-relay/scripts/parity",
+        "-p",
+        "ssh_fixture_test.py"
+      ],
+      "exitCode": 0
+    },
+    {
+      "stage": "clean-before-focused-tests",
+      "command": [
+        "cargo",
+        "clean",
+        "--offline",
+        "--locked",
+        "--manifest-path",
+        "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/Cargo.toml",
+        "--profile",
+        "dev",
+        "-p",
+        "openchamber-native-core",
+        "-p",
+        "openchamber-native-transport",
+        "-p",
+        "openchamber-native-desktop",
+        "-p",
+        "gpui-base",
+        "-p",
+        "gpui-component",
+        "-p",
+        "gpui-pre"
+      ],
+      "exitCode": 0
+    },
+    {
+      "stage": "focused-tests",
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "--offline",
+        "--locked",
+        "--manifest-path",
+        "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/Cargo.toml",
+        "--cargo-profile",
+        "dev",
+        "-p",
+        "openchamber-native-desktop",
+        "-j4",
+        "-E",
+        "test(ssh_)"
+      ],
+      "exitCode": 100
+    }
+  ],
+  "sourceUnchanged": true
+}

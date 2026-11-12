@@ -1,0 +1,9 @@
+{
+  "path": "/home/deandre/projects/rust/OpenChamber/native/.cache/unit-a-cleanup-6p4vyw3z/unit-a-qualified-integration.tar",
+  "sha256": "2cba6bba60b831d97748bc9bd8e50d44cd33d6ad969145df5586259f87cd767b",
+  "bytes": 1503641600,
+  "containsQualifiedCandidate": true,
+  "sourceInputsStillMatch": true,
+  "wholeWorkspaceSourceIncluded": false,
+  "qualificationRepeated": false
+}

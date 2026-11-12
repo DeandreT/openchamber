@@ -1,0 +1,19 @@
+{
+  "command": [
+    "python3",
+    "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/.cache/unit-a-cleanup-6p4vyw3z/qualify.py"
+  ],
+  "exitCode": 100,
+  "owner": {
+    "pid": 1184213,
+    "pgrp": 1184213,
+    "startTicks": 9678407
+  },
+  "log": "/home/deandre/projects/rust/OpenChamber/native/target/tmp/unit-a-qualification-0fzslye4/command.log",
+  "availableBytesBefore": 50958274560,
+  "availableBytesAfter": 52346028032,
+  "minimumSampledAvailableBytes": 50958274560,
+  "stopThresholdBytes": 18253611008,
+  "signals": [],
+  "cleanupPerformed": false
+}

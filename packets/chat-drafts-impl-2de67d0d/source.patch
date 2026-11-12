@@ -1,0 +1,2062 @@
+diff -ruN before/native/crates/core/src/chat_draft.rs after/native/crates/core/src/chat_draft.rs
+--- before/native/crates/core/src/chat_draft.rs	1969-12-31 16:00:00.000000000 -0800
++++ after/native/crates/core/src/chat_draft.rs	2026-11-11 03:08:15.681073144 -0800
+@@ -0,0 +1,381 @@
++//! The new-session draft's Chat target: a session that belongs to no project
++//! and lives in its own folder under the server's managed Chats root.
++//!
++//! Ports the target rules of `openNewSessionDraft` and
++//! `setNewSessionDraftTarget` (`sync/session-ui-store.ts`), the folder name of
++//! `createChatDirectory` (`lib/chatDirectories.ts`), the Chat step of
++//! `pickEffectiveDirectory` (`hooks/useEffectiveDirectory.ts`) and the text a
++//! moved draft carries (`composer/state/useComposerDraft.ts`).
++
++use crate::chat_roots::ChatRoots;
++use crate::path;
++
++/// The project identity a Chat creation records (`CHAT_DRAFT_PROJECT_ID`).
++/// No registered project can have it: project identities are not URIs.
++pub const CHAT_PROJECT_ID: &str = "openchamber:chats";
++
++/// The draft identity of the one open Chat draft of a runtime.
++pub const CHAT_DRAFT_ID: &str = "chat-new-session";
++
++/// Where a new-session draft will create its session.
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub enum DraftDestination {
++    /// A managed Chat, in a folder of its own under the Chats root.
++    Chat,
++    /// A registered project root or one of its worktrees.
++    Project(String),
++}
++
++/// What an entry point asked for when it opened a new-session draft.
++#[derive(Clone, Copy, Debug, Default)]
++pub struct OpenRequest<'a> {
++    /// The Chats header's "+": a Chat whatever was targeted last.
++    pub chat: bool,
++    /// `directoryOverride`: the directory the entry point forwards, such as
++    /// the selected session's for the shortcut and the menu.
++    pub directory: Option<&'a str>,
++    /// The side of the target picker the user last worked on.
++    pub last: Option<&'a DraftDestination>,
++}
++
++/// The destination a new draft opens on.
++///
++/// An explicit directory names a project draft unless it is a managed Chat
++/// folder, which asks for another Chat. With nothing explicit the draft
++/// reopens on the last project target while that project is still
++/// registered, and on Chat otherwise. `registered` answers whether a session
++/// can be created in a directory.
++///
++/// The reference opens a project draft for any explicit directory. Native
++/// creates sessions only in registered directories, so an unregistered one
++/// opens a Chat, as the reference does for an unregistered live directory.
++pub fn resolve_destination(
++    request: OpenRequest<'_>,
++    roots: Option<&ChatRoots>,
++    registered: impl Fn(&str) -> bool,
++) -> DraftDestination {
++    if request.chat {
++        return DraftDestination::Chat;
++    }
++    if let Some(directory) = request.directory {
++        return match path::normalize(directory) {
++            Some(directory)
++                if !roots.is_some_and(|roots| roots.contains(Some(directory.as_str())))
++                    && registered(&directory) =>
++            {
++                DraftDestination::Project(directory)
++            }
++            _ => DraftDestination::Chat,
++        };
++    }
++    match request.last {
++        Some(DraftDestination::Project(directory)) if registered(directory) => {
++            DraftDestination::Project(directory.clone())
++        }
++        _ => DraftDestination::Chat,
++    }
++}
++
++/// How far the read of the server's Chats root got.
++///
++/// A failed read is never the same as a server without a root: neither can
++/// create a Chat, but only the failure is worth reading again.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub enum RootsStatus {
++    /// No answer yet.
++    Pending,
++    /// The server named its root.
++    Ready,
++    /// The server answered without a usable home, so it has no root.
++    Missing,
++    /// The last read failed.
++    Failed,
++}
++
++impl RootsStatus {
++    /// `answered` is whether a read completed, `failed` whether the last
++    /// one gave up.
++    pub fn of(roots: Option<&ChatRoots>, answered: bool, failed: bool) -> Self {
++        match (roots, answered, failed) {
++            (Some(_), _, _) => Self::Ready,
++            (None, true, _) => Self::Missing,
++            (None, false, true) => Self::Failed,
++            (None, false, false) => Self::Pending,
++        }
++    }
++}
++
++/// A calendar day, for the dated folder a Chat is created under.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub struct ChatDate {
++    pub year: i32,
++    pub month: u32,
++    pub day: u32,
++}
++
++/// The folder of one new Chat: `<root>/<YYYY-MM-DD>/session-<id>`.
++///
++/// Returns `None` for an `id` that is empty or would leave the dated folder.
++pub fn session_directory(roots: &ChatRoots, date: ChatDate, id: &str) -> Option<String> {
++    let usable = !id.is_empty()
++        && id
++            .chars()
++            .all(|character| character.is_ascii_alphanumeric() || character == '-');
++    usable.then(|| {
++        format!(
++            "{}/{:04}-{:02}-{:02}/session-{id}",
++            roots.configured().trim_end_matches('/'),
++            date.year,
++            date.month,
++            date.day
++        )
++    })
++}
++
++/// The directory the panels, the catalogs and the terminal of a Chat draft
++/// work in: the managed Chats root, and nothing until the server names it.
++/// Never the project that was on screen before, whose files, commands and
++/// skills would leak into the chat.
++pub fn effective_directory(roots: Option<&ChatRoots>) -> Option<String> {
++    roots.and_then(|roots| path::normalize(roots.configured()))
++}
++
++/// Whether `folder` can still hold a new Chat: a descendant of a managed
++/// root, never a root itself.
++pub fn is_session_folder(roots: &ChatRoots, folder: &str) -> bool {
++    roots
++        .root_of(Some(folder))
++        .is_some_and(|root| path::normalize(folder).as_deref() != Some(root))
++}
++
++/// The text of a draft that moved to another destination: what was typed
++/// follows what the destination already kept, and equal texts stay single.
++pub fn carried_text(saved: &str, outgoing: &str) -> String {
++    if saved.is_empty() || saved == outgoing {
++        outgoing.to_owned()
++    } else if outgoing.is_empty() {
++        saved.to_owned()
++    } else {
++        format!("{saved}\n\n{outgoing}")
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn roots() -> ChatRoots {
++        ChatRoots::from_home_info(Some("/home/me"), Some("/data/chats"), None, None)
++            .expect("home is usable")
++    }
++
++    fn registered(directory: &str) -> bool {
++        matches!(directory, "/work/app" | "/work/app-worktree")
++    }
++
++    #[test]
++    fn a_plain_new_session_opens_a_chat_until_a_project_was_targeted_last() {
++        let roots = roots();
++        assert_eq!(
++            resolve_destination(OpenRequest::default(), Some(&roots), registered),
++            DraftDestination::Chat
++        );
++        let project = DraftDestination::Project("/work/app".to_owned());
++        assert_eq!(
++            resolve_destination(
++                OpenRequest {
++                    last: Some(&project),
++                    ..OpenRequest::default()
++                },
++                Some(&roots),
++                registered,
++            ),
++            project
++        );
++        assert_eq!(
++            resolve_destination(
++                OpenRequest {
++                    last: Some(&DraftDestination::Chat),
++                    ..OpenRequest::default()
++                },
++                Some(&roots),
++                registered,
++            ),
++            DraftDestination::Chat
++        );
++    }
++
++    #[test]
++    fn a_project_removed_since_it_was_targeted_reopens_as_a_chat() {
++        let removed = DraftDestination::Project("/work/gone".to_owned());
++        assert_eq!(
++            resolve_destination(
++                OpenRequest {
++                    last: Some(&removed),
++                    ..OpenRequest::default()
++                },
++                Some(&roots()),
++                registered,
++            ),
++            DraftDestination::Chat
++        );
++    }
++
++    #[test]
++    fn a_forwarded_session_directory_names_its_project_or_another_chat() {
++        let roots = roots();
++        let last = DraftDestination::Project("/work/app".to_owned());
++        let open = |directory| {
++            resolve_destination(
++                OpenRequest {
++                    directory: Some(directory),
++                    last: Some(&last),
++                    ..OpenRequest::default()
++                },
++                Some(&roots),
++                registered,
++            )
++        };
++        assert_eq!(
++            open("/work/app-worktree/"),
++            DraftDestination::Project("/work/app-worktree".to_owned())
++        );
++        // A chat session's folder owns no project, and the last project
++        // target does not take the draft back either.
++        assert_eq!(
++            open("/data/chats/2026-11-11/session-a"),
++            DraftDestination::Chat
++        );
++        assert_eq!(
++            open("/home/me/.config/openchamber/chats/old"),
++            DraftDestination::Chat
++        );
++        assert_eq!(open("/elsewhere"), DraftDestination::Chat);
++    }
++
++    #[test]
++    fn the_chats_header_opens_a_chat_over_every_other_input() {
++        let last = DraftDestination::Project("/work/app".to_owned());
++        assert_eq!(
++            resolve_destination(
++                OpenRequest {
++                    chat: true,
++                    directory: Some("/work/app"),
++                    last: Some(&last),
++                },
++                Some(&roots()),
++                registered,
++            ),
++            DraftDestination::Chat
++        );
++    }
++
++    #[test]
++    fn a_failed_root_read_is_not_a_server_without_a_root() {
++        let roots = roots();
++        assert_eq!(
++            RootsStatus::of(Some(&roots), true, false),
++            RootsStatus::Ready
++        );
++        assert_eq!(RootsStatus::of(None, true, false), RootsStatus::Missing);
++        assert_eq!(RootsStatus::of(None, false, true), RootsStatus::Failed);
++        assert_eq!(RootsStatus::of(None, false, false), RootsStatus::Pending);
++        // Roots kept from an earlier answer outlive a later failed refresh.
++        assert_eq!(
++            RootsStatus::of(Some(&roots), false, true),
++            RootsStatus::Ready
++        );
++    }
++
++    #[test]
++    fn a_chat_is_created_in_a_dated_folder_of_its_own_under_the_root() {
++        let roots = roots();
++        let date = ChatDate {
++            year: 2026,
++            month: 3,
++            day: 7,
++        };
++        let folder = session_directory(&roots, date, "0a1b-2c").expect("the id is usable");
++        assert_eq!(folder, "/data/chats/2026-03-07/session-0a1b-2c");
++        assert!(roots.contains(Some(folder.as_str())));
++        assert!(is_session_folder(&roots, &folder));
++        assert_eq!(session_directory(&roots, date, ""), None);
++        assert_eq!(session_directory(&roots, date, "../escape"), None);
++        assert_eq!(session_directory(&roots, date, "a/b"), None);
++    }
++
++    #[test]
++    fn a_session_created_in_the_chat_folder_is_listed_under_chats() {
++        use crate::ids::ProjectId;
++        use crate::ordering::SessionOrdering;
++        use crate::ownership::{ConfiguredProject, OwnershipInputs};
++        use crate::session::SessionRecord;
++        use crate::sidebar_collection::SidebarCollection;
++
++        let roots = roots();
++        let date = ChatDate {
++            year: 2026,
++            month: 11,
++            day: 11,
++        };
++        let folder = session_directory(&roots, date, "abc").expect("the id is usable");
++        let projects = [ConfiguredProject {
++            id: ProjectId::from("app"),
++            path: "/work/app".into(),
++        }];
++        let sessions = [
++            SessionRecord::new("chat", &folder),
++            SessionRecord::new("project", "/work/app"),
++        ];
++        let collection = SidebarCollection::build(
++            &OwnershipInputs {
++                sessions: &sessions,
++                projects: &projects,
++                ..OwnershipInputs::default()
++            },
++            Some(&roots),
++            &mut SessionOrdering::new(),
++        );
++        let chats: Vec<&str> = collection
++            .chat_sessions
++            .iter()
++            .map(|session| session.id.as_str())
++            .collect();
++        let owned: Vec<&str> = collection
++            .project_sessions
++            .iter()
++            .map(|session| session.id.as_str())
++            .collect();
++        assert_eq!(chats, ["chat"]);
++        assert_eq!(owned, ["project"]);
++    }
++
++    #[test]
++    fn a_root_or_a_folder_outside_the_roots_holds_no_new_chat() {
++        let roots = roots();
++        assert!(!is_session_folder(&roots, "/data/chats"));
++        assert!(!is_session_folder(&roots, "/data/chats/"));
++        assert!(!is_session_folder(&roots, "/work/app"));
++        assert!(is_session_folder(
++            &roots,
++            "/home/me/.config/openchamber/chats/2025-01-01/session-a"
++        ));
++    }
++
++    #[test]
++    fn a_chat_draft_works_in_the_root_and_nowhere_before_it_is_known() {
++        assert_eq!(effective_directory(None), None);
++        assert_eq!(
++            effective_directory(Some(&roots())).as_deref(),
++            Some("/data/chats")
++        );
++    }
++
++    #[test]
++    fn a_moved_draft_keeps_its_text_after_what_the_destination_held() {
++        assert_eq!(carried_text("", "typed"), "typed");
++        assert_eq!(carried_text("kept", "typed"), "kept\n\ntyped");
++        assert_eq!(carried_text("same", "same"), "same");
++        assert_eq!(carried_text("kept", ""), "kept");
++    }
++}
+diff -ruN before/native/crates/core/src/lib.rs after/native/crates/core/src/lib.rs
+--- before/native/crates/core/src/lib.rs	2026-11-11 02:58:44.437912757 -0800
++++ after/native/crates/core/src/lib.rs	2026-11-11 02:59:24.525262813 -0800
+@@ -10,6 +10,7 @@
+ pub mod autocomplete;
+ pub mod branch_integration;
+ pub mod branching;
++pub mod chat_draft;
+ pub mod chat_roots;
+ pub mod composer_selection;
+ pub mod context_pins;
+diff -ruN before/native/crates/desktop/src/app_menu.rs after/native/crates/desktop/src/app_menu.rs
+--- before/native/crates/desktop/src/app_menu.rs	2026-11-11 02:58:44.601914535 -0800
++++ after/native/crates/desktop/src/app_menu.rs	2026-11-11 03:02:21.139343113 -0800
+@@ -452,7 +452,9 @@
+             Command::OpenCommandPalette => self.toggle_command_palette(window, cx),
+             Command::Quit => cx.quit(),
+             Command::Close => self.request_close(window, cx),
+-            Command::NewSession => self.show_new_session(window, cx),
++            Command::NewSession => {
++                self.open_new_session(crate::chat_draft::NewSession::FromSelected, window, cx)
++            }
+             Command::ToggleRightSidebar => {
+                 let surface = self.panels.open.unwrap_or(PanelSurface::Git);
+                 self.toggle_panel(surface, cx);
+diff -ruN before/native/crates/desktop/src/chat_draft.rs after/native/crates/desktop/src/chat_draft.rs
+--- before/native/crates/desktop/src/chat_draft.rs	1969-12-31 16:00:00.000000000 -0800
++++ after/native/crates/desktop/src/chat_draft.rs	2026-11-11 03:05:45.713347474 -0800
+@@ -0,0 +1,506 @@
++//! The new-session draft's Chat target: which runtimes have one open, the
++//! folder its session will be created in, and the read of the Chats root.
++//!
++//! `draft_projects` keeps owning project targets. A runtime's draft targets
++//! Chat when it has an entry here and none there, so a project chosen by any
++//! path wins. The folder is named by the client once the server names its
++//! root and is created on the server by the first send.
++
++use std::collections::hash_map::RandomState;
++use std::collections::{HashMap, HashSet};
++use std::hash::{BuildHasher, Hasher};
++
++use chrono::Datelike;
++use gpui_kit::{App, Context, Task, Window};
++use openchamber_native_core::chat_draft::{
++    self, CHAT_DRAFT_ID, CHAT_PROJECT_ID, ChatDate, DraftDestination, OpenRequest, RootsStatus,
++};
++use openchamber_native_core::chat_roots::ChatRoots;
++use openchamber_native_core::draft::{DraftKey, DraftTarget};
++use openchamber_native_core::ids::RuntimeId;
++
++use crate::connection::ConnectionState;
++use crate::ui_memory::{self, UiMemory};
++use crate::workspace::Workspace;
++
++/// The failure shown when a Chat cannot be created for want of its root.
++const NOT_SENT: &str = "chat.nativeRecovery.sendFailed";
++
++/// Which entry point opened the new-session draft.
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(crate) enum NewSession {
++    /// The titlebar button and the command palette: the side last worked on.
++    Plain,
++    /// The shortcut and the menu, which forward the selected session's
++    /// directory: its project, or another Chat from a chat session.
++    FromSelected,
++    /// The Chats header's "+".
++    Chat,
++}
++
++#[derive(Default)]
++pub(crate) struct ChatDrafts {
++    /// The runtimes whose draft targets Chat, with the folder the session
++    /// will be created in; `None` until the server names its Chats root.
++    open: HashMap<RuntimeId, Option<String>>,
++    /// The runtimes whose first draft already took its default destination.
++    defaulted: HashSet<RuntimeId>,
++    /// Whether the last read of the current runtime's Chats root failed.
++    roots_failed: bool,
++    /// The read a failed one is retried with; dropping it cancels the read.
++    roots_read: Option<Task<()>>,
++    sequence: u64,
++}
++
++impl ChatDrafts {
++    /// The folder of `runtime`'s Chat draft, when it has one.
++    fn folder(&self, runtime: &RuntimeId) -> Option<&str> {
++        self.open.get(runtime)?.as_deref()
++    }
++
++    /// Stops `runtime`'s draft targeting Chat. Its text stays stored under
++    /// its folder and comes back when Chat is targeted again.
++    pub(crate) fn close(&mut self, runtime: &RuntimeId) {
++        self.open.remove(runtime);
++    }
++
++    /// A runtime switch starts a new read of the new runtime's root.
++    pub(crate) fn switch_runtime(&mut self) {
++        self.roots_failed = false;
++        self.roots_read = None;
++    }
++}
++
++impl Workspace {
++    /// Whether the current runtime's new-session draft targets Chat.
++    pub(crate) fn chat_draft_open(&self) -> bool {
++        !self.draft_projects.contains_key(&self.runtime)
++            && self.chat_drafts.open.contains_key(&self.runtime)
++    }
++
++    /// The Chat draft's key once its folder is named.
++    pub(crate) fn chat_draft_key(&self) -> Option<DraftKey> {
++        if !self.chat_draft_open() {
++            return None;
++        }
++        DraftKey::new(
++            self.runtime.clone(),
++            self.chat_drafts.folder(&self.runtime)?,
++            DraftTarget::NewSession(CHAT_DRAFT_ID.into()),
++        )
++    }
++
++    /// The directory a Chat draft's catalogs, panels and terminal use: the
++    /// Chats root. `None` while it is unknown, never a project's directory.
++    pub(crate) fn chat_draft_directory(&self) -> Option<String> {
++        chat_draft::effective_directory(self.topology.chat_roots.as_ref())
++    }
++
++    pub(crate) fn chat_roots_status(&self) -> RootsStatus {
++        RootsStatus::of(
++            self.topology.chat_roots.as_ref(),
++            self.session_admission.roots_ready,
++            self.chat_drafts.roots_failed,
++        )
++    }
++
++    /// Whether `key` is a Chat draft whose folder the known roots hold.
++    pub(crate) fn is_chat_creation(&self, key: &DraftKey) -> bool {
++        matches!(key.target(), DraftTarget::NewSession(id) if id.as_str() == CHAT_DRAFT_ID)
++            && self
++                .topology
++                .chat_roots
++                .as_ref()
++                .is_some_and(|roots| chat_draft::is_session_folder(roots, key.directory()))
++    }
++
++    /// Opens the new-session draft on the destination `origin` asks for.
++    /// Synthetic data has no server to create a Chat on and keeps its draft.
++    pub(crate) fn open_new_session(
++        &mut self,
++        origin: NewSession,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
++        if self.is_synthetic() {
++            self.show_new_session(window, cx);
++            return;
++        }
++        let directory = match origin {
++            NewSession::FromSelected => self
++                .selected_session()
++                .and_then(|session| session.directory.clone()),
++            NewSession::Plain | NewSession::Chat => None,
++        };
++        let last = self.last_draft_destination(cx);
++        let destination = chat_draft::resolve_destination(
++            OpenRequest {
++                chat: origin == NewSession::Chat,
++                directory: directory.as_deref(),
++                last: last.as_ref(),
++            },
++            self.topology.chat_roots.as_ref(),
++            |directory| self.draft_destination_project(directory).is_some(),
++        );
++        self.show_new_session(window, cx);
++        self.retarget_draft(&destination, false, window, cx);
++        self.focus_composer(window, cx);
++        if destination == DraftDestination::Chat {
++            self.retry_failed_chat_roots(window, cx);
++        }
++    }
++
++    /// The target picker's choice for the open draft: a registered
++    /// directory, or `CHAT_PROJECT_ID` for Chat. The draft stays the same
++    /// one, so its text goes along to the new destination.
++    pub(crate) fn move_draft_to(
++        &mut self,
++        choice: &str,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
++        if self.selected.is_some() {
++            return;
++        }
++        let destination = if choice == CHAT_PROJECT_ID {
++            DraftDestination::Chat
++        } else if self.draft_destination_project(choice).is_some() {
++            DraftDestination::Project(choice.to_owned())
++        } else {
++            return;
++        };
++        self.retarget_draft(&destination, true, window, cx);
++        self.focus_composer(window, cx);
++        if destination == DraftDestination::Chat {
++            self.retry_failed_chat_roots(window, cx);
++        }
++    }
++
++    /// The one writer of the draft's destination. With `carry`, text typed
++    /// under the previous destination moves to the new one.
++    fn retarget_draft(
++        &mut self,
++        destination: &DraftDestination,
++        carry: bool,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
++        let on_draft = self.selected.is_none();
++        if on_draft {
++            self.save_composer_draft(cx);
++        }
++        let before = self.new_session_draft_key();
++        let runtime = self.runtime.clone();
++        match destination {
++            DraftDestination::Chat => {
++                self.draft_projects.remove(&runtime);
++                self.chat_drafts.open.entry(runtime).or_insert(None);
++                self.name_chat_folder();
++            }
++            DraftDestination::Project(directory) => {
++                self.chat_drafts.close(&runtime);
++                self.draft_projects.insert(runtime, directory.clone());
++            }
++        }
++        self.remember_draft_destination(destination, cx);
++        let after = self.new_session_draft_key();
++        if carry {
++            self.carry_draft_text(before.as_ref(), after.as_ref(), cx);
++        }
++        if on_draft {
++            self.navigation_revision = self.navigation_revision.wrapping_add(1);
++            self.composer_key = after;
++            self.restore_composer_draft(window, cx);
++            self.ensure_send_catalog(cx);
++        }
++        cx.notify();
++    }
++
++    /// The first draft of a runtime opens on the side last worked on, once
++    /// the registered projects are known. Later reads change nothing, and a
++    /// destination the user already picked is kept.
++    pub(crate) fn open_default_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
++        if self.is_synthetic() || !self.chat_drafts.defaulted.insert(self.runtime.clone()) {
++            return;
++        }
++        if self.draft_projects.contains_key(&self.runtime)
++            || self.chat_drafts.open.contains_key(&self.runtime)
++        {
++            return;
++        }
++        let last = self.last_draft_destination(cx);
++        let destination = chat_draft::resolve_destination(
++            OpenRequest {
++                last: last.as_ref(),
++                ..OpenRequest::default()
++            },
++            self.topology.chat_roots.as_ref(),
++            |directory| self.draft_destination_project(directory).is_some(),
++        );
++        // Text typed before the destination was known belongs to this draft.
++        self.retarget_draft(&destination, true, window, cx);
++    }
++
++    /// Names the Chat draft's folder when the roots allow it: the folder a
++    /// stored Chat draft was saved under, else a new one. A folder outside
++    /// the current roots is replaced, since the server would refuse it.
++    fn name_chat_folder(&mut self) {
++        let runtime = self.runtime.clone();
++        if !self.chat_drafts.open.contains_key(&runtime) {
++            return;
++        }
++        let Some(roots) = self.topology.chat_roots.clone() else {
++            return;
++        };
++        if self
++            .chat_drafts
++            .folder(&runtime)
++            .is_some_and(|folder| chat_draft::is_session_folder(&roots, folder))
++        {
++            return;
++        }
++        let stored = self
++            .drafts
++            .iter()
++            .map(|(key, _)| key)
++            .filter(|key| {
++                key.runtime() == &runtime
++                    && matches!(
++                        key.target(),
++                        DraftTarget::NewSession(id) if id.as_str() == CHAT_DRAFT_ID
++                    )
++                    && chat_draft::is_session_folder(&roots, key.directory())
++            })
++            .map(|key| key.directory().to_owned())
++            .min();
++        let folder = stored.or_else(|| self.new_chat_folder(&roots));
++        self.chat_drafts.open.insert(runtime, folder);
++    }
++
++    fn new_chat_folder(&mut self, roots: &ChatRoots) -> Option<String> {
++        let today = chrono::Local::now().date_naive();
++        self.chat_drafts.sequence = self.chat_drafts.sequence.wrapping_add(1);
++        let mut id = String::with_capacity(32);
++        for half in 0..2_u8 {
++            // Uniqueness only: the name confers no authority.
++            let mut hasher = RandomState::new().build_hasher();
++            hasher.write_u64(self.chat_drafts.sequence);
++            hasher.write_u8(half);
++            id.push_str(&format!("{:016x}", hasher.finish()));
++        }
++        chat_draft::session_directory(
++            roots,
++            ChatDate {
++                year: today.year(),
++                month: today.month(),
++                day: today.day(),
++            },
++            &id,
++        )
++    }
++
++    /// Follows an answer about the Chats root: a Chat draft waiting for its
++    /// folder gets one, and what was typed meanwhile moves under it.
++    pub(crate) fn chat_roots_read(
++        &mut self,
++        succeeded: bool,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
++        self.chat_drafts.roots_failed = !succeeded;
++        if succeeded {
++            self.settle_chat_folder(window, cx);
++        }
++        cx.notify();
++    }
++
++    /// Also runs after stored drafts load, which can name the folder a Chat
++    /// draft was saved under before the restart.
++    pub(crate) fn settle_chat_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
++        if !self.chat_draft_open() {
++            return;
++        }
++        let before = self.new_session_draft_key();
++        self.name_chat_folder();
++        let after = self.new_session_draft_key();
++        if before == after {
++            return;
++        }
++        let on_draft = self.selected.is_none() && self.composer_key == before;
++        if on_draft {
++            self.save_composer_draft(cx);
++        }
++        self.carry_draft_text(before.as_ref(), after.as_ref(), cx);
++        if on_draft {
++            self.composer_key = after;
++            self.restore_composer_draft(window, cx);
++            self.ensure_send_catalog(cx);
++        }
++    }
++
++    /// After a Chat's session exists its folder is that session's: the
++    /// draft takes a new one, with whatever was typed since the send.
++    pub(crate) fn renew_chat_folder(
++        &mut self,
++        runtime: &RuntimeId,
++        used: &DraftKey,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) {
++        if self.chat_drafts.folder(runtime) != Some(used.directory()) {
++            return;
++        }
++        if runtime != &self.runtime {
++            // Its roots are read again when that runtime is back.
++            self.chat_drafts.open.insert(runtime.clone(), None);
++            return;
++        }
++        let folder = self
++            .topology
++            .chat_roots
++            .clone()
++            .and_then(|roots| self.new_chat_folder(&roots));
++        self.chat_drafts.open.insert(runtime.clone(), folder);
++        if !self.chat_draft_open() {
++            return;
++        }
++        let after = self.new_session_draft_key();
++        let on_draft = self.selected.is_none() && self.composer_key.as_ref() == Some(used);
++        if on_draft {
++            self.save_composer_draft(cx);
++        }
++        self.carry_draft_text(Some(used), after.as_ref(), cx);
++        if on_draft {
++            self.composer_key = after;
++            self.restore_composer_draft(window, cx);
++        }
++    }
++
++    /// Moves a draft's text from one key to another, after whatever the
++    /// destination already kept. Files, context and mentions name the old
++    /// directory and stay there. A compound document is left where it is.
++    fn carry_draft_text(
++        &mut self,
++        from: Option<&DraftKey>,
++        to: Option<&DraftKey>,
++        cx: &mut Context<Self>,
++    ) {
++        let (Some(from), Some(to)) = (from, to) else {
++            return;
++        };
++        if from == to
++            || self.composer_documents.contains(from)
++            || self.composer_documents.contains(to)
++        {
++            return;
++        }
++        let Some(mut left) = self.drafts.take(from) else {
++            return;
++        };
++        let outgoing = left.text.clone();
++        if outgoing.is_empty() {
++            self.drafts.save(from.clone(), left);
++            return;
++        }
++        left.edit_text(String::new(), 0..0);
++        self.record_native_composer_change(from);
++        self.save_draft_preview(from, &left, cx);
++        self.drafts.save(from.clone(), left);
++        let mut kept = self.drafts.take(to).unwrap_or_default();
++        let text = chat_draft::carried_text(&kept.text, &outgoing);
++        let end = text.len();
++        kept.edit_text(text, end..end);
++        self.record_native_composer_change(to);
++        self.save_draft_preview(to, &kept, cx);
++        self.drafts.save(to.clone(), kept);
++        self.queue_persistence(cx);
++    }
++
++    /// Whether a send from the Chat draft has to stop for want of a folder.
++    /// The draft and its text stay; a failed root read is tried again and
++    /// the failure is shown, so the message is never created elsewhere.
++    pub(crate) fn chat_send_blocked(
++        &mut self,
++        window: &mut Window,
++        cx: &mut Context<Self>,
++    ) -> bool {
++        if self.selected.is_some() || !self.chat_draft_open() || self.chat_draft_key().is_some() {
++            return false;
++        }
++        if self.composer_has_sendable_content(cx)
++            && matches!(
++                self.chat_roots_status(),
++                RootsStatus::Failed | RootsStatus::Missing
++            )
++        {
++            self.notify_mutation_failure(NOT_SENT, window, cx);
++            self.retry_failed_chat_roots(window, cx);
++        }
++        true
++    }
++
++    /// Reads the Chats root again after a failed read.
++    pub(crate) fn retry_failed_chat_roots(&mut self, window: &mut Window, cx: &mut Context<Self>) {
++        if self.chat_roots_status() != RootsStatus::Failed || self.chat_drafts.roots_read.is_some()
++        {
++            return;
++        }
++        let Some(connection) = self
++            .connection
++            .as_ref()
++            .filter(|connection| matches!(connection.state, ConnectionState::Connected))
++        else {
++            return;
++        };
++        let Some(client) = connection.client.clone() else {
++            return;
++        };
++        let runtime = self.runtime.clone();
++        let read = connection
++            .network
++            .run(async move { client.chat_roots().await });
++        self.chat_drafts.roots_read = Some(cx.spawn_in(window, async move |this, cx| {
++            let result = read.await;
++            let _ = this.update_in(cx, |this, window, cx| {
++                this.chat_drafts.roots_read = None;
++                if this.runtime != runtime {
++                    return;
++                }
++                match result {
++                    Some(Ok(roots)) => {
++                        this.topology.chat_roots = roots;
++                        this.session_admission.roots_ready = true;
++                        this.chat_roots_read(true, window, cx);
++                        this.rebuild_sidebar();
++                    }
++                    Some(Err(error)) => {
++                        tracing::warn!(%error, "the Chats roots could not be read");
++                        this.chat_roots_read(false, window, cx);
++                    }
++                    None => {}
++                }
++            });
++        }));
++    }
++
++    /// The side of the target picker last worked on, for this runtime.
++    fn last_draft_destination(&self, cx: &App) -> Option<DraftDestination> {
++        cx.try_global::<UiMemory>()?
++            .draft_destination(self.runtime.as_str())
++    }
++
++    pub(crate) fn remember_draft_destination(
++        &self,
++        destination: &DraftDestination,
++        cx: &mut Context<Self>,
++    ) {
++        if self.is_synthetic() {
++            return;
++        }
++        ui_memory::remember_draft_destination(self.runtime.as_str(), destination, cx);
++    }
++}
++
++#[cfg(test)]
++#[path = "chat_draft_tests.rs"]
++mod tests;
+diff -ruN before/native/crates/desktop/src/chat_draft_tests.rs after/native/crates/desktop/src/chat_draft_tests.rs
+--- before/native/crates/desktop/src/chat_draft_tests.rs	1969-12-31 16:00:00.000000000 -0800
++++ after/native/crates/desktop/src/chat_draft_tests.rs	2026-11-11 03:05:45.730347649 -0800
+@@ -0,0 +1,314 @@
++//! The Chat draft's destination, key and text against a workspace that has a
++//! server connection but sends nothing: no request leaves these tests.
++
++use gpui_kit::{AnyWindowHandle, Entity, TestAppContext};
++use openchamber_native_core::chat_draft::{self, CHAT_DRAFT_ID, CHAT_PROJECT_ID, RootsStatus};
++use openchamber_native_core::chat_roots::ChatRoots;
++use openchamber_native_core::draft::{Draft, DraftKey, DraftTarget};
++use openchamber_native_transport::endpoint::Endpoint;
++
++use super::NewSession;
++use crate::connection::{Connection, ServerConfig};
++use crate::workspace::Workspace;
++
++/// A workspace with the synthetic projects and Chats root and a connection
++/// that was never started, so a Chat can be targeted.
++fn open(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<Workspace>) {
++    let (window, workspace) = crate::workspace_tests::open(cx);
++    cx.update(|cx| {
++        workspace.update(cx, |workspace, _| {
++            let endpoint = Endpoint::parse("http://127.0.0.1:9").expect("unused test endpoint");
++            workspace.connection =
++                Some(Connection::new(ServerConfig::for_endpoint(endpoint)).expect("network"));
++            // The synthetic roots stand for a root the server already named.
++            workspace.session_admission.roots_ready = true;
++        });
++    });
++    (window, workspace)
++}
++
++fn roots(workspace: &Workspace) -> ChatRoots {
++    workspace
++        .topology
++        .chat_roots
++        .clone()
++        .expect("the synthetic workspace has Chats roots")
++}
++
++fn type_text(
++    workspace: &mut Workspace,
++    text: &str,
++    window: &mut gpui_kit::Window,
++    cx: &mut gpui_kit::Context<Workspace>,
++) {
++    workspace.composer.update(cx, |composer, cx| {
++        composer.set_value(text.to_owned(), window, cx)
++    });
++    workspace.save_composer_draft(cx);
++}
++
++fn composer_text(workspace: &Workspace, cx: &gpui_kit::App) -> String {
++    workspace.composer.read(cx).value().to_string()
++}
++
++#[gpui_kit::test]
++fn a_plain_new_session_opens_a_chat_in_its_own_folder_under_the_root(cx: &mut TestAppContext) {
++    let (window, workspace) = open(cx);
++    cx.update_window(window, |_, window, cx| {
++        workspace.update(cx, |workspace, cx| {
++            workspace.open_new_session(NewSession::Plain, window, cx);
++            assert!(workspace.chat_draft_open());
++            assert!(!workspace.draft_projects.contains_key(&workspace.runtime));
++            let roots = roots(workspace);
++            let key = workspace.composer_key.clone().expect("the draft has a key");
++            assert_eq!(Some(&key), workspace.chat_draft_key().as_ref());
++            assert_eq!(key.target(), &DraftTarget::NewSession(CHAT_DRAFT_ID.into()));
++            // The session is created in the key's directory: a folder of its
++            // own, never the shared root and never a project.
++            assert!(chat_draft::is_session_folder(&roots, key.directory()));
++            assert!(workspace.is_chat_creation(&key));
++            assert!(
++                workspace
++                    .draft_destination_project(key.directory())
++                    .is_none()
++            );
++            // Catalogs, panels and the terminal work in the root meanwhile.
++            assert_eq!(
++                workspace.config_directory().as_deref(),
++                Some(roots.configured())
++            );
++            assert_eq!(workspace.chat_roots_status(), RootsStatus::Ready);
++        });
++    })
++    .expect("test window");
++}
++
++#[gpui_kit::test]
++fn the_shortcut_keeps_a_project_session_in_its_project_and_the_chats_plus_opens_a_chat(
++    cx: &mut TestAppContext,
++) {
++    let (window, workspace) = open(cx);
++    cx.update_window(window, |_, window, cx| {
++        workspace.update(cx, |workspace, cx| {
++            let project = workspace.topology.projects[0].path.clone();
++            workspace.open_new_session(NewSession::Plain, window, cx);
++            workspace.move_draft_to(&project, window, cx);
++            assert!(!workspace.chat_draft_open());
++            assert_eq!(
++                workspace.draft_projects.get(&workspace.runtime),
++                Some(&project)
++            );
++            // The project header's "+" and the picker both leave a project
++            // target, which a plain new session reopens.
++            workspace.open_new_session(NewSession::Plain, window, cx);
++            assert!(!workspace.chat_draft_open());
++            assert_eq!(
++                workspace.draft_projects.get(&workspace.runtime),
++                Some(&project)
++            );
++            // The Chats header's "+" asks for a Chat whatever came before.
++            workspace.open_new_session(NewSession::Chat, window, cx);
++            assert!(workspace.chat_draft_open());
++            assert!(!workspace.draft_projects.contains_key(&workspace.runtime));
++            // With no session selected the shortcut forwards no directory
++            // and reopens the side last worked on, which is Chat now.
++            workspace.open_new_session(NewSession::FromSelected, window, cx);
++            assert!(workspace.chat_draft_open());
++        });
++    })
++    .expect("test window");
++}
++
++#[gpui_kit::test]
++fn switching_the_draft_target_keeps_the_text(cx: &mut TestAppContext) {
++    let (window, workspace) = open(cx);
++    cx.update_window(window, |_, window, cx| {
++        workspace.update(cx, |workspace, cx| {
++            let project = workspace.topology.projects[0].path.clone();
++            workspace.open_new_session(NewSession::Chat, window, cx);
++            let chat = workspace.composer_key.clone().expect("chat key");
++            type_text(workspace, "typed in the chat", window, cx);
++
++            workspace.move_draft_to(&project, window, cx);
++            let in_project = workspace.composer_key.clone().expect("project key");
++            assert_eq!(in_project.directory(), project);
++            assert_eq!(composer_text(workspace, cx), "typed in the chat");
++            assert_eq!(
++                workspace
++                    .drafts
++                    .get(&in_project)
++                    .map(|draft| draft.text.as_str()),
++                Some("typed in the chat")
++            );
++            assert!(
++                workspace.drafts.get(&chat).is_none(),
++                "the text moved; it was not copied"
++            );
++
++            workspace.move_draft_to(CHAT_PROJECT_ID, window, cx);
++            assert!(workspace.chat_draft_open());
++            let back = workspace.composer_key.clone().expect("chat key");
++            assert_eq!(composer_text(workspace, cx), "typed in the chat");
++            assert_eq!(
++                workspace.drafts.get(&back).map(|draft| draft.text.as_str()),
++                Some("typed in the chat")
++            );
++            assert!(workspace.drafts.get(&in_project).is_none());
++        });
++    })
++    .expect("test window");
++}
++
++#[gpui_kit::test]
++fn a_new_draft_opened_elsewhere_leaves_the_chat_text_in_place(cx: &mut TestAppContext) {
++    let (window, workspace) = open(cx);
++    cx.update_window(window, |_, window, cx| {
++        workspace.update(cx, |workspace, cx| {
++            let project = workspace.topology.projects[0].path.clone();
++            workspace.open_new_session(NewSession::Chat, window, cx);
++            let chat = workspace.composer_key.clone().expect("chat key");
++            type_text(workspace, "chat text", window, cx);
++            // A project's own new-session entry opens another draft.
++            workspace.show_new_session(window, cx);
++            workspace.choose_draft_project(&project, window, cx);
++            assert_eq!(composer_text(workspace, cx), "");
++            assert_eq!(
++                workspace.drafts.get(&chat).map(|draft| draft.text.as_str()),
++                Some("chat text")
++            );
++            // Coming back to Chat finds the folder its text is stored under.
++            workspace.open_new_session(NewSession::Chat, window, cx);
++            assert_eq!(workspace.composer_key.as_ref(), Some(&chat));
++            assert_eq!(composer_text(workspace, cx), "chat text");
++        });
++    })
++    .expect("test window");
++}
++
++#[gpui_kit::test]
++fn a_failed_root_read_keeps_the_chat_draft_and_creates_nothing_elsewhere(cx: &mut TestAppContext) {
++    let (window, workspace) = open(cx);
++    cx.update_window(window, |_, window, cx| {
++        workspace.update(cx, |workspace, cx| {
++            let named = roots(workspace);
++            // The read failed: no roots, and no answer either.
++            workspace.topology.chat_roots = None;
++            workspace.session_admission.roots_ready = false;
++            workspace.chat_roots_read(false, window, cx);
++            assert_eq!(workspace.chat_roots_status(), RootsStatus::Failed);
++
++            workspace.open_new_session(NewSession::Chat, window, cx);
++            assert!(workspace.chat_draft_open(), "the draft stays a Chat");
++            assert_eq!(workspace.chat_draft_key(), None);
++            assert_eq!(
++                workspace.config_directory(),
++                None,
++                "no project's catalogs stand in for the unknown root"
++            );
++            type_text(workspace, "kept through the failure", window, cx);
++            let holding = workspace.composer_key.clone().expect("the text has a key");
++            assert!(!workspace.is_chat_creation(&holding));
++
++            // Sending stops at the failure and leaves everything in place.
++            assert!(workspace.chat_send_blocked(window, cx));
++            assert!(!workspace.submit_new_session_with(None, window, cx));
++            assert!(!workspace.can_create_connected());
++            assert_eq!(workspace.creations.iter().count(), 0);
++            assert!(workspace.chat_draft_open());
++            assert_eq!(composer_text(workspace, cx), "kept through the failure");
++            assert_eq!(
++                workspace
++                    .drafts
++                    .get(&holding)
++                    .map(|draft| draft.text.as_str()),
++                Some("kept through the failure")
++            );
++
++            // A server that answers without a root is a different state.
++            workspace.session_admission.roots_ready = true;
++            assert_eq!(workspace.chat_roots_status(), RootsStatus::Missing);
++            assert!(workspace.chat_send_blocked(window, cx));
++            workspace.session_admission.roots_ready = false;
++
++            // The root arrives: the draft gets its folder and its text.
++            workspace.topology.chat_roots = Some(named.clone());
++            workspace.session_admission.roots_ready = true;
++            workspace.chat_roots_read(true, window, cx);
++            let key = workspace.chat_draft_key().expect("the folder is named");
++            assert!(chat_draft::is_session_folder(&named, key.directory()));
++            assert_eq!(workspace.composer_key.as_ref(), Some(&key));
++            assert_eq!(composer_text(workspace, cx), "kept through the failure");
++            assert!(workspace.drafts.get(&holding).is_none());
++            assert!(!workspace.chat_send_blocked(window, cx));
++        });
++    })
++    .expect("test window");
++}
++
++#[gpui_kit::test]
++fn an_unsent_chat_draft_comes_back_under_its_folder_after_a_restart(cx: &mut TestAppContext) {
++    let (window, workspace) = open(cx);
++    cx.update_window(window, |_, window, cx| {
++        workspace.update(cx, |workspace, cx| {
++            // What the journal restores: a Chat draft saved under its folder.
++            let roots = roots(workspace);
++            let folder = chat_draft::session_directory(
++                &roots,
++                chat_draft::ChatDate {
++                    year: 2026,
++                    month: 11,
++                    day: 10,
++                },
++                "restored",
++            )
++            .expect("the id is usable");
++            let stored = DraftKey::new(
++                workspace.runtime.clone(),
++                &folder,
++                DraftTarget::NewSession(CHAT_DRAFT_ID.into()),
++            )
++            .expect("the folder is usable");
++            workspace
++                .drafts
++                .save(stored.clone(), Draft::new("unsent before the restart"));
++
++            // The first draft of the runtime defaults to Chat and takes the
++            // stored folder, not a new one.
++            workspace.open_default_draft(window, cx);
++            assert!(workspace.chat_draft_open());
++            assert_eq!(workspace.composer_key.as_ref(), Some(&stored));
++            assert_eq!(composer_text(workspace, cx), "unsent before the restart");
++
++            // A later settings read does not move a draft the user retargets.
++            let project = workspace.topology.projects[0].path.clone();
++            workspace.show_new_session(window, cx);
++            workspace.choose_draft_project(&project, window, cx);
++            workspace.open_default_draft(window, cx);
++            assert!(!workspace.chat_draft_open());
++        });
++    })
++    .expect("test window");
++}
++
++#[gpui_kit::test]
++fn a_chat_folder_outside_the_current_roots_is_replaced(cx: &mut TestAppContext) {
++    let (window, workspace) = open(cx);
++    cx.update_window(window, |_, window, cx| {
++        workspace.update(cx, |workspace, cx| {
++            workspace.open_new_session(NewSession::Chat, window, cx);
++            let first = workspace.chat_draft_key().expect("chat key");
++            type_text(workspace, "moves with the root", window, cx);
++            // The server now names another root, as a relocated data
++            // directory does; the old folder is no managed Chat folder.
++            let moved = ChatRoots::from_home_info(Some("/elsewhere"), None, None, None)
++                .expect("home is usable");
++            workspace.topology.chat_roots = Some(moved.clone());
++            workspace.chat_roots_read(true, window, cx);
++            let second = workspace.chat_draft_key().expect("chat key");
++            assert_ne!(first, second);
++            assert!(chat_draft::is_session_folder(&moved, second.directory()));
++            assert_eq!(composer_text(workspace, cx), "moves with the root");
++        });
++    })
++    .expect("test window");
++}
+diff -ruN before/native/crates/desktop/src/command_palette.rs after/native/crates/desktop/src/command_palette.rs
+--- before/native/crates/desktop/src/command_palette.rs	2026-11-11 02:58:44.612914654 -0800
++++ after/native/crates/desktop/src/command_palette.rs	2026-11-11 03:02:21.141659760 -0800
+@@ -1723,7 +1723,9 @@
+         cx: &mut Context<Self>,
+     ) {
+         match command {
+-            CommandId::NewSession => self.show_new_session(window, cx),
++            CommandId::NewSession => {
++                self.open_new_session(crate::chat_draft::NewSession::Plain, window, cx)
++            }
+             CommandId::AddProject => self.open_add_project(None, window, cx),
+             CommandId::ToggleSidebar => self.toggle_sidebar(cx),
+             CommandId::ToggleTerminal => self.toggle_terminal(window, cx),
+diff -ruN before/native/crates/desktop/src/draft_sidebar.rs after/native/crates/desktop/src/draft_sidebar.rs
+--- before/native/crates/desktop/src/draft_sidebar.rs	2026-11-11 02:58:44.485913277 -0800
++++ after/native/crates/desktop/src/draft_sidebar.rs	2026-11-11 03:02:21.135501786 -0800
+@@ -196,6 +196,7 @@
+         self.show_new_session(window, cx);
+         self.save_composer_draft(cx);
+         self.composer_key = Some(key.clone());
++        self.chat_drafts.close(&self.runtime);
+         self.draft_projects
+             .insert(self.runtime.clone(), key.directory().to_owned());
+         self.restore_composer_draft(window, cx);
+diff -ruN before/native/crates/desktop/src/main.rs after/native/crates/desktop/src/main.rs
+--- before/native/crates/desktop/src/main.rs	2026-11-11 02:58:44.638914935 -0800
++++ after/native/crates/desktop/src/main.rs	2026-11-11 03:02:21.125686314 -0800
+@@ -39,6 +39,7 @@
+ mod branching_view;
+ #[cfg(target_os = "linux")]
+ mod browser_view;
++mod chat_draft;
+ mod chrome;
+ mod clipboard_attachment;
+ mod code_card;
+diff -ruN before/native/crates/desktop/src/mutation_journal.rs after/native/crates/desktop/src/mutation_journal.rs
+--- before/native/crates/desktop/src/mutation_journal.rs	2026-11-11 02:58:44.588914393 -0800
++++ after/native/crates/desktop/src/mutation_journal.rs	2026-11-11 03:02:21.143222508 -0800
+@@ -1460,10 +1460,13 @@
+                 creation.source == source.draft
+                     && owner.draft.runtime() == &key.runtime
+                     && owner.draft.target() == &DraftTarget::Session(key.session.clone())
+-                    && owner
+-                        .project
+-                        .as_ref()
+-                        .is_some_and(|project| project.as_str() == creation.project)
++                    && match &owner.project {
++                        Some(project) => project.as_str() == creation.project,
++                        // A Chat belongs to no registered project.
++                        None => {
++                            creation.project == openchamber_native_core::chat_draft::CHAT_PROJECT_ID
++                        }
++                    }
+             });
+             if !valid {
+                 return Err(JournalError::Invalid("staged selection lacks its creation"));
+diff -ruN before/native/crates/desktop/src/project_chooser.rs after/native/crates/desktop/src/project_chooser.rs
+--- before/native/crates/desktop/src/project_chooser.rs	2026-11-11 02:58:44.626914805 -0800
++++ after/native/crates/desktop/src/project_chooser.rs	2026-11-11 03:03:43.296925498 -0800
+@@ -1,4 +1,5 @@
+-//! Registered project selection for a client-owned new-session draft.
++//! The target of a client-owned new-session draft: Chat, or a registered
++//! project (`DraftTargetSelectors.tsx`, whose list starts with Chat).
+ 
+ use gpui_kit::component::combobox::{Combobox, ComboboxEvent, ComboboxState};
+ use gpui_kit::component::searchable_list::{SearchableListItem, SearchableVec};
+@@ -7,6 +8,7 @@
+     SharedString, StatefulInteractiveElement, StyleRefinement, Styled, Subscription,
+     TestSupportExt, Window, div, px,
+ };
++use openchamber_native_core::chat_draft::CHAT_PROJECT_ID;
+ 
+ use crate::baseline::CssTextExt;
+ use crate::chrome::{CONTROL_RADIUS, glyph};
+@@ -23,7 +25,12 @@
+ pub(crate) const ICON_ID: &str = "choose-project-icon";
+ const ICON_SIZE: f32 = 16.0;
+ 
+-/// Selects a registered project through the popup's accessibility action.
++/// The Chat row's label. The reference writes `layout.mainTab.chat` ("Chat"),
++/// which the native key list does not carry yet.
++const CHAT_LABEL: &str = "sessions.sidebar.activity.chatsTitle";
++
++/// Selects a registered project, or Chat by `CHAT_PROJECT_ID`, through the
++/// popup's accessibility action.
+ #[derive(Clone, PartialEq, serde::Deserialize, gpui_kit::Action)]
+ #[action(namespace = openchamber, no_json)]
+ pub(crate) struct ChooseDraftProject {
+@@ -48,6 +55,11 @@
+     fn render(&self, _: &mut Window, cx: &mut gpui_kit::App) -> impl IntoElement {
+         let palette = cx.global::<Palette>();
+         let directory = self.directory.clone();
++        let icon = if self.directory == CHAT_PROJECT_ID {
++            "chat-new"
++        } else {
++            "folder"
++        };
+         div()
+             .id(SharedString::from(format!(
+                 "project-option:{}",
+@@ -68,7 +80,7 @@
+             .items_center()
+             .gap(px(6.0))
+             .min_w_0()
+-            .child(glyph("folder", 14.0, palette.muted_foreground))
++            .child(glyph(icon, 14.0, palette.muted_foreground))
+             .child(
+                 div()
+                     .min_w_0()
+@@ -95,6 +107,36 @@
+ }
+ 
+ impl Workspace {
++    /// A registered project's row: its saved label, else its folder name.
++    fn project_option(
++        &self,
++        project: &openchamber_native_core::ownership::ConfiguredProject,
++    ) -> ProjectOption {
++        let label = self
++            .send_catalog
++            .settings
++            .as_ref()
++            .and_then(|settings| {
++                settings
++                    .project_labels
++                    .iter()
++                    .find(|entry| entry.path == project.path)
++            })
++            .map(|entry| entry.label.clone())
++            .unwrap_or_else(|| {
++                project
++                    .path
++                    .rsplit('/')
++                    .find(|segment| !segment.is_empty())
++                    .unwrap_or(&project.path)
++                    .to_owned()
++            });
++        ProjectOption {
++            directory: project.path.clone(),
++            label: label.into(),
++        }
++    }
++
+     pub(crate) fn render_project_chooser(
+         &mut self,
+         palette: &Palette,
+@@ -103,36 +145,22 @@
+         cx: &mut Context<Self>,
+     ) -> impl IntoElement + use<> {
+         let strings = locale::strings(cx).clone();
+-        let items: Vec<ProjectOption> = self
+-            .topology
+-            .projects
+-            .iter()
+-            .filter(|project| openchamber_native_core::path::normalize(&project.path).is_some())
+-            .map(|project| {
+-                let label = self
+-                    .send_catalog
+-                    .settings
+-                    .as_ref()
+-                    .and_then(|settings| {
+-                        settings
+-                            .project_labels
+-                            .iter()
+-                            .find(|entry| entry.path == project.path)
++        // Chat leads the list wherever a server can create one.
++        let chat = (!self.is_synthetic()).then(|| ProjectOption {
++            directory: CHAT_PROJECT_ID.to_owned(),
++            label: strings.get(CHAT_LABEL),
++        });
++        let items: Vec<ProjectOption> = chat
++            .into_iter()
++            .chain(
++                self.topology
++                    .projects
++                    .iter()
++                    .filter(|project| {
++                        openchamber_native_core::path::normalize(&project.path).is_some()
+                     })
+-                    .map(|entry| entry.label.clone())
+-                    .unwrap_or_else(|| {
+-                        project
+-                            .path
+-                            .rsplit('/')
+-                            .find(|segment| !segment.is_empty())
+-                            .unwrap_or(&project.path)
+-                            .to_owned()
+-                    });
+-                ProjectOption {
+-                    directory: project.path.clone(),
+-                    label: label.into(),
+-                }
+-            })
++                    .map(|project| self.project_option(project)),
++            )
+             .collect();
+         if self.project_chooser.is_none() {
+             let state = cx.new(|cx| {
+@@ -144,7 +172,8 @@
+                 if let ComboboxEvent::Confirm(values) = event
+                     && let Some(directory) = values.first()
+                 {
+-                    this.choose_draft_project(directory, window, cx);
++                    // The open draft changes where it runs and keeps its text.
++                    this.move_draft_to(directory, window, cx);
+                 }
+             });
+             self.project_chooser = Some(ProjectChooser {
+@@ -153,6 +182,7 @@
+                 _subscription: subscription,
+             });
+         }
++        let chat_choice = self.chat_draft_open().then(|| CHAT_PROJECT_ID.to_owned());
+         let chooser = self
+             .project_chooser
+             .as_mut()
+@@ -163,12 +193,16 @@
+             });
+             chooser.items = items;
+         }
+-        let directory = self.draft_projects.get(&self.runtime).filter(|directory| {
+-            chooser
+-                .items
+-                .iter()
+-                .any(|item| &item.directory == *directory)
+-        });
++        let directory = self
++            .draft_projects
++            .get(&self.runtime)
++            .or(chat_choice.as_ref())
++            .filter(|directory| {
++                chooser
++                    .items
++                    .iter()
++                    .any(|item| &item.directory == *directory)
++            });
+         if chooser.state.read(cx).selected_value().as_ref() != directory {
+             chooser.state.update(cx, |state, cx| {
+                 state.set_selected_values(
+@@ -187,7 +221,8 @@
+             })
+             .map(|item| item.label.clone())
+             .unwrap_or_else(|| strings.get("chat.chatInput.chooseProject"));
+-        let has_project = directory.is_some();
++        // A project shows its folder mark; Chat is a bare word.
++        let has_project = directory.is_some_and(|directory| directory != CHAT_PROJECT_ID);
+         let connection_failed = self
+             .connection
+             .as_ref()
+diff -ruN before/native/crates/desktop/src/send_catalog.rs after/native/crates/desktop/src/send_catalog.rs
+--- before/native/crates/desktop/src/send_catalog.rs	2026-11-11 02:58:44.575914253 -0800
++++ after/native/crates/desktop/src/send_catalog.rs	2026-11-11 03:02:21.136222435 -0800
+@@ -257,6 +257,11 @@
+         if let Some(directory) = self.draft_projects.get(&self.runtime) {
+             return path::normalize(directory);
+         }
++        if self.chat_draft_open() {
++            // A Chat reads the Chats root's catalogs, and none before the
++            // server names it: never those of the last or active project.
++            return self.chat_draft_directory();
++        }
+         let settings = self.send_catalog.settings.as_ref()?;
+         let known = |directory: &str| {
+             self.topology
+diff -ruN before/native/crates/desktop/src/server_sync.rs after/native/crates/desktop/src/server_sync.rs
+--- before/native/crates/desktop/src/server_sync.rs	2026-11-11 02:58:44.497913407 -0800
++++ after/native/crates/desktop/src/server_sync.rs	2026-11-11 03:03:18.757555505 -0800
+@@ -268,6 +268,7 @@
+         self.subagents_reopened.set(false);
+         self.selected = None;
+         self.project_chooser = None;
++        self.chat_drafts.switch_runtime();
+         self.composer_key = self.new_session_draft_key();
+         self.restore_composer_draft(window, cx);
+         self.rebuild_sidebar();
+@@ -829,10 +830,14 @@
+                             Some(Ok(roots)) => {
+                                 this.topology.chat_roots = roots;
+                                 this.session_admission.roots_ready = true;
++                                this.chat_roots_read(true, window, cx);
+                             }
+                             Some(Err(error)) => {
+                                 failed_roots = true;
+                                 tracing::warn!(%error, "the Chats roots could not be read");
++                                // A failure is kept apart from a server
++                                // without a root: a Chat draft waits for it.
++                                this.chat_roots_read(false, window, cx);
+                             }
+                             None => {}
+                         }
+@@ -931,6 +936,11 @@
+                                 None => this.topology.worktrees.push(entry),
+                             }
+                         }
++                        if !failed_settings {
++                            // The registered projects are known: the first
++                            // draft opens on the side last worked on.
++                            this.open_default_draft(window, cx);
++                        }
+                         this.rebuild_sidebar();
+                         this.reconcile_session_admission(window, cx);
+                         cx.notify();
+diff -ruN before/native/crates/desktop/src/session_admission.rs after/native/crates/desktop/src/session_admission.rs
+--- before/native/crates/desktop/src/session_admission.rs	2026-11-11 02:58:44.526913722 -0800
++++ after/native/crates/desktop/src/session_admission.rs	2026-11-11 03:03:18.759216741 -0800
+@@ -430,6 +430,7 @@
+                         if let Some(roots) = roots {
+                             this.topology.chat_roots = roots;
+                             this.session_admission.roots_ready = true;
++                            this.chat_roots_read(true, window, cx);
+                         }
+                         assessment
+                     }
+diff -ruN before/native/crates/desktop/src/session_creation.rs after/native/crates/desktop/src/session_creation.rs
+--- before/native/crates/desktop/src/session_creation.rs	2026-11-11 02:58:44.471913125 -0800
++++ after/native/crates/desktop/src/session_creation.rs	2026-11-11 03:06:17.467773507 -0800
+@@ -1,6 +1,7 @@
+ //! Durable creation, exact observation and atomic first-message binding.
+ 
+ use gpui_kit::{Context, Window};
++use openchamber_native_core::chat_draft::CHAT_PROJECT_ID;
+ use openchamber_native_core::draft::{Draft, DraftKey, DraftTarget};
+ use openchamber_native_core::ids::{MessageId, PartId};
+ use openchamber_native_core::pending_requests::RequestKey;
+@@ -52,16 +53,28 @@
+         let Some(owner) = self.composer_key.as_ref() else {
+             return false;
+         };
+-        owner.runtime() == &self.runtime
+-            && matches!(owner.target(), DraftTarget::NewSession(_))
+-            && self
++        // A project draft creates in its registered directory and reads that
++        // directory's catalogs. A Chat creates in its own folder under the
++        // Chats root and reads the root's catalogs.
++        let destination = if self.chat_draft_key().as_ref() == Some(owner) {
++            self.is_chat_creation(owner)
++                .then(|| self.chat_draft_directory())
++                .flatten()
++        } else {
++            (self
+                 .draft_projects
+                 .get(&self.runtime)
+                 .is_some_and(|directory| directory == owner.directory())
+-            && self.draft_destination_project(owner.directory()).is_some()
++                && self.draft_destination_project(owner.directory()).is_some())
++            .then(|| owner.directory().to_owned())
++        };
++        owner.runtime() == &self.runtime
++            && matches!(owner.target(), DraftTarget::NewSession(_))
+             && self.creations.can_begin(owner)
+-            && self.send_selection().is_some_and(|(directory, selection)| {
+-                directory == owner.directory() && selection.model.is_some()
++            && destination.is_some_and(|catalogs| {
++                self.send_selection().is_some_and(|(directory, selection)| {
++                    directory == catalogs && selection.model.is_some()
++                })
+             })
+             && self.connection.as_ref().is_some_and(|connection| {
+                 matches!(connection.state, ConnectionState::Connected)
+@@ -73,16 +86,16 @@
+         self.submit_new_session_with(None, window, cx);
+     }
+ 
+-    /// Creates the selected project's session and sends its first prompt:
+-    /// the composer's text, or a starter's rendered prompt. False when
+-    /// nothing was created.
++    /// Creates the session of the draft's project, or of its Chat folder,
++    /// and sends its first prompt: the composer's text, or a starter's
++    /// rendered prompt. False when nothing was created.
+     pub(crate) fn submit_new_session_with(
+         &mut self,
+         starter: Option<crate::starters::StarterPrompt>,
+         window: &mut Window,
+         cx: &mut Context<Self>,
+     ) -> bool {
+-        if !self.can_create_connected() {
++        if self.chat_send_blocked(window, cx) || !self.can_create_connected() {
+             return false;
+         }
+         let Some(source) = self.composer_key.clone() else {
+@@ -91,10 +104,14 @@
+         if starter.is_none() && !self.starters.captures.can_begin(&source) {
+             return false;
+         }
+-        let Some(project) = self.draft_destination_project(source.directory()) else {
+-            return false;
++        let project = if self.chat_draft_key().as_ref() == Some(&source) {
++            CHAT_PROJECT_ID.to_owned()
++        } else {
++            let Some(project) = self.draft_destination_project(source.directory()) else {
++                return false;
++            };
++            project.id.to_string()
+         };
+-        let project = project.id.to_string();
+         let from_starter = starter.is_some();
+         let (draft, prompt_text, parts, selection, permission_mode, capture_id, effort) =
+             match starter {
+@@ -258,6 +275,7 @@
+             return;
+         }
+         let request = attempt.request.clone();
++        let chat = attempt.project == CHAT_PROJECT_ID;
+         let message_id = attempt.prompt.message_id.clone();
+         if attempt.phase == CreationPhase::Uncertain {
+             self.effort_preferences
+@@ -282,92 +300,108 @@
+             return;
+         };
+         let task_key = key.clone();
+-        let task =
+-            cx.spawn_in(window, async move |this, cx| {
+-                let saved = saved
+-                    .await
+-                    .unwrap_or(Err(crate::journal_worker::JournalFailure::WorkerStopped));
+-                let dispatch = this.update_in(cx, |this, _, cx| {
+-                    let durable =
+-                        this.record_persistence(stamp, &saved, cx) && this.persistence_ready();
+-                    let eligible = this.creations.get(&key).is_some_and(|attempt| {
+-                        matches!(
+-                            attempt.phase,
+-                            CreationPhase::Preparing | CreationPhase::Uncertain
+-                        )
+-                    });
+-                    if !durable || !eligible {
+-                        this.effort_preferences
+-                            .forget_user_send(&key.runtime, &message_id);
+-                        if eligible {
+-                            this.creations.phase(&key, CreationPhase::Uncertain);
+-                        }
+-                        this.creation_tasks.remove(&key);
+-                        cx.notify();
+-                        return false;
++        let task = cx.spawn_in(window, async move |this, cx| {
++            let saved = saved
++                .await
++                .unwrap_or(Err(crate::journal_worker::JournalFailure::WorkerStopped));
++            let dispatch = this.update_in(cx, |this, _, cx| {
++                let durable =
++                    this.record_persistence(stamp, &saved, cx) && this.persistence_ready();
++                let eligible = this.creations.get(&key).is_some_and(|attempt| {
++                    matches!(
++                        attempt.phase,
++                        CreationPhase::Preparing | CreationPhase::Uncertain
++                    )
++                });
++                if !durable || !eligible {
++                    this.effort_preferences
++                        .forget_user_send(&key.runtime, &message_id);
++                    if eligible {
++                        this.creations.phase(&key, CreationPhase::Uncertain);
+                     }
+-                    this.creations.phase(&key, CreationPhase::Creating);
++                    this.creation_tasks.remove(&key);
+                     cx.notify();
+-                    true
+-                });
+-                if !matches!(dispatch, Ok(true)) {
++                    return false;
++                }
++                this.creations.phase(&key, CreationPhase::Creating);
++                cx.notify();
++                true
++            });
++            if !matches!(dispatch, Ok(true)) {
++                return;
++            }
++            let captured = client.clone();
++            let result = NetworkTask::spawn_on(&executor, async move {
++                // A Chat's folder does not exist before its first send.
++                // Without it no session can have been created, and the
++                // check that follows offers the same create again.
++                if chat
++                    && captured
++                        .create_chat_directory(request.directory())
++                        .await
++                        .is_err()
++                {
++                    tracing::warn!("a chat's folder could not be created");
++                    return None;
++                }
++                Some(captured.create_session(&request).await)
++            })
++            .await
++            .flatten();
++            let _ = this.update_in(cx, |this, window, cx| {
++                this.creation_tasks.remove(&key);
++                if this
++                    .creations
++                    .get(&key)
++                    .is_none_or(|attempt| attempt.phase == CreationPhase::Deleted)
++                {
++                    this.effort_preferences
++                        .forget_user_send(&key.runtime, &message_id);
+                     return;
+                 }
+-                let captured = client.clone();
+-                let result = NetworkTask::spawn_on(&executor, async move {
+-                    captured.create_session(&request).await
+-                })
+-                .await;
+-                let _ = this.update_in(cx, |this, window, cx| {
+-                    this.creation_tasks.remove(&key);
+-                    if this
+-                        .creations
+-                        .get(&key)
+-                        .is_none_or(|attempt| attempt.phase == CreationPhase::Deleted)
+-                    {
+-                        this.effort_preferences
+-                            .forget_user_send(&key.runtime, &message_id);
+-                        return;
++                if !matches!(&result, Some(Ok(_))) {
++                    this.effort_preferences
++                        .forget_user_send(&key.runtime, &message_id);
++                }
++                match result {
++                    Some(Ok(session)) => {
++                        this.creations.phase(&key, CreationPhase::Confirmed);
++                        this.bind_created_session(
++                            &key,
++                            session,
++                            client,
++                            executor,
++                            requests,
++                            (window, cx),
++                        );
+                     }
+-                    if !matches!(&result, Some(Ok(_))) {
+-                        this.effort_preferences
+-                            .forget_user_send(&key.runtime, &message_id);
++                    Some(Err(error))
++                        if matches!(
++                            error.source,
++                            SessionError::IdentityMismatch | SessionError::LocationMismatch
++                        ) =>
++                    {
++                        this.creations.phase(&key, CreationPhase::Mismatch);
+                     }
+-                    match result {
+-                        Some(Ok(session)) => {
+-                            this.creations.phase(&key, CreationPhase::Confirmed);
+-                            this.bind_created_session(
+-                                &key,
+-                                session,
+-                                client,
+-                                executor,
+-                                requests,
+-                                (window, cx),
+-                            );
+-                        }
+-                        Some(Err(error))
+-                            if matches!(
+-                                error.source,
+-                                SessionError::IdentityMismatch | SessionError::LocationMismatch
+-                            ) =>
+-                        {
+-                            this.creations.phase(&key, CreationPhase::Mismatch);
+-                        }
+-                        _ => {
+-                            this.creations.phase(&key, CreationPhase::Uncertain);
+-                            // Observation is allowed; continuation still requires a click.
+-                            this.check_creation(&key, false, window, cx);
+-                        }
++                    _ => {
++                        this.creations.phase(&key, CreationPhase::Uncertain);
++                        // Observation is allowed; continuation still requires a click.
++                        this.check_creation(&key, false, window, cx);
+                     }
+-                    this.queue_persistence(cx);
+-                    cx.notify();
+-                });
++                }
++                this.queue_persistence(cx);
++                cx.notify();
+             });
++        });
+         self.creation_tasks.insert(task_key, task);
+         cx.notify();
+     }
+ 
+     fn creation_project_registered(&self, attempt: &CreateAttempt) -> bool {
++        if attempt.project == CHAT_PROJECT_ID {
++            // A Chat is created only inside a managed root the server named.
++            return self.is_chat_creation(&attempt.source);
++        }
+         self.draft_destination_project(attempt.request.directory())
+             .is_some_and(|project| project.id.as_str() == attempt.project)
+     }
+@@ -577,9 +611,9 @@
+         let dispatched = first_prompt_selection(&attempt.prompt, &session);
+         let selection_owner = openchamber_native_core::composer_selection::SelectionOwner {
+             draft: owner.clone(),
+-            project: Some(openchamber_native_core::ids::ProjectId::from(
+-                attempt.project.clone(),
+-            )),
++            // A Chat belongs to no registered project.
++            project: (attempt.project != CHAT_PROJECT_ID)
++                .then(|| openchamber_native_core::ids::ProjectId::from(attempt.project.clone())),
+         };
+         let selection = openchamber_native_core::send_config::Selection {
+             model: attempt.prompt.model.clone(),
+@@ -640,6 +674,10 @@
+                 self.select_session(key.session.clone(), window, cx);
+             }
+         }
++        if attempt.project == CHAT_PROJECT_ID {
++            // The folder is the session's now; the next Chat takes its own.
++            self.renew_chat_folder(&key.runtime, &attempt.source, window, cx);
++        }
+         // Like the web's `finishDraftSession`, the mode write runs beside the
+         // first send and never waits for or reorders it.
+         self.write_created_permission_mode(
+diff -ruN before/native/crates/desktop/src/shortcuts.rs after/native/crates/desktop/src/shortcuts.rs
+--- before/native/crates/desktop/src/shortcuts.rs	2026-11-11 02:58:44.661915185 -0800
++++ after/native/crates/desktop/src/shortcuts.rs	2026-11-11 03:02:21.138092829 -0800
+@@ -203,7 +203,9 @@
+             self.close_app_menu(window, cx);
+         }
+         match id {
+-            "new_chat" => self.show_new_session(window, cx),
++            "new_chat" => {
++                self.open_new_session(crate::chat_draft::NewSession::FromSelected, window, cx)
++            }
+             "focus_input" => self.focus_composer(window, cx),
+             "toggle_permission_auto_accept" => {
+                 if !self.permission_mode_interactive() {
+diff -ruN before/native/crates/desktop/src/state_persistence.rs after/native/crates/desktop/src/state_persistence.rs
+--- before/native/crates/desktop/src/state_persistence.rs	2026-11-11 02:58:44.551913993 -0800
++++ after/native/crates/desktop/src/state_persistence.rs	2026-11-11 03:03:18.760825517 -0800
+@@ -286,6 +286,8 @@
+                         }
+                         this.restore_draft_previews(cx);
+                         this.restore_composer_draft(window, cx);
++                        // A Chat draft stored before the restart names its folder.
++                        this.settle_chat_folder(window, cx);
+                         this.persistence.status = Status::Ready;
+                     }
+                     Err(error) => {
+diff -ruN before/native/crates/desktop/src/ui_memory.rs after/native/crates/desktop/src/ui_memory.rs
+--- before/native/crates/desktop/src/ui_memory.rs	2026-11-11 02:58:44.650915066 -0800
++++ after/native/crates/desktop/src/ui_memory.rs	2026-11-11 03:04:23.278462308 -0800
+@@ -1,7 +1,9 @@
+ //! Device-local interface memory that outlives a restart: per runtime, the
+ //! project action each project's button last ran
+-//! (`lib/projectActionSelection.ts`) and each root's file tree
+-//! (`useFilesViewTabsStore.ts`); for every runtime, the work status sections
++//! (`lib/projectActionSelection.ts`), each root's file tree
++//! (`useFilesViewTabsStore.ts`) and the side of the new-session target picker
++//! last worked on (`oc.chatInput.lastDraftTarget`); for every runtime, the
++//! work status sections
+ //! the user folded or unfolded (`workStatusExpandedSections`). The web keeps
+ //! them in local storage and never sends them to the server; here they live
+ //! in `ui-memory.json` beside the layout file.
+@@ -17,6 +19,7 @@
+ use std::time::{SystemTime, UNIX_EPOCH};
+ 
+ use gpui_kit::{App, Global, Task};
++use openchamber_native_core::chat_draft::DraftDestination;
+ use serde::{Deserialize, Serialize};
+ 
+ const FILE_NAME: &str = "ui-memory.json";
+@@ -49,6 +52,10 @@
+     /// Runtime, then root directory.
+     #[serde(default)]
+     file_trees: BTreeMap<String, BTreeMap<String, TreeMemory>>,
++    /// Runtime, then the directory of the project a new session last
++    /// targeted; `null` when it targeted Chat.
++    #[serde(default)]
++    draft_destinations: BTreeMap<String, Option<String>>,
+     /// The work status sections the user folded or unfolded, by section ID
+     /// (`workStatusExpandedSections`). The web keeps one map for every
+     /// runtime, so this one is not keyed by runtime either.
+@@ -113,6 +120,16 @@
+         self.file.file_trees.get(runtime)?.get(root)
+     }
+ 
++    /// What a new session last targeted on `runtime`; `None` before the
++    /// first one.
++    pub(crate) fn draft_destination(&self, runtime: &str) -> Option<DraftDestination> {
++        let directory = self.file.draft_destinations.get(runtime)?;
++        Some(match directory {
++            Some(directory) => DraftDestination::Project(directory.clone()),
++            None => DraftDestination::Chat,
++        })
++    }
++
+     /// Whether the user left the work status section `id` expanded; `None`
+     /// until they fold or unfold it, when the section's default applies.
+     pub(crate) fn work_status_section_expanded(&self, id: &str) -> Option<bool> {
+@@ -133,6 +150,30 @@
+     save(cx);
+ }
+ 
++/// Remembers what a new session last targeted on `runtime`.
++pub(crate) fn remember_draft_destination(
++    runtime: &str,
++    destination: &DraftDestination,
++    cx: &mut App,
++) {
++    let directory = match destination {
++        DraftDestination::Chat => None,
++        DraftDestination::Project(directory) if directory.len() <= MAX_PATH_LENGTH => {
++            Some(directory.clone())
++        }
++        DraftDestination::Project(_) => return,
++    };
++    let memory = cx.default_global::<UiMemory>();
++    if memory.file.draft_destinations.get(runtime) == Some(&directory) {
++        return;
++    }
++    memory
++        .file
++        .draft_destinations
++        .insert(runtime.to_owned(), directory);
++    save(cx);
++}
++
+ /// Remembers `action` as `project`'s pick on `runtime`.
+ pub(crate) fn pick_action(runtime: &str, project: &str, action: &str, cx: &mut App) {
+     let memory = cx.default_global::<UiMemory>();
+@@ -305,6 +346,29 @@
+     }
+ 
+     #[gpui_kit::test]
++    fn the_last_draft_destination_survives_a_restart(cx: &mut TestAppContext) {
++        let directory = scratch("draft-destination");
++        cx.update(|cx| {
++            cx.set_global(UiMemory::load(&directory));
++            remember_draft_destination("chat", &DraftDestination::Chat, cx);
++            remember_draft_destination("work", &DraftDestination::Project("/p".into()), cx);
++        });
++        cx.run_until_parked();
++        let loaded = UiMemory::load(&directory);
++        assert_eq!(
++            loaded.draft_destination("chat"),
++            Some(DraftDestination::Chat)
++        );
++        assert_eq!(
++            loaded.draft_destination("work"),
++            Some(DraftDestination::Project("/p".into()))
++        );
++        // A runtime that never opened a draft has no last side.
++        assert_eq!(loaded.draft_destination("other"), None);
++        let _ = fs::remove_dir_all(&directory);
++    }
++
++    #[gpui_kit::test]
+     fn picks_and_trees_survive_a_restart(cx: &mut TestAppContext) {
+         let directory = scratch("restart");
+         cx.update(|cx| {
+diff -ruN before/native/crates/desktop/src/workspace.rs after/native/crates/desktop/src/workspace.rs
+--- before/native/crates/desktop/src/workspace.rs	2026-11-11 02:58:44.458912984 -0800
++++ after/native/crates/desktop/src/workspace.rs	2026-11-11 03:02:21.133329497 -0800
+@@ -184,6 +184,9 @@
+     pub(crate) draft_previews: HashMap<DraftKey, SharedString>,
+     pub(crate) draft_rows: HashMap<DraftKey, usize>,
+     pub(crate) draft_projects: HashMap<RuntimeId, String>,
++    /// The runtimes whose draft targets Chat; a project in `draft_projects`
++    /// wins over an entry here.
++    pub(crate) chat_drafts: crate::chat_draft::ChatDrafts,
+     pub(crate) project_chooser: Option<crate::project_chooser::ProjectChooser>,
+     pub(crate) session_menu: Option<crate::session_menu::SessionMenu>,
+     pub(crate) app_menu: crate::app_menu::AppMenuState,
+@@ -389,6 +392,7 @@
+             draft_previews: HashMap::new(),
+             draft_rows: HashMap::new(),
+             draft_projects: HashMap::new(),
++            chat_drafts: Default::default(),
+             project_chooser: None,
+             session_menu: None,
+             app_menu: Default::default(),
+@@ -707,7 +711,13 @@
+         diagnostics::mark(Marker::SidebarRebuilt, Some(elapsed), Some(count));
+     }
+ 
++    /// The open new-session draft's key: its project's, else its Chat
++    /// folder's, else the project-less key. A Chat draft whose folder is
++    /// not named yet keeps its text under the project-less key.
+     pub(crate) fn new_session_draft_key(&self) -> Option<DraftKey> {
++        if let Some(key) = self.chat_draft_key() {
++            return Some(key);
++        }
+         let directory = self.draft_projects.get(&self.runtime);
+         DraftKey::new(
+             self.runtime.clone(),
+@@ -744,8 +754,13 @@
+             return;
+         }
+         self.save_composer_draft(cx);
++        self.chat_drafts.close(&self.runtime);
+         self.draft_projects
+             .insert(self.runtime.clone(), directory.to_owned());
++        self.remember_draft_destination(
++            &openchamber_native_core::chat_draft::DraftDestination::Project(directory.to_owned()),
++            cx,
++        );
+         self.navigation_revision = self.navigation_revision.wrapping_add(1);
+         self.composer_key = self.new_session_draft_key();
+         self.restore_composer_draft(window, cx);
+diff -ruN before/native/crates/transport/src/files.rs after/native/crates/transport/src/files.rs
+--- before/native/crates/transport/src/files.rs	2026-11-11 02:58:44.447912865 -0800
++++ after/native/crates/transport/src/files.rs	2026-11-11 02:59:32.740706786 -0800
+@@ -561,6 +561,20 @@
+         )
+         .await
+     }
++
++    /// Creates the folder of a new managed Chat with its missing parents
++    /// (`POST /api/fs/mkdir`), which succeeds again for a folder that exists.
++    ///
++    /// The request names no directory: the server accepts a path under its
++    /// managed Chats roots whatever project is active, and refuses any other
++    /// path that is outside the active workspace.
++    pub async fn create_chat_directory(&self, directory: &str) -> Result<(), FilesError> {
++        expect_success(
++            self.authorized(Method::POST, self.endpoint().url("api/fs/mkdir"))
++                .json(&json!({ "path": directory })),
++        )
++        .await
++    }
+ }
+ 
+ async fn files_json<T: DeserializeOwned>(request: RequestBuilder) -> Result<T, FilesError> {

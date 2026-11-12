@@ -1,0 +1,70 @@
+Running clean-before-focused-tests : cargo clean --offline --locked --manifest-path /home/deandre/projects/rust/oc-wt/native-hosts-relay/native/Cargo.toml --profile dev -p openchamber-native-core -p openchamber-native-transport -p openchamber-native-desktop -p gpui-base -p gpui-component -p gpui-pre
+     Removed 87 files, 2.6GiB total
+Running focused-tests : cargo nextest run --offline --locked --manifest-path /home/deandre/projects/rust/oc-wt/native-hosts-relay/native/Cargo.toml --cargo-profile dev -p openchamber-native-desktop -j4 --no-fail-fast -E test(ssh_)
+   Compiling gpui-pre v0.3.9 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/vendor/gpui-pre)
+   Compiling gpui-component v0.7.3 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/vendor/gpui-component)
+   Compiling libghostty-vt-sys v0.2.0 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/vendor/libghostty-vt-sys)
+   Compiling openchamber-native-core v0.1.0 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/core)
+   Compiling openchamber-native-transport v0.1.0 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/transport)
+   Compiling gpui-pre-wgpu v0.3.9
+   Compiling gpui-kit-assets v0.7.3
+   Compiling gpui-base v0.7.3 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/vendor/gpui-base)
+   Compiling libghostty-vt v0.2.0
+   Compiling gpui-pre-linux v0.3.9 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/vendor/gpui-pre-linux)
+   Compiling gpui-pre-platform v0.3.9
+   Compiling gpui-kit v0.7.3
+   Compiling openchamber-native-desktop v0.1.0 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/desktop)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 3m 09s
+────────────
+ Nextest run ID c77d955a-e701-4202-98ed-84a3aea188f9 with nextest profile: default
+    Starting 15 tests across 1 binary (1068 tests skipped)
+        PASS [   0.098s] ( 1/15) openchamber-native-desktop::bin/openchamber-native host_profiles::tests::ssh_and_relay_profiles_round_trip_without_credentials_or_temporary_ports
+        PASS [   0.099s] ( 2/15) openchamber-native-desktop::bin/openchamber-native ssh_cleanup::tests::missing_or_changed_identity_and_unknown_serve_ack_grant_no_authority
+        PASS [   0.144s] ( 3/15) openchamber-native-desktop::bin/openchamber-native ssh_cleanup::tests::a_reaped_leader_and_failed_group_signal_do_not_confirm_helpers
+        PASS [   0.144s] ( 4/15) openchamber-native-desktop::bin/openchamber-native ssh_cleanup::tests::explicit_not_found_without_pid_requires_one_matching_port
+        PASS [   0.098s] ( 5/15) openchamber-native-desktop::bin/openchamber-native ssh_command::tests::commands_keep_connection_options_and_their_order
+        PASS [   0.099s] ( 6/15) openchamber-native-desktop::bin/openchamber-native ssh_cleanup::tests::zero_exit_warning_is_a_failed_stop_and_unknown_replies_stay_uncertain
+        PASS [   0.126s] ( 7/15) openchamber-native-desktop::bin/openchamber-native ssh_command::tests::shell_quoting_survives_single_quotes
+        PASS [   0.126s] ( 8/15) openchamber-native-desktop::bin/openchamber-native ssh_command::tests::options_that_belong_to_the_manager_or_run_commands_are_refused
+        PASS [   0.091s] ( 9/15) openchamber-native-desktop::bin/openchamber-native ssh_host::tests::profiles_and_extra_forwards_reject_unusable_or_exposed_ports
+        PASS [   0.104s] (10/15) openchamber-native-desktop::bin/openchamber-native ssh_host::tests::reaped_group_leader_does_not_prove_its_live_helper_was_cleaned_up
+        PASS [   1.088s] (11/15) openchamber-native-desktop::bin/openchamber-native ssh_host::tests::system_ssh_forwards_a_real_loopback_connection_and_stops_its_listener
+        PASS [   1.991s] (12/15) openchamber-native-desktop::bin/openchamber-native ssh_host::tests::cleanup_receipt_outlives_the_last_session_and_api_runtime
+        PASS [   2.863s] (13/15) openchamber-native-desktop::bin/openchamber-native ssh_host::tests::managed_ssh_installs_the_matching_version_reuses_and_stops_only_the_daemon
+        PASS [   2.371s] (14/15) openchamber-native-desktop::bin/openchamber-native ssh_host::tests::unknown_serve_reply_never_authorizes_stopping_a_later_daemon_by_port
+        PASS [   9.896s] (15/15) openchamber-native-desktop::bin/openchamber-native ssh_host::tests::cleanup_reports_real_cli_outcomes_without_requiring_remote_success
+────────────
+     Summary [  10.096s] 15 tests run: 15 passed, 1068 skipped
+Running clean-before-clippy : cargo clean --offline --locked --manifest-path /home/deandre/projects/rust/oc-wt/native-hosts-relay/native/Cargo.toml --profile dev -p openchamber-native-core -p openchamber-native-transport -p openchamber-native-desktop -p gpui-base -p gpui-component -p gpui-pre
+     Removed 67 files, 2.3GiB total
+Running clippy : cargo clippy --offline --locked --manifest-path /home/deandre/projects/rust/oc-wt/native-hosts-relay/native/Cargo.toml --profile dev -p openchamber-native-desktop --all-targets -j4 -- -D warnings
+   Compiling gpui-pre v0.3.9 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/vendor/gpui-pre)
+   Compiling gpui-component v0.7.3 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/vendor/gpui-component)
+    Checking libghostty-vt-sys v0.2.0 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/vendor/libghostty-vt-sys)
+    Checking openchamber-native-core v0.1.0 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/core)
+    Checking libghostty-vt v0.2.0
+    Checking openchamber-native-transport v0.1.0 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/transport)
+    Checking gpui-pre-wgpu v0.3.9
+    Checking gpui-kit-assets v0.7.3
+    Checking gpui-base v0.7.3 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/vendor/gpui-base)
+    Checking gpui-pre-linux v0.3.9 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/vendor/gpui-pre-linux)
+    Checking gpui-pre-platform v0.3.9
+    Checking gpui-kit v0.7.3
+    Checking openchamber-native-desktop v0.1.0 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/desktop)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 1m 16s
+Running clean-before-debug-build : cargo clean --offline --locked --manifest-path /home/deandre/projects/rust/oc-wt/native-hosts-relay/native/Cargo.toml --profile dev -p openchamber-native-core -p openchamber-native-transport -p openchamber-native-desktop -p gpui-base -p gpui-component -p gpui-pre
+     Removed 68 files, 63.9MiB total
+Running debug-build : cargo build --offline --locked --manifest-path /home/deandre/projects/rust/oc-wt/native-hosts-relay/native/Cargo.toml --profile dev -p openchamber-native-desktop -j4
+   Compiling gpui-pre v0.3.9 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/vendor/gpui-pre)
+   Compiling gpui-component v0.7.3 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/vendor/gpui-component)
+   Compiling openchamber-native-core v0.1.0 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/core)
+   Compiling openchamber-native-transport v0.1.0 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/transport)
+   Compiling gpui-pre-wgpu v0.3.9
+   Compiling gpui-base v0.7.3 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/vendor/gpui-base)
+   Compiling gpui-pre-linux v0.3.9 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/vendor/gpui-pre-linux)
+   Compiling gpui-kit-assets v0.7.3
+   Compiling gpui-pre-platform v0.3.9
+   Compiling gpui-kit v0.7.3
+   Compiling openchamber-native-desktop v0.1.0 (/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/crates/desktop)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2m 22s
+Unit A frozen qualification completed

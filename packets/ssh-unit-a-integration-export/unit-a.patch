@@ -1,0 +1,908 @@
+--- a/native/crates/desktop/src/ssh_host.rs
++++ b/native/crates/desktop/src/ssh_host.rs
+@@ -10,6 +10,10 @@
+ use tokio::process::Command;
+ use tokio::sync::{mpsc, oneshot};
+ 
++use crate::ssh_cleanup::{
++    self, CleanupReceipt, CleanupReport, GroupSignal, Helpers, LocalCleanup, RemoteStop,
++    TargetState,
++};
+ use crate::ssh_command::{SshCommand, shell_quote};
+ 
+ #[derive(Clone, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+@@ -145,18 +149,18 @@
+ /// A running forward. The endpoint retains it while captured work uses it.
+ pub(crate) struct SshSession {
+     stop: std::sync::Mutex<Option<oneshot::Sender<()>>>,
+-    done: tokio::sync::watch::Receiver<bool>,
++    done: CleanupReceipt,
+     pub(crate) port: u16,
+     alive: Arc<std::sync::atomic::AtomicBool>,
+ }
+ 
+ impl SshSession {
+-    pub(crate) fn completion(&self) -> tokio::sync::watch::Receiver<bool> {
++    pub(crate) fn completion(&self) -> CleanupReceipt {
+         self.done.clone()
+     }
+     /// Stops after captured writes drain. The receipt survives the client
+     /// network runtime so app quit can await owned remote cleanup.
+-    pub(crate) fn shutdown(&self) -> tokio::sync::watch::Receiver<bool> {
++    pub(crate) fn shutdown(&self) -> CleanupReceipt {
+         if let Some(stop) = self.stop.lock().expect("stop lock").take() {
+             let _ = stop.send(());
+         }
+@@ -250,22 +254,36 @@
+     }
+ }
+ 
+-struct ProcessGroup(Option<crate::owned_process::ProcessIdentity>);
++struct ProcessGroup {
++    identity: Option<crate::owned_process::ProcessIdentity>,
++    reported: bool,
++}
+ 
+ impl ProcessGroup {
+     fn new(child: &tokio::process::Child) -> Self {
+-        Self(child.id().and_then(crate::owned_process::identify))
++        Self {
++            identity: child.id().and_then(crate::owned_process::identify),
++            reported: false,
++        }
++    }
++
++    fn signal(&mut self) -> GroupSignal {
++        self.reported = true;
++        self.identity
++            .map_or(GroupSignal::IdentityUnavailable, |identity| {
++                GroupSignal::observed(crate::owned_process::send(
++                    identity,
++                    crate::owned_process::Target::Group,
++                    crate::owned_process::Signal::Kill,
++                ))
++            })
+     }
+ }
+ 
+ impl Drop for ProcessGroup {
+     fn drop(&mut self) {
+-        if let Some(identity) = self.0 {
+-            let _ = crate::owned_process::send(
+-                identity,
+-                crate::owned_process::Target::Group,
+-                crate::owned_process::Signal::Kill,
+-            );
++        if !self.reported {
++            let _ = self.signal();
+         }
+     }
+ }
+@@ -443,7 +461,7 @@
+         .map_err(|_| SshError::Forward)?
+         .success()
+     {
+-        stop_remote(&runner, &profile, remote_port, owned_binary.as_deref()).await;
++        let _ = stop_remote(&runner, &profile, remote_port, owned_binary.as_ref()).await;
+         return Err(SshError::Forward);
+     }
+     let ready = async {
+@@ -464,11 +482,11 @@
+     .await;
+     if let Err(error) = ready {
+         let _ = child.kill().await;
+-        stop_remote(&runner, &profile, remote_port, owned_binary.as_deref()).await;
++        let _ = stop_remote(&runner, &profile, remote_port, owned_binary.as_ref()).await;
+         return Err(error);
+     }
+     let (stop, mut stopped) = oneshot::channel();
+-    let (finished, done) = tokio::sync::watch::channel(false);
++    let (finished, done) = tokio::sync::watch::channel(None);
+     let alive = Arc::new(std::sync::atomic::AtomicBool::new(true));
+     let running = alive.clone();
+     tokio::spawn(async move {
+@@ -476,6 +494,7 @@
+         let _diagnostic = diagnostic;
+         let mut group = group;
+         let mut retries = 0;
++        let mut group_signals = Vec::new();
+         loop {
+             tokio::select! { _ = &mut stopped => break, _ = child.wait() => {} }
+             if retries == 5 {
+@@ -504,6 +523,7 @@
+             let Ok(replacement) = runner.command(&args, None).stdout(Stdio::null()).spawn() else {
+                 break;
+             };
++            group_signals.push(group.signal());
+             drop(group);
+             child = replacement;
+             group = ProcessGroup::new(&child);
+@@ -511,14 +531,26 @@
+             // trust answer is needed, explicit Retry starts a prompted attempt.
+         }
+         running.store(false, std::sync::atomic::Ordering::Release);
+-        let _ = tokio::time::timeout(
++        let remote = tokio::time::timeout(
+             Duration::from_secs(5),
+-            stop_remote(&runner, &profile, remote_port, owned_binary.as_deref()),
++            stop_remote(&runner, &profile, remote_port, owned_binary.as_ref()),
+         )
+-        .await;
+-        let _ = child.kill().await;
++        .await
++        .unwrap_or(RemoteStop::Uncertain);
++        let leader_reaped = match child.try_wait() {
++            Ok(Some(_)) => true,
++            _ => child.kill().await.is_ok(),
++        };
++        group_signals.push(group.signal());
+         drop(group);
+-        finished.send_replace(true);
++        finished.send_replace(Some(CleanupReport {
++            remote,
++            local: LocalCleanup {
++                leader_reaped,
++                group_signals,
++                helpers: Helpers::Unconfirmed,
++            },
++        }));
+     });
+     Ok(Arc::new(SshSession {
+         stop: std::sync::Mutex::new(Some(stop)),
+@@ -545,13 +577,53 @@
+     }
+ }
+ 
+-async fn stop_remote(runner: &Runner, profile: &SshProfile, port: u16, binary: Option<&str>) {
+-    if !profile.keep_running
+-        && let Some(binary) = binary
++struct ManagedDaemon {
++    binary: String,
++    pid: Option<u32>,
++}
++
++async fn stop_daemon(runner: &Runner, port: u16, daemon: &ManagedDaemon) -> RemoteStop {
++    let Some(pid) = daemon.pid else {
++        return RemoteStop::Uncertain;
++    };
++    let Ok(status) = runner
++        .remote(&format!(
++            "{PATH_SETUP} {} status --json",
++            shell_quote(&daemon.binary)
++        ))
++        .await
++    else {
++        return RemoteStop::Uncertain;
++    };
++    match ssh_cleanup::target_state(&status, port, Some(pid)) {
++        TargetState::Absent => return RemoteStop::Absent,
++        TargetState::Uncertain => return RemoteStop::Uncertain,
++        TargetState::Matching => {}
++    }
++    match runner
++        .remote(&format!(
++            "{} stop --port {port} --json",
++            shell_quote(&daemon.binary)
++        ))
++        .await
+     {
+-        let _ = runner
+-            .remote(&format!("{} stop --port {port}", shell_quote(binary)))
+-            .await;
++        Ok(reply) => ssh_cleanup::stop_reply(&reply, port, pid),
++        Err(_) => RemoteStop::Uncertain,
++    }
++}
++
++async fn stop_remote(
++    runner: &Runner,
++    profile: &SshProfile,
++    port: u16,
++    daemon: Option<&ManagedDaemon>,
++) -> RemoteStop {
++    if profile.keep_running {
++        return RemoteStop::NotRequested;
++    }
++    match daemon {
++        Some(daemon) => stop_daemon(runner, port, daemon).await,
++        None => RemoteStop::NotRequested,
+     }
+ }
+ 
+@@ -585,7 +657,7 @@
+     runner: &Runner,
+     profile: &SshProfile,
+     version: &str,
+-) -> Result<(u16, Option<String>), SshError> {
++) -> Result<(u16, Option<ManagedDaemon>), SshError> {
+     // Version is a package version, never user-supplied shell input.
+     if !version
+         .bytes()
+@@ -645,12 +717,29 @@
+         if (running_version == version && bind_fits)
+             || (!daemon && profile.remote_port == Some(port))
+         {
+-            return Ok((port, daemon.then_some(binary)));
++            let pid = entry
++                .get("pid")
++                .and_then(|value| value.as_u64())
++                .and_then(|pid| u32::try_from(pid).ok())
++                .filter(|pid| *pid != 0);
++            return Ok((port, daemon.then_some(ManagedDaemon { binary, pid })));
+         }
+         if daemon {
+-            runner
+-                .remote(&format!("{PATH_SETUP} {quoted} stop --port {port}"))
+-                .await?;
++            let pid = entry
++                .get("pid")
++                .and_then(|value| value.as_u64())
++                .and_then(|pid| u32::try_from(pid).ok())
++                .filter(|pid| *pid != 0);
++            let daemon = ManagedDaemon {
++                binary: binary.clone(),
++                pid,
++            };
++            if !matches!(
++                stop_daemon(runner, port, &daemon).await,
++                RemoteStop::Stopped | RemoteStop::Absent
++            ) {
++                return Err(SshError::Remote);
++            }
+             if probe_server(runner, port).await.is_ok() {
+                 return Err(SshError::Remote);
+             }
+@@ -668,22 +757,24 @@
+             r#"{PATH_SETUP}
+ OPENCODE_BINARY="$(command -v opencode 2>/dev/null)"; [ -n "$OPENCODE_BINARY" ] || exit 1
+ export OPENCODE_BINARY
+-OPENCHAMBER_RUNTIME=ssh-remote {quoted} serve --hostname 127.0.0.1 --port {port}"#
++OPENCHAMBER_RUNTIME=ssh-remote {quoted} serve --hostname 127.0.0.1 --port {port} --json"#
+         ))
+         .await?;
+-    let port = started
+-        .split_whitespace()
+-        .filter_map(|word| word.parse::<u16>().ok())
+-        .find(|port| *port != 0)
+-        .unwrap_or(port);
++    // An unacknowledged launch grants no disconnect authority over a later
++    // daemon that happens to occupy the requested port.
++    let (port, pid) = ssh_cleanup::launch_reply(&started).ok_or(SshError::Remote)?;
++    let daemon = ManagedDaemon {
++        binary,
++        pid: Some(pid),
++    };
+     for _ in 0..30 {
+         if probe_server(runner, port).await.is_ok() {
+-            return Ok((port, Some(binary)));
++            return Ok((port, Some(daemon)));
+         }
+         tokio::time::sleep(Duration::from_secs(1)).await;
+     }
+     if !profile.keep_running {
+-        let _ = runner.remote(&format!("{quoted} stop --port {port}")).await;
++        let _ = stop_daemon(runner, port, &daemon).await;
+     }
+     Err(SshError::Remote)
+ }
+@@ -943,7 +1034,7 @@
+         drop(attempt);
+         drop(api);
+         drop(session);
+-        tokio::time::timeout(Duration::from_secs(10), done.wait_for(|done| *done))
++        tokio::time::timeout(Duration::from_secs(10), done.wait_for(Option::is_some))
+             .await
+             .expect("independent cleanup finishes")
+             .expect("cleanup receipt remains live");
+@@ -958,4 +1049,162 @@
+             "the receipt follows closure of the owned forward"
+         );
+     }
+-}
++
++    #[tokio::test]
++    async fn cleanup_reports_real_cli_outcomes_without_requiring_remote_success() {
++        for (mode, expected, stops) in [
++            ("ok", RemoteStop::Stopped, 1),
++            ("warning", RemoteStop::Failed, 1),
++            ("malformed", RemoteStop::Uncertain, 1),
++            ("lost", RemoteStop::Uncertain, 1),
++            ("absent", RemoteStop::Absent, 0),
++            ("changed", RemoteStop::Uncertain, 0),
++            ("missing", RemoteStop::Uncertain, 0),
++        ] {
++            let (_fixture, ready) = fixture(false).await;
++            let root = std::path::PathBuf::from(ready["root"].as_str().expect("root"));
++            let profile = SshProfile {
++                command: ready["command"].as_str().expect("command").into(),
++                remote_port: Some(
++                    u16::try_from(ready["remotePort"].as_u64().expect("port")).expect("u16"),
++                ),
++                keep_running: false,
++                ..Default::default()
++            };
++            let (sender, _prompts) = mpsc::channel(4);
++            let session = prepare(profile, "2.6.1", sender, None)
++                .await
++                .expect("adopt confined daemon");
++            match mode {
++                "absent" => std::fs::remove_file(root.join("running")).expect("fixture absent"),
++                "changed" => {
++                    let pid: u32 = std::fs::read_to_string(root.join("daemon_identity"))
++                        .expect("identity")
++                        .parse()
++                        .expect("pid");
++                    std::fs::write(root.join("daemon_identity"), (pid + 1).to_string())
++                        .expect("replacement identity");
++                }
++                "missing" => {
++                    std::fs::write(root.join("missing_identity"), "").expect("missing identity")
++                }
++                _ => std::fs::write(root.join("stop_mode"), mode).expect("stop outcome"),
++            }
++            let mut receipt = session.completion();
++            drop(session);
++            let report =
++                tokio::time::timeout(Duration::from_secs(10), receipt.wait_for(Option::is_some))
++                    .await
++                    .expect("worker completes best effort")
++                    .expect("report sender lives")
++                    .clone()
++                    .expect("report");
++            assert_eq!(report.remote, expected, "{mode}");
++            assert!(report.local.leader_reaped, "{mode}: leader was reaped");
++            assert_eq!(
++                report.local.helpers,
++                Helpers::Unconfirmed,
++                "leader reap never confirms every helper"
++            );
++            let commands = std::fs::read_to_string(root.join("commands")).expect("commands");
++            assert_eq!(
++                commands
++                    .lines()
++                    .filter(|line| line.contains("\"stop\""))
++                    .count(),
++                stops,
++                "{mode}: destructive commands"
++            );
++            assert_eq!(
++                root.join("running").exists(),
++                !matches!(mode, "ok" | "absent"),
++                "{mode}: actual daemon observation"
++            );
++        }
++    }
++
++    #[tokio::test]
++    async fn unknown_serve_reply_never_authorizes_stopping_a_later_daemon_by_port() {
++        for mode in ["malformed", "lost"] {
++            let (_fixture, ready) = fixture(true).await;
++            let root = std::path::PathBuf::from(ready["root"].as_str().expect("root"));
++            std::fs::write(root.join("serve_mode"), mode).expect("serve outcome");
++            let profile = SshProfile {
++                command: ready["command"].as_str().expect("command").into(),
++                remote_port: Some(
++                    u16::try_from(ready["remotePort"].as_u64().expect("port")).expect("u16"),
++                ),
++                keep_running: false,
++                ..Default::default()
++            };
++            let (sender, _prompts) = mpsc::channel(4);
++            assert!(
++                prepare(profile, "2.6.1", sender, None).await.is_err(),
++                "unknown acknowledgement must not gain authority"
++            );
++            std::fs::write(root.join("daemon_identity"), "999999").expect("later fixture daemon");
++            let commands = std::fs::read_to_string(root.join("commands")).expect("commands");
++            assert!(
++                !commands.lines().any(|line| line.contains("\"stop\"")),
++                "no destructive port reconciliation"
++            );
++            assert!(
++                root.join("running").exists(),
++                "unknown daemon remains untouched"
++            );
++        }
++    }
++
++    #[tokio::test]
++    async fn reaped_group_leader_does_not_prove_its_live_helper_was_cleaned_up() {
++        use tokio::io::AsyncBufReadExt;
++        struct Helper(crate::owned_process::ProcessIdentity);
++        impl Drop for Helper {
++            fn drop(&mut self) {
++                let _ = crate::owned_process::send(
++                    self.0,
++                    crate::owned_process::Target::Process,
++                    crate::owned_process::Signal::Kill,
++                );
++            }
++        }
++        let mut command = Command::new("sh");
++        command
++            .args(["-c", "sleep 30 & echo $!; read line; exit 0"])
++            .stdin(Stdio::piped())
++            .stdout(Stdio::piped())
++            .kill_on_drop(true);
++        #[cfg(unix)]
++        {
++            use std::os::unix::process::CommandExt;
++            command.as_std_mut().process_group(0);
++        }
++        let mut child = command.spawn().expect("owned group leader");
++        let mut group = ProcessGroup::new(&child);
++        let mut reader =
++            tokio::io::BufReader::new(child.stdout.take().expect("helper identity pipe"));
++        let mut line = String::new();
++        reader.read_line(&mut line).await.expect("helper PID");
++        let helper = Helper(
++            crate::owned_process::identify(line.trim().parse().expect("pid"))
++                .expect("captured live helper"),
++        );
++        drop(child.stdin.take());
++        child.wait().await.expect("leader reaped");
++        assert_eq!(
++            group.signal(),
++            GroupSignal::NotOwned,
++            "gone leader no longer grants group signal authority"
++        );
++        assert!(
++            crate::owned_process::is_alive(helper.0),
++            "helper remains alive after leader reap"
++        );
++        let local = LocalCleanup {
++            leader_reaped: true,
++            group_signals: vec![GroupSignal::NotOwned],
++            helpers: Helpers::Unconfirmed,
++        };
++        assert_eq!(local.helpers, Helpers::Unconfirmed);
++    }
++}
+--- a/native/crates/desktop/src/ssh_view.rs
++++ b/native/crates/desktop/src/ssh_view.rs
+@@ -63,7 +63,7 @@
+                                 Ok(session) => {
+                                     this.ssh_sessions.retain(|session| session.strong_count() != 0);
+                                     this.ssh_sessions.push(std::sync::Arc::downgrade(&session));
+-                                    this.ssh_cleanup.retain(|receipt| !*receipt.borrow());
++                                    this.ssh_cleanup.retain(|receipt| receipt.borrow().is_none());
+                                     this.ssh_cleanup.push(session.completion());
+                                     let transport = Endpoint::parse(&format!("http://127.0.0.1:{}/", session.port)).expect("loopback URL");
+                                     connection.config.endpoint = connection.config.endpoint.clone().with_transport(&transport, session.clone());
+--- a/native/crates/desktop/src/workspace.rs
++++ b/native/crates/desktop/src/workspace.rs
+@@ -202,7 +202,7 @@
+     pub(crate) connection: Option<Connection>,
+     pub(crate) retired_networks: Vec<(RuntimeId, crate::network::Network)>,
+     pub(crate) ssh_sessions: Vec<std::sync::Weak<crate::ssh_host::SshSession>>,
+-    pub(crate) ssh_cleanup: Vec<tokio::sync::watch::Receiver<bool>>,
++    pub(crate) ssh_cleanup: Vec<crate::ssh_cleanup::CleanupReceipt>,
+     pub(crate) authentication: crate::authentication::Authentication,
+     pub(crate) host_manager: Option<Entity<crate::host_manager::HostManager>>,
+     pub(crate) settings: Option<Entity<crate::settings_view::Settings>>,
+@@ -517,7 +517,7 @@
+                         drop(session.shutdown());
+                     }
+                     for mut stopped in ssh_cleanup {
+-                        let _ = stopped.wait_for(|done| *done).await;
++                        let _ = stopped.wait_for(Option::is_some).await;
+                     }
+                     drop(ssh_sessions);
+                     drop(active_network);
+--- a/native/crates/desktop/DOCUMENTATION.md
++++ b/native/crates/desktop/DOCUMENTATION.md
+@@ -263,11 +263,27 @@
+   Remote registry read failure blocks managed startup. A CLI daemon is reused
+   only after its password policy fits; foreground servers are never stopped.
+   Keep server running controls stopping the managed CLI daemon on disconnect.
++  Selecting another host preserves the previous SSH connection for background
++  work; selection alone does not require a remote stop. Remote stop is best
++  effort, including for an adopted managed daemon with disconnect authority.
+   An interrupted forward makes at most 5 key/agent reconnect attempts with
+   backoff. A new password or trust decision requires explicit Retry.
+   Its cleanup executor outlives the API connection. App quit drains accepted
+   writes first, then stops every retained SSH session and awaits its bounded
+   remote-stop receipt before releasing client runtimes.
++  `ssh_cleanup.rs` defines private cleanup observations. Receipt completion means
++  the worker ended, independently of remote success. Stop JSON distinguishes a
++  confirmed stop, explicit failure, authoritative absence and uncertainty. The
++  existing CLI serve JSON supplies the launched daemon's port and PID; missing
++  acknowledgements grant no destructive port-based reconciliation. Adopted
++  daemons capture their existing CLI status identity. Stop rechecks that identity
++  and suppresses the command if it is missing or changed. CLI status and stop are
++  separate operations, so they do not provide an atomic conditional stop or
++  protection against PID reuse. Local reports retain group-signal outcomes and
++  leader-reap observation separately; helper cleanup remains unconfirmed.
++  Reports add no close veto, UI, timeout or host-switch policy. Reliable terminal
++  preflight and stronger process/session custody belong to their own lifecycle
++  owners; the final GPUI shutdown hook remains bounded best-effort cleanup.
+ - `shortcuts.rs` binds the configurable shortcuts that have a native command
+   into GPUI's keymap, runs them and saves the user's map to the settings
+   document. `shortcuts_settings.rs` is the Shortcuts page and its recording
+--- a/scripts/parity/ssh_fixture.py
++++ b/scripts/parity/ssh_fixture.py
+@@ -39,17 +39,40 @@
+     log.write(json.dumps(args) + '\n')
+ port = int((root / 'port').read_text())
+ version = (root / 'version').read_text().strip()
++pid = int((root / 'daemon_identity').read_text())
+ if args == ['--version']:
+     print(version)
+ elif args == ['status', '--json']:
+-    print(json.dumps({'instances': [{'runtime':'cli','port':port,'launchMode':'daemon','bindHost':'127.0.0.1','passwordProtected':False}] if (root / 'running').exists() else []}))
++    instance = {'runtime':'cli','port':port,'pid':pid,'launchMode':'daemon','bindHost':'127.0.0.1','passwordProtected':False}
++    if (root / 'missing_identity').exists():
++        instance.pop('pid')
++    print(json.dumps({'instances': [instance] if (root / 'running').exists() else []}))
+ elif args and args[0] == 'serve':
+     if int(args[args.index('--port') + 1]) != port:
+         raise SystemExit(1)
+     (root / 'running').touch()
+-    print(port)
++    mode = (root / 'serve_mode').read_text().strip() if (root / 'serve_mode').exists() else 'ok'
++    if mode == 'lost':
++        raise SystemExit(255)
++    if mode == 'malformed':
++        print('unacknowledged')
++    elif '--json' in args:
++        print(json.dumps({'port':port,'pid':pid,'launchMode':'daemon'}))
++    else:
++        print(port)
+ elif args and args[0] == 'stop':
+-    (root / 'running').unlink(missing_ok=True)
++    mode = (root / 'stop_mode').read_text().strip() if (root / 'stop_mode').exists() else 'ok'
++    if mode == 'lost':
++        raise SystemExit(255)
++    if mode == 'malformed':
++        print('{broken')
++    elif mode == 'warning':
++        print(json.dumps({'status':'warning','stoppedCount':0,'results':[{'port':port,'pid':pid,'stopped':False,'reason':'stop-failed'}]}))
++    elif not (root / 'running').exists():
++        print(json.dumps({'stoppedCount':0,'results':[]}))
++    else:
++        (root / 'running').unlink()
++        print(json.dumps({'status':'ok','stoppedCount':1,'results':[{'port':port,'pid':pid,'stopped':True}]}))
+ else:
+     raise SystemExit(1)
+ '''
+@@ -78,6 +101,7 @@
+     (tools / 'opencode').write_text('#!/bin/sh\nexit 0\n')
+     (tools / 'opencode').chmod(0o700)
+     (root / 'version').write_text('0.0.0' if managed else '2.6.1')
++    (root / 'daemon_identity').write_text(str(os.getpid()))
+     if not managed:
+         (root / 'running').touch()
+ 
+--- a/scripts/parity/ssh_fixture_test.py
++++ b/scripts/parity/ssh_fixture_test.py
+@@ -6,6 +6,8 @@
+ import os
+ from pathlib import Path
+ import signal
++import subprocess
++import sys
+ import tempfile
+ import unittest
+ import urllib.request
+@@ -92,6 +94,33 @@
+         self.assertEqual(refused.exception.code, 403)
+         refused.exception.close()
+ 
++    def test_stop_json_matches_success_failure_absence_and_unknown_wire_cases(self):
++        root = self.output / 'fixture'
++        cli = root / 'home/.openchamber/npm-global/bin/openchamber'
++        env = {'HOME':str(root / 'home'), 'PATH':'/usr/bin:/bin'}
++        try:
++            for mode in ('ok', 'warning', 'malformed', 'lost'):
++                (root / 'running').touch()
++                (root / 'stop_mode').write_text(mode)
++                result = subprocess.run([sys.executable, str(cli), 'stop', '--port', str(self.ready['remotePort']), '--json'], env=env, capture_output=True, text=True, timeout=3)
++                if mode == 'lost':
++                    self.assertNotEqual(result.returncode, 0)
++                elif mode == 'malformed':
++                    self.assertEqual(result.returncode, 0)
++                    with self.assertRaises(json.JSONDecodeError):
++                        json.loads(result.stdout)
++                else:
++                    self.assertEqual(result.returncode, 0)
++                    self.assertEqual(json.loads(result.stdout)['results'][0]['stopped'], mode == 'ok')
++                self.assertEqual((root / 'running').exists(), mode != 'ok')
++            (root / 'stop_mode').write_text('ok')
++            (root / 'running').unlink(missing_ok=True)
++            result = subprocess.run([sys.executable, str(cli), 'stop', '--port', str(self.ready['remotePort']), '--json'], env=env, capture_output=True, text=True, check=True, timeout=3)
++            self.assertEqual(json.loads(result.stdout), {'stoppedCount':0, 'results':[]})
++        finally:
++            (root / 'stop_mode').unlink(missing_ok=True)
++            (root / 'running').touch()
++
+ 
+ if __name__ == '__main__':
+     unittest.main()
+--- a/native/crates/desktop/src/main.rs
++++ b/native/crates/desktop/src/main.rs
+@@ -169,6 +169,7 @@
+ #[cfg(test)]
+ mod source_board_tests;
+ mod source_board_view;
++mod ssh_cleanup;
+ mod ssh_command;
+ mod ssh_host;
+ mod ssh_prompt;
+--- /dev/null
++++ b/native/crates/desktop/src/ssh_cleanup.rs
+@@ -0,0 +1,275 @@
++//! Private observations from best-effort SSH cleanup, separate from completion.
++
++use crate::owned_process::SignalError;
++
++pub(crate) type CleanupReceipt = tokio::sync::watch::Receiver<Option<CleanupReport>>;
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(crate) enum RemoteStop {
++    NotRequested,
++    Stopped,
++    Failed,
++    Absent,
++    Uncertain,
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(crate) enum GroupSignal {
++    Sent,
++    IdentityUnavailable,
++    NotOwned,
++    Unavailable,
++    Refused,
++}
++
++impl GroupSignal {
++    pub(crate) fn observed(result: Result<(), SignalError>) -> Self {
++        match result {
++            Ok(()) => Self::Sent,
++            Err(SignalError::NotOwned) => Self::NotOwned,
++            Err(SignalError::Unavailable) => Self::Unavailable,
++            Err(SignalError::Refused) => Self::Refused,
++        }
++    }
++}
++
++#[derive(Clone, Copy, Debug, PartialEq, Eq)]
++pub(crate) enum Helpers {
++    /// Neither a signal request nor reaping the leader confirms all helpers.
++    Unconfirmed,
++}
++
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub(crate) struct LocalCleanup {
++    pub(crate) leader_reaped: bool,
++    pub(crate) group_signals: Vec<GroupSignal>,
++    pub(crate) helpers: Helpers,
++}
++
++#[derive(Clone, Debug, PartialEq, Eq)]
++pub(crate) struct CleanupReport {
++    pub(crate) remote: RemoteStop,
++    pub(crate) local: LocalCleanup,
++}
++
++pub(crate) enum TargetState {
++    Matching,
++    Absent,
++    Uncertain,
++}
++
++/// The existing CLI status provides PID, runtime and launch mode, not an atomic
++/// conditional-stop capability. Missing or changed identity grants no stop.
++pub(crate) fn target_state(text: &str, port: u16, expected_pid: Option<u32>) -> TargetState {
++    let Some(pid) = expected_pid else {
++        return TargetState::Uncertain;
++    };
++    let Ok(value) = serde_json::from_str::<serde_json::Value>(text.trim()) else {
++        return TargetState::Uncertain;
++    };
++    let Some(instances) = value.get("instances").and_then(|value| value.as_array()) else {
++        return TargetState::Uncertain;
++    };
++    // A record with an unreadable port could be the target. It cannot prove
++    // absence, while unrelated records with valid ports stay independent.
++    if instances.iter().any(|entry| {
++        entry
++            .get("port")
++            .and_then(|value| value.as_u64())
++            .is_none_or(|port| port == 0 || port > u64::from(u16::MAX))
++    }) {
++        return TargetState::Uncertain;
++    }
++    let mut matches = instances.iter().filter(|entry| {
++        entry.get("port").and_then(|value| value.as_u64()) == Some(u64::from(port))
++    });
++    let Some(entry) = matches.next() else {
++        return TargetState::Absent;
++    };
++    if matches.next().is_some()
++        || entry.get("pid").and_then(|value| value.as_u64()) != Some(u64::from(pid))
++        || entry.get("runtime").and_then(|value| value.as_str()) != Some("cli")
++        || entry.get("launchMode").and_then(|value| value.as_str()) != Some("daemon")
++    {
++        return TargetState::Uncertain;
++    }
++    TargetState::Matching
++}
++
++pub(crate) fn stop_reply(text: &str, port: u16, pid: u32) -> RemoteStop {
++    let Ok(value) = serde_json::from_str::<serde_json::Value>(text.trim()) else {
++        return RemoteStop::Uncertain;
++    };
++    let Some(results) = value.get("results").and_then(|value| value.as_array()) else {
++        return RemoteStop::Uncertain;
++    };
++    if results.is_empty() && value.get("stoppedCount").and_then(|value| value.as_u64()) == Some(0) {
++        return if matches!(
++            value.get("status").and_then(|value| value.as_str()),
++            Some("warning" | "error")
++        ) || value
++            .get("messages")
++            .and_then(|value| value.as_array())
++            .is_some_and(|messages| !messages.is_empty())
++        {
++            RemoteStop::Failed
++        } else if value.get("status").is_none()
++            || value.get("status").and_then(|value| value.as_str()) == Some("ok")
++        {
++            RemoteStop::Absent
++        } else {
++            RemoteStop::Uncertain
++        };
++    }
++    let mut matching = results.iter().filter(|entry| {
++        entry.get("port").and_then(|value| value.as_u64()) == Some(u64::from(port))
++    });
++    let Some(entry) = matching.next() else {
++        return RemoteStop::Uncertain;
++    };
++    if matching.next().is_some() {
++        return RemoteStop::Uncertain;
++    }
++    // Explicit-port stop can observe the daemon disappearing after status.
++    // The pinned CLI reports not-found without PID; this grants no new action.
++    if entry.get("reason").and_then(|value| value.as_str()) == Some("not-found") {
++        return if entry.get("stopped").and_then(|value| value.as_bool()) == Some(false)
++            && value.get("stoppedCount").and_then(|value| value.as_u64()) == Some(0)
++        {
++            RemoteStop::Absent
++        } else {
++            RemoteStop::Uncertain
++        };
++    }
++    if entry.get("pid").and_then(|value| value.as_u64()) != Some(u64::from(pid)) {
++        return RemoteStop::Uncertain;
++    }
++    match entry.get("stopped").and_then(|value| value.as_bool()) {
++        Some(true)
++            if value
++                .get("stoppedCount")
++                .and_then(|value| value.as_u64())
++                .is_some_and(|count| count > 0) =>
++        {
++            RemoteStop::Stopped
++        }
++        Some(false) => RemoteStop::Failed,
++        _ => RemoteStop::Uncertain,
++    }
++}
++
++pub(crate) fn launch_reply(text: &str) -> Option<(u16, u32)> {
++    let value: serde_json::Value = serde_json::from_str(text.trim()).ok()?;
++    if value.get("launchMode")?.as_str()? != "daemon" {
++        return None;
++    }
++    let port = u16::try_from(value.get("port")?.as_u64()?)
++        .ok()
++        .filter(|port| *port != 0)?;
++    let pid = u32::try_from(value.get("pid")?.as_u64()?)
++        .ok()
++        .filter(|pid| *pid != 0)?;
++    Some((port, pid))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn zero_exit_warning_is_a_failed_stop_and_unknown_replies_stay_uncertain() {
++        assert_eq!(
++            stop_reply(
++                r#"{"status":"warning","stoppedCount":0,"results":[{"port":42,"pid":7,"stopped":false}]}"#,
++                42,
++                7
++            ),
++            RemoteStop::Failed
++        );
++        for reply in [
++            "",
++            "{broken",
++            "{}",
++            r#"{"status":"unknown","stoppedCount":0,"results":[]}"#,
++            r#"{"stoppedCount":1,"results":[{"port":42,"pid":8,"stopped":true}]}"#,
++        ] {
++            assert_eq!(stop_reply(reply, 42, 7), RemoteStop::Uncertain);
++        }
++        assert_eq!(
++            stop_reply(r#"{"stoppedCount":0,"results":[]}"#, 42, 7),
++            RemoteStop::Absent
++        );
++        assert_eq!(
++            stop_reply(
++                r#"{"status":"ok","stoppedCount":1,"results":[{"port":42,"pid":7,"stopped":true}]}"#,
++                42,
++                7
++            ),
++            RemoteStop::Stopped
++        );
++    }
++
++    #[test]
++    fn missing_or_changed_identity_and_unknown_serve_ack_grant_no_authority() {
++        let current =
++            r#"{"instances":[{"port":42,"pid":8,"runtime":"cli","launchMode":"daemon"}]}"#;
++        assert!(matches!(
++            target_state(current, 42, Some(7)),
++            TargetState::Uncertain
++        ));
++        assert!(matches!(
++            target_state(current, 42, None),
++            TargetState::Uncertain
++        ));
++        assert!(matches!(
++            target_state(current, 42, Some(8)),
++            TargetState::Matching
++        ));
++        assert!(matches!(
++            target_state(r#"{"instances":[]}"#, 42, Some(8)),
++            TargetState::Absent
++        ));
++        assert!(matches!(
++            target_state(r#"{"instances":[{}]}"#, 42, Some(8)),
++            TargetState::Uncertain
++        ));
++        assert_eq!(launch_reply("lost or malformed reply"), None);
++        assert_eq!(launch_reply("23456\n"), None);
++        assert_eq!(
++            launch_reply(r#"{"port":23456,"pid":7,"launchMode":"daemon"}"#),
++            Some((23456, 7))
++        );
++    }
++
++    #[test]
++    fn explicit_not_found_without_pid_requires_one_matching_port() {
++        let reply =
++            r#"{"stoppedCount":0,"results":[{"port":42,"stopped":false,"reason":"not-found"}]}"#;
++        assert_eq!(stop_reply(reply, 42, 7), RemoteStop::Absent);
++        assert_eq!(stop_reply(reply, 43, 7), RemoteStop::Uncertain);
++        for malformed in [
++            r#"{"stoppedCount":0,"results":[{"port":42,"stopped":false,"reason":"not-found"},{"port":42,"stopped":false,"reason":"not-found"}]}"#,
++            r#"{"stoppedCount":1,"results":[{"port":42,"stopped":false,"reason":"not-found"}]}"#,
++            r#"{"stoppedCount":0,"results":[{"port":42,"stopped":true,"reason":"not-found"}]}"#,
++        ] {
++            assert_eq!(stop_reply(malformed, 42, 7), RemoteStop::Uncertain);
++        }
++    }
++
++    #[test]
++    fn a_reaped_leader_and_failed_group_signal_do_not_confirm_helpers() {
++        for result in [
++            Err(SignalError::NotOwned),
++            Err(SignalError::Unavailable),
++            Err(SignalError::Refused),
++            Ok(()),
++        ] {
++            let local = LocalCleanup {
++                leader_reaped: true,
++                group_signals: vec![GroupSignal::observed(result)],
++                helpers: Helpers::Unconfirmed,
++            };
++            assert_eq!(local.helpers, Helpers::Unconfirmed);
++        }
++    }
++}
