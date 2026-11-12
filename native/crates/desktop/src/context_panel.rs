@@ -91,6 +91,18 @@ impl Workspace {
         self.work_status_open && self.work_status_fits(window)
     }
 
+    /// The card keeps its column beside an open zone while the row still
+    /// leaves the chat its 560 px (`roomyBesidePanel`). The zone counts at
+    /// the width it shows at: the Files tree's, else its stored one.
+    pub(crate) fn work_status_beside_zone(&self, window: &gpui_kit::Window) -> bool {
+        let zone = if self.panels.tree_only {
+            self.pane_sizes.tree_width()
+        } else {
+            self.pane_sizes.panel_width()
+        };
+        self.work_status_open && self.panel_area(window) - zone >= REQUIRED_CHAT_AREA_WIDTH
+    }
+
     /// The docked work status card.
     pub(crate) fn render_work_status_panel(
         &self,
@@ -236,7 +248,8 @@ impl Workspace {
                             .inset_0()
                             .rounded(px(CARD_RADIUS))
                             .shadow(elevation::panel_edge_ring(palette)),
-                    ),
+                    )
+                    .test_support(),
             )
     }
 

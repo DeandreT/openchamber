@@ -102,6 +102,35 @@ pub struct QueuedMessage {
     pub goal: bool,
     /// Whether a scheduled task queued it; those cannot be edited or sent.
     pub scheduled: bool,
+    /// The durable enqueue request behind the item, when the server names
+    /// one and holds it queued or uncertain (`queueDelivery`).
+    pub delivery: Option<QueueDelivery>,
+}
+
+/// How the server holds a listed item's durable enqueue request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QueueDeliveryState {
+    Queued,
+    Uncertain,
+}
+
+/// The durable enqueue request behind a queued item, as its queue lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueueDelivery {
+    pub request: String,
+    pub state: QueueDeliveryState,
+}
+
+/// What the projection says of one enqueue request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListedDelivery {
+    /// Nothing was applied for the request's queue or its owner. The
+    /// projection cannot tell a read that is on its way from one that failed
+    /// or was never started; whoever reads the queue knows which.
+    Unread,
+    /// The queue was applied and no item names the request.
+    Absent,
+    Listed(QueueDeliveryState),
 }
 
 impl fmt::Debug for QueuedMessage {
@@ -275,6 +304,24 @@ impl MessageQueue {
     /// The item the server is delivering for `key`.
     pub fn sending(&self, key: &QueueKey) -> Option<&QueuedItemId> {
         self.sending.get(key)
+    }
+
+    /// How the queue at `key` lists the enqueue request `request`.
+    pub fn listed_delivery(&self, key: &QueueKey, request: &str) -> ListedDelivery {
+        let listed = self
+            .queue(key)
+            .iter()
+            .filter_map(|message| message.delivery.as_ref())
+            .find(|delivery| delivery.request == request);
+        if let Some(delivery) = listed {
+            return ListedDelivery::Listed(delivery.state);
+        }
+        let owner = (key.runtime.clone(), key.owner().map(str::to_owned));
+        if self.applied.contains_key(key) || self.snapshots.contains_key(&owner) {
+            ListedDelivery::Absent
+        } else {
+            ListedDelivery::Unread
+        }
     }
 
     /// Applies one session's authoritative state from `owner` (a space, or
@@ -490,6 +537,7 @@ mod tests {
             send_config: None,
             goal: false,
             scheduled: false,
+            delivery: None,
         }
     }
 
@@ -512,6 +560,52 @@ mod tests {
             .iter()
             .map(|message| message.id.as_str().to_owned())
             .collect()
+    }
+
+    #[test]
+    fn a_request_is_unread_then_listed_then_absent() {
+        let mut queue = MessageQueue::default();
+        let key = key("/repo");
+        assert_eq!(
+            queue.listed_delivery(&key, "request"),
+            ListedDelivery::Unread
+        );
+        let listed = |state| {
+            let mut session = session("/repo", &["a", "b"]);
+            session.items[1].delivery = Some(QueueDelivery {
+                request: "request".to_owned(),
+                state,
+            });
+            session
+        };
+        assert!(queue.apply_session(&runtime(), None, listed(QueueDeliveryState::Queued), 1));
+        assert_eq!(
+            queue.listed_delivery(&key, "request"),
+            ListedDelivery::Listed(QueueDeliveryState::Queued)
+        );
+        assert_eq!(
+            queue.listed_delivery(&key, "another"),
+            ListedDelivery::Absent,
+            "the applied queue names no such request"
+        );
+        assert!(queue.apply_session(&runtime(), None, listed(QueueDeliveryState::Uncertain), 2));
+        assert_eq!(
+            queue.listed_delivery(&key, "request"),
+            ListedDelivery::Listed(QueueDeliveryState::Uncertain)
+        );
+        assert!(queue.apply_session(&runtime(), None, session("/repo", &[]), 3));
+        assert_eq!(
+            queue.listed_delivery(&key, "request"),
+            ListedDelivery::Absent,
+            "the item left its queue"
+        );
+        let mut snapshot = MessageQueue::default();
+        assert!(snapshot.apply_snapshot(&runtime(), None, 1, Vec::new()));
+        assert_eq!(
+            snapshot.listed_delivery(&key, "request"),
+            ListedDelivery::Absent,
+            "a complete snapshot of the owner lists no such queue"
+        );
     }
 
     #[test]

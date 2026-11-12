@@ -4,7 +4,9 @@
 //!
 //! The statistics are recomputed while the session is idle; while a turn
 //! runs, the section keeps the last ones it committed, as the web's record
-//! subscription pauses while the session works.
+//! subscription pauses while the session works, and names them "Previous
+//! turn". A session first shown mid-run reads the turn before its newest
+//! prompt once.
 
 use gpui_kit::{AnyElement, Context, SharedString};
 use openchamber_native_core::turn_stats::{self, TurnStats};
@@ -29,8 +31,14 @@ impl Workspace {
     ) -> Option<AnyElement> {
         let id = self.selected.as_ref()?;
         let open = self.open_sessions.get(id)?;
-        let stats = if self.is_streaming(id) {
-            open.turn_stats.get()
+        let streaming = self.is_streaming(id);
+        let stats = if streaming {
+            let stats = open
+                .turn_stats
+                .get()
+                .or_else(|| turn_stats::previous_completed_turn(open.transcript.messages()));
+            open.turn_stats.set(stats);
+            stats
         } else {
             let stats = turn_stats::latest_completed_turn(open.transcript.messages());
             open.turn_stats.set(stats);
@@ -45,9 +53,19 @@ impl Workspace {
                 id: "work-status-telemetry",
                 icon: "bar-chart-2",
                 title: strings.get("chat.workStatus.section.telemetry"),
-                summary: stats
-                    .and_then(|stats| stats.response_tokens_per_second)
-                    .map(|rate| turn_stats::format_rate(rate).into()),
+                summary: stats.and_then(|stats| {
+                    let rate = stats
+                        .response_tokens_per_second
+                        .map(turn_stats::format_rate);
+                    match (stats.previous_turn || streaming, rate) {
+                        (true, Some(rate)) => Some(strings.format(
+                            "chat.workStatus.telemetry.previousTurnRate",
+                            &[("rate", &rate)],
+                        )),
+                        (true, None) => Some(strings.get("chat.workStatus.telemetry.previousTurn")),
+                        (false, rate) => rate.map(SharedString::from),
+                    }
+                }),
                 expanded: self.work_status_telemetry_open,
                 toggle: |this, _| {
                     this.work_status_telemetry_open = !this.work_status_telemetry_open

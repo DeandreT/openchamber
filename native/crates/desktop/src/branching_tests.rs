@@ -338,6 +338,182 @@ fn revert_failure_restores_captured_owner_after_runtime_switch(cx: &mut TestAppC
     });
 }
 
+/// Links an expanded `/btw` side conversation to `session`.
+fn open_btw(
+    this: &mut Workspace,
+    session: &SessionId,
+    window: &mut gpui_kit::Window,
+    cx: &mut gpui_kit::Context<Workspace>,
+) {
+    let fork: SessionId = "revert_btw".into();
+    let mut record = SessionRecord::new(fork.clone(), "/p");
+    record.kind = SessionKind::Btw;
+    this.apply_server_events(
+        vec![
+            ServerEvent::SessionCreated(record),
+            ServerEvent::SessionPatched {
+                session_id: session.clone(),
+                patch: SessionPatch {
+                    metadata: Some(MetadataFacts {
+                        btw: BtwMetadata {
+                            link: Some(fork),
+                            ..BtwMetadata::default()
+                        },
+                        ..MetadataFacts::default()
+                    }),
+                    ..SessionPatch::default()
+                },
+            },
+        ],
+        window,
+        cx,
+    );
+    assert!(
+        this.btw_takes_composer(),
+        "the expanded panel takes the composer"
+    );
+}
+
+/// The parity scenario: the session's own editor shows the reverted prompt,
+/// and a refused stage leaves it there.
+#[gpui_kit::test]
+fn a_failed_revert_keeps_the_prompt_its_editor_took(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let (session, users) = select_root(window, &workspace, cx);
+    let last = users.last().expect("a prompt").clone();
+    update(window, &workspace, cx, |this, window, cx| {
+        let key = this.mutation_key(&session);
+        let draft = this
+            .composer_key
+            .clone()
+            .expect("selected session has a draft owner");
+        this.composer.update(cx, |composer, cx| {
+            composer.set_value("Draft before the failed revert", window, cx)
+        });
+        this.save_composer_draft(cx);
+        let rollback = this.revert_rollback(Some(&draft), Some("Revert target prompt"), cx);
+        assert!(
+            rollback.is_none(),
+            "the editor takes the prompt, so nothing is undone on a refusal"
+        );
+        // What `revert_to_message` does before its request leaves.
+        this.branching.pending_reverts.insert(key.clone(), last);
+        this.show_reverted_prompt(draft.clone(), "Revert target prompt".into(), window, cx);
+        this.finish_revert(
+            key,
+            rollback,
+            Some(Err(TransportError::Http { status: 500 })),
+            window,
+            cx,
+        );
+        assert_eq!(
+            this.composer.read(cx).value().as_ref(),
+            "Revert target prompt"
+        );
+        assert_eq!(
+            this.drafts
+                .get(&draft)
+                .expect("the reverted prompt is the session's draft")
+                .text,
+            "Revert target prompt"
+        );
+        assert!(this.branching.pending_reverts.is_empty());
+    });
+}
+
+/// The reference's composer shows the side conversation's draft while its
+/// panel is expanded, so the parent's restored prompt is not consumed and a
+/// refusal rolls it back. Collapsing the panel hands the composer to the
+/// parent, which consumes it.
+#[gpui_kit::test]
+fn a_failed_revert_under_an_expanded_btw_panel_restores_what_it_replaced(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let (session, users) = select_root(window, &workspace, cx);
+    let last = users.last().expect("a prompt").clone();
+    update(window, &workspace, cx, |this, window, cx| {
+        open_btw(this, &session, window, cx);
+        let key = this.mutation_key(&session);
+        let draft = this
+            .composer_key
+            .clone()
+            .expect("selected session has a draft owner");
+        for collapses in [false, true] {
+            this.branching.btw.entry(key.clone()).or_default().collapsed = false;
+            this.composer.update(cx, |composer, cx| {
+                composer.set_value("side question", window, cx)
+            });
+            this.save_composer_draft(cx);
+            let rollback = this.revert_rollback(Some(&draft), Some("Revert target prompt"), cx);
+            assert!(
+                rollback.is_some(),
+                "the side conversation holds the composer at the stage"
+            );
+            this.branching
+                .pending_reverts
+                .insert(key.clone(), last.clone());
+            this.show_reverted_prompt(draft.clone(), "Revert target prompt".into(), window, cx);
+            if collapses {
+                this.branching.btw.entry(key.clone()).or_default().collapsed = true;
+            }
+            this.finish_revert(
+                key.clone(),
+                rollback,
+                Some(Err(TransportError::Http { status: 500 })),
+                window,
+                cx,
+            );
+            assert_eq!(
+                this.composer.read(cx).value().as_ref(),
+                if collapses {
+                    "Revert target prompt"
+                } else {
+                    "side question"
+                },
+                "collapsed before the refusal: {collapses}"
+            );
+        }
+    });
+}
+
+#[gpui_kit::test]
+fn a_failed_revert_restores_a_draft_no_editor_showed(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let (session, _) = select_root(window, &workspace, cx);
+    update(window, &workspace, cx, |this, window, cx| {
+        let key = this.mutation_key(&session);
+        let draft = this
+            .composer_key
+            .clone()
+            .expect("selected session has a draft owner");
+        this.composer.update(cx, |composer, cx| {
+            composer.set_value("earlier draft", window, cx)
+        });
+        this.save_composer_draft(cx);
+        // Another draft holds the composer when the revert is staged.
+        this.show_new_session(window, cx);
+        assert_ne!(this.composer_key.as_ref(), Some(&draft));
+        let rollback = this.revert_rollback(Some(&draft), Some("Revert target prompt"), cx);
+        assert!(rollback.is_some(), "no editor shows the session's draft");
+        this.show_reverted_prompt(draft.clone(), "Revert target prompt".into(), window, cx);
+        assert_eq!(
+            this.drafts.get(&draft).expect("staged draft").text,
+            "Revert target prompt"
+        );
+        this.finish_revert(
+            key,
+            rollback,
+            Some(Err(TransportError::Http { status: 500 })),
+            window,
+            cx,
+        );
+        assert_eq!(
+            this.drafts.get(&draft).expect("restored draft").text,
+            "earlier draft",
+            "the unconsumed prompt is rolled back to the saved draft"
+        );
+    });
+}
+
 #[gpui_kit::test]
 fn btw_completion_clears_only_accepted_unchanged_text(cx: &mut TestAppContext) {
     use crate::session_branching::BtwDraft;
@@ -829,11 +1005,10 @@ fn a_staged_revert_hides_its_cut_and_a_refusal_restores_it(cx: &mut TestAppConte
         "a refused stage brings the messages back"
     );
     assert!(!shown(window, "revert-strip", cx));
-    // The composer held the restored text only if the prompt had one.
-    let text = composer_text(&workspace, cx);
-    assert!(
-        text == "earlier draft" || text == "restored prompt",
-        "the composer keeps text the user typed: {text}"
+    assert_eq!(
+        composer_text(&workspace, cx),
+        "restored prompt",
+        "the session's own editor took the prompt, so a refusal leaves it"
     );
     assert!(cx.read(|cx| workspace.read(cx).branching.pending_reverts.is_empty()));
 }

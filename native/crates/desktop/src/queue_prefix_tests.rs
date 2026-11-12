@@ -1253,6 +1253,7 @@ fn payload_eligibility_keeps_rich_large_items_and_stops_at_each_real_fifo_barrie
         send_config: Some(configuration()),
         goal: false,
         scheduled: false,
+        delivery: None,
     };
     for barrier in 0..3 {
         let mut middle = make("q_barrier");
@@ -1381,6 +1382,7 @@ fn only_a_complete_captured_owner_snapshot_establishes_prefix_unavailability() {
         send_config: Some(configuration()),
         goal: false,
         scheduled: false,
+        delivery: None,
     };
     let session = SessionId::from("ses_prefix");
     let ids = vec!["q_first".into(), "q_second".into()];

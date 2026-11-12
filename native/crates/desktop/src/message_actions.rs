@@ -184,7 +184,6 @@ impl Workspace {
             .flex_shrink_0()
             .flex()
             .flex_row_from(direction)
-            .justify_end()
             .child(
                 div()
                     .when(menu_open.is_none(), |this| {

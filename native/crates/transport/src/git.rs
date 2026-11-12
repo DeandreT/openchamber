@@ -440,6 +440,15 @@ impl ServerClient {
         expect_success(request).await
     }
 
+    /// Discards every change of `path`, staged and unstaged (`revertGitFile`
+    /// with `scope: 'all'`, as Revert all sends it for each listed path).
+    pub async fn discard_all_changes(&self, directory: &str, path: &str) -> Result<(), GitError> {
+        let request = self
+            .git_request(Method::POST, "api/git/revert", directory)
+            .json(&json!({ "path": path, "scope": "all" }));
+        expect_success(request).await
+    }
+
     /// Commits what is staged with `message`.
     pub async fn commit(&self, directory: &str, message: &str) -> Result<CommitCreated, GitError> {
         let request = self

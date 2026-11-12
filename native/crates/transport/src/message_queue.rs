@@ -11,8 +11,8 @@
 use crate::request::RequestBuilder;
 use openchamber_native_core::ids::{MessageId, SessionId};
 use openchamber_native_core::message_queue::{
-    AttachmentSource, QueueSession, QueuedAttachment, QueuedItemId, QueuedMessage,
-    QueuedSendConfig, queue_owner,
+    AttachmentSource, QueueDelivery, QueueDeliveryState, QueueSession, QueuedAttachment,
+    QueuedItemId, QueuedMessage, QueuedSendConfig, queue_owner,
 };
 use reqwest::{Method, Url};
 use serde::{Deserialize, Serialize};
@@ -74,6 +74,10 @@ struct ItemWire {
     send_config: SendConfigWire,
     goal: Option<Value>,
     scheduled_task: Option<Value>,
+    /// `queueDelivery` of `sessionSnapshot`: the durable enqueue behind an
+    /// item. Kept as a value, so an object this client cannot read costs the
+    /// item its delivery and never the snapshot or broadcast around it.
+    queue_delivery: Option<Value>,
 }
 
 #[derive(Deserialize)]
@@ -444,6 +448,20 @@ fn message(wire: ItemWire) -> Result<QueuedMessage, TransportError> {
         });
     }
     let scheduled = wire.scheduled_task.is_some();
+    // Only a request the server still holds for this item is carried. Any
+    // other state reads as an item whose request is no longer listed.
+    let delivery = wire.queue_delivery.as_ref().and_then(|delivery| {
+        let request = delivery.get("requestId").and_then(Value::as_str)?;
+        let state = match delivery.get("state").and_then(Value::as_str)? {
+            "queued" => QueueDeliveryState::Queued,
+            "uncertain" => QueueDeliveryState::Uncertain,
+            _ => return None,
+        };
+        (!request.is_empty()).then(|| QueueDelivery {
+            request: request.to_owned(),
+            state,
+        })
+    });
     Ok(QueuedMessage {
         id: QueuedItemId::new(wire.id),
         content: wire.content,
@@ -463,6 +481,7 @@ fn message(wire: ItemWire) -> Result<QueuedMessage, TransportError> {
         send_config: send_config(wire.send_config, scheduled)?,
         goal: wire.goal.as_ref().is_some_and(Value::is_object),
         scheduled,
+        delivery,
     })
 }
 
@@ -916,6 +935,71 @@ mod tests {
             Some("build")
         );
         assert!(queued.editable_as_text());
+    }
+
+    #[test]
+    fn an_item_carries_the_enqueue_request_the_server_still_holds() {
+        let parse = |extra: &str| {
+            let wire: ItemWire = serde_json::from_str(&item(extra)).expect("fixture is JSON");
+            message(wire).expect("a deliverable item").delivery
+        };
+        assert_eq!(parse(""), None, "an item queued without a request");
+        assert_eq!(
+            parse(r#","queueDelivery":{"requestId":"req_1","state":"queued","attempt":0}"#),
+            Some(QueueDelivery {
+                request: "req_1".to_owned(),
+                state: QueueDeliveryState::Queued,
+            })
+        );
+        assert_eq!(
+            parse(
+                r#","queueDelivery":{"requestId":"req_1","state":"uncertain","attempt":1,"blocked":"route"}"#
+            )
+            .map(|delivery| delivery.state),
+            Some(QueueDeliveryState::Uncertain)
+        );
+        assert_eq!(
+            parse(r#","queueDelivery":{"requestId":"req_1","state":"dispatched","attempt":0}"#),
+            None,
+            "a request the server no longer holds for the item"
+        );
+    }
+
+    #[test]
+    fn an_unreadable_delivery_costs_neither_its_item_nor_its_queue() {
+        let partial = [
+            r#","queueDelivery":{"state":"queued"}"#,
+            r#","queueDelivery":{"requestId":"req_1"}"#,
+            r#","queueDelivery":{"requestId":7,"state":"queued"}"#,
+            r#","queueDelivery":{"requestId":"req_1","state":null}"#,
+            r#","queueDelivery":{"requestId":"","state":"queued"}"#,
+            r#","queueDelivery":"queued""#,
+            r#","queueDelivery":[]"#,
+            r#","queueDelivery":null"#,
+        ];
+        for extra in partial {
+            let wire: ItemWire = serde_json::from_str(&item(extra)).expect("the item still reads");
+            let message = message(wire).expect("the item is still deliverable");
+            assert_eq!(message.delivery, None, "{extra}");
+            assert_eq!(message.id.as_str(), "q1");
+        }
+        let healthy = r#","queueDelivery":{"requestId":"req_2","state":"queued","attempt":0}"#;
+        let session = format!(
+            r#"{{"sessionId":"ses_1","directory":"/repo","items":[{},{}],"sendingId":null}}"#,
+            item(r#","queueDelivery":{"requestId":7}"#),
+            item(healthy),
+        );
+        let wire: SessionWire = serde_json::from_str(&session).expect("the queue still reads");
+        let queue = queue_session(wire).expect("one unreadable delivery keeps the queue");
+        assert_eq!(queue.items.len(), 2);
+        assert_eq!(queue.items[0].delivery, None);
+        assert_eq!(
+            queue.items[1]
+                .delivery
+                .as_ref()
+                .map(|delivery| delivery.state),
+            Some(QueueDeliveryState::Queued)
+        );
     }
 
     #[test]

@@ -329,11 +329,12 @@ impl AttachmentStorage {
             row.status = AttachmentStorageStatus::Retiring;
         }
     }
+    /// Queues the input and answers its row's ticket.
     fn admit(
         &mut self,
         owner: DraftKey,
         input: AttachmentIntake,
-    ) -> Result<(), Box<RejectedAttachmentInput>> {
+    ) -> Result<u64, Box<RejectedAttachmentInput>> {
         let bytes = input_bytes(&input);
         if self.stopped
             || matches!(&input.source,
@@ -368,7 +369,7 @@ impl AttachmentStorage {
             owner,
             input,
         }));
-        Ok(())
+        Ok(ticket)
     }
     fn forget_source(&mut self, source: &CapturedSource) {
         self.recovery_bytes -= source.capacity;
@@ -420,22 +421,50 @@ impl Workspace {
     ) -> Vec<RejectedAttachmentInput> {
         let mut rejected = Vec::new();
         for input in inputs {
-            let result = if !self.persistence_loaded()
-                || self.close_in_progress()
-                || self.attachment_worker().is_none()
-            {
-                Err(Box::new(RejectedAttachmentInput { input }))
-            } else {
-                self.attachment_storage.admit(owner.clone(), input)
-            };
-            if let Err(input) = result {
-                self.storage_notice(&owner, &input.input.filename, window, cx);
+            if let Err(input) = self.admit_attachment(&owner, input, window, cx) {
                 rejected.push(*input);
             }
         }
         self.drive_attachment_storage(window, cx);
         cx.notify();
         rejected
+    }
+
+    /// Admits one input and answers its row's ticket, which names the row
+    /// until it publishes, fails or is removed. A refusal is reported and
+    /// answers `None`.
+    pub(crate) fn ingest_attachment(
+        &mut self,
+        owner: DraftKey,
+        input: AttachmentIntake,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<u64> {
+        let ticket = self.admit_attachment(&owner, input, window, cx).ok();
+        self.drive_attachment_storage(window, cx);
+        cx.notify();
+        ticket
+    }
+
+    fn admit_attachment(
+        &mut self,
+        owner: &DraftKey,
+        input: AttachmentIntake,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Result<u64, Box<RejectedAttachmentInput>> {
+        let result = if !self.persistence_loaded()
+            || self.close_in_progress()
+            || self.attachment_worker().is_none()
+        {
+            Err(Box::new(RejectedAttachmentInput { input }))
+        } else {
+            self.attachment_storage.admit(owner.clone(), input)
+        };
+        if let Err(input) = &result {
+            self.storage_notice(owner, &input.input.filename, window, cx);
+        }
+        result
     }
 
     /// Cancels exactly one source row, including a capture assigned while its action was queued.
@@ -445,6 +474,8 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A row removed before it published takes its citation with it.
+        self.retract_citation(ticket, window, cx);
         if let Some(id) = self
             .attachment_storage
             .rows
@@ -1036,6 +1067,7 @@ async fn process_input(
         .update_in(cx, |this, window, cx| {
             if !this.attachment_storage.current_input(ticket) {
                 this.attachment_storage.rows.remove(&ticket);
+                this.retract_citation(ticket, window, cx);
                 cx.notify();
                 return None;
             }
@@ -1050,6 +1082,9 @@ async fn process_input(
                     if let Some(row) = this.attachment_storage.rows.get(&ticket) {
                         this.storage_notice(&owner, &row.filename, window, cx);
                     }
+                    // A folder, an unreadable or unsupported file, a refused
+                    // name: nothing attached, so nothing stays cited.
+                    this.retract_citation(ticket, window, cx);
                     cx.notify();
                     None
                 }
@@ -1181,7 +1216,14 @@ async fn process_source(
             }
         }
         let result = this
-            .update_in(cx, |this, _, cx| this.publish_storage_source(&source, cx))
+            .update_in(cx, |this, _, cx| {
+                let result = this.publish_storage_source(&source, cx);
+                if result.is_ok() {
+                    // The files are in the draft: the citation stays.
+                    this.attachment_input.settle_citation(source.ticket);
+                }
+                result
+            })
             .unwrap_or(Err(AttachmentStorageFailure::Unavailable));
         if let Err(error) = result {
             finish_failed_source(this, cx, source, error).await;
@@ -1273,6 +1315,9 @@ fn retain_source(
         if let Some(row) = this.attachment_storage.rows.get(&source.ticket) {
             this.storage_notice(&source.owner, &row.filename, window, cx);
         }
+        // No citation for a source that failed before it published; one that
+        // published is settled and keeps its own.
+        this.retract_citation(source.ticket, window, cx);
         this.attachment_storage
             .sources
             .insert(source.key.clone(), source);
@@ -1285,6 +1330,9 @@ async fn cancel_source_after_receipt(
     cx: &mut AsyncWindowContext,
     source: CapturedSource,
 ) {
+    let _ = this.update_in(cx, |this, window, cx| {
+        this.retract_citation(source.ticket, window, cx)
+    });
     if source.phase == SourcePhase::Published {
         let _ = this.update_in(cx, |this, window, cx| {
             this.save_composer_draft(cx);

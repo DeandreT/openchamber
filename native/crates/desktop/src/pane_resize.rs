@@ -1,14 +1,20 @@
 //! Resizable sidebar and context panel, and the device-local layout that
 //! restores them: the session sidebar's open state and width
-//! (`Sidebar.tsx`) and the right zone's width (`ContextPanel.tsx`), which
-//! the web keeps in its persisted UI store and never sends to the server.
+//! (`Sidebar.tsx`), the right zone's width (`ContextPanel.tsx`) and the Files
+//! tree's width (`contextEditorTreeWidth`), which the web keeps in its
+//! persisted UI store and never sends to the server.
 //!
 //! Widths are logical pixels. A drag changes a width by the pointer's
 //! movement toward the side that widens the pane, mirrored in right-to-left
 //! layouts, and saves once when the pointer is released.
+//!
+//! The right zone that opens without room for a 320 px chat folds the
+//! sidebar, and closing it gives the sidebar back unless the user toggled it
+//! in between (`zoneFitWatch.ts`).
 
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
+use std::mem;
 use std::path::{Path, PathBuf};
 
 use gpui_kit::{
@@ -35,6 +41,12 @@ pub(crate) const PANEL_MIN_WIDTH: f32 = 320.0;
 const PANEL_MAX_STORED_WIDTH: f32 = 10_000.0;
 /// `CONTEXT_CHAT_MIN_WIDTH`: the chat keeps this much beside the panel.
 pub(crate) const CHAT_MIN_WIDTH: f32 = 320.0;
+/// `contextEditorTreeWidth` and `clampContextEditorTreeWidth`: the Files
+/// tree's column beside the editor, and the zone's own width while it shows
+/// the tree alone.
+pub(crate) const TREE_DEFAULT_WIDTH: f32 = 240.0;
+const TREE_MIN_WIDTH: f32 = 200.0;
+const TREE_MAX_WIDTH: f32 = 480.0;
 const MAX_BYTES: u64 = 4 * 1024;
 
 pub(crate) fn clamp_sidebar(width: f32) -> f32 {
@@ -53,6 +65,20 @@ fn clamp_stored_panel(width: f32) -> f32 {
     }
 }
 
+pub(crate) fn clamp_tree(width: f32) -> f32 {
+    if width.is_finite() {
+        width.round().clamp(TREE_MIN_WIDTH, TREE_MAX_WIDTH)
+    } else {
+        TREE_DEFAULT_WIDTH
+    }
+}
+
+/// `planZoneFit` for the right zone: whether a zone of `zone` px leaves the
+/// chat less than its minimum in `row`, the width they share.
+pub(crate) fn zone_needs_sidebar_room(row: f32, zone: f32) -> bool {
+    row - zone < CHAT_MIN_WIDTH
+}
+
 /// The panel's width beside `area`, the room the chat and the panel share:
 /// the chat keeps its minimum, and the panel never goes under its own.
 pub(crate) fn fit_panel(width: f32, area: f32) -> f32 {
@@ -66,6 +92,13 @@ pub(crate) struct PaneLayout {
     pub(crate) sidebar_open: bool,
     pub(crate) sidebar_width: f32,
     pub(crate) panel_width: f32,
+    /// Absent from layouts saved before the tree had a width of its own.
+    #[serde(default = "default_tree_width")]
+    pub(crate) tree_width: f32,
+}
+
+fn default_tree_width() -> f32 {
+    TREE_DEFAULT_WIDTH
 }
 
 impl Default for PaneLayout {
@@ -74,6 +107,7 @@ impl Default for PaneLayout {
             sidebar_open: true,
             sidebar_width: SIDEBAR_DEFAULT_WIDTH,
             panel_width: PANEL_DEFAULT_WIDTH,
+            tree_width: TREE_DEFAULT_WIDTH,
         }
     }
 }
@@ -85,6 +119,7 @@ impl PaneLayout {
             sidebar_open: self.sidebar_open,
             sidebar_width: clamp_sidebar(self.sidebar_width),
             panel_width: clamp_stored_panel(self.panel_width),
+            tree_width: clamp_tree(self.tree_width),
         }
     }
 }
@@ -170,6 +205,9 @@ pub(crate) enum Pane {
     Sidebar,
     /// The panel's start edge; dragging toward the chat widens it.
     Panel,
+    /// The same edge while the zone shows the Files tree alone: the drag
+    /// sets the tree's width and leaves the zone's own.
+    Tree,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -179,11 +217,30 @@ struct Drag {
     start_width: f32,
 }
 
+/// What `watchZoneFit` keeps between two frames.
+#[derive(Debug, Default)]
+struct ZoneFit {
+    /// The right zone was on screen at the last frame.
+    shown: bool,
+    /// The sidebar is closed because the zone needed its room.
+    folded: bool,
+    /// The sidebar's state as the last frame left it; a difference since is
+    /// the user's own toggle.
+    sidebar_open: Option<bool>,
+}
+
 /// The pane widths, the drag in progress and where they are kept.
 #[derive(Debug, Default)]
 pub(crate) struct PaneSizes {
     pub(crate) sidebar_width: Option<f32>,
     pub(crate) panel_width: Option<f32>,
+    pub(crate) tree_width: Option<f32>,
+    /// `!contextEditorTreeVisible` and `!contextEditorVisible`: the Files
+    /// columns the header's two layout buttons hid. Kept for the window's
+    /// lifetime.
+    pub(crate) tree_hidden: bool,
+    pub(crate) editor_hidden: bool,
+    fit: ZoneFit,
     drag: Option<Drag>,
     store: Option<LayoutStore>,
     /// One write at a time; a change during it writes again after.
@@ -198,6 +255,31 @@ impl PaneSizes {
 
     pub(crate) fn panel_width(&self) -> f32 {
         self.panel_width.unwrap_or(PANEL_DEFAULT_WIDTH)
+    }
+
+    pub(crate) fn tree_width(&self) -> f32 {
+        self.tree_width.unwrap_or(TREE_DEFAULT_WIDTH)
+    }
+
+    /// `toggleContextEditorTree`: the tree never hides alongside the editor,
+    /// so hiding it while the editor is hidden brings the editor back.
+    pub(crate) fn toggle_tree(&mut self) {
+        if !self.tree_hidden && self.editor_hidden {
+            self.tree_hidden = true;
+            self.editor_hidden = false;
+        } else {
+            self.tree_hidden = !self.tree_hidden;
+        }
+    }
+
+    /// `toggleContextEditor`, the mirror of [`Self::toggle_tree`].
+    pub(crate) fn toggle_editor(&mut self) {
+        if !self.editor_hidden && self.tree_hidden {
+            self.editor_hidden = true;
+            self.tree_hidden = false;
+        } else {
+            self.editor_hidden = !self.editor_hidden;
+        }
     }
 
     pub(crate) fn dragging(&self) -> Option<Pane> {
@@ -223,6 +305,7 @@ impl PaneSizes {
         Some(match drag.pane {
             Pane::Sidebar => (Pane::Sidebar, clamp_sidebar(drag.start_width + moved)),
             Pane::Panel => (Pane::Panel, (drag.start_width - moved).max(PANEL_MIN_WIDTH)),
+            Pane::Tree => (Pane::Tree, clamp_tree(drag.start_width - moved)),
         })
     }
 }
@@ -233,7 +316,44 @@ impl Workspace {
         self.sidebar_open = layout.sidebar_open;
         self.pane_sizes.sidebar_width = Some(layout.sidebar_width);
         self.pane_sizes.panel_width = Some(layout.panel_width);
+        self.pane_sizes.tree_width = Some(layout.tree_width);
         self.pane_sizes.store = Some(store);
+    }
+
+    /// Makes room for the right zone as it opens and gives the room back as
+    /// it closes (`watchZoneFit`), once per frame before the layout is drawn.
+    ///
+    /// `shown` is whether the zone is on screen in this frame. `switched`
+    /// says the frame shows another directory than the last one: a zone that
+    /// is simply there after a switch folds nothing, and a sidebar folded
+    /// for the directory left behind comes back when this one shows no zone.
+    ///
+    /// The fold measures the zone at its stored width even while it shows
+    /// the 240 px Files tree, as the reference's `shownWidth` does.
+    pub(crate) fn settle_zone_fit(&mut self, shown: bool, switched: bool, window: &Window) {
+        // The user's own sidebar toggle is theirs to keep.
+        if self
+            .pane_sizes
+            .fit
+            .sidebar_open
+            .is_some_and(|seen| seen != self.sidebar_open)
+        {
+            self.pane_sizes.fit.folded = false;
+        }
+        let was_shown = mem::replace(&mut self.pane_sizes.fit.shown, shown);
+        if !shown {
+            if mem::take(&mut self.pane_sizes.fit.folded) {
+                self.sidebar_open = true;
+            }
+        } else if !was_shown
+            && !switched
+            && self.sidebar_open
+            && zone_needs_sidebar_room(self.panel_area(window), self.pane_sizes.panel_width())
+        {
+            self.sidebar_open = false;
+            self.pane_sizes.fit.folded = true;
+        }
+        self.pane_sizes.fit.sidebar_open = Some(self.sidebar_open);
     }
 
     /// Writes the layout off the UI thread, one write at a time, so the
@@ -254,9 +374,12 @@ impl Workspace {
         };
         self.pane_sizes.dirty = false;
         let layout = PaneLayout {
-            sidebar_open: self.sidebar_open,
+            // A sidebar folded for the zone is still the user's open sidebar:
+            // the zone is not restored at the next start.
+            sidebar_open: self.sidebar_open || self.pane_sizes.fit.folded,
             sidebar_width: self.pane_sizes.sidebar_width(),
             panel_width: self.pane_sizes.panel_width(),
+            tree_width: self.pane_sizes.tree_width(),
         };
         let write = cx.background_spawn(async move { store.save(layout) });
         self.pane_sizes.saving = Some(cx.spawn(async move |this, cx| {
@@ -284,9 +407,22 @@ impl Workspace {
             - crate::context_panel::RAIL_WIDTH
     }
 
-    /// The open panel's width beside a chat of at least its minimum.
+    /// The open zone's width: the tree's own while it shows the Files tree
+    /// alone, else the stored width beside a chat of at least its minimum.
     pub(crate) fn fitted_panel_width(&self, window: &Window) -> f32 {
+        if self.panels.tree_only {
+            return self.pane_sizes.tree_width();
+        }
         fit_panel(self.pane_sizes.panel_width(), self.panel_area(window))
+    }
+
+    /// The edge the zone's handle drags in this frame.
+    pub(crate) fn zone_pane(&self) -> Pane {
+        if self.panels.tree_only {
+            Pane::Tree
+        } else {
+            Pane::Panel
+        }
     }
 
     fn begin_pane_drag(
@@ -298,7 +434,7 @@ impl Workspace {
     ) {
         let width = match pane {
             Pane::Sidebar => self.pane_sizes.sidebar_width(),
-            Pane::Panel => self.fitted_panel_width(window),
+            Pane::Panel | Pane::Tree => self.fitted_panel_width(window),
         };
         self.pane_sizes
             .begin(pane, f32::from(event.position.x), width);
@@ -332,6 +468,7 @@ impl Workspace {
             Pane::Panel => {
                 self.pane_sizes.panel_width = Some(fit_panel(width, self.panel_area(window)))
             }
+            Pane::Tree => self.pane_sizes.tree_width = Some(width),
         }
         cx.notify();
     }
@@ -365,7 +502,7 @@ impl Workspace {
         let border = palette.border;
         let id = match pane {
             Pane::Sidebar => "sidebar-resize",
-            Pane::Panel => "panel-resize",
+            Pane::Panel | Pane::Tree => "panel-resize",
         };
         let handle = div()
             .id(id)
@@ -390,7 +527,7 @@ impl Workspace {
         // (`ContextPanel.tsx`).
         match pane {
             Pane::Sidebar => handle.w(px(3.0)).inset_end(direction, px(0.0)),
-            Pane::Panel => handle.w(px(8.0)).inset_start(direction, px(-6.0)),
+            Pane::Panel | Pane::Tree => handle.w(px(8.0)).inset_start(direction, px(-6.0)),
         }
     }
 }
@@ -443,6 +580,55 @@ mod tests {
     }
 
     #[test]
+    fn the_tree_only_zone_drags_the_tree_width_within_its_bounds() {
+        let ltr = Direction::LeftToRight;
+        let rtl = Direction::RightToLeft;
+        assert_eq!(moved(Pane::Tree, 240.0, 1000.0, 940.0, ltr), Some(300.0));
+        assert_eq!(moved(Pane::Tree, 240.0, 300.0, 360.0, rtl), Some(300.0));
+        assert_eq!(
+            moved(Pane::Tree, 240.0, 1000.0, 0.0, ltr),
+            Some(TREE_MAX_WIDTH)
+        );
+        assert_eq!(
+            moved(Pane::Tree, 240.0, 1000.0, 1900.0, ltr),
+            Some(TREE_MIN_WIDTH)
+        );
+        assert_eq!(clamp_tree(239.6), 240.0, "a stored width is whole pixels");
+        assert_eq!(clamp_tree(f32::NAN), TREE_DEFAULT_WIDTH);
+    }
+
+    #[test]
+    fn a_zone_folds_the_sidebar_only_when_the_chat_would_lose_its_minimum() {
+        // 1280 px window, 280 px sidebar, 44 px rail: the row is 956 px.
+        assert!(zone_needs_sidebar_room(956.0, 640.0), "316 px of chat");
+        // 1440 px window: the row is 1116 px.
+        assert!(!zone_needs_sidebar_room(1116.0, 640.0), "476 px of chat");
+        assert!(
+            !zone_needs_sidebar_room(960.0, 640.0),
+            "exactly 320 px fits"
+        );
+    }
+
+    #[test]
+    fn the_layout_buttons_never_hide_both_files_columns() {
+        let mut sizes = PaneSizes::default();
+        sizes.toggle_tree();
+        assert!(sizes.tree_hidden && !sizes.editor_hidden);
+        sizes.toggle_editor();
+        assert!(
+            !sizes.tree_hidden && sizes.editor_hidden,
+            "hiding the editor beside a hidden tree brings the tree back"
+        );
+        sizes.toggle_tree();
+        assert!(
+            sizes.tree_hidden && !sizes.editor_hidden,
+            "hiding the tree beside a hidden editor brings the editor back"
+        );
+        sizes.toggle_tree();
+        assert!(!sizes.tree_hidden && !sizes.editor_hidden);
+    }
+
+    #[test]
     fn stored_layouts_round_trip_and_clamp() {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -460,6 +646,7 @@ mod tests {
             sidebar_open: false,
             sidebar_width: 333.0,
             panel_width: 777.0,
+            tree_width: 311.0,
         };
         store.save(layout).expect("save");
         assert_eq!(store.load(), layout);
@@ -474,8 +661,16 @@ mod tests {
                 sidebar_open: true,
                 sidebar_width: SIDEBAR_MAX_WIDTH,
                 panel_width: PANEL_MIN_WIDTH,
-            }
+                tree_width: TREE_DEFAULT_WIDTH,
+            },
+            "a layout saved before the tree had a width reads its default"
         );
+        fs::write(
+            directory.join("layout.json"),
+            br#"{"version":1,"layout":{"sidebarOpen":true,"sidebarWidth":300,"panelWidth":700,"treeWidth":9000}}"#,
+        )
+        .expect("fixture");
+        assert_eq!(store.load().tree_width, TREE_MAX_WIDTH);
         fs::write(directory.join("layout.json"), b"not json").expect("fixture");
         assert_eq!(
             store.load(),

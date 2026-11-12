@@ -138,7 +138,6 @@ fn open(cx: &mut TestAppContext, fixture: &Fixture) -> (AnyWindowHandle, Entity<
             cx.new(|cx| {
                 let mut workspace =
                     Workspace::new(Source::Synthetic(WorkloadSize::Small), window, cx);
-                workspace.project_readouts.without_app_icon();
                 // The supplied owner intentionally differs from the synthetic runtime. Local
                 // publication is permitted; staging can never start a network request here.
                 workspace.composer_key = None;
@@ -1811,4 +1810,100 @@ async fn initial_hold_semantic_refusal_and_exact_publication_checks_preserve_the
         save_valid(&mut validator, &snapshot(workspace));
     });
     finish_worker(&workspace, cx).await;
+}
+
+/// Each way a dropped path can be admitted and then fail to attach, through
+/// the real intake: only the file that attached stays cited.
+#[gpui_kit::test]
+async fn dropped_paths_that_fail_to_attach_leave_no_citation(cx: &mut TestAppContext) {
+    let fixture = Fixture::new();
+    let folder = fixture.0.join("folder");
+    fs::create_dir(&folder).expect("test-owned dropped folder");
+    let unsupported = fixture.0.join("blob.bin");
+    fs::write(&unsupported, [0_u8, 1, 2, 255]).expect("test-owned binary file");
+    let unreadable = fixture.0.join("missing.txt");
+    let refused_name = fixture.0.join("bad:name.txt");
+    fs::write(&refused_name, b"text").expect("test-owned file with a refused name");
+    let attached = fixture.0.join("notes.txt");
+    fs::write(&attached, b"kept").expect("test-owned text file");
+    let captured_owner = owner("cited-failures");
+    let (window, workspace) = open(cx, &fixture);
+    cx.condition(&workspace, |workspace, _| workspace.persistence_ready())
+        .await;
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.composer_key = Some(captured_owner.clone());
+            workspace.composer.update(cx, |composer, cx| {
+                composer.set_value("see", window, cx);
+                composer.set_selected_range(3..3, cx);
+            });
+            workspace.attach_cited_paths(
+                captured_owner.clone(),
+                vec![folder, unsupported, attached, unreadable, refused_name],
+                window,
+                cx,
+            );
+            assert_eq!(
+                workspace.composer.read(cx).value().as_ref(),
+                "see [folder] [blob.bin] [notes.txt] [missing.txt] [bad:name.txt]",
+                "every admitted path is cited at once"
+            );
+        })
+    })
+    .expect("the drop adapter cites what storage admitted");
+    cx.condition(&workspace, |workspace, _| {
+        !workspace.attachment_storage.is_busy()
+            && workspace
+                .attachment_storage
+                .rows(&captured_owner)
+                .all(|row| matches!(row.status, AttachmentStorageStatus::Failed(_)))
+            && workspace
+                .drafts
+                .get(&captured_owner)
+                .is_some_and(|draft| draft.content.files.len() == 1)
+    })
+    .await;
+    workspace.read_with(cx, |workspace, cx| {
+        assert_eq!(
+            workspace.composer.read(cx).value().as_ref(),
+            "see [notes.txt]",
+            "the folder, the binary, the missing file and the refused name are gone"
+        );
+        let failures: Vec<_> = workspace
+            .attachment_storage
+            .rows(&captured_owner)
+            .map(|row| (row.filename.as_str(), row.status.clone()))
+            .collect();
+        for (name, expected) in [
+            ("folder", AttachmentIntakeError::NotRegular),
+            ("blob.bin", AttachmentIntakeError::Unsupported),
+            ("bad:name.txt", AttachmentIntakeError::InvalidFilename),
+        ] {
+            assert!(
+                failures.contains(&(
+                    name,
+                    AttachmentStorageStatus::Failed(AttachmentStorageFailure::Intake(expected))
+                )),
+                "{name} failed as {expected:?}: {failures:?}"
+            );
+        }
+        assert!(
+            failures.iter().any(|(name, status)| *name == "missing.txt"
+                && matches!(
+                    status,
+                    AttachmentStorageStatus::Failed(AttachmentStorageFailure::Intake(
+                        AttachmentIntakeError::Read(_)
+                    ))
+                )),
+            "the missing file failed to read: {failures:?}"
+        );
+        assert_eq!(
+            workspace
+                .drafts
+                .get(&captured_owner)
+                .expect("the draft keeps the attached file")
+                .text,
+            "see [notes.txt]"
+        );
+    });
 }

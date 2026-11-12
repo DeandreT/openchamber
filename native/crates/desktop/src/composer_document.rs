@@ -1253,6 +1253,12 @@ impl Workspace {
                 .any(|document| document.append.is_some())
     }
 
+    /// Whether `owner`'s text is a compound document, which only the editor
+    /// may change.
+    pub(crate) fn has_composer_document(&self, owner: &DraftKey) -> bool {
+        self.composer_documents.documents.contains_key(owner)
+    }
+
     pub(crate) fn composer_document_ready(&self, owner: &DraftKey) -> bool {
         self.composer_documents.frozen.is_none()
             && self
@@ -1543,6 +1549,10 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // Citation positions follow every committed edit, saved or not.
+        if let Some(owner) = &self.composer_key {
+            self.attachment_input.map_citations(owner, event);
+        }
         if self.composer_documents.frozen.is_some() {
             return;
         }
@@ -1574,6 +1584,7 @@ impl Workspace {
             self.queue_persistence(cx);
         }
         self.autocomplete_after_edit(event, cx);
+        self.flush_citations(window, cx);
         self.resume_composer_close(window, cx);
         cx.notify();
     }
@@ -1589,6 +1600,8 @@ impl Workspace {
         self.apply_deferred_composer(&owner, window, cx);
         self.reconcile_composer_references(&owner, window, cx);
         self.schedule_composer_document_save(&owner, window, cx);
+        // A citation or its removal that waited for the composition.
+        self.flush_citations(window, cx);
         self.resume_composer_close(window, cx);
         cx.notify();
     }

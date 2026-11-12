@@ -10,8 +10,8 @@ use openchamber_native_core::session::LiveStatus;
 use openchamber_native_transport::client::ServerSettings;
 use openchamber_native_transport::event::ServerEvent;
 use openchamber_native_transport::queue_manifest::{
-    QueueAttachmentDescriptor, QueueIndexedPayload, QueuePayloadDocument, QueuePayloadIndex,
-    QueuePayloadItem, QueuePayloadPointer, QueuePayloadUse,
+    QueueAttachmentDescriptor, QueueEnqueueState, QueueIndexedPayload, QueuePayloadDocument,
+    QueuePayloadIndex, QueuePayloadItem, QueuePayloadPointer, QueuePayloadUse,
 };
 use serde_json::json;
 
@@ -336,7 +336,24 @@ fn fixture_transfer_item(state: &State, item: &Value) -> Value {
 }
 
 fn session_body(state: &State) -> Value {
-    json!({"sessionId": "ses_queue", "directory": "/project", "items": state.items, "sendingId": null})
+    // The server lists each item with its durable enqueue (`sessionSnapshot`).
+    let items: Vec<Value> = state
+        .items
+        .iter()
+        .map(|item| {
+            let mut item = item.clone();
+            let record = state
+                .enqueue_requests
+                .values()
+                .find(|record| record["receipt"]["itemId"] == item["id"]);
+            if let Some(record) = record {
+                item["queueDelivery"] = json!({"requestId": record["receipt"]["requestId"],
+                    "state": record["state"], "attempt": record["attempt"]});
+            }
+            item
+        })
+        .collect();
+    json!({"sessionId": "ses_queue", "directory": "/project", "items": items, "sendingId": null})
 }
 
 fn answer(
@@ -775,6 +792,12 @@ fn answer(
         ("DELETE", Some(rest)) => {
             let id = rest.trim_start_matches("/items/");
             state.items.retain(|item| item["id"] != id);
+            // The server settles the item's durable enqueue with it.
+            for record in state.enqueue_requests.values_mut() {
+                if record["receipt"]["itemId"] == id {
+                    record["state"] = json!("removed");
+                }
+            }
             ("200 OK", changed(state).to_string())
         }
         ("PUT", Some("/order")) => {
@@ -1311,6 +1334,91 @@ impl Harness {
         })
     }
 
+    /// Rereads the host's queue, as a queue broadcast would deliver it.
+    fn reread(&self, cx: &mut TestAppContext) {
+        self.act(cx, |workspace, _, cx| workspace.read_queue_owner(None, cx));
+    }
+
+    /// Rereads the queue and waits for the recovery row that listing gives
+    /// the enqueue `id`.
+    fn reread_until_row(
+        &self,
+        cx: &mut TestAppContext,
+        id: &crate::queue_capture::QueueOperationId,
+    ) {
+        self.reread(cx);
+        wait(cx, |cx| {
+            cx.read(|cx| {
+                self.workspace
+                    .read(cx)
+                    .enqueue_recovery_items()
+                    .iter()
+                    .any(|row| &row.id == id)
+            })
+        });
+    }
+
+    /// Draws one frame, which is where a queued message's departure is
+    /// picked up. Without `rows`, the frame must hold no enqueue recovery row.
+    fn frame(&self, cx: &mut TestAppContext, rows: bool) {
+        cx.update_window(self.window, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(
+                rows || self.workspace.read(cx).enqueue_recovery_items().is_empty(),
+                "no enqueue recovery row is drawn in this frame"
+            );
+        })
+        .expect("window");
+    }
+
+    /// Draws a frame after every task the executor can step, until `done`.
+    fn frames_until(
+        &self,
+        cx: &mut TestAppContext,
+        rows: bool,
+        mut done: impl FnMut(&mut TestAppContext) -> bool,
+    ) {
+        let mut waited = Duration::ZERO;
+        loop {
+            self.frame(cx, rows);
+            let mut steps = 0;
+            while steps < 256 && cx.executor().tick() {
+                self.frame(cx, rows);
+                steps += 1;
+            }
+            cx.run_until_parked();
+            self.frame(cx, rows);
+            if done(cx) {
+                return;
+            }
+            assert!(
+                waited < Duration::from_secs(5),
+                "background work completes within five seconds of drawing"
+            );
+            let started = Instant::now();
+            thread::sleep(Duration::from_millis(1));
+            waited += started.elapsed();
+        }
+    }
+
+    fn lookups(&self) -> usize {
+        count(
+            &self.server,
+            "GET /api/message-queue/sessions/ses_queue/requests/",
+        )
+    }
+
+    fn queued_in(&self, cx: &mut TestAppContext, workspace: &Entity<Workspace>) -> Vec<String> {
+        cx.read(|cx| {
+            workspace
+                .read(cx)
+                .selected_queue()
+                .iter()
+                .map(|message| message.content.clone())
+                .collect()
+        })
+    }
+
     fn idle(&self, cx: &mut TestAppContext) {
         self.wait(cx, "all captured send actors settle", |cx| {
             cx.read(|cx| {
@@ -1413,6 +1521,280 @@ fn legacy_queue_routes_leave_files_and_context_with_their_original_text(cx: &mut
     assert_eq!(count(&harness.server, "preview-prefix"), 0);
     assert_eq!(count(&harness.server, "reserve-prefix"), 0);
     assert_eq!(count(&harness.server, "/prompt"), 0);
+}
+
+#[gpui_kit::test]
+fn a_healthy_queued_message_is_one_composer_row_without_a_recovery_row(cx: &mut TestAppContext) {
+    use gpui_kit::px;
+
+    let harness = harness(cx, FollowUpBehavior::Queue);
+    harness.type_and_enter(cx, "follow up", false);
+    // No frame of the enqueue draws a recovery row: not while it is captured
+    // and submitted, not between its acceptance and the queue's reread, and
+    // not once it is accepted, queued by its receipt and listed by its queue.
+    harness.frames_until(cx, false, |cx| {
+        harness.queued(cx) == ["follow up"]
+            && harness.composer(cx).is_empty()
+            && cx.read(|cx| {
+                let workspace = harness.workspace.read(cx);
+                let operations = workspace.queue_storage.operations();
+                !workspace.queue.enqueues.any_busy()
+                    && operations.len() == 1
+                    && workspace.queue.enqueues.seen_listed(operations[0].id())
+                    && !workspace
+                        .queue
+                        .enqueues
+                        .awaiting_listing(operations[0].id())
+            })
+    });
+    harness.idle(cx);
+    harness.frame(cx, false);
+    cx.update_window(harness.window, |_, window, cx| {
+        window.render_frame(cx);
+        let (operation, id) = {
+            let workspace = harness.workspace.read(cx);
+            assert!(
+                matches!(
+                    workspace.queue_storage.operations()[0].action(),
+                    crate::queue_storage::QueueAction::Enqueue {
+                        phase: crate::queue_storage::QueueEnqueuePhase::Accepted { .. },
+                        ..
+                    }
+                ),
+                "the enqueue stays held for a later check"
+            );
+            assert!(
+                workspace.enqueue_recovery_items().is_empty(),
+                "a healthy queued message has nothing to recover"
+            );
+            (
+                workspace.queue_storage.operations()[0].id().clone(),
+                workspace.selected_queue()[0].id.as_str().to_owned(),
+            )
+        };
+        assert!(
+            window
+                .try_find(gpui_kit::ElementId::Name(
+                    format!("queue-enqueue-{}", operation.as_str()).into()
+                ))
+                .is_none(),
+            "no recovery row is drawn"
+        );
+        let named = |name: &str| gpui_kit::ElementId::Name(format!("queued-{name}-{id}").into());
+        let strip = window.find("queued-strip").bounds();
+        let row = window.find(named("row")).bounds();
+        let remove = window.find(named("remove")).bounds();
+        assert_eq!(
+            strip.size.height,
+            px(32.0),
+            "`.oc-composer-row` is 2rem with the strip's border inside it"
+        );
+        assert_eq!(row.size.height, px(31.0), "the row above the 1px border");
+        assert_eq!(
+            window.find("composer").bounds().size.height,
+            px(132.0),
+            "the queue row over the resting 100px composer, as the web's box"
+        );
+        assert_eq!(
+            remove.size,
+            gpui_kit::size(px(32.0), px(28.0)),
+            "a small Button around a 16px icon: h-7 and px-2"
+        );
+        assert_eq!(row.right() - remove.right(), px(6.0), "the row's pe-1.5");
+        let send = window.find(named("send")).bounds();
+        let edit = window.find(named("edit")).bounds();
+        assert_eq!(send.size.height, px(28.0));
+        assert_eq!(edit.size.height, px(28.0));
+        assert_eq!(remove.left() - send.right(), px(8.0), "the row's gap-2");
+        assert_eq!(send.left() - edit.right(), px(8.0), "the row's gap-2");
+    })
+    .expect("window");
+}
+
+#[gpui_kit::test]
+fn a_queue_row_removed_by_the_user_leaves_no_recovery_row(cx: &mut TestAppContext) {
+    let harness = harness(cx, FollowUpBehavior::Queue);
+    harness.type_and_enter(cx, "removed by hand", false);
+    harness.frames_until(cx, false, |cx| {
+        harness.queued(cx) == ["removed by hand"]
+            && cx.read(|cx| !harness.workspace.read(cx).queue.enqueues.any_busy())
+    });
+    let item = cx.read(|cx| harness.workspace.read(cx).selected_queue()[0].id.clone());
+    let lookups = harness.lookups();
+    harness.act(cx, |workspace, _, cx| workspace.remove_queued(&item, cx));
+    harness.frames_until(cx, false, |cx| {
+        cx.read(|cx| {
+            let workspace = harness.workspace.read(cx);
+            workspace.queue_storage.operations().is_empty() && !workspace.queue.enqueues.any_busy()
+        })
+    });
+    assert!(harness.queued(cx).is_empty());
+    assert_eq!(
+        harness.lookups(),
+        lookups + 1,
+        "the removal is observed by one read, after the server answered it"
+    );
+    assert_eq!(
+        count(&harness.server, "/enqueue"),
+        1,
+        "observing the removal never resubmits"
+    );
+}
+
+#[gpui_kit::test]
+fn a_failed_automatic_check_shows_its_row_once(cx: &mut TestAppContext) {
+    use crate::queue_enqueue::EnqueueCheck;
+
+    let harness = harness(cx, FollowUpBehavior::Queue);
+    harness.type_and_enter(cx, "checked once", false);
+    harness.frames_until(cx, false, |cx| {
+        harness.queued(cx) == ["checked once"]
+            && cx.read(|cx| !harness.workspace.read(cx).queue.enqueues.any_busy())
+    });
+    let id = cx.read(|cx| {
+        harness.workspace.read(cx).queue_storage.operations()[0]
+            .id()
+            .clone()
+    });
+    {
+        let mut state = harness.server.state.lock().expect("state");
+        state
+            .enqueue_requests
+            .get_mut(id.as_str())
+            .expect("immutable receipt")["state"] = json!("dispatched");
+        state.items.clear();
+        state.revision += 1;
+        // The lookup of this one request answers 500.
+        state
+            .fail
+            .push(Box::leak(id.as_str().to_owned().into_boxed_str()));
+    }
+    let lookups = harness.lookups();
+    harness.reread(cx);
+    harness.frames_until(cx, true, |cx| {
+        harness.lookups() == lookups + 1
+            && cx.read(|cx| !harness.workspace.read(cx).queue.enqueues.any_busy())
+    });
+    let rows = cx.read(|cx| harness.workspace.read(cx).enqueue_recovery_items());
+    assert_eq!(rows.len(), 1, "the failed check leaves the row");
+    assert!(rows[0].id == id);
+    assert!(
+        rows[0].status == EnqueueCheck::Failed,
+        "the row says its check failed"
+    );
+    assert!(rows[0].can_check, "the row offers the manual check");
+    // Neither another reread nor further frames check again.
+    harness.reread(cx);
+    for _ in 0..3 {
+        harness.frame(cx, true);
+        cx.run_until_parked();
+    }
+    harness.frames_until(cx, true, |cx| {
+        cx.read(|cx| !harness.workspace.read(cx).queue.any_payload_busy())
+    });
+    assert_eq!(
+        harness.lookups(),
+        lookups + 1,
+        "one automatic check for one departure"
+    );
+    assert_eq!(
+        cx.read(|cx| harness.workspace.read(cx).enqueue_recovery_items().len()),
+        1
+    );
+    // The manual check on that row still observes the delivery.
+    harness.server.state.lock().expect("state").fail.clear();
+    cx.update_window(harness.window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(
+            gpui_kit::ElementId::Name(format!("queue-enqueue-{}-check", id.as_str()).into()),
+            cx,
+        );
+    })
+    .expect("the row's own control");
+    harness.frames_until(cx, true, |cx| {
+        cx.read(|cx| {
+            let workspace = harness.workspace.read(cx);
+            workspace.queue_storage.operations().is_empty() && !workspace.queue.enqueues.any_busy()
+        })
+    });
+    assert_eq!(harness.lookups(), lookups + 2);
+}
+
+#[gpui_kit::test]
+fn a_failed_host_queue_read_shows_the_row(cx: &mut TestAppContext) {
+    let harness = harness(cx, FollowUpBehavior::Queue);
+    harness.type_and_enter(cx, "kept after a failed read", false);
+    harness.frames_until(cx, false, |cx| {
+        harness.queued(cx) == ["kept after a failed read"]
+            && cx.read(|cx| !harness.workspace.read(cx).queue.enqueues.any_busy())
+    });
+    let id = cx.read(|cx| {
+        harness.workspace.read(cx).queue_storage.operations()[0]
+            .id()
+            .clone()
+    });
+    // Every read of the host's queue fails from here on.
+    harness
+        .server
+        .state
+        .lock()
+        .expect("state")
+        .fail
+        .push("message-queue");
+    close(cx, harness.window, &harness.workspace);
+    let (window, workspace) = open(
+        cx,
+        &harness.server.server(),
+        &harness._fixture,
+        &harness.key,
+    );
+    ready(cx, &workspace);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            configure_queue_session(workspace, &harness.key, window, cx)
+        });
+    })
+    .expect("reopened");
+    let rows = |cx: &mut TestAppContext| {
+        cx.read(|cx| {
+            workspace
+                .read(cx)
+                .enqueue_recovery_items()
+                .iter()
+                .filter(|row| row.id == id)
+                .count()
+        })
+    };
+    wait(cx, |cx| rows(cx) == 1);
+    assert_eq!(
+        rows(cx),
+        1,
+        "a queue that was never read, or could not be, hides nothing"
+    );
+    assert_eq!(
+        harness.lookups(),
+        0,
+        "the row is manual: hydration and a failed read start no check"
+    );
+    // While a read is on its way the receipt still stands.
+    cx.update_window(window, |_, _, cx| {
+        workspace.update(cx, |workspace, cx| workspace.read_queue_owner(None, cx));
+    })
+    .expect("window");
+    assert_eq!(rows(cx), 0, "an unanswered read is not a failed one");
+    wait(cx, |cx| rows(cx) == 1);
+    // A read that answers lists the message, and the row goes.
+    harness.server.state.lock().expect("state").fail.clear();
+    cx.update_window(window, |_, _, cx| {
+        workspace.update(cx, |workspace, cx| workspace.read_queue_owner(None, cx));
+    })
+    .expect("window");
+    wait(cx, |cx| {
+        harness.queued_in(cx, &workspace) == ["kept after a failed read"]
+    });
+    assert_eq!(rows(cx), 0);
+    assert_eq!(harness.lookups(), 0);
+    close(cx, window, &workspace);
 }
 
 #[gpui_kit::test]
@@ -1693,15 +2075,20 @@ fn explicit_delivery_retry_is_journaled_and_a_lost_reply_does_not_authorize_anot
         })
         .expect("actual recovery control");
     };
+    harness.reread_until_row(cx, &id);
+    let lookups = harness.lookups();
     click("check", cx);
+    // The listing already offers Retry; these wait for the Check's own read.
+    wait(cx, |_| harness.lookups() == lookups + 1);
     wait(cx, |cx| {
         cx.read(|cx| {
-            harness
-                .workspace
-                .read(cx)
-                .enqueue_recovery_items()
-                .iter()
-                .any(|row| row.id == id && row.can_retry)
+            let workspace = harness.workspace.read(cx);
+            !workspace.queue.enqueues.any_busy()
+                && workspace.queue.enqueues.delivery(&id) == Some(QueueEnqueueState::Uncertain)
+                && workspace
+                    .enqueue_recovery_items()
+                    .iter()
+                    .any(|row| row.id == id && row.can_retry)
         })
     });
     harness.server.state.lock().expect("state").drop_retry_reply = true;
@@ -1893,14 +2280,21 @@ fn terminal_enqueue_status_retires_only_its_local_capture_after_observation(
         state.items.clear();
         state.revision += 1;
     }
-    cx.update_window(harness.window, |_, window, cx| {
-        window.render_frame(cx);
-        window.click(
-            gpui_kit::ElementId::Name(format!("queue-enqueue-{}-check", id.as_str()).into()),
-            cx,
-        );
-    })
-    .expect("explicit terminal observation");
+    // The delivered message leaves its queue. Its departure is checked once,
+    // without a recovery row in any frame.
+    let lookups = harness.lookups();
+    harness.reread(cx);
+    harness.frames_until(cx, false, |cx| {
+        cx.read(|cx| {
+            let workspace = harness.workspace.read(cx);
+            workspace.queue_storage.operation(&id).is_none() && !workspace.queue.enqueues.any_busy()
+        })
+    });
+    assert_eq!(
+        harness.lookups(),
+        lookups + 1,
+        "one read of the original request observes the delivery"
+    );
     wait(cx, |cx| {
         cx.read(|cx| {
             let workspace = harness.workspace.read(cx);
@@ -2140,15 +2534,20 @@ fn check_terminal_enqueue_without_local_payload(
             .enqueue_requests
             .get_mut(id.as_str())
             .expect("original receipt")["state"] = json!("uncertain");
+        harness.reread_until_row(cx, &id);
+        let lookups = harness.lookups();
         click("check", cx);
+        // The listing already offers Retry; these wait for the Check's own read.
+        wait(cx, |_| harness.lookups() == lookups + 1);
         wait(cx, |cx| {
             cx.read(|cx| {
-                harness
-                    .workspace
-                    .read(cx)
-                    .enqueue_recovery_items()
-                    .iter()
-                    .any(|row| row.id == id && row.can_retry)
+                let workspace = harness.workspace.read(cx);
+                !workspace.queue.enqueues.any_busy()
+                    && workspace.queue.enqueues.delivery(&id) == Some(QueueEnqueueState::Uncertain)
+                    && workspace
+                        .enqueue_recovery_items()
+                        .iter()
+                        .any(|row| row.id == id && row.can_retry)
             })
         });
         harness.server.state.lock().expect("state").drop_retry_reply = true;
@@ -2196,17 +2595,16 @@ fn check_terminal_enqueue_without_local_payload(
         .enqueue_requests
         .get_mut(id.as_str())
         .expect("same receipt")["state"] = json!("dispatched");
-    let lookups = count(
-        &harness.server,
-        "GET /api/message-queue/sessions/ses_queue/requests/",
-    );
-    click("check", cx);
-    wait(cx, |_| {
-        count(
-            &harness.server,
-            "GET /api/message-queue/sessions/ses_queue/requests/",
-        ) == lookups + 1
-    });
+    let lookups = harness.lookups();
+    if retry_prepared {
+        // A prepared retry keeps its row; its Check is the click.
+        click("check", cx);
+    } else {
+        // The queue stops vouching for the request, and its departure is
+        // checked without a row or a click.
+        harness.reread(cx);
+    }
+    harness.frames_until(cx, retry_prepared, |_| harness.lookups() == lookups + 1);
     wait(cx, |cx| {
         cx.read(|cx| {
             let workspace = harness.workspace.read(cx);
@@ -3297,6 +3695,9 @@ fn row_send_steers_with_the_captured_selection_and_arrow_up_edits(cx: &mut TestA
         "editing takes it out of the queue"
     );
 
+    // The edit took "first" out of its queue, which starts its one status
+    // check; like the row's Check, it holds the session's Enter until it ends.
+    harness.idle(cx);
     harness.type_and_enter(cx, "gone", false);
     wait(cx, |cx| harness.queued(cx) == ["gone"]);
     let id = cx.read(|cx| harness.workspace.read(cx).selected_queue()[0].id.clone());

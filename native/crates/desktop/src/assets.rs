@@ -24,6 +24,16 @@ const MCP_ICON_SVG: &str = concat!(
     r#"<path d="M14.485 4.703a.823.823 0 000-1.18.863.863 0 00-1.204 0l-7.119 6.982a4.115 4.115 0 000 5.9 4.314 4.314 0 006.016 0l7.12-6.982a.823.823 0 000-1.18.863.863 0 00-1.204 0l-7.119 6.982a2.588 2.588 0 01-3.61 0 2.47 2.47 0 010-3.54l7.12-6.982z"/>"#,
     "</svg>"
 );
+/// The composer's Stop mark, which the icon sprite does not carry
+/// (`components/icons/StopIcon.tsx`): an outlined square over its own fill at
+/// a fifth of the color. It is served like a sprite icon.
+pub(crate) const STOP_ICON: &str = "stop-duotone";
+const STOP_ICON_SVG: &str = concat!(
+    r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="currentColor">"#,
+    r#"<path d="M208,56V200a8,8,0,0,1-8,8H56a8,8,0,0,1-8-8V56a8,8,0,0,1,8-8H200A8,8,0,0,1,208,56Z" opacity="0.2"/>"#,
+    r#"<path d="M200,40H56A16,16,0,0,0,40,56V200a16,16,0,0,0,16,16H200a16,16,0,0,0,16-16V56A16,16,0,0,0,200,40Zm0,160H56V56H200V200Z"/>"#,
+    "</svg>"
+);
 
 /// Serves OpenChamber's embedded icons and logo, then Kit assets.
 #[derive(Clone, Copy, Debug, Default)]
@@ -59,6 +69,9 @@ impl AssetSource for AppAssets {
         {
             if name == MCP_ICON {
                 return Ok(Some(Cow::Borrowed(MCP_ICON_SVG.as_bytes())));
+            }
+            if name == STOP_ICON {
+                return Ok(Some(Cow::Borrowed(STOP_ICON_SVG.as_bytes())));
             }
             return Ok(icons().get(name).map(|svg| Cow::Borrowed(svg.as_bytes())));
         }
@@ -111,6 +124,25 @@ mod tests {
         assert!(text.contains("currentColor"));
         assert!(
             icons().get(MCP_ICON).is_none(),
+            "the sprite export carries no icon of this name to shadow"
+        );
+    }
+
+    #[test]
+    fn the_stop_mark_is_served_beside_the_sprite_icons() {
+        let svg = AppAssets
+            .load(&icon_path(STOP_ICON))
+            .expect("asset source")
+            .expect("the Stop mark is embedded");
+        let text = std::str::from_utf8(&svg).expect("SVG is UTF-8");
+        assert!(text.starts_with("<svg"));
+        assert!(text.contains("viewBox=\"0 0 256 256\""));
+        assert!(
+            text.contains("opacity=\"0.2\""),
+            "the fill under the outline"
+        );
+        assert!(
+            icons().get(STOP_ICON).is_none(),
             "the sprite export carries no icon of this name to shadow"
         );
     }

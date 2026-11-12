@@ -15,8 +15,8 @@ use gpui_kit::base::text::{
     TextViewStyle, markdown_ast,
 };
 use gpui_kit::{
-    App, ElementId, FontWeight, HighlightStyle, Hsla, IntoElement, ParentElement, Styled,
-    WeakEntity, Window, div, relative, rems,
+    App, ElementId, FontWeight, HighlightStyle, Hsla, IntoElement, ParentElement, StyleRefinement,
+    Styled, WeakEntity, Window, div, relative, rems, transparent_black,
 };
 
 use crate::code_card::CodeFence;
@@ -37,6 +37,15 @@ const BLOCK_GAP: f32 = 0.65;
 const HEADING_ALPHA: f32 = 0.95;
 const HEADING_LINE: f32 = 1.3;
 const HEADING_SPACE_ABOVE: f32 = 1.25;
+
+/// Tables, as `[data-streamdown="table"]` and its cells in `index.css`: the
+/// frame has `0.5rem` corners, the elevated surface and a border at 80 %;
+/// cells pad `0.625rem 1rem` and divide columns at 60 % of the border.
+const TABLE_RADIUS: f32 = 0.5;
+const TABLE_BORDER_ALPHA: f32 = 0.8;
+const TABLE_CELL_PADDING_X: f32 = 1.0;
+const TABLE_CELL_PADDING_Y: f32 = 0.625;
+const TABLE_DIVIDER_ALPHA: f32 = 0.6;
 
 /// Whose message the Markdown belongs to; a user's code has no actions.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -131,7 +140,35 @@ fn body_style(palette: &Palette, foreground: Hsla) -> TextViewStyle {
             background_color: Some(palette.inline_code_background.opacity(0.5)),
             ..HighlightStyle::default()
         })
+        .with_table(table_frame(palette))
+        .with_table_head(table_head(palette))
+        .with_table_cell(table_cell(palette))
         .with_dark(palette.appearance == Appearance::Dark)
+}
+
+/// The table's frame. Its text is `--text-sm`, the body's size, which also
+/// sizes the columns.
+fn table_frame(palette: &Palette) -> StyleRefinement {
+    StyleRefinement::default()
+        .rounded(rems(TABLE_RADIUS))
+        .border_color(palette.border.opacity(TABLE_BORDER_ALPHA))
+        .bg(palette.elevated)
+        .text_size(rems(BODY_SIZE))
+}
+
+/// The header row: semibold in the full foreground, with no fill of its own.
+fn table_head(palette: &Palette) -> StyleRefinement {
+    StyleRefinement::default()
+        .bg(transparent_black())
+        .text_color(palette.foreground)
+        .font_weight(FontWeight::SEMIBOLD)
+}
+
+fn table_cell(palette: &Palette) -> StyleRefinement {
+    StyleRefinement::default()
+        .px(rems(TABLE_CELL_PADDING_X))
+        .py(rems(TABLE_CELL_PADDING_Y))
+        .border_color(palette.border.opacity(TABLE_DIVIDER_ALPHA))
 }
 
 /// The source of a node's children: the inline text of a heading, the
@@ -287,6 +324,37 @@ mod tests {
                 Some(palette.inline_code_background.opacity(0.5))
             );
         }
+    }
+
+    #[test]
+    fn tables_use_the_reference_frame_header_and_cell_styles() {
+        for appearance in [Appearance::Light, Appearance::Dark] {
+            let palette = Palette::default_for(appearance);
+            let style = body_style(&palette, palette.foreground);
+            let frame = style.table();
+            assert_eq!(frame.text.font_size, Some(rems(0.875).into()));
+            assert_eq!(frame.border_color, Some(palette.border.opacity(0.8)));
+            assert_eq!(frame.background, Some(palette.elevated.into()));
+            assert_eq!(frame.corner_radii.top_left, Some(rems(0.5).into()));
+            assert_eq!(frame.corner_radii.bottom_right, Some(rems(0.5).into()));
+            let head = style.table_head();
+            assert_eq!(head.text.font_weight, Some(FontWeight::SEMIBOLD));
+            assert_eq!(head.text.color, Some(palette.foreground));
+            assert_eq!(head.background, Some(transparent_black().into()));
+            let cell = style.table_cell();
+            assert_eq!(cell.padding.left, Some(rems(1.0).into()));
+            assert_eq!(cell.padding.right, Some(rems(1.0).into()));
+            assert_eq!(cell.padding.top, Some(rems(0.625).into()));
+            assert_eq!(cell.padding.bottom, Some(rems(0.625).into()));
+            assert_eq!(cell.border_color, Some(palette.border.opacity(0.6)));
+        }
+    }
+
+    /// The reference's one-line row: the 23 px body line, `0.625rem` above
+    /// and below, and the 1 px row border.
+    #[test]
+    fn a_one_line_table_row_is_44_px_high() {
+        assert_eq!(23.0 + 2.0 * TABLE_CELL_PADDING_Y * 16.0 + 1.0, 44.0);
     }
 
     #[test]

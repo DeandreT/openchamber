@@ -508,6 +508,10 @@ impl Workspace {
                     .map(|task| std::mem::take(&mut task.native_roots).into_iter().collect())
                     .unwrap_or_default();
                 this.queue.prefixes.tasks.remove(&id);
+                // A departure held back while this transfer ran is noted now.
+                cx.defer_in(window, |this, window, cx| {
+                    this.reconcile_enqueue_listings(window, cx);
+                });
                 this.retire_released_native_roots(roots, window, cx);
                 if this.queue_storage.operation(&id).is_some() {
                     this.queue.prefixes.checks.insert(

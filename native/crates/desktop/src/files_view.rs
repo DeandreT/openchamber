@@ -3,7 +3,16 @@
 //! The rail's Files, Git and Diff buttons open a panel in place of the work
 //! status card (`ContextPanel.tsx`), 640 px wide until resized, while the chat keeps 320 px.
 //! Each surface is its own view, retained per runtime and directory, so a
-//! session switch and a return bring back a dirty draft as it was.
+//! session switch and a return bring back a dirty draft as it was. What the
+//! zone shows belongs to the directory on screen too
+//! (`contextPanelByDirectory`): New session from a session with an open
+//! editor shows no editor, and returning shows it again.
+//!
+//! The Files surface draws the zone's header itself: the strip with its tab,
+//! the two column toggles and Close. With no file open, or with the editor
+//! hidden, the zone shrinks to the tree's own width (240 px until resized,
+//! `contextEditorTreeWidth`); with a file open the editor takes the zone and
+//! the tree docks at its end edge at that same width.
 //!
 //! The Files surface (`FilesView.tsx`) lists the directory's tree and opens
 //! one file in Kit's code editor. Saving writes one snapshot of the draft
@@ -15,6 +24,7 @@
 
 use std::cell::Cell;
 use std::collections::HashMap;
+use std::mem;
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -38,7 +48,7 @@ use openchamber_native_transport::files::{
 
 use crate::activation::on_activate;
 use crate::baseline::CssTextExt;
-use crate::chrome::{ButtonTone, CONTROL_RADIUS, IconButton, glyph};
+use crate::chrome::{CONTROL_RADIUS, IconButton, glyph};
 use crate::context_panel::{ROW_LINE, ROW_SIZE, XS_LINE, XS_SIZE};
 use crate::diff_view::DiffView;
 use crate::elevation;
@@ -50,10 +60,26 @@ use crate::network::NetworkTask;
 use crate::theme::Palette;
 use crate::workspace::Workspace;
 
-const HEADER_HEIGHT: f32 = 40.0;
-/// The tree column beside the editor.
-const TREE_WIDTH: f32 = 220.0;
+/// The zone header: `min-h-10` and the border under it.
+const HEADER_HEIGHT: f32 = 41.0;
+const HEADER_BUTTON: f32 = 28.0;
+/// The action band over the tree and over the editor (`h-8`, its top border
+/// included), with 24 px buttons around 14 px glyphs.
+const BAND_HEIGHT: f32 = 32.0;
+const BAND_BUTTON: f32 = 24.0;
+const BAND_GLYPH: f32 = 14.0;
+/// The tree's search field (`h-8`).
+const SEARCH_HEIGHT: f32 = 32.0;
+/// `typography-meta`: 12.5 px on an 18 px line.
+pub(crate) const META_SIZE: f32 = 0.781_25;
+pub(crate) const META_LINE: f32 = 1.125;
+/// A tab's label: `typography-micro` on `leading-[1.2]`.
+const TAB_SIZE: f32 = 0.75;
+const TAB_LINE: f32 = 0.9;
+/// `calc(max(1lh, 1rem) + 0.5rem)` of a `typography-meta` row.
 pub(crate) const PANEL_ROW: f32 = 26.0;
+/// The zone card's `rounded-[10px]`.
+const CARD_RADIUS: f32 = 10.0;
 const OPEN_FILE_POLL: Duration = Duration::from_secs(2);
 /// Folders are listed again every fourth open-file poll.
 const FOLDER_POLL_EVERY: u32 = 4;
@@ -158,10 +184,55 @@ impl PanelSurface {
 
 type ViewKey = (RuntimeId, String);
 
+/// What the right zone shows for one directory.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ZoneState {
+    surface: Option<PanelSurface>,
+    /// The extension the Guest surface shows, so a parked one returns as
+    /// itself.
+    guest: Option<openchamber_native_transport::web_content::GuestPanel>,
+    terminal: bool,
+}
+
+impl ZoneState {
+    /// Something to keep for the directory.
+    fn is_open(&self) -> bool {
+        self.surface.is_some() || self.terminal
+    }
+}
+
+/// The widths and hidden columns the workspace hands the Files surface.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct FilesLayout {
+    pub(crate) tree_width: f32,
+    pub(crate) tree_hidden: bool,
+    pub(crate) editor_hidden: bool,
+}
+
+impl Default for FilesLayout {
+    fn default() -> Self {
+        Self {
+            tree_width: crate::pane_resize::TREE_DEFAULT_WIDTH,
+            tree_hidden: false,
+            editor_hidden: false,
+        }
+    }
+}
+
 /// The open surface and the retained views.
 #[derive(Default)]
 pub(crate) struct Panels {
     pub(crate) open: Option<PanelSurface>,
+    /// The zone shows the Files tree alone in this frame, at the tree's width.
+    pub(crate) tree_only: bool,
+    /// The directory the zone belonged to when the last frame was drawn;
+    /// none while that frame's directory was unresolved.
+    zone_owner: Option<ViewKey>,
+    /// What the zone showed when the last frame was drawn.
+    settled: ZoneState,
+    /// What the zone showed in the directories left behind. The directory
+    /// on screen has no entry.
+    parked: HashMap<ViewKey, ZoneState>,
     files: HashMap<ViewKey, (Entity<FilesView>, Rc<Cell<bool>>)>,
     git: HashMap<ViewKey, Entity<GitView>>,
     diff: HashMap<ViewKey, Entity<DiffView>>,
@@ -271,6 +342,25 @@ impl Workspace {
         }
     }
 
+    /// A Git refresh hint for `directory`: the open Git or Changes panel of
+    /// that directory reads again, as the reference's visible panel does.
+    pub(crate) fn refresh_open_git_panel(&mut self, directory: &str, cx: &mut Context<Self>) {
+        let key = (self.runtime.clone(), directory.to_owned());
+        match self.panels.open {
+            Some(PanelSurface::Git) => {
+                if let Some(view) = self.panels.git.get(&key) {
+                    view.update(cx, |view, cx| view.refresh(cx));
+                }
+            }
+            Some(PanelSurface::Diff) => {
+                if let Some(view) = self.panels.diff.get(&key) {
+                    view.update(cx, |view, cx| view.refresh(cx));
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Opens `surface`, or closes it when it is the open one.
     pub(crate) fn toggle_panel(&mut self, surface: PanelSurface, cx: &mut Context<Self>) {
         self.panels.open = (self.panels.open != Some(surface)).then_some(surface);
@@ -314,6 +404,95 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Settles the right zone for the frame about to be drawn, before any
+    /// width is read.
+    ///
+    /// The zone's state belongs to the directory on screen: leaving a
+    /// directory for another parks what it showed and brings back what the
+    /// next one showed. A surface opened together with the navigation belongs
+    /// to the destination.
+    ///
+    /// A frame whose directory is unresolved (a draft with nowhere to fall
+    /// back to, a selected session whose record is missing) owns no state
+    /// and receives none: nothing is parked or restored on the way in or
+    /// out, and the zone on screen goes to the first resolved directory.
+    pub(crate) fn settle_zone(&mut self, window: &Window, cx: &mut Context<Self>) {
+        let key = self
+            .panel_directory()
+            .map(|directory| (self.runtime.clone(), directory));
+        let mut current = self.zone_state();
+        let settled = mem::take(&mut self.panels.settled);
+        let owner = self.panels.zone_owner.take();
+        let mut switched = false;
+        let mut restored = false;
+        if let Some(key) = &key {
+            match owner {
+                Some(owner) if owner != *key => {
+                    switched = true;
+                    let arrived = self.panels.parked.remove(key).unwrap_or_default();
+                    if current == settled {
+                        restored = true;
+                        current = arrived;
+                        self.panels.open = current.surface;
+                        if current.guest.is_some() {
+                            self.panels.open_guest = current.guest.clone();
+                        }
+                        self.terminal_open = current.terminal;
+                    }
+                    if settled.is_open() {
+                        self.panels.parked.insert(owner, settled.clone());
+                    }
+                }
+                Some(_) => {}
+                // The first resolved directory after frames without one
+                // takes the zone as it stands.
+                None => {
+                    self.panels.parked.remove(key);
+                }
+            }
+        }
+        let has_file = key.as_ref().is_some_and(|key| {
+            self.panels
+                .pending_file
+                .as_ref()
+                .is_some_and(|(target, _)| target == key)
+                || self
+                    .panels
+                    .files
+                    .get(key)
+                    .is_some_and(|(view, _)| view.read(cx).has_file())
+        });
+        let files = current.surface == Some(PanelSurface::Files);
+        // Files opened with no file shows its tree again (`openContextPanel`).
+        // A return to a directory opens nothing, and no other frame touches
+        // the user's toggle: with no file the tree is drawn whatever it says.
+        if files && !restored && settled.surface != Some(PanelSurface::Files) && !has_file {
+            self.pane_sizes.tree_hidden = false;
+        }
+        let shows_editor =
+            has_file && (!self.pane_sizes.editor_hidden || self.pane_sizes.tree_hidden);
+        self.panels.tree_only = files && !shows_editor;
+        // The terminal counts while it can be drawn, as the chat's width
+        // counts it (`chat_area_width`).
+        let shown =
+            current.surface.is_some() || (current.terminal && self.terminal_panel.is_some());
+        self.panels.zone_owner = key;
+        self.panels.settled = current;
+        self.settle_zone_fit(shown, switched, window);
+    }
+
+    /// What the zone shows now, as it is parked.
+    fn zone_state(&self) -> ZoneState {
+        let surface = self.panels.open;
+        ZoneState {
+            surface,
+            guest: (surface == Some(PanelSurface::Guest))
+                .then(|| self.panels.open_guest.clone())
+                .flatten(),
+            terminal: self.terminal_open && surface.is_none(),
+        }
+    }
+
     /// Opens `path` in the Files surface of the panel's directory
     /// (`openContextFile`). A file outside it opens read-only.
     pub(crate) fn open_context_file(&mut self, path: String, cx: &mut Context<Self>) -> bool {
@@ -321,6 +500,8 @@ impl Workspace {
             return false;
         };
         self.terminal_open = false;
+        // Revealing a file shows it, even if the editor was hidden.
+        self.pane_sizes.editor_hidden = false;
         self.panels.open = Some(PanelSurface::Files);
         self.panels.pending_file = Some(((scope.runtime, scope.directory), path));
         cx.notify();
@@ -343,7 +524,10 @@ impl Workspace {
         })
     }
 
-    /// The directory a panel surface shows.
+    /// The directory a panel surface shows (`pickEffectiveDirectory`): the
+    /// selected session's, else the draft's project, else the active
+    /// project. The reference's Chats-root step is for a chat-target draft,
+    /// which native does not have: a draft here has a project or none.
     pub(crate) fn panel_directory(&self) -> Option<String> {
         if self.selected.is_some() {
             path::normalize_optional(self.selected_session()?.directory.as_deref())
@@ -405,9 +589,17 @@ impl Workspace {
                         })
                         .0
                         .clone();
-                    if let Some(path) = pending {
-                        view.update(cx, |view, cx| view.open_later(path, cx));
-                    }
+                    let layout = FilesLayout {
+                        tree_width: self.pane_sizes.tree_width(),
+                        tree_hidden: self.pane_sizes.tree_hidden,
+                        editor_hidden: self.pane_sizes.editor_hidden,
+                    };
+                    view.update(cx, |view, cx| {
+                        view.set_layout(layout, cx);
+                        if let Some(path) = pending {
+                            view.open_later(path, cx);
+                        }
+                    });
                     view.into_any_element()
                 }
                 PanelSurface::Git => self
@@ -656,7 +848,7 @@ impl Workspace {
             .child(
                 div()
                     .size_full()
-                    .rounded(px(12.0))
+                    .rounded(px(CARD_RADIUS))
                     .overflow_hidden()
                     .bg(elevation::panel_fill(palette))
                     .shadow(elevation::panel_edge(palette))
@@ -664,7 +856,7 @@ impl Workspace {
             )
             .child(
                 self.render_resize_handle(
-                    crate::pane_resize::Pane::Panel,
+                    self.zone_pane(),
                     strings.get("contextPanel.actions.resizePanelAria"),
                     palette,
                     direction,
@@ -868,6 +1060,9 @@ pub(crate) struct OpenEditor {
     outside: bool,
     /// Shown as a read-only preview; large files start this way.
     pub(crate) preview: bool,
+    /// A file opened from the tree keeps an italic tab until it is edited or
+    /// its tab or row is double-clicked (`pinContextPanelTab`).
+    pub(crate) pinned: bool,
     status: SaveStatus,
     /// Set while this view writes the editor's text, so the change event it
     /// raises is not an edit.
@@ -905,6 +1100,9 @@ pub(crate) struct FilesView {
     pub(crate) switch: Option<PendingSwitch>,
     /// A file to open on the next frame, which has the window it needs.
     open_next: Option<String>,
+    /// The next file opens pinned, as one a link asked for does.
+    pin_next: bool,
+    pub(crate) layout: FilesLayout,
     pub(crate) rename: Option<crate::file_tree_view::TreeRename>,
     /// Paths whose rename runs; a save under one is refused, as a write would
     /// recreate the old path.
@@ -973,6 +1171,8 @@ impl FilesView {
             next_editor: 0,
             switch: None,
             open_next: None,
+            pin_next: false,
+            layout: FilesLayout::default(),
             rename: None,
             renaming: Vec::new(),
             uncertain_renames: HashMap::new(),
@@ -1076,6 +1276,65 @@ impl FilesView {
     /// Opens `path` on the next frame, as a link from the transcript asks.
     pub(crate) fn open_later(&mut self, path: String, cx: &mut Context<Self>) {
         self.open_next = Some(path);
+        self.pin_next = true;
+        cx.notify();
+    }
+
+    /// A file is open or about to be.
+    pub(crate) fn has_file(&self) -> bool {
+        self.open.is_some() || self.open_next.is_some()
+    }
+
+    /// The editor column is on screen: a file is open and the editor was not
+    /// hidden, or the tree was, which never hides alongside it.
+    pub(crate) fn shows_editor(&self) -> bool {
+        self.has_file() && (!self.layout.editor_hidden || self.layout.tree_hidden)
+    }
+
+    /// The tree column is on screen: it was not hidden, or no file is open
+    /// and it is all the surface has.
+    fn shows_tree(&self) -> bool {
+        !self.layout.tree_hidden || !self.has_file()
+    }
+
+    pub(crate) fn set_layout(&mut self, layout: FilesLayout, cx: &mut Context<Self>) {
+        if self.layout != layout {
+            self.layout = layout;
+            cx.notify();
+        }
+    }
+
+    /// Changes the workspace once this update is over, then redraws it: the
+    /// zone's width and the sidebar follow what this surface shows.
+    fn update_owner(&self, cx: &mut Context<Self>, change: impl FnOnce(&mut Workspace) + 'static) {
+        let Some(owner) = self.scope.owner.clone() else {
+            return;
+        };
+        cx.defer(move |cx| {
+            let _ = owner.update(cx, |workspace, cx| {
+                change(workspace);
+                cx.notify();
+            });
+        });
+    }
+
+    /// Keeps the open file's tab: a double click on it or on `path`'s row.
+    pub(crate) fn pin_file(&mut self, path: Option<&str>, cx: &mut Context<Self>) {
+        if let Some(open) = self.open.as_mut()
+            && !open.pinned
+            && path.is_none_or(|path| open.file.path() == path)
+        {
+            open.pinned = true;
+            cx.notify();
+        }
+    }
+
+    /// Folds every folder (`collapseAllExpandedPaths`).
+    fn collapse_all(&mut self, cx: &mut Context<Self>) {
+        for path in self.tree.expanded_paths() {
+            self.tree.collapse(&path);
+        }
+        self.remember_tree(cx);
         cx.notify();
     }
 
@@ -1187,6 +1446,13 @@ impl FilesView {
     /// read-only. While the open file has unsaved edits, the unsaved-changes
     /// dialog asks first.
     pub(crate) fn open_file(&mut self, path: &str, window: &mut Window, cx: &mut Context<Self>) {
+        // A file asked for shows, even if the editor was hidden
+        // (`openContextPanelTab`): the open one again, and the one the
+        // unsaved-changes dialog is about to ask for, which needs the
+        // editor's room.
+        if self.layout.editor_hidden {
+            self.update_owner(cx, |workspace| workspace.pane_sizes.editor_hidden = false);
+        }
         if self
             .open
             .as_ref()
@@ -1271,6 +1537,7 @@ impl FilesView {
             editor,
             outside,
             preview: false,
+            pinned: mem::take(&mut self.pin_next),
             status: SaveStatus::Idle,
             applying: false,
             pending_apply: false,
@@ -1289,6 +1556,9 @@ impl FilesView {
             self.remember_tree(cx);
         }
         self.load_open_file(window, cx);
+        // An opened file shows, even if the editor was hidden, and the zone
+        // takes its own width for it.
+        self.update_owner(cx, |workspace| workspace.pane_sizes.editor_hidden = false);
         cx.notify();
     }
 
@@ -1497,9 +1767,11 @@ impl FilesView {
         open.file.edit(text);
         open.status = SaveStatus::Idle;
         let now_dirty = open.file.is_dirty();
+        // Typing into a preview keeps its tab.
+        let pinned = !mem::replace(&mut open.pinned, true);
         // Every edit restarts the debounce.
         self.arm_autosave(cx);
-        if was_dirty != now_dirty {
+        if was_dirty != now_dirty || pinned {
             cx.notify();
         }
     }
@@ -1890,117 +2162,485 @@ impl FilesView {
         }
     }
 
-    fn render_header(
+    /// The zone's header (`ContextPanel.tsx`): the strip with the surface's
+    /// tab, then the column toggles and Close.
+    fn render_zone_header(
         &self,
         palette: &Palette,
         direction: Direction,
         cx: &Context<Self>,
     ) -> AnyElement {
         let strings = locale::strings(cx);
-        let searching = !self.search.read(cx).value().trim().is_empty();
+        // Each glyph names the side its column stands on.
+        let (editor_glyph, tree_glyph) = match direction {
+            Direction::LeftToRight => ("layout-left", "layout-right"),
+            Direction::RightToLeft => ("layout-right", "layout-left"),
+        };
+        let button = |id: &'static str,
+                      icon: &'static str,
+                      label: SharedString,
+                      pressed: Option<bool>| GlyphButton {
+            id,
+            icon,
+            label,
+            size: HEADER_BUTTON,
+            glyph: 16.0,
+            pressed,
+            fill: false,
+        };
         div()
             .h(px(HEADER_HEIGHT))
-            .px(px(8.0))
+            .flex_shrink_0()
+            .border_b_1()
+            .border_color(palette.border)
             .flex_row_from(direction)
-            .items_center()
-            .gap(px(4.0))
             .child(
                 div()
-                    .id("files-search")
-                    .role(Role::Search)
-                    .accessibility_id("files-search")
-                    .aria_label(strings.get("filesView.tree.search.placeholder"))
                     .flex_1()
                     .min_w_0()
-                    .h(px(28.0))
-                    .px(px(8.0))
-                    .rounded(px(CONTROL_RADIUS))
-                    .bg(palette.background)
+                    .h_full()
+                    .flex_row_from(direction)
+                    .child(self.render_tab(palette, direction, cx)),
+            )
+            .child(
+                div()
+                    .h_full()
+                    .flex_shrink_0()
+                    .px(px(6.0))
                     .flex_row_from(direction)
                     .items_center()
-                    .gap(px(6.0))
-                    .child(glyph("search", 14.0, palette.muted_foreground))
-                    .child(
-                        div().flex_1().min_w_0().child(
-                            Input::new(&self.search)
-                                .appearance(false)
-                                .bordered(false)
-                                .text_size(gpui_kit::rems(ROW_SIZE)),
-                        ),
-                    )
-                    .when(searching, |this| {
+                    .gap(px(4.0))
+                    .when(self.has_file(), |this| {
                         this.child(
-                            IconButton::new(
-                                "files-search-clear",
-                                "close",
-                                strings.get("filesView.tree.search.clearAria"),
+                            button(
+                                "files-toggle-editor",
+                                editor_glyph,
+                                strings.get("contextRail.editor.toggle"),
+                                Some(self.shows_editor()),
                             )
-                            .size(20.0, 14.0)
                             .render(
                                 palette,
                                 cx,
-                                |this: &mut Self, window, cx| this.clear_search(window, cx),
+                                |this: &mut Self, _, cx| {
+                                    this.update_owner(cx, |workspace| {
+                                        workspace.pane_sizes.toggle_editor()
+                                    });
+                                },
                             ),
                         )
-                    }),
+                    })
+                    .child(
+                        button(
+                            "files-toggle-tree",
+                            tree_glyph,
+                            strings.get("contextRail.editorTree.toggle"),
+                            Some(self.shows_tree()),
+                        )
+                        .render(palette, cx, |this: &mut Self, _, cx| {
+                            this.update_owner(cx, |workspace| workspace.pane_sizes.toggle_tree());
+                        }),
+                    )
+                    .child(
+                        button(
+                            "files-close-panel",
+                            "close",
+                            strings.get("contextPanel.actions.closePanel"),
+                            None,
+                        )
+                        .render(palette, cx, |this: &mut Self, _, cx| {
+                            this.update_owner(cx, |workspace| workspace.panels.open = None);
+                        }),
+                    ),
             )
-            .child(text_button(
-                "files-search-names",
-                strings.get("sidebarFilesTree.search.mode.names"),
-                Some(self.search_mode == SearchMode::Names),
-                palette,
-                cx,
-                |this: &mut Self, _, cx| this.set_search_mode(SearchMode::Names, cx),
-            ))
-            .child(text_button(
-                "files-search-contents",
-                strings.get("sidebarFilesTree.search.mode.contents"),
-                Some(self.search_mode == SearchMode::Contents),
-                palette,
-                cx,
-                |this: &mut Self, _, cx| this.set_search_mode(SearchMode::Contents, cx),
-            ))
-            .when(self.search_mode == SearchMode::Contents, |this| {
-                this.child(text_button(
-                    "files-search-regex",
-                    ".*".into(),
-                    Some(self.regex),
-                    palette,
-                    cx,
-                    |this: &mut Self, _, cx| {
-                        this.regex = !this.regex;
-                        this.search_changed(cx);
-                    },
-                ))
-            })
+            .into_any_element()
+    }
+
+    /// The strip's one tab: the open file, or the surface itself while the
+    /// tree is all it has. The underline marks it active.
+    fn render_tab(
+        &self,
+        palette: &Palette,
+        direction: Direction,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let strings = locale::strings(cx);
+        let text = |label: SharedString, italic: bool| {
+            div()
+                .min_w_0()
+                .truncate()
+                .when(italic, |this| this.italic())
+                .css_text(TAB_SIZE, TAB_LINE, cx)
+                .text_color(palette.foreground)
+                .child(label)
+        };
+        let tab = match self.open.as_ref() {
+            Some(open) => {
+                let name: SharedString = file_name(open.file.path()).into();
+                div()
+                    .id("files-tab")
+                    .role(Role::Tab)
+                    .accessibility_id("files-tab")
+                    .aria_label(name.clone())
+                    .aria_selected(true)
+                    .h_full()
+                    .px(px(12.0))
+                    .flex_row_from(direction)
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .size(px(16.0))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(glyph("file-text", 14.0, palette.primary)),
+                    )
+                    .child(text(name, !open.pinned))
+                    .on_click(cx.listener(|this, event: &gpui_kit::ClickEvent, _, cx| {
+                        if event.click_count() >= 2 {
+                            this.pin_file(None, cx);
+                        }
+                    }))
+                    .test_support()
+                    .into_any_element()
+            }
+            None => {
+                let label = strings.get("contextPanel.mode.files");
+                let close = strings.format(
+                    "contextPanel.tab.closeTabAria",
+                    &[("label", label.as_ref())],
+                );
+                div()
+                    .h_full()
+                    .flex_row_from(direction)
+                    .items_center()
+                    .child(
+                        div()
+                            .id("files-tab")
+                            .role(Role::Tab)
+                            .accessibility_id("files-tab")
+                            .aria_label(label.clone())
+                            .aria_selected(true)
+                            .h_full()
+                            .px(px(12.0))
+                            .flex()
+                            .items_center()
+                            .child(text(label, false))
+                            .test_support(),
+                    )
+                    .child(
+                        div().margin_end(direction, px(4.0)).child(
+                            GlyphButton {
+                                id: "files-tab-close",
+                                icon: "close",
+                                label: close,
+                                size: 20.0,
+                                glyph: 12.0,
+                                pressed: None,
+                                fill: false,
+                            }
+                            .render(
+                                palette,
+                                cx,
+                                |this: &mut Self, _, cx| {
+                                    this.update_owner(cx, |workspace| workspace.panels.open = None);
+                                },
+                            ),
+                        ),
+                    )
+                    .into_any_element()
+            }
+        };
+        div()
+            .relative()
+            .h_full()
+            .min_w_0()
+            .child(tab)
+            // `-bottom-px`: the underline lies over the header's border.
             .child(
-                IconButton::new(
+                div()
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .bottom(px(-1.0))
+                    .h(px(3.0))
+                    .bg(palette.primary),
+            )
+            .into_any_element()
+    }
+
+    /// The tree's action band (`SidebarFilesTree.tsx`): its buttons end the
+    /// row, in line with the editor's band beside it.
+    fn render_tree_band(
+        &self,
+        palette: &Palette,
+        direction: Direction,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let strings = locale::strings(cx);
+        let button = |id: &'static str,
+                      icon: &'static str,
+                      label: SharedString,
+                      pressed: Option<bool>| GlyphButton {
+            id,
+            icon,
+            label,
+            size: BAND_BUTTON,
+            glyph: BAND_GLYPH,
+            pressed,
+            fill: true,
+        };
+        div()
+            .h(px(BAND_HEIGHT))
+            .flex_shrink_0()
+            .border_t_1()
+            .border_color(palette.divider)
+            .px(px(8.0))
+            .flex_row_from(direction)
+            .items_center()
+            .justify_end()
+            .gap(px(2.0))
+            .child(
+                button(
                     "files-show-gitignored",
-                    if self.tree.show_gitignored() {
-                        "eye"
-                    } else {
-                        "eye-off"
-                    },
+                    "file-forbid",
                     strings.get("filesView.tree.actions.showGitignored"),
+                    Some(self.tree.show_gitignored()),
                 )
-                .tone(if self.tree.show_gitignored() {
-                    ButtonTone::Active
-                } else {
-                    ButtonTone::Quiet
-                })
                 .render(palette, cx, |this: &mut Self, _, cx| {
                     let show = !this.tree.show_gitignored();
                     this.set_show_gitignored(show, cx);
                 }),
             )
             .child(
-                IconButton::new(
+                button(
                     "files-refresh",
                     "refresh",
                     strings.get("filesView.tree.actions.refreshTitle"),
+                    None,
                 )
                 .render(palette, cx, |this: &mut Self, _, cx| this.refresh_tree(cx)),
             )
+            .child(
+                button(
+                    "files-collapse-all",
+                    "collapse-vertical",
+                    strings.get("sidebarFilesTree.actions.collapseAllTitle"),
+                    None,
+                )
+                .render(palette, cx, |this: &mut Self, _, cx| this.collapse_all(cx)),
+            )
+            .into_any_element()
+    }
+
+    /// The tree's search field: the mode button where the field's glyph
+    /// sits, then the query, with the regex chip and Clear at its end.
+    fn render_search(
+        &self,
+        palette: &Palette,
+        direction: Direction,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let strings = locale::strings(cx);
+        let searching = !self.search_text(cx).is_empty();
+        let contents = self.search_mode == SearchMode::Contents;
+        // The button switches to the other mode and is named after it.
+        let (id, icon, key, next) = if contents {
+            (
+                "files-search-names",
+                "file-search",
+                "sidebarFilesTree.search.mode.names",
+                SearchMode::Names,
+            )
+        } else {
+            (
+                "files-search-contents",
+                "search",
+                "sidebarFilesTree.search.mode.contents",
+                SearchMode::Contents,
+            )
+        };
+        let mode = GlyphButton {
+            id,
+            icon,
+            label: strings.get(key),
+            size: BAND_BUTTON,
+            glyph: 16.0,
+            pressed: None,
+            fill: false,
+        }
+        .render(palette, cx, move |this: &mut Self, _, cx| {
+            this.set_search_mode(next, cx)
+        });
+        let field = div()
+            .id("files-search")
+            .role(Role::Search)
+            .accessibility_id("files-search")
+            .aria_label(strings.get("filesView.tree.search.placeholder"))
+            .test_support()
+            .relative()
+            .w_full()
+            .h(px(SEARCH_HEIGHT))
+            .rounded(px(CONTROL_RADIUS))
+            .bg(palette.background)
+            .padding_start(direction, px(32.0))
+            .padding_end(direction, px(if contents { 64.0 } else { 32.0 }))
+            .flex()
+            .items_center()
+            .child(
+                div().flex_1().min_w_0().child(
+                    Input::new(&self.search)
+                        .appearance(false)
+                        .bordered(false)
+                        .text_size(gpui_kit::rems(META_SIZE)),
+                ),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .top(px(4.0))
+                    .inset_start(direction, px(4.0))
+                    .child(mode),
+            )
+            .when(contents, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top(px(6.0))
+                        .inset_end(direction, px(4.0))
+                        .child(self.render_regex_chip(palette, cx)),
+                )
+            })
+            .when(searching, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top(px(8.0))
+                        .inset_end(direction, px(if contents { 32.0 } else { 8.0 }))
+                        .child(
+                            IconButton::new(
+                                "files-search-clear",
+                                "close",
+                                strings.get("filesView.tree.search.clearAria"),
+                            )
+                            .size(16.0, 16.0)
+                            .render(
+                                palette,
+                                cx,
+                                |this: &mut Self, window, cx| this.clear_search(window, cx),
+                            ),
+                        ),
+                )
+            });
+        div()
+            .px(px(8.0))
+            .py(px(8.0))
+            .child(field)
+            .into_any_element()
+    }
+
+    /// The content search's regular-expression toggle, inside the field.
+    fn render_regex_chip(&self, palette: &Palette, cx: &Context<Self>) -> AnyElement {
+        let on = self.regex;
+        let hover = palette.hover;
+        let chip = div()
+            .id("files-search-regex")
+            .role(Role::Button)
+            .accessibility_id("files-search-regex")
+            .aria_label(SharedString::from(".*"))
+            .aria_toggled(if on {
+                gpui_kit::Toggled::True
+            } else {
+                gpui_kit::Toggled::False
+            })
+            .h(px(20.0))
+            .px(px(4.0))
+            .rounded(px(CONTROL_RADIUS))
+            .flex()
+            .items_center()
+            .cursor_pointer()
+            .css_text(XS_SIZE, XS_LINE, cx)
+            .text_color(if on {
+                palette.selection_foreground
+            } else {
+                palette.foreground
+            })
+            .when(on, |this| this.bg(palette.selection))
+            .when(!on, |this| this.hover(move |style| style.bg(hover)))
+            .child(".*");
+        on_activate(chip, cx, |this: &mut Self, _, cx| {
+            this.regex = !this.regex;
+            this.search_changed(cx);
+        })
+        .test_support()
+        .into_any_element()
+    }
+
+    /// The tree column: its band and search over the rows, or over the
+    /// results while a query is typed. `fill` is the zone showing it alone;
+    /// beside the editor it keeps the tree's width and draws the divider.
+    fn render_tree_column(
+        &mut self,
+        fill: bool,
+        palette: &Palette,
+        direction: Direction,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let rows = if self.search_text(cx).is_empty() {
+            self.render_tree(palette, direction, cx)
+        } else {
+            self.render_results(palette, direction, cx)
+        };
+        let width = self.layout.tree_width;
+        let line = status_line("files-notice", self.notice.as_ref(), palette, direction, cx);
+        // The newest outcome lies over the rows' foot. With none the line
+        // keeps its place in the accessibility tree and takes no room.
+        let notice = match &self.notice {
+            Some(_) => div()
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom_0()
+                .bg(elevation::panel_fill(palette))
+                .child(line),
+            None => div().h(px(0.0)).overflow_hidden().child(line),
+        };
+        div()
+            .relative()
+            .h_full()
+            .flex()
+            .flex_col()
+            .map(|this| {
+                if fill {
+                    this.flex_1().min_w_0()
+                } else {
+                    this.w(px(width)).flex_shrink_0()
+                }
+            })
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .border_b_1()
+                    .border_color(palette.divider)
+                    .flex()
+                    .flex_col()
+                    .child(self.render_tree_band(palette, direction, cx))
+                    .child(self.render_search(palette, direction, cx)),
+            )
+            .child(div().flex_1().min_h_0().child(rows))
+            .child(notice)
+            .when(!fill, |this| {
+                this.child(
+                    div()
+                        .absolute()
+                        .top_0()
+                        .bottom_0()
+                        .inset_start(direction, px(0.0))
+                        .w(px(1.0))
+                        .bg(palette.border),
+                )
+            })
             .into_any_element()
     }
 
@@ -2033,18 +2673,22 @@ impl FilesView {
                 .accessibility_id(SharedString::from(id))
                 .aria_label(label.clone())
                 .h(px(PANEL_ROW))
-                .mx(px(4.0))
+                .margin_start(direction, px(6.0))
+                // The tree's inset and the scroller's reserved thumb.
+                .margin_end(direction, px(12.0))
                 .px(px(8.0))
                 .rounded(px(CONTROL_RADIUS))
                 .flex_row_from(direction)
                 .items_center()
+                .gap(px(6.0))
                 .cursor_pointer()
                 .hover(move |style| style.bg(hover))
+                .child(glyph("file-text", 14.0, palette.muted_foreground))
                 .child(
                     div()
                         .min_w_0()
                         .truncate()
-                        .css_text(ROW_SIZE, ROW_LINE, cx)
+                        .css_text(META_SIZE, META_LINE, cx)
                         .text_color(palette.foreground)
                         .child(label),
                 );
@@ -2131,7 +2775,7 @@ impl FilesView {
             .role(Role::List)
             .accessibility_id("files-results")
             .size_full()
-            .py(px(4.0))
+            .py(px(6.0))
             .overflow_y_scroll()
             .children(rows)
             .into_any_element()
@@ -2164,58 +2808,91 @@ impl FilesView {
         };
         let can_save =
             !open.file.read_only() && open.file.failure().is_none() && !open.file.is_loading();
+        // The path within the directory, as the docked toolbar names the file.
+        let path = open.file.path();
+        let relative: SharedString = path
+            .strip_prefix(self.scope.directory.as_str())
+            .and_then(|rest| rest.strip_prefix('/'))
+            .unwrap_or(path)
+            .to_owned()
+            .into();
+        let loaded = open.file.failure().is_none() && !open.file.is_loading();
+        // The same band the tree draws beside it, so the two read as one row.
         let header = div()
-            .h(px(32.0))
+            .h(px(BAND_HEIGHT))
+            .flex_shrink_0()
+            .border_t_1()
+            .border_color(palette.divider)
             .px(px(8.0))
             .flex_row_from(direction)
             .items_center()
-            .gap(px(6.0))
+            .gap(px(2.0))
             .child(
                 div()
+                    .flex_1()
                     .min_w_0()
-                    .truncate()
-                    .css_text(ROW_SIZE, ROW_LINE, cx)
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(palette.foreground)
-                    .child(name.clone()),
+                    .margin_end(direction, px(8.0))
+                    .flex_row_from(direction)
+                    .items_center()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .min_w_0()
+                            .truncate()
+                            .css_text(META_SIZE, META_LINE, cx)
+                            .text_color(palette.muted_foreground)
+                            .child(relative),
+                    )
+                    .when(dirty, |this| {
+                        this.child(
+                            div()
+                                .size(px(6.0))
+                                .flex_shrink_0()
+                                .rounded_full()
+                                .bg(palette.foreground),
+                        )
+                    })
+                    .child(
+                        div()
+                            .id("files-save-status")
+                            .role(Role::Status)
+                            .accessibility_id("files-save-status")
+                            .test_support()
+                            .when_some(state.clone(), |this, state| this.aria_label(state))
+                            .min_w_0()
+                            .truncate()
+                            .css_text(XS_SIZE, XS_LINE, cx)
+                            .text_color(palette.muted_foreground)
+                            .children(state),
+                    ),
             )
-            .when(dirty, |this| {
-                this.child(div().size(px(6.0)).rounded_full().bg(palette.foreground))
+            .when(loaded, |this| {
+                this.child(
+                    GlyphButton {
+                        id: "files-preview",
+                        icon: "eye",
+                        label: strings.get("documentToolbar.preview"),
+                        size: BAND_BUTTON,
+                        glyph: BAND_GLYPH,
+                        pressed: Some(open.preview),
+                        fill: true,
+                    }
+                    .render(palette, cx, |this: &mut Self, _, cx| {
+                        this.toggle_preview(cx)
+                    }),
+                )
             })
-            .child(
-                div()
-                    .id("files-save-status")
-                    .role(Role::Status)
-                    .accessibility_id("files-save-status")
-                    .test_support()
-                    .when_some(state.clone(), |this, state| this.aria_label(state))
-                    .min_w_0()
-                    .truncate()
-                    .css_text(XS_SIZE, XS_LINE, cx)
-                    .text_color(palette.muted_foreground)
-                    .children(state),
-            )
-            .child(div().flex_1())
-            .when(
-                open.file.failure().is_none() && !open.file.is_loading(),
-                |this| {
-                    this.child(text_button(
-                        "files-preview",
-                        strings.get("documentToolbar.preview"),
-                        Some(open.preview),
-                        palette,
-                        cx,
-                        |this: &mut Self, _, cx| this.toggle_preview(cx),
-                    ))
-                },
-            )
             .when(can_save, |this| {
                 this.child(
-                    IconButton::new(
-                        "files-save",
-                        "save-3",
-                        strings.get("filesView.editor.saveFile"),
-                    )
+                    GlyphButton {
+                        id: "files-save",
+                        icon: "save-3",
+                        label: strings.get("filesView.editor.saveFile"),
+                        size: BAND_BUTTON,
+                        glyph: BAND_GLYPH,
+                        pressed: None,
+                        fill: false,
+                    }
                     .render(palette, cx, |this: &mut Self, _, cx| {
                         let _ = this.save(SaveTrigger::Explicit, cx);
                     }),
@@ -2352,13 +3029,13 @@ impl Render for FilesView {
         self.sync_html_preview(cx);
         let palette = cx.global::<Palette>().clone();
         let direction = locale::strings(cx).direction();
-        let searching = !self.search.read(cx).value().trim().is_empty();
-        let tree = if searching {
-            self.render_results(&palette, direction, cx)
-        } else {
-            self.render_tree(&palette, direction, cx)
-        };
+        let shows_editor = self.shows_editor();
+        let shows_tree = self.shows_tree();
         let label = locale::strings(cx).get("contextPanel.mode.files");
+        let header = self.render_zone_header(&palette, direction, cx);
+        let editor = shows_editor.then(|| self.render_editor_column(&palette, direction, cx));
+        let tree =
+            shows_tree.then(|| self.render_tree_column(!shows_editor, &palette, direction, cx));
         div()
             .id("files-panel")
             .role(Role::Group)
@@ -2373,24 +3050,77 @@ impl Render for FilesView {
             .size_full()
             .flex()
             .flex_col()
-            .child(self.render_header(&palette, direction, cx))
-            .child(status_line(
-                "files-notice",
-                self.notice.as_ref(),
-                &palette,
-                direction,
-                cx,
-            ))
+            .child(header)
             .child(
                 div()
                     .flex_1()
                     .min_h_0()
                     .flex_row_from(direction)
-                    .child(div().w(px(TREE_WIDTH)).flex_shrink_0().h_full().child(tree))
-                    .child(div().w(px(1.0)).h_full().bg(palette.divider))
-                    .child(self.render_editor_column(&palette, direction, cx)),
+                    .children(editor)
+                    .children(tree),
             )
             .children(self.render_switch_dialog(&palette, direction, cx))
+            .test_support()
+    }
+}
+
+/// A square glyph control of the zone header or of an action band: a toggle
+/// when `pressed` is set, which a band shows with the selection fill.
+struct GlyphButton {
+    id: &'static str,
+    icon: &'static str,
+    label: SharedString,
+    size: f32,
+    glyph: f32,
+    pressed: Option<bool>,
+    fill: bool,
+}
+
+impl GlyphButton {
+    fn render<V: 'static>(
+        self,
+        palette: &Palette,
+        cx: &Context<V>,
+        action: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static,
+    ) -> AnyElement {
+        let hover = palette.hover;
+        let foreground = palette.foreground;
+        let on = self.pressed == Some(true);
+        let filled = on && self.fill;
+        let rest = if on {
+            palette.foreground
+        } else {
+            palette.muted_foreground
+        };
+        let button = div()
+            .id(self.id)
+            .group(self.id)
+            .role(Role::Button)
+            .accessibility_id(self.id)
+            .aria_label(self.label)
+            .when_some(self.pressed, |this, pressed| {
+                this.aria_toggled(if pressed {
+                    gpui_kit::Toggled::True
+                } else {
+                    gpui_kit::Toggled::False
+                })
+            })
+            .size(px(self.size))
+            .flex_shrink_0()
+            .rounded(px(CONTROL_RADIUS))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .when(filled, |this| this.bg(palette.selection))
+            .when(!filled, |this| this.hover(move |style| style.bg(hover)))
+            .child(
+                glyph(self.icon, self.glyph, rest)
+                    .group_hover(self.id, move |style| style.text_color(foreground)),
+            );
+        on_activate(button, cx, action)
+            .test_support()
+            .into_any_element()
     }
 }
 
@@ -2447,7 +3177,8 @@ mod resize_tests {
         cx.update_window(window, |_, window, cx| {
             cx.set_global(Strings::load(language));
             workspace.update(cx, |workspace, cx| {
-                workspace.panels.open = Some(PanelSurface::Files);
+                // Files without a file would shrink the zone to its tree.
+                workspace.panels.open = Some(PanelSurface::Git);
                 workspace.pane_sizes.panel_width = Some(640.0);
                 cx.notify();
             });

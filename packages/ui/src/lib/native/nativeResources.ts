@@ -82,6 +82,16 @@ const readList = (relativePath: string): string[] =>
 const isSpriteIcon = (name: string): name is keyof typeof iconSpriteData => Object.hasOwn(iconSpriteData, name);
 
 /**
+ * Keys whose shipped translations leave out a placeholder of the English
+ * text: the web client shows those sentences without the value, and so does
+ * the native client.
+ */
+const PLACEHOLDER_OPTIONAL_KEYS: ReadonlySet<string> = new Set([
+  'gitView.changes.revertAllDescriptionPlural',
+  'gitView.changes.revertAllDescriptionSingle',
+]);
+
+/**
  * Exports every used key for every locale.
  *
  * Throws when a key is unknown, a locale lacks it, or a translation's
@@ -97,8 +107,14 @@ export const renderNativeLocales = (): string => {
       if (!isDictionaryKey(key)) throw new Error(`native locale key ${key} is not in the English dictionary`);
       const message = dictionary[key];
       if (!message) throw new Error(`locale ${locale} has no message for ${key}`);
-      const expected = placeholders(en[key]).join(',');
-      if (placeholders(message).join(',') !== expected) {
+      const expected = placeholders(en[key]);
+      const used = placeholders(message);
+      // A translation of these keys may phrase the sentence without the
+      // value; it still may not name a placeholder English lacks.
+      const matches = PLACEHOLDER_OPTIONAL_KEYS.has(key)
+        ? used.every((name) => expected.includes(name))
+        : used.join(',') === expected.join(',');
+      if (!matches) {
         throw new Error(`locale ${locale} changes the placeholders of ${key}`);
       }
       messages[key] = message;

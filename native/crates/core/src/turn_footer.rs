@@ -1,5 +1,6 @@
 //! The facts under a finished turn, as `MessageBody.tsx` shows them: the
-//! model, then the effort, the agent, the turn's duration and the time.
+//! model, then the agent and the turn's duration. The effort is the model's
+//! tooltip and the time the duration's.
 
 /// A turn's duration: tenths of a second under a minute (`0.6s`), whole
 /// seconds after (`1m 2s`), as `formatTurnDuration` writes it.
@@ -13,8 +14,8 @@ pub fn turn_duration(duration_ms: i64) -> String {
     format!("{}m {}s", total_seconds / 60, total_seconds % 60)
 }
 
-/// The effort fact: `None` for the default efforts, else the effort with its
-/// first character lowercased.
+/// The effort in the model's tooltip: `None` for the default efforts, else
+/// the effort with its first character lowercased.
 pub fn effort_fact(variant: &str) -> Option<String> {
     let lowered = variant.to_lowercase();
     if variant.is_empty() || lowered == "default" || lowered == "none" {
@@ -31,52 +32,25 @@ pub fn effort_fact(variant: &str) -> Option<String> {
 pub struct FactWidths {
     /// The model fact: its icon, gap and full name.
     pub model: f32,
-    pub effort: Option<f32>,
     pub agent: Option<f32>,
     pub duration: Option<f32>,
-    pub timestamp: Option<f32>,
 }
 
 /// Which optional facts stay on the line.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ShownFacts {
-    pub effort: bool,
     pub agent: bool,
-    pub timestamp: bool,
 }
 
-/// `useFactsFit`: drops the time, then the agent, then the effort until the
-/// model's name is whole in `available`; the duration always stays, and a
+/// `useFactsFit`: drops the agent, the one fact with a priority, when the
+/// model's name is not whole in `available`; the duration always stays, and a
 /// model that still does not fit truncates.
 pub fn fit_facts(available: f32, widths: FactWidths) -> ShownFacts {
-    let mut shown = ShownFacts {
-        effort: widths.effort.is_some(),
-        agent: widths.agent.is_some(),
-        timestamp: widths.timestamp.is_some(),
-    };
-    let model_fits = |shown: &ShownFacts| {
-        let optional = [
-            (shown.effort, widths.effort),
-            (shown.agent, widths.agent),
-            (shown.timestamp, widths.timestamp),
-        ]
-        .into_iter()
-        .filter_map(|(kept, width)| kept.then_some(width).flatten())
-        .sum::<f32>();
-        // The web allows one pixel of rounding.
-        widths.model + optional + widths.duration.unwrap_or(0.0) <= available + 1.0
-    };
-    for drop in [
-        |shown: &mut ShownFacts| shown.timestamp = false,
-        |shown: &mut ShownFacts| shown.agent = false,
-        |shown: &mut ShownFacts| shown.effort = false,
-    ] {
-        if model_fits(&shown) {
-            return shown;
-        }
-        drop(&mut shown);
-    }
-    shown
+    // The web allows one pixel of rounding.
+    let agent = widths.agent.is_some_and(|agent| {
+        widths.model + agent + widths.duration.unwrap_or(0.0) <= available + 1.0
+    });
+    ShownFacts { agent }
 }
 
 #[cfg(test)]
@@ -100,30 +74,34 @@ mod tests {
         assert_eq!(effort_fact("xhigh"), Some("xhigh".to_owned()));
     }
 
-    /// The reference's 422 px row: model, agent and duration fit; the time
-    /// does not.
+    /// The agent stays while the model, the agent and the duration fit, with
+    /// the web's one pixel of rounding.
     #[test]
-    fn facts_drop_in_priority_order() {
+    fn the_agent_is_the_only_fact_that_drops() {
         let widths = FactWidths {
             model: 224.4,
-            effort: None,
             agent: Some(48.9),
             duration: Some(42.3),
-            timestamp: Some(131.0),
         };
-        let shown = |effort, agent, timestamp| ShownFacts {
-            effort,
-            agent,
-            timestamp,
-        };
-        assert_eq!(fit_facts(422.0, widths), shown(false, true, false));
-        assert_eq!(fit_facts(500.0, widths), shown(false, true, true));
-        assert_eq!(fit_facts(300.0, widths), shown(false, false, false));
-        let with_effort = FactWidths {
-            effort: Some(40.0),
+        let shown = |agent| ShownFacts { agent };
+        assert_eq!(fit_facts(422.0, widths), shown(true));
+        assert_eq!(
+            fit_facts(315.0, widths),
+            shown(true),
+            "one pixel is allowed"
+        );
+        assert_eq!(fit_facts(314.0, widths), shown(false));
+        assert_eq!(fit_facts(100.0, widths), shown(false));
+        let without_agent = FactWidths {
+            agent: None,
             ..widths
         };
-        assert_eq!(fit_facts(310.0, with_effort), shown(true, false, false));
-        assert_eq!(fit_facts(250.0, with_effort), shown(false, false, false));
+        assert_eq!(fit_facts(422.0, without_agent), shown(false));
+        let without_duration = FactWidths {
+            duration: None,
+            ..widths
+        };
+        assert_eq!(fit_facts(273.0, without_duration), shown(true));
+        assert_eq!(fit_facts(272.0, without_duration), shown(false));
     }
 }

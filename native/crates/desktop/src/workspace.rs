@@ -537,6 +537,7 @@ impl Workspace {
         workspace.composer_key = workspace.new_session_draft_key();
         workspace.start_persistence(window, cx);
         let window_handle = window.window_handle();
+        workspace.queue.set_window(window_handle);
         workspace
             ._subscriptions
             .push(cx.on_request_quit_in(window, |workspace, window, cx| {

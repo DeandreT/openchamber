@@ -19,7 +19,7 @@ use super::GitView;
 use crate::activation::on_activate;
 use crate::baseline::CssTextExt;
 use crate::chrome::{CONTROL_RADIUS, glyph};
-use crate::context_panel::{ROW_LINE, ROW_SIZE, XS_LINE, XS_SIZE};
+use crate::context_panel::{ROW_LINE, ROW_SIZE};
 use crate::files_view::{PANEL_ROW, PanelScope};
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
@@ -180,24 +180,33 @@ impl GitView {
                         strings.get("gitView.empty.selectRepositoryPlaceholder")
                     )))
                     .aria_expanded(self.repositories.open)
+                    // `SelectTrigger` with `max-w-[13rem] gap-1.5 px-2`.
                     .h(px(28.0))
-                    .max_w(px(160.0))
-                    .px(px(6.0))
+                    .max_w(px(208.0))
+                    .px(px(8.0))
                     .rounded(px(CONTROL_RADIUS))
+                    .bg(palette.elevated)
+                    .shadow(crate::elevation::control(palette))
                     .flex_row_from(direction)
                     .items_center()
-                    .gap(px(4.0))
+                    .gap(px(6.0))
                     .cursor_pointer()
                     .hover(move |style| style.bg(hover))
-                    .child(glyph("folder", 14.0, palette.muted_foreground))
+                    .child(glyph("folder", 16.0, palette.muted_foreground))
                     .child(
                         div()
                             .min_w_0()
                             .truncate()
-                            .css_text(XS_SIZE, XS_LINE, cx)
+                            .css_text(
+                                crate::panel_controls::LABEL_SIZE,
+                                crate::panel_controls::LABEL_LINE,
+                                cx,
+                            )
+                            .font_weight(gpui_kit::FontWeight::MEDIUM)
                             .text_color(palette.foreground)
                             .child(label),
-                    ),
+                    )
+                    .child(glyph("arrow-down-s", 16.0, palette.muted_foreground)),
                 cx,
                 |this: &mut Self, _, cx| {
                     this.repositories.open = !this.repositories.open;

@@ -11,17 +11,42 @@
 
 use std::collections::{HashMap, HashSet};
 
-use gpui_kit::{Context, Task, Window};
+use gpui_kit::{AnyWindowHandle, Context, Task, Window};
 use openchamber_native_core::ids::SessionId;
 use openchamber_native_core::message_queue::{
-    FollowUpBehavior, MessageQueue, QueueKey, QueuedItemId, QueuedMessage,
+    FollowUpBehavior, ListedDelivery, MessageQueue, QueueDeliveryState, QueueKey, QueuedItemId,
+    QueuedMessage, queue_owner,
 };
 use openchamber_native_transport::error::TransportError;
 use openchamber_native_transport::message_queue::QueueUpdate;
 use openchamber_native_transport::prompt::Delivery;
 
 use crate::connection::ConnectionState;
+use crate::queue_capture::QueueOperationId;
+use crate::queue_storage::{QueueAction, QueueEnqueuePhase, QueueOperation};
 use crate::workspace::Workspace;
+
+/// A read of one owner's queue that has not put a snapshot in the projection.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OwnerRead {
+    /// This many reads are waiting for their answer.
+    Pending(usize),
+    /// The last read to finish failed.
+    Failed,
+}
+
+/// What is known of the queue's own listing of one enqueue request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum EnqueueListing {
+    Listed(QueueDeliveryState),
+    /// The queue was read and does not list the request, or no queue can
+    /// be keyed for it.
+    Absent,
+    /// The owner's queue was asked for and has not answered yet.
+    Pending,
+    /// The owner's queue was never asked for from here, or the read failed.
+    Unavailable,
+}
 
 /// The queue projection and the work in flight on it. Runtime-scoped: a
 /// runtime switch drops obsolete projection completions. Durable enqueue
@@ -37,8 +62,14 @@ pub(crate) struct QueueState {
     read_connection: Option<u64>,
     /// Spaces whose own queue was read on this connection.
     space_reads: HashSet<String>,
+    /// Reads of an owner (a space, or the host) still unanswered or failed.
+    /// An owner whose snapshot was applied has no entry.
+    owner_reads: HashMap<Option<String>, OwnerRead>,
     tasks: HashMap<u64, Task<()>>,
     next_task: u64,
+    /// The workspace's window. A queue answer arrives outside any window
+    /// update, and the status check a departed enqueue gets needs one.
+    window: Option<AnyWindowHandle>,
     /// Durable enqueue chains retain their original host across disk waits.
     pub(crate) enqueues: crate::queue_enqueue::EnqueueState,
     pub(crate) takes: crate::queue_take::TakeState,
@@ -47,6 +78,11 @@ pub(crate) struct QueueState {
 }
 
 impl QueueState {
+    /// Names the window this queue's workspace is drawn in.
+    pub(crate) fn set_window(&mut self, window: AnyWindowHandle) {
+        self.window = Some(window);
+    }
+
     pub(crate) fn any_payload_busy(&self) -> bool {
         self.enqueues.any_busy()
             || self.takes.any_busy()
@@ -135,11 +171,22 @@ impl Workspace {
 
     pub(crate) fn read_queue_owner(&mut self, space: Option<String>, cx: &mut Context<Self>) {
         let Some(connection) = self.connection.as_ref() else {
+            self.settle_awaited_listings(space.as_deref());
+            self.enqueue_listings_applied(cx);
             return;
         };
         let Some(client) = connection.client.clone() else {
+            self.settle_awaited_listings(space.as_deref());
+            self.enqueue_listings_applied(cx);
             return;
         };
+        let pending = match self.queue.owner_reads.get(&space) {
+            Some(OwnerRead::Pending(count)) => count + 1,
+            Some(OwnerRead::Failed) | None => 1,
+        };
+        self.queue
+            .owner_reads
+            .insert(space.clone(), OwnerRead::Pending(pending));
         let owner = space.clone();
         let read = connection
             .network
@@ -154,6 +201,7 @@ impl Workspace {
                     if generation != this.queue.generation || runtime != this.runtime {
                         return;
                     }
+                    let answered = matches!(result, Some(Ok(_)));
                     match result {
                         Some(Ok(snapshot)) => {
                             this.queue.projection.apply_snapshot(
@@ -162,7 +210,6 @@ impl Workspace {
                                 snapshot.revision,
                                 snapshot.sessions,
                             );
-                            cx.notify();
                         }
                         // A failed read keeps what the projection held; a
                         // stopped space keeps what was last known of it.
@@ -171,6 +218,25 @@ impl Workspace {
                         }
                         None => {}
                     }
+                    // An owner still without a snapshot is told apart by
+                    // whether another read is on its way.
+                    match this.queue.owner_reads.get(&space) {
+                        Some(OwnerRead::Pending(count)) if *count > 1 => {
+                            let remaining = OwnerRead::Pending(count - 1);
+                            this.queue.owner_reads.insert(space.clone(), remaining);
+                        }
+                        _ if answered => {
+                            this.queue.owner_reads.remove(&space);
+                        }
+                        _ => {
+                            this.queue
+                                .owner_reads
+                                .insert(space.clone(), OwnerRead::Failed);
+                        }
+                    }
+                    this.settle_awaited_listings(space.as_deref());
+                    this.enqueue_listings_applied(cx);
+                    cx.notify();
                 });
             })
         });
@@ -203,6 +269,169 @@ impl Workspace {
         self.queue.projection.reset_runtime(previous);
         self.queue.read_connection = None;
         self.queue.space_reads.clear();
+        self.queue.owner_reads.clear();
+        self.queue.enqueues.reset_listings();
+    }
+
+    /// What the queue of `operation`'s session says of its request.
+    pub(crate) fn enqueue_listing(&self, operation: &QueueOperation) -> EnqueueListing {
+        let Some(key) = QueueKey::new(
+            self.runtime.clone(),
+            operation.owner().directory(),
+            SessionId::from(operation.owner().session()),
+        ) else {
+            return EnqueueListing::Absent;
+        };
+        match self
+            .queue
+            .projection
+            .listed_delivery(&key, operation.id().as_str())
+        {
+            ListedDelivery::Listed(state) => EnqueueListing::Listed(state),
+            ListedDelivery::Absent => EnqueueListing::Absent,
+            ListedDelivery::Unread => {
+                match self.queue.owner_reads.get(&key.owner().map(str::to_owned)) {
+                    Some(OwnerRead::Pending(_)) => EnqueueListing::Pending,
+                    Some(OwnerRead::Failed) | None => EnqueueListing::Unavailable,
+                }
+            }
+        }
+    }
+
+    /// This runtime's accepted enqueues whose listing changed since it was
+    /// last noted: those newly listed, and those that left a queue which
+    /// listed them. A queue that is about to be answered again proves no
+    /// departure, and one is not acted on while a take, a prefix send or a
+    /// local send is still working on this queue's messages.
+    fn enqueue_listing_changes(&self) -> (Vec<QueueOperationId>, Vec<QueueOperationId>) {
+        let (mut listed, mut left) = (Vec::new(), Vec::new());
+        let transfers_busy = self.queue.takes.any_busy()
+            || self.queue.prefixes.any_busy()
+            || self.queue.local_sends.any_busy();
+        for operation in self.queue_storage.operations() {
+            if operation.owner().runtime() != self.runtime.as_str()
+                || !matches!(
+                    operation.action(),
+                    QueueAction::Enqueue {
+                        phase: QueueEnqueuePhase::Accepted { .. },
+                        ..
+                    }
+                )
+            {
+                continue;
+            }
+            let id = operation.id();
+            let seen = self.queue.enqueues.seen_listed(id);
+            match self.enqueue_listing(operation) {
+                EnqueueListing::Listed(_) if !seen => listed.push(id.clone()),
+                EnqueueListing::Absent
+                    if seen && !transfers_busy && !self.queue.enqueues.awaiting_listing(id) =>
+                {
+                    left.push(id.clone());
+                }
+                _ => {}
+            }
+        }
+        (listed, left)
+    }
+
+    /// Whether [`Self::reconcile_enqueue_listings`] has anything to note.
+    pub(crate) fn enqueue_listings_changed(&self) -> bool {
+        let (listed, left) = self.enqueue_listing_changes();
+        !listed.is_empty() || !left.is_empty()
+    }
+
+    /// A queue snapshot, broadcast or mutation answer was applied, or was
+    /// given up on, outside a window update: runs
+    /// [`Self::reconcile_enqueue_listings`] in the workspace's window once
+    /// this update ends, when a listing changed.
+    pub(crate) fn enqueue_listings_applied(&mut self, cx: &mut Context<Self>) {
+        if !self.enqueue_listings_changed() {
+            return;
+        }
+        let Some(window) = self.queue.window else {
+            return;
+        };
+        let this = cx.weak_entity();
+        cx.defer(move |cx| {
+            let _ = window.update(cx, |_, window, cx| {
+                let _ = this.update(cx, |this, cx| this.reconcile_enqueue_listings(window, cx));
+            });
+        });
+    }
+
+    /// Notes each listing change once. An enqueue that left its queue while
+    /// its receipt still says queued gets the read-only status check its
+    /// recovery row offers, started here without a click: a terminal answer
+    /// retires its local capture, and anything else leaves the row. The
+    /// departure is consumed either way, so nothing here repeats or polls.
+    pub(crate) fn reconcile_enqueue_listings(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        use openchamber_native_transport::queue_manifest::QueueEnqueueState;
+
+        use crate::queue_enqueue::EnqueueCheck;
+
+        let (listed, left) = self.enqueue_listing_changes();
+        if listed.is_empty() && left.is_empty() {
+            return;
+        }
+        for id in listed {
+            self.queue.enqueues.note_listed(id);
+        }
+        for id in left {
+            self.queue.enqueues.note_left(&id);
+            let receipt_queued =
+                self.queue.enqueues.delivery(&id) == Some(QueueEnqueueState::Queued);
+            let unchecked = matches!(
+                self.queue.enqueues.check(&id),
+                EnqueueCheck::Unknown | EnqueueCheck::Queued
+            );
+            if receipt_queued && unchecked {
+                self.check_payload_enqueue(&id, window, cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// The queue of `space` (or the host) was answered, or will not be:
+    /// its enqueues no longer wait for it.
+    fn settle_awaited_listings(&mut self, space: Option<&str>) {
+        let settled: Vec<QueueOperationId> = self
+            .queue_storage
+            .operations()
+            .iter()
+            .filter(|operation| {
+                operation.owner().runtime() == self.runtime.as_str()
+                    && queue_owner(operation.owner().directory()) == space
+            })
+            .map(|operation| operation.id().clone())
+            .collect();
+        for id in &settled {
+            self.queue.enqueues.settle_awaited(id);
+        }
+    }
+
+    /// The enqueues queued in `key`'s session, accepted and still held.
+    fn session_enqueues(&self, key: &QueueKey) -> Vec<QueueOperationId> {
+        self.queue_storage
+            .operations()
+            .iter()
+            .filter(|operation| {
+                operation.owner().runtime() == key.runtime.as_str()
+                    && operation.owner().session() == key.session.as_str()
+                    && matches!(
+                        operation.action(),
+                        QueueAction::Enqueue {
+                            phase: QueueEnqueuePhase::Accepted { .. },
+                            ..
+                        }
+                    )
+            })
+            .map(|operation| operation.id().clone())
+            .collect()
     }
 
     /// Applies a mutation's answer, or after a failure rereads the owner's
@@ -221,6 +450,11 @@ impl Workspace {
                     update.session,
                     update.revision,
                 );
+                // The server answered for this queue after the change.
+                for id in self.session_enqueues(key) {
+                    self.queue.enqueues.settle_awaited(&id);
+                }
+                self.enqueue_listings_applied(cx);
             }
             Some(Err(error)) => {
                 tracing::warn!(%error, "a message queue change failed");
@@ -346,6 +580,11 @@ impl Workspace {
         };
         if !self.queue.projection.remove_local(&key, id) {
             return;
+        }
+        // The row is gone from the screen before the server removed the
+        // message, so its absence proves nothing until the server answers.
+        for held in self.session_enqueues(&key) {
+            self.queue.enqueues.await_listing(held);
         }
         let (session, directory, item) = (key.session.clone(), key.directory.clone(), id.clone());
         let request = self

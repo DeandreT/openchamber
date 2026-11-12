@@ -314,7 +314,6 @@ fn open(
                 connection.state = ConnectionState::Connected;
                 workspace.connection = Some(connection);
                 workspace.switch_runtime(key.runtime.clone(), window, cx);
-                workspace.project_readouts.without_app_icon();
                 workspace.open_persistence(fixture.journal(), window, cx);
                 workspace
             })

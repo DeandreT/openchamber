@@ -20,14 +20,19 @@ use openchamber_native_transport::files::FilesError;
 use crate::activation::on_activate;
 use crate::baseline::CssTextExt;
 use crate::chrome::{CONTROL_RADIUS, glyph};
-use crate::context_panel::{ROW_LINE, ROW_SIZE};
-use crate::files_view::{FilesView, Notice, PANEL_ROW, file_name};
+use crate::files_view::{FilesView, META_LINE, META_SIZE, Notice, PANEL_ROW, file_name};
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
 use crate::sidebar_view;
 use crate::theme::Palette;
 
+/// `FILE_TREE_BASE_PADDING_PX` and `FILE_TREE_INDENT_PX`.
+const BASE_PADDING: f32 = 8.0;
 const INDENT: f32 = 12.0;
+/// The tree's own inset (`px-1.5 py-1.5`).
+const TREE_INSET: f32 = 6.0;
+/// The room the scroller reserves for its thumb, past the inset.
+const THUMB_GUTTER: f32 = 6.0;
 
 /// A rename typed into the tree.
 pub(crate) struct TreeRename {
@@ -78,7 +83,7 @@ impl FilesView {
             .track_focus(&self.tree_focus)
             .on_key_down(cx.listener(Self::tree_key))
             .size_full()
-            .py(px(4.0))
+            .py(px(TREE_INSET))
             .child(list)
             .into_any_element()
     }
@@ -97,11 +102,7 @@ impl FilesView {
             .as_ref()
             .is_some_and(|open| open.file.path() == row.path);
         let is_dir = row.kind == EntryKind::Directory;
-        let icon = match (row.kind, row.expanded) {
-            (EntryKind::Directory, true) => "folder-open",
-            (EntryKind::Directory, false) => "folder",
-            (EntryKind::File, _) => "file-text",
-        };
+        let active = selected || is_open;
         let hover = palette.hover;
         let renaming = self
             .rename
@@ -118,8 +119,13 @@ impl FilesView {
                 .flex_1()
                 .min_w_0()
                 .truncate()
-                .css_text(ROW_SIZE, ROW_LINE, cx)
-                .text_color(palette.foreground)
+                .css_text(META_SIZE, META_LINE, cx)
+                .text_color(if active {
+                    palette.selection_foreground
+                } else {
+                    // `text-foreground/90` at rest.
+                    palette.foreground.opacity(0.9)
+                })
                 .child(SharedString::from(row.name.clone()))
                 .into_any_element(),
         };
@@ -128,6 +134,18 @@ impl FilesView {
             .as_ref()
             .map(|failure| listing_failure_text(failure, cx));
         let path = row.path.clone();
+        let pinned = (!is_dir).then(|| row.path.clone());
+        // A folder leads with its chevron; a file with its glyph, 2 px in
+        // (`ms-0.5`).
+        let lead = if is_dir {
+            sidebar_view::chevron(!row.expanded, direction, palette).into_any_element()
+        } else {
+            div()
+                .margin_start(direction, px(2.0))
+                .flex_shrink_0()
+                .child(glyph("file-text", 14.0, palette.muted_foreground))
+                .into_any_element()
+        };
         let element = div()
             .id(gpui_kit::ElementId::Name(id.clone().into()))
             .role(Role::TreeItem)
@@ -139,38 +157,50 @@ impl FilesView {
             .aria_selected(selected)
             .when(is_dir, |this| this.aria_expanded(row.expanded))
             .h(px(PANEL_ROW))
-            .mx(px(4.0))
-            .padding_start(direction, px(6.0 + row.depth as f32 * INDENT))
-            .padding_end(direction, px(6.0))
+            .w_full()
+            .padding_start(direction, px(BASE_PADDING + row.depth as f32 * INDENT))
+            .padding_end(direction, px(8.0))
             .rounded(px(CONTROL_RADIUS))
             .flex_row_from(direction)
             .items_center()
-            .gap(px(4.0))
+            .gap(px(6.0))
             .cursor_pointer()
-            .when(selected || is_open, |this| this.bg(palette.selection))
-            .when(!selected && !is_open, |this| {
-                this.hover(move |style| style.bg(hover))
+            .when(active, |this| this.bg(palette.selection))
+            .when(!active, |this| this.hover(move |style| style.bg(hover)))
+            // A double click keeps the preview tab the first click opened.
+            .when_some(pinned, |this, pinned| {
+                this.on_click(
+                    cx.listener(move |this, event: &gpui_kit::ClickEvent, _, cx| {
+                        if event.click_count() >= 2 {
+                            this.pin_file(Some(&pinned), cx);
+                        }
+                    }),
+                )
             })
-            .child(div().w(px(14.0)).flex_shrink_0().when(is_dir, |this| {
-                this.child(sidebar_view::chevron(!row.expanded, direction, palette))
-            }))
-            .child(glyph(icon, 14.0, palette.muted_foreground))
+            .child(lead)
             .child(label)
             .children(failure.map(|failure| {
                 div()
                     .flex_shrink_0()
                     .max_w(px(120.0))
                     .truncate()
-                    .css_text(ROW_SIZE, ROW_LINE, cx)
+                    .css_text(META_SIZE, META_LINE, cx)
                     .text_color(palette.status_error)
                     .child(failure)
             }));
-        on_activate(element, cx, move |this: &mut FilesView, window, cx| {
+        let element = on_activate(element, cx, move |this: &mut FilesView, window, cx| {
             this.tree_focus.focus(window, cx);
             this.activate_row(&path, is_dir, window, cx);
         })
-        .test_support()
-        .into_any_element()
+        .test_support();
+        // The list lays each item out as a root, which sizes it to its
+        // content and drops its margins; a full-width box holds the insets.
+        div()
+            .w_full()
+            .padding_start(direction, px(TREE_INSET))
+            .padding_end(direction, px(TREE_INSET + THUMB_GUTTER))
+            .child(element)
+            .into_any_element()
     }
 
     fn activate_row(

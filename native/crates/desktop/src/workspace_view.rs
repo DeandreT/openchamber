@@ -186,6 +186,9 @@ impl Render for Workspace {
             self.prompt_panel = None;
             self.prompt_hover_task = None;
         }
+        // Before any width is read: the zone's directory, its width and the
+        // sidebar it may fold.
+        self.settle_zone(window, cx);
         if self.work_status_fits(window) {
             self.work_status_overlay = false;
         }
@@ -234,7 +237,10 @@ impl Render for Workspace {
         let side_panel = self
             .render_side_panel(&palette, direction, window, cx)
             .or_else(|| self.render_terminal_panel(window, cx));
-        let work_status = side_panel.is_none() && !chat_covered;
+        // Beside an open zone the card keeps its column only while the chat
+        // keeps its own.
+        let beside_zone = side_panel.is_some() && self.work_status_beside_zone(window);
+        let work_status = (side_panel.is_none() || beside_zone) && !chat_covered;
         self.ensure_pinned_messages(
             work_status && (self.work_status_inline(window) || self.work_status_overlay),
             cx,
@@ -318,22 +324,39 @@ impl Render for Workspace {
                             .min_h_0()
                             .flex_row_from(direction)
                             .child(chat)
-                            .children(side_panel)
-                            .when(work_status && self.work_status_inline(window), |this| {
+                            // Beside the zone the card holds the slot's start.
+                            .when(beside_zone && work_status, |this| {
                                 this.child(self.render_work_status_panel(&palette, direction, cx))
                             })
-                            .when(work_status && self.work_status_overlay, |this| {
-                                this.child(
-                                    div()
-                                        .absolute()
-                                        .top_0()
-                                        .bottom_0()
-                                        .inset_end(direction, px(crate::context_panel::RAIL_WIDTH))
-                                        .child(
-                                            self.render_work_status_panel(&palette, direction, cx),
-                                        ),
-                                )
-                            })
+                            .children(side_panel)
+                            .when(
+                                work_status && !beside_zone && self.work_status_inline(window),
+                                |this| {
+                                    this.child(
+                                        self.render_work_status_panel(&palette, direction, cx),
+                                    )
+                                },
+                            )
+                            .when(
+                                work_status && !beside_zone && self.work_status_overlay,
+                                |this| {
+                                    this.child(
+                                        div()
+                                            .absolute()
+                                            .top_0()
+                                            .bottom_0()
+                                            .inset_end(
+                                                direction,
+                                                px(crate::context_panel::RAIL_WIDTH),
+                                            )
+                                            .child(
+                                                self.render_work_status_panel(
+                                                    &palette, direction, cx,
+                                                ),
+                                            ),
+                                    )
+                                },
+                            )
                             .child(self.render_rail(&palette, direction, cx)),
                     ),
             )

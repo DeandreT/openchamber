@@ -81,7 +81,6 @@ fn no_loaded_journal_close_still_waits_for_an_accepted_permission_write(cx: &mut
             connection.state = ConnectionState::Connected;
             workspace.connection = Some(connection);
             workspace.switch_runtime(key.runtime.clone(), window, cx);
-            workspace.project_readouts.without_app_icon();
             configure_send(workspace, &key, window, cx);
             assert!(!workspace.persistence_loaded());
             assert!(workspace.attachment_worker().is_none());

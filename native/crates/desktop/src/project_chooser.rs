@@ -18,6 +18,11 @@ use crate::send_catalog::Load;
 use crate::theme::Palette;
 use crate::workspace::Workspace;
 
+/// The trigger's project mark. `ProjectLabel` asks for 14 px, but the
+/// `Button` it sits in sizes every icon without a `size-*` class to 16 px.
+pub(crate) const ICON_ID: &str = "choose-project-icon";
+const ICON_SIZE: f32 = 16.0;
+
 /// Selects a registered project through the popup's accessibility action.
 #[derive(Clone, PartialEq, serde::Deserialize, gpui_kit::Action)]
 #[action(namespace = openchamber, no_json)]
@@ -269,7 +274,14 @@ impl Workspace {
                         .cursor_pointer()
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(foreground)
-                        .children(has_project.then(|| glyph("folder", 14.0, foreground)))
+                        .children(has_project.then(|| {
+                            div()
+                                .id(ICON_ID)
+                                .size(px(ICON_SIZE))
+                                .flex_shrink_0()
+                                .child(glyph("folder", ICON_SIZE, muted))
+                                .test_support()
+                        }))
                         .child(
                             div()
                                 .min_w_0()
@@ -295,7 +307,41 @@ fn project_list_status(synthetic: bool, load: &Load<()>, connection_failed: bool
 
 #[cfg(test)]
 mod tests {
+    use gpui_kit::TestAppContext;
+    use gpui_kit::test::TestWindowExt;
+
     use super::*;
+
+    #[gpui_kit::test]
+    fn the_trigger_draws_the_project_mark_at_the_button_icon_size(cx: &mut TestAppContext) {
+        let (window, workspace) = crate::workspace_tests::open(cx);
+        cx.update_window(window, |_, window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                let directory = workspace.topology.projects[0].path.clone();
+                workspace.choose_draft_project(&directory, window, cx);
+            });
+            window.render_frame(cx);
+            let trigger = window.find("choose-project").bounds();
+            let icon = window.find(ICON_ID).bounds();
+            assert_eq!(trigger.size.height, px(28.0), "the trigger is h-7");
+            assert_eq!(
+                icon.size,
+                gpui_kit::size(px(16.0), px(16.0)),
+                "a Button sizes its icons to 16px"
+            );
+            assert_eq!(
+                icon.left() - trigger.left(),
+                px(6.0),
+                "px-1.5 before the mark"
+            );
+            assert_eq!(
+                icon.top() - trigger.top(),
+                px(6.0),
+                "the mark is centered in the 28px trigger"
+            );
+        })
+        .expect("window is open");
+    }
 
     #[test]
     fn failed_project_discovery_is_not_an_empty_list() {

@@ -67,6 +67,18 @@ pub(crate) struct EnqueueState {
     checks: HashMap<QueueOperationId, EnqueueCheck>,
     /// Display-only receipt state, decoded at hydration/receipt transitions.
     deliveries: HashMap<QueueOperationId, QueueEnqueueState>,
+    /// Accepted enqueues this window saw queued: by their own receipt when it
+    /// was accepted here, or listed by their queue. Leaving the queue from
+    /// here is the one transition that starts a status check on its own.
+    listed: HashSet<QueueOperationId>,
+    /// Enqueues whose queue is about to be answered again: after their
+    /// acceptance, or after a local removal. Until then a queue that does
+    /// not list them proves nothing.
+    awaiting: HashSet<QueueOperationId>,
+    /// Enqueues whose departure already started its one automatic check.
+    automatic: HashSet<QueueOperationId>,
+    /// Enqueues whose capturing activation is still running.
+    initial: HashSet<QueueOperationId>,
     /// Exact expanded bytes survive a failed put for same-window explicit retry.
     /// A restart with incomplete inputs cannot rerun preparation.
     pending_inputs: HashMap<QueueOperationId, Vec<u8>>,
@@ -98,6 +110,58 @@ impl EnqueueState {
 
     pub(crate) fn busy(&self, id: &QueueOperationId) -> bool {
         self.tasks.contains_key(id)
+    }
+
+    /// Whether the activation that captured `id` is still running.
+    pub(crate) fn first_activation_running(&self, id: &QueueOperationId) -> bool {
+        self.initial.contains(id) && self.tasks.contains_key(id)
+    }
+
+    pub(crate) fn seen_listed(&self, id: &QueueOperationId) -> bool {
+        self.listed.contains(id)
+    }
+
+    pub(crate) fn awaiting_listing(&self, id: &QueueOperationId) -> bool {
+        self.awaiting.contains(id)
+    }
+
+    /// Whether the check started by `id` leaving its queue is still running.
+    pub(crate) fn automatic_check_running(&self, id: &QueueOperationId) -> bool {
+        self.automatic.contains(id) && self.tasks.contains_key(id)
+    }
+
+    /// The queue lists `id`; a later departure may be checked once more.
+    pub(crate) fn note_listed(&mut self, id: QueueOperationId) {
+        self.automatic.remove(&id);
+        self.listed.insert(id);
+    }
+
+    /// `id` left its queue: the departure is consumed, whether or not its
+    /// check can start.
+    pub(crate) fn note_left(&mut self, id: &QueueOperationId) {
+        self.listed.remove(id);
+        self.automatic.insert(id.clone());
+    }
+
+    pub(crate) fn await_listing(&mut self, id: QueueOperationId) {
+        self.awaiting.insert(id);
+    }
+
+    pub(crate) fn settle_awaited(&mut self, id: &QueueOperationId) {
+        self.awaiting.remove(id);
+    }
+
+    /// Drops what was learned from a projection that is being reset.
+    pub(crate) fn reset_listings(&mut self) {
+        self.listed.clear();
+        self.awaiting.clear();
+        self.automatic.clear();
+    }
+
+    fn forget_listing(&mut self, id: &QueueOperationId) {
+        self.listed.remove(id);
+        self.awaiting.remove(id);
+        self.automatic.remove(id);
     }
 
     /// Before admission the actor still owns the captured native files and their
@@ -585,7 +649,12 @@ impl Workspace {
                     .map(|task| std::mem::take(&mut task.native_roots))
                     .unwrap_or_default();
                 this.queue.enqueues.tasks.remove(&id);
+                this.queue.enqueues.initial.remove(&id);
                 this.retire_released_native_roots(roots, window, cx);
+                if result.is_err() {
+                    // No reread follows a failed activation.
+                    this.queue.enqueues.settle_awaited(&id);
+                }
                 if this.queue_storage.operation(&id).is_some() {
                     this.queue.enqueues.checks.insert(
                         id,
@@ -598,6 +667,7 @@ impl Workspace {
                 } else {
                     this.queue.enqueues.checks.remove(&id);
                     this.queue.enqueues.deliveries.remove(&id);
+                    this.queue.enqueues.forget_listing(&id);
                     this.queue.enqueues.pending_inputs.remove(&id);
                 }
                 if result.is_err() && this.runtime == runtime && !this.close_in_progress() {
@@ -607,6 +677,9 @@ impl Workspace {
                 cx.notify();
             });
         });
+        if activation == Activation::Initial {
+            self.queue.enqueues.initial.insert(task_id.clone());
+        }
         self.queue.enqueues.tasks.insert(
             task_id,
             EnqueueTask {
@@ -1868,6 +1941,9 @@ async fn enqueue(
         record = request.await.ok_or(QueueCaptureFailure::Unavailable)??;
     }
     let receipt = receipt(&record)?;
+    // A receipt first accepted here is this window's own evidence that the
+    // message was queued. A later observation of the same receipt is not.
+    let first_acceptance = accepted.is_none();
     this.update_in(cx, |this, _, _| {
         if this.close_in_progress() {
             return Err(QueueCaptureFailure::Unavailable);
@@ -1881,6 +1957,13 @@ async fn enqueue(
             .enqueues
             .deliveries
             .insert(id.clone(), record.state);
+        if first_acceptance {
+            // The reread below answers for this queue.
+            this.queue.enqueues.await_listing(id.clone());
+            if record.state == QueueEnqueueState::Queued {
+                this.queue.enqueues.note_listed(id.clone());
+            }
+        }
         Ok::<_, QueueCaptureFailure>(())
     })
     .map_err(|_| QueueCaptureFailure::Unavailable)??;
