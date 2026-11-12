@@ -4992,3 +4992,43 @@ Linux packaging tools rpmbuild/dpkg-deb/mksquashfs/appimagetool were absent. No 
   reviewed). Decisions: picker row label "Chat" (layout.mainTab.chat), keep the
   existing failure toast wording, create the chat folder when the reference
   does (first keystroke) so pre-send attachments stage.
+
+## Nov 12 ~02:15 UTC: SPACE RECOVERY REQUESTED BY USER
+- User needs the disk for another project: finish work that depends on local
+  files, push, then delete every artifact. Deleted so far: target/release,
+  all non-packet scratch under target/tmp (reports, candidates, Electron
+  reference build, old logs/scripts), unit-a tar, ~/.cache/openchamber-retained.
+  Unmerged packets + this file + triage notes + wrapper scripts pushed to branch
+  wip/native-unmerged-packets (orphan commit). Parity reference build must be
+  rebuilt from /home/deandre/projects/rust/openchamber-reference-v2.6.1 before
+  any future comparison run.
+- A server restart woke old child sessions (stale notifications). One restarted
+  a build in oc-wt/native-settings-opencode (label sop-build); stopped it.
+  Do NOT resume old sessions or rebuild their evidence.
+- Integrator ses_e3285b7d9ffezGLGgOmyg3V13S is finishing the third merge
+  (m4-* labels). After it: check:changed, commit, push, then delete
+  native/target and native/.cache entirely.
+- oc-wt worktrees (1.5 GiB) hold uncommitted source; left untouched.
+
+## Nov 12: third merge committed, local artifacts deleted
+- PUSHED 2bc49e08b on feat/rust-native-desktop: composer R3, transcript R2,
+  files layout R2, git/board R2. fmt/clippy clean, Python 400, check:changed
+  pass. nextest 2,378: 2,373 pass in the full run; the 5 failures were
+  wall-clock deadline tests under load average 25 and all pass at -j1. No clean
+  single full run yet -> rerun on a quiet machine. Parity scripts edited in this
+  and the previous merge were never run against the app. No parity rerun was
+  done after 544fef273.
+- OPEN DECISION: the automatic delivery check holds the session's Enter gate
+  while it runs, so Enter is silently ignored during that lookup.
+- User asked to free disk for another project: native/target, native/.cache,
+  tmp/parity and all scratch were deleted on Nov 12. The Electron 2.6.1
+  reference build is gone; rebuild it from
+  /home/deandre/projects/rust/openchamber-reference-v2.6.1 before any parity
+  run (app 2.6.1, Electron 45.2.1, OpenCode 2.2.5) and never use the runner's
+  default engine. Use bun 1.4.4 (~/.local/share/bun-1.4.4/bun-linux-x64).
+- Old worker sessions resumed after a server restart; none has unmerged
+  committed work except the oc-wt worktrees, which hold uncommitted changes
+  (native-composer-parity and native-hosts-relay are 1 commit ahead).
+- Remaining work: see the Nov 11 unassigned list above, plus chat drafts
+  (packet exported, unreviewed), Settings MCP/Agents/Providers, header menu,
+  transcript search, message actions.
