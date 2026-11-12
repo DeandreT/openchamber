@@ -177,6 +177,9 @@ impl Workspace {
         let strings = locale::strings(cx);
         let new_session_label = strings.get("sessions.sidebar.header.actions.newSession");
         let foreground = palette.foreground;
+        // Labelled while the sidebar is open. Closed, it is a 24 px icon
+        // button whose glyph keeps its place.
+        let labelled = self.sidebar_open;
         let new_session = div()
             .id("new-session")
             .group("new-session")
@@ -184,11 +187,17 @@ impl Workspace {
             .accessibility_id("new-session")
             .aria_label(new_session_label.clone())
             .h(px(24.0))
-            // `ps-1 pe-1.5`: the glyph sits where an icon-only button
-            // centres it.
-            .padding_start(direction, px(4.0))
-            .padding_end(direction, px(6.0))
             .margin_start(direction, px(-4.0))
+            .map(|this| {
+                if labelled {
+                    // `ps-1 pe-1.5`: the glyph sits where the icon-only
+                    // button centres it.
+                    this.padding_start(direction, px(4.0))
+                        .padding_end(direction, px(6.0))
+                } else {
+                    this.w(px(24.0)).flex_shrink_0().justify_center()
+                }
+            })
             .rounded(px(CONTROL_RADIUS))
             .flex_row_from(direction)
             .items_center()
@@ -203,11 +212,13 @@ impl Workspace {
                 glyph("chat-new", 16.0, palette.muted_foreground)
                     .group_hover("new-session", move |style| style.text_color(foreground)),
             )
-            .child(
-                div()
-                    .css_text(LABEL_SIZE, LABEL_LINE, cx)
-                    .child(new_session_label),
-            );
+            .when(labelled, |this| {
+                this.child(
+                    div()
+                        .css_text(LABEL_SIZE, LABEL_LINE, cx)
+                        .child(new_session_label),
+                )
+            });
         div()
             .flex_row_from(direction)
             .items_center()

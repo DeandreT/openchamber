@@ -191,3 +191,7 @@ checkbox-multiple
 donut-chart-fill
 slash-commands-2
 restart
+layout-right
+file-forbid
+collapse-vertical
+git-commit

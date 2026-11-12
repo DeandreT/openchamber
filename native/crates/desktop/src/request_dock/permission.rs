@@ -62,8 +62,13 @@ fn strip_directory_glob(value: &str) -> &str {
     }
 }
 
+/// Whether the Always button's label names what it saves.
+pub(super) fn always_names_patterns(request: &PermissionRequest) -> bool {
+    !request.save.iter().all(|value| value == "*")
+}
+
 pub(super) fn always_label(request: &PermissionRequest, strings: &Strings) -> SharedString {
-    if request.save.iter().all(|value| value == "*") {
+    if !always_names_patterns(request) {
         return strings.get("chat.permissionCard.alwaysAllow");
     }
     let patterns: Vec<_> = request

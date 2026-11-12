@@ -630,7 +630,6 @@ mod workspace_gates {
                 workspace
                     .send_catalog
                     .insert_test_directory("/project".into(), catalog);
-                workspace.project_readouts.without_app_icon();
                 workspace.select_session(SessionId::from("ses_local"), window, cx);
                 workspace.open_persistence(fixture.journal(), window, cx);
             });

@@ -430,8 +430,12 @@ def git_steps(session: Session):
         session.client.click("rail-diff")
         session.wait_id("diff-panel")
         session.wait_id("diff-content", timeout=30)
+        session.client.click("diff-scope")
+        session.wait_id("diff-scopes")
         session.client.click("diff-scope-staged")
         session.wait_id("diff-message", timeout=30)
+        session.client.click("diff-scope")
+        session.wait_id("diff-scopes")
         session.client.click("diff-scope-changed")
         session.wait_id("diff-content", timeout=30)
 

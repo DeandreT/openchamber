@@ -150,7 +150,8 @@ rendering asks for a projection and dispatches an action.
   `context_usage.rs` reads a session's context fill from the newest response
   that reported tokens, unknown after a finished compaction. Parts carry
   their times and steps their cost (`Usd`, billionths of a dollar so sums are
-  exact), and `turn_stats.rs` ports `getLatestCompletedTurnStats` over them.
+  exact), and `turn_stats.rs` ports `getLatestCompletedTurnStats` and
+  `getPreviousCompletedTurnStats` over them.
   `message_time.rs` writes a message's time as `formatTimestampForDisplay`
   does, from local calendar fields and a locale's exported month names and
   clocks. User and assistant messages carry parts; every

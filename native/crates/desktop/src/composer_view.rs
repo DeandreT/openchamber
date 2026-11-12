@@ -32,6 +32,8 @@ const EDITOR_MIN_HEIGHT: f32 = 52.0;
 pub(crate) const TOOLBAR_HEIGHT: f32 = 44.0;
 const ACTION_SIZE: f32 = 24.0;
 const ACTION_GLYPH: f32 = 16.0;
+/// `stopIconSizeClass`: Stop is `h-5 w-5` in the same 24 px button.
+const STOP_GLYPH: f32 = 20.0;
 /// The toolbar's `px-2.5`, the start actions' and the groups' `gap-x-1.5`,
 /// and the end controls' `md:gap-x-3`.
 pub(crate) const TOOLBAR_PADDING_X: f32 = 10.0;
@@ -105,11 +107,12 @@ impl Workspace {
     /// status panel and rail.
     pub(crate) fn chat_area_width(&self, window: &Window) -> f32 {
         let mut area = self.panel_area(window);
-        if self.panels.open.is_some() {
+        if self.panels.open.is_some() || (self.terminal_open && self.terminal_panel.is_some()) {
             // The fitted slot already includes side_panel_frame's gutters.
             area -= self.fitted_panel_width(window);
-        } else if self.terminal_open && self.terminal_panel.is_some() {
-            area -= self.fitted_panel_width(window);
+            if self.work_status_beside_zone(window) {
+                area -= context_panel::PANEL_WIDTH;
+            }
         } else if self.work_status_inline(window) {
             area -= context_panel::PANEL_WIDTH;
         }
@@ -258,7 +261,7 @@ impl Workspace {
                     .cursor_pointer()
                     .hover(move |style| style.bg(hover))
                     .tooltip(move |window, cx| Tooltip::new(stop_label.clone()).build(window, cx))
-                    .child(glyph("stop", 16.0, palette.status_error)),
+                    .child(glyph(crate::assets::STOP_ICON, 16.0, palette.status_error)),
                 cx,
                 |this, window, cx| this.stop(window, cx),
             )
@@ -325,15 +328,25 @@ impl Workspace {
         let paste_workspace = cx.weak_entity();
         let drop_workspace = cx.weak_entity();
         let drop_fill = palette.selection;
-        let (label, icon) = if streaming {
+        // `ComposerActionButtons`: Stop in the error color, Send in the
+        // primary color once it can send and dimmed foreground until then.
+        let (label, icon, icon_size, icon_color) = if streaming {
             (
                 strings.get("chat.chatInput.actions.stopGeneratingAria"),
-                "stop",
+                crate::assets::STOP_ICON,
+                STOP_GLYPH,
+                palette.status_error,
             )
         } else {
             (
                 strings.get("chat.chatInput.actions.sendMessageAria"),
                 "send-plane-2",
+                ACTION_GLYPH,
+                if can_send {
+                    palette.primary
+                } else {
+                    palette.foreground
+                },
             )
         };
         // The microphone, while dictation is on and a server can transcribe.
@@ -366,7 +379,7 @@ impl Workspace {
                 .justify_center()
                 .when(streaming || can_send, |this| this.cursor_pointer())
                 .when(!streaming && !can_send, |this| this.opacity(0.3))
-                .child(glyph(icon, 16.0, palette.foreground)),
+                .child(glyph(icon, icon_size, icon_color)),
             cx,
             move |this, window, cx| {
                 if streaming {
@@ -399,7 +412,7 @@ impl Workspace {
                     && !this.close_in_progress()
                     && let Some(owner) = this.composer_key.clone()
                 {
-                    this.attach_selected_paths(owner, paths.paths().to_vec(), window, cx);
+                    this.attach_cited_paths(owner, paths.paths().to_vec(), window, cx);
                 }
             }))
             // While recording, Enter confirms and Escape cancels, before the

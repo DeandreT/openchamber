@@ -83,7 +83,8 @@ pub(crate) enum BtwPanel {
     },
 }
 
-/// The exact composer change to undo if a staged revert fails.
+/// The draft change to undo if a staged revert fails before the session's own
+/// editor took the reverted prompt.
 pub(crate) struct RevertRestore {
     pub key: DraftKey,
     pub previous: String,
@@ -495,7 +496,10 @@ impl Workspace {
     /// Reverts the selected session to before one of its prompts or subagent
     /// reports (`revertToMessage`): a running turn stops first, the cut hides
     /// at once, descendants revert first and the prompt's text returns to the
-    /// composer. A refusal drops the marker and puts the composer back.
+    /// composer. A refusal drops the marker. The prompt stays where the
+    /// session's own editor took it; a draft whose editor never showed it,
+    /// because an expanded `/btw` panel or another draft held the composer,
+    /// gets its earlier text back.
     pub(crate) fn revert_to_message(
         &mut self,
         message: MessageId,
@@ -536,14 +540,7 @@ impl Workspace {
             .collect();
 
         let draft = self.branch_draft_key(&session);
-        let rollback = draft
-            .as_ref()
-            .zip(restore.as_ref())
-            .map(|(draft, restored)| RevertRestore {
-                key: draft.clone(),
-                previous: self.draft_text(draft, cx),
-                restored: restored.clone(),
-            });
+        let rollback = self.revert_rollback(draft.as_ref(), restore.as_deref(), cx);
         let id = session.clone();
         let stage_cut = cut.clone();
         let finish_key = key.clone();
@@ -621,8 +618,11 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         self.branching.pending_reverts.remove(&key);
+        // The reference's pending restore survives a refusal only once the
+        // session's own editor consumed it, at the stage or since.
         if matches!(result, Some(Err(_)))
             && let Some(rollback) = rollback
+            && !self.composer_shows_own_draft(&rollback.key)
         {
             self.rollback_revert(rollback, window, cx);
         }
@@ -659,8 +659,35 @@ impl Workspace {
         cx.notify();
     }
 
-    /// Drops the optimistic marker and returns the composer to what it held,
-    /// unless the user typed over the restored prompt meanwhile.
+    /// Whether the composer is the editor of the session that owns `key`: it
+    /// shows that draft, and no expanded `/btw` panel takes what is typed.
+    /// The reference's composer shows the side conversation's own draft then.
+    pub(crate) fn composer_shows_own_draft(&self, key: &DraftKey) -> bool {
+        self.composer_key.as_ref() == Some(key) && !self.btw_takes_composer()
+    }
+
+    /// What a refused revert must undo: nothing when the session's own editor
+    /// takes the prompt now, else the draft's text before the prompt replaces
+    /// it.
+    pub(crate) fn revert_rollback(
+        &mut self,
+        draft: Option<&DraftKey>,
+        restored: Option<&str>,
+        cx: &mut Context<Self>,
+    ) -> Option<RevertRestore> {
+        let (draft, restored) = draft.zip(restored)?;
+        if self.composer_shows_own_draft(draft) {
+            return None;
+        }
+        Some(RevertRestore {
+            key: draft.clone(),
+            previous: self.draft_text(draft, cx),
+            restored: restored.to_owned(),
+        })
+    }
+
+    /// Returns the draft to what it held before the prompt replaced it, unless
+    /// the user typed over the restored prompt meanwhile.
     fn rollback_revert(
         &mut self,
         rollback: RevertRestore,

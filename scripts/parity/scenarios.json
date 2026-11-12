@@ -12,7 +12,7 @@
     "files-search-field": {"electron": {"selector": "input[placeholder='Search files...']"}, "native": "files-search"},
     "files-docs-folder": {"electron": {"selector": "button:has(span[title='{fixture}/docs'])"}, "native": "files-row:{fixture}/docs"},
     "files-crlf-file": {"electron": {"selector": "button:has(span[title='{fixture}/docs/crlf.txt'])"}, "native": "files-row:{fixture}/docs/crlf.txt"},
-    "board-search-field": {"electron": {"selector": "input[aria-label='Search, or paste a link or #number']"}, "native": "source-board-search"},
+    "board-search-field": {"electron": {"selector": "input[aria-label='Search, or paste a link or #number']"}, "native": "source-board-search-box"},
     "prompt-indicator": {
       "electron": { "selector": "nav[aria-label='Prompt navigation'] button[aria-haspopup='listbox']" },
       "native": "prompt-indicator"

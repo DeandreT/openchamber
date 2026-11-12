@@ -1,8 +1,10 @@
-//! Draws the source board: the toolbar (kind tabs, project, search, filter,
-//! refresh), the status line, the list with its loading, failure, empty and
-//! not-connected states, and the preview of the highlighted item with its
-//! state menu, details, comments and reply. Every control dispatches to
-//! `SourceBoard`; nothing here decides what the server said.
+//! Draws the source board: the toolbar (kind tabs, project, repository,
+//! search, filter, refresh), the status line, the list with its loading,
+//! failure, empty and not-connected states, and the preview of the
+//! highlighted item with its state menu, details, comments and reply. A board
+//! under 960 px shows the list as a dropdown from the toolbar's item picker
+//! and gives the preview the page. Every control dispatches to `SourceBoard`;
+//! nothing here decides what the server said.
 
 use gpui_kit::component::input::{Input, Textarea};
 use gpui_kit::{
@@ -24,7 +26,7 @@ use crate::files_view::{status_line, text_button};
 use crate::locale::{self, Direction, Strings};
 use crate::logical::LogicalStyledExt;
 use crate::markdown_view::{self, Author};
-use crate::source_board::{Busy, DetailLoad, Menu, ProjectSource, SourceBoard};
+use crate::source_board::{Busy, DetailLoad, Menu, ProjectSource, SourceBoard, is_narrow};
 use crate::theme::Palette;
 
 const HEADER_SIZE: f32 = 0.875;
@@ -38,6 +40,29 @@ const MICRO_LINE: f32 = 1.0625;
 const LIST_MIN_WIDTH: f32 = 280.0;
 
 type Action = Box<dyn Fn(&mut SourceBoard, &mut Window, &mut Context<SourceBoard>)>;
+
+/// How a toolbar trigger is sized: its glyph, side padding and label weight.
+#[derive(Clone, Copy)]
+struct TriggerLook {
+    icon: f32,
+    padding: f32,
+    weight: FontWeight,
+}
+
+impl TriggerLook {
+    /// The scope pickers (`h-7 px-2 typography-ui-label font-medium`).
+    const PICKER: Self = Self {
+        icon: 16.0,
+        padding: 8.0,
+        weight: FontWeight::MEDIUM,
+    };
+    /// The filter's `dropdownTriggerVariants()` (`px-2.5`).
+    const FILTER: Self = Self {
+        icon: 16.0,
+        padding: 10.0,
+        weight: FontWeight::NORMAL,
+    };
+}
 /// `ReferencePickerRow` shows at most two labels on a row.
 const ROW_LABELS: usize = 2;
 
@@ -129,6 +154,20 @@ impl SourceBoard {
             return;
         }
         let key = &event.keystroke;
+        if self.narrow() {
+            // Typing or arrows show the results; Enter and Escape hide them.
+            match key.key.as_str() {
+                "enter" | "escape" => {
+                    if self.list_open && key.key == "escape" {
+                        cx.stop_propagation();
+                    }
+                    self.set_list_open(false, cx);
+                }
+                "down" | "up" | "backspace" | "space" => self.set_list_open(true, cx),
+                name if name.chars().count() == 1 => self.set_list_open(true, cx),
+                _ => {}
+            }
+        }
         let plain = !key.modifiers.control && !key.modifiers.alt && !key.modifiers.platform;
         let control = key.modifiers.control && !key.modifiers.alt && !key.modifiers.platform;
         let forward = match key.key.as_str() {
@@ -140,6 +179,14 @@ impl SourceBoard {
         };
         self.move_highlight(forward, cx);
         cx.stop_propagation();
+    }
+
+    /// Escape closes the list dropdown from anywhere in the board.
+    fn page_key(&mut self, event: &KeyDownEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if self.list_open && event.keystroke.key == "escape" {
+            self.set_list_open(false, cx);
+            cx.stop_propagation();
+        }
     }
 
     /// Reads the next page once the list scrolled within three rows of its end.
@@ -163,6 +210,7 @@ impl SourceBoard {
             .context()
             .map(|(_, terms)| terms.change_request.clone())
             .unwrap_or_else(|| "pullRequest".to_owned());
+        let narrow = self.narrow();
         let tab = |kind: RepositoryKind, icon: &'static str, label: SharedString| {
             let selected = self.kind == kind;
             let id = format!("source-board-kind:{}", kind.as_str());
@@ -175,7 +223,10 @@ impl SourceBoard {
                     .aria_label(label.clone())
                     .aria_selected(selected)
                     .h(px(24.0))
-                    .px(px(10.0))
+                    // A narrow board names the kinds by icon (`px-2.5` in the
+                    // pill's own 1 px edge).
+                    .when(narrow, |this| this.w(px(36.0)).justify_center())
+                    .when(!narrow, |this| this.px(px(12.0)))
                     .rounded(px(CONTROL_RADIUS))
                     .flex_row_from(direction)
                     .items_center()
@@ -195,17 +246,19 @@ impl SourceBoard {
                             palette.muted_foreground
                         },
                     ))
-                    .child(
-                        div()
-                            .css_text(MICRO_SIZE, MICRO_LINE, cx)
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(if selected {
-                                palette.foreground
-                            } else {
-                                palette.muted_foreground
-                            })
-                            .child(label),
-                    ),
+                    .when(!narrow, |this| {
+                        this.child(
+                            div()
+                                .css_text(MICRO_SIZE, MICRO_LINE, cx)
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(if selected {
+                                    palette.foreground
+                                } else {
+                                    palette.muted_foreground
+                                })
+                                .child(label),
+                        )
+                    }),
                 cx,
                 move |this: &mut Self, _, cx| this.select_kind(kind, cx),
             )
@@ -230,7 +283,8 @@ impl SourceBoard {
                 RepositoryKind::Pull,
                 "git-pull-request",
                 strings.get(term_keys(&term).tab),
-            ));
+            ))
+            .test_support();
         let project_label = self
             .project
             .as_ref()
@@ -243,11 +297,38 @@ impl SourceBoard {
                 label,
                 strings.get("sourceBoard.project.label"),
                 Menu::Project,
+                TriggerLook::PICKER,
                 palette,
                 direction,
                 cx,
             )
         });
+        // The repository the list reads: the project's own folder.
+        let repository = self
+            .project
+            .as_deref()
+            .filter(|_| matches!(self.source, ProjectSource::Ready(_)))
+            .and_then(|path| path.trim_end_matches('/').rsplit('/').next())
+            .filter(|name| !name.is_empty())
+            .map(|name| {
+                self.dropdown_trigger(
+                    "source-board-repository",
+                    "folder",
+                    SharedString::from(name.to_owned()),
+                    strings.get("gitView.empty.selectRepositoryPlaceholder"),
+                    Menu::Repository,
+                    TriggerLook {
+                        icon: 14.0,
+                        ..TriggerLook::PICKER
+                    },
+                    palette,
+                    direction,
+                    cx,
+                )
+            });
+        let item = narrow
+            .then(|| self.render_item_trigger(palette, direction, cx))
+            .flatten();
         let filter = self.filter();
         let mut summary = strings.get(filter.state.label_key()).to_string();
         if filter.people != Default::default() {
@@ -258,18 +339,21 @@ impl SourceBoard {
         let has_text = !self.search.read(cx).value().is_empty();
         let search = div()
             .id("source-board-search-box")
+            // The field as the reference measures it: the whole 28 px box.
+            .role(Role::Group)
+            .accessibility_id("source-board-search-box")
             .capture_key_down(cx.listener(Self::search_key))
             .flex_1()
-            .min_w(px(224.0))
+            .min_w(px(if narrow { 0.0 } else { 224.0 }))
             .h(px(28.0))
-            .px(px(8.0))
+            .px(px(10.0))
             .rounded(px(CONTROL_RADIUS))
             .bg(palette.background)
             .shadow(elevation::control(palette))
             .flex_row_from(direction)
             .items_center()
             .gap(px(6.0))
-            .child(glyph("search", 14.0, palette.muted_foreground))
+            .child(glyph("search", 16.0, palette.muted_foreground))
             .child(
                 div().flex_1().min_w_0().child(
                     Input::new(&self.search)
@@ -295,7 +379,32 @@ impl SourceBoard {
                         this.clear_search(window, cx)
                     }),
                 )
-            });
+            })
+            .test_support();
+        let refresh_label = strings.get("sourceBoard.list.refresh");
+        let refresh_hover = palette.hover;
+        // `Button variant="outline" size="sm"` at `size-7`.
+        let refresh = on_activate(
+            div()
+                .id("source-board-refresh")
+                .role(Role::Button)
+                .accessibility_id("source-board-refresh")
+                .aria_label(refresh_label)
+                .size(px(28.0))
+                .flex_shrink_0()
+                .rounded(px(CONTROL_RADIUS))
+                .bg(palette.background)
+                .shadow(elevation::control(palette))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .hover(move |style| style.bg(refresh_hover))
+                .child(glyph("refresh", 16.0, palette.foreground)),
+            cx,
+            |this: &mut Self, _, cx| this.refresh_list(cx),
+        )
+        .test_support();
         div()
             .id("source-board-toolbar")
             .relative()
@@ -311,26 +420,30 @@ impl SourceBoard {
             .border_color(palette.divider)
             .child(tabs)
             .children(project)
-            .child(search)
-            .child(self.dropdown_trigger(
-                "source-board-filter",
-                "filter-3",
-                summary.into(),
-                strings.get("references.picker.filter.label"),
-                Menu::Filter,
-                palette,
-                direction,
-                cx,
-            ))
+            .children(repository)
+            .children(item)
+            // `ReferenceBrowserSearch`: the field, the filter and refresh. A
+            // narrow board keeps the group 320 px wide or wraps it to a row.
             .child(
-                IconButton::new(
-                    "source-board-refresh",
-                    "refresh",
-                    strings.get("sourceBoard.list.refresh"),
-                )
-                .size(28.0, 16.0)
-                .tone(crate::chrome::ButtonTone::QuietFilled)
-                .render(palette, cx, |this: &mut Self, _, cx| this.refresh_list(cx)),
+                div()
+                    .flex_1()
+                    .min_w(px(if narrow { 320.0 } else { 0.0 }))
+                    .flex_row_from(direction)
+                    .items_center()
+                    .gap(px(8.0))
+                    .child(search)
+                    .child(self.dropdown_trigger(
+                        "source-board-filter",
+                        "filter-3",
+                        summary.into(),
+                        strings.get("references.picker.filter.label"),
+                        Menu::Filter,
+                        TriggerLook::FILTER,
+                        palette,
+                        direction,
+                        cx,
+                    ))
+                    .child(refresh),
             )
             .into_any_element()
     }
@@ -343,6 +456,7 @@ impl SourceBoard {
         value: SharedString,
         label: SharedString,
         menu: Menu,
+        look: TriggerLook,
         palette: &Palette,
         direction: Direction,
         cx: &mut Context<Self>,
@@ -357,8 +471,8 @@ impl SourceBoard {
                 .aria_label(SharedString::from(format!("{label}: {value}")))
                 .aria_expanded(open)
                 .h(px(28.0))
-                .max_w(px(288.0))
-                .px(px(8.0))
+                .max_w(px(256.0))
+                .px(px(look.padding))
                 .rounded(px(CONTROL_RADIUS))
                 .flex_shrink_0()
                 .bg(palette.background)
@@ -368,21 +482,84 @@ impl SourceBoard {
                 .gap(px(6.0))
                 .cursor_pointer()
                 .hover(move |style| style.bg(hover))
-                .child(glyph(icon, 14.0, palette.muted_foreground))
+                .child(glyph(icon, look.icon, palette.muted_foreground))
                 .child(
                     div()
                         .min_w_0()
                         .truncate()
                         .css_text(LABEL_SIZE, LABEL_LINE, cx)
+                        .font_weight(look.weight)
                         .text_color(palette.foreground)
                         .child(value),
                 )
-                .child(glyph("arrow-down-s", 14.0, palette.muted_foreground)),
+                .child(glyph("arrow-down-s", 16.0, palette.muted_foreground)),
             cx,
             move |this: &mut Self, _, cx| this.toggle_menu(menu, cx),
         )
         .test_support()
         .into_any_element()
+    }
+
+    /// The narrow board's item picker (`itemTrigger`): the previewed item's
+    /// number, or "Choose"; it opens the list as a dropdown.
+    fn render_item_trigger(
+        &self,
+        palette: &Palette,
+        direction: Direction,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let (_, terms) = self.context()?;
+        let strings = locale::strings(cx).clone();
+        let label: SharedString = match self.previewed() {
+            Some(item) => terms.number_label(item).into(),
+            None => strings.get("sourceBoard.list.choose"),
+        };
+        let icon = match self.kind {
+            RepositoryKind::Issue => "record-circle",
+            RepositoryKind::Pull => "git-pull-request",
+        };
+        let open = self.list_open;
+        let hover = palette.hover;
+        Some(
+            on_activate(
+                div()
+                    .id("source-board-item")
+                    .role(Role::Button)
+                    .accessibility_id("source-board-item")
+                    .aria_label(
+                        strings.format("sourceBoard.list.toggleAria", &[("item", label.as_ref())]),
+                    )
+                    .aria_expanded(open)
+                    // `dropdownTriggerVariants()` with `gap-1.5`.
+                    .h(px(28.0))
+                    .px(px(10.0))
+                    .rounded(px(CONTROL_RADIUS))
+                    .flex_shrink_0()
+                    .bg(if open {
+                        palette.active
+                    } else {
+                        palette.background
+                    })
+                    .shadow(elevation::control(palette))
+                    .flex_row_from(direction)
+                    .items_center()
+                    .gap(px(6.0))
+                    .cursor_pointer()
+                    .when(!open, |this| this.hover(move |style| style.bg(hover)))
+                    .child(glyph(icon, 14.0, palette.muted_foreground))
+                    .child(
+                        div()
+                            .css_text(LABEL_SIZE, LABEL_LINE, cx)
+                            .text_color(palette.foreground)
+                            .child(label),
+                    )
+                    .child(glyph("arrow-down-s", 16.0, palette.muted_foreground)),
+                cx,
+                move |this: &mut Self, _, cx| this.set_list_open(!open, cx),
+            )
+            .test_support()
+            .into_any_element(),
+        )
     }
 
     /// One option of a floating menu.
@@ -469,6 +646,24 @@ impl SourceBoard {
                         direction,
                         cx,
                         move |this: &mut Self, _, cx| this.select_project(Some(path.clone()), cx),
+                    ));
+                }
+            }
+            Menu::Repository => {
+                // The project's own folder is the one repository read here.
+                if let Some(name) = self
+                    .project
+                    .as_deref()
+                    .and_then(|path| path.trim_end_matches('/').rsplit('/').next())
+                {
+                    items.push(self.menu_option(
+                        "source-board-repository-option".to_owned(),
+                        SharedString::from(name.to_owned()),
+                        true,
+                        palette,
+                        direction,
+                        cx,
+                        |this: &mut Self, _, cx| this.toggle_menu(Menu::Repository, cx),
                     ));
                 }
             }
@@ -614,6 +809,54 @@ impl SourceBoard {
             .into_any_element()
     }
 
+    /// The failed refresh of a list that still shows its earlier rows, with
+    /// Retry; above the list, and above the preview of a narrow board whose
+    /// dropdown is closed.
+    fn render_refresh_error(
+        &self,
+        palette: &Palette,
+        direction: Direction,
+        cx: &mut Context<Self>,
+    ) -> Option<AnyElement> {
+        let error = self.list.refresh_error()?;
+        let strings = locale::strings(cx).clone();
+        let text = strings.format("references.picker.error.refresh", &[("error", error)]);
+        let retry = text_button(
+            "source-board-list-retry",
+            strings.get("references.picker.actions.retry"),
+            None,
+            palette,
+            cx,
+            |this: &mut Self, _, cx| this.load_list(cx),
+        );
+        Some(
+            div()
+                .id("source-board-refresh-error")
+                .role(Role::Status)
+                .accessibility_id("source-board-refresh-error")
+                .aria_label(text.clone())
+                .flex_shrink_0()
+                .m(px(6.0))
+                .px(px(10.0))
+                .py(px(6.0))
+                .rounded(px(8.0))
+                .bg(palette.status_error.opacity(0.12))
+                .flex_row_from(direction)
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .css_text(META_SIZE, META_LINE, cx)
+                        .text_color(palette.status_error)
+                        .child(text),
+                )
+                .child(retry)
+                .into_any_element(),
+        )
+    }
+
     fn render_list(
         &self,
         terms: &ProviderTerms,
@@ -679,31 +922,7 @@ impl SourceBoard {
         }
         let items = self.list.items();
         let highlighted = self.list.highlighted_key();
-        let banner = self.list.refresh_error().map(|error| {
-            let text = strings.format("references.picker.error.refresh", &[("error", error)]);
-            div()
-                .id("source-board-refresh-error")
-                .role(Role::Status)
-                .accessibility_id("source-board-refresh-error")
-                .aria_label(text.clone())
-                .m(px(6.0))
-                .px(px(10.0))
-                .py(px(6.0))
-                .rounded(px(8.0))
-                .bg(palette.status_error.opacity(0.12))
-                .flex_row_from(direction)
-                .items_center()
-                .gap(px(8.0))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .css_text(META_SIZE, META_LINE, cx)
-                        .text_color(palette.status_error)
-                        .child(text),
-                )
-                .children(retry(cx))
-        });
+        let banner = self.render_refresh_error(palette, direction, cx);
         let empty = items.is_empty().then(|| {
             let key = if !self.search_text().trim().is_empty() {
                 "references.picker.empty.search".to_owned()
@@ -998,6 +1217,7 @@ impl SourceBoard {
                 cx,
             );
         };
+        let narrow = self.narrow();
         let status = self.status_of(&item).cloned();
         let look = state_look(&item, status.as_ref());
         let state_label = strings.get(look.label_key);
@@ -1325,8 +1545,9 @@ impl SourceBoard {
             .aria_label(SharedString::from(item.title.clone()))
             .size_full()
             .overflow_y_scroll()
-            .px(px(20.0))
-            .py(px(16.0))
+            // The page-wide preview stands in `px-6`, 20 px under the toolbar.
+            .px(px(if narrow { 24.0 } else { 20.0 }))
+            .py(px(if narrow { 20.0 } else { 16.0 }))
             .flex()
             .flex_col()
             .gap(px(16.0))
@@ -1676,50 +1897,134 @@ impl Render for SourceBoard {
             self.reply
                 .update(cx, |input, cx| input.set_value("", window, cx));
         }
-        let body = match self.render_source_state(&palette, cx) {
-            Some(state) => state,
-            None => {
-                let terms = self
-                    .context()
-                    .map(|(_, terms)| terms.clone())
-                    .expect("a ready source has terms");
-                div()
-                    .size_full()
-                    .flex_row_from(direction)
-                    .child(
+        let body =
+            match self.render_source_state(&palette, cx) {
+                Some(state) => state,
+                None => {
+                    let terms = self
+                        .context()
+                        .map(|(_, terms)| terms.clone())
+                        .expect("a ready source has terms");
+                    if self.narrow() {
+                        let list = self.list_open.then(|| {
+                            let dismiss = on_activate(
+                                div().id("source-board-list-dismiss").absolute().inset_0(),
+                                cx,
+                                |this: &mut Self, _, cx| this.set_list_open(false, cx),
+                            );
+                            // `absolute inset-x-2 top-1 h-[min(28rem,75%)] rounded-xl`.
+                            let dropdown = div()
+                                .id("source-board-list-dropdown")
+                                .role(Role::Group)
+                                .accessibility_id("source-board-list-dropdown")
+                                .absolute()
+                                .top(px(4.0))
+                                .left(px(8.0))
+                                .right(px(8.0))
+                                .h(gpui_kit::relative(0.75))
+                                .max_h(px(448.0))
+                                .rounded(px(12.0))
+                                .overflow_hidden()
+                                .bg(palette.elevated)
+                                .shadow(elevation::floating(&palette))
+                                .occlude()
+                                .child(self.render_list(&terms, &palette, direction, cx))
+                                .test_support();
+                            [dismiss.into_any_element(), dropdown.into_any_element()]
+                        });
+                        // With the dropdown closed, a list that could not be read
+                        // takes the page with its reason and Retry, and a failed
+                        // refresh stands above the preview: neither may look like
+                        // a board with nothing in it.
+                        let unread = !self.list_open
+                            && matches!(
+                                self.list.status(),
+                                ListStatus::Failed(_) | ListStatus::Unavailable(_)
+                            );
+                        let page =
+                            if unread {
+                                self.render_list(&terms, &palette, direction, cx)
+                            } else {
+                                let stale = (!self.list_open)
+                                    .then(|| self.render_refresh_error(&palette, direction, cx))
+                                    .flatten();
+                                div()
+                                    .size_full()
+                                    .flex()
+                                    .flex_col()
+                                    .children(stale)
+                                    .child(div().flex_1().min_h_0().child(
+                                        self.render_preview(&terms, &palette, direction, cx),
+                                    ))
+                                    .into_any_element()
+                            };
                         div()
-                            .h_full()
-                            .w(gpui_kit::relative(0.416_66))
-                            .min_w(px(LIST_MIN_WIDTH))
-                            .max_w(gpui_kit::relative(0.6))
-                            .flex_shrink_0()
-                            .child(self.render_list(&terms, &palette, direction, cx)),
-                    )
-                    .child(
+                            .size_full()
+                            .relative()
+                            .child(page)
+                            .children(list.into_iter().flatten())
+                            .into_any_element()
+                    } else {
                         div()
-                            .w(px(1.0))
-                            .h_full()
-                            .flex_shrink_0()
-                            .bg(palette.divider),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .h_full()
-                            .child(self.render_preview(&terms, &palette, direction, cx)),
-                    )
-                    .into_any_element()
-            }
-        };
+                            .size_full()
+                            .flex_row_from(direction)
+                            .child(
+                                div()
+                                    .h_full()
+                                    .w(gpui_kit::relative(0.416_66))
+                                    .min_w(px(LIST_MIN_WIDTH))
+                                    .max_w(gpui_kit::relative(0.6))
+                                    .flex_shrink_0()
+                                    .child(self.render_list(&terms, &palette, direction, cx)),
+                            )
+                            .child(
+                                div()
+                                    .w(px(1.0))
+                                    .h_full()
+                                    .flex_shrink_0()
+                                    .bg(palette.divider),
+                            )
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .h_full()
+                                    .child(self.render_preview(&terms, &palette, direction, cx)),
+                            )
+                            .into_any_element()
+                    }
+                }
+            };
         if self.list.has_more() && !self.list.is_loading_more() {
             let entity = cx.entity().downgrade();
             cx.defer(move |cx| {
                 let _ = entity.update(cx, |this, cx| this.maybe_load_more(cx));
             });
         }
+        // The painted width decides the layout, as the reference's
+        // `ResizeObserver` does. A crossing of the threshold is applied
+        // once this draw ends (a refresh asked for while drawing is
+        // dropped), and the board then draws in its new layout.
+        let width = self.width.clone();
+        let board = cx.entity().downgrade();
+        let measure = gpui_kit::canvas(
+            move |bounds, _, cx| {
+                let next = f32::from(bounds.size.width);
+                let previous = width.replace(next);
+                if is_narrow(previous) != is_narrow(next) {
+                    let board = board.clone();
+                    cx.defer(move |cx| {
+                        let _ = board.update(cx, |board, cx| board.layout_changed(cx));
+                    });
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0();
         div()
             .id("source-board-page")
+            .on_key_down(cx.listener(Self::page_key))
             .role(Role::Region)
             .accessibility_id("source-board-page")
             .test_support()
@@ -1732,14 +2037,18 @@ impl Render for SourceBoard {
             .flex_col()
             .bg(palette.background)
             .text_color(palette.foreground)
+            .child(measure)
             .child(self.render_toolbar(&palette, direction, cx))
-            .child(status_line(
-                "source-board-notice",
-                self.notice.as_ref(),
-                &palette,
-                direction,
-                cx,
-            ))
+            // The line takes its row only while there is an outcome to read.
+            .when(self.notice.is_some(), |this| {
+                this.child(status_line(
+                    "source-board-notice",
+                    self.notice.as_ref(),
+                    &palette,
+                    direction,
+                    cx,
+                ))
+            })
             .child(div().flex_1().min_h_0().child(body))
             .children(self.render_menu(&palette, direction, cx))
     }

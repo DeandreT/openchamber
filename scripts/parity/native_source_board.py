@@ -143,6 +143,13 @@ def open_page(session: Session, line: str):
     session.client.click(line)
 
 
+def show_list(session: Session):
+    """A narrow board lists its rows in the dropdown under the item picker."""
+    if not session.has("source-board-list-dropdown"):
+        session.client.click("source-board-item")
+    session.wait_id("source-board-list-dropdown")
+
+
 def board_steps(session: Session):
     client = session.client
     server = session.server.url
@@ -165,6 +172,7 @@ def board_steps(session: Session):
         open_page(session, "source-board")
 
     def selected():
+        show_list(session)
         session.wait_id(ISSUE_ROW.format(1))
         session.wait_id(ISSUE_ROW.format(2))
         if session.has(PULL_ROW.format(3)):
@@ -175,6 +183,7 @@ def board_steps(session: Session):
 
     def search():
         session.type("dark")
+        session.wait_id("source-board-list-dropdown")
         session.wait_gone(ISSUE_ROW.format(1))
         session.wait_id(ISSUE_ROW.format(2))
         session.wait_label("source-board-title", "Add a dark theme")
@@ -185,15 +194,22 @@ def board_steps(session: Session):
         client.click("source-board-filter")
         session.wait_id("source-board-filter-state:closed")
         client.click("source-board-filter-state:closed")
-        session.wait_label("source-board-list-state", "No open issues.")
-        session.wait_label("source-board-preview-empty", "Pick an item")
-        # The menu stays open so state and people combine.
-        client.click("source-board-filter-state:open")
-        session.wait_id(ISSUE_ROW.format(1))
+        # The filter menu and the list dropdown are never open together.
         client.click("source-board-filter")
         session.wait_gone("source-board-menu")
+        show_list(session)
+        session.wait_label("source-board-list-state", "No open issues.")
+        session.wait_label("source-board-preview-empty", "Pick an item")
+        client.click("source-board-filter")
+        session.wait_id("source-board-filter-state:open")
+        client.click("source-board-filter-state:open")
+        client.click("source-board-filter")
+        session.wait_gone("source-board-menu")
+        show_list(session)
+        session.wait_id(ISSUE_ROW.format(1))
 
     def comment():
+        show_list(session)
         client.click(ISSUE_ROW.format(1))
         session.wait_label("source-board-title", "Crash on startup")
         session.click_node("source-board-reply")
@@ -218,12 +234,15 @@ def board_steps(session: Session):
         session.control("release")
         session.wait_label("source-board-notice", "Closed #1")
         # The open list no longer holds the closed issue.
+        show_list(session)
+        session.wait_id(ISSUE_ROW.format(2))
         session.wait_gone(ISSUE_ROW.format(1))
         if session.repository()["items"]["1"]["state"] != "CLOSED":
             raise RuntimeError("the fixture issue is still open")
 
     def review():
         client.click("source-board-kind:pull")
+        show_list(session)
         session.wait_id(PULL_ROW.format(3))
         client.click(PULL_ROW.format(3))
         session.wait_label("source-board-title", "Fix the crash on an empty config")
@@ -239,6 +258,7 @@ def board_steps(session: Session):
         # A refresh that fails keeps the rows and says so above them.
         client.click("source-board-refresh")
         session.wait_label("source-board-refresh-error", "Couldn’t refresh")
+        show_list(session)
         if not session.has(PULL_ROW.format(3)):
             raise RuntimeError("a failed refresh dropped the listed rows")
         # A new list read that fails has no rows to keep.

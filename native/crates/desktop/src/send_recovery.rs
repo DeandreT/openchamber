@@ -78,34 +78,96 @@ impl RecoveryState {
 impl Workspace {
     /// Queue request recovery uses operation identities, never prompt identities.
     /// Inspecting this projection performs no spool read or network request.
+    ///
+    /// The rows cover every session of the runtime, each named by its
+    /// session, as the prompt and transfer rows do. An enqueue has no row
+    /// while nothing about it needs the user:
+    ///
+    /// - while the activation that captured it is still running;
+    /// - while its receipt says queued and its queue lists it queued, is
+    ///   about to answer, or stopped listing it after this window saw it
+    ///   queued (that departure starts one status check on its own);
+    /// - while that automatic check runs.
+    ///
+    /// Every other enqueue keeps its row: one that failed or was never
+    /// accepted, one listed uncertain, one whose check failed or came back
+    /// without a terminal state, and one whose queue was never read, could
+    /// not be read, or already lacked it when this window first read it.
     pub(crate) fn enqueue_recovery_items(&self) -> Vec<crate::recovery_view::EnqueueRecoveryRow> {
+        use openchamber_native_core::message_queue::QueueDeliveryState;
+        use openchamber_native_transport::queue_manifest::QueueEnqueueState;
+
+        use crate::message_queue::EnqueueListing;
+        use crate::queue_enqueue::EnqueueCheck;
         use crate::queue_storage::{QueueAction, QueueEnqueuePhase};
 
         let connected = self.connection.as_ref().is_some_and(|connection| {
             connection.state == ConnectionState::Connected && connection.client.is_some()
         });
-        let mut rows: Vec<_> = self.queue_storage.operations().iter().filter_map(|operation| {
-            if operation.owner().runtime() != self.runtime.as_str() { return None; }
-            let QueueAction::Enqueue { phase, .. } = operation.action() else { return None; };
-            let busy = self.queue.enqueues.busy(operation.id());
+        let enqueues = &self.queue.enqueues;
+        let mut rows = Vec::new();
+        for operation in self.queue_storage.operations() {
+            if operation.owner().runtime() != self.runtime.as_str() {
+                continue;
+            }
+            let QueueAction::Enqueue { phase, .. } = operation.action() else {
+                continue;
+            };
+            let id = operation.id();
+            if enqueues.first_activation_running(id) {
+                continue;
+            }
+            let busy = enqueues.busy(id);
             let session = SessionId::from(operation.owner().session());
-            let accepted_state = self.queue.enqueues.delivery(operation.id());
-            let check = self.queue.enqueues.check(operation.id());
-            let status = if check == crate::queue_enqueue::EnqueueCheck::Unknown
-                && accepted_state == Some(openchamber_native_transport::queue_manifest::QueueEnqueueState::Queued) {
-                crate::queue_enqueue::EnqueueCheck::Queued
-            } else { check };
-            Some(crate::recovery_view::EnqueueRecoveryRow {
-                id: operation.id().clone(),
+            let accepted_state = enqueues.delivery(id);
+            let check = enqueues.check(id);
+            let accepted = matches!(phase, QueueEnqueuePhase::Accepted { .. });
+            let listing = self.enqueue_listing(operation);
+            let receipt_queued = accepted_state == Some(QueueEnqueueState::Queued);
+            let uncertain = accepted_state == Some(QueueEnqueueState::Uncertain)
+                || listing == EnqueueListing::Listed(QueueDeliveryState::Uncertain);
+            let held = match listing {
+                EnqueueListing::Listed(QueueDeliveryState::Queued) | EnqueueListing::Pending => {
+                    true
+                }
+                // Queued when last seen from here: either the reread after
+                // its acceptance is still due, or its departure is about to
+                // be checked.
+                EnqueueListing::Absent => enqueues.seen_listed(id),
+                EnqueueListing::Listed(QueueDeliveryState::Uncertain)
+                | EnqueueListing::Unavailable => false,
+            };
+            let healthy = accepted
+                && receipt_queued
+                && matches!(check, EnqueueCheck::Unknown | EnqueueCheck::Queued)
+                && held;
+            if healthy || (accepted && enqueues.automatic_check_running(id)) {
+                continue;
+            }
+            // A queue that was read and lacks the request no longer vouches
+            // for the receipt's "queued".
+            let status = if check == EnqueueCheck::Unknown
+                && receipt_queued
+                && !uncertain
+                && listing != EnqueueListing::Absent
+            {
+                EnqueueCheck::Queued
+            } else {
+                check
+            };
+            let actionable =
+                connected && !busy && self.persistence_ready() && !self.close_in_progress();
+            rows.push(crate::recovery_view::EnqueueRecoveryRow {
+                id: id.clone(),
                 session_label: self.sessions.get(&session).map_or_else(
-                    || session.to_string().into(), |session| session.title.clone().into()),
+                    || session.to_string().into(),
+                    |session| session.title.clone().into(),
+                ),
                 status,
-                can_check: connected && !busy && self.persistence_ready() && !self.close_in_progress()
-                    && !matches!(phase, QueueEnqueuePhase::Capturing),
-                can_retry: connected && !busy && self.persistence_ready() && !self.close_in_progress()
-                    && (!matches!(phase, QueueEnqueuePhase::Accepted { .. }) || accepted_state == Some(openchamber_native_transport::queue_manifest::QueueEnqueueState::Uncertain)),
-            })
-        }).collect();
+                can_check: actionable && !matches!(phase, QueueEnqueuePhase::Capturing),
+                can_retry: actionable && (!accepted || uncertain),
+            });
+        }
         rows.sort_by(|left, right| left.id.as_str().cmp(right.id.as_str()));
         rows
     }

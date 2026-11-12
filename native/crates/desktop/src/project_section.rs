@@ -10,12 +10,10 @@
 //! settles. Nested repositories and pull request rows are not ported yet.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use gpui_kit::{
-    AnyElement, AppContext, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    Role, SharedString, StatefulInteractiveElement, Styled, TestSupportExt, div, img,
+    AnyElement, Context, FontWeight, IntoElement, ParentElement, SharedString, Styled, div,
     prelude::FluentBuilder, px,
 };
 use openchamber_native_core::chat_roots;
@@ -24,13 +22,11 @@ use openchamber_native_core::project_actions::ProjectSetup;
 use openchamber_native_core::repository::{Attention, GitStatusRead, RepositoryStatus};
 use openchamber_native_transport::error::TransportError;
 
-use crate::activation::on_activate;
 use crate::baseline::CssTextExt;
 use crate::chrome::glyph;
 use crate::context_panel::{self, IconRow, RowValue};
 use crate::locale::{self, Direction, Strings};
 use crate::logical::LogicalStyledExt;
-use crate::open_in_app;
 use crate::theme::Palette;
 use crate::workspace::Workspace;
 
@@ -40,11 +36,6 @@ const STATUS_STALE: Duration = Duration::from_secs(5);
 /// `TOOL_GIT_REFRESH_WINDOW_MS`: finished tool calls within this window
 /// share one status read.
 const TOOL_REFRESH_WINDOW: Duration = Duration::from_millis(250);
-/// The open-in-app control's 24 px buttons with 16 px glyphs.
-const APP_BUTTON: f32 = 24.0;
-const APP_GLYPH: f32 = 16.0;
-const APP_ICON_OPACITY: f32 = 0.85;
-
 /// One directory's Git status reads.
 #[derive(Default)]
 struct GitEntry {
@@ -64,35 +55,13 @@ struct ActionsEntry {
     _fetch: Option<gpui_kit::Task<()>>,
 }
 
-/// Where the file manager's icon lookup stands.
-#[derive(Default)]
-enum AppIcon {
-    #[default]
-    Unknown,
-    Looking {
-        _lookup: gpui_kit::Task<()>,
-    },
-    Found(Option<PathBuf>),
-}
-
 /// The Project section's reads, by directory and project.
 #[derive(Default)]
 pub(crate) struct ProjectReadouts {
     git: HashMap<String, GitEntry>,
     actions: HashMap<String, ActionsEntry>,
-    app_icon: AppIcon,
     /// The directory last brought into view, so a return refreshes it.
     in_view: Option<String>,
-}
-
-impl ProjectReadouts {
-    /// Settles the file-manager icon as absent. A headless test against a
-    /// loopback server would otherwise scan this machine's icon themes on the
-    /// test thread, where background tasks run inline.
-    #[cfg(test)]
-    pub(crate) fn without_app_icon(&mut self) {
-        self.app_icon = AppIcon::Found(None);
-    }
 }
 
 /// What the section is about: the session's directory and the project whose
@@ -240,18 +209,6 @@ impl Workspace {
             && !self.project_readouts.actions.contains_key(&project)
         {
             self.read_project_actions(&project, cx);
-        }
-        if matches!(self.project_readouts.app_icon, AppIcon::Unknown) && self.desktop_local() {
-            let lookup = cx.background_spawn(async { open_in_app::file_manager_icon() });
-            self.project_readouts.app_icon = AppIcon::Looking {
-                _lookup: cx.spawn(async move |this, cx| {
-                    let icon = lookup.await;
-                    let _ = this.update(cx, |this, cx| {
-                        this.project_readouts.app_icon = AppIcon::Found(icon);
-                        cx.notify();
-                    });
-                }),
-            };
         }
     }
 
@@ -401,21 +358,18 @@ impl Workspace {
                     entry.refresh = None;
                 }
                 this.read_git_status(&key, cx);
+                this.refresh_open_git_panel(&key, cx);
             });
         }));
     }
 
     /// Forgets every read, as a new runtime must.
     pub(crate) fn reset_project_readouts(&mut self) {
-        let app_icon = std::mem::take(&mut self.project_readouts.app_icon);
-        self.project_readouts = ProjectReadouts {
-            app_icon,
-            ..ProjectReadouts::default()
-        };
+        self.project_readouts = ProjectReadouts::default();
     }
 
     /// The section, when the session's directory has a branch, changes or an
-    /// operation needing attention, or the open-in-app control applies.
+    /// operation needing attention (`hasRepository`).
     pub(crate) fn render_project_section(
         &self,
         palette: &Palette,
@@ -436,7 +390,7 @@ impl Workspace {
         let has_readout = status.is_some_and(|status| {
             status.branch.is_some() || status.changed().is_some() || status.attention.is_some()
         });
-        if !has_readout && (subject.action_project.is_none() || !self.desktop_local()) {
+        if !has_readout {
             return None;
         }
         let strings = locale::strings(cx);
@@ -448,11 +402,6 @@ impl Workspace {
         if let Some(status) = status {
             rows.extend(self.repository_rows(status, strings, palette, direction, cx));
         }
-        let summary = subject
-            .action_project
-            .is_some()
-            .then(|| self.render_open_in_app(&subject.directory, strings, palette, direction, cx))
-            .flatten();
         Some(
             div()
                 .flex()
@@ -498,8 +447,7 @@ impl Workspace {
                                         .text_color(palette.muted_foreground)
                                         .child(label)
                                 })),
-                        )
-                        .children(summary),
+                        ),
                 )
                 .children(rows)
                 .into_any_element(),
@@ -603,86 +551,6 @@ impl Workspace {
             ));
         }
         rows
-    }
-
-    /// The file manager control at the heading's end: its icon, or the
-    /// label's initial, and the chevron of the app menu.
-    fn render_open_in_app(
-        &self,
-        directory: &str,
-        strings: &Strings,
-        palette: &Palette,
-        direction: Direction,
-        cx: &Context<Self>,
-    ) -> Option<AnyElement> {
-        if !self.desktop_local() {
-            return None;
-        }
-        let icon: AnyElement = match &self.project_readouts.app_icon {
-            AppIcon::Found(Some(file)) => img(file.clone())
-                .size(px(APP_GLYPH))
-                .rounded(px(4.0))
-                .into_any_element(),
-            _ => div()
-                .size(px(APP_GLYPH))
-                .rounded(px(4.0))
-                .bg(palette.muted)
-                .flex()
-                .items_center()
-                .justify_center()
-                .text_size(px(9.0))
-                .font_weight(FontWeight::MEDIUM)
-                .text_color(palette.muted_foreground)
-                .child(open_in_app::initial())
-                .into_any_element(),
-        };
-        let label = strings.format(
-            "openInApp.actions.openInAria",
-            &[("app", open_in_app::LABEL)],
-        );
-        let target = PathBuf::from(directory);
-        let open = on_activate(
-            div()
-                .id("open-in-app")
-                .role(Role::Button)
-                .accessibility_id("open-in-app")
-                .aria_label(label)
-                .size(px(APP_BUTTON))
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(6.0))
-                .opacity(APP_ICON_OPACITY)
-                .hover(|style| style.opacity(1.0))
-                .cursor_pointer()
-                .child(icon),
-            cx,
-            move |_, _, _| open_directory(&target),
-        )
-        .test_support();
-        Some(
-            div()
-                .flex_shrink_0()
-                .flex_row_from(direction)
-                .items_center()
-                .text_color(palette.muted_foreground)
-                .child(open)
-                .child(
-                    div()
-                        .size(px(APP_BUTTON))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(glyph("arrow-down-s", APP_GLYPH, palette.muted_foreground)),
-                )
-                .into_any_element(),
-        )
-    }
-}
-
-fn open_directory(directory: &Path) {
-    if let Err(error) = open_in_app::open_directory(directory) {
-        tracing::warn!(%error, "the file manager could not be opened");
     }
 }
 

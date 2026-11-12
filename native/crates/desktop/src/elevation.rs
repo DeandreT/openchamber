@@ -57,9 +57,31 @@ fn floating_surface(
     shadows
 }
 
-/// `.oc-glass-floating.oc-composer-sheen` uses a quieter dark top light.
+/// `.oc-glass-floating.oc-composer-sheen`: `--oc-elevation-raised`, one level
+/// below the menus that open over the composer.
+///
+/// The recipe's rings are half a pixel wide. At scale factor 1 Chromium
+/// paints the dark inset ring as a one-pixel line at half its alpha, which is
+/// what the inset ring here draws. The outer rings keep the one-pixel alphas
+/// [`floating`] uses for the same `0.5px` rings.
 pub fn composer(palette: &Palette) -> Vec<BoxShadow> {
-    floating_surface(palette, 0.025, 0.55)
+    let mut shadows = match palette.appearance {
+        Appearance::Dark => vec![
+            shadow(1.0, 0.0, 0.0, white(0.04), true),
+            shadow(0.0, 0.0, 1.0, white(0.04), true),
+            shadow(0.0, 0.0, 1.0, black(0.36), false),
+            shadow(2.0, 4.0, 0.0, black(0.25), false),
+            shadow(1.0, 2.0, 0.0, black(0.25), false),
+        ],
+        Appearance::Light => vec![
+            shadow(1.0, 0.0, 0.0, white(0.7), true),
+            shadow(0.0, 0.0, 1.0, black(0.1), false),
+            shadow(1.0, 2.0, -0.5, black(0.06), false),
+            shadow(4.0, 10.0, -2.0, black(0.07), false),
+        ],
+    };
+    shadows.reverse();
+    shadows
 }
 
 /// `.oc-glass-floating`: the shared popup edge and shadow.
@@ -174,13 +196,59 @@ mod tests {
     #[test]
     fn css_recipes_convert_blur_and_paint_top_shadow_last() {
         let palette = Palette::default_for(Appearance::Light);
-        let shadows = composer(&palette);
+        let shadows = floating(&palette);
         assert_eq!(shadows[0].blur_radius, px(10.0));
         assert_eq!(shadows[0].offset.y, px(12.0));
-        let highlight = shadows.last().expect("composer includes its top highlight");
+        let highlight = shadows.last().expect("a popup includes its top highlight");
         assert!(highlight.inset);
-        assert_eq!(highlight.color.a, 0.55);
+        assert_eq!(highlight.color.a, 0.8);
         assert_eq!(panel_edge(&palette)[0].blur_radius, px(4.0));
+    }
+
+    #[test]
+    fn the_composer_takes_the_raised_level() {
+        let dark = composer(&Palette::default_for(Appearance::Dark));
+        assert_eq!(dark.len(), 5, "top light, two rings and two shadows");
+        // `0 1px 2px 0` and `0 2px 4px 0`, both at a quarter black.
+        assert_eq!(
+            (dark[0].offset.y, dark[0].blur_radius, dark[0].spread_radius),
+            (px(1.0), px(1.0), px(0.0))
+        );
+        assert_eq!(
+            (dark[1].offset.y, dark[1].blur_radius, dark[1].spread_radius),
+            (px(2.0), px(2.0), px(0.0))
+        );
+        assert_eq!((dark[0].color.a, dark[1].color.a), (0.25, 0.25));
+        assert!(!dark[2].inset, "the dark ring outside the box");
+        let ring = &dark[3];
+        assert!(ring.inset);
+        assert_eq!(
+            (ring.spread_radius, ring.color.a),
+            (px(1.0), 0.04),
+            "half of the 0.5px ring's 8% white on one pixel"
+        );
+        let top_light = &dark[4];
+        assert!(top_light.inset);
+        assert_eq!((top_light.offset.y, top_light.color.a), (px(1.0), 0.04));
+
+        let light = composer(&Palette::default_for(Appearance::Light));
+        assert_eq!(light.len(), 4, "top light, one ring and two shadows");
+        // `0 4px 10px -2px` at 7% black is the lowest layer.
+        assert_eq!(
+            (
+                light[0].offset.y,
+                light[0].blur_radius,
+                light[0].spread_radius
+            ),
+            (px(4.0), px(5.0), px(-2.0))
+        );
+        assert_eq!(light[0].color.a, 0.07);
+        assert_eq!(
+            light.iter().filter(|shadow| shadow.inset).count(),
+            1,
+            "the light recipe has no inset ring"
+        );
+        assert_eq!(light[3].color.a, 0.7);
     }
 
     #[test]

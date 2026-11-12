@@ -28,6 +28,9 @@ const INDICATOR_TICKS: usize = 5;
 const TICK_HEIGHT: f32 = 2.0;
 const TICK_WIDTH: f32 = 12.0;
 const PANEL_WIDTH: f32 = 320.0;
+/// The web's overlay scroller keeps a 6 px gutter for its thumb at the
+/// list's inline end, whether or not the list overflows.
+const SCROLL_GUTTER: f32 = 6.0;
 /// The prompt list's key context. Its own key handler moves through the list
 /// with Ctrl+N and Ctrl+P, ahead of any application shortcut on those keys.
 pub(crate) const LIST_CONTEXT: &str = "PromptList";
@@ -424,7 +427,7 @@ impl Workspace {
                 .aria_label(label.clone())
                 .track_focus(&panel.focus)
                 .flex_1()
-                .min_h_0()
+                .min_w_0()
                 .overflow_y_scroll()
                 .track_scroll(&panel.scroll)
                 .p(px(4.0))
@@ -479,8 +482,13 @@ impl Workspace {
                     )
                     .test_support()
                 }))
-                .test_support()
-                .into_any_element();
+                .test_support();
+            let list = div()
+                .flex_1()
+                .min_h_0()
+                .flex_row_from(direction)
+                .child(list)
+                .child(div().w(px(SCROLL_GUTTER)).flex_shrink_0());
             div()
                 .id("prompt-panel")
                 .w(px(PANEL_WIDTH.min(self.chat_area_width(window) - 24.0)))

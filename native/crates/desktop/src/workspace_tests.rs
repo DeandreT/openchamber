@@ -1105,6 +1105,15 @@ fn prompt_navigator_shortcut_preserves_the_draft_and_jumps_to_a_prompt(cx: &mut 
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
         assert!(window.find(ElementId::Name("prompt-list".into())).visible());
+        assert_eq!(
+            window
+                .find(ElementId::Name("prompt-list".into()))
+                .bounds()
+                .size
+                .width,
+            px(314.0),
+            "the list leaves the scroller's 6 px gutter of the 320 px panel"
+        );
         window.press("ctrl-p", cx);
         window.render_frame(cx);
         let previous = &prompt_ids[prompt_ids.len() - 2];

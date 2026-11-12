@@ -4,9 +4,9 @@
 //! four rows tall before it scrolls.
 
 use gpui_kit::{
-    AnyElement, App, AppContext, Context, InteractiveElement, IntoElement, ParentElement, Render,
-    Role, SharedString, StatefulInteractiveElement, Styled, TestSupportExt, Window, div,
-    prelude::FluentBuilder, px,
+    AnyElement, App, AppContext, Context, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, Render, Role, SharedString, StatefulInteractiveElement, Styled, TestSupportExt,
+    Window, div, prelude::FluentBuilder, px,
 };
 use openchamber_native_core::message_queue::{QueuedItemId, QueuedMessage};
 use openchamber_native_core::send_config;
@@ -23,11 +23,21 @@ use crate::workspace::Workspace;
 const ROW_HEIGHT: f32 = 32.0;
 /// `max-h-40`.
 const LIST_MAX_HEIGHT: f32 = 160.0;
-/// `text-sm` and `typography-ui-label`, in rems.
+/// The strip's `border-b`. A lone message's row carries it inside its
+/// border-box height; the list's header and rows sit above it.
+const BORDER: f32 = 1.0;
+/// `text-sm`, in rems.
 const TEXT_SIZE: f32 = 0.875;
 const TEXT_LINE: f32 = 1.25;
-const ACTION_SIZE: f32 = 0.75;
-const ACTION_LINE: f32 = 1.0;
+/// `typography-ui-label`, which the `Button` actions and the agent badge
+/// use, in rems.
+const LABEL_SIZE: f32 = 0.843_75;
+const LABEL_LINE: f32 = 1.25;
+/// `Button size="sm"` with an icon as its first child: `h-7 gap-1.5
+/// has-[>svg]:px-2`.
+const ACTION_HEIGHT: f32 = 28.0;
+const ACTION_PADDING_X: f32 = 8.0;
+const ACTION_GAP: f32 = 6.0;
 
 /// A queued message being dragged.
 #[derive(Clone)]
@@ -78,6 +88,7 @@ impl Workspace {
             return Some(
                 strip
                     .child(self.queued_row(message, false, palette, direction, cx))
+                    .test_support()
                     .into_any_element(),
             );
         }
@@ -141,6 +152,7 @@ impl Workspace {
                             })),
                     )
                 })
+                .test_support()
                 .into_any_element(),
         )
     }
@@ -172,13 +184,14 @@ impl Workspace {
                 .role(Role::Button)
                 .accessibility_id(SharedString::from(format!("queued-{name}-{key}")))
                 .aria_label(label.clone())
-                .h(px(28.0))
-                .px(px(6.0))
+                .h(px(ACTION_HEIGHT))
+                .px(px(ACTION_PADDING_X))
                 .flex_shrink_0()
                 .flex_row_from(direction)
                 .items_center()
-                .gap(px(4.0))
+                .gap(px(ACTION_GAP))
                 .cursor_pointer()
+                .font_weight(FontWeight::MEDIUM)
                 .text_color(palette.muted_foreground)
                 .hover(|style| style.text_color(palette.foreground))
                 // A press here never takes focus from the editor.
@@ -220,7 +233,11 @@ impl Workspace {
             .role(Role::Group)
             .accessibility_id(row_id)
             .aria_label(line.clone())
-            .h(px(ROW_HEIGHT))
+            .h(px(if sortable {
+                ROW_HEIGHT
+            } else {
+                ROW_HEIGHT - BORDER
+            }))
             .min_w_0()
             .padding_start(direction, px(12.0))
             .padding_end(direction, px(6.0))
@@ -280,12 +297,13 @@ impl Workspace {
                         .flex_row_from(direction)
                         .items_center()
                         .gap(px(6.0))
+                        .font_weight(FontWeight::MEDIUM)
                         .text_color(color)
                         .child(glyph("ai-agent", 14.0, color))
                         .child(
                             div()
                                 .truncate()
-                                .css_text(ACTION_SIZE, ACTION_LINE, cx)
+                                .css_text(LABEL_SIZE, LABEL_LINE, cx)
                                 .child(label),
                         ),
                 )
@@ -297,11 +315,8 @@ impl Workspace {
                 let send_label = strings.get("chat.queuedMessage.send");
                 this.child(
                     on_activate(
-                        action("edit", "edit", edit_label.clone(), palette).child(
-                            div()
-                                .css_text(ACTION_SIZE, ACTION_LINE, cx)
-                                .child(edit_label),
-                        ),
+                        action("edit", "edit", edit_label.clone(), palette)
+                            .child(div().css_text(LABEL_SIZE, LABEL_LINE, cx).child(edit_label)),
                         cx,
                         move |this, window, cx| this.edit_queued(&edit_id, window, cx),
                     )
@@ -309,11 +324,8 @@ impl Workspace {
                 )
                 .child(
                     on_activate(
-                        action("send", "send-plane", send_label.clone(), palette).child(
-                            div()
-                                .css_text(ACTION_SIZE, ACTION_LINE, cx)
-                                .child(send_label),
-                        ),
+                        action("send", "send-plane", send_label.clone(), palette)
+                            .child(div().css_text(LABEL_SIZE, LABEL_LINE, cx).child(send_label)),
                         cx,
                         move |this, window, cx| this.send_queued(&send_id, window, cx),
                     )

@@ -31,7 +31,29 @@ pub(crate) enum PickerKind {
     Effort,
 }
 
+/// The triggers' `typography-meta`, in rems.
+const LABEL_SIZE: f32 = 0.781_25;
+const LABEL_LINE: f32 = 1.125;
+/// The effort's slash carries no typography class
+/// (`model-controls__variant-slash`), so it keeps the page's 16 px text
+/// beside the 12.5 px label. Its box is 22 px tall in the web client.
+const SLASH_SIZE: f32 = 1.0;
+const SLASH_LINE: f32 = 1.375;
+/// The web client measures the slash 5.95 px wide. A whole-pixel box keeps
+/// the controls after it on the pixel grid.
+const SLASH_WIDTH: f32 = 6.0;
+pub(crate) const SLASH_ID: &str = "composer-variant-slash";
+
 impl PickerKind {
+    /// The menu's width: `w-[min(380px,…)]` for models and
+    /// `w-[min(280px,…)]` for agents in `ModelControls.tsx`.
+    fn menu_width(self) -> f32 {
+        match self {
+            Self::Model => 380.0,
+            Self::Agent => 280.0,
+            Self::Effort => 320.0,
+        }
+    }
     fn id(self) -> &'static str {
         match self {
             Self::Model => "composer-model",
@@ -469,7 +491,7 @@ impl RenderOnce for SelectionControl {
                 .max_w_full()
                 .h(px(32.0))
                 .disabled(self.disabled)
-                .menu_width(px(320.0))
+                .menu_width(px(self.kind.menu_width()))
                 .menu_max_h(px(320.0))
                 .menu_offset(px(4.0))
                 .menu_align(if self.direction == Direction::RightToLeft {
@@ -508,10 +530,13 @@ impl RenderOnce for SelectionControl {
                     let leading = if suffix && self.show_label {
                         Some(
                             div()
+                                .id(SLASH_ID)
                                 .flex_shrink_0()
-                                .css_text(0.78125, 1.125, cx)
+                                .w(px(SLASH_WIDTH))
+                                .css_text(SLASH_SIZE, SLASH_LINE, cx)
                                 .text_color(palette.muted_foreground.opacity(0.6))
                                 .child("/")
+                                .test_support()
                                 .into_any_element(),
                         )
                     } else if let Some(provider) = self.provider.as_ref() {
@@ -567,7 +592,7 @@ impl RenderOnce for SelectionControl {
                                 .min_w_0()
                                 .max_w(px(if suffix { 180.0 } else { 260.0 }))
                                 .truncate()
-                                .css_text(0.78125, 1.125, cx)
+                                .css_text(LABEL_SIZE, LABEL_LINE, cx)
                                 .font_weight(FontWeight::MEDIUM)
                                 .text_color(self.label_color)
                                 .child(shown)
@@ -665,7 +690,9 @@ mod tests {
                 catalog.providers = Load::Ready(providers);
                 catalog.opencode = Load::Ready(Default::default());
                 workspace.send_catalog.insert_test_directory(path, catalog);
-                workspace.panels.open = Some(crate::files_view::PanelSurface::Files);
+                // A surface at the zone's stored width; Files without a file
+                // would shrink it to the tree.
+                workspace.panels.open = Some(crate::files_view::PanelSurface::Git);
                 workspace.pane_sizes.panel_width = Some(640.0);
                 workspace.open_persistence(fixture.journal(), window, cx);
             });
@@ -780,6 +807,64 @@ mod tests {
                 dictation.left() - agent.right(),
                 px(12.0),
                 "the controls end where the reference's do"
+            );
+        })
+        .expect("window opens");
+    }
+
+    #[test]
+    fn menus_take_the_reference_widths() {
+        assert_eq!(PickerKind::Model.menu_width(), 380.0);
+        assert_eq!(PickerKind::Agent.menu_width(), 280.0);
+    }
+
+    #[gpui_kit::test]
+    fn the_effort_slash_keeps_the_page_text_beside_the_label(cx: &mut TestAppContext) {
+        cx.executor().allow_parking();
+        let fixture = crate::recovery_tests::Fixture::new();
+        let (window, workspace) = crate::workspace_tests::open(cx);
+        cx.update_window(window, |_, window, cx| {
+            window.activate_accessibility_for_test();
+            workspace.update(cx, |workspace, cx| setup(workspace, window, cx));
+            workspace.update(cx, |workspace, cx| {
+                workspace.open_persistence(fixture.journal(), window, cx)
+            });
+        })
+        .expect("open journal");
+        crate::recovery_tests::ready(cx, &workspace);
+        cx.update_window(window, |_, window, cx| {
+            // The effort shows once the owner has a model with a variant.
+            workspace.update(cx, |workspace, cx| {
+                let owner = workspace
+                    .selection_owner()
+                    .expect("fixture selection owner");
+                workspace.choose_composer_model(
+                    &owner,
+                    ModelChoice {
+                        provider_id: "provider".into(),
+                        model_id: "alpha".into(),
+                        variant: Some("low".into()),
+                    },
+                    cx,
+                );
+            });
+            window.render_frame(cx);
+            let effort = window.find("composer-variant").bounds();
+            let slash = window.find(SLASH_ID).bounds();
+            assert_eq!(effort.size.height, px(32.0), "the footer's control height");
+            assert_eq!(
+                slash.size.height,
+                px(22.0),
+                "the slash has no typography class: 16px text in a 22px box"
+            );
+            assert_eq!(
+                slash.left(),
+                effort.left(),
+                "the slash leads the effort trigger"
+            );
+            assert!(
+                slash.right() + px(4.0) <= effort.right(),
+                "gap-1 separates the slash from the effort label: {slash:?}, {effort:?}"
             );
         })
         .expect("window opens");

@@ -164,7 +164,8 @@ impl GitView {
         cx.notify();
     }
 
-    /// The header's identity button.
+    /// The state row's identity control (`IdentityDropdown iconOnly`): the
+    /// icon and a chevron; the label names who commits.
     pub(super) fn render_identity_button(
         &self,
         palette: &Palette,
@@ -191,25 +192,18 @@ impl GitView {
                 )))
                 .aria_expanded(self.identities.open)
                 .h(px(28.0))
-                .max_w(px(140.0))
-                .px(px(6.0))
+                .px(px(8.0))
+                .flex_shrink_0()
                 .rounded(px(CONTROL_RADIUS))
                 .flex_row_from(direction)
                 .items_center()
-                .gap(px(4.0))
+                .gap(px(6.0))
                 .when(!disabled, |this| {
                     this.cursor_pointer().hover(move |style| style.bg(hover))
                 })
                 .when(disabled, |this| this.opacity(0.6))
-                .child(glyph("user", 14.0, palette.muted_foreground))
-                .child(
-                    div()
-                        .min_w_0()
-                        .truncate()
-                        .css_text(XS_SIZE, XS_LINE, cx)
-                        .text_color(palette.foreground)
-                        .child(label),
-                ),
+                .child(glyph("user", 16.0, palette.status_info))
+                .child(glyph("arrow-down-s", 16.0, palette.muted_foreground)),
             cx,
             move |this: &mut Self, _, cx| {
                 if !disabled {

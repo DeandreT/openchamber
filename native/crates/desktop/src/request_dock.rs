@@ -11,6 +11,7 @@ use openchamber_native_core::pending_requests::{
     PendingRequest, RequestId, RequestKey, ResponseState,
 };
 use openchamber_native_core::permission::PermissionReply;
+use openchamber_native_core::shortcuts::{self, Platform};
 
 use crate::activation::on_activate;
 use crate::baseline::CssTextExt;
@@ -25,7 +26,8 @@ mod permission;
 #[derive(Clone, Copy)]
 enum Control {
     Raised,
-    Permission(PermissionReply),
+    /// A reply and the shortcut shown after its label.
+    Permission(PermissionReply, Option<&'static str>),
     Details(bool),
     Advance(bool),
     Ghost,
@@ -58,6 +60,20 @@ fn option_label(label: &str, recommended: &str) -> String {
         label.to_owned()
     }
 }
+
+/// The shortcut `PermissionActions` shows on a reply's button. The Always
+/// button shows none once its label names what it saves.
+fn permission_shortcut(decision: PermissionReply, names_patterns: bool) -> Option<&'static str> {
+    match decision {
+        PermissionReply::Reject => Some("alt+backspace"),
+        PermissionReply::Once => Some("alt+enter"),
+        PermissionReply::Always => (!names_patterns).then_some("alt+shift+enter"),
+    }
+}
+
+/// `hidden sm:inline`: shortcuts show from Tailwind's 640 px breakpoint, read
+/// against the window's content as the web reads its viewport.
+const SHORTCUT_MIN_WINDOW_WIDTH: f32 = 640.0;
 
 fn button(
     id: String,
@@ -94,6 +110,16 @@ fn button(
         })
         .read(cx)
         .clone();
+    let shortcut = match control {
+        Control::Permission(_, combo)
+            if f32::from(crate::chrome::content_size(window).width)
+                >= SHORTCUT_MIN_WINDOW_WIDTH =>
+        {
+            combo
+        }
+        _ => None,
+    };
+    let shortcut_id = format!("{id}-shortcut");
     on_activate(
         div()
             .id(SharedString::from(id.clone()))
@@ -191,7 +217,7 @@ fn button(
                     .bg(palette.primary.opacity(0.1))
                     .text_color(palette.primary)
                     .shadow(raised(palette)),
-                Control::Permission(decision) => element
+                Control::Permission(decision, _) => element
                     .gap(px(4.))
                     .px(px(6.))
                     .flex_shrink_0()
@@ -266,7 +292,7 @@ fn button(
                     element.child(
                         div()
                             .when(
-                                matches!(control, Control::Permission(PermissionReply::Always)),
+                                matches!(control, Control::Permission(PermissionReply::Always, _)),
                                 |element| element.max_w(px(180.)).truncate(),
                             )
                             .css_text(
@@ -291,7 +317,22 @@ fn button(
                             .child(label),
                     )
                 },
-            ),
+            )
+            // `<kbd class="ms-1 typography-micro opacity-60">` in the
+            // interface font.
+            .when_some(shortcut, |element, combo| {
+                let hint = shortcuts::format_for_display(combo, "", Platform::current());
+                element.child(
+                    div()
+                        .id(SharedString::from(shortcut_id))
+                        .aria_label(hint.clone())
+                        .test_support()
+                        .margin_start(locale::strings(cx).direction(), px(4.))
+                        .opacity(0.6)
+                        .css_text(0.75, 1.0625, cx)
+                        .child(hint),
+                )
+            }),
         cx,
         move |this, window, cx| {
             if enabled {
@@ -632,7 +673,13 @@ impl Workspace {
                             strings.get(label)
                         },
                         enabled,
-                        Control::Permission(decision),
+                        Control::Permission(
+                            decision,
+                            permission_shortcut(
+                                decision,
+                                permission::always_names_patterns(request),
+                            ),
+                        ),
                         palette,
                         (window, cx),
                         move |this, window, cx| {
@@ -1252,6 +1299,18 @@ mod tests {
                         .role(),
                     Some(Role::Button)
                 );
+                for (suffix, combo) in [("once", "alt+enter"), ("reject", "alt+backspace")] {
+                    let hint = shortcuts::format_for_display(combo, "", Platform::current());
+                    assert_eq!(
+                        window
+                            .find(ElementId::Name(
+                                format!("permission-{id}-{suffix}-shortcut").into()
+                            ))
+                            .label(),
+                        Some(hint.as_str()),
+                        "{case}: the {suffix} button shows its shortcut"
+                    );
+                }
             })
             .expect("permission fixture window");
         }

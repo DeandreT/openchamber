@@ -421,8 +421,9 @@ mod tests {
                 cx.set_global(locale::Strings::load(language));
                 window.activate_accessibility_for_test();
                 workspace.update(cx, |workspace, _| {
+                    // Files without a file would shrink the zone to its tree.
                     workspace.panels.open =
-                        panel_open.then_some(crate::files_view::PanelSurface::Files);
+                        panel_open.then_some(crate::files_view::PanelSurface::Git);
                     workspace.pane_sizes.panel_width = Some(640.0);
                 });
                 window.render_frame(cx);

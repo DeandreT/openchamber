@@ -24,6 +24,7 @@ use openchamber_native_transport::credential::Credential;
 use openchamber_native_transport::endpoint::Endpoint;
 use serde_json::{Value, json};
 
+use crate::diff_view::DiffView;
 use crate::files_view::{FilesView, PanelScope};
 use crate::git_view::GitView;
 use crate::locale::Strings;
@@ -65,6 +66,11 @@ struct World {
     fail: Vec<(&'static str, u16, &'static str)>,
     requests: Vec<Request>,
     lose_rename_response: bool,
+    /// Paths whose revert the server refuses.
+    revert_fail: Vec<String>,
+    /// Paths whose patch is not a diff, and paths left out of a diffs answer.
+    bad_patch: Vec<String>,
+    omit_patch: Vec<String>,
 }
 
 impl World {
@@ -194,6 +200,27 @@ impl World {
                 "diff": format!("diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n-old\n+new\n"),
                 "submodule": null,
             })),
+            ("POST", "/api/git/diffs") => {
+                let paths = request.json()["paths"]
+                    .as_array()
+                    .cloned()
+                    .unwrap_or_default();
+                let diffs: Vec<Value> = paths
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .filter(|path| !self.omit_patch.iter().any(|omitted| omitted == path))
+                    .map(|path| {
+                        if self.bad_patch.iter().any(|bad| bad == path) {
+                            return json!({ "path": path, "diff": "not a patch\n" });
+                        }
+                        json!({
+                            "path": path,
+                            "diff": format!("diff --git a/{path} b/{path}\n--- a/{path}\n+++ b/{path}\n@@ -1 +1 @@\n-old\n+new\n"),
+                        })
+                    })
+                    .collect();
+                ok(json!({ "diffs": diffs }))
+            }
             ("POST", "/api/git/stage") => {
                 for path in request.json()["paths"].as_array().into_iter().flatten() {
                     if let Some(entry) = self
@@ -212,6 +239,13 @@ impl World {
                     .as_str()
                     .unwrap_or_default()
                     .to_owned();
+                if self.revert_fail.contains(&target) {
+                    return (
+                        500,
+                        "application/json",
+                        json!({ "error": format!("cannot revert {target}") }).to_string(),
+                    );
+                }
                 let working = request.json()["scope"] == "working";
                 self.status.retain_mut(|(candidate, index, worktree)| {
                     if *candidate != target {
@@ -1810,4 +1844,1012 @@ fn switching_during_an_existing_save_refuses_until_it_finishes(cx: &mut TestAppC
         cx.read(|cx| editor_text(&view, cx)) == Some("lib\n".into())
     });
     assert_eq!(server.requests("POST", "/api/fs/write").len(), 1);
+}
+
+/// An element's left, top, width and height in logical pixels.
+fn rect_of(window: &gpui_kit::Window, id: &str) -> [f32; 4] {
+    let bounds = window.find(name(id)).bounds();
+    [
+        f32::from(bounds.left()),
+        f32::from(bounds.top()),
+        f32::from(bounds.size.width),
+        f32::from(bounds.size.height),
+    ]
+}
+
+/// Connects a 1280x800 workspace window, the parity runner's size, to
+/// `server`.
+fn open_connected(
+    cx: &mut TestAppContext,
+    server: &Scripted,
+    harness: &Harness,
+) -> (AnyWindowHandle, Entity<crate::workspace::Workspace>) {
+    let (window, workspace) = crate::workspace_tests::open(cx);
+    cx.executor().allow_parking();
+    let config = crate::connection::ServerConfig {
+        endpoint: server.endpoint.clone(),
+        password: None,
+        client: openchamber_native_transport::client::ClientDescription {
+            label: "test".into(),
+            kind: "desktop".into(),
+            dedupe_key: None,
+            device_platform: None,
+            app_version: None,
+        },
+    };
+    let mut connection = crate::connection::Connection::new(config).expect("network");
+    connection.client = Some(harness.scope.client.clone());
+    cx.update(|cx| workspace.update(cx, |workspace, _| workspace.connection = Some(connection)));
+    (window, workspace)
+}
+
+/// Sidebar sessions in `count` different directories, with those
+/// directories as the panel resolves them.
+fn sessions_in_directories(
+    workspace: &Entity<crate::workspace::Workspace>,
+    cx: &mut TestAppContext,
+    count: usize,
+) -> Vec<(openchamber_native_core::ids::SessionId, String)> {
+    cx.read(|cx| {
+        let workspace = workspace.read(cx);
+        let mut found: Vec<(openchamber_native_core::ids::SessionId, String)> = Vec::new();
+        for item in &workspace.sidebar_items {
+            let crate::sidebar_item::SidebarItem::Session { session_id, .. } = item else {
+                continue;
+            };
+            let directory = workspace
+                .session(session_id)
+                .and_then(|session| path::normalize_optional(session.directory.as_deref()));
+            if let Some(directory) = directory
+                && found.iter().all(|(_, known)| *known != directory)
+            {
+                found.push((session_id.clone(), directory));
+            }
+            if found.len() == count {
+                break;
+            }
+        }
+        assert_eq!(
+            found.len(),
+            count,
+            "the synthetic workload has sessions in {count} directories"
+        );
+        found
+    })
+}
+
+/// A project-less draft with nowhere to fall back to: its directory is
+/// unresolved.
+fn show_unresolved_draft(
+    workspace: &Entity<crate::workspace::Workspace>,
+    window: &mut gpui_kit::Window,
+    cx: &mut gpui_kit::App,
+) {
+    workspace.update(cx, |workspace, cx| {
+        workspace.show_new_session(window, cx);
+        workspace.draft_projects.remove(&workspace.runtime.clone());
+        workspace.send_catalog.settings = None;
+        assert_eq!(workspace.panel_directory(), None);
+    });
+}
+
+/// The Files zone at the parity runner's 1280x800 window, against the
+/// packaged 2.6.1 geometry: the tree alone, a file open in a session, a
+/// draft in another project, and the return to the session.
+#[gpui_kit::test]
+fn the_files_zone_matches_the_reference_at_the_runner_window(cx: &mut TestAppContext) {
+    let server = Scripted::new(World::default());
+    let harness = harness(&server);
+    let (window, workspace) = open_connected(cx, &server, &harness);
+    let (session, directory) = sessions_in_directories(&workspace, cx, 1).remove(0);
+    // A registered project elsewhere, for a draft that leaves the session's
+    // directory.
+    let elsewhere = cx.read(|cx| {
+        workspace
+            .read(cx)
+            .topology
+            .projects
+            .iter()
+            .map(|project| project.path.clone())
+            .find(|project| path::normalize(project).as_deref() != Some(directory.as_str()))
+            .expect("the synthetic workload has a second project")
+    });
+    {
+        let mut world = server.world.lock().expect("world");
+        world.write(&format!("{directory}/README.md"), "# Readme\n");
+        world.write(&format!("{directory}/src/app.txt"), "one\ntwo\n");
+    }
+    let folder = format!("files-row:{directory}/src");
+    let readme = format!("files-row:{directory}/README.md");
+    let file = format!("files-row:{directory}/src/app.txt");
+
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.work_status_open = true;
+            workspace.select_session(session.clone(), window, cx)
+        });
+        window.render_frame(cx);
+        assert!(workspace.read(cx).sidebar_open);
+        assert!(window.try_find(name("side-panel")).is_none());
+        window.click(name("rail-files"), cx);
+    })
+    .expect("window is open");
+    wait_for_element(cx, window, &readme);
+
+    // The tree alone: the zone is the tree's 240 px, and the sidebar folds,
+    // because the 956 px row would leave 316 px beside the stored 640 px.
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(!workspace.read(cx).sidebar_open);
+        assert_eq!(rect_of(window, "new-session"), [72.0, 12.0, 24.0, 24.0]);
+        assert_eq!(rect_of(window, "side-panel"), [996.0, 48.0, 240.0, 752.0]);
+        assert_eq!(rect_of(window, "files-panel"), [1004.0, 48.0, 226.0, 744.0]);
+        // 1236 px of row keep the card's column beside the 240 px tree.
+        let card = rect_of(window, "work-status");
+        assert_eq!([card[0], card[1], card[2]], [680.0, 64.0, 300.0]);
+        let tab = rect_of(window, "files-tab");
+        assert_eq!([tab[0], tab[1], tab[3]], [1004.0, 48.0, 40.0]);
+        assert!(window.try_find(name("files-toggle-editor")).is_none());
+        assert_eq!(
+            rect_of(window, "files-toggle-tree"),
+            [1164.0, 54.0, 28.0, 28.0]
+        );
+        assert_eq!(
+            rect_of(window, "files-close-panel"),
+            [1196.0, 54.0, 28.0, 28.0]
+        );
+        for (id, left) in [
+            ("files-show-gitignored", 1146.0),
+            ("files-refresh", 1172.0),
+            ("files-collapse-all", 1198.0),
+        ] {
+            let button = rect_of(window, id);
+            assert_eq!(
+                [button[0], button[2], button[3]],
+                [left, 24.0, 24.0],
+                "{id}"
+            );
+        }
+        assert_eq!(
+            rect_of(window, "files-search"),
+            [1012.0, 129.0, 210.0, 32.0]
+        );
+        assert_eq!(rect_of(window, &folder), [1010.0, 176.0, 208.0, 26.0]);
+        assert_eq!(rect_of(window, &readme), [1010.0, 202.0, 208.0, 26.0]);
+        window.click(name(folder.clone()), cx);
+    })
+    .expect("window is open");
+    wait_for_element(cx, window, &file);
+    cx.update_window(window, |_, window, cx| window.click(name(file.clone()), cx))
+        .expect("window is open");
+    wait_for_element(cx, window, "files-save");
+
+    // A file open in the session: the zone takes its stored 640 px, the
+    // editor the room before the 240 px tree.
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(!workspace.read(cx).sidebar_open);
+        assert_eq!(rect_of(window, "new-session"), [72.0, 12.0, 24.0, 24.0]);
+        assert_eq!(rect_of(window, "side-panel"), [596.0, 48.0, 640.0, 752.0]);
+        assert_eq!(rect_of(window, "files-panel"), [604.0, 48.0, 626.0, 744.0]);
+        assert!(
+            window.try_find(name("work-status")).is_none(),
+            "the card yields beside the 640 px zone"
+        );
+        let tab = rect_of(window, "files-tab");
+        assert_eq!([tab[0], tab[1], tab[3]], [604.0, 48.0, 40.0]);
+        assert_eq!(
+            rect_of(window, "files-toggle-editor"),
+            [1132.0, 54.0, 28.0, 28.0]
+        );
+        assert_eq!(
+            rect_of(window, "files-toggle-tree"),
+            [1164.0, 54.0, 28.0, 28.0]
+        );
+        assert_eq!(
+            rect_of(window, "files-close-panel"),
+            [1196.0, 54.0, 28.0, 28.0]
+        );
+        assert_eq!(
+            rect_of(window, "files-editor"),
+            [604.0, 121.0, 386.0, 671.0]
+        );
+        for (id, left) in [("files-preview", 932.0), ("files-save", 958.0)] {
+            let button = rect_of(window, id);
+            assert_eq!(
+                [button[0], button[2], button[3]],
+                [left, 24.0, 24.0],
+                "{id}"
+            );
+        }
+        assert_eq!(rect_of(window, "files-search"), [998.0, 129.0, 224.0, 32.0]);
+        assert_eq!(rect_of(window, &folder), [996.0, 176.0, 222.0, 26.0]);
+        assert_eq!(rect_of(window, &file), [996.0, 202.0, 222.0, 26.0]);
+        assert_eq!(rect_of(window, &readme), [996.0, 228.0, 222.0, 26.0]);
+        // A draft in another project, reached in one step.
+        workspace.update(cx, |workspace, cx| {
+            workspace.show_new_session(window, cx);
+            workspace.choose_draft_project(&elsewhere, window, cx);
+        });
+    })
+    .expect("window is open");
+
+    // The draft's directory is another one: the session's zone stays behind
+    // and the sidebar it folded comes back.
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let state = workspace.read(cx);
+        assert_eq!(state.selected, None);
+        assert_eq!(state.panels.open, None);
+        assert!(state.sidebar_open);
+        assert!(window.try_find(name("side-panel")).is_none());
+        let button = rect_of(window, "new-session");
+        assert_eq!([button[0], button[1], button[3]], [72.0, 12.0, 24.0]);
+        assert!(button[2] > 24.0, "the open sidebar labels New session");
+        workspace.update(cx, |workspace, cx| {
+            workspace.select_session(session.clone(), window, cx)
+        });
+        window.render_frame(cx);
+        // The session's editor is back. A zone that is simply there after a
+        // switch folds nothing, so it keeps the chat's 320 px by narrowing.
+        let state = workspace.read(cx);
+        assert_eq!(
+            state.panels.open,
+            Some(crate::files_view::PanelSurface::Files)
+        );
+        assert!(state.sidebar_open);
+        assert_eq!(rect_of(window, "side-panel"), [600.0, 48.0, 636.0, 752.0]);
+        assert!(window.try_find(name("files-editor")).is_some());
+        window.click(name("files-close-panel"), cx);
+    })
+    .expect("window is open");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(workspace.read(cx).panels.open, None);
+        assert!(window.try_find(name("side-panel")).is_none());
+        // Opened again with the sidebar open, the zone folds it; closing the
+        // zone gives it back.
+        window.click(name("rail-files"), cx);
+        window.render_frame(cx);
+        assert!(!workspace.read(cx).sidebar_open);
+        window.click(name("rail-files"), cx);
+        window.render_frame(cx);
+        assert!(workspace.read(cx).sidebar_open);
+        // The user's own toggle is theirs to keep.
+        window.click(name("rail-files"), cx);
+        window.render_frame(cx);
+        window.click(name("sidebar-toggle"), cx);
+        window.render_frame(cx);
+        assert!(workspace.read(cx).sidebar_open);
+        window.click(name("sidebar-toggle"), cx);
+        window.render_frame(cx);
+        window.click(name("rail-files"), cx);
+        window.render_frame(cx);
+        assert!(
+            !workspace.read(cx).sidebar_open,
+            "a sidebar the user closed stays closed when the zone closes"
+        );
+    })
+    .expect("window is open");
+}
+
+/// An unresolved directory neither owns nor receives zone state: the zone on
+/// screen stays through it and goes to the first resolved directory.
+#[gpui_kit::test]
+fn an_unresolved_directory_carries_the_zone_to_the_next_resolved_one(cx: &mut TestAppContext) {
+    use crate::files_view::PanelSurface;
+
+    let (window, workspace) = crate::workspace_tests::open(cx);
+    let sessions = sessions_in_directories(&workspace, cx, 2);
+    let (first, second) = (sessions[0].0.clone(), sessions[1].0.clone());
+    let open = |workspace: &Entity<crate::workspace::Workspace>, cx: &gpui_kit::App| {
+        workspace.read(cx).panels.open
+    };
+    cx.update_window(window, |_, window, cx| {
+        // Unresolved to resolved: a zone opened before any directory is
+        // known is not closed by the first one that resolves.
+        show_unresolved_draft(&workspace, window, cx);
+        window.render_frame(cx);
+        window.click(name("rail-git"), cx);
+        window.render_frame(cx);
+        assert_eq!(open(&workspace, cx), Some(PanelSurface::Git));
+        workspace.update(cx, |workspace, cx| {
+            workspace.select_session(first.clone(), window, cx)
+        });
+        window.render_frame(cx);
+        assert_eq!(open(&workspace, cx), Some(PanelSurface::Git));
+        assert!(window.try_find(name("side-panel")).is_some());
+
+        // Resolved to unresolved and back: nothing is parked or restored.
+        show_unresolved_draft(&workspace, window, cx);
+        window.render_frame(cx);
+        assert_eq!(open(&workspace, cx), Some(PanelSurface::Git));
+        workspace.update(cx, |workspace, cx| {
+            workspace.select_session(first.clone(), window, cx)
+        });
+        window.render_frame(cx);
+        assert_eq!(open(&workspace, cx), Some(PanelSurface::Git));
+
+        // Through an unresolved frame to another directory: the zone is
+        // carried there, and the first directory kept nothing.
+        show_unresolved_draft(&workspace, window, cx);
+        window.render_frame(cx);
+        workspace.update(cx, |workspace, cx| {
+            workspace.select_session(second.clone(), window, cx)
+        });
+        window.render_frame(cx);
+        assert_eq!(open(&workspace, cx), Some(PanelSurface::Git));
+        workspace.update(cx, |workspace, cx| {
+            workspace.select_session(first.clone(), window, cx)
+        });
+        window.render_frame(cx);
+        assert_eq!(
+            open(&workspace, cx),
+            None,
+            "resolved to resolved parks the zone"
+        );
+        workspace.update(cx, |workspace, cx| {
+            workspace.select_session(second.clone(), window, cx)
+        });
+        window.render_frame(cx);
+        assert_eq!(open(&workspace, cx), Some(PanelSurface::Git));
+    })
+    .expect("window is open");
+}
+
+/// A parked extension panel returns as itself, whatever extension another
+/// directory opened meanwhile.
+#[gpui_kit::test]
+fn a_parked_extension_panel_returns_as_itself(cx: &mut TestAppContext) {
+    use crate::files_view::PanelSurface;
+    use openchamber_native_transport::web_content::GuestPanel;
+
+    let (window, workspace) = crate::workspace_tests::open(cx);
+    let sessions = sessions_in_directories(&workspace, cx, 2);
+    let (first, second) = (sessions[0].0.clone(), sessions[1].0.clone());
+    let guest = |id: &str| GuestPanel {
+        id: id.to_owned(),
+        name: id.to_owned(),
+        icon: "apps".to_owned(),
+        entry: "index.html".to_owned(),
+    };
+    let shown = |workspace: &Entity<crate::workspace::Workspace>, cx: &gpui_kit::App| {
+        let workspace = workspace.read(cx);
+        (
+            workspace.panels.open,
+            workspace
+                .panels
+                .open_guest
+                .as_ref()
+                .map(|panel| panel.id.clone()),
+        )
+    };
+    cx.update_window(window, |_, window, cx| {
+        for (session, id) in [(&first, "alpha"), (&second, "beta")] {
+            workspace.update(cx, |workspace, cx| {
+                workspace.select_session(session.clone(), window, cx)
+            });
+            window.render_frame(cx);
+            assert_eq!(shown(&workspace, cx).0, None);
+            workspace.update(cx, |workspace, cx| {
+                workspace.toggle_guest_panel(guest(id), cx)
+            });
+            window.render_frame(cx);
+        }
+        for (session, id) in [(&first, "alpha"), (&second, "beta"), (&first, "alpha")] {
+            workspace.update(cx, |workspace, cx| {
+                workspace.select_session(session.clone(), window, cx)
+            });
+            window.render_frame(cx);
+            assert_eq!(
+                shown(&workspace, cx),
+                (Some(PanelSurface::Guest), Some(id.to_owned()))
+            );
+        }
+    })
+    .expect("window is open");
+}
+
+/// The tree toggle is the user's: frames with no file open draw the tree
+/// without resetting it, and only opening Files with no file does.
+#[gpui_kit::test]
+fn the_hidden_tree_toggle_is_reset_only_when_files_opens_with_no_file(cx: &mut TestAppContext) {
+    let (window, workspace) = crate::workspace_tests::open(cx);
+    let (session, _) = sessions_in_directories(&workspace, cx, 1).remove(0);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.select_session(session.clone(), window, cx)
+        });
+        window.render_frame(cx);
+        window.click(name("rail-files"), cx);
+        window.render_frame(cx);
+        workspace.update(cx, |workspace, cx| {
+            workspace.pane_sizes.tree_hidden = true;
+            cx.notify();
+        });
+        for _ in 0..3 {
+            window.render_frame(cx);
+            let state = workspace.read(cx);
+            assert!(state.pane_sizes.tree_hidden, "a frame leaves the toggle");
+            assert!(state.panels.tree_only, "with no file the tree is drawn");
+        }
+        assert_eq!(rect_of(window, "side-panel")[2], 240.0);
+        // Another surface and back to Files: Files opens with no file.
+        window.click(name("rail-git"), cx);
+        window.render_frame(cx);
+        assert!(workspace.read(cx).pane_sizes.tree_hidden);
+        window.click(name("rail-files"), cx);
+        window.render_frame(cx);
+        assert!(!workspace.read(cx).pane_sizes.tree_hidden);
+    })
+    .expect("window is open");
+}
+
+/// With the editor hidden, the open file's row shows the editor again, and a
+/// row that raises the unsaved-changes dialog gives the dialog the editor's
+/// room.
+#[gpui_kit::test]
+fn a_file_row_shows_the_hidden_editor_and_fits_the_unsaved_dialog(cx: &mut TestAppContext) {
+    let server = Scripted::new(World::default());
+    let harness = harness(&server);
+    let (window, workspace) = open_connected(cx, &server, &harness);
+    let (session, directory) = sessions_in_directories(&workspace, cx, 1).remove(0);
+    {
+        let mut world = server.world.lock().expect("world");
+        world.write(&format!("{directory}/README.md"), "# Readme\n");
+        world.write(&format!("{directory}/notes.txt"), "notes\n");
+    }
+    let readme = format!("files-row:{directory}/README.md");
+    let notes = format!("files-row:{directory}/notes.txt");
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.select_session(session.clone(), window, cx)
+        });
+        window.render_frame(cx);
+        window.click(name("rail-files"), cx);
+    })
+    .expect("window is open");
+    wait_for_element(cx, window, &readme);
+    cx.update_window(window, |_, window, cx| {
+        window.click(name(readme.clone()), cx)
+    })
+    .expect("window is open");
+    wait_for_element(cx, window, "files-save");
+    let hide_editor = |cx: &mut TestAppContext| {
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window.click(name("files-toggle-editor"), cx);
+        })
+        .expect("window is open");
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            assert!(workspace.read(cx).pane_sizes.editor_hidden);
+            assert_eq!(rect_of(window, "side-panel")[2], 240.0);
+            assert!(window.try_find(name("files-editor")).is_none());
+        })
+        .expect("window is open");
+    };
+
+    // The open file's own row.
+    hide_editor(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.click(name(readme.clone()), cx)
+    })
+    .expect("window is open");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(!workspace.read(cx).pane_sizes.editor_hidden);
+        assert_eq!(rect_of(window, "side-panel")[2], 640.0);
+        assert!(window.try_find(name("files-editor")).is_some());
+        // An unsaved edit, then another file's row with the editor hidden.
+        window.click(name("files-editor"), cx);
+        window.press("ctrl-end", cx);
+        window.input("kept", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    hide_editor(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.click(name(notes.clone()), cx)
+    })
+    .expect("window is open");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(!workspace.read(cx).pane_sizes.editor_hidden);
+        let card = rect_of(window, "files-panel");
+        assert_eq!(card, [604.0, 48.0, 626.0, 744.0]);
+        // 320 px wide, centred in the card: nothing of it is clipped.
+        let dialog = rect_of(window, "files-unsaved");
+        assert_eq!([dialog[0], dialog[2]], [757.0, 320.0]);
+        assert!(dialog[1] >= card[1] && dialog[1] + dialog[3] <= card[1] + card[3]);
+        window.click(name("files-unsaved-cancel"), cx);
+    })
+    .expect("window is open");
+    assert!(
+        server.requests("POST", "/api/fs/write").is_empty(),
+        "cancelling keeps the draft unwritten"
+    );
+}
+
+/// A draft with no project is not a chat draft: its surfaces keep working
+/// in the active project, where a file is saved and a change staged.
+#[gpui_kit::test]
+fn a_project_less_draft_saves_and_stages_in_the_active_project(cx: &mut TestAppContext) {
+    let mut world = files_world();
+    world.status = vec![("new.txt".to_owned(), '?', '?')];
+    let server = Scripted::new(world);
+    let harness = harness(&server);
+    let (window, workspace) = open_connected(cx, &server, &harness);
+    let readme = format!("{ROOT}/README.md");
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.show_new_session(window, cx);
+            workspace.draft_projects.remove(&workspace.runtime.clone());
+            workspace.send_catalog.settings =
+                Some(openchamber_native_transport::client::ServerSettings {
+                    projects: vec![openchamber_native_core::ownership::ConfiguredProject {
+                        id: "active".into(),
+                        path: ROOT.to_owned(),
+                    }],
+                    active_project_id: Some("active".to_owned()),
+                    ..Default::default()
+                });
+            assert!(
+                workspace.topology.chat_roots.is_some(),
+                "the Chats root is known and still not used"
+            );
+            assert_eq!(workspace.panel_directory().as_deref(), Some(ROOT));
+            assert_eq!(workspace.terminal_directory().as_deref(), Some(ROOT));
+        });
+        window.render_frame(cx);
+        window.click(name("rail-files"), cx);
+    })
+    .expect("window is open");
+    wait_for_element(cx, window, &format!("files-row:{readme}"));
+    cx.update_window(window, |_, window, cx| {
+        window.click(name(format!("files-row:{readme}")), cx)
+    })
+    .expect("window is open");
+    wait_for_element(cx, window, "files-save");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(name("files-editor"), cx);
+        window.press("ctrl-end", cx);
+        window.input("more", cx);
+    })
+    .expect("window is open");
+    // The editor's change reaches the view once the input's update ends.
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(name("files-save"), cx);
+    })
+    .expect("window is open");
+    wait(cx, |_| !server.requests("POST", "/api/fs/write").is_empty());
+    let write = server.requests("POST", "/api/fs/write").remove(0);
+    // The write's directory travels in a header the scripted server does
+    // not keep; its path is inside the active project.
+    assert_eq!(write.json()["path"], json!(readme));
+
+    cx.update_window(window, |_, window, cx| window.click(name("rail-git"), cx))
+        .expect("window is open");
+    wait_for_element(cx, window, "git-stage:new.txt");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(name("git-stage:new.txt"), cx);
+    })
+    .expect("window is open");
+    wait(cx, |_| {
+        !server.requests("POST", "/api/git/stage").is_empty()
+    });
+    let stage = server.requests("POST", "/api/git/stage").remove(0);
+    assert_eq!(stage.param("directory"), Some(ROOT));
+    assert!(
+        server
+            .requests("GET", "/api/git/status")
+            .iter()
+            .all(|status| status.param("directory") == Some(ROOT)),
+        "every status read names the active project"
+    );
+}
+
+fn rect(x: f32, y: f32, width: f32, height: f32) -> Bounds<gpui_kit::Pixels> {
+    Bounds {
+        origin: point(px(x), px(y)),
+        size: size(px(width), px(height)),
+    }
+}
+
+/// `bounds` with its top measured from `top`.
+fn below(bounds: Bounds<gpui_kit::Pixels>, top: gpui_kit::Pixels) -> Bounds<gpui_kit::Pixels> {
+    Bounds {
+        origin: point(bounds.left(), bounds.top() - top),
+        size: bounds.size,
+    }
+}
+
+#[gpui_kit::test]
+fn the_git_panel_lays_out_its_groups_rows_and_commit_section_as_the_reference_does(
+    cx: &mut TestAppContext,
+) {
+    let server = Scripted::new(git_world());
+    let harness = harness(&server);
+    let (window, view) = open_git(cx, &harness);
+    wait_for_element(cx, window, "git-change:unstaged:new.txt");
+    cx.run_until_parked();
+    let quiet = cx.read(|cx| view.read(cx).notice_text().is_none());
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        // The header row with its line, then who commits.
+        assert_eq!(
+            window.find("git-header").bounds(),
+            rect(0.0, 0.0, 640.0, 41.0)
+        );
+        assert_eq!(
+            window.find("git-branch-button").bounds().origin,
+            point(px(6.0), px(6.0))
+        );
+        assert_eq!(
+            window.find("git-state-row").bounds(),
+            rect(0.0, 41.0, 640.0, 40.0)
+        );
+        assert_eq!(
+            window.find("git-identity").bounds(),
+            rect(12.0, 47.0, 54.0, 28.0)
+        );
+
+        // The list stands in `px-4 pt-1`; its rows stop 8 px short of its end.
+        let list = window.find("git-changes").bounds();
+        assert_eq!(list.left(), px(16.0));
+        assert_eq!(list.size.width, px(608.0));
+        if quiet {
+            assert_eq!(
+                list.top(),
+                px(85.0),
+                "no outcome line stands above the list"
+            );
+        }
+        let top = list.top();
+        let expected = [
+            ("git-unstage-all", rect(16.0, 8.0, 20.0, 20.0)),
+            ("git-group:staged", rect(44.0, 8.0, 572.0, 20.0)),
+            ("git-unstage:a.txt", rect(16.0, 42.0, 20.0, 20.0)),
+            ("git-change:staged:a.txt", rect(44.0, 36.0, 572.0, 32.0)),
+            // The second group: 4 px, its line, then the same 36 px.
+            ("git-stage-all", rect(16.0, 81.0, 20.0, 20.0)),
+            ("git-group:unstaged", rect(44.0, 81.0, 572.0, 20.0)),
+            ("git-stage:a.txt", rect(16.0, 115.0, 20.0, 20.0)),
+            ("git-change:unstaged:a.txt", rect(44.0, 109.0, 544.0, 32.0)),
+            ("git-discard:a.txt", rect(596.0, 115.0, 20.0, 20.0)),
+            ("git-change:unstaged:b.txt", rect(44.0, 141.0, 544.0, 32.0)),
+            (
+                "git-change:unstaged:new.txt",
+                rect(44.0, 173.0, 544.0, 32.0),
+            ),
+            ("git-discard:new.txt", rect(596.0, 179.0, 20.0, 20.0)),
+        ];
+        for (id, bounds) in expected {
+            assert_eq!(below(window.find(name(id)).bounds(), top), bounds, "{id}");
+        }
+        let revert_all = below(window.find("git-revert-all").bounds(), top);
+        assert_eq!(revert_all.top(), px(213.0));
+        assert_eq!(revert_all.size.height, px(28.0));
+        assert_eq!(revert_all.right(), px(616.0));
+
+        // The commit section ends 16 px above the panel's bottom.
+        assert_eq!(
+            window.find("git-commit-message").bounds(),
+            rect(16.0, 594.0, 608.0, 38.0)
+        );
+        let commit = window.find("git-commit").bounds();
+        assert_eq!(commit.top(), px(644.0));
+        assert_eq!(commit.size.height, px(28.0));
+        assert_eq!(commit.right(), px(624.0));
+
+        window.click(name("git-group:unstaged"), cx);
+        window.render_frame(cx);
+        assert!(
+            window.try_find(name("git-change:unstaged:b.txt")).is_none(),
+            "a collapsed group shows its header only"
+        );
+        assert!(window.try_find(name("git-change:staged:a.txt")).is_some());
+    })
+    .expect("window is open");
+}
+
+#[gpui_kit::test]
+fn the_changes_panel_lists_collapsed_files_and_opens_a_patch_under_its_row(
+    cx: &mut TestAppContext,
+) {
+    let server = Scripted::new(git_world());
+    let harness = harness(&server);
+    let scope = harness.scope.clone();
+    let (window, _view) = open_view(cx, move |_, cx| DiffView::new(scope, cx));
+    wait_for_element(cx, window, "diff-file:new.txt");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert_eq!(
+            window.find("diff-toolbar").bounds(),
+            rect(0.0, 0.0, 640.0, 41.0)
+        );
+        let scope = window.find("diff-scope").bounds();
+        assert_eq!(scope.origin, point(px(6.0), px(6.0)));
+        assert_eq!(scope.size.height, px(28.0));
+        assert_eq!(
+            window.find("diff-split").bounds(),
+            rect(610.0, 8.0, 24.0, 24.0)
+        );
+        assert_eq!(
+            window.find("diff-wrap").bounds(),
+            rect(578.0, 8.0, 24.0, 24.0)
+        );
+        assert_eq!(
+            window.find("diff-walkthrough").bounds(),
+            rect(542.0, 6.0, 28.0, 28.0)
+        );
+        let expand = window.find("diff-expand-all").bounds();
+        assert_eq!(expand.right(), px(534.0));
+        assert_eq!(expand.top(), px(6.0));
+        assert_eq!(expand.size.height, px(28.0));
+
+        // Each file: a 40 px row, its line, then the file's own line.
+        assert_eq!(
+            window.find("diff-content").bounds(),
+            rect(0.0, 41.0, 640.0, 659.0)
+        );
+        assert_eq!(
+            window.find(name("diff-file:a.txt")).bounds(),
+            rect(0.0, 41.0, 640.0, 40.0)
+        );
+        assert_eq!(
+            window.find(name("diff-file:b.txt")).bounds(),
+            rect(0.0, 83.0, 640.0, 40.0)
+        );
+        assert_eq!(
+            window.find(name("diff-file:new.txt")).bounds(),
+            rect(0.0, 125.0, 640.0, 40.0)
+        );
+        assert!(
+            window.try_find(name("diff-file-patch:b.txt")).is_none(),
+            "files start collapsed"
+        );
+        window.click(name("diff-file:b.txt"), cx);
+    })
+    .expect("window is open");
+    wait_for_element(cx, window, "diff-file-patch:b.txt");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let patch = window.find(name("diff-file-patch:b.txt")).bounds();
+        assert_eq!(patch.origin, point(px(0.0), px(124.0)));
+        assert_eq!(patch.size.width, px(640.0));
+        assert_eq!(
+            window.find(name("diff-file:new.txt")).bounds().top(),
+            patch.bottom() + px(1.0),
+            "the next file follows the open patch and the file's line"
+        );
+        assert_eq!(
+            window.find(name("diff-file:a.txt")).bounds(),
+            rect(0.0, 41.0, 640.0, 40.0),
+            "opening a file moves nothing above it"
+        );
+    })
+    .expect("window is open");
+}
+
+/// Opens the Revert all dialog, then presses its confirm button's action.
+fn ask_revert_all(cx: &mut TestAppContext, window: AnyWindowHandle, view: &Entity<GitView>) {
+    cx.update_window(window, |_, window, cx| {
+        view.update(cx, |view, cx| view.request_revert_all(window, cx))
+    })
+    .expect("window is open");
+}
+
+fn confirm_revert_all(cx: &mut TestAppContext, window: AnyWindowHandle, view: &Entity<GitView>) {
+    cx.update_window(window, |_, window, cx| {
+        view.update(cx, |view, cx| view.confirm_revert_all(window, cx))
+    })
+    .expect("window is open");
+}
+
+fn reverted_paths(server: &Scripted) -> Vec<(String, String)> {
+    server
+        .requests("POST", "/api/git/revert")
+        .iter()
+        .map(|request| {
+            let body = request.json();
+            (
+                body["path"].as_str().unwrap_or_default().to_owned(),
+                body["scope"].as_str().unwrap_or_default().to_owned(),
+            )
+        })
+        .collect()
+}
+
+#[gpui_kit::test]
+fn revert_all_reports_one_summary_that_keeps_an_earlier_failure(cx: &mut TestAppContext) {
+    let server = Scripted::new(World {
+        revert_fail: vec!["b.txt".to_owned()],
+        ..git_world()
+    });
+    let harness = harness(&server);
+    let (window, view) = open_git(cx, &harness);
+    wait_for_element(cx, window, "git-change:unstaged:new.txt");
+    cx.run_until_parked();
+    ask_revert_all(cx, window, &view);
+    assert_eq!(
+        cx.read(|cx| view.read(cx).revert_all_asking()),
+        Some(3),
+        "the dialog names every path of both groups once"
+    );
+    let reads = server.requests("GET", "/api/git/status").len();
+    confirm_revert_all(cx, window, &view);
+    wait(cx, |cx| {
+        cx.read(|cx| !view.read(cx).revert_all_running())
+            && server.requests("GET", "/api/git/status").len() > reads
+    });
+    cx.run_until_parked();
+    // b.txt failed between two successes; the summary still says so.
+    assert_eq!(
+        cx.read(|cx| view.read(cx).notice_text()).as_deref(),
+        Some("Reverted 2 files, 1 failed")
+    );
+    assert_eq!(
+        reverted_paths(&server),
+        [
+            ("a.txt".to_owned(), "all".to_owned()),
+            ("b.txt".to_owned(), "all".to_owned()),
+            ("new.txt".to_owned(), "all".to_owned()),
+        ]
+    );
+    assert_eq!(
+        server.requests("GET", "/api/git/status").len(),
+        reads + 1,
+        "the batch reads the status once"
+    );
+}
+
+#[gpui_kit::test]
+fn revert_all_runs_once_at_a_time_and_leaves_queued_paths_alone(cx: &mut TestAppContext) {
+    let server = Scripted::new(git_world());
+    let harness = harness(&server);
+    let (window, view) = open_git(cx, &harness);
+    wait_for_element(cx, window, "git-stage:new.txt");
+    cx.run_until_parked();
+    // new.txt is being staged when the batch starts: the batch leaves it.
+    *server.held_route.lock().expect("gate") = Some("/api/git/stage".into());
+    cx.update_window(window, |_, window, cx| {
+        window.click(name("git-stage:new.txt"), cx)
+    })
+    .expect("window is open");
+    wait(cx, |_| {
+        !server.requests("POST", "/api/git/stage").is_empty()
+    });
+    ask_revert_all(cx, window, &view);
+    confirm_revert_all(cx, window, &view);
+    assert!(cx.read(|cx| view.read(cx).revert_all_running()));
+    // A second request while the batch runs opens nothing.
+    ask_revert_all(cx, window, &view);
+    assert_eq!(cx.read(|cx| view.read(cx).revert_all_asking()), None);
+    *server.held_route.lock().expect("gate") = None;
+    wait(cx, |cx| cx.read(|cx| !view.read(cx).revert_all_running()));
+    assert_eq!(
+        reverted_paths(&server),
+        [
+            ("a.txt".to_owned(), "all".to_owned()),
+            ("b.txt".to_owned(), "all".to_owned()),
+        ]
+    );
+}
+
+#[gpui_kit::test]
+fn revert_all_asks_again_when_the_listed_paths_changed(cx: &mut TestAppContext) {
+    let server = Scripted::new(git_world());
+    let harness = harness(&server);
+    let (window, view) = open_git(cx, &harness);
+    wait_for_element(cx, window, "git-change:unstaged:new.txt");
+    cx.run_until_parked();
+    ask_revert_all(cx, window, &view);
+    assert_eq!(cx.read(|cx| view.read(cx).revert_all_asking()), Some(3));
+    // The list changes under the open dialog.
+    server
+        .world
+        .lock()
+        .expect("world")
+        .status
+        .retain(|(path, _, _)| path != "new.txt");
+    cx.update(|cx| view.update(cx, |view, cx| view.refresh(cx)));
+    wait(cx, |cx| {
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            window
+                .try_find(name("git-change:unstaged:new.txt"))
+                .is_none()
+        })
+        .expect("window is open")
+    });
+    confirm_revert_all(cx, window, &view);
+    cx.run_until_parked();
+    assert!(
+        reverted_paths(&server).is_empty(),
+        "a confirmation for an older list reverts nothing"
+    );
+    assert_eq!(
+        cx.read(|cx| view.read(cx).revert_all_asking()),
+        Some(2),
+        "the dialog asks again for what is listed now"
+    );
+    confirm_revert_all(cx, window, &view);
+    wait(cx, |cx| cx.read(|cx| !view.read(cx).revert_all_running()));
+    assert_eq!(reverted_paths(&server).len(), 2);
+}
+
+#[gpui_kit::test]
+fn a_patch_that_does_not_parse_and_an_omitted_path_show_failures(cx: &mut TestAppContext) {
+    let server = Scripted::new(World {
+        bad_patch: vec!["b.txt".to_owned()],
+        omit_patch: vec!["new.txt".to_owned()],
+        ..git_world()
+    });
+    let harness = harness(&server);
+    let scope = harness.scope.clone();
+    let (window, view) = open_view(cx, move |_, cx| DiffView::new(scope, cx));
+    wait_for_element(cx, window, "diff-file:new.txt");
+    assert_eq!(
+        cx.read(|cx| view.read(cx).failure_of("new.txt")),
+        Some(String::new()),
+        "a path the server left out is a failure"
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.click(name("diff-file:b.txt"), cx);
+        window.click(name("diff-file:a.txt"), cx);
+    })
+    .expect("window is open");
+    wait_for_element(cx, window, "diff-file-message:b.txt");
+    wait_for_element(cx, window, "diff-file-patch:a.txt");
+    let failure = cx.read(|cx| view.read(cx).failure_of("b.txt"));
+    assert!(
+        failure.as_deref().is_some_and(|detail| !detail.is_empty()),
+        "the parse error keeps its message: {failure:?}"
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.try_find(name("diff-file-patch:b.txt")).is_none());
+    })
+    .expect("window is open");
+    // Only the opened, parsed file holds a Kit state.
+    assert!(cx.read(|cx| view.read(cx).has_state("a.txt")));
+    assert!(!cx.read(|cx| view.read(cx).has_state("new.txt")));
+}
+
+#[gpui_kit::test]
+fn a_read_started_for_the_other_scope_never_fills_the_new_one(cx: &mut TestAppContext) {
+    let server = Scripted::new(git_world());
+    let harness = harness(&server);
+    let scope = harness.scope.clone();
+    *server.held_route.lock().expect("gate") = Some("/api/git/diffs".into());
+    let (window, view) = open_view(cx, move |_, cx| DiffView::new(scope, cx));
+    // The Changed read waits on its patches when the scope changes.
+    wait(cx, |_| {
+        !server.requests("POST", "/api/git/diffs").is_empty()
+    });
+    cx.update(|cx| {
+        view.update(cx, |view, cx| {
+            view.set_scope(
+                openchamber_native_core::git_changes::ChangeScope::Staged,
+                cx,
+            )
+        })
+    });
+    *server.held_route.lock().expect("gate") = None;
+    wait_for_element(cx, window, "diff-file:a.txt");
+    cx.run_until_parked();
+    assert_eq!(
+        cx.read(|cx| view.read(cx).listed_paths()),
+        ["a.txt".to_owned()],
+        "only the staged path is listed under Staged"
+    );
+    assert_eq!(
+        cx.read(|cx| view.read(cx).scope_shown()),
+        openchamber_native_core::git_changes::ChangeScope::Staged
+    );
 }

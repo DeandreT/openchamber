@@ -172,6 +172,8 @@ chat.workStatus.telemetry.tokens
 chat.workStatus.telemetry.tokens.inOut
 chat.workStatus.telemetry.toolDuration
 chat.workStatus.telemetry.ttft
+chat.workStatus.telemetry.previousTurn
+chat.workStatus.telemetry.previousTurnRate
 common.date.yesterdayWithTime
 common.loading
 openChamberLogo.aria.logo
@@ -709,6 +711,7 @@ chat.messageBody.actions.copyLink
 chat.messageBody.actions.pinContext
 chat.messageBody.actions.unpinContext
 chat.messageBody.actions.contextPinFailed
+chat.messageBody.footer.reasoningTooltip
 chat.messageLink.notFound
 chat.search.placeholder
 chat.search.position
@@ -1972,3 +1975,20 @@ settings.page.about.title
 settings.page.commands.title
 settings.page.git.title
 settings.page.magicPrompts.title
+contextRail.editor.toggle
+contextRail.editorTree.toggle
+sidebarFilesTree.actions.collapseAllTitle
+diffView.actions.expandAll
+diffView.actions.collapseAll
+gitView.changes.revertAll
+gitView.changes.revertAllDialogTitle
+gitView.changes.revertAllDescriptionSingle
+gitView.changes.revertAllDescriptionPlural
+gitView.commit.title
+gitView.commit.stageFilesHint
+gitView.toast.revertedFilesSingle
+gitView.toast.revertedFilesPlural
+gitView.toast.revertedSomeSingle
+gitView.toast.revertedSomePlural
+sourceBoard.list.choose
+sourceBoard.list.toggleAria

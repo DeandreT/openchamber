@@ -1295,7 +1295,10 @@ impl Workspace {
                     self.session_folders_changed(updated_at, cx)
                 }
                 ServerEvent::MessageQueueUpdated { update, space } => {
-                    self.apply_queue_broadcast(update, space)
+                    self.apply_queue_broadcast(update, space);
+                    // A message the broadcast no longer lists gets its
+                    // status check here, where the listing changed.
+                    self.reconcile_enqueue_listings(window, cx);
                 }
                 ServerEvent::AutoReviewUpdated(update) => self.apply_auto_review_update(update),
                 ServerEvent::Notification(notification) => {

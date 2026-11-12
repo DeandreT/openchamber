@@ -13,6 +13,9 @@ const MAX_PLAUSIBLE_TOKENS_PER_SECOND: f64 = 5_000.0;
 /// The latest completed turn's statistics.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TurnStats {
+    /// The turn is not the newest one: a prompt after it has no reply yet,
+    /// or the session was first read while its newest turn ran.
+    pub previous_turn: bool,
     pub steps: usize,
     pub elapsed_ms: Option<i64>,
     pub model_ms: Option<i64>,
@@ -43,18 +46,43 @@ struct StepStats {
     cost: Option<Usd>,
 }
 
-/// The newest user-bounded turn's statistics, or `None` when the newest
-/// conversation record is not a finished assistant step of a turn whose
-/// steps all completed.
+/// The newest user-bounded turn's statistics, or `None` when the turn's
+/// last conversation record is not a finished assistant step of a turn whose
+/// steps all completed. A prompt that has no reply yet lands before the
+/// session reports busy; the turn before it is then the latest finished one
+/// and is marked as the previous turn.
 pub fn latest_completed_turn(messages: &[Message]) -> Option<TurnStats> {
-    let conversation =
-        |message: &Message| matches!(message.info.role, Role::User | Role::Assistant);
-    let last = messages.iter().rposition(conversation)?;
+    let newest = last_conversation(messages, messages.len())?;
+    if messages[newest].info.role == Role::User {
+        return turn_ending_at(messages, last_conversation(messages, newest)?, true);
+    }
+    turn_ending_at(messages, newest, false)
+}
+
+/// The turn before the newest prompt, for a session first read while that
+/// prompt's turn runs (`getPreviousCompletedTurnStats`).
+pub fn previous_completed_turn(messages: &[Message]) -> Option<TurnStats> {
+    let prompt = messages
+        .iter()
+        .rposition(|message| message.info.role == Role::User)?;
+    turn_ending_at(messages, last_conversation(messages, prompt)?, true)
+}
+
+/// The newest user or assistant record before `end`; plumbing roles can
+/// trail the final assistant step.
+fn last_conversation(messages: &[Message], end: usize) -> Option<usize> {
+    messages[..end]
+        .iter()
+        .rposition(|message| matches!(message.info.role, Role::User | Role::Assistant))
+}
+
+/// The statistics of the turn whose final step is `messages[last]`.
+fn turn_ending_at(messages: &[Message], last: usize, previous_turn: bool) -> Option<TurnStats> {
     let final_step = &messages[last];
     if final_step.info.role != Role::Assistant {
         return None;
     }
-    let prompt = messages
+    let prompt = messages[..last]
         .iter()
         .rposition(|message| message.info.role == Role::User)?;
     let turn_start = Some(messages[prompt].info.created).filter(|created| *created >= 0);
@@ -110,6 +138,7 @@ pub fn latest_completed_turn(messages: &[Message]) -> Option<TurnStats> {
         _ => None,
     };
     Some(TurnStats {
+        previous_turn,
         steps: steps.len(),
         elapsed_ms,
         model_ms,
@@ -437,6 +466,49 @@ mod tests {
         assert_eq!(format_cost(stats.cost.expect("known")), "$0");
     }
 
+    /// The permission capture: the new prompt has no finished reply, and the
+    /// card keeps the turn before it as "Previous turn".
+    #[test]
+    fn an_unanswered_prompt_reads_the_turn_before_it_as_previous() {
+        let finished = [
+            user(1_000),
+            step(1_049, Some(1_600), 2_263, vec![text(1_049, 1_600)]),
+        ];
+        let newest = latest_completed_turn(&finished).expect("a completed turn");
+        assert!(!newest.previous_turn);
+
+        let mut waiting = finished.to_vec();
+        waiting.push(user(5_000));
+        let previous = latest_completed_turn(&waiting).expect("the turn before the prompt");
+        assert!(previous.previous_turn);
+        assert_eq!(
+            TurnStats {
+                previous_turn: false,
+                ..previous
+            },
+            newest,
+            "the readings are the finished turn's"
+        );
+
+        // The reply started: the idle reading has no finished turn, and a
+        // session first read now takes the turn before the prompt.
+        waiting.push(step(5_100, None, 0, Vec::new()));
+        assert_eq!(latest_completed_turn(&waiting), None);
+        assert_eq!(previous_completed_turn(&waiting), Some(previous));
+    }
+
+    #[test]
+    fn a_first_prompt_has_no_previous_turn() {
+        assert_eq!(latest_completed_turn(&[user(0)]), None);
+        assert_eq!(previous_completed_turn(&[user(0)]), None);
+        assert_eq!(
+            previous_completed_turn(&[user(0), user(10)]),
+            None,
+            "a prompt is not a finished turn"
+        );
+        assert_eq!(previous_completed_turn(&[]), None);
+    }
+
     #[test]
     fn tools_take_their_merged_time_from_the_model() {
         let messages = [
@@ -469,15 +541,17 @@ mod tests {
     }
 
     #[test]
-    fn an_unfinished_or_trailing_prompt_turn_has_no_stats() {
+    fn an_unfinished_turn_has_no_stats_and_a_trailing_prompt_reads_the_turn_before_it() {
         assert_eq!(
             latest_completed_turn(&[user(0), step(10, None, 5, vec![])]),
             None
         );
-        assert_eq!(
-            latest_completed_turn(&[user(0), step(10, Some(20), 5, vec![]), user(30)]),
-            None
-        );
+        // A prompt with no reply yet keeps the finished turn before it, as the
+        // reference `telemetry.ts` does while a new turn starts.
+        let trailing = latest_completed_turn(&[user(0), step(10, Some(20), 5, vec![]), user(30)])
+            .expect("the turn before the prompt");
+        assert!(trailing.previous_turn);
+        assert_eq!(trailing.steps, 1);
     }
 
     #[test]

@@ -25,7 +25,9 @@ prompt. Attachments and worktree creation remain separate workflows.
   mutation tasks. The dock's active permission answers Alt+Enter (once),
   Alt+Shift+Enter (always, when it can be saved) and Alt+Backspace (deny)
   wherever focus is in the window. `request_dock.rs` draws one nonmodal
-  permission-priority panel above the composer. `form_input.rs` owns retained typed drafts and field widgets;
+  permission-priority panel above the composer; Deny and Allow once show
+  those shortcuts after their labels, and Always shows its own until its
+  label names what it saves. `form_input.rs` owns retained typed drafts and field widgets;
   `form_copy.rs` exports the form's content through explicit clipboard actions.
 - `session_goal.rs` owns the composer's goal arm, the goal writes (arm on
   send, Pause, Resume, the dialog's Start, Save and Remove goal) and the reads
@@ -152,7 +154,15 @@ prompt. Attachments and worktree creation remain separate workflows.
   own format normalization, bounded Office/OpenDocument extraction and HEIC
   conversion. `attachment_intake.rs` admits complete regular-file or memory input
   before normalization. It performs no draft, spool or network mutation.
-  Intake never publishes the picked or dropped file's original path. Electron
+  Intake never publishes the picked or dropped file's original path. A drop
+  or a file paste cites each file admitted to storage in the draft as
+  `[name]` (`composer_attachment_input.rs`), one insertion at the committed
+  selection with the web's boundary spaces; the picker attaches without a
+  citation. A file that is not an image keeps its citation only if its
+  storage row publishes: a row that fails or is removed first takes the
+  citation and the insertion's own spaces back out, in the composer or in
+  the stored draft. Insertions and removals wait for an IME composition to
+  end, and a removal in a compound document waits until its editor shows. Electron
   sends that path only to its own local instance, and native connects only to
   externally owned hosts; a loopback URL can be a forward to another machine, so
   it is not proof of local ownership. The server receives the safe filename.
@@ -222,7 +232,11 @@ prompt. Attachments and worktree creation remain separate workflows.
   the account through the binding and the hosts' current accounts, lists
   issues or change requests with search and the state and people filter,
   previews the highlighted item with its comments, and comments, closes or
-  reopens, approves and requests changes. `source_board_view.rs` draws it.
+  reopens, approves and requests changes. `source_board_view.rs` draws it:
+  under 960 px of its own painted width the board is narrow, with icon-only
+  kind tabs, the preview on the whole page and the list in a dropdown the
+  item picker and the search field open; from 960 px it keeps the list and
+  preview columns.
   Trackers, discussions, a folder's several repositories, links other
   surfaces ask to show, label and reviewer editing, merge and ready for
   review, review threads and drafts, check runs, stacks, comment
@@ -316,10 +330,14 @@ prompt. Attachments and worktree creation remain separate workflows.
   behind the title row's menu button, labelled from Electron's own menu
   dictionaries (`resources/menu-locales.json`). Each row carries the
   accessibility ID `app-menu-<label key>`; submenu headings carry none.
-- `pane_resize.rs` owns the sidebar's and the context panel's widths, their
-  drag handles and the device-local `layout.json` (sidebar open, sidebar
-  width, panel width) that restores them. The Files, Git, Diff and terminal
-  surfaces share the panel width, as the reference's right zone does.
+- `pane_resize.rs` owns the sidebar's, the context panel's and the Files
+  tree's widths, their drag handles and the device-local `layout.json`
+  (sidebar open, sidebar width, panel width, tree width) that restores them.
+  The Files editor, Git, Diff and terminal surfaces share the panel width, as
+  the reference's right zone does; Files showing its tree alone takes the
+  tree's width. It also owns the sidebar fold: a zone that opens without room
+  for a 320 px chat closes the sidebar, and closing the zone gives it back
+  unless the user toggled the sidebar in between.
 - `settings_view.rs` owns the retained Settings dialog, selected page and search
   field. `settings_navigation.rs` lists only implemented pages, in the
   reference's `pageOrder`, and indexes only implemented targets. General is
@@ -480,16 +498,27 @@ prompt. Attachments and worktree creation remain separate workflows.
   Git and Diff buttons open one in place of the work status card, 640 px wide
   while the chat keeps 320 px, for the selected session's directory (else the
   draft's project, else the active project). Each surface is its own view
-  entity, retained per runtime and directory. The same file holds the Files
-  view: header with name and content search, the tree column
-  (`file_tree_view.rs`: virtualized tree items with level, position and
-  expanded state, arrow keys, Enter, Home, End and F2 rename) and Kit's code
-  editor. `diff_view.rs` shows patches in Kit's read-only diff: one path's pane
-  for the Git view and the Diff surface with every changed file of the
-  Changed or Staged scope. `git_view.rs` is the Git surface: branch menu with
+  entity, retained per runtime and directory, and what the zone shows is kept
+  per runtime and directory too. The same file holds the Files view: the zone
+  header with the surface's tab, the column toggles and Close; the tree
+  column with its action band and search field (`file_tree_view.rs`:
+  virtualized tree items with level, position and expanded state, arrow keys,
+  Enter, Home, End and F2 rename); and Kit's code editor under its own band.
+  `diff_view.rs` shows patches in Kit's read-only diff: one path's pane
+  for the Git view, and the Changes surface, a virtual list of every changed
+  file of the Changed or Staged scope. Its files start collapsed, and an open
+  file's `DiffState` is made when its row is first drawn and kept across
+  reads while its patch text is unchanged. The surface reads when it is
+  shown, on a Git refresh hint for its directory and on Retry after a failed
+  read. `git_view.rs` is the Git surface: branch menu with
   create, rename, checkout and delete, fetch, pull and push as planned
-  operations with cancel, staged and unstaged changes with stage, unstage and
-  confirmed discard, the commit field and the selected change's diff.
+  operations with cancel, collapsible staged and unstaged groups with stage,
+  unstage and confirmed discard, Revert all, the commit section and the
+  selected change's diff. Revert all asks in a modal dialog, then discards
+  every listed path of both groups with scope `all` as one batch outside the
+  index queue and reports one outcome; a confirmation for a list that has
+  changed asks again and reverts nothing. The Git and Changes status lines
+  take a row only while they hold a notice.
   `git_view/update_branch.rs` owns the local/remote target picker and its
   Merge/Rebase run log, with a planned fetch before remote integration.
   `git_view/conflicts.rs`
@@ -566,7 +595,8 @@ prompt. Attachments and worktree creation remain separate workflows.
   machine.
 - `turn_stats_section.rs` draws the card's Turn stats from the core's
   `turn_stats`, recomputed while the session is idle and kept while it
-  works; `context_panel.rs` holds the card's shared collapsible section and
+  works under the "Previous turn" summary; a session first shown mid-run
+  reads the turn before its newest prompt; `context_panel.rs` holds the card's shared collapsible section and
   readout row.
 - `context_panel/subagents_section.rs` draws the card's Subagents section:
   the selected session's child sessions from the live session list, each with
@@ -589,7 +619,8 @@ prompt. Attachments and worktree creation remain separate workflows.
 - `mcp_status.rs` holds each asked directory's MCP servers with their
   connection status (`useMcpStore`) and runs the on/off switch.
   `context_panel/mcp_section.rs` draws the card's MCP section, and
-  `assets.rs` serves the MCP mark the icon sprite lacks.
+  `assets.rs` serves the MCP mark and the composer's Stop mark, which the
+  icon sprite lacks.
 - `context_panel.rs` holds the pill a row ends in when its state is the
   control to press (`row_action`), and `section_expanded` and
   `toggle_section`, which read and flip a section's folded state in
@@ -603,10 +634,11 @@ prompt. Attachments and worktree creation remain separate workflows.
   its own scroll position and closes on selection, Escape, keyboard blur,
   outside click or session change. Earlier pages prepend without moving
   the transcript's anchor or the panel's highlighted message.
-- `turn_footer.rs` draws the facts under a finished turn (model, effort,
-  agent, duration, time) and fits them to the row as `useFactsFit` does,
-  beside the message actions (`message_actions.rs`). The
-  time is the step's completion in the local time zone (`chrono`), written
+- `turn_footer.rs` draws the facts under a finished turn (model, agent,
+  duration) and fits them to the row as `useFactsFit` does, dropping the
+  agent first; the message actions (`message_actions.rs`) follow the facts.
+  The thinking effort is the model's tooltip and the time the duration's:
+  the step's completion in the local time zone (`chrono`), written
   with the locale's exported data; settings choose the clock.
   Fitted facts paint in one text row so fractional widths do not accumulate
   rounding between fragments. Narrow rows retain the element-based layout
@@ -685,7 +717,9 @@ prompt. Attachments and worktree creation remain separate workflows.
   the web's body color and block spacing. Headings (`markdown_view.rs`),
   lists (`markdown_list.rs`) and fenced code (`code_card.rs`) are custom
   blocks drawn to the web's `.markdown-content` rules; their inline content
-  goes through nested text views with the same blocks. A selection crossing
+  goes through nested text views with the same blocks. Tables stay Kit's,
+  styled through its frame, header and cell refinements to the web's
+  `[data-streamdown="table"]` rules. A selection crossing
   a custom block takes it whole. Code is highlighted with tree-sitter in the
   theme's syntax colors (`theme.rs` builds Kit's highlight theme), and the
   code wrap choice is the `codeBlockLineWrap` setting, saved through
@@ -980,6 +1014,29 @@ prompt. Attachments and worktree creation remain separate workflows.
   surface polls nothing; expanded folders are listed again every 8 s, except
   folders over 1,000 entries. Changing the search query replaces its request,
   which ends the previous ripgrep on the server.
+- The right zone's width is read only after `settle_zone` ran for the frame.
+  Between two resolved directories it parks the zone's state, the extension
+  panel included, under the one left behind and restores the arriving one's;
+  then it decides whether Files shows its tree alone and folds or restores
+  the sidebar. A surface opened in the same update as a navigation belongs
+  to the destination.
+- A frame with no directory owns no zone state and receives none. The zone
+  on screen stays through it and belongs to the first directory that
+  resolves afterwards.
+- The tree toggle is written by the user and by Files opening with no file.
+  No other frame writes it; with no file open the tree is drawn whatever it
+  says.
+- A file row shows the editor, also for the file already open and before the
+  unsaved-changes dialog.
+- The terminal opens in `panel_directory` for a draft, the directory Files
+  and Git work in.
+- The Files zone is the tree's width (240 px until resized, 200 to 480) while
+  no file is open or the editor is hidden, and the zone's stored width
+  otherwise. The tree and the editor never hide together.
+- A sidebar closed by the fold is saved as open.
+- A narrow source board with its dropdown closed shows a list that failed or
+  is unavailable on the page with its reason and Retry, and a failed refresh
+  above the preview. A board that grows to 960 px drops its open dropdown.
 - Every Git mutation ends in a status read, failed or not, and no row shows a
   state before the server reports it. Push, pull and fetch never retry:
   a lost execute answer is resolved by reading the same operation ID.
@@ -1213,8 +1270,10 @@ prompt. Attachments and worktree creation remain separate workflows.
   revert marker changed while it generated.
 - The transcript hides rows from the revert marker on; the optimistic marker
   outranks the record's. A revert stops a busy session, reverts descendants
-  first, then stages; a refusal drops the marker and returns the composer to
-  what it held unless the user typed over the restored prompt. A cut or
+  first, then stages; a refusal drops the marker. The prompt stays where the
+  session's own editor took it, at the stage or since; a draft no editor
+  showed, or one an expanded `/btw` panel was typing into, gets its earlier
+  text back unless the user typed over the prompt. A cut or
   marker change remeasures the session's rows. A commit trims the visited
   transcript before the batch clears the marker.
 - A fork opens only while the reader is still where it started; its
@@ -1660,6 +1719,20 @@ prompt. Attachments and worktree creation remain separate workflows.
   local retirement, followed by durable named-chunk release. Failed release keeps
   its retirement intent for an explicit local retry. No server upload is released
   by the native enqueue caller.
+- An enqueue has a recovery row only when it needs the user. It has none while
+  its capturing activation runs, and none while its receipt says queued and its
+  queue lists the request queued (`queueDelivery`) or is about to answer. Rows
+  cover every session of the runtime.
+- An accepted enqueue this window saw queued, by its own receipt or its queue's
+  listing, gets one read-only status check when its queue stops listing it.
+  A terminal answer retires the local capture without a row; a failed or
+  non-terminal answer leaves the row and its manual Check. The check waits for
+  the server's answer to a local removal and for running takes and sends, and
+  it is requested in the workspace's window when a queue snapshot, broadcast
+  or mutation answer is applied and when a take or send ends. It never repeats
+  for the same departure. Hydration still starts no reads: an enqueue restored
+  after a restart whose queue was never read, could not be read, or already
+  lacks it keeps a manual row.
 - Queue enqueue tasks survive projection resets and retain their original network
   runtime through disk waits. Close prevents further dispatch and drains accepted
   worker writes; a cancelled network request leaves its prewritten unknown state.
@@ -2465,6 +2538,25 @@ behind the marker. Native keeps the marker as an overlay keyed by runtime and
 session, so a refusal only drops the overlay; no message moves. A fork
 creates a session the client cannot name before the answer, so it waits.
 
+### Why a failed revert keeps a prompt its editor took
+
+The web hands the reverted prompt to the composer through a pending restore
+that the session's mounted editor consumes at once; its rollback clears only
+an unconsumed restore. Native has one composer, so "consumed" means the
+composer shows the session's own draft with no expanded `/btw` panel, at the
+stage or by the time of the refusal. Then the prompt stays. Otherwise the
+draft gets back what the prompt replaced. Always restoring the earlier draft
+was the alternative, and it showed text the reference no longer shows.
+
+### Why a dropped file is cited at admission and not when it attaches
+
+The web cites a file that is not an image after its attach resolved, which
+there is immediate. Native's attach ends after spool writes and a save
+barrier, while the row with its Remove button shows at once; text typed in
+between would come before a citation inserted at publication. So the
+citation enters with the drop and is taken out again if the row never
+publishes, which leaves the same text as the web in both outcomes.
+
 ### Why `/btw` retains drafts through admission
 
 BTW start and follow-up text remains in the normal persisted draft until the
@@ -2563,8 +2655,60 @@ snapshot applies. A failed read must not stand in for an empty snapshot.
 ### Why the layout lives on the device
 
 The web keeps the sidebar and panel sizes in its persisted UI store, outside
-the settings document, so each device has its own. Native writes the same
-three values to its private folder instead of the server.
+the settings document, so each device has its own. Native writes these
+values and the Files tree's width to its private folder instead of the server.
+
+### Why the zone is settled at draw and not at each navigation
+
+The reference keeps panel state per directory in its store and an arbiter
+subscribed to that store. Native changes the directory from many places:
+selecting a session, New session, a draft's project, a runtime switch.
+Settling once at the top of the workspace's draw covers all of them with one
+rule; a hook in each navigation path was the alternative and would miss the
+next one added.
+
+### Why a folded sidebar is saved as open
+
+The reference persists the closed sidebar together with the open panel, so
+both come back. Native does not restore the zone at start, so a saved fold
+would leave the sidebar closed with nothing that needs its room.
+
+### Why the fold measures the stored zone width while the tree shows
+
+`zoneFitWatch.ts` plans with `contextZoneSizes[side] ?? 640` whatever the
+zone shows, so at 1280 px the 240 px tree folds the sidebar too. Planning
+with the drawn width would keep the sidebar and differ from the packaged app
+in every Files capture.
+
+### Why an unresolved directory carries the zone and does not close it
+
+Keying the zone on an empty directory made every first resolution a switch:
+a zone opened before the session record or the settings arrived closed when
+they did. Skipping park and restore while either side is unresolved loses
+one thing, a zone parked for the directory that resolves next, and keeps
+the one on screen.
+
+### Why a project-less draft keeps the active project
+
+The reference sends a chat draft to the Chats root. Native has no chat
+draft: a draft has a project or none, and one without cannot create a
+session. Sending it to the Chats root would move Files, Git and the
+terminal off the project for a draft that is not a chat.
+
+### Why the search mode is one button named after the other mode
+
+The reference opens a two-item menu from the field's glyph. Native has one
+24 px button in the same place that switches to the other mode; its ID is
+`files-search-contents` or `files-search-names`, whichever it switches to,
+so the parity scripts click the IDs they always did.
+
+### Why the departed-enqueue check runs where a queue answer is applied
+
+The check needs a window, and a queue read or broadcast finishes outside any
+window update. The queue state keeps the workspace's window handle and
+defers the reconcile into it. Requesting it from the composer's draw was the
+alternative; it tied a network request to painting and missed a departure
+while the composer was not drawn.
 
 ### Why WebKitGTK directly and not wry
 

@@ -1393,14 +1393,15 @@ impl Render for TerminalPanel {
 }
 
 impl crate::workspace::Workspace {
-    /// The directory terminals open in: the selected session's, else the
-    /// project a new-session draft targets.
+    /// The directory terminals open in: the selected session's, else where
+    /// a draft's panel surfaces work (`useEffectiveDirectory`, which the
+    /// reference's terminal reads too): its project, else the active one.
     pub(crate) fn terminal_directory(&self) -> Option<String> {
         let host = if let Some(record) = self.selected.as_ref().and_then(|id| self.sessions.get(id))
         {
             record.directory.clone()
         } else {
-            self.draft_projects.get(&self.runtime).cloned()
+            self.panel_directory()
         };
         // A project action that runs in the project's checkout shows its tab
         // there while the panel was opened for it (`targetDirectory`).

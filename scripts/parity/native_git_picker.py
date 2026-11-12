@@ -128,6 +128,10 @@ def picker_steps(session, configured, escape_only=False):
             return
         session.client.click("git-update-close")
         session.wait_gone("git-update-dialog")
+        # The commit field exists only while the repository has changes.
+        (session.project / "picker-dirty.txt").write_text("dirty\n")
+        session.client.click("git-refresh")
+        session.wait_id("git-commit-message")
         commit = entries(session.client._find("git-commit-message"))
         assert len(commit) == 1, "the commit field needs exactly one editable"
         session.click_node(commit[0])

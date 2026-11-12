@@ -1,14 +1,16 @@
-//! The facts under a finished turn: the provider logo and model, the effort,
-//! the agent and the turn's duration, as `MessageBody.tsx` lays them out.
+//! The facts under a finished turn: the provider logo and model, the agent
+//! and the turn's duration, as `MessageBody.tsx` lays them out.
 //!
-//! The row reserves the width of the message actions, which the web shows on
-//! hover and lays out at all times, so the facts fit as they do there. The
-//! time fact is the step's completion (else its creation) in the local time
+//! The facts are as wide as their text and the message actions follow them,
+//! shown on hover and laid out at all times, so the facts fit as they do on
+//! the web. The thinking effort is the model's tooltip and the time the
+//! duration's: the step's completion (else its creation) in the local time
 //! zone, written with the locale's exported `Intl` data.
 
 use std::sync::Arc;
 
 use chrono::{Datelike, Local, NaiveDate, TimeZone, Timelike};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyElement, App, Context, FontFeatures, Hsla, InteractiveElement, IntoElement, ParentElement,
     Pixels, Role, SharedString, StatefulInteractiveElement, Styled, TextAlign, Window, canvas, div,
@@ -26,28 +28,28 @@ use crate::message_actions::ACTIONS_WIDTH;
 use crate::theme::Palette;
 use crate::workspace::Workspace;
 
-/// `mt-2 mb-1`, the row's 26 px action buttons and its `gap-2`.
+/// `mt-2 mb-1`, the row's 26 px action buttons and its `gap-3`.
 const MARGIN_TOP: f32 = 8.0;
 const MARGIN_BOTTOM: f32 = 4.0;
 const ROW_HEIGHT: f32 = 26.0;
-const ROW_GAP: f32 = 8.0;
+const ROW_GAP: f32 = 12.0;
 /// The gap to the changed-files line, which a turn that stopped lays out
 /// even when it lists nothing.
 const FILES_GAP: f32 = 6.0;
-/// `text-sm`, in rems of the 16 px root, and its pixels for measuring.
-const TEXT_SIZE: f32 = 0.875;
-const TEXT_LINE: f32 = 1.25;
-const TEXT_PX: f32 = 14.0;
-/// The logo or agent icon (`h-3.5 w-3.5`) and the facts' `gap-1.5` and
+/// `typography-meta`: `--text-meta` on a `round(1.45em, 1px)` line, in rems
+/// of the 16 px root, and the size in pixels for measuring.
+const TEXT_SIZE: f32 = 0.78125;
+const TEXT_LINE: f32 = 1.125;
+const TEXT_PX: f32 = 12.5;
+/// The logo (`h-[13px] w-[13px]`) and the facts' `gap-1.5` and
 /// `padding-inline-start: 0.375rem`.
-const ICON: f32 = 14.0;
+const ICON: f32 = 13.0;
 const FACT_GAP: f32 = 6.0;
-/// `text-muted-foreground/60`, and the separators' `opacity-60` on top.
-const TEXT_ALPHA: f32 = 0.6;
+/// The facts are `text-muted-foreground`; the separators add `opacity-60`.
 const SEPARATOR_OPACITY: f32 = 0.6;
 const SEPARATOR: &str = "·";
 
-/// The facts a finished turn shows.
+/// The facts a finished turn shows. The effort and the time are tooltips.
 struct Facts {
     model: ModelChoice,
     model_name: SharedString,
@@ -74,66 +76,49 @@ impl Workspace {
         let facts = self.turn_facts(row, message, cx)?;
         let measure = |text: &str| text_width(text, window, false);
         let measure_digits = |text: &str| text_width(text, window, true);
-        let fact_width = |text: &str| FACT_GAP + measure(SEPARATOR) + FACT_GAP + measure(text);
         let widths = FactWidths {
             model: ICON + FACT_GAP + measure(&facts.model_name),
-            effort: facts.effort.as_deref().map(fact_width),
-            agent: facts.agent.as_deref().map(fact_width),
+            agent: facts
+                .agent
+                .as_deref()
+                .map(|text| FACT_GAP + measure(SEPARATOR) + FACT_GAP + measure(text)),
             duration: facts
                 .duration
                 .as_deref()
                 .map(|text| FACT_GAP + measure(SEPARATOR) + FACT_GAP + measure_digits(text)),
-            timestamp: facts
-                .time
-                .as_deref()
-                .map(|text| FACT_GAP + measure(SEPARATOR) + FACT_GAP + measure_digits(text)),
         };
         let available = self.composer_width(window) - ROW_GAP - ACTIONS_WIDTH;
-        let ShownFacts {
-            effort,
-            agent,
-            timestamp,
-        } = turn_footer::fit_facts(available, widths);
-        let color = palette.muted_foreground.opacity(TEXT_ALPHA);
-        let fact =
-            |text: SharedString| render_fact(text, color, Digits::Proportional, direction, cx);
-        let digits = |text: SharedString| render_fact(text, color, Digits::Tabular, direction, cx);
+        let ShownFacts { agent } = turn_footer::fit_facts(available, widths);
+        let color = palette.muted_foreground;
+        let effort_hint = facts.effort.as_deref().map(|effort| {
+            locale::strings(cx).format(
+                "chat.messageBody.footer.reasoningTooltip",
+                &[("effort", effort)],
+            )
+        });
+        let time_hint = facts.time.clone();
         let icon = self
             .render_provider_logo(&facts.model.provider_id, ICON, 1.0, palette)
             .unwrap_or_else(|| div().size(px(ICON)).flex_shrink_0().into_any_element());
         let inline = render_inline_facts(
-            facts.model_name.clone(),
-            [
-                facts
-                    .effort
-                    .clone()
-                    .filter(|_| effort)
-                    .map(|text| (text, Digits::Proportional)),
-                facts
-                    .agent
-                    .clone()
-                    .filter(|_| agent)
-                    .map(|text| (text, Digits::Proportional)),
-                facts.duration.clone().map(|text| (text, Digits::Tabular)),
-                facts
-                    .time
-                    .clone()
-                    .filter(|_| timestamp)
-                    .map(|text| (text, Digits::Tabular)),
-            ]
-            .into_iter()
-            .flatten()
-            .collect(),
+            InlineFacts {
+                model: facts.model_name.clone(),
+                agent: facts.agent.clone().filter(|_| agent),
+                duration: facts.duration.clone(),
+                model_hint: effort_hint.clone(),
+                duration_hint: time_hint.clone(),
+            },
             color,
             available - ICON - FACT_GAP,
             direction,
             window,
             cx,
         );
+        // `flex: 0 1 auto`: as wide as the facts, so the actions follow them.
         let content = if let Some(inline) = inline {
             div()
-                .flex_1()
                 .min_w_0()
+                .flex_shrink(1.0)
                 .flex_row_from(direction)
                 .items_center()
                 .gap(px(FACT_GAP))
@@ -141,6 +126,7 @@ impl Workspace {
                 .child(inline)
         } else {
             let model = div()
+                .id("footer-model")
                 .min_w_0()
                 .flex_shrink(1.0)
                 .flex_row_from(direction)
@@ -153,26 +139,30 @@ impl Workspace {
                         .truncate()
                         .css_text(TEXT_SIZE, TEXT_LINE, cx)
                         .child(facts.model_name),
-                );
+                )
+                .when_some(effort_hint, |this, hint| {
+                    this.tooltip(move |window, cx| Tooltip::new(hint.clone()).build(window, cx))
+                });
             div()
-                .flex_1()
                 .min_w_0()
+                .flex_shrink(1.0)
                 .overflow_hidden()
                 .flex_row_from(direction)
                 .items_center()
                 .whitespace_nowrap()
                 .text_color(color)
                 .child(model)
-                .children(facts.effort.filter(|_| effort).map(&fact))
-                .children(facts.agent.filter(|_| agent).map(&fact))
-                .children(facts.duration.map(&digits))
-                .children(facts.time.filter(|_| timestamp).map(&digits))
+                .children(facts.agent.filter(|_| agent).map(|text| {
+                    render_fact(text, color, Digits::Proportional, None, direction, cx)
+                }))
+                .children(facts.duration.map(|text| {
+                    render_fact(text, color, Digits::Tabular, time_hint, direction, cx)
+                }))
         };
         let row = div()
             .h(px(ROW_HEIGHT))
             .flex_row_from(direction)
             .items_center()
-            .justify_between()
             .gap(px(ROW_GAP))
             .child(content)
             // The message actions appear on hover; their place is kept.
@@ -250,7 +240,7 @@ impl Workspace {
     }
 }
 
-/// How a fact's digits are set: `tabular-nums` for the duration and time.
+/// How a fact's digits are set: `tabular-nums` for the duration.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Digits {
     Proportional,
@@ -294,12 +284,21 @@ pub(crate) fn message_time<V>(
     Some(text.into())
 }
 
+/// The facts drawn on one line and the tooltips two of them carry.
+struct InlineFacts {
+    model: SharedString,
+    agent: Option<SharedString>,
+    duration: Option<SharedString>,
+    model_hint: Option<SharedString>,
+    duration_hint: Option<SharedString>,
+}
+
 /// Shapes the fitted footer as one row. Text widths retain fractional pixels
 /// between fragments, avoiding accumulated rounding from separate layout
 /// nodes. The existing elements handle truncation when the model must shrink.
+/// The model and the duration carry their tooltips on areas over the text.
 fn render_inline_facts(
-    model: SharedString,
-    facts: Vec<(SharedString, Digits)>,
+    facts: InlineFacts,
     color: Hsla,
     available: f32,
     direction: Direction,
@@ -317,9 +316,14 @@ fn render_inline_facts(
             .text_system()
             .shape_line(text, px(TEXT_PX), &[run], None)
     };
-    let mut label = model.to_string();
-    let mut fragments = vec![(shape(model, Digits::Proportional, color), 0.0)];
-    for (text, digits) in facts {
+    let mut label = facts.model.to_string();
+    let has_duration = facts.duration.is_some();
+    let mut fragments = vec![(shape(facts.model, Digits::Proportional, color), 0.0)];
+    let later = [
+        facts.agent.map(|text| (text, Digits::Proportional)),
+        facts.duration.map(|text| (text, Digits::Tabular)),
+    ];
+    for (text, digits) in later.into_iter().flatten() {
         label.push_str(" · ");
         label.push_str(&text);
         fragments.push((
@@ -339,6 +343,32 @@ fn render_inline_facts(
     if width > available || available <= 0.0 {
         return None;
     }
+    let model_width = f32::from(fragments[0].0.width);
+    let duration_width = fragments
+        .last()
+        .filter(|_| has_duration)
+        .map(|(line, _)| f32::from(line.width));
+    // A tooltip's area: `span` wide, `start` from the row's inline start.
+    let area = |id: &'static str, start: f32, span: f32, hint: SharedString| {
+        let left = match direction {
+            Direction::LeftToRight => start,
+            Direction::RightToLeft => width - start - span,
+        };
+        div()
+            .id(id)
+            .absolute()
+            .top_0()
+            .left(px(left))
+            .w(px(span))
+            .h_full()
+            .tooltip(move |window, cx| Tooltip::new(hint.clone()).build(window, cx))
+    };
+    let model_area = facts
+        .model_hint
+        .map(|hint| area("footer-model", 0.0, model_width, hint));
+    let duration_area = duration_width
+        .zip(facts.duration_hint)
+        .map(|(span, hint)| area("footer-duration", width - span, span, hint));
     let text = canvas(
         |_, _, _| (),
         move |bounds, (), window, cx| {
@@ -367,12 +397,15 @@ fn render_inline_facts(
     Some(
         div()
             .id("footer-facts")
-            .flex_1()
-            .min_w_0()
+            .relative()
+            .flex_none()
+            .w(px(width))
             .h(px(TEXT_LINE * 16.0))
             .role(Role::Label)
             .aria_label(label)
             .child(text)
+            .children(model_area)
+            .children(duration_area)
             .into_any_element(),
     )
 }
@@ -392,15 +425,18 @@ fn fragment_start(cursor: &mut Pixels, width: Pixels, gap: Pixels, direction: Di
     }
 }
 
-/// One fact after the model: its separator and text.
+/// One fact after the model: its separator and text, with `hint` as its
+/// tooltip.
 fn render_fact(
     text: SharedString,
     color: Hsla,
     digits: Digits,
+    hint: Option<SharedString>,
     direction: Direction,
     cx: &Context<Workspace>,
 ) -> AnyElement {
     div()
+        .id(SharedString::from(format!("footer-fact:{text}")))
         .flex_none()
         .flex_row_from(direction)
         .items_center()
@@ -420,6 +456,9 @@ fn render_fact(
                 })
                 .child(text),
         )
+        .when_some(hint, |this, hint| {
+            this.tooltip(move |window, cx| Tooltip::new(hint.clone()).build(window, cx))
+        })
         .into_any_element()
 }
 
@@ -459,5 +498,14 @@ mod tests {
             (f32::from(left) - 26.15).abs() < 0.0001,
             "layout never rounds an intermediate width"
         );
+    }
+
+    /// `typography-meta` at the 16 px root: 12.5 px text on an 18 px line,
+    /// `round(1.45em, 1px)`.
+    #[test]
+    fn facts_use_the_meta_text_size_and_line() {
+        assert_eq!(TEXT_SIZE * 16.0, TEXT_PX);
+        assert_eq!(TEXT_LINE * 16.0, (1.45 * TEXT_PX).round());
+        assert_eq!(TEXT_LINE * 16.0, 18.0);
     }
 }

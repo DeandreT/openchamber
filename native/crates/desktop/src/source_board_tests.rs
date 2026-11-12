@@ -10,7 +10,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use gpui_kit::test::TestWindowExt;
-use gpui_kit::{AnyWindowHandle, AppContext, ElementId, Entity, SharedString, TestAppContext};
+use gpui_kit::{
+    AnyWindowHandle, AppContext, Bounds, ElementId, Entity, SharedString, TestAppContext, point,
+    px, size,
+};
 use openchamber_native_core::source_board::RepositoryKind;
 use openchamber_native_transport::client::ServerClient;
 use openchamber_native_transport::credential::Credential;
@@ -33,6 +36,7 @@ struct Request {
 struct World {
     signed_in: bool,
     fail_comments: bool,
+    fail_references: bool,
     requests: Vec<Request>,
 }
 
@@ -71,6 +75,9 @@ impl World {
                     "connected": self.signed_in,
                     "accounts": if self.signed_in { json!([{"id": "acct", "current": true, "status": "valid"}]) } else { json!([]) }}),
             ),
+            "/api/source-control/github/references" if self.fail_references => {
+                (502, json!({"error": "GitHub is unavailable"}))
+            }
             "/api/source-control/github/references" => (
                 200,
                 json!({"connected": true, "repo": {"owner": "acme", "repo": "widgets", "url": "u"},
@@ -341,6 +348,8 @@ fn the_list_previews_its_first_row_and_a_failed_comment_keeps_its_text(cx: &mut 
     });
     let network = Network::new().expect("a network runtime");
     let (window, board) = open_board(cx, &server, &network);
+    // A narrow board lists its rows from the item picker.
+    cx.update(|cx| board.update(cx, |board, cx| board.set_list_open(true, cx)));
     wait(cx, |cx| {
         painted(cx, window, "source-board-row:github:acme/widgets#2")
     });
@@ -407,4 +416,171 @@ fn the_list_previews_its_first_row_and_a_failed_comment_keeps_its_text(cx: &mut 
     assert_eq!(comments[1].body["directory"], json!(ROOT));
     assert_eq!(comments[1].body["target"]["number"], json!(1));
     assert_eq!(comments[1].body["body"], json!("Thanks"));
+}
+
+#[gpui_kit::test]
+fn a_narrow_board_keeps_one_toolbar_row_and_lists_from_the_item_picker(cx: &mut TestAppContext) {
+    let server = Scripted::new(World {
+        signed_in: true,
+        ..World::default()
+    });
+    let network = Network::new().expect("a network runtime");
+    let (window, board) = open_board(cx, &server, &network);
+    wait(cx, |cx| painted(cx, window, "source-board-item"));
+    wait(cx, |cx| cx.read(|cx| board.read(cx).previewed().is_some()));
+    let page = cx
+        .update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            let page = window.find("source-board-page").bounds();
+            assert!(
+                page.size.width < px(960.0),
+                "the workspace window leaves the board under 960 px"
+            );
+            let top = page.top() + px(10.0);
+            // Two icon tabs of 36 px in the strip's 2 px padding and gap.
+            let kinds = window.find("source-board-kinds").bounds();
+            assert_eq!(
+                kinds,
+                Bounds {
+                    origin: point(page.left() + px(8.0), top),
+                    size: size(px(78.0), px(28.0)),
+                }
+            );
+            assert_eq!(
+                window.find(name("source-board-kind:issue")).bounds(),
+                Bounds {
+                    origin: point(kinds.left() + px(2.0), top + px(2.0)),
+                    size: size(px(36.0), px(24.0)),
+                }
+            );
+            // Every control is 28 px high and 8 px after the one before it.
+            let mut left = kinds.right() + px(8.0);
+            for id in [
+                "source-board-project",
+                "source-board-repository",
+                "source-board-item",
+                "source-board-search-box",
+                "source-board-filter",
+                "source-board-refresh",
+            ] {
+                let bounds = window.find(id).bounds();
+                // Content-sized pickers have fractional widths, so a sum of
+                // `f32` edges can differ from the layout's by a rounding step.
+                assert!(
+                    (bounds.left() - left).abs() < px(0.001),
+                    "{id} starts at {:?}, expected {left:?}",
+                    bounds.left()
+                );
+                assert_eq!(bounds.top(), top, "{id}");
+                assert_eq!(bounds.size.height, px(28.0), "{id}");
+                left = bounds.right() + px(8.0);
+            }
+            assert!(
+                (left - page.right()).abs() < px(0.001),
+                "refresh ends 8 px before the board's edge: {left:?}, {:?}",
+                page.right()
+            );
+            assert_eq!(
+                window.find("source-board-refresh").bounds().size,
+                size(px(28.0), px(28.0))
+            );
+
+            // The preview takes the page under the toolbar's 48 px and line.
+            assert!(window.try_find(name("source-board-list")).is_none());
+            let preview = window.find("source-board-preview").bounds();
+            assert_eq!(preview.origin, point(page.left(), page.top() + px(49.0)));
+            assert_eq!(preview.size.width, page.size.width);
+            window.click(name("source-board-item"), cx);
+            page
+        })
+        .expect("window is open");
+    wait(cx, |cx| painted(cx, window, "source-board-list-dropdown"));
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let body = page.size.height - px(49.0);
+        assert!(
+            body * 0.75 > px(448.0),
+            "the dropdown reaches its 28rem cap"
+        );
+        assert_eq!(
+            window.find("source-board-list-dropdown").bounds(),
+            Bounds {
+                origin: point(page.left() + px(8.0), page.top() + px(53.0)),
+                size: size(page.size.width - px(16.0), px(448.0)),
+            }
+        );
+        window.click(name("source-board-row:github:acme/widgets#2"), cx);
+    })
+    .expect("window is open");
+    wait(cx, |cx| !painted(cx, window, "source-board-list-dropdown"));
+    assert_eq!(
+        cx.read(|cx| board.read(cx).previewed().map(|item| item.number)),
+        Some(2),
+        "picking a row previews it and closes the list"
+    );
+}
+
+#[gpui_kit::test]
+fn a_failed_list_read_shows_on_a_narrow_board_with_its_dropdown_closed(cx: &mut TestAppContext) {
+    let server = Scripted::new(World {
+        signed_in: true,
+        fail_references: true,
+        ..World::default()
+    });
+    let network = Network::new().expect("a network runtime");
+    let (window, board) = open_board(cx, &server, &network);
+    // The board learns its width when it is painted.
+    wait(cx, |cx| {
+        painted(cx, window, "source-board-page") && cx.read(|cx| board.read(cx).narrow())
+    });
+    wait(cx, |cx| painted(cx, window, "source-board-list-state"));
+    assert!(!cx.read(|cx| board.read(cx).list_open));
+    assert!(
+        painted(cx, window, "source-board-list-retry"),
+        "the failure offers Retry outside the dropdown"
+    );
+    assert!(
+        !painted(cx, window, "source-board-preview-empty"),
+        "a failed read never looks like a board with nothing picked"
+    );
+    server.world.lock().expect("world").fail_references = false;
+    cx.update_window(window, |_, window, cx| {
+        window.click(name("source-board-list-retry"), cx)
+    })
+    .expect("window is open");
+    wait(cx, |cx| cx.read(|cx| board.read(cx).previewed().is_some()));
+    assert!(painted(cx, window, "source-board-preview"));
+}
+
+#[gpui_kit::test]
+fn a_board_that_grows_wide_drops_its_open_dropdown(cx: &mut TestAppContext) {
+    let server = Scripted::new(World {
+        signed_in: true,
+        ..World::default()
+    });
+    let network = Network::new().expect("a network runtime");
+    let (window, board) = open_board(cx, &server, &network);
+    // The board learns its width when it is painted.
+    wait(cx, |cx| {
+        painted(cx, window, "source-board-page") && cx.read(|cx| board.read(cx).narrow())
+    });
+    wait(cx, |cx| cx.read(|cx| board.read(cx).previewed().is_some()));
+    cx.update(|cx| board.update(cx, |board, cx| board.set_list_open(true, cx)));
+    wait(cx, |cx| painted(cx, window, "source-board-list-dropdown"));
+    cx.simulate_window_resize(window, size(px(1800.0), px(800.0)));
+    wait(cx, |cx| {
+        painted(cx, window, "source-board-page") && cx.read(|cx| !board.read(cx).narrow())
+    });
+    wait(cx, |cx| cx.read(|cx| !board.read(cx).list_open));
+    assert!(!painted(cx, window, "source-board-list-dropdown"));
+    assert!(
+        painted(cx, window, "source-board-row:github:acme/widgets#2"),
+        "the wide board lists its rows in the column"
+    );
+    // Narrow again, the dropdown stays closed until asked for.
+    cx.simulate_window_resize(window, size(px(1280.0), px(800.0)));
+    wait(cx, |cx| {
+        painted(cx, window, "source-board-page") && cx.read(|cx| board.read(cx).narrow())
+    });
+    assert!(!cx.read(|cx| board.read(cx).list_open));
 }

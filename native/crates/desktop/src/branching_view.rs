@@ -268,7 +268,8 @@ impl Workspace {
                 .rounded(px(12.0))
                 .bg(palette.elevated)
                 .text_color(palette.elevated_foreground)
-                .shadow(crate::elevation::composer(palette))
+                // `ComposerFloatingPanel`: `oc-glass-popover oc-glass-floating`.
+                .shadow(crate::elevation::floating(palette))
                 .flex()
                 .flex_col()
                 .test_support()

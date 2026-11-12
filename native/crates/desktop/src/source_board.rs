@@ -19,8 +19,10 @@
 //! attachments, starting a session or a worktree on an item, the narrow
 //! dropdown layout and the list's resize handle.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hasher};
+use std::rc::Rc;
 use std::time::Duration;
 
 use gpui_kit::component::input::{InputEvent, InputState, TextareaState};
@@ -45,6 +47,14 @@ use crate::workspace::Workspace;
 
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(300);
 const DETAIL_DEBOUNCE: Duration = Duration::from_millis(250);
+/// `NARROW_BOARD_WIDTH` in `SourceBoardView.tsx`.
+pub(crate) const NARROW_BOARD_WIDTH: f32 = 960.0;
+
+/// Whether a board painted `width` wide lays out narrow; an unpainted board
+/// (zero) does not.
+pub(crate) fn is_narrow(width: f32) -> bool {
+    width > 0.0 && width < NARROW_BOARD_WIDTH
+}
 
 /// A registered project the board can read.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -99,6 +109,7 @@ pub(crate) enum Busy {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Menu {
     Project,
+    Repository,
     Filter,
     State,
 }
@@ -137,6 +148,10 @@ pub(crate) struct SourceBoard {
     write_task: Option<Task<()>>,
     pub(crate) notice: Option<Notice>,
     pub(crate) list_scroll: ScrollHandle,
+    /// The board's painted width; zero before its first frame.
+    pub(crate) width: Rc<Cell<f32>>,
+    /// A narrow board shows its list as a dropdown; this is whether it is open.
+    pub(crate) list_open: bool,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -151,6 +166,12 @@ impl SourceBoard {
         let reply = cx.new(|cx| TextareaState::new(window, cx).auto_grow(3, 10));
         let search_subscription = cx.subscribe_in(&search, window, |this, _, event, _, cx| {
             if let InputEvent::Change = event {
+                // Typed, pasted or committed text shows its results; the
+                // field emptied by its clear button does not.
+                let text = this.search.read(cx).value().to_string();
+                if this.narrow() && !text.is_empty() && text != this.search_text {
+                    this.set_list_open(true, cx);
+                }
                 this.schedule_search(cx);
             }
         });
@@ -192,6 +213,8 @@ impl SourceBoard {
             write_task: None,
             notice: None,
             list_scroll: ScrollHandle::new(),
+            width: Rc::new(Cell::new(0.0)),
+            list_open: false,
             _subscriptions: vec![search_subscription, reply_subscription],
         }
     }
@@ -361,10 +384,37 @@ impl SourceBoard {
         self.load_list(cx);
     }
 
+    /// Whether the board is narrower than `NARROW_BOARD_WIDTH`: the list
+    /// becomes a dropdown under the toolbar and the preview takes the page.
+    pub(crate) fn narrow(&self) -> bool {
+        is_narrow(self.width.get())
+    }
+
+    /// The painted width crossed the narrow threshold: a wide board has no
+    /// dropdown to keep open, and either layout draws again.
+    pub(crate) fn layout_changed(&mut self, cx: &mut Context<Self>) {
+        if !self.narrow() {
+            self.list_open = false;
+        }
+        cx.notify();
+    }
+
+    pub(crate) fn set_list_open(&mut self, open: bool, cx: &mut Context<Self>) {
+        if self.list_open != open {
+            self.list_open = open;
+            self.menu = None;
+            cx.notify();
+        }
+    }
+
     pub(crate) fn toggle_menu(&mut self, menu: Menu, cx: &mut Context<Self>) {
         self.menu = if self.menu == Some(menu) {
             None
         } else {
+            // A toolbar menu opens alone, never over the list dropdown.
+            if menu != Menu::State {
+                self.list_open = false;
+            }
             Some(menu)
         };
         cx.notify();
@@ -547,6 +597,8 @@ impl SourceBoard {
     pub(crate) fn highlight(&mut self, key: String, cx: &mut Context<Self>) {
         self.list.highlight(Some(key));
         self.menu = None;
+        // Picking a row shows it (`ReferenceBrowserList`'s `onShow`).
+        self.list_open = false;
         self.after_highlight(cx);
         cx.notify();
     }

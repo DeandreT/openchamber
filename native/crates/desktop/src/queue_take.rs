@@ -409,6 +409,10 @@ impl Workspace {
             let result = run_take(&this, cx, &id, &server, activation).await;
             let _ = this.update_in(cx, |this, window, cx| {
                 this.queue.takes.tasks.remove(&id);
+                // A departure held back while this transfer ran is noted now.
+                cx.defer_in(window, |this, window, cx| {
+                    this.reconcile_enqueue_listings(window, cx);
+                });
                 let refresh_owner = this.queue_storage.operation(&id).and_then(|operation| {
                     matches!(
                         operation.action(),

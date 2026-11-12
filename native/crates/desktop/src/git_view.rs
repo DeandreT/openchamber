@@ -1,12 +1,14 @@
-//! The Git surface (`GitView.tsx`): the branch with its sync actions, the
-//! staged and unstaged changes, the commit field and the selected change's
-//! diff.
+//! The Git surface (`GitView.tsx`): the branch with its sync actions, who
+//! commits, the staged and unstaged changes as `ChangesPanel` lays them out,
+//! the commit section and the selected change's diff.
 //!
 //! The server's status is the only authority for what the rows show. Index
 //! mutations run one at a time in the order asked (`IndexQueue`), and each is
 //! followed by a status read, failed or not, so no row keeps a state the
 //! server did not report. Only the newest status read applies. Discarding
-//! asks for a confirmation in place.
+//! one file asks for a confirmation in place. Revert all asks in a dialog
+//! for the paths listed when it opened, discards each with scope `all`
+//! outside the queue, then reads the status once and reports one summary.
 //!
 //! Fetch, pull and push are planned network operations: the binding read and
 //! the core's request building pick the tracked remote, the server plans,
@@ -23,15 +25,17 @@
 
 use std::time::Duration;
 
+use gpui_kit::component::WindowExt;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::{
-    AnyElement, AppContext, Context, Entity, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Render, Role, SharedString, StatefulInteractiveElement, Styled, Subscription,
-    Task, TestSupportExt, Window, div, prelude::FluentBuilder, px,
+    AnyElement, AppContext, Context, Div, Entity, FontWeight, Hsla, InteractiveElement,
+    IntoElement, ParentElement, Render, Role, SharedString, StatefulInteractiveElement, Styled,
+    Subscription, Task, TestSupportExt, Window, div, prelude::FluentBuilder, px,
 };
 use openchamber_native_core::git_changes::{
-    ChangeRow, ChangeScope, ChangesRead, GitChanges, IndexMutation, IndexQueue, NetworkAction,
-    NetworkOperation, NetworkRefusal, StatusLoads, accept_snapshot, network_request,
+    ChangeKind, ChangeRow, ChangeScope, ChangesRead, GitChanges, IndexMutation, IndexQueue,
+    LineStat, NetworkAction, NetworkOperation, NetworkRefusal, StatusLoads, accept_snapshot,
+    network_request,
 };
 use openchamber_native_transport::git::{Branches, GitError};
 
@@ -40,9 +44,13 @@ use crate::baseline::CssTextExt;
 use crate::chrome::{CONTROL_RADIUS, IconButton, glyph};
 use crate::context_panel::{ROW_LINE, ROW_SIZE, XS_LINE, XS_SIZE};
 use crate::diff_view::DiffPane;
+use crate::elevation;
 use crate::files_view::{Notice, PANEL_ROW, PanelScope, empty_state, status_line, text_button};
 use crate::locale::{self, Direction, Strings};
 use crate::logical::LogicalStyledExt;
+use crate::panel_controls::{
+    HEADER_LINE, HEADER_SIZE, LABEL_LINE, LABEL_SIZE, META_LINE, META_SIZE, MICRO_LINE, MICRO_SIZE,
+};
 use crate::theme::Palette;
 
 mod conflicts;
@@ -54,6 +62,29 @@ pub(crate) const UPDATE_PICKER_CONTEXT: &str = "GitUpdatePicker";
 
 const OPERATION_POLL: Duration = Duration::from_secs(1);
 const DIFF_HEIGHT: f32 = 260.0;
+
+/// The panel header's row with its bottom line (`h-10 border-b`).
+const HEADER_ROW: f32 = 41.0;
+/// `GitHeader`'s state row (`h-10`).
+const STATE_ROW: f32 = 40.0;
+/// The list's side padding (`px-4`).
+const LIST_PADDING: f32 = 16.0;
+/// The end padding of a list row (`pe-2`).
+const ROW_END_PADDING: f32 = 8.0;
+/// A group header: a 20 px line in `py-2`.
+const GROUP_HEADER: f32 = 36.0;
+/// A change row: a 20 px line in `py-1.5`.
+pub(crate) const CHANGE_ROW: f32 = 32.0;
+/// The stage, unstage and revert controls (`size-5`).
+const SYMBOL_BUTTON: f32 = 20.0;
+/// The revert-all row: a 28 px button in `py-2`.
+const REVERT_ALL_ROW: f32 = 44.0;
+/// The commit section's title row: a 20 px line in `pt-2 pb-1`.
+const COMMIT_HEADER: f32 = 32.0;
+/// `CommitInput`'s single-line height.
+const COMMIT_FIELD: f32 = 38.0;
+/// The file glyph of a change row.
+pub(crate) const FILE_ICON: &str = "file-text";
 
 /// A network operation this view started.
 struct OperationRun {
@@ -67,6 +98,19 @@ struct OperationRun {
     poll: Option<Task<()>>,
 }
 
+/// What Revert all would discard, as listed when its dialog opened.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct RevertAllTarget {
+    directory: String,
+    paths: Vec<String>,
+}
+
+/// A running Revert all: its paths show as busy until it ends.
+struct RevertAllRun {
+    paths: Vec<String>,
+    _task: Task<()>,
+}
+
 pub(crate) struct GitView {
     scope: PanelScope,
     status: StatusLoads,
@@ -76,6 +120,11 @@ pub(crate) struct GitView {
     selected: Option<(String, ChangeScope)>,
     pane: DiffPane,
     confirm_discard: Option<String>,
+    /// Revert all waits in its dialog for these paths.
+    revert_all_confirm: Option<RevertAllTarget>,
+    revert_all: Option<RevertAllRun>,
+    staged_collapsed: bool,
+    changes_collapsed: bool,
     commit_input: Entity<InputState>,
     commit_task: Option<Task<()>>,
     branches: Option<Branches>,
@@ -138,6 +187,10 @@ impl GitView {
             selected: None,
             pane: DiffPane::new(cx),
             confirm_discard: None,
+            revert_all_confirm: None,
+            revert_all: None,
+            staged_collapsed: false,
+            changes_collapsed: false,
             commit_input,
             commit_task: None,
             branches: None,
@@ -275,6 +328,223 @@ impl GitView {
             |view: &mut Self| &mut view.pane,
             cx,
         );
+        cx.notify();
+    }
+
+    /// Every changed path of both groups, once each (`allChangePaths`).
+    fn revert_all_target(&self) -> RevertAllTarget {
+        let mut paths: Vec<String> = Vec::new();
+        if let Some(changes) = self.changes() {
+            for row in changes.staged().into_iter().chain(changes.unstaged()) {
+                if !paths.contains(&row.path) {
+                    paths.push(row.path);
+                }
+            }
+        }
+        RevertAllTarget {
+            directory: self.git_directory(),
+            paths,
+        }
+    }
+
+    fn reverting(&self, path: &str) -> bool {
+        self.revert_all
+            .as_ref()
+            .is_some_and(|run| run.paths.iter().any(|candidate| candidate == path))
+    }
+
+    #[cfg(test)]
+    pub(crate) fn revert_all_running(&self) -> bool {
+        self.revert_all.is_some()
+    }
+
+    /// How many paths the open Revert all dialog names.
+    #[cfg(test)]
+    pub(crate) fn revert_all_asking(&self) -> Option<usize> {
+        self.revert_all_confirm
+            .as_ref()
+            .map(|target| target.paths.len())
+    }
+
+    /// Opens the Revert all dialog for the paths listed now.
+    pub(crate) fn request_revert_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.revert_all.is_some() || self.revert_all_confirm.is_some() {
+            return;
+        }
+        let target = self.revert_all_target();
+        if target.paths.is_empty() {
+            return;
+        }
+        self.revert_all_confirm = Some(target);
+        let view = cx.entity().downgrade();
+        window.open_dialog(cx, move |dialog, _, cx| {
+            let Some(this) = view.upgrade() else {
+                return dialog;
+            };
+            let Some(target) = this.read(cx).revert_all_confirm.clone() else {
+                return dialog;
+            };
+            let palette = cx.global::<Palette>().clone();
+            let strings = locale::strings(cx).clone();
+            let direction = strings.direction();
+            let count = target.paths.len().to_string();
+            let description = strings.format(
+                if target.paths.len() == 1 {
+                    "gitView.changes.revertAllDescriptionSingle"
+                } else {
+                    "gitView.changes.revertAllDescriptionPlural"
+                },
+                &[("count", &count)],
+            );
+            let (on_close, on_cancel, on_confirm) = (view.clone(), view.clone(), view.clone());
+            let button = |id: &'static str, label: SharedString, fill: Option<Hsla>, text: Hsla| {
+                div()
+                    .id(id)
+                    .role(Role::Button)
+                    .accessibility_id(id)
+                    .aria_label(label.clone())
+                    .h(px(28.0))
+                    .px(px(10.0))
+                    .rounded(px(CONTROL_RADIUS))
+                    .flex()
+                    .items_center()
+                    .cursor_pointer()
+                    .text_color(text)
+                    .when_some(fill, |this, fill| this.bg(fill))
+                    .when(fill.is_none(), |this| {
+                        this.border_1().border_color(palette.border)
+                    })
+                    .child(div().text_size(gpui_kit::rems(LABEL_SIZE)).child(label))
+                    .test_support()
+            };
+            dialog
+                .w(px(448.0))
+                .close_button(false)
+                .on_close(move |_, _, cx| {
+                    let _ = on_close.update(cx, |this, cx| {
+                        this.revert_all_confirm = None;
+                        cx.notify();
+                    });
+                })
+                .title(strings.get("gitView.changes.revertAllDialogTitle"))
+                .child(
+                    div()
+                        .id("git-revert-all-description")
+                        .text_size(gpui_kit::rems(LABEL_SIZE))
+                        .text_color(palette.muted_foreground)
+                        .child(description),
+                )
+                .footer(
+                    div()
+                        .w_full()
+                        .flex_row_from(direction)
+                        .items_center()
+                        .justify_end()
+                        .gap(px(8.0))
+                        .child(
+                            button(
+                                "git-revert-all-cancel",
+                                strings.get("gitView.common.cancel"),
+                                None,
+                                palette.foreground,
+                            )
+                            .on_click(move |_, window, cx| {
+                                let _ = on_cancel
+                                    .update(cx, |this, cx| this.cancel_revert_all(window, cx));
+                            }),
+                        )
+                        .child(
+                            button(
+                                "git-revert-all-confirm",
+                                strings.get("gitView.changes.revertAll"),
+                                Some(palette.status_error),
+                                palette.status_error_foreground,
+                            )
+                            .on_click(move |_, window, cx| {
+                                let _ = on_confirm
+                                    .update(cx, |this, cx| this.confirm_revert_all(window, cx));
+                            }),
+                        ),
+                )
+        });
+        cx.notify();
+    }
+
+    pub(crate) fn cancel_revert_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.revert_all_confirm = None;
+        window.close_dialog(cx);
+        cx.notify();
+    }
+
+    /// Reverts exactly what the dialog named. When the listed paths or the
+    /// repository changed meanwhile, the dialog asks again for what is
+    /// listed now and nothing is reverted.
+    pub(crate) fn confirm_revert_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(confirmed) = self.revert_all_confirm.take() else {
+            return;
+        };
+        let current = self.revert_all_target();
+        if current != confirmed {
+            if current.paths.is_empty() {
+                window.close_dialog(cx);
+            } else {
+                self.revert_all_confirm = Some(current);
+            }
+            cx.notify();
+            return;
+        }
+        window.close_dialog(cx);
+        self.start_revert_all(confirmed.paths, cx);
+    }
+
+    /// Discards `paths` one after another, keeps every failure, then reads
+    /// the status once and reports one summary (`handleRevertPaths`).
+    fn start_revert_all(&mut self, paths: Vec<String>, cx: &mut Context<Self>) {
+        if self.revert_all.is_some() {
+            return;
+        }
+        // A path an index mutation is changing is left to that mutation.
+        let paths: Vec<String> = paths
+            .into_iter()
+            .filter(|path| !self.queue.touches(path))
+            .collect();
+        if paths.is_empty() {
+            return;
+        }
+        let Some(client) = self.scope.client(cx) else {
+            self.notice = Some(Notice::error(
+                locale::strings(cx).get("gitView.operation.state.unavailable"),
+                None,
+            ));
+            cx.notify();
+            return;
+        };
+        let directory = self.git_directory();
+        let batch = paths.clone();
+        let task = self.scope.run(async move {
+            let mut failed: Vec<Option<String>> = Vec::new();
+            for path in &batch {
+                if let Err(error) = client.discard_all_changes(&directory, path).await {
+                    failed.push(error.message().map(str::to_owned));
+                }
+            }
+            failed
+        });
+        let total = paths.len();
+        let task = cx.spawn(async move |this, cx| {
+            let failed = task.await;
+            let _ = this.update(cx, |this, cx| {
+                this.revert_all = None;
+                if let Some(failed) = failed {
+                    this.notice = Some(revert_all_notice(total, &failed, locale::strings(cx)));
+                }
+                // One read for the whole batch; the summary stays unless
+                // that read fails.
+                this.refresh(cx);
+                cx.notify();
+            });
+        });
+        self.revert_all = Some(RevertAllRun { paths, _task: task });
         cx.notify();
     }
 
@@ -884,15 +1154,6 @@ fn operation_notice(run: &OperationRun, strings: &Strings) -> Notice {
     Notice::error(title, detail.as_deref())
 }
 
-fn kind_color(row: &ChangeRow, palette: &Palette) -> gpui_kit::Hsla {
-    use openchamber_native_core::git_changes::ChangeKind;
-    match row.kind {
-        ChangeKind::Added | ChangeKind::Untracked => palette.status_success,
-        ChangeKind::Deleted | ChangeKind::Conflicted => palette.status_error,
-        _ => palette.status_warning,
-    }
-}
-
 impl GitView {
     fn render_header(
         &self,
@@ -923,21 +1184,17 @@ impl GitView {
                 .gap(px(6.0))
                 .cursor_pointer()
                 .hover(move |style| style.bg(hover))
-                .child(glyph("git-branch", 14.0, palette.muted_foreground))
+                .child(glyph("git-branch", 16.0, palette.primary))
                 .child(
                     div()
                         .min_w_0()
                         .truncate()
-                        .css_text(ROW_SIZE, ROW_LINE, cx)
+                        .css_text(LABEL_SIZE, LABEL_LINE, cx)
                         .font_weight(FontWeight::MEDIUM)
                         .text_color(palette.foreground)
                         .child(branch),
                 )
-                .child(crate::sidebar_view::chevron(
-                    !self.branches_open,
-                    direction,
-                    palette,
-                )),
+                .child(glyph("arrow-down-s", 16.0, palette.muted_foreground)),
             cx,
             |this: &mut Self, _, cx| this.toggle_branches(cx),
         )
@@ -950,15 +1207,18 @@ impl GitView {
                 .child(SharedString::from(text))
         };
         div()
-            .h(px(40.0))
-            .px(px(8.0))
+            .id("git-header")
+            .h(px(HEADER_ROW))
+            .flex_shrink_0()
+            .px(px(6.0))
+            .border_b_1()
+            .border_color(palette.divider)
             .flex_row_from(direction)
             .items_center()
             .gap(px(4.0))
             .child(branch_button)
             .children(self.render_repository_button(palette, direction, cx))
             .child(div().flex_1())
-            .child(self.render_identity_button(palette, direction, cx))
             .children(self.render_repository_views_button(palette, cx))
             .child(text_button(
                 "git-fetch",
@@ -1005,6 +1265,7 @@ impl GitView {
                     this.refresh(cx)
                 }),
             )
+            .test_support()
             .into_any_element()
     }
 
@@ -1193,71 +1454,312 @@ impl GitView {
                 .into_any_element(),
         )
     }
+}
 
+/// The one outcome of a Revert all of `total` paths: all reverted, none, or
+/// how many of each, so a later success never hides a failure.
+fn revert_all_notice(total: usize, failed: &[Option<String>], strings: &Strings) -> Notice {
+    let failures = failed.len();
+    if failures == 0 {
+        let count = total.to_string();
+        return Notice::info(strings.format(
+            if total == 1 {
+                "gitView.toast.revertedFilesSingle"
+            } else {
+                "gitView.toast.revertedFilesPlural"
+            },
+            &[("count", &count)],
+        ));
+    }
+    if failures >= total {
+        return Notice::error(
+            strings.get("gitView.toast.revertFailed"),
+            failed.iter().flatten().next().map(String::as_str),
+        );
+    }
+    let succeeded = total - failures;
+    let (success, failures) = (succeeded.to_string(), failures.to_string());
+    Notice::error(
+        strings.format(
+            if succeeded == 1 {
+                "gitView.toast.revertedSomeSingle"
+            } else {
+                "gitView.toast.revertedSomePlural"
+            },
+            &[("success", &success), ("failed", &failures)],
+        ),
+        None,
+    )
+}
+
+/// The letter and color of a change, as `describeChange` gives them.
+pub(crate) fn change_descriptor(kind: ChangeKind, palette: &Palette) -> (&'static str, Hsla) {
+    match kind {
+        ChangeKind::Untracked => ("?", palette.status_info),
+        ChangeKind::Added => ("A", palette.status_success),
+        ChangeKind::Deleted => ("D", palette.status_error),
+        ChangeKind::Renamed => ("R", palette.status_info),
+        ChangeKind::Copied => ("C", palette.status_info),
+        ChangeKind::Conflicted => ("!", palette.status_error),
+        ChangeKind::Modified | ChangeKind::TypeChanged => ("M", palette.status_warning),
+    }
+}
+
+/// A changed path on one line (`ChangedPathLabel.tsx`): the folder muted and
+/// truncated first, the file name whole. Paths read left to right in every
+/// interface direction.
+pub(crate) fn changed_path_label<V>(path: &str, palette: &Palette, cx: &Context<V>) -> Div {
+    let label = div().flex_1().min_w_0().flex().flex_row().overflow_hidden();
+    let Some((folder, name)) = path.rsplit_once('/') else {
+        return label.child(
+            div()
+                .min_w_0()
+                .truncate()
+                .css_text(LABEL_SIZE, LABEL_LINE, cx)
+                .text_color(palette.foreground)
+                .child(SharedString::from(path.to_owned())),
+        );
+    };
+    label
+        .child(
+            div()
+                .min_w_0()
+                .truncate()
+                .css_text(LABEL_SIZE, LABEL_LINE, cx)
+                .text_color(palette.muted_foreground)
+                .child(SharedString::from(folder.to_owned())),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .css_text(LABEL_SIZE, LABEL_LINE, cx)
+                .text_color(palette.muted_foreground)
+                .child("/"),
+        )
+        .child(
+            div()
+                .flex_shrink_0()
+                .css_text(LABEL_SIZE, LABEL_LINE, cx)
+                .text_color(palette.foreground)
+                .child(SharedString::from(name.to_owned())),
+        )
+}
+
+/// `+N/-N` in the status colors, as `ChangeRow` writes it.
+fn change_stats<V>(stat: Option<LineStat>, palette: &Palette, cx: &Context<V>) -> Div {
+    let (insertions, deletions) = stat
+        .map(|stat| (stat.insertions, stat.deletions))
+        .unwrap_or_default();
+    let part = |text: String, color: Hsla| {
+        div()
+            .css_text(MICRO_SIZE, MICRO_LINE, cx)
+            .text_color(color)
+            .child(SharedString::from(text))
+    };
+    div()
+        .flex_shrink_0()
+        .flex()
+        .flex_row()
+        .items_center()
+        .child(part(format!("+{insertions}"), palette.status_success))
+        .child(part("/".to_owned(), palette.muted_foreground).mx(px(2.0)))
+        .child(part(format!("-{deletions}"), palette.status_error))
+}
+
+/// The 20 px stage or unstage control of a row or a group: `+` or `-`.
+fn symbol_button<V: 'static>(
+    id: SharedString,
+    symbol: &'static str,
+    label: SharedString,
+    palette: &Palette,
+    cx: &Context<V>,
+    action: impl Fn(&mut V, &mut Window, &mut Context<V>) + 'static,
+) -> AnyElement {
+    let foreground = palette.foreground;
+    on_activate(
+        div()
+            .id(gpui_kit::ElementId::Name(id.clone()))
+            .role(Role::Button)
+            .accessibility_id(id)
+            .aria_label(label)
+            .size(px(SYMBOL_BUTTON))
+            .flex_shrink_0()
+            .rounded(px(4.0))
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .text_color(palette.muted_foreground)
+            .hover(move |style| style.text_color(foreground))
+            .child(
+                div()
+                    .css_text(MICRO_SIZE, MICRO_LINE, cx)
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(symbol),
+            ),
+        cx,
+        action,
+    )
+    .test_support()
+    .into_any_element()
+}
+
+impl GitView {
+    fn is_collapsed(&self, scope: ChangeScope) -> bool {
+        match scope {
+            ChangeScope::Staged => self.staged_collapsed,
+            ChangeScope::Unstaged => self.changes_collapsed,
+        }
+    }
+
+    fn toggle_collapsed(&mut self, scope: ChangeScope, cx: &mut Context<Self>) {
+        match scope {
+            ChangeScope::Staged => self.staged_collapsed = !self.staged_collapsed,
+            ChangeScope::Unstaged => self.changes_collapsed = !self.changes_collapsed,
+        }
+        cx.notify();
+    }
+
+    /// The row under the header (`GitHeader`'s `h-10 px-3`): who commits.
+    fn render_state_row(
+        &self,
+        palette: &Palette,
+        direction: Direction,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        div()
+            .id("git-state-row")
+            .h(px(STATE_ROW))
+            .flex_shrink_0()
+            .px(px(12.0))
+            .flex_row_from(direction)
+            .items_center()
+            .gap(px(8.0))
+            .child(self.render_identity_button(palette, direction, cx))
+            .test_support()
+            .into_any_element()
+    }
+
+    /// One group of `ChangesPanel`: its header, then its rows unless collapsed.
     fn render_section(
         &self,
         title: SharedString,
         rows: Vec<ChangeRow>,
+        first: bool,
         palette: &Palette,
         direction: Direction,
         cx: &Context<Self>,
     ) -> AnyElement {
         let strings = locale::strings(cx);
-        let scope = rows.first().map(|row| row.scope);
+        let Some(scope) = rows.first().map(|row| row.scope) else {
+            return div().into_any_element();
+        };
+        let collapsed = self.is_collapsed(scope);
         let all: Vec<String> = rows.iter().map(|row| row.path.clone()).collect();
-        let bulk = scope.map(|scope| match scope {
-            ChangeScope::Staged => IconButton::new(
+        let (scope_name, bulk_id, symbol, bulk_label) = match scope {
+            ChangeScope::Staged => (
+                "staged",
                 "git-unstage-all",
-                "subtract",
+                "-",
                 strings.get("gitView.changes.unstageAllAria"),
-            )
-            .render(palette, cx, move |this: &mut Self, _, cx| {
-                this.enqueue(IndexMutation::Unstage(all.clone()), cx)
-            }),
-            ChangeScope::Unstaged => IconButton::new(
+            ),
+            ChangeScope::Unstaged => (
+                "unstaged",
                 "git-stage-all",
-                "add",
+                "+",
                 strings.get("gitView.changes.stageAllAria"),
-            )
-            .render(palette, cx, move |this: &mut Self, _, cx| {
-                this.enqueue(IndexMutation::Stage(all.clone()), cx)
-            }),
-        });
+            ),
+        };
+        let bulk = symbol_button(
+            bulk_id.into(),
+            symbol,
+            bulk_label,
+            palette,
+            cx,
+            move |this: &mut Self, _, cx| {
+                let mutation = match scope {
+                    ChangeScope::Staged => IndexMutation::Unstage(all.clone()),
+                    ChangeScope::Unstaged => IndexMutation::Stage(all.clone()),
+                };
+                this.enqueue(mutation, cx)
+            },
+        );
+        let group_id = SharedString::from(format!("git-group:{scope_name}"));
+        let toggle = on_activate(
+            div()
+                .id(gpui_kit::ElementId::Name(group_id.clone()))
+                .role(Role::Button)
+                .accessibility_id(group_id)
+                .aria_label(title.clone())
+                .aria_expanded(!collapsed)
+                .flex_1()
+                .min_w_0()
+                .h(px(SYMBOL_BUTTON))
+                .flex_row_from(direction)
+                .items_center()
+                .gap(px(8.0))
+                .cursor_pointer()
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .css_text(HEADER_SIZE, HEADER_LINE, cx)
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(palette.foreground)
+                        .child(title),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .css_text(META_SIZE, META_LINE, cx)
+                        .text_color(palette.muted_foreground)
+                        .child(SharedString::from(rows.len().to_string())),
+                )
+                .child(crate::sidebar_view::chevron(collapsed, direction, palette)),
+            cx,
+            move |this: &mut Self, _, cx| this.toggle_collapsed(scope, cx),
+        )
+        .test_support();
+        // A later group's top line stands above its 36 px.
         let heading = div()
-            .h(px(28.0))
-            .px(px(12.0))
+            .h(px(if first {
+                GROUP_HEADER
+            } else {
+                GROUP_HEADER + 1.0
+            }))
+            .flex_shrink_0()
+            .padding_end(direction, px(ROW_END_PADDING))
             .flex_row_from(direction)
             .items_center()
-            .gap(px(6.0))
-            .child(
-                div()
-                    .css_text(XS_SIZE, XS_LINE, cx)
-                    .font_weight(FontWeight::SEMIBOLD)
-                    .text_color(palette.foreground)
-                    .child(title),
-            )
-            .child(
-                div()
-                    .css_text(XS_SIZE, XS_LINE, cx)
-                    .text_color(palette.muted_foreground)
-                    .child(SharedString::from(rows.len().to_string())),
-            )
-            .child(div().flex_1())
-            .children(bulk);
+            .gap(px(8.0))
+            .when(!first, |this| {
+                // `mt-1 border-t border-edge-muted` between groups.
+                this.mt(px(4.0))
+                    .border_t_1()
+                    .border_color(palette.border.opacity(0.4))
+            })
+            .child(bulk)
+            .child(toggle);
         div()
             .flex()
             .flex_col()
             .child(heading)
-            .children(
-                rows.into_iter()
-                    .map(|row| self.render_change(row, palette, direction, cx)),
-            )
+            .when(!collapsed, |this| {
+                this.children(
+                    rows.into_iter().enumerate().map(|(index, row)| {
+                        self.render_change(row, index > 0, palette, direction, cx)
+                    }),
+                )
+            })
             .into_any_element()
     }
 
+    /// One `ChangeRow` in the flat view: the stage control, the status
+    /// letter, the file, its path and line counts, then revert.
     fn render_change(
         &self,
         row: ChangeRow,
+        divided: bool,
         palette: &Palette,
         direction: Direction,
         cx: &Context<Self>,
@@ -1268,6 +1770,16 @@ impl GitView {
             ChangeScope::Unstaged => "unstaged",
         };
         let id = format!("git-change:{scope_name}:{}", row.path);
+        // `before:border-t before:border-edge`, short of the end padding.
+        let divider = divided.then(|| {
+            div()
+                .absolute()
+                .top_0()
+                .inset_start(direction, px(0.0))
+                .inset_end(direction, px(ROW_END_PADDING))
+                .h(px(1.0))
+                .bg(palette.divider)
+        });
         if row.scope == ChangeScope::Unstaged
             && self.confirm_discard.as_deref() == Some(row.path.as_str())
         {
@@ -1281,19 +1793,21 @@ impl GitView {
                     "gitView.changes.revertFileDescription",
                     &[("path", &row.path)],
                 ))
-                .min_h(px(PANEL_ROW))
-                .px(px(12.0))
-                .py(px(2.0))
+                .relative()
+                .h(px(CHANGE_ROW))
+                .padding_start(direction, px(8.0))
+                .padding_end(direction, px(ROW_END_PADDING))
                 .bg(palette.status_warning_background)
                 .flex_row_from(direction)
                 .items_center()
-                .gap(px(6.0))
+                .gap(px(8.0))
+                .children(divider)
                 .child(
                     div()
                         .flex_1()
                         .min_w_0()
                         .truncate()
-                        .css_text(XS_SIZE, XS_LINE, cx)
+                        .css_text(META_SIZE, META_LINE, cx)
                         .text_color(palette.foreground)
                         .child(strings.format(
                             "gitView.changes.revertFileDescription",
@@ -1325,11 +1839,8 @@ impl GitView {
                 .into_any_element();
         }
         let selected = self.selected.as_ref() == Some(&(row.path.clone(), row.scope));
-        let busy = self.queue.touches(&row.path);
-        let hover = palette.hover;
-        let stat = row
-            .stat
-            .map(|stat| format!("+{} −{}", stat.insertions, stat.deletions));
+        let busy = self.queue.touches(&row.path) || self.reverting(&row.path);
+        let (code, color) = change_descriptor(row.kind, palette);
         let select_row = row.clone();
         let label: SharedString = row.path.clone().into();
         let main = on_activate(
@@ -1337,160 +1848,280 @@ impl GitView {
                 .id(gpui_kit::ElementId::Name(id.clone().into()))
                 .role(Role::ListItem)
                 .accessibility_id(SharedString::from(id))
-                .aria_label(label.clone())
+                .aria_label(label)
                 .aria_selected(selected)
                 .flex_1()
                 .min_w_0()
-                .h(px(PANEL_ROW))
-                .px(px(8.0))
-                .rounded(px(CONTROL_RADIUS))
+                .h(px(CHANGE_ROW))
                 .flex_row_from(direction)
                 .items_center()
-                .gap(px(6.0))
+                .gap(px(8.0))
                 .cursor_pointer()
-                .when(selected, |this| this.bg(palette.selection))
-                .when(!selected, |this| this.hover(move |style| style.bg(hover)))
                 .child(
                     div()
-                        .w(px(12.0))
+                        .w(px(16.0))
                         .flex_shrink_0()
-                        .css_text(XS_SIZE, XS_LINE, cx)
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(kind_color(&row, palette))
-                        .child(SharedString::from(row.kind.letter().to_string())),
+                        .flex()
+                        .justify_center()
+                        .child(
+                            div()
+                                .css_text(MICRO_SIZE, MICRO_LINE, cx)
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(color)
+                                .child(code),
+                        ),
                 )
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .truncate()
-                        .css_text(ROW_SIZE, ROW_LINE, cx)
-                        .text_color(palette.foreground)
-                        .child(label),
-                )
-                .children(stat.map(|stat| {
-                    div()
-                        .flex_shrink_0()
-                        .css_text(XS_SIZE, XS_LINE, cx)
-                        .text_color(palette.muted_foreground)
-                        .child(SharedString::from(stat))
-                })),
+                .child(glyph(FILE_ICON, 14.0, palette.status_info))
+                .child(changed_path_label(&row.path, palette, cx))
+                .child(change_stats(row.stat, palette, cx)),
             cx,
             move |this: &mut Self, _, cx| this.select(&select_row, cx),
         )
         .test_support();
         let path = row.path.clone();
-        let actions: Vec<AnyElement> = if busy {
-            Vec::new()
-        } else {
-            match row.scope {
-                ChangeScope::Staged => vec![
-                    IconButton::new(
-                        format!("git-unstage:{path}"),
-                        "subtract",
-                        strings.format("gitView.changes.unstageFileAria", &[("path", &path)]),
-                    )
-                    .render(palette, cx, move |this: &mut Self, _, cx| {
+        // The slots keep their width while a mutation of the path runs.
+        let slot = || {
+            div()
+                .size(px(SYMBOL_BUTTON))
+                .flex_shrink_0()
+                .into_any_element()
+        };
+        let stage = match (busy, row.scope) {
+            (true, _) => slot(),
+            (false, ChangeScope::Staged) => {
+                let path = path.clone();
+                symbol_button(
+                    format!("git-unstage:{path}").into(),
+                    "-",
+                    strings.format("gitView.changes.unstageFileAria", &[("path", &path)]),
+                    palette,
+                    cx,
+                    move |this: &mut Self, _, cx| {
                         this.enqueue(IndexMutation::Unstage(vec![path.clone()]), cx)
-                    }),
-                ],
-                ChangeScope::Unstaged => {
-                    let discard = path.clone();
-                    vec![
-                        IconButton::new(
-                            format!("git-discard:{path}"),
-                            "arrow-go-back",
-                            strings.get("gitView.changes.revertFileTooltip"),
-                        )
-                        .render(
-                            palette,
-                            cx,
-                            move |this: &mut Self, _, cx| {
-                                this.confirm_discard = Some(discard.clone());
-                                cx.notify();
-                            },
-                        ),
-                        IconButton::new(
-                            format!("git-stage:{path}"),
-                            "add",
-                            strings.format("gitView.changes.stageFileAria", &[("path", &path)]),
-                        )
-                        .render(
-                            palette,
-                            cx,
-                            move |this: &mut Self, _, cx| {
-                                this.enqueue(IndexMutation::Stage(vec![path.clone()]), cx)
-                            },
-                        ),
-                    ]
-                }
+                    },
+                )
+            }
+            (false, ChangeScope::Unstaged) => {
+                let path = path.clone();
+                symbol_button(
+                    format!("git-stage:{path}").into(),
+                    "+",
+                    strings.format("gitView.changes.stageFileAria", &[("path", &path)]),
+                    palette,
+                    cx,
+                    move |this: &mut Self, _, cx| {
+                        this.enqueue(IndexMutation::Stage(vec![path.clone()]), cx)
+                    },
+                )
             }
         };
+        let revert = match (busy, row.scope) {
+            (_, ChangeScope::Staged) => None,
+            (true, ChangeScope::Unstaged) => Some(slot()),
+            (false, ChangeScope::Unstaged) => Some(
+                IconButton::new(
+                    format!("git-discard:{path}"),
+                    "arrow-go-back",
+                    strings.get("gitView.changes.revertFileTooltip"),
+                )
+                .size(SYMBOL_BUTTON, 14.0)
+                .render(palette, cx, move |this: &mut Self, _, cx| {
+                    this.confirm_discard = Some(path.clone());
+                    cx.notify();
+                }),
+            ),
+        };
         div()
-            .px(px(4.0))
+            .relative()
+            .h(px(CHANGE_ROW))
+            .padding_end(direction, px(ROW_END_PADDING))
             .flex_row_from(direction)
             .items_center()
-            .gap(px(2.0))
+            .gap(px(8.0))
+            .children(divider)
+            .child(stage)
             .child(main)
-            // A fixed slot, so a row keeps its width while its actions run.
-            .child(
-                div()
-                    .w(px(52.0))
-                    .flex_shrink_0()
-                    .flex_row_from(direction)
-                    .justify_end()
-                    .children(actions),
-            )
+            .children(revert)
             .into_any_element()
     }
 
-    fn render_commit(
+    /// `ChangesPanel`'s last row: the button that asks to revert every
+    /// listed path. It is disabled while such a batch runs.
+    fn render_revert_all(
         &self,
         palette: &Palette,
         direction: Direction,
         cx: &Context<Self>,
     ) -> AnyElement {
         let strings = locale::strings(cx);
-        let label = if self.commit_task.is_some() {
+        let label = strings.get("gitView.changes.revertAll");
+        let running = self.revert_all.is_some();
+        let tint = palette.status_error.opacity(0.1);
+        // `Button variant="ghost" size="sm"` in the error color.
+        let button = on_activate(
+            div()
+                .id("git-revert-all")
+                .role(Role::Button)
+                .accessibility_id("git-revert-all")
+                .aria_label(label.clone())
+                .h(px(28.0))
+                .px(px(8.0))
+                .flex_shrink_0()
+                .rounded(px(CONTROL_RADIUS))
+                .flex_row_from(direction)
+                .items_center()
+                .gap(px(6.0))
+                .when(running, |this| this.opacity(0.5))
+                .when(!running, |this| {
+                    this.cursor_pointer().hover(move |style| style.bg(tint))
+                })
+                .child(glyph("arrow-go-back", 14.0, palette.status_error))
+                .child(
+                    div()
+                        .css_text(LABEL_SIZE, LABEL_LINE, cx)
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(palette.status_error)
+                        .child(label),
+                ),
+            cx,
+            |this: &mut Self, window, cx| this.request_revert_all(window, cx),
+        )
+        .test_support();
+        div()
+            .h(px(REVERT_ALL_ROW))
+            .flex_shrink_0()
+            .padding_end(direction, px(ROW_END_PADDING))
+            .flex_row_from(direction)
+            .items_center()
+            .child(div().flex_1())
+            .child(button)
+            .into_any_element()
+    }
+
+    /// `CommitSection`: its title with the staging hint, the message field
+    /// and the commit action.
+    fn render_commit(
+        &self,
+        staged: usize,
+        palette: &Palette,
+        direction: Direction,
+        cx: &Context<Self>,
+    ) -> AnyElement {
+        let strings = locale::strings(cx);
+        let committing = self.commit_task.is_some();
+        let label = if committing {
             strings.get("gitView.commit.committing")
         } else {
             strings.get("gitView.commit.commit")
         };
+        let can_commit = staged > 0
+            && !committing
+            && !self.queue.is_busy()
+            && !self.commit_input.read(cx).value().trim().is_empty();
+        let hover = palette.hover;
+        // `Button variant="outline" size="sm"` around the commit glyph.
+        let commit = on_activate(
+            div()
+                .id("git-commit")
+                .role(Role::Button)
+                .accessibility_id("git-commit")
+                .aria_label(label.clone())
+                .h(px(28.0))
+                .px(px(8.0))
+                .flex_shrink_0()
+                .rounded(px(CONTROL_RADIUS))
+                .bg(palette.elevated)
+                .shadow(elevation::control(palette))
+                .flex_row_from(direction)
+                .items_center()
+                .gap(px(6.0))
+                .when(can_commit, |this| {
+                    this.cursor_pointer().hover(move |style| style.bg(hover))
+                })
+                .when(!can_commit, |this| this.opacity(0.5))
+                .child(glyph("git-commit", 16.0, palette.foreground))
+                .child(
+                    div()
+                        .css_text(LABEL_SIZE, LABEL_LINE, cx)
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(palette.foreground)
+                        .child(label),
+                ),
+            cx,
+            // The commit reports an empty message or an empty index itself.
+            |this: &mut Self, window, cx| this.commit(window, cx),
+        )
+        .test_support();
         div()
-            .px(px(8.0))
-            .py(px(6.0))
-            .flex_row_from(direction)
-            .items_center()
-            .gap(px(6.0))
+            .id("git-commit-section")
+            .flex_shrink_0()
+            .flex()
+            .flex_col()
             .child(
                 div()
-                    .id("git-commit-message")
-                    .role(Role::Group)
-                    .accessibility_id("git-commit-message")
-                    .aria_label(strings.get("gitView.commit.messagePlaceholder"))
-                    .flex_1()
-                    .min_w_0()
-                    .h(px(28.0))
-                    .px(px(8.0))
-                    .rounded(px(CONTROL_RADIUS))
-                    .bg(palette.background)
-                    .flex()
+                    .h(px(COMMIT_HEADER))
+                    .pt(px(8.0))
+                    .pb(px(4.0))
+                    .flex_row_from(direction)
                     .items_center()
+                    .gap(px(8.0))
                     .child(
-                        Input::new(&self.commit_input)
-                            .appearance(false)
-                            .bordered(false)
-                            .text_size(gpui_kit::rems(ROW_SIZE)),
+                        div()
+                            .flex_shrink_0()
+                            .css_text(HEADER_SIZE, HEADER_LINE, cx)
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .text_color(palette.foreground)
+                            .child(strings.get("gitView.commit.title")),
+                    )
+                    .when(staged == 0, |this| {
+                        this.child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .css_text(META_SIZE, META_LINE, cx)
+                                .text_color(palette.muted_foreground)
+                                .child(strings.get("gitView.commit.stageFilesHint")),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .pt(px(4.0))
+                    .pb(px(12.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(12.0))
+                    .child(
+                        div()
+                            .id("git-commit-message")
+                            .role(Role::Group)
+                            .accessibility_id("git-commit-message")
+                            .aria_label(strings.get("gitView.commit.messagePlaceholder"))
+                            .h(px(COMMIT_FIELD))
+                            .px(px(12.0))
+                            .rounded(px(8.0))
+                            .bg(palette.elevated)
+                            .shadow(elevation::control(palette))
+                            .flex()
+                            .items_center()
+                            .child(
+                                Input::new(&self.commit_input)
+                                    .appearance(false)
+                                    .bordered(false)
+                                    .text_size(gpui_kit::rems(LABEL_SIZE)),
+                            )
+                            .test_support(),
+                    )
+                    .child(
+                        div()
+                            .h(px(28.0))
+                            .flex_row_from(direction)
+                            .items_center()
+                            .gap(px(8.0))
+                            .child(div().flex_1())
+                            .child(commit),
                     ),
             )
-            .child(text_button(
-                "git-commit",
-                label,
-                None,
-                palette,
-                cx,
-                |this: &mut Self, window, cx| this.commit(window, cx),
-            ))
             .into_any_element()
     }
 }
@@ -1548,32 +2179,51 @@ impl Render for GitView {
             Some(ChangesRead::Repository(repository)) => {
                 let staged = repository.staged();
                 let unstaged = repository.unstaged();
+                let staged_count = staged.len();
+                let staged_first = !staged.is_empty();
+                // `px-4 pt-1 pb-4`, the list over the commit section, `gap-3`.
                 div()
-                    .id("git-changes")
-                    .role(Role::Group)
-                    .accessibility_id("git-changes")
-                    .aria_label(strings.get("gitView.changes.changedFilesAria"))
                     .size_full()
-                    .overflow_y_scroll()
-                    .py(px(4.0))
-                    .when(!staged.is_empty(), |this| {
-                        this.child(self.render_section(
-                            strings.get("gitView.changes.stagedTitle"),
-                            staged,
-                            &palette,
-                            direction,
-                            cx,
-                        ))
-                    })
-                    .when(!unstaged.is_empty(), |this| {
-                        this.child(self.render_section(
-                            strings.get("gitView.changes.title"),
-                            unstaged,
-                            &palette,
-                            direction,
-                            cx,
-                        ))
-                    })
+                    .px(px(LIST_PADDING))
+                    .pt(px(4.0))
+                    .pb(px(16.0))
+                    .flex()
+                    .flex_col()
+                    .gap(px(12.0))
+                    .child(
+                        div()
+                            .id("git-changes")
+                            .role(Role::List)
+                            .accessibility_id("git-changes")
+                            .aria_label(strings.get("gitView.changes.changedFilesAria"))
+                            .flex_1()
+                            .min_h_0()
+                            .overflow_y_scroll()
+                            .when(staged_first, |this| {
+                                this.child(self.render_section(
+                                    strings.get("gitView.changes.stagedTitle"),
+                                    staged,
+                                    true,
+                                    &palette,
+                                    direction,
+                                    cx,
+                                ))
+                            })
+                            .when(!unstaged.is_empty(), |this| {
+                                this.child(self.render_section(
+                                    strings.get("gitView.changes.title"),
+                                    unstaged,
+                                    !staged_first,
+                                    &palette,
+                                    direction,
+                                    cx,
+                                ))
+                            })
+                            // Shown whenever a path is listed; this arm has one.
+                            .child(self.render_revert_all(&palette, direction, cx))
+                            .test_support(),
+                    )
+                    .child(self.render_commit(staged_count, &palette, direction, cx))
                     .into_any_element()
             }
         };
@@ -1588,24 +2238,26 @@ impl Render for GitView {
             .flex_col()
             .when(repository, |this| {
                 this.child(self.render_header(changes.as_ref(), &palette, direction, cx))
+                    .child(self.render_state_row(&palette, direction, cx))
             })
             .children(self.render_operation(&palette, direction, cx))
             .children(self.render_repositories(&palette, cx))
             .children(self.render_identities(&palette, cx))
             .children(self.render_repository_views(&palette, direction, cx))
             .children(self.render_in_progress(changes.as_ref(), &palette, direction, cx))
-            .child(status_line(
-                "git-notice",
-                self.notice.as_ref(),
-                &palette,
-                direction,
-                cx,
-            ))
+            // The reference reports outcomes in toasts; the line takes its
+            // row only while there is an outcome to read.
+            .when(self.notice.is_some(), |this| {
+                this.child(status_line(
+                    "git-notice",
+                    self.notice.as_ref(),
+                    &palette,
+                    direction,
+                    cx,
+                ))
+            })
             .children(self.render_branches(changes.as_ref(), &palette, direction, cx))
             .child(div().flex_1().min_h_0().child(body))
-            .when(repository, |this| {
-                this.child(self.render_commit(&palette, direction, cx))
-            })
             .when(self.selected.is_some(), |this| {
                 this.child(div().h(px(1.0)).bg(palette.divider)).child(
                     div()

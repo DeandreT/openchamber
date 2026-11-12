@@ -476,6 +476,10 @@ impl Workspace {
             let result = retire(&this, cx, &id).await;
             let _ = this.update_in(cx, |this, window, cx| {
                 this.queue.local_sends.tasks.remove(&id);
+                // A departure held back while this transfer ran is noted now.
+                cx.defer_in(window, |this, window, cx| {
+                    this.reconcile_enqueue_listings(window, cx);
+                });
                 if this.queue_storage.local_send_retirement(&id).is_some() {
                     let check = if result.is_err() {
                         LocalSendCheck::Failed
@@ -677,6 +681,10 @@ impl Workspace {
                     return;
                 }
                 this.queue.local_sends.tasks.remove(&id);
+                // A departure held back while this transfer ran is noted now.
+                cx.defer_in(window, |this, window, cx| {
+                    this.reconcile_enqueue_listings(window, cx);
+                });
                 this.retire_released_native_roots(roots, window, cx);
                 let check = match &result {
                     Ok(check) => *check,
