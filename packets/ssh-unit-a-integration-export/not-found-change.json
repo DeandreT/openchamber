@@ -1,0 +1,8 @@
+{
+  "sourceChanged": [
+    "native/crates/desktop/src/ssh_cleanup.rs"
+  ],
+  "previousReceipt": "/home/deandre/projects/rust/OpenChamber/native/target/tmp/unit-a-qualification-short-tmp-xz9udont/receipt.json",
+  "previousCandidatePreserved": true,
+  "newTest": "explicit_not_found_without_pid_requires_one_matching_port"
+}

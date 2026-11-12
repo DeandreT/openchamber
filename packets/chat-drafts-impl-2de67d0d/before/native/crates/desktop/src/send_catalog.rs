@@ -1,0 +1,793 @@
+//! What the composer sends with and the Work status card counts: the
+//! catalogs of the active config directory, OpenChamber's defaults and the
+//! selection they resolve to.
+//!
+//! Mirrors the catalog loads of `packages/ui/src/stores/useConfigStore.ts`:
+//! the config directory is the selected session's directory, or on the
+//! new-session view the chosen draft project, then the last directory when
+//! it is a known project or worktree, else the active project, else the first one. Each directory's
+//! catalogs load once and reload when OpenCode announces a rebuild; a reread
+//! that fails keeps what the directory held. OpenCode starts a location
+//! lazily and plugins register agents while it already serves, so the first
+//! directory is read again once startup has settled, as the web client does.
+
+use std::cell::Cell;
+use std::collections::HashMap;
+use std::rc::Rc;
+use std::time::Duration;
+
+use gpui_kit::{Context, Task};
+use openchamber_native_core::path;
+use openchamber_native_core::send_config::{
+    self, AgentColor, AgentEntry, AutoRouting, CatalogProvider, ModelChoice, Selection,
+    SelectionDefaults, SessionRecordChoice,
+};
+use openchamber_native_transport::catalog::{ModelCatalog, OpenCodeDefaults};
+use openchamber_native_transport::client::ServerSettings;
+use openchamber_native_transport::error::TransportError;
+use openchamber_native_transport::event::CatalogKind;
+
+use crate::theme::Palette;
+use crate::workspace::Workspace;
+
+/// Reads per catalog before a load gives up, and the growing pause between
+/// them (`loadAgents` and `loadProviders`).
+const READ_ATTEMPTS: u32 = 3;
+const ATTEMPT_PAUSE: Duration = Duration::from_millis(200);
+/// When the first directory is read again (`startupAgentRecheck`).
+const STARTUP_RECHECK: Duration = Duration::from_secs(8);
+/// The model `openchamber/auto` routes per prompt.
+const AUTO_PROVIDER: &str = "openchamber";
+const AUTO_MODEL: &str = "auto";
+
+/// Where one catalog of a directory stands.
+#[derive(Debug, Default)]
+pub(crate) enum Load<T> {
+    #[default]
+    Loading,
+    Ready(T),
+    /// The read failed and nothing was held before.
+    Failed,
+}
+
+impl<T> Load<T> {
+    pub(crate) fn ready(&self) -> Option<&T> {
+        match self {
+            Self::Ready(value) => Some(value),
+            Self::Loading | Self::Failed => None,
+        }
+    }
+
+    /// Takes a read's result; a failed reread keeps what was held.
+    pub(crate) fn settle(&mut self, outcome: Option<T>) {
+        match outcome {
+            Some(value) => *self = Self::Ready(value),
+            None if matches!(self, Self::Ready(_)) => {}
+            None => *self = Self::Failed,
+        }
+    }
+}
+
+/// The catalogs of one config directory.
+#[derive(Default)]
+pub(crate) struct DirectoryCatalog {
+    pub agents: Load<Vec<AgentEntry>>,
+    pub providers: Load<Vec<CatalogProvider>>,
+    pub opencode: Load<OpenCodeDefaults>,
+    pub skills: Load<usize>,
+    pub mcp_connected: Load<usize>,
+    reads: Vec<Task<()>>,
+    revisions: [u64; 5],
+}
+
+/// OpenChamber's settings and each visited directory's catalogs.
+#[derive(Default)]
+pub(crate) struct SendCatalog {
+    /// Absent until the settings document was read.
+    pub settings: Option<ServerSettings>,
+    /// One read-start clock for layout snapshots in this settings record.
+    pub(crate) work_status_read_clock: Rc<Cell<u64>>,
+    pub settings_load: Load<()>,
+    directories: HashMap<String, DirectoryCatalog>,
+    recheck: Option<Task<()>>,
+    pub(crate) routing: AutoRouting,
+    /// Whether the permission safety net can run; false until read.
+    pub(crate) safety_net: bool,
+    pub(crate) routing_read: Option<Task<()>>,
+    routing_generation: Option<u64>,
+}
+
+impl SendCatalog {
+    #[cfg(test)]
+    pub(crate) fn insert_test_directory(&mut self, directory: String, catalog: DirectoryCatalog) {
+        self.directories.insert(directory, catalog);
+    }
+
+    pub(crate) fn directory(&self, directory: &str) -> Option<&DirectoryCatalog> {
+        self.directories.get(directory)
+    }
+}
+
+/// Which reads a load makes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Reads {
+    agents: bool,
+    models: bool,
+    config: bool,
+    skills: bool,
+    mcp: bool,
+}
+
+impl Reads {
+    const ALL: Self = Self {
+        agents: true,
+        models: true,
+        config: true,
+        skills: true,
+        mcp: true,
+    };
+
+    /// What a rebuilt catalog changes, as `catalogRefresh.ts` rereads it.
+    fn for_kind(kind: CatalogKind) -> Self {
+        let none = Self {
+            agents: false,
+            models: false,
+            config: false,
+            skills: false,
+            mcp: false,
+        };
+        match kind {
+            CatalogKind::Config => Self::ALL,
+            CatalogKind::Agent => Self {
+                agents: true,
+                ..none
+            },
+            CatalogKind::Skill => Self {
+                skills: true,
+                ..none
+            },
+            CatalogKind::Provider | CatalogKind::Model | CatalogKind::Credential => Self {
+                models: true,
+                ..none
+            },
+            CatalogKind::McpStatus => Self { mcp: true, ..none },
+        }
+    }
+}
+
+/// The results of one load; `None` where a read was not made.
+struct Outcome {
+    agents: Option<Result<Vec<AgentEntry>, TransportError>>,
+    models: Option<Result<ModelCatalog, TransportError>>,
+    config: Option<Result<OpenCodeDefaults, TransportError>>,
+    skills: Option<Result<usize, TransportError>>,
+    mcp: Option<Result<usize, TransportError>>,
+}
+
+/// What the composer's model control shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ModelControl {
+    /// The catalogs are still loading, or could not be read.
+    Pending { unavailable: bool },
+    /// Nothing is selected.
+    Unselected,
+    /// `openchamber/auto`.
+    Auto,
+    Model {
+        provider_id: String,
+        model_id: String,
+        label: String,
+        variant: VariantControl,
+    },
+}
+
+/// What the composer's reasoning effort control shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum VariantControl {
+    /// The model offers no efforts.
+    Hidden,
+    /// The model's default effort.
+    Default,
+    Selected(String),
+}
+
+/// What the composer's agent control shows.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum AgentControl {
+    Pending {
+        unavailable: bool,
+    },
+    /// No agent is selected: the label of the agent a send would use, muted.
+    Default {
+        label: Option<String>,
+    },
+    Agent {
+        label: String,
+        color: AgentColor,
+    },
+}
+
+impl Workspace {
+    pub(crate) fn load_auto_routing(&mut self, cx: &mut Context<Self>) {
+        let Some(connection) = self.connection.as_ref() else {
+            return;
+        };
+        let Some(client) = connection.client.clone() else {
+            return;
+        };
+        let runtime = self.runtime.clone();
+        let generation = connection.generation;
+        self.send_catalog.routing_generation = Some(generation);
+        let task = connection
+            .network
+            .run(async move { client.routing().await });
+        self.send_catalog.routing_read = Some(cx.spawn(async move |this, cx| {
+            let Some(result) = task.await else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                if this.runtime != runtime
+                    || this
+                        .connection
+                        .as_ref()
+                        .is_none_or(|connection| connection.generation != generation)
+                {
+                    return;
+                }
+                this.send_catalog.routing_read = None;
+                if let Ok(routing) = result {
+                    this.send_catalog.routing = routing.auto;
+                    let lost = this.send_catalog.safety_net && !routing.safety_net;
+                    this.send_catalog.safety_net = routing.safety_net;
+                    if lost {
+                        // Safety sessions now wait for the user.
+                        this.release_unanswered_holds();
+                    }
+                }
+                cx.notify();
+            });
+        }));
+    }
+
+    /// The directory whose catalogs the composer uses.
+    pub(crate) fn config_directory(&self) -> Option<String> {
+        if let Some(session) = self.selected_session() {
+            return session.directory.as_deref().and_then(path::normalize);
+        }
+        if let Some(directory) = self.draft_projects.get(&self.runtime) {
+            return path::normalize(directory);
+        }
+        let settings = self.send_catalog.settings.as_ref()?;
+        let known = |directory: &str| {
+            self.topology
+                .projects
+                .iter()
+                .any(|project| project.path == directory)
+                || self.topology.worktrees.iter().any(|entry| {
+                    entry
+                        .worktrees
+                        .iter()
+                        .any(|worktree| worktree.path == directory)
+                })
+        };
+        settings
+            .last_directory
+            .as_deref()
+            .and_then(path::normalize)
+            .filter(|directory| known(directory))
+            .or_else(|| settings.active_project_path().map(str::to_owned))
+            .or_else(|| {
+                settings
+                    .projects
+                    .first()
+                    .map(|project| project.path.clone())
+            })
+    }
+
+    /// The project a directory belongs to: itself when registered, else the
+    /// project of the worktree it is.
+    pub(crate) fn owning_project(&self, directory: &str) -> Option<&str> {
+        if let Some(project) = self
+            .topology
+            .projects
+            .iter()
+            .find(|project| project.path == directory)
+        {
+            return Some(&project.path);
+        }
+        self.topology
+            .worktrees
+            .iter()
+            .find(|entry| {
+                entry
+                    .worktrees
+                    .iter()
+                    .any(|worktree| worktree.path == directory)
+            })
+            .map(|entry| entry.project_path.as_str())
+    }
+
+    /// Starts loading the config directory's catalogs if nothing holds them.
+    /// Called while rendering, so every way the directory changes is covered.
+    pub(crate) fn ensure_send_catalog(&mut self, cx: &mut Context<Self>) {
+        self.refresh_composer_choices(cx);
+        if self.connection.as_ref().is_some_and(|connection| {
+            self.send_catalog.routing_generation != Some(connection.generation)
+        }) {
+            self.load_auto_routing(cx);
+        }
+        self.ensure_permission_policy(cx);
+        if self.send_catalog.settings.is_none() {
+            return;
+        }
+        let Some(directory) = self.config_directory() else {
+            return;
+        };
+        if self.send_catalog.directories.contains_key(&directory) {
+            return;
+        }
+        let first = self.send_catalog.directories.is_empty();
+        self.send_catalog
+            .directories
+            .insert(directory.clone(), DirectoryCatalog::default());
+        self.load_catalog(&directory, Reads::ALL, cx);
+        if first {
+            self.send_catalog.recheck = Some(cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(STARTUP_RECHECK).await;
+                let _ = this.update(cx, |this, cx| {
+                    this.load_catalog(&directory, Reads::for_kind(CatalogKind::Agent), cx);
+                });
+            }));
+        }
+    }
+
+    /// Rereads what a rebuilt catalog changed, in its directory or in every
+    /// directory held when the event names none.
+    pub(crate) fn refresh_send_catalog(
+        &mut self,
+        kind: CatalogKind,
+        directory: Option<&str>,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(kind, CatalogKind::Config | CatalogKind::Credential) {
+            self.load_auto_routing(cx);
+        }
+        let directories: Vec<String> = match directory.and_then(path::normalize) {
+            Some(directory) if self.send_catalog.directories.contains_key(&directory) => {
+                vec![directory]
+            }
+            Some(_) => Vec::new(),
+            None => self.send_catalog.directories.keys().cloned().collect(),
+        };
+        for directory in directories {
+            self.load_catalog(&directory, Reads::for_kind(kind), cx);
+        }
+    }
+
+    /// Forgets every directory's catalogs, as a new runtime must.
+    pub(crate) fn reset_send_catalog(&mut self) {
+        self.send_catalog = SendCatalog::default();
+    }
+
+    fn load_catalog(&mut self, directory: &str, reads: Reads, cx: &mut Context<Self>) {
+        let Some(connection) = self.connection.as_ref() else {
+            return;
+        };
+        let Some(client) = connection.client.clone() else {
+            return;
+        };
+        let runtime = self.runtime.clone();
+        let generation = connection.generation;
+        let revisions = if let Some(entry) = self.send_catalog.directories.get_mut(directory) {
+            for (revision, wanted) in entry.revisions.iter_mut().zip([
+                reads.agents,
+                reads.models,
+                reads.config,
+                reads.skills,
+                reads.mcp,
+            ]) {
+                if wanted {
+                    *revision += 1;
+                }
+            }
+            entry.revisions
+        } else {
+            return;
+        };
+        let skills_directory = self
+            .owning_project(directory)
+            .unwrap_or(directory)
+            .to_owned();
+        let read_directory = directory.to_owned();
+        let task = connection.network.run(async move {
+            let directory = read_directory.as_str();
+            let (agents, models, config, skills, mcp) = tokio::join!(
+                read(reads.agents, || client.agents(directory)),
+                read(reads.models, || client.model_catalog(directory)),
+                read(reads.config, || client.opencode_defaults(directory)),
+                read(reads.skills, || client.skill_count(&skills_directory)),
+                read(reads.mcp, || client.connected_mcp_servers(directory)),
+            );
+            Outcome {
+                agents,
+                models,
+                config,
+                skills,
+                mcp,
+            }
+        });
+        let directory = directory.to_owned();
+        let key = directory.clone();
+        let read = cx.spawn(async move |this, cx| {
+            let Some(outcome) = task.await else {
+                return;
+            };
+            let _ = this.update(cx, |this, cx| {
+                if this.runtime != runtime
+                    || this
+                        .connection
+                        .as_ref()
+                        .is_none_or(|connection| connection.generation != generation)
+                {
+                    return;
+                }
+                this.apply_catalog(&directory, revisions, outcome);
+                cx.notify();
+            });
+        });
+        if let Some(entry) = self.send_catalog.directories.get_mut(&key) {
+            entry.reads.retain(|task| !task.is_ready());
+            entry.reads.push(read);
+        }
+    }
+
+    fn apply_catalog(&mut self, directory: &str, revisions: [u64; 5], mut outcome: Outcome) {
+        let Some(entry) = self.send_catalog.directories.get_mut(directory) else {
+            return;
+        };
+        if entry.revisions[0] != revisions[0] {
+            outcome.agents = None;
+        }
+        if entry.revisions[1] != revisions[1] {
+            outcome.models = None;
+        }
+        if entry.revisions[2] != revisions[2] {
+            outcome.config = None;
+        }
+        if entry.revisions[3] != revisions[3] {
+            outcome.skills = None;
+        }
+        if entry.revisions[4] != revisions[4] {
+            outcome.mcp = None;
+        }
+        fn settle<T>(load: &mut Load<T>, result: Option<Result<T, TransportError>>, what: &str) {
+            match result {
+                None => {}
+                Some(Ok(value)) => load.settle(Some(value)),
+                Some(Err(error)) => {
+                    tracing::warn!(%error, "the {what} could not be read");
+                    load.settle(None);
+                }
+            }
+        }
+        settle(&mut entry.agents, outcome.agents, "agents");
+        let providers = outcome.models.map(|result| {
+            result.map(|catalog| send_config::group_catalog(&catalog.providers, &catalog.models))
+        });
+        settle(&mut entry.providers, providers, "models");
+        settle(&mut entry.opencode, outcome.config, "OpenCode config");
+        settle(&mut entry.skills, outcome.skills, "skills");
+        settle(&mut entry.mcp_connected, outcome.mcp, "MCP servers");
+    }
+
+    /// The defaults the selection resolves from, for `directory`.
+    pub(crate) fn selection_defaults(
+        &self,
+        directory: &str,
+        opencode: &OpenCodeDefaults,
+    ) -> SelectionDefaults {
+        let Some(settings) = self.send_catalog.settings.as_ref() else {
+            return SelectionDefaults::default();
+        };
+        let project = self.owning_project(directory).and_then(|project| {
+            settings
+                .project_defaults
+                .iter()
+                .find(|defaults| defaults.path == project)
+        });
+        SelectionDefaults {
+            project_default_agent: project.and_then(|project| project.agent.clone()),
+            project_default_model: project.and_then(|project| project.model.clone()),
+            project_default_variant: project.and_then(|project| project.variant.clone()),
+            settings_default_agent: settings.default_agent.clone(),
+            settings_default_model: settings.default_model.clone(),
+            settings_default_variant: settings.default_variant.clone(),
+            opencode_default_agent: opencode.default_agent.clone(),
+            opencode_default_model: opencode.model.clone(),
+            last_selected_model: settings.last_selected_model.clone(),
+            last_used_efforts: settings.last_used_efforts.clone().unwrap_or_default(),
+            hidden_models: settings.hidden_models.clone(),
+            allow_fallback: true,
+            auto_routing: self.send_catalog.routing,
+        }
+    }
+
+    /// What a send would use, once the config directory's agents, models
+    /// and config are known: the directory's default selection, refined by a
+    /// selected session's record.
+    pub(crate) fn send_selection(&self) -> Option<(String, Selection)> {
+        let directory = self.config_directory()?;
+        let entry = self.send_catalog.directory(&directory)?;
+        let agents = entry.agents.ready()?;
+        let providers = entry.providers.ready()?;
+        let fallback = OpenCodeDefaults::default();
+        let opencode = match &entry.opencode {
+            Load::Ready(opencode) => opencode,
+            Load::Failed => &fallback,
+            Load::Loading => return None,
+        };
+        let defaults = self.selection_defaults(&directory, opencode);
+        if let Some(state) = self
+            .selection_owner()
+            .as_ref()
+            .and_then(|owner| self.composer_selections.get(owner))
+        {
+            let selection = state.selection();
+            if selection.model.as_ref().is_some_and(is_auto)
+                && self.send_catalog.routing != AutoRouting::Ready
+            {
+                return None;
+            }
+            return Some((directory, selection));
+        }
+        let selection = send_config::resolve_default_selection(agents, providers, &defaults);
+        let selection = match self.selected_session() {
+            Some(session) => send_config::resolve_session_selection(
+                &selection,
+                SessionRecordChoice {
+                    model: session.model.as_ref(),
+                    agent: session.agent.as_deref(),
+                },
+                agents,
+                providers,
+                &defaults,
+            ),
+            None => selection,
+        };
+        if selection.model.as_ref().is_some_and(is_auto)
+            && self.send_catalog.routing != AutoRouting::Ready
+        {
+            return None;
+        }
+        Some((directory, selection))
+    }
+
+    /// Whether the catalogs could not be read and are not coming.
+    fn catalog_unavailable(&self) -> bool {
+        let Some(directory) = self.config_directory() else {
+            return false;
+        };
+        self.send_catalog
+            .directory(&directory)
+            .is_some_and(|entry| {
+                matches!(entry.agents, Load::Failed) || matches!(entry.providers, Load::Failed)
+            })
+    }
+
+    pub(crate) fn model_control(&self) -> ModelControl {
+        let unavailable = self.catalog_unavailable();
+        let held = self
+            .selection_owner()
+            .as_ref()
+            .and_then(|owner| self.composer_selections.get(owner))
+            .map(|state| state.selection());
+        let selection = self
+            .config_directory()
+            .zip(held)
+            .or_else(|| self.send_selection());
+        let Some((directory, selection)) = selection else {
+            return ModelControl::Pending { unavailable };
+        };
+        let Some(choice) = selection.model else {
+            return ModelControl::Unselected;
+        };
+        if is_auto(&choice) {
+            return ModelControl::Auto;
+        }
+        let providers = self
+            .send_catalog
+            .directory(&directory)
+            .and_then(|entry| entry.providers.ready())
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let offers_variants = send_config::find_model(providers, &choice)
+            .is_some_and(|model| !model.variants.is_empty());
+        let variant = match (offers_variants, choice.variant.as_ref()) {
+            (false, _) => VariantControl::Hidden,
+            (true, None) => VariantControl::Default,
+            (true, Some(variant)) => VariantControl::Selected(variant.clone()),
+        };
+        ModelControl::Model {
+            label: send_config::model_label(providers, &choice),
+            provider_id: choice.provider_id,
+            model_id: choice.model_id,
+            variant,
+        }
+    }
+
+    pub(crate) fn agent_control(&self, palette: &Palette) -> AgentControl {
+        let entry = self
+            .config_directory()
+            .as_deref()
+            .and_then(|directory| self.send_catalog.directory(directory));
+        let Some(agents) = entry.and_then(|entry| entry.agents.ready()) else {
+            return AgentControl::Pending {
+                unavailable: entry.is_some_and(|entry| matches!(entry.agents, Load::Failed)),
+            };
+        };
+        let selection = self
+            .selection_owner()
+            .as_ref()
+            .and_then(|owner| self.composer_selections.get(owner))
+            .map(|state| state.selection())
+            .unwrap_or_default();
+        let Some(name) = selection.agent_name else {
+            // `getAgentDisplayName` without a choice: Build, else the first
+            // primary agent.
+            let primary = || {
+                agents
+                    .iter()
+                    .filter(|agent| !agent.hidden && is_primary(agent))
+            };
+            let shown = primary()
+                .find(|agent| agent.name == "build")
+                .or_else(|| primary().next());
+            return AgentControl::Default {
+                label: shown.map(send_config::agent_label),
+            };
+        };
+        let label = agents
+            .iter()
+            .find(|agent| agent.name == name)
+            .map(send_config::agent_label)
+            .unwrap_or_else(|| send_config::agent_name_label(&name));
+        let color = send_config::agent_color_with_palette(
+            Some(&name),
+            agents,
+            &palette.agent_palette,
+            palette.agent_syntax.len(),
+        );
+        AgentControl::Agent { label, color }
+    }
+
+    /// The Work status card's ambient counts: skills, then connected MCP
+    /// servers, or `None` while neither is known.
+    pub(crate) fn context_counts(&self) -> Option<(usize, usize)> {
+        let directory = self.config_directory()?;
+        let entry = self.send_catalog.directory(&directory)?;
+        let skills = entry.skills.ready().copied();
+        let mcp = entry.mcp_connected.ready().copied();
+        if skills.is_none() && mcp.is_none() {
+            return None;
+        }
+        Some((skills.unwrap_or(0), mcp.unwrap_or(0)))
+    }
+}
+
+/// Makes one read, retrying a failure with a growing pause.
+async fn read<T, F, Fut>(wanted: bool, mut attempt: F) -> Option<Result<T, TransportError>>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<T, TransportError>>,
+{
+    if !wanted {
+        return None;
+    }
+    let mut tries = 0;
+    loop {
+        tries += 1;
+        match attempt().await {
+            Ok(value) => return Some(Ok(value)),
+            Err(error @ (TransportError::AuthenticationRequired | TransportError::Cancelled)) => {
+                return Some(Err(error));
+            }
+            Err(error) if tries >= READ_ATTEMPTS => return Some(Err(error)),
+            Err(_) => tokio::time::sleep(ATTEMPT_PAUSE * tries).await,
+        }
+    }
+}
+
+fn is_auto(choice: &ModelChoice) -> bool {
+    choice.provider_id == AUTO_PROVIDER && choice.model_id == AUTO_MODEL
+}
+
+/// `isPrimaryMode`: an absent mode is primary.
+fn is_primary(agent: &AgentEntry) -> bool {
+    !matches!(agent.mode, Some(send_config::AgentMode::Subagent))
+}
+
+#[cfg(test)]
+mod tests {
+    use gpui_kit::{AppContext, TestAppContext};
+    use openchamber_native_core::send_config::CatalogModel;
+
+    use super::*;
+
+    #[gpui_kit::test]
+    fn server_effort_memory_reaches_production_send_selection(cx: &mut TestAppContext) {
+        let (window, workspace) = crate::workspace_tests::open(cx);
+        cx.update_window(window, |_, _, cx| {
+            workspace.update(cx, |workspace, _| {
+                let project = workspace.topology.projects[0].clone();
+                let directory = project.path.clone();
+                workspace
+                    .draft_projects
+                    .insert(workspace.runtime.clone(), directory.clone());
+                workspace.composer_selections = Default::default();
+                workspace.send_catalog.insert_test_directory(
+                    directory.clone(),
+                    DirectoryCatalog {
+                        agents: Load::Ready(vec![AgentEntry {
+                            description: None,
+                            name: "build".to_owned(),
+                            display_name: None,
+                            mode: None,
+                            hidden: false,
+                            model: None,
+                            color: None,
+                        }]),
+                        providers: Load::Ready(vec![CatalogProvider {
+                            id: "perf".to_owned(),
+                            name: None,
+                            models: vec![CatalogModel {
+                                id: "stream".to_owned(),
+                                provider_model_id: None,
+                                name: None,
+                                variants: vec!["low".to_owned(), "high".to_owned()],
+                                context_limit: None,
+                            }],
+                        }]),
+                        opencode: Load::Ready(OpenCodeDefaults::default()),
+                        ..DirectoryCatalog::default()
+                    },
+                );
+                for (remembered, expected) in [
+                    (None, None),
+                    (Some(None), None),
+                    (Some(Some("high")), Some("high")),
+                    (Some(Some("retired")), None),
+                ] {
+                    workspace.send_catalog.settings = Some(ServerSettings {
+                        projects: vec![project.clone()],
+                        default_model: Some("perf/stream".to_owned()),
+                        last_used_efforts: remembered.map(|effort| {
+                            HashMap::from([("perf/stream".to_owned(), effort.map(str::to_owned))])
+                        }),
+                        ..ServerSettings::default()
+                    });
+                    let defaults =
+                        workspace.selection_defaults(&directory, &OpenCodeDefaults::default());
+                    assert_eq!(
+                        defaults.last_used_efforts.get("perf/stream").cloned(),
+                        remembered.map(|effort| effort.map(str::to_owned)),
+                        "the settings projection must preserve Default versus absence"
+                    );
+                    let (selected_directory, selection) = workspace
+                        .send_selection()
+                        .expect("loaded catalogs and settings resolve a send selection");
+                    assert_eq!(selected_directory, directory);
+                    assert_eq!(
+                        selection.model,
+                        Some(ModelChoice {
+                            provider_id: "perf".to_owned(),
+                            model_id: "stream".to_owned(),
+                            variant: expected.map(str::to_owned),
+                        }),
+                        "the production send must use remembered effort {remembered:?}"
+                    );
+                }
+            });
+        })
+        .expect("the test workspace remains open");
+    }
+}

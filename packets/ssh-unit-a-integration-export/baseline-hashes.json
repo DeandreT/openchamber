@@ -1,0 +1,9 @@
+{
+  "native/crates/desktop/src/ssh_host.rs": "92b7a5eeb937e41f766e51f9bd74e6f4735f8f7caafd438184ec3e211a84254c",
+  "native/crates/desktop/src/ssh_view.rs": "3a5d03ed5b969258a51df871991e272215adef0a998ba954584e250ef0cede1b",
+  "native/crates/desktop/src/workspace.rs": "a999baf1cb8dfeef1384d4a1506336464bfc7b7bf5bad19dcd05a510635c7858",
+  "native/crates/desktop/DOCUMENTATION.md": "f08af40191b4cd7e56e285c7adce78ead0a003eb32c2ef00fcc82442f49ac33e",
+  "scripts/parity/ssh_fixture.py": "eca3c0865f3c3df00a467223a20e96617233b8e7b2f30aa470f43abdffac3bb0",
+  "scripts/parity/ssh_fixture_test.py": "55ac10d1bc6a41c36f30065fe8281ff057d7a98e9ab62aab9d64f3b71c9823fc",
+  "native/crates/desktop/src/main.rs": "b0f3c3b622485173f26b7be7035806736cc79dddcbff1edd16757e5d85cfd15b"
+}

@@ -1,0 +1,13 @@
+[
+  {
+    "environment": "first-private-tmp",
+    "pathBytes": 138,
+    "bindSucceeded": false,
+    "error": "AF_UNIX path too long"
+  },
+  {
+    "environment": "short-private-tmp",
+    "pathBytes": 67,
+    "bindSucceeded": true
+  }
+]

@@ -1,0 +1,19 @@
+{
+  "command": [
+    "python3",
+    "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/.cache/unit-a-cleanup-6p4vyw3z/before.py"
+  ],
+  "exitCode": 0,
+  "owner": {
+    "pid": 1172718,
+    "pgrp": 1172718,
+    "startTicks": 9638944
+  },
+  "log": "/home/deandre/projects/rust/OpenChamber/native/target/tmp/unit-a-before-nphn_6bq/command.log",
+  "availableBytesBefore": 51013677056,
+  "availableBytesAfter": 51013677056,
+  "minimumSampledAvailableBytes": 51013677056,
+  "stopThresholdBytes": 18253611008,
+  "signals": [],
+  "cleanupPerformed": false
+}

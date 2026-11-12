@@ -1,0 +1,97 @@
+{
+  "status": "frozen qualified Unit A export; coordinator integration not performed",
+  "qualifiedWorktree": "/home/deandre/projects/rust/oc-wt/native-hosts-relay",
+  "sourceManifest": {
+    "file": "qualified-source.json",
+    "sha256": "40e90f4f30cab25a2e19186627468f9564b3c149bd11e0f177d3f3c950fe308d",
+    "entries": 1027
+  },
+  "patch": {
+    "file": "unit-a.patch",
+    "sha256": "5adc7729f82e8cd99b489cfbae0ec040ca66c846558c02e8c26682580117f948",
+    "targets": [
+      "native/crates/desktop/src/ssh_host.rs",
+      "native/crates/desktop/src/ssh_view.rs",
+      "native/crates/desktop/src/workspace.rs",
+      "native/crates/desktop/DOCUMENTATION.md",
+      "scripts/parity/ssh_fixture.py",
+      "scripts/parity/ssh_fixture_test.py",
+      "native/crates/desktop/src/main.rs",
+      "native/crates/desktop/src/ssh_cleanup.rs"
+    ]
+  },
+  "candidate": {
+    "preservedPath": "/home/deandre/projects/rust/OpenChamber/native/.cache/unit-a-cleanup-6p4vyw3z/candidate",
+    "archiveMember": "unit-a/candidate",
+    "sha256": "b75c1a609f426d11f3347ee0160928d281b09c9b1e46e1d30c11f46bea4ee4c2",
+    "size": 1503143616
+  },
+  "receipt": {
+    "originalPath": "/home/deandre/projects/rust/OpenChamber/native/target/tmp/unit-a-not-found-5xtrkk05/receipt.json",
+    "file": "qualifying-receipt.json",
+    "sha256": "997b8cf6ef2dff52579ff6e2851065e7a67c11cb1bcd171b16544e9ceb2079c1",
+    "exitCode": 0
+  },
+  "previousPassingCandidate": {
+    "preservedPath": "/home/deandre/projects/rust/OpenChamber/native/.cache/unit-a-cleanup-6p4vyw3z/attempt-2/candidate",
+    "sha256": "c8d5282707132e492205a5b9b09f2a0802ca3b1e9aaf698b6e0b67a26b82ba7a"
+  },
+  "originalImmutableArtifacts": {
+    "candidate": {
+      "path": "/home/deandre/projects/rust/OpenChamber/native/target/tmp/hosts-final-runtime-eE2575sX/candidate",
+      "sha256": "9ebcffea21557cd560b46a0661ba767e9e23edd8bac3b82f3bd388ad7c0fc57a"
+    },
+    "originalSnapshot": {
+      "path": "/home/deandre/projects/rust/OpenChamber/native/target/tmp/hosts-final-runtime-eE2575sX/source.json",
+      "sha256": "7eca2fdeadbb2f5dcd66108256d1d3f74ef59f078351e84279dd8a1680f13262"
+    },
+    "originalHandoff": {
+      "path": "/home/deandre/projects/rust/OpenChamber/native/target/tmp/hosts-final-runtime-eE2575sX/handoff.md",
+      "sha256": "4fd6231243279f44988b991bf8d191170e5dbff8bc8582f77f83f4d66b11b2c5"
+    }
+  },
+  "historicalFailureRetained": {
+    "receipt": "failed-receipt.json",
+    "exitCode": 100,
+    "sourceManifest": "failed-source.json"
+  },
+  "workspaceCodeChanges": [
+    "-    pub(crate) ssh_cleanup: Vec<tokio::sync::watch::Receiver<bool>>,",
+    "+    pub(crate) ssh_cleanup: Vec<crate::ssh_cleanup::CleanupReceipt>,",
+    "-                        let _ = stopped.wait_for(|done| *done).await;",
+    "+                        let _ = stopped.wait_for(Option::is_some).await;"
+  ],
+  "decisions": [
+    "keep SSH sessions across host selection",
+    "no stop on selection",
+    "remote stop remains best effort",
+    "uncertainty does not create success, new stop authority or a permanent normal-close veto"
+  ],
+  "notApproved": [
+    "8-second default",
+    "futures-util desktop dependency",
+    "new failure copy",
+    "200ms cap change",
+    "deadline policy"
+  ],
+  "laterUnits": [
+    "registered setup custody",
+    "application-owned strong SSH sessions",
+    "small shared-daemon coordinator",
+    "accepted-task and Files barriers",
+    "terminal preflight after all writes and successful journal finish"
+  ],
+  "requiredLaterProof": [
+    "one aggregate deadline with policy still unanswered",
+    "real quit held beyond 200ms"
+  ],
+  "limits": [
+    "remote stop is best effort",
+    "helpers remain unconfirmed",
+    "status/stop is not atomic and PID reuse is not proven away",
+    "no GUI/quit/held>200ms/aggregate-deadline proof",
+    "no new lifecycle wiring or switch policy",
+    "no independent agent review; parent reviewed parser correction"
+  ],
+  "qualificationRepeatedForExport": false
+}

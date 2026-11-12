@@ -1,0 +1,5 @@
+{
+  "path": "/tmp/opencode/ua-tc5pdldf",
+  "mode": "0o700",
+  "reason": "short owned Unix socket path; private compiler/test TMPDIR"
+}

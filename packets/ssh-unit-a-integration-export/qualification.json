@@ -1,0 +1,142 @@
+{
+  "stages": [
+    {
+      "stage": "clean-before-focused-tests",
+      "command": [
+        "cargo",
+        "clean",
+        "--offline",
+        "--locked",
+        "--manifest-path",
+        "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/Cargo.toml",
+        "--profile",
+        "dev",
+        "-p",
+        "openchamber-native-core",
+        "-p",
+        "openchamber-native-transport",
+        "-p",
+        "openchamber-native-desktop",
+        "-p",
+        "gpui-base",
+        "-p",
+        "gpui-component",
+        "-p",
+        "gpui-pre"
+      ],
+      "exitCode": 0
+    },
+    {
+      "stage": "focused-tests",
+      "command": [
+        "cargo",
+        "nextest",
+        "run",
+        "--offline",
+        "--locked",
+        "--manifest-path",
+        "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/Cargo.toml",
+        "--cargo-profile",
+        "dev",
+        "-p",
+        "openchamber-native-desktop",
+        "-j4",
+        "--no-fail-fast",
+        "-E",
+        "test(ssh_)"
+      ],
+      "exitCode": 0
+    },
+    {
+      "stage": "clean-before-clippy",
+      "command": [
+        "cargo",
+        "clean",
+        "--offline",
+        "--locked",
+        "--manifest-path",
+        "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/Cargo.toml",
+        "--profile",
+        "dev",
+        "-p",
+        "openchamber-native-core",
+        "-p",
+        "openchamber-native-transport",
+        "-p",
+        "openchamber-native-desktop",
+        "-p",
+        "gpui-base",
+        "-p",
+        "gpui-component",
+        "-p",
+        "gpui-pre"
+      ],
+      "exitCode": 0
+    },
+    {
+      "stage": "clippy",
+      "command": [
+        "cargo",
+        "clippy",
+        "--offline",
+        "--locked",
+        "--manifest-path",
+        "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/Cargo.toml",
+        "--profile",
+        "dev",
+        "-p",
+        "openchamber-native-desktop",
+        "--all-targets",
+        "-j4",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "exitCode": 0
+    },
+    {
+      "stage": "clean-before-debug-build",
+      "command": [
+        "cargo",
+        "clean",
+        "--offline",
+        "--locked",
+        "--manifest-path",
+        "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/Cargo.toml",
+        "--profile",
+        "dev",
+        "-p",
+        "openchamber-native-core",
+        "-p",
+        "openchamber-native-transport",
+        "-p",
+        "openchamber-native-desktop",
+        "-p",
+        "gpui-base",
+        "-p",
+        "gpui-component",
+        "-p",
+        "gpui-pre"
+      ],
+      "exitCode": 0
+    },
+    {
+      "stage": "debug-build",
+      "command": [
+        "cargo",
+        "build",
+        "--offline",
+        "--locked",
+        "--manifest-path",
+        "/home/deandre/projects/rust/oc-wt/native-hosts-relay/native/Cargo.toml",
+        "--profile",
+        "dev",
+        "-p",
+        "openchamber-native-desktop",
+        "-j4"
+      ],
+      "exitCode": 0
+    }
+  ],
+  "sourceUnchanged": true
+}

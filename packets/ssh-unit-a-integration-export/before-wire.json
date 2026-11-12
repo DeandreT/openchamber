@@ -1,0 +1,31 @@
+{
+  "nativeSourceSha256": "92b7a5eeb937e41f766e51f9bd74e6f4735f8f7caafd438184ec3e211a84254c",
+  "coverage": "real SSH stop wire cases; native stop_remote still discards output; old bool denotes worker completion only",
+  "cases": [
+    {
+      "mode": "warning",
+      "exitCode": 0,
+      "stdout": "{\"status\": \"warning\", \"stoppedCount\": 0, \"results\": [{\"port\": 35761, \"pid\": 1172718, \"stopped\": false, \"reason\": \"stop-failed\"}]}",
+      "remoteRunning": true
+    },
+    {
+      "mode": "malformed",
+      "exitCode": 0,
+      "stdout": "{broken",
+      "remoteRunning": true
+    },
+    {
+      "mode": "lost",
+      "exitCode": 255,
+      "stdout": "",
+      "remoteRunning": true
+    },
+    {
+      "mode": "ok",
+      "exitCode": 0,
+      "stdout": "{\"status\": \"ok\", \"stoppedCount\": 1, \"results\": [{\"port\": 35761, \"pid\": 1172718, \"stopped\": true}]}",
+      "remoteRunning": false
+    }
+  ],
+  "passedWireReproduction": true
+}
