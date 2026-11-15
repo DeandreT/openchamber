@@ -1,5 +1,6 @@
 import React from 'react';
 
+import { Input } from '@/components/ui/input';
 import { NumberInput } from '@/components/ui/number-input';
 import { SortableTabsStrip, type SortableTabsStripItem } from '@/components/ui/sortable-tabs-strip';
 import {
@@ -10,6 +11,8 @@ import {
   SettingsControlGroup,
   SettingsRadioGroup,
   SettingsRadioOption,
+  SettingsStackedField,
+  SettingsNewBadge,
   SETTINGS_NUMBER_INPUT_CLASS,
   SETTINGS_NUMBER_STEPPER_ROW_CLASS,
   SETTINGS_NUMBER_UNIT_CLASS,
@@ -29,11 +32,11 @@ import { updateDesktopSettings } from '@/lib/persistence';
 import { useInputHistoryStore } from '@/stores/useInputHistoryStore';
 import { useMessageQueueStore, type FollowUpBehavior } from '@/stores/messageQueueStore';
 import { selectSafetyNetAvailable, useRoutingStore } from '@/stores/useRoutingStore';
-import { useUIStore, type LargeTextPasteBehavior } from '@/stores/useUIStore';
+import { DEFAULT_SELECTION_APPROVAL_TEXT, useUIStore, type LargeTextPasteBehavior } from '@/stores/useUIStore';
 
 import { MessageSearchSettings } from './MessageSearchSettings';
 import { SessionGoalCheckerField, SessionGoalMaxTurnsField } from './SessionGoalCheckerField';
-import { useChatSettingsTabStore, type ChatSettingsTab } from './chatSettingsTabs';
+import { chatSettingsTabAnchors, useChatSettingsTabStore, type ChatSettingsTab } from './chatSettingsTabs';
 
 type ChipOption<T extends string> = { id: T; labelKey: I18nKey };
 
@@ -84,6 +87,30 @@ const useChipOptions = <T extends string>(options: ChipOption<T>[]) => {
 };
 
 /** How the transcript reads: agent activity, layout, formatting, search. */
+const SelectionApprovalField: React.FC = () => {
+  const { t } = useI18n();
+  const selectionApprovalText = useUIStore((state) => state.selectionApprovalText);
+  const setSelectionApprovalText = useUIStore((state) => state.setSelectionApprovalText);
+
+  return (
+    <SettingsStackedField
+      className="pt-3"
+      label={t('settings.openchamber.visual.field.selectionApprovalText')}
+      info={t('settings.openchamber.visual.field.selectionApprovalTextInfo')}
+      settingsItem="chat.selection-approval-text"
+    >
+      <Input
+        value={selectionApprovalText}
+        placeholder={DEFAULT_SELECTION_APPROVAL_TEXT}
+        maxLength={1000}
+        onChange={(event) => setSelectionApprovalText(event.target.value)}
+        aria-label={t('settings.openchamber.visual.field.selectionApprovalText')}
+        dir="auto"
+      />
+    </SettingsStackedField>
+  );
+};
+
 const MessagesTab: React.FC = () => {
   const { t } = useI18n();
   const isVSCode = isVSCodeRuntime();
@@ -137,7 +164,7 @@ const MessagesTab: React.FC = () => {
 
   return (
     <>
-      <SettingsSection title={t('settings.layout.chat.section.activity')} divider={false} contentClassName="space-y-3">
+      <SettingsSection title={t('settings.layout.chat.section.activity')} contentClassName="space-y-3">
         <SettingsFieldRow label={t('settings.openchamber.visual.section.activityDefault')} settingsItem="chat.activity-default">
           <SettingsChipGroup
             value={activityRenderMode}
@@ -261,6 +288,7 @@ const MessagesTab: React.FC = () => {
           info={t('settings.openchamber.visual.field.showSplitAssistantMessageActionsTooltip')}
           settingsItem="chat.inline-assistant-actions"
         />
+        <SelectionApprovalField />
       </SettingsSection>
 
       <SettingsSection title={t('settings.layout.chat.section.formatting')} contentClassName="space-y-3">
@@ -380,7 +408,7 @@ const ComposerTab: React.FC = () => {
 
   return (
     <>
-      <SettingsSection title={t('settings.layout.chat.section.sending')} divider={false} settingsItem="chat.composer" contentClassName="space-y-5">
+      <SettingsSection title={t('settings.layout.chat.section.sending')} settingsItem="chat.composer" contentClassName="space-y-5">
         <div>
           {/* Phones send with the keyboard's own button, so there is no send key to pick. */}
           {isMobile ? null : (
@@ -542,7 +570,6 @@ const AssistanceTab: React.FC = () => {
       <SettingsSection
         title={t('settings.openchamber.visual.section.sessionAssistance')}
         settingsItem="chat.session-assistance"
-        divider={false}
         contentClassName={SETTINGS_OPTION_STACK_CLASS}
       >
         <SettingsCheckboxRow
@@ -649,11 +676,13 @@ export const ChatSettings: React.FC = () => {
   const { t } = useI18n();
   const tab = useChatSettingsTabStore((state) => state.tab);
   const setTab = useChatSettingsTabStore((state) => state.setTab);
-  const tabs = React.useMemo<Array<SortableTabsStripItem & { id: ChatSettingsTab }>>(() => [
-    { id: 'messages', label: t('settings.layout.chat.tab.messages') },
-    { id: 'composer', label: t('settings.layout.chat.tab.composer') },
-    { id: 'assistance', label: t('settings.layout.chat.tab.assistance') },
-  ], [t]);
+  const tabs = React.useMemo<Array<SortableTabsStripItem & { id: ChatSettingsTab }>>(() => (
+    (['messages', 'composer', 'assistance'] as const).map((id) => ({
+      id,
+      label: t(`settings.layout.chat.tab.${id}`),
+      accessory: <SettingsNewBadge items={chatSettingsTabAnchors(id)} />,
+    }))
+  ), [t]);
 
   return (
     <>

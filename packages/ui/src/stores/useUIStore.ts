@@ -8,6 +8,7 @@ import { SEMANTIC_TYPOGRAPHY, getTypographyVariable, type SemanticTypographyKey 
 import type { ShortcutCombo } from '@/lib/shortcuts';
 import type { DraftStarterRef } from '@/lib/draftStarters';
 import type { CustomProviderIcon } from '@/lib/customProviderIcons';
+import type { CustomProviderLogo } from '@/lib/customProviderLogos';
 import { DEFAULT_MONO_FONT, DEFAULT_UI_FONT, DEFAULT_UI_FONT_WEIGHT, type MonoFontOption, type UiFontOption, type UiFontWeight } from '@/lib/fontOptions';
 import { getStoredMobileKeyboardMode, type MobileKeyboardMode } from '@/lib/mobileKeyboardMode';
 import type { TerminalShell } from '@/lib/api/types';
@@ -18,8 +19,8 @@ import { rebaseMovedPath } from '@/lib/filePathMoves';
 import { isVSCodeRuntime } from '@/lib/desktop';
 import { noteBrowserTabOpenedWithAddress, requestBrowserTabLoad } from '@/lib/browser/devServerWait';
 import { clampLiveBrowserTabs, LIVE_BROWSER_TABS_DEFAULT } from '@/lib/browser/liveTabs';
-import { isContextPanelMode, type ContextPanelMode } from '@/lib/surfaces/modes';
-import { orderMobileWorkspaceTabs, shownMobileWorkspaceTabs, type MobileWorkspaceTab } from '@/lib/mobileWorkspaceTabs';
+import { isContextPanelMode, type ContextPanelMode, type PluginContextPanelMode } from '@/lib/surfaces/modes';
+import { shownMobileWorkspaceTabs, storedMobileWorkspaceTabOrder, type MobileWorkspaceTab } from '@/lib/mobileWorkspaceTabs';
 import {
   carrySurfaceToZone,
   getZoneView,
@@ -940,6 +941,8 @@ interface UIStore {
    */
   workStatusHiddenSections: string[];
   workStatusSectionOrder: WorkStatusPanelSectionId[];
+  /** True once the user arranged the sections, false for a saved default. */
+  workStatusSectionOrderExplicit: boolean;
   /** Explicitly chosen hidden-section state. False keeps the default opt-in seed. */
   workStatusHiddenSectionsExplicit: boolean;
   isSessionSwitcherOpen: boolean;
@@ -947,6 +950,8 @@ interface UIStore {
   pendingDiffFile: string | null;
   pendingDiffStaged: boolean;
   pendingDiffScope: PendingDiffScope | null;
+  /** A file a click asked to see in the session's last turn diff, until Changes answers whether it is there. */
+  pendingTurnDiffFile: { file: string; sessionId: string | null } | null;
   pendingFileNavigation: PendingFileNavigation | null;
   pendingFileFocusPath: string | null;
   isMobile: boolean;
@@ -961,9 +966,7 @@ interface UIStore {
   isArchivePageOpen: boolean;
   /** The full-screen integrations catalog page, opened from the sidebar header. */
   isIntegrationsCatalogOpen: boolean;
-  /** The query the Archive page opened with; empty for a plain open. */
-  archivePageSearch: string;
-  /** Grows on every open, so a page already on screen restarts with the new query. */
+  /** Grows on every open, so a page already on screen starts fresh. */
   archivePageOpenCount: number;
   isUsageStatsPageOpen: boolean;
   /** The issues and pull requests board. */
@@ -1048,6 +1051,8 @@ interface UIStore {
   autoDeleteAfterDays: number;
   sessionRetentionAction: SessionRetentionAction;
   sessionRetentionOnlyArchived: boolean;
+  /** Retention also takes sessions in the In work block. Off by default: they stay until Done. */
+  sessionRetentionIncludeInWork: boolean;
   /** Archive a worktree's sessions and remove it once its PR is merged. Off by default. */
   mergedWorktreeCleanupEnabled: boolean;
   /** Done on a worktree in work also archives it. Off by default: Done then only takes it out of In work. */
@@ -1055,6 +1060,8 @@ interface UIStore {
   autoDeleteLastRunAt: number | null;
   messageLimit: number;
   fontSize: number;
+  /** Chat text size in percent of the interface size, so the chat can grow without the sidebar. */
+  chatFontSize: number;
   // Global draft welcome starters; null = unset (use the default built-in set).
   globalDraftStarters: DraftStarterRef[] | null;
   draftStartersVisible: boolean;
@@ -1081,6 +1088,8 @@ interface UIStore {
   providerOrder: string[];
   collapsedModelProviders: string[];
   customProviderIcons: Record<string, CustomProviderIcon>;
+  /** Uploaded logos by provider ID; the server writes them with the image. */
+  customProviderLogos: Record<string, CustomProviderLogo>;
   recentModels: Array<{ providerID: string; modelID: string }>;
   /** `provider/model` last picked in a chat composer; a new session starts on it when nothing is configured. */
   lastSelectedModel: string | undefined;
@@ -1153,14 +1162,18 @@ interface UIStore {
   agentMemoryToolEnabled: boolean;
   agentKnowledgeToolEnabled: boolean;
   agentNotifyToolEnabled: boolean;
+  agentUsageToolEnabled: boolean;
   agentImageToolEnabled: boolean;
   /** `provider/model` the image tool draws with; empty until the user picks one. */
   agentImageModel: string;
+  /** The agent memory tidies itself in the background (`agent-memory/dreaming.js`); off until turned on. */
+  agentMemoryDreamingEnabled: boolean;
+  /** `provider/model` dreaming runs on; empty runs it on the default model. */
+  agentMemoryDreamingModel: string;
+  agentMemoryDreamingVariant: string;
   agentRenderToolEnabled: boolean;
   agentSecretToolEnabled: boolean;
   agentWorkflowToolEnabled: boolean;
-  /** Whether OpenChamber's agent tools sit behind OpenCode's Code Mode instead of being direct tools. */
-  agentToolsCodeMode: boolean;
   /** The isolated-spaces switch as saved; the server applies it at its next start. */
   isolatedSpacesEnabled: boolean;
   /** The permission mode the server writes onto each new top-level session. */
@@ -1203,6 +1216,7 @@ interface UIStore {
   codeBlockLineWrap: boolean;
   tableCellWrap: boolean;
   copyMessagesAsPlainText: boolean;
+  selectionApprovalText: string;
   showToolFileIcons: boolean;
   showTurnChangedFiles: boolean;
   timeFormatPreference: TimeFormatPreference;
@@ -1294,12 +1308,14 @@ interface UIStore {
   setContextRailSurfaceVisible: (surfaceId: string, visible: boolean) => void;
   setContextRailHiddenSurfaces: (surfaceIds: string[]) => void;
   setMobileWorkspaceTabOrder: (order: readonly string[]) => void;
-  setMobileWorkspaceTabVisible: (tab: MobileWorkspaceTab, visible: boolean) => void;
+  /** `extensions`: the extension tabs available now, so the last tab shown is counted right. */
+  setMobileWorkspaceTabVisible: (tab: MobileWorkspaceTab, visible: boolean, extensions?: readonly PluginContextPanelMode[]) => void;
   setMobileWorkStatusSectionVisible: (sectionId: string, visible: boolean) => void;
   setMobileWorkStatusHiddenSections: (sectionIds: string[]) => void;
   setSessionSwitcherOpen: (open: boolean) => void;
   setSessionDropdownOpen: (open: boolean) => void;
   setPendingDiffFile: (filePath: string | null, staged?: boolean, scope?: PendingDiffScope | null) => void;
+  setPendingTurnDiffFile: (request: { file: string; sessionId: string | null } | null) => void;
   setPendingFileNavigation: (navigation: PendingFileNavigation | null) => void;
   setPendingFileFocusPath: (path: string | null) => void;
   navigateToDiff: (filePath: string, staged?: boolean, scope?: PendingDiffScope | null) => void;
@@ -1316,7 +1332,7 @@ interface UIStore {
   setSessionCreateDialogOpen: (open: boolean) => void;
   setScheduledTasksDialogOpen: (open: boolean) => void;
   /** `search` fills the page's search field, for a sidebar search that found nothing. */
-  setArchivePageOpen: (open: boolean, search?: string) => void;
+  setArchivePageOpen: (open: boolean) => void;
   setIntegrationsCatalogOpen: (open: boolean) => void;
   setUsageStatsPageOpen: (open: boolean) => void;
   setSourceBoardOpen: (open: boolean) => void;
@@ -1338,6 +1354,8 @@ interface UIStore {
   setSettingsProvidersClassificationRequested: (requested: boolean) => void;
   setSettingsProvidersOpenRequested: (providerId: string | null) => void;
   requestSettingsJump: (page: string, itemId?: string | null) => void;
+  /** Opens Settings on `page` and reveals `itemId` there, from anywhere in the app. */
+  openSettingsAt: (page: string, itemId?: string | null) => void;
   clearSettingsJumpRequest: () => void;
   setSettingsRemoteInstancesSelectedId: (instanceId: string | null) => void;
   setEventStreamStatus: (status: EventStreamStatus, hint?: string | null) => void;
@@ -1370,9 +1388,11 @@ interface UIStore {
   setAutoDeleteAfterDays: (days: number) => void;
   setSessionRetentionAction: (value: SessionRetentionAction) => void;
   setSessionRetentionOnlyArchived: (value: boolean) => void;
+  setSessionRetentionIncludeInWork: (value: boolean) => void;
   setAutoDeleteLastRunAt: (timestamp: number | null) => void;
   setMessageLimit: (value: number) => void;
   setFontSize: (size: number) => void;
+  setChatFontSize: (size: number) => void;
   setGlobalDraftStarters: (refs: DraftStarterRef[]) => void;
   setDraftStartersVisible: (value: boolean) => void;
   setTerminalFontSize: (size: number) => void;
@@ -1400,6 +1420,7 @@ interface UIStore {
   ) => void;
   setProviderOrder: (orderedProviderIDs: string[]) => void;
   setCustomProviderIcon: (providerID: string, icon: CustomProviderIcon | null) => void;
+  setCustomProviderLogo: (providerID: string, logo: CustomProviderLogo | null) => void;
   toggleHiddenModel: (providerID: string, modelID: string) => void;
   isHiddenModel: (providerID: string, modelID: string) => boolean;
   hideAllModels: (providerID: string, modelIDs: string[]) => void;
@@ -1458,12 +1479,15 @@ interface UIStore {
   setAgentMemoryToolEnabled: (value: boolean) => void;
   setAgentKnowledgeToolEnabled: (value: boolean) => void;
   setAgentNotifyToolEnabled: (value: boolean) => void;
+  setAgentUsageToolEnabled: (value: boolean) => void;
   setAgentImageToolEnabled: (value: boolean) => void;
   setAgentImageModel: (value: string) => void;
+  setAgentMemoryDreamingEnabled: (value: boolean) => void;
+  setAgentMemoryDreamingModel: (value: string) => void;
+  setAgentMemoryDreamingVariant: (value: string) => void;
   setAgentRenderToolEnabled: (value: boolean) => void;
   setAgentSecretToolEnabled: (value: boolean) => void;
   setAgentWorkflowToolEnabled: (value: boolean) => void;
-  setAgentToolsCodeMode: (value: boolean) => void;
   setIsolatedSpacesEnabled: (value: boolean) => void;
   setPermissionDefaultMode: (value: PermissionMode) => void;
   setAgentMemoryFeatureAvailable: (value: boolean) => void;
@@ -1483,6 +1507,7 @@ interface UIStore {
   setCodeBlockLineWrap: (value: boolean) => void;
   setTableCellWrap: (value: boolean) => void;
   setCopyMessagesAsPlainText: (value: boolean) => void;
+  setSelectionApprovalText: (value: string) => void;
   setShowToolFileIcons: (value: boolean) => void;
   setShowTurnChangedFiles: (value: boolean) => void;
   setTimeFormatPreference: (value: TimeFormatPreference) => void;
@@ -1526,6 +1551,12 @@ const openFileTab = (state: UIStore, directory: string, filePath: string, previe
   }
 };
 
+/** What the selection menu's thumb-up says when the user set no text of their own. */
+export const DEFAULT_SELECTION_APPROVAL_TEXT = 'Sounds good';
+export const DEFAULT_EDITOR_FONT_SIZE = 12;
+/** The Files tree beside the editor: narrow enough that the code beside it does not wrap. */
+export const DEFAULT_CONTEXT_EDITOR_TREE_WIDTH = 208;
+
 export const useUIStore = create<UIStore>()(
   devtools(
     persist(
@@ -1547,7 +1578,7 @@ export const useUIStore = create<UIStore>()(
         contextEditorTreeVisible: true,
         fileTreeSide: 'right',
         contextEditorVisible: true,
-        contextEditorTreeWidth: 240,
+        contextEditorTreeWidth: DEFAULT_CONTEXT_EDITOR_TREE_WIDTH,
         contextZoneSizes: {},
         contextZoneExpandedChatSizes: {},
         workStatusExpandedSections: {},
@@ -1559,12 +1590,14 @@ export const useUIStore = create<UIStore>()(
         workStatusOverlayOpen: false,
         workStatusHiddenSections: [],
         workStatusSectionOrder: sanitizeWorkStatusSectionOrder([]),
+        workStatusSectionOrderExplicit: false,
         workStatusHiddenSectionsExplicit: false,
         isSessionSwitcherOpen: false,
         isSessionDropdownOpen: false,
         pendingDiffFile: null,
         pendingDiffStaged: false,
         pendingDiffScope: null,
+        pendingTurnDiffFile: null,
         pendingFileNavigation: null,
         pendingFileFocusPath: null,
         isMobile: false,
@@ -1578,7 +1611,6 @@ export const useUIStore = create<UIStore>()(
         isScheduledTasksDialogOpen: false,
         isArchivePageOpen: false,
         isIntegrationsCatalogOpen: false,
-        archivePageSearch: '',
         archivePageOpenCount: 0,
         isUsageStatsPageOpen: false,
         isSourceBoardOpen: false,
@@ -1627,17 +1659,19 @@ export const useUIStore = create<UIStore>()(
         autoDeleteAfterDays: 30,
         sessionRetentionAction: 'archive',
         sessionRetentionOnlyArchived: false,
+        sessionRetentionIncludeInWork: false,
         mergedWorktreeCleanupEnabled: false,
         worktreeArchiveOnDoneEnabled: false,
         autoDeleteLastRunAt: null,
         messageLimit: 200,
         fontSize: 100,
+        chatFontSize: 100,
         globalDraftStarters: null,
         terminalFontSize: 14,
         terminalShell: 'auto',
         terminalLoginShells: [],
         terminalCloseOnExit: true,
-        editorFontSize: 13,
+        editorFontSize: DEFAULT_EDITOR_FONT_SIZE,
         uiFont: DEFAULT_UI_FONT,
         monoFont: DEFAULT_MONO_FONT,
         customUiFont: '',
@@ -1652,6 +1686,7 @@ export const useUIStore = create<UIStore>()(
         providerOrder: [],
         collapsedModelProviders: [],
         customProviderIcons: {},
+        customProviderLogos: {},
         recentModels: [],
         lastSelectedModel: undefined,
         recentAgents: [],
@@ -1701,18 +1736,23 @@ export const useUIStore = create<UIStore>()(
         agentControlToolEnabled: true,
         agentScheduleToolEnabled: true,
         agentWebToolEnabled: true,
+        // Off until the server says otherwise: it resolves the default (on) and sends it with
+        // every settings response, and a runtime with no OpenChamber server has no message search.
         messageSearchEnabled: false,
         messageSearchReasoningEnabled: false,
         browserProvider: 'builtin',
         agentMemoryToolEnabled: false,
         agentKnowledgeToolEnabled: true,
         agentNotifyToolEnabled: false,
+        agentUsageToolEnabled: false,
         agentImageToolEnabled: false,
         agentImageModel: '',
+        agentMemoryDreamingEnabled: false,
+        agentMemoryDreamingModel: '',
+        agentMemoryDreamingVariant: '',
         agentRenderToolEnabled: true,
         agentSecretToolEnabled: true,
         agentWorkflowToolEnabled: false,
-        agentToolsCodeMode: false,
         isolatedSpacesEnabled: false,
         permissionDefaultMode: 'ask',
         agentMemoryFeatureAvailable: false,
@@ -1731,6 +1771,7 @@ export const useUIStore = create<UIStore>()(
         codeBlockLineWrap: true,
         tableCellWrap: true,
         copyMessagesAsPlainText: true,
+        selectionApprovalText: '',
         showToolFileIcons: true,
         showTurnChangedFiles: false,
         timeFormatPreference: 'auto',
@@ -2420,7 +2461,7 @@ export const useUIStore = create<UIStore>()(
           set({ mobileWorkStatusHiddenSections: [...new Set(sectionIds)] });
         },
         setWorkStatusSectionOrder: (sectionIds) => {
-          set({ workStatusSectionOrder: sanitizeWorkStatusSectionOrder(sectionIds) });
+          set({ workStatusSectionOrder: sanitizeWorkStatusSectionOrder(sectionIds), workStatusSectionOrderExplicit: true });
         },
 
         setContextRailSurfaceVisible: (surfaceId, visible) => {
@@ -2441,10 +2482,10 @@ export const useUIStore = create<UIStore>()(
         },
 
         setMobileWorkspaceTabOrder: (order) => {
-          set({ mobileWorkspaceTabOrder: orderMobileWorkspaceTabs(order) });
+          set((state) => ({ mobileWorkspaceTabOrder: storedMobileWorkspaceTabOrder(order, state.mobileWorkspaceTabOrder) }));
         },
 
-        setMobileWorkspaceTabVisible: (tab, visible) => {
+        setMobileWorkspaceTabVisible: (tab, visible, extensions) => {
           set((state) => {
             const hidden = state.mobileWorkspaceHiddenTabs;
             if (visible) {
@@ -2452,7 +2493,7 @@ export const useUIStore = create<UIStore>()(
             }
             if (hidden.includes(tab)) return state;
             // The last tab the user keeps stays: the drawer would have nothing to show.
-            const shown = shownMobileWorkspaceTabs(state.mobileWorkspaceTabOrder, hidden);
+            const shown = shownMobileWorkspaceTabs(state.mobileWorkspaceTabOrder, hidden, extensions);
             if (shown.length <= 1) return state;
             return { mobileWorkspaceHiddenTabs: [...hidden, tab] };
           });
@@ -2479,6 +2520,10 @@ export const useUIStore = create<UIStore>()(
             pendingDiffStaged: filePath ? staged : false,
             pendingDiffScope: filePath ? scope : null,
           });
+        },
+
+        setPendingTurnDiffFile: (request) => {
+          set({ pendingTurnDiffFile: request });
         },
 
         setPendingFileNavigation: (navigation) => {
@@ -2547,9 +2592,9 @@ export const useUIStore = create<UIStore>()(
             : { isScheduledTasksDialogOpen: false });
         },
 
-        setArchivePageOpen: (open, search = '') => {
+        setArchivePageOpen: (open) => {
           set(open
-            ? { isArchivePageOpen: true, archivePageSearch: search, archivePageOpenCount: get().archivePageOpenCount + 1, isUsageStatsPageOpen: false, isIntegrationsCatalogOpen: false, isSourceBoardOpen: false, isOverviewOpen: false, isScheduledTasksDialogOpen: false, worktreesPageProjectId: null, spacesPageProjectId: null, runOverviewKey: null, openGuestPageId: null }
+            ? { isArchivePageOpen: true, archivePageOpenCount: get().archivePageOpenCount + 1, isUsageStatsPageOpen: false, isIntegrationsCatalogOpen: false, isSourceBoardOpen: false, isOverviewOpen: false, isScheduledTasksDialogOpen: false, worktreesPageProjectId: null, spacesPageProjectId: null, runOverviewKey: null, openGuestPageId: null }
             : { isArchivePageOpen: false });
         },
 
@@ -2651,6 +2696,10 @@ export const useUIStore = create<UIStore>()(
         },
         requestSettingsJump: (page, itemId = null) => {
           set({ settingsJumpRequest: { page, itemId } });
+        },
+        openSettingsAt: (page, itemId = null) => {
+          get().requestSettingsJump(page, itemId);
+          get().setSettingsDialogOpen(true);
         },
         clearSettingsJumpRequest: () => {
           set({ settingsJumpRequest: null });
@@ -2800,6 +2849,10 @@ export const useUIStore = create<UIStore>()(
           }));
         },
 
+        setSessionRetentionIncludeInWork: (value) => {
+          set({ sessionRetentionIncludeInWork: value });
+        },
+
         setAutoDeleteLastRunAt: (timestamp) => {
           set({ autoDeleteLastRunAt: timestamp });
         },
@@ -2814,6 +2867,10 @@ export const useUIStore = create<UIStore>()(
           const clampedSize = Math.max(50, Math.min(200, size));
           set({ fontSize: clampedSize });
           get().applyTypography();
+        },
+
+        setChatFontSize: (size) => {
+          set({ chatFontSize: Math.max(50, Math.min(200, Math.round(size))) });
         },
 
         setGlobalDraftStarters: (refs) => {
@@ -3052,6 +3109,17 @@ export const useUIStore = create<UIStore>()(
             if (icon) next[normalizedProviderID] = icon;
             else delete next[normalizedProviderID];
             return { customProviderIcons: next };
+          });
+        },
+
+        setCustomProviderLogo: (providerID, logo) => {
+          const normalizedProviderID = providerID.trim();
+          if (!normalizedProviderID) return;
+          set((state) => {
+            const next = { ...state.customProviderLogos };
+            if (logo) next[normalizedProviderID] = logo;
+            else delete next[normalizedProviderID];
+            return { customProviderLogos: next };
           });
         },
 
@@ -3369,11 +3437,23 @@ export const useUIStore = create<UIStore>()(
         setAgentNotifyToolEnabled: (value) => {
           set({ agentNotifyToolEnabled: value });
         },
+        setAgentUsageToolEnabled: (value) => {
+          set({ agentUsageToolEnabled: value });
+        },
         setAgentImageToolEnabled: (value) => {
           set({ agentImageToolEnabled: value });
         },
         setAgentImageModel: (value) => {
           set({ agentImageModel: value });
+        },
+        setAgentMemoryDreamingEnabled: (value) => {
+          set({ agentMemoryDreamingEnabled: value });
+        },
+        setAgentMemoryDreamingModel: (value) => {
+          set({ agentMemoryDreamingModel: value });
+        },
+        setAgentMemoryDreamingVariant: (value) => {
+          set({ agentMemoryDreamingVariant: value });
         },
         setAgentRenderToolEnabled: (value) => {
           set({ agentRenderToolEnabled: value });
@@ -3389,9 +3469,6 @@ export const useUIStore = create<UIStore>()(
             const workflowTabIds = panel.tabs.filter((tab) => tab.mode === 'workflows').map((tab) => tab.id);
             if (workflowTabIds.length > 0) get().closeContextPanelTabs(directory, workflowTabIds);
           }
-        },
-        setAgentToolsCodeMode: (value) => {
-          set({ agentToolsCodeMode: value });
         },
         setAgentMemoryFeatureAvailable: (value) => {
           set({ agentMemoryFeatureAvailable: value });
@@ -3448,6 +3525,9 @@ export const useUIStore = create<UIStore>()(
         },
         setTableCellWrap: (value) => {
           set({ tableCellWrap: value });
+        },
+        setSelectionApprovalText: (value) => {
+          set({ selectionApprovalText: value });
         },
         setCopyMessagesAsPlainText: (value) => {
           set({ copyMessagesAsPlainText: value });
@@ -3546,7 +3626,7 @@ export const useUIStore = create<UIStore>()(
       {
         name: 'ui-store',
         storage: createDeferredSafeJSONStorage(),
-        version: 26,
+        version: 29,
         migrate: (persistedState, version) => {
           if (!persistedState || typeof persistedState !== 'object') {
             return persistedState;
@@ -3558,6 +3638,26 @@ export const useUIStore = create<UIStore>()(
           // the synced settings after hydration.
           if (version < 23) {
             state.tableCellWrap = true;
+          }
+
+          // v26 -> v27: Context sources moved up the default order; an order
+          // the user arranged stays.
+          if (version < 27 && Array.isArray(state.workStatusSectionOrder)) {
+            state.workStatusSectionOrder = sanitizeWorkStatusSectionOrder(state.workStatusSectionOrder, false);
+          }
+
+          // v27 -> v28: the Editor font size default went from 13 to 12. The
+          // local copy holds 13 for everyone who never changed it; a 13 the
+          // user chose is restored from the synced settings after hydration.
+          if (version < 28 && state.editorFontSize === 13) {
+            state.editorFontSize = DEFAULT_EDITOR_FONT_SIZE;
+          }
+
+          // v28 -> v29: the Files tree's default width went from 240 to 208.
+          // The local copy holds 240 for everyone who never dragged it; a
+          // width the user set (any other) stays.
+          if (version < 29 && state.contextEditorTreeWidth === 240) {
+            state.contextEditorTreeWidth = DEFAULT_CONTEXT_EDITOR_TREE_WIDTH;
           }
 
           // v20 -> v21: enable telemetry by default; preserve explicit choices.
@@ -3839,6 +3939,7 @@ export const useUIStore = create<UIStore>()(
           workStatusPanelEnabled: state.workStatusPanelEnabled,
           workStatusHiddenSections: state.workStatusHiddenSections,
           workStatusSectionOrder: state.workStatusSectionOrder,
+          workStatusSectionOrderExplicit: state.workStatusSectionOrderExplicit,
           workStatusHiddenSectionsExplicit: state.workStatusHiddenSectionsExplicit,
           isSessionSwitcherOpen: state.isSessionSwitcherOpen,
           sidebarSection: state.sidebarSection,
@@ -3874,11 +3975,13 @@ export const useUIStore = create<UIStore>()(
           autoDeleteAfterDays: state.autoDeleteAfterDays,
           sessionRetentionAction: state.sessionRetentionAction,
           sessionRetentionOnlyArchived: state.sessionRetentionOnlyArchived,
+          sessionRetentionIncludeInWork: state.sessionRetentionIncludeInWork,
           mergedWorktreeCleanupEnabled: state.mergedWorktreeCleanupEnabled,
           worktreeArchiveOnDoneEnabled: state.worktreeArchiveOnDoneEnabled,
           autoDeleteLastRunAt: state.autoDeleteLastRunAt,
           messageLimit: state.messageLimit,
           fontSize: state.fontSize,
+          chatFontSize: state.chatFontSize,
           globalDraftStarters: state.globalDraftStarters,
           terminalFontSize: state.terminalFontSize,
           terminalShell: state.terminalShell,
@@ -3897,6 +4000,7 @@ export const useUIStore = create<UIStore>()(
           providerOrder: state.providerOrder,
           collapsedModelProviders: state.collapsedModelProviders,
           customProviderIcons: state.customProviderIcons,
+          customProviderLogos: state.customProviderLogos,
           recentModels: state.recentModels,
           lastSelectedModel: state.lastSelectedModel,
           recentAgents: state.recentAgents,
@@ -3938,12 +4042,15 @@ export const useUIStore = create<UIStore>()(
           agentMemoryToolEnabled: state.agentMemoryToolEnabled,
           agentKnowledgeToolEnabled: state.agentKnowledgeToolEnabled,
           agentNotifyToolEnabled: state.agentNotifyToolEnabled,
+          agentUsageToolEnabled: state.agentUsageToolEnabled,
           agentImageToolEnabled: state.agentImageToolEnabled,
           agentImageModel: state.agentImageModel,
+          agentMemoryDreamingEnabled: state.agentMemoryDreamingEnabled,
+          agentMemoryDreamingModel: state.agentMemoryDreamingModel,
+          agentMemoryDreamingVariant: state.agentMemoryDreamingVariant,
           agentRenderToolEnabled: state.agentRenderToolEnabled,
           agentSecretToolEnabled: state.agentSecretToolEnabled,
           agentWorkflowToolEnabled: state.agentWorkflowToolEnabled,
-          agentToolsCodeMode: state.agentToolsCodeMode,
           isolatedSpacesEnabled: state.isolatedSpacesEnabled,
           permissionDefaultMode: state.permissionDefaultMode,
           agentMemoryViewedAt: state.agentMemoryViewedAt,
@@ -3956,6 +4063,7 @@ export const useUIStore = create<UIStore>()(
           codeBlockLineWrap: state.codeBlockLineWrap,
           tableCellWrap: state.tableCellWrap,
           copyMessagesAsPlainText: state.copyMessagesAsPlainText,
+          selectionApprovalText: state.selectionApprovalText,
           showToolFileIcons: state.showToolFileIcons,
           showTurnChangedFiles: state.showTurnChangedFiles,
           timeFormatPreference: state.timeFormatPreference,

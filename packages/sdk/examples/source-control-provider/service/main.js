@@ -61,12 +61,25 @@ function installGuestScrollbarActivity(doc) {
 }
 var GUEST_SCROLLBAR_SCRIPT = `(${installGuestScrollbarActivity.toString()})(document);`;
 // packages/sdk/src/manifest.ts
+var GUEST_PROVIDER_LOGO_BYTES_MAX = 1024 * 1024;
 var TRACKER_URL_TOKENS = ["{id}", "{segment}", "{segments+}"];
 var TRACKER_URL_TOKEN_SET = new Set(TRACKER_URL_TOKENS);
 // packages/sdk/src/session-events.ts
-var GUEST_SESSION_EVENT_TYPES = ["turn-finished", "turn-failed", "permission-asked", "question-asked"];
+var GUEST_SESSION_EVENT_TYPES = [
+  "turn-finished",
+  "turn-failed",
+  "permission-asked",
+  "question-asked",
+  "turn-started",
+  "session-created",
+  "session-archived",
+  "session-deleted"
+];
 var SESSION_EVENTS_IDLE_MS = 10 * 60000;
 var EVENT_TYPES = new Set(GUEST_SESSION_EVENT_TYPES);
+// packages/sdk/src/service-host.ts
+var SERVICE_SCHEDULE_IDLE_MS = 10 * 60000;
+var MENTIONS_IDLE_MS = 10 * 60000;
 // packages/sdk/src/file-editor.ts
 var patternExpressions = new Map;
 // packages/sdk/src/contract.ts
@@ -111,6 +124,7 @@ var HOST_PUSH_TYPES = new Set([
   "item",
   "resolve",
   "action",
+  "service-event",
   "status-control-event",
   "popover-closed",
   "file-open",
@@ -140,6 +154,7 @@ var SOURCE_CONTROL_PROVIDER_WIRE_VERSION = 1;
 var SOURCE_CONTROL_PROVIDER_METHODS = [
   "auth.verify",
   "auth.probe",
+  "auth.status",
   "changeRequestStatus",
   "listChangeRequests",
   "changeRequestContext",
@@ -171,9 +186,12 @@ var readSessionUser = (user) => {
   if (Object(user) !== user || user === undefined)
     return;
   const { id, login } = user;
-  if (!Number.isSafeInteger(id) || String(login) !== login || login.length === 0)
+  const isPositiveSafeIntegerId = typeof id === "number" && Number.isSafeInteger(id) && id > 0;
+  const isBoundedStringId = typeof id === "string" && id.length > 0 && id.length <= 256;
+  const validId = isPositiveSafeIntegerId || isBoundedStringId;
+  if (!validId || String(login) !== login || login.length === 0)
     return;
-  return { id: Number(id), login };
+  return { id, login };
 };
 var readSession = (session) => {
   if (session === null)
@@ -269,6 +287,7 @@ var createSourceControlForge = ({ env }) => {
 };
 var NOTIFICATIONS_PROVIDER_IDLE_MS = 10 * 60000;
 var TRACKER_PROVIDER_IDLE_MS = 10 * 60000;
+var QUOTA_PROVIDER_IDLE_MS = 10 * 60000;
 // packages/sdk/src/service-surface.ts
 var SURFACE_CONTROLLERS = ["none", "agent", "user"];
 var CONTROLLERS = new Set(SURFACE_CONTROLLERS);
@@ -571,6 +590,7 @@ var unsupported = async (_call, _input, request) => {
   throw new CallError(`${request.method} is not something this Git host offers`, 501, "UNSUPPORTED");
 };
 var handlers = {
+  "auth.status": unsupported,
   "auth.verify": async (call) => {
     const { data } = await api(call, "GET", "/user");
     const user = { id: data.id, login: data.login };

@@ -29,6 +29,9 @@
  * cost of re-rendering a whole turn per delta depends on. `agent-*reads-*`
  * reads large files instead, and `agent-100tools-x5-*` makes its calls five
  * at a time, so one step's message carries five tool parts.
+ * `agent-20tools-wait3000ms-300cps` waits three seconds before each step's
+ * first token, as a hosted model does: every step's assistant message then
+ * sits empty for that long, which the instant fixtures never show.
  * `unicode-300cps` streams prose with em dashes, curly quotes and Cyrillic
  * paragraphs and a 150-line TypeScript fence whose comments and strings carry
  * the same characters. A string with any character above Latin-1 is stored by
@@ -48,12 +51,19 @@
  * n seconds) drive the session goal and review loops deterministically from
  * what the conversation says (`planWorkflow`), and the goal's progress check
  * gets the JSON answer its report lines call for (`auditAnswer`).
+ *
+ * A prompt from `fixture-conversations.mjs` overrides all of the above: the
+ * request gets that conversation's scripted tool steps and answer at seeding
+ * speed, whatever the model, so design shots show a history that reads like
+ * real work. No perf scenario sends those prompts.
  */
 
 import { createServer } from "node:http"
 import { resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import process from "node:process"
+
+import { planScriptedResponse } from "./fixture-conversations.mjs"
 
 const FIXTURE_PROVIDER_ID = "perf"
 const FIXTURE_RATES = [100, 300, 600, 1200]
@@ -499,11 +509,11 @@ const parseModel = (model) => {
   }
   const think = /think-(\d+)s/.exec(String(model ?? ""))
   if (think) return { delayMs: Number(think[1]) * 1000, charactersPerSecond: 1200, document: THINK_ANSWER, toolSteps: 0 }
-  const agent = /agent-(\d+)(tools|reads)(?:-x(\d+))?-(\d+)cps/.exec(String(model ?? ""))
+  const agent = /agent-(\d+)(tools|reads)(?:-x(\d+))?(?:-wait(\d+)ms)?-(\d+)cps/.exec(String(model ?? ""))
   if (agent) {
     return {
-      delayMs: 0,
-      charactersPerSecond: Math.max(1, Number(agent[4])),
+      delayMs: Number(agent[4] ?? 0),
+      charactersPerSecond: Math.max(1, Number(agent[5])),
       document: FIXTURE_DOCUMENT,
       toolSteps: Number(agent[1]),
       reads: agent[2] === "reads",
@@ -529,6 +539,8 @@ const parseModel = (model) => {
  */
 const planResponse = (model, body, interactions = false, workflows = false) => {
   const messages = Array.isArray(body.messages) ? body.messages : []
+  const scripted = planScriptedResponse(messages)
+  if (scripted) return { delayMs: 0, charactersPerSecond: FIXTURE_SEED_RATE, ...scripted }
   const lastUser = messages.filter((message) => message?.role === "user").map(messageText).at(-1) ?? ""
   if (lastUser.startsWith("files-link-proof: ")) return { delayMs: 0, charactersPerSecond: 20000,
     text: `[Outside file](${lastUser.slice("files-link-proof: ".length).trim()})`, toolCalls: [] }
@@ -644,6 +656,7 @@ const streamCompletion = async (response, model, plan, waitForTurnRelease) => {
     plan = { ...plan, delayMs: 0 }
   }
   try {
+    // Scripted and feature steps can stream reasoning before their answer.
     if (plan.reasoning) await streamText(response, model, plan.reasoning, plan, "reasoning_content")
     await streamText(response, model, plan.text, plan.reasoning ? { ...plan, delayMs: 0 } : plan)
   } catch {
@@ -795,6 +808,7 @@ export const fixtureProviderConfig = (port, { interactions = false, workflows = 
           `agent-${calls}tools-x${parallel}-${rate}cps`,
           { name: `Fixture agent, ${calls} tool calls ${parallel} at a time, then ${rate} characters/s`, tool_call: true },
         ])),
+        ["agent-20tools-wait3000ms-300cps", { name: "Fixture agent, 20 tool calls, 3 s to each step's first token, then 300 characters/s", tool_call: true }],
       ]),
     },
   },

@@ -11,10 +11,11 @@ import { SortableTabsStrip } from '@/components/ui/sortable-tabs-strip';
 import { PullRequestView } from '@/components/views/PullRequestView';
 import { TrackerItemView } from '@/components/views/TrackerItemView';
 import { trackerTargetOfUrl } from '@/components/sourceBoard/openTrackerItem';
-import { useRepositoryUrlMatcher } from '@/lib/source-control/repositoryUrlMatcher';
-import { useTrackerUrlMatcher } from '@/lib/trackers/matchTrackerUrl';
+import { type RepositoryUrlMatcher, useRepositoryUrlMatcher } from '@/lib/source-control/repositoryUrlMatcher';
+import { type TrackerUrlMatcher, useTrackerUrlMatcher } from '@/lib/trackers/matchTrackerUrl';
 import { trackerPresentation } from '@/lib/trackers/presentation';
 import { lazyWithChunkRecovery } from '@/lib/chunkLoadRecovery';
+import { isDesktopShell } from '@/lib/desktop';
 import { getDisambiguatingFolders } from '@/lib/path-utils';
 
 // Heavy views stay on-demand (same as MainLayout): importing GitView or the
@@ -30,6 +31,12 @@ import { useGuestSurfaces } from '@/hooks/useGuestSurfaces';
 import { cn } from '@/lib/utils';
 import { useI18n } from '@/lib/i18n';
 import { useBrowserFaviconStore } from '@/stores/useBrowserFaviconStore';
+import { useTrackedRecords } from '@/stores/useTrackedItemsStore';
+import { repositoryStateLook } from '@/components/references/referencePickerItems';
+import { repositoryThread, workItem } from '@/lib/trackedItems/fromLinks';
+import { useTrackedItems } from '@/lib/trackedItems/interest';
+import type { TrackedItem, TrackedItemState } from '@/lib/trackedItems/model';
+import { trackerStateGlyph } from '@/lib/trackers/stateLook';
 import { clampContextEditorTreeWidth, isTrackerBranchTab, useUIStore, type ContextPanelMode } from '@/stores/useUIStore';
 import { useGitStatus } from '@/stores/useGitStore';
 import { useChildStoreManager } from '@/sync/sync-context';
@@ -215,11 +222,48 @@ const ChatTabIcon: React.FC<{ sessionId: string }> = ({ sessionId }) => {
     : <Icon name="chat-4" className="h-3.5 w-3.5" />;
 };
 
-// The branch's own tab, then what each item is.
-const TrackerTabIcon: React.FC<{ url: string | null }> = ({ url }) => {
+const NO_TRACKED: TrackedItem[] = [];
+
+// The item a Tracker tab's link names, as the server follows it: a link, read
+// with the host's current account, like the links the sidebar shows.
+const trackedItemOfLink = (url: string, urls: RepositoryUrlMatcher, trackerUrls: TrackerUrlMatcher): TrackedItem | null => {
+  const tracker = trackerUrls(url);
+  if (tracker) return workItem(tracker.provider, tracker.identifier);
+  const thread = urls.match(url);
+  return thread ? repositoryThread(thread.kind, thread) : null;
+};
+
+// The glyph the item's state pill draws, from the state the server follows.
+const trackedStateLook = (record: TrackedItemState | null): { icon: IconName; color: string } | null => {
+  switch (record?.type) {
+    case 'pull':
+      return record.state ? repositoryStateLook({ kind: 'pull', state: record.state.state, draft: record.state.draft }, record.state) : null;
+    case 'issue':
+      return record.state ? repositoryStateLook({ kind: 'issue', state: record.state.state }, null) : null;
+    case 'discussion':
+      return record.state ? repositoryStateLook({ kind: 'discussion', state: record.state.state, answered: record.state.answered }, null) : null;
+    case 'work-item':
+      return record.state ? trackerStateGlyph(record.state.state.category) : null;
+    default:
+      return null;
+  }
+};
+
+// The branch's own tab, then what each item is. An item's tab follows its
+// item live and shows its state glyph, coloured while another tab is active,
+// so a PR merged or an issue closed in the background reads from the strip;
+// the active tab stays in the strip's text colour beside the state pill.
+const TrackerTabIcon: React.FC<{ url: string | null; active: boolean; visible: boolean }> = ({ url, active, visible }) => {
   const urls = useRepositoryUrlMatcher();
   const trackerUrls = useTrackerUrlMatcher();
+  const tracked = React.useMemo(() => (url ? trackedItemOfLink(url, urls, trackerUrls) : null), [trackerUrls, url, urls]);
+  const followed = React.useMemo(() => (tracked ? [tracked] : []), [tracked]);
+  useTrackedItems(visible ? followed : NO_TRACKED);
+  const look = trackedStateLook(useTrackedRecords(followed)[0] ?? null);
   const target = url ? trackerTargetOfUrl(url, urls, trackerUrls) : null;
+  if (target && look) {
+    return <Icon name={look.icon} className="h-3.5 w-3.5" style={active ? undefined : { color: look.color }} />;
+  }
   const name: IconName = !target ? 'git-branch'
     : target.source === 'tracker' ? trackerPresentation(target.provider).icon
       : REPOSITORY_KIND_ICONS[target.kind];
@@ -229,6 +273,8 @@ const TrackerTabIcon: React.FC<{ url: string | null }> = ({ url }) => {
 const getTabIcon = (
   tab: { mode: ContextPanelMode; targetPath: string | null; dedupeKey?: string },
   faviconByOrigin: Record<string, string> = {},
+  active = true,
+  visible = true,
 ): React.ReactNode | undefined => {
   if (tab.mode === 'file') {
     return tab.targetPath
@@ -249,7 +295,7 @@ const getTabIcon = (
   }
 
   if (tab.mode === 'pr') {
-    return <TrackerTabIcon url={tab.targetPath} />;
+    return <TrackerTabIcon url={tab.targetPath} active={active} visible={visible} />;
   }
 
   if (tab.mode === 'notes') {
@@ -261,7 +307,7 @@ const getTabIcon = (
   }
 
   if (tab.mode === 'context') {
-    return <Icon name="donut-chart-fill" className="h-3.5 w-3.5" />;
+    return <Icon name="pie-chart" className="h-3.5 w-3.5" />;
   }
 
   if (tab.mode === 'workflows') {
@@ -853,6 +899,7 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
   // The branch tab is named after the branch checked out here.
   const trackerBranch = useGitStatus(activeTab?.mode === 'pr' && directoryKey ? directoryKey : null)?.current ?? null;
 
+  const activeTabId = activeTab?.id;
   const tabItems = React.useMemo(() => {
     const fileFolders = getDisambiguatingFolders(activeModeTabs
       .filter((tab) => tab.mode === 'file')
@@ -866,14 +913,15 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
         id: tab.id,
         label,
         labelFolder: tab.mode === 'file' ? fileFolders.get(tabPathLabel) : undefined,
-        icon: getTabIcon(tab, faviconByOrigin),
+        icon: getTabIcon(tab, faviconByOrigin, tab.id === activeTabId, isOpen),
         title: tabPathLabel ? `${rawLabel}: ${tabPathLabel}` : rawLabel,
         closeLabel: t('contextPanel.tab.closeTabAria', { label }),
+        closeShortcut: tab.id === activeTabId && isDesktopShell() ? formatShortcutForDisplay('mod+w', '') : undefined,
         closable: !branchTab,
         preview: tab.preview,
       };
     });
-  }, [activeModeTabs, effectiveDirectory, faviconByOrigin, sessionTitleById, t, tabT, trackerBranch]);
+  }, [activeModeTabs, activeTabId, effectiveDirectory, faviconByOrigin, isOpen, sessionTitleById, t, tabT, trackerBranch]);
 
   const activeNonChatContent = activeTab?.mode === 'context'
         ? <ContextPanelHeaderSlotProvider value={headerSlotEl}><ContextPanelContent /></ContextPanelHeaderSlotProvider>
@@ -1072,6 +1120,8 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
       )}
       <div className="flex h-10 shrink-0 items-center gap-1 self-start px-1.5">
         {activeTab?.mode === 'browser' ? (
+          <Tooltip>
+          <TooltipTrigger asChild>
           <Button
             type="button"
             variant="ghost"
@@ -1081,11 +1131,13 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
               openNewContextBrowserTab(directoryKey);
             }}
             className="h-7 w-7 p-0"
-            title={t('contextPanel.browser.newTab')}
             aria-label={t('contextPanel.browser.newTab')}
           >
             <Icon name="add" className="h-3.5 w-3.5" />
           </Button>
+          </TooltipTrigger>
+          <TooltipContent side="bottom" sideOffset={6}>{t('contextPanel.browser.newTab')}</TooltipContent>
+          </Tooltip>
         ) : null}
         {/* Each icon toggles the column on its side: the editor and the tree
             swap sides with the file tree side setting, the icons stay put. */}
@@ -1093,20 +1145,27 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
           const isTree = side === fileTreeSide;
           if (!isTree && !hasOpenEditorFile) return null;
           const label = isTree ? t('contextRail.editorTree.toggle') : t('contextRail.editor.toggle');
+          const shown = isTree ? contextEditorTreeVisible : showsEditor;
+          const tooltip = isTree
+            ? t(shown ? 'contextTooltips.panel.hideFileTree' : 'contextTooltips.panel.showFileTree')
+            : t(shown ? 'contextTooltips.panel.hideFileEditor' : 'contextTooltips.panel.showFileEditor');
           return (
+            <Tooltip key={side}>
+            <TooltipTrigger asChild>
             <Button
-              key={side}
               type="button"
               variant="ghost"
               size="sm"
               onClick={isTree ? toggleContextEditorTree : toggleContextEditor}
               className="h-7 w-7 p-0"
-              title={label}
               aria-label={label}
-              aria-pressed={isTree ? contextEditorTreeVisible : showsEditor}
+              aria-pressed={shown}
             >
               <Icon name={side === 'left' ? 'layout-left' : 'layout-right'} className="h-3.5 w-3.5" />
             </Button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" sideOffset={6}>{tooltip}</TooltipContent>
+            </Tooltip>
           );
         }) : null}
         {!isTreeOnly ? (
@@ -1126,17 +1185,21 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
           <TooltipContent side="bottom" sideOffset={6}><TooltipLabelWithShortcut label={isExpanded ? t('contextPanel.actions.collapsePanel') : t('contextPanel.actions.expandPanel')} shortcut={formatShortcutForDisplay(getEffectiveShortcutCombo('toggle_context_panel_expanded', shortcutOverrides), '')} /></TooltipContent>
           </Tooltip>
         ) : null}
+        <Tooltip>
+        <TooltipTrigger asChild>
         <Button
           type="button"
           variant="ghost"
           size="sm"
           onClick={handleClose}
           className="h-7 w-7 p-0"
-          title={t('contextPanel.actions.closePanel')}
           aria-label={t('contextPanel.actions.closePanel')}
         >
           <Icon name="close" className="h-3.5 w-3.5" />
         </Button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" sideOffset={6}>{t('contextPanel.actions.closePanel')}</TooltipContent>
+        </Tooltip>
       </div>
     </header>
   );
@@ -1286,10 +1349,9 @@ export const ContextPanel: React.FC<{ zone?: ContextZone }> = ({ zone = 'right' 
           zone === 'bottom' && (leftZoneShown ? 'ms-0' : 'ms-2'),
           zone === 'bottom' && (rightSlotFilled ? 'me-0' : 'me-1.5'),
           isVertical ? null : 'h-[calc(100%-0.5rem)]',
-          // A framed card, inset from the chat: its own border and radius rather
-          // than a divider running the length of the window.
-          // The dropdown's hairline ring (`oc-panel-edge`), shared with the
-          // work-status card.
+          // A framed card, inset from the chat: its own colour, hairline ring
+          // and radius rather than a divider running the length of the window
+          // (`oc-panel-edge`, shared with the work-status card).
           'oc-panel-edge overflow-hidden rounded-[10px] bg-background',
           // Size animates in sync with the zone (surface switches, resize
           // release).

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { test, vi } from 'vitest';
 import { createMessageQueueRuntime, registerMessageQueueRoutes } from './runtime.js';
@@ -30,7 +31,7 @@ const until = async (predicate) => {
 };
 
 const fixture = async (t, options = {}) => {
-  const root = '/tmp/opencode';
+  const root = path.join(tmpdir(), 'opencode');
   await fs.promises.mkdir(root, { recursive: true });
   const dataDir = options.dataDir ?? await fs.promises.mkdtemp(path.join(root, 'queue-receipts-'));
   const state = options.state ?? { held: true, inbox: new Map(), posts: [], commands: [], fail: null, badInbox: null };
@@ -44,6 +45,14 @@ const fixture = async (t, options = {}) => {
     if (pathname === '/api/session/active') {
       state.activeReads = (state.activeReads ?? 0) + 1;
       return Response.json({ data: state.active ?? {} });
+    }
+    if (method === 'GET' && /^\/api\/session\/[^/]+$/.test(pathname)) {
+      return Response.json({ data: { id: pathname.split('/')[3], ...(state.revert ? { revert: state.revert } : {}) } });
+    }
+    if (method === 'POST' && pathname.endsWith('/revert/commit')) {
+      state.revert = null;
+      (state.revertCommits ??= []).push(pathname);
+      return new Response(null, { status: 204 });
     }
     if (pathname.endsWith('/message')) return Response.json({ data: [], cursor: {} });
     if (pathname === '/api/command') {
@@ -130,6 +139,44 @@ test('lost enqueue response, concurrent repeat and restart retain one immutable 
   await assert.rejects(restored.runtime.enqueueRequest('ses_other', 'enqueue-request-1', body), { code: 'queue_request_conflict' });
   await assert.rejects(restored.runtime.takeRequest(SESSION, 'enqueue-request-1', { directory: DIRECTORY, itemIds: [reply.receipt.itemId] }), { code: 'queue_request_conflict' });
   await assert.rejects(restored.runtime.getRequest(SESSION, 'unknown-request-1', DIRECTORY), { code: 'queue_request_unknown', status: 404 });
+});
+
+test('session moves preserve durable queue and prefix capture owners across restart', async (t) => {
+  for (const prefix of [false, true]) {
+    const f = await fixture(t);
+    const accepted = await f.runtime.enqueueRequest(SESSION, 'move-captured-owner', input({ context: [{ kind: 'synthetic', text: 'captured' }] }));
+    const reservation = prefix ? {
+      id: 'msg_move_owner', directory: DIRECTORY, format: 'manifest-v1',
+      itemIds: [accepted.receipt.itemId], composer: 'next', sendConfig: item().sendConfig,
+    } : null;
+    if (reservation) await f.runtime.reservePrefix(SESSION, reservation);
+    f.runtime.processPayload({ type: 'session.updated', properties: {
+      info: { id: SESSION, directory: '/new/repository', projectID: 'project-1' },
+    } });
+    assert.equal(f.runtime.sessionSnapshot(SESSION).directory, DIRECTORY);
+    await f.runtime.flush();
+    f.runtime.stop();
+    const restored = await fixture(t, { dataDir: f.dataDir });
+    assert.deepEqual((await restored.runtime.getRequest(SESSION, 'move-captured-owner', DIRECTORY)).receipt, accepted.receipt);
+    assert.equal(restored.runtime.sessionSnapshot(SESSION).items.length, 1);
+    if (reservation) assert.equal((await restored.runtime.reservePrefix(SESSION, reservation)).reservation.directory, DIRECTORY);
+  }
+});
+
+test('durable context delivery commits a staged revert and retains receipt-owned synthetic IDs', async (t) => {
+  const posts = [];
+  const f = await fixture(t, { onRequest: (url, init) => {
+    if (init.method === 'POST') posts.push(new URL(url).pathname);
+  } });
+  f.state.revert = { messageID: 'msg_boundary' };
+  const accepted = await f.runtime.enqueueRequest(SESSION, 'revert-receipt-context', input({ context: [{ kind: 'synthetic', text: 'captured' }] }));
+  f.state.held = false;
+  f.runtime.release(SESSION);
+  await until(() => f.runtime.sessionSnapshot(SESSION).items.length === 0);
+  assert.deepEqual(f.state.posts.map((entry) => entry.body.id), [...accepted.receipt.contextIds, accepted.receipt.messageId]);
+  assert.equal(f.state.revert, null);
+  assert.ok(posts.indexOf(`/api/session/${SESSION}/revert/commit`) < posts.indexOf(`/api/session/${SESSION}/synthetic`));
+  assert.deepEqual(f.state.revertCommits, [`/api/session/${SESSION}/revert/commit`]);
 });
 
 test('enqueue acknowledges and dispatches only after file and directory sync complete', async (t) => {
@@ -974,7 +1021,7 @@ test('owned blob guards reject symlink roots, hard links, missing bytes and dige
   const linked = await fixture(t);
   const target = path.join(linked.dataDir, 'outside');
   await fs.promises.mkdir(target, { mode: 0o700 });
-  await fs.promises.symlink(target, path.join(linked.dataDir, 'message-queue-blobs'));
+  await fs.promises.symlink(target, path.join(linked.dataDir, 'message-queue-blobs'), process.platform === 'win32' ? 'junction' : 'dir');
   await assert.rejects(upload(linked.runtime, 'symlink-root-1', 'file', Buffer.from('a')), /unsafe queue blob storage/);
   for (const damage of ['hard-link', 'missing', 'corrupt']) {
     const f = await fixture(t);
@@ -1146,8 +1193,9 @@ test('release checkpoints precede unlink and failed unlink can be retried after 
     assert.ok((await fs.promises.stat(filename)).isFile());
   } finally { renameMock.mockRestore(); }
   const unlink = fs.promises.unlink.bind(fs.promises);
+  const canonicalFilename = await fs.promises.realpath(filename);
   const unlinkMock = vi.spyOn(fs.promises, 'unlink').mockImplementation(async (target) => {
-    if (target === filename) throw Object.assign(new Error('unlink failed'), { code: 'EIO' });
+    if (target === canonicalFilename) throw Object.assign(new Error('unlink failed'), { code: 'EIO' });
     return unlink(target);
   });
   try {

@@ -120,6 +120,7 @@ const storedFileSchema = z.object({ revision: z.number().int().nonnegative().opt
 const runIdentitySchema = z.object({ originalSessionID: sessionIdSchema, reviewSessionID: sessionIdSchema, directory: z.string().min(1) });
 const recordTypeSchema = z.object({ type: z.string(), id: z.string().optional() });
 const messagePageSchema = z.object({ data: z.array(z.unknown()) });
+const sessionRecordSchema = z.object({ revert: z.object({}).nullish() });
 const statusEventSchema = z.object({
   type: z.literal('session.status'),
   properties: z.object({ sessionID: z.string().min(1), status: z.object({ type: z.string().min(1) }) }),
@@ -239,6 +240,8 @@ export function createAutoReviewRuntime({
   const sendFailures = new Map(); // originalSessionID → consecutive failed sends
   const settleChecks = new Map(); // originalSessionID → rechecks spent waiting for the idle record
   const ticking = new Set();
+  // Ticks under way: one can still persist after `stop()`, so `flush()` waits for them.
+  const ticksInFlight = new Set();
 
   // --- persistence ---------------------------------------------------------
 
@@ -415,6 +418,19 @@ export function createAutoReviewRuntime({
     }
   };
 
+  /**
+   * Commits a revert staged on the session before context goes in: OpenCode's
+   * commit deletes everything admitted past the revert's boundary, so the commit
+   * a prompt makes would delete the context admitted just before it. A failed
+   * read or commit throws, which leaves the send pending with nothing admitted.
+   */
+  const commitStagedRevert = async (sessionID) => {
+    const sessionPath = `/api/session/${encodeURIComponent(sessionID)}`;
+    const session = parse(sessionRecordSchema, await openCodeRequest(sessionPath));
+    if (!session) throw new Error(`OpenCode returned no record for session ${sessionID}`);
+    if (session.revert) await openCodeRequest(`${sessionPath}/revert/commit`, { method: 'POST' });
+  };
+
   // --- loop ----------------------------------------------------------------
 
   const clearTimer = (originalSessionID) => {
@@ -430,9 +446,12 @@ export function createAutoReviewRuntime({
     clearTimer(originalSessionID);
     const timer = setTimeout(() => {
       timers.delete(originalSessionID);
-      tick(originalSessionID).catch((error) => {
-        console.warn('[auto-review] tick failed:', error?.message ?? error);
-      });
+      const work = tick(originalSessionID)
+        .catch((error) => {
+          console.warn('[auto-review] tick failed:', error?.message ?? error);
+        })
+        .finally(() => ticksInFlight.delete(work));
+      ticksInFlight.add(work);
     }, Math.max(0, delayMs));
     timer.unref?.();
     timers.set(originalSessionID, timer);
@@ -486,10 +505,9 @@ export function createAutoReviewRuntime({
     // The response style is left out: a handoff or feedback send lands in the
     // user's own session, whose style entry must stay as it is.
     if (sessionKnowledgeRuntime) await sessionKnowledgeRuntime.sync(send.sessionID, run.directory);
-    for (const [index, text] of send.context.entries()) {
-      if (!text.trim()) continue;
-      await admit(send.sessionID, 'synthetic', { id: send.contextIDs[index], text, resume: false });
-    }
+    const context = send.context.flatMap((text, index) => (text.trim() ? [{ id: send.contextIDs[index], text }] : []));
+    if (context.length > 0) await commitStagedRevert(send.sessionID);
+    for (const { id, text } of context) await admit(send.sessionID, 'synthetic', { id, text, resume: false });
     await admit(send.sessionID, 'prompt', { id: send.messageID, text: send.text });
     if (!stillCurrent(run)) return;
     sendFailures.delete(run.originalSessionID);
@@ -766,8 +784,14 @@ export function createAutoReviewRuntime({
     processPayload,
     start: startRuntime,
     stop,
-    /** Drains the pending write; tests and shutdown use it. */
-    flush: () => writePromise,
+    /**
+     * Drains the ticks under way and every write they queue; after `stop()`
+     * nothing writes once it resolves. Tests use it before removing the data dir.
+     */
+    flush: async () => {
+      while (ticksInFlight.size > 0) await Promise.all(ticksInFlight);
+      await writePromise;
+    },
   };
 }
 

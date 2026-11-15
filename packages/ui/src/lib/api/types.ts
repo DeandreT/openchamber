@@ -19,6 +19,7 @@ import type {
   PullRequestStack,
   ProjectUpstream,
   ReadyChangeRequestInput,
+  DraftChangeRequestInput,
   CommentInput,
   DiscussionCloseReason,
   DiscussionCommentInput,
@@ -45,6 +46,7 @@ import type {
   SourceControlMergeMutationResult,
   SourceControlMutationReceipt,
   SourceControlReadyMutationResult,
+  SourceControlDraftMutationResult,
   SourceControlReviewMutationResult,
   SourceControlStateMutationResult,
   SourceControlBindingRead,
@@ -211,6 +213,8 @@ interface GitStatusFile {
   path: string;
   index: string;
   working_dir: string;
+  /** Set on a rename: the path this file came from. */
+  previousPath?: string;
 }
 
 export interface GitMergeInProgress {
@@ -306,6 +310,8 @@ export interface GetGitDiffOptions {
   path: string;
   staged?: boolean;
   contextLines?: number;
+  /** A rename's source path. */
+  previousPath?: string;
 }
 
 export interface GetGitDiffsOptions {
@@ -334,6 +340,8 @@ export interface GetGitRangeDiffOptions {
   path?: string;
   contextLines?: number;
   includeWorkingTree?: boolean;
+  /** A rename's source path. */
+  previousPath?: string;
 }
 
 export interface GetGitRangeFilesOptions {
@@ -346,6 +354,8 @@ export interface GetGitRangeFilesOptions {
 export interface GitRangeFileEntry {
   path: string;
   status: string;
+  /** A rename's source path. */
+  previousPath?: string;
   /**
    * Working-tree listings only: changes exactly when this file's patch can
    * change (merge base moved, or the file was written). Absent elsewhere.
@@ -369,6 +379,8 @@ export interface GitFileDiffResponse {
 export interface GetGitFileDiffOptions {
   path: string;
   staged?: boolean;
+  /** A rename's source path. */
+  previousPath?: string;
 }
 
 export interface GitBranchDetails {
@@ -715,6 +727,7 @@ export type GitNetworkOperationErrorCode =
   | 'STALE_BINDING'
   | 'STALE_CONFIG'
   | 'REMOTE_CHANGED'
+  | 'REMOTE_URL_USERINFO'
   | 'AUTHENTICATION_REQUIRED'
   | 'DESTINATION_SELECTION_REQUIRED'
   | 'CONTRIBUTOR_MANAGED_TRANSPORT_REQUIRED'
@@ -727,6 +740,8 @@ export type GitNetworkOperationErrorCode =
   | 'RUNTIME_UNSUPPORTED'
   | 'GIT_LFS_CLIENT_MISSING'
   | 'CHECKOUT_TOO_LARGE'
+  | 'PATH_LENGTH_LIMIT'
+  | 'BRANCH_NAME_CONFLICT'
   | 'UNKNOWN';
 
 export interface GitNetworkOperationError<Code extends GitNetworkOperationErrorCode = GitNetworkOperationErrorCode> {
@@ -1023,6 +1038,12 @@ export interface CreateGitWorktreePayload {
   startRef?: string;
   /** Additional startup script to run after project startup script. */
   startCommand?: string;
+  /**
+   * The project's own command that creates the worktree in place of
+   * `git worktree add`, given `$WORKTREE_PATH` and `$WORKTREE_BRANCH`. The
+   * request then waits for it, even with `returnAfterDirectoryCreated`.
+   */
+  createCommand?: string;
   /** Configure upstream tracking for the created/attached local branch. */
   setUpstream?: boolean;
   upstreamRemote?: string;
@@ -1079,6 +1100,15 @@ export interface GitCheckoutTrustInspection {
 export interface RemoveGitWorktreePayload {
   directory: string;
   deleteLocalBranch?: boolean;
+  /** Runs inside the worktree before anything is removed; a failure keeps the worktree. */
+  teardownCommand?: string;
+}
+
+/** Runs a worktree's teardown commands without removing it. */
+export interface TeardownGitWorktreePayload {
+  /** The worktree. */
+  directory: string;
+  teardownCommand: string;
 }
 
 /** Private ref (`refs/openchamber/runs/<group>/<session>`) holding a worktree snapshot. */
@@ -1179,6 +1209,8 @@ interface GitWorktreeAPI {
   preview?(directory: string, payload: CreateGitWorktreePayload): Promise<GitWorktreeCreateResult>;
   create?(directory: string, payload: CreateGitWorktreePayload): Promise<GitWorktreeCreateResult>;
   remove?(directory: string, payload: RemoveGitWorktreePayload): Promise<{ success: boolean }>;
+  /** `directory` is the project; runs the worktree's teardown and keeps it. */
+  teardown?(directory: string, payload: TeardownGitWorktreePayload): Promise<{ success: boolean }>;
   /** Sets the task title of the worktree at `directory` as the user's; an empty title clears it. */
   setTitle?(directory: string, title: string, by?: 'user' | 'agent'): Promise<GitWorktreeTitleResult>;
   /** Pins or unpins the task of the worktree at `directory`. */
@@ -1382,6 +1414,7 @@ export interface FileSearchQuery {
   maxResults?: number;
   includeHidden?: boolean;
   respectGitignore?: boolean;
+  signal?: AbortSignal;
 }
 
 export interface FileSearchResult {
@@ -1909,6 +1942,22 @@ export class SourceControlInstanceOtherProviderError extends Error {
   }
 }
 
+/**
+ * Saving an instance's aliases refused one: `invalid` when it is not an HTTPS
+ * address, `taken` when it already is (or aliases) another instance's.
+ */
+export class SourceControlInstanceAliasError extends Error {
+  readonly reason: 'invalid' | 'taken';
+  readonly alias: string;
+
+  constructor(message: string, reason: 'invalid' | 'taken', alias: string) {
+    super(message);
+    this.name = 'SourceControlInstanceAliasError';
+    this.reason = reason;
+    this.alias = alias;
+  }
+}
+
 export interface SourceControlAPI {
   /**
    * The providers the connected server serves, ordered. An authoritative
@@ -1932,6 +1981,12 @@ export interface SourceControlAPI {
   authSetToken(identity: SourceControlIdentity, token: string, options?: { username?: string }): Promise<SourceControlAuthStatus>;
   /** Stores the instance's separate SSH address, or removes it with null. Providers without one answer unsupported. */
   authSetSshUrl(identity: SourceControlIdentity, sshUrl: string | null): Promise<{ sshUrl: string | null }>;
+  /**
+   * Replaces the other web addresses of an instance the user added; an empty
+   * list removes them. Answers them as stored, in the instance's spelling.
+   * Throws `SourceControlInstanceAliasError` for an address it refuses.
+   */
+  setInstanceAliases(identity: SourceControlIdentity, aliases: string[]): Promise<{ aliases: string[] }>;
   authDisconnect(identity: SourceControlIdentity, accountId: string): Promise<{ removed: boolean }>;
   authActivate(identity: SourceControlIdentity, accountId: string): Promise<SourceControlAuthStatus>;
   authSetCliDisabled(identity: SourceControlIdentity, disabled: boolean): Promise<{ disabled: boolean }>;
@@ -1945,6 +2000,7 @@ export interface SourceControlAPI {
   changeRequestUpdate(payload: UpdateChangeRequestInput): Promise<SourceControlMutationReceipt<SourceControlEmptyMutationResult>>;
   changeRequestMerge(payload: MergeChangeRequestInput): Promise<SourceControlMutationReceipt<SourceControlMergeMutationResult>>;
   changeRequestReady(payload: ReadyChangeRequestInput): Promise<SourceControlMutationReceipt<SourceControlReadyMutationResult>>;
+  changeRequestDraft(payload: DraftChangeRequestInput): Promise<SourceControlMutationReceipt<SourceControlDraftMutationResult>>;
   changeRequestComment(payload: CommentInput): Promise<SourceControlMutationReceipt<SourceControlEmptyMutationResult>>;
   /** Opens a thread on a change request: a comment that waits to be resolved (GitLab). */
   changeRequestStartThread(payload: CommentInput): Promise<SourceControlMutationReceipt<SourceControlEmptyMutationResult>>;

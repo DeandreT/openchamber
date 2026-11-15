@@ -1,4 +1,5 @@
 import React from 'react';
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useI18n } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { DockedPanelSurfaceContext } from '@/hooks/usePageColors';
@@ -209,9 +210,9 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
         // so the settings button stays discoverable — going transparent made the
         // only recovery path unreachable.
         'motion-reduce:transition-none',
-        // Beside the chat: the layout panels' ring (`oc-panel-edge`, shared
-        // with the context panel card). Over the chat it is a dropdown and
-        // takes the dropdown's full edge (`data-edge-floating`).
+        // Beside the chat: the layout panels' hairline ring (`oc-panel-edge`,
+        // shared with the context panel card). Over the chat it is a dropdown
+        // and takes the dropdown's full edge (`data-edge-floating`).
         'oc-panel-edge rounded-xl',
         // Takes the docked panels' lifted page colour (design-system.css).
         !overlay && 'bg-background',
@@ -229,6 +230,8 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
         // unblurred, for the whole fade and frosted only at the end. The glass
         // layer fades itself; the edge fades with it.
         width: WORK_STATUS_PANEL_WIDTH,
+        // The overlay can sit in a VS Code sidebar narrower than the card.
+        maxWidth: overlay ? 'calc(100% - 1.5rem)' : undefined,
         opacity: overlay || interactive ? 1 : 0,
         transform: overlay ? (visible ? 'translateY(0) scale(1)' : 'translateY(-6px) scale(0.98)') : undefined,
         // The overlay sits at the chat's end corner: top right, or top left in RTL.
@@ -256,14 +259,23 @@ export const WorkStatusPanel: React.FC<Props> = ({ sessionId, directory, visible
       >
       {/* Overlaid rather than placed in flow: the panel has no header of its
           own, and giving it one would cost a row of height on every session. */}
-      <button
-        type="button"
-        aria-label={t('chat.workStatus.sections.open')}
-        onClick={() => setSectionsDialogOpen(true)}
-        className="absolute inset-e-2 top-1.5 z-10 rounded p-0.5 text-muted-foreground transition-colors hover:text-foreground"
-      >
-        <Icon name="equalizer-2" className="size-4" />
-      </button>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <button
+            type="button"
+            aria-label={t('chat.workStatus.sections.open')}
+            onClick={() => setSectionsDialogOpen(true)}
+            // Centred on the first heading's line (the card's 8px padding plus
+            // half the 24px heading), at the rows' 13px icon size.
+            className="absolute inset-e-2 top-2 z-10 inline-flex h-6 items-center rounded px-1 text-muted-foreground transition-colors hover:text-foreground"
+          >
+            {/* Acts on the card itself (which sections show): the glyph of every
+                control that configures what a list shows, as on the rail. */}
+            <Icon name="list-settings" className="size-[13px]" />
+          </button>
+        </TooltipTrigger>
+        <TooltipContent side="bottom" sideOffset={6}>{t('chat.workStatus.sections.open')}</TooltipContent>
+      </Tooltip>
 
       {contentMounted ? (
       <WorkStatusPresenceProvider onChange={setRenderedSections}>

@@ -47,7 +47,7 @@ export function buildChatInputHistorySubmissions({
 
 function materializeHistoryAttachment(attachment: InputHistoryAttachment, occurrence: number): AttachedFile | null {
   if (attachment.source === 'file-url') {
-    if (!attachment.reference || attachment.reference.startsWith('data:')) return null;
+    if (!attachment.reference || (attachment.reference.startsWith('data:') && !attachment.path)) return null;
     if (attachment.fileReference) {
       return materializeFileReference(attachment.fileReference, `history-${occurrence}-${attachment.key}`, attachment.mimeType);
     }
@@ -59,7 +59,8 @@ function materializeHistoryAttachment(attachment: InputHistoryAttachment, occurr
       filename: attachment.filename,
       size: attachment.size,
       source: 'local',
-      serverPath: attachment.reference,
+      serverPath: attachment.path ?? attachment.reference,
+      agentPath: attachment.path,
     };
   }
 
