@@ -102,6 +102,22 @@ pub(crate) struct ComposerAttachmentInput {
 }
 
 impl ComposerAttachmentInput {
+    /// A target change carries the citation anchors with the complete draft.
+    /// A pending OS picker is invalidated because its capture names the old owner.
+    pub(crate) fn retarget(&mut self, from: &DraftKey, to: &DraftKey, prefix: usize) {
+        let revision = self.revisions.entry(from.clone()).or_default();
+        *revision = revision.wrapping_add(1);
+        if self.picker.as_ref().is_some_and(|(owner, _)| owner == from) {
+            self.picker = None;
+        }
+        for group in &mut self.citations {
+            if &group.owner == from {
+                group.owner = to.clone();
+                group.start = group.start.saturating_add(prefix);
+            }
+        }
+    }
+
     pub(crate) fn cancel(&mut self, owner: &DraftKey) {
         let revision = self.revisions.entry(owner.clone()).or_default();
         *revision = revision.wrapping_add(1);

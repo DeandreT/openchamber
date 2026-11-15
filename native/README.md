@@ -12,6 +12,7 @@ require separate runtime and release checks before support is claimed.
 | `crates/core` (`openchamber-native-core`) | Domain records, sidebar membership and rows, transcripts, drafts, scroll memory and synthetic workloads. Standard library only. See its [DOCUMENTATION.md](crates/core/DOCUMENTATION.md). |
 | `crates/transport` (`openchamber-native-transport`) | The connection to an OpenChamber server: endpoint, identity, authentication, requests, wire parsing and the global event stream. See its [DOCUMENTATION.md](crates/transport/DOCUMENTATION.md). |
 | `crates/desktop` (`openchamber-native-desktop`) | The GPUI Kit window, views, theme, locale and icon resources, diagnostics, the server connection and application lifetime. See its [DOCUMENTATION.md](crates/desktop/DOCUMENTATION.md). |
+| `crates/windows-process` (`openchamber-windows-process`) | Windows-only suspended process creation, exact kernel identity, private job ownership and inherited pipes. The audited Win32 boundary is isolated from the unsafe-free application crates. See its [DOCUMENTATION.md](crates/windows-process/DOCUMENTATION.md). |
 
 ## Toolchain
 
@@ -129,12 +130,17 @@ The pending-send row checks the original message ID before retrying. Retries
 reuse that ID and never run automatically. Normal window close drains pending
 saves; a dispatched prompt is recorded durably before network I/O begins.
 
-New-session text submission uses the selected registered project's root directory.
+New-session submission uses Chat's prepared dated directory or the selected
+registered project's directory. Chat preparation starts with committed text,
+attachment intake or MCP activation and finishes before execution-bound reads.
+Its model configuration uses the managed root while Files and terminal follow
+the prepared directory once available. A target change carries the whole draft;
+conflicting metadata retains both originals and keeps the current target.
 The client saves one session ID before creation, verifies its returned location,
 then durably binds the first message before sending. Check status never submits
 the saved message. Retry same message uses the original identities and captured
-configuration. An observed deletion never triggers recreation. Journal version 8
-reads versions 1 through 7 and retains pending queue operations with compact spool
+configuration. An observed deletion never triggers recreation. Journal version 9
+reads versions 1 through 8 and retains pending queue operations with compact spool
 references. Hydration never replays them automatically. Malformed or future
 formats remain untouched.
 

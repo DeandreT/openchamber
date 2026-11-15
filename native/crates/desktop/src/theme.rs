@@ -128,6 +128,7 @@ pub struct Palette {
     pub link: Hsla,
     pub inline_code: Hsla,
     pub inline_code_background: Hsla,
+    pub markdown_bold: Hsla,
     pub syntax_background: Hsla,
     pub syntax_foreground: Hsla,
     /// `syntax.base.comment`, the terminal's bright black.
@@ -167,9 +168,161 @@ pub struct Palette {
 impl Global for Palette {}
 
 /// A built-in theme's canonical picker label and ID.
+#[derive(Clone)]
 pub(crate) struct ThemeOption {
     pub(crate) id: String,
     pub(crate) name: String,
+    pub(crate) full_name: String,
+    pub(crate) palette: Palette,
+}
+
+/// Resolves a host-owned definition before it can enter the active library.
+pub(crate) fn from_definition(definition: &serde_json::Value) -> Result<ThemeOption, String> {
+    let resolved =
+        crate::theme_import::resolve_theme(definition).map_err(|error| error.code().to_owned())?;
+    let mut colors = resolved.colors;
+    for (name, fallback, alpha) in [
+        ("chat.background", "surface.background", 1.0),
+        ("chat.divider", "interactive.border", 1.0),
+        ("chat.userMessageBackground", "surface.elevated", 1.0),
+        ("markdown.link", "primary.base", 1.0),
+        ("markdown.inlineCode", "syntax.base.string", 1.0),
+        ("markdown.inlineCodeBackground", "chat.background", 1.0),
+        ("markdown.bold", "surface.foreground", 1.0),
+        ("tools.border", "interactive.border", 0.3),
+        ("tools.icon", "surface.mutedForeground", 1.0),
+        ("tools.title", "surface.foreground", 1.0),
+        ("tools.description", "surface.mutedForeground", 0.6),
+    ] {
+        if !colors.contains_key(name) {
+            let value = colors.get(fallback).ok_or("invalid")?.clone();
+            let value = if alpha == 1.0 {
+                value
+            } else {
+                crate::theme_import::css_opacity(&value, alpha)
+            };
+            colors.insert(name.into(), value);
+        }
+    }
+    let dark = resolved.variant == "dark";
+    let foreground = crate::theme_import::css_color_context(
+        colors.get("surface.foreground").ok_or("invalid")?,
+        dark,
+    )
+    .map_err(|_| "unsupported")?;
+    let mut painted = HashMap::new();
+    for (token, value) in &mut colors {
+        let rgba = crate::theme_import::resolve_css_color(value, dark, Some(foreground))
+            .map_err(|_| "unsupported")?;
+        painted.insert(
+            token.clone(),
+            Hsla::from(Rgba {
+                r: rgba[0],
+                g: rgba[1],
+                b: rgba[2],
+                a: rgba[3],
+            }),
+        );
+        // Kit's syntax-theme deserializer consumes hex. Main UI paint retains
+        // floating channels in `painted`; conversion never rewrites the source.
+        *value = format!(
+            "#{:02x}{:02x}{:02x}{:02x}",
+            (rgba[0] * 255.0).round() as u8,
+            (rgba[1] * 255.0).round() as u8,
+            (rgba[2] * 255.0).round() as u8,
+            (rgba[3] * 255.0).round() as u8
+        );
+    }
+    // External definitions never reach the generated-resource assertions below.
+    for token in [
+        "surface.background",
+        "surface.foreground",
+        "surface.muted",
+        "surface.mutedForeground",
+        "surface.elevated",
+        "surface.elevatedForeground",
+        "surface.subtle",
+        "interactive.border",
+        "interactive.hover",
+        "interactive.active",
+        "interactive.selection",
+        "readable.selectionForeground",
+        "interactive.focusRing",
+        "primary.base",
+        "primary.foreground",
+        "primary.hover",
+        "chat.background",
+        "chat.divider",
+        "chat.userMessageBackground",
+        "markdown.link",
+        "markdown.inlineCode",
+        "markdown.inlineCodeBackground",
+        "markdown.bold",
+        "syntax.base.background",
+        "syntax.base.foreground",
+        "syntax.base.comment",
+        "readable.status.error",
+        "readable.status.warning",
+        "readable.status.success",
+        "readable.status.info",
+        "status.error",
+        "status.errorForeground",
+        "status.success",
+        "status.warning",
+        "status.warningBackground",
+        "status.info",
+        "status.errorBackground",
+        "tools.border",
+        "tools.icon",
+        "tools.title",
+        "tools.description",
+        "pr.open",
+        "pr.draft",
+        "pr.blocked",
+        "pr.merged",
+        "pr.closed",
+        "interactive.cursor",
+        "syntax.base.keyword",
+        "syntax.base.type",
+        "syntax.base.function",
+        "syntax.base.number",
+        "syntax.base.string",
+        "syntax.base.operator",
+        "syntax.base.variable",
+    ] {
+        if !painted.contains_key(token) {
+            return Err("invalid".into());
+        }
+    }
+    let entry = ThemeEntry {
+        id: resolved.id,
+        name: resolved.name,
+        variant: resolved.variant,
+        colors,
+        agent_palette: resolved
+            .agent_palette
+            .into_iter()
+            .map(|role| PaletteRole {
+                index: role.index,
+                colorful: role.colorful,
+            })
+            .collect(),
+    };
+    let suffix = if entry.variant == "light" {
+        " Light"
+    } else {
+        " Dark"
+    };
+    Ok(ThemeOption {
+        id: entry.id.clone(),
+        full_name: entry.name.clone(),
+        name: entry
+            .name
+            .strip_suffix(suffix)
+            .unwrap_or(&entry.name)
+            .to_owned(),
+        palette: Palette::from_entry_colors(&entry, |token| painted[token]),
+    })
 }
 
 pub(crate) fn options(appearance: Appearance) -> Vec<ThemeOption> {
@@ -181,9 +334,22 @@ pub(crate) fn options(appearance: Appearance) -> Vec<ThemeOption> {
         .themes
         .into_iter()
         .filter(|entry| entry.variant == variant)
-        .map(|entry| ThemeOption {
-            id: entry.id,
-            name: entry.name,
+        .map(|entry| {
+            let suffix = if appearance == Appearance::Light {
+                " Light"
+            } else {
+                " Dark"
+            };
+            ThemeOption {
+                id: entry.id.clone(),
+                full_name: entry.name.clone(),
+                name: entry
+                    .name
+                    .strip_suffix(suffix)
+                    .unwrap_or(&entry.name)
+                    .to_owned(),
+                palette: Palette::from_entry(&entry),
+            }
         })
         .collect();
     options.sort_by(|a, b| a.name.cmp(&b.name));
@@ -205,6 +371,10 @@ impl Palette {
     pub fn by_id(id: &str) -> Option<Self> {
         let file = theme_file();
         let entry = file.themes.iter().find(|entry| entry.id == id)?;
+        Some(Self::from_entry(entry))
+    }
+
+    fn from_entry(entry: &ThemeEntry) -> Self {
         let color = |token: &str| -> Hsla {
             let value = entry
                 .colors
@@ -212,7 +382,11 @@ impl Palette {
                 .unwrap_or_else(|| panic!("generated theme {} lacks the {token} token", entry.id));
             parse_hex(value).unwrap_or_else(|| panic!("theme {} has a non-hex {token}", entry.id))
         };
-        Some(Self {
+        Self::from_entry_colors(entry, color)
+    }
+
+    fn from_entry_colors(entry: &ThemeEntry, color: impl Fn(&str) -> Hsla) -> Self {
+        Self {
             id: entry.id.clone(),
             appearance: if entry.variant == "dark" {
                 Appearance::Dark
@@ -242,6 +416,7 @@ impl Palette {
             link: color("markdown.link"),
             inline_code: color("markdown.inlineCode"),
             inline_code_background: color("markdown.inlineCodeBackground"),
+            markdown_bold: color("markdown.bold"),
             syntax_background: color("syntax.base.background"),
             syntax_foreground: color("syntax.base.foreground"),
             syntax_comment: color("syntax.base.comment"),
@@ -276,7 +451,7 @@ impl Palette {
                     colorful: role.colorful,
                 })
                 .collect(),
-        })
+        }
     }
 }
 
@@ -418,6 +593,30 @@ mod tests {
         assert!(parse_hex("#abc").is_some());
         assert!(parse_hex("red").is_none());
         assert!(parse_hex("#12345").is_none());
+    }
+
+    #[test]
+    fn imported_palette_current_color_keeps_missing_alpha_distinct_from_zero() {
+        let fixtures: serde_json::Value =
+            serde_json::from_str(include_str!("theme_import/fixtures.json")).expect("fixtures");
+        for (alpha, expected) in [
+            ("none", [150.0 / 255.0, 150.0 / 255.0, 75.0 / 255.0, 0.4]),
+            ("0", [100.0 / 255.0, 200.0 / 255.0, 100.0 / 255.0, 0.2]),
+        ] {
+            let mut definition = fixtures["definitions"][0]["definition"].clone();
+            definition["colors"]["surface"]["foreground"] =
+                serde_json::json!(format!("rgb(200 100 50 / {alpha})"));
+            definition["colors"]["interactive"]["border"] =
+                serde_json::json!("color-mix(in srgb, currentColor, rgb(100 200 100 / 0.4))");
+            let option = from_definition(&definition).expect("imported palette");
+            let actual = Rgba::from(option.palette.chat_divider);
+            for (channel, expected) in [actual.r, actual.g, actual.b, actual.a]
+                .into_iter()
+                .zip(expected)
+            {
+                assert!((channel - expected).abs() < 1e-6, "alpha={alpha}");
+            }
+        }
     }
 
     #[test]

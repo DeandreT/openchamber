@@ -113,6 +113,8 @@ impl From<&FixtureAgent> for AgentEntry {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct Defaults {
+    #[serde(default)]
+    catalog_loaded: bool,
     project_default_agent: Option<String>,
     project_default_model: Option<String>,
     project_default_variant: Option<String>,
@@ -133,6 +135,7 @@ struct Defaults {
 impl From<&Defaults> for SelectionDefaults {
     fn from(defaults: &Defaults) -> Self {
         Self {
+            catalog_loaded: defaults.catalog_loaded,
             project_default_agent: defaults.project_default_agent.clone(),
             project_default_model: defaults.project_default_model.clone(),
             project_default_variant: defaults.project_default_variant.clone(),

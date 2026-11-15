@@ -193,6 +193,7 @@ impl Render for Workspace {
             self.work_status_overlay = false;
         }
         self.ensure_send_catalog(cx);
+        self.sync_native_request_drafts(window, cx);
         self.sync_shortcut_bindings(cx);
         self.ensure_provider_logos(cx);
         self.ensure_project_readouts(cx);
@@ -249,6 +250,9 @@ impl Render for Workspace {
             work_status && (self.work_status_inline(window) || self.work_status_overlay),
             cx,
         );
+        if self.sidebar_open {
+            self.ensure_sidebar_search(window, cx);
+        }
         div()
             .id("workspace")
             .role(Role::Group)
@@ -296,7 +300,7 @@ impl Render for Workspace {
                     let directory = action.directory.clone();
                     window.dispatch_action(Box::new(gpui_kit::base::actions::Cancel), cx);
                     cx.defer_in(window, move |this, window, cx| {
-                        this.choose_draft_project(&directory, window, cx);
+                        this.move_draft_to(&directory, window, cx);
                     });
                 },
             ))
@@ -305,7 +309,7 @@ impl Render for Workspace {
             .bg(palette.background)
             .text_color(palette.foreground)
             .when(self.sidebar_open, |this| {
-                this.child(self.render_sidebar(&palette, direction, cx))
+                this.child(self.render_sidebar(&palette, direction, window, cx))
             })
             .child(
                 div()

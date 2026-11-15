@@ -741,6 +741,20 @@ impl Render for Settings {
 
 pub(crate) fn page_header(page: Page, cx: &App) -> gpui_kit::AnyElement {
     let strings = locale::strings(cx);
+    if page.named_by_sidebar() {
+        // Keep a heading in the accessibility tree without reserving a second
+        // visible title row. The sidebar already names these pages.
+        return div()
+            .id("settings-current-page")
+            .accessibility_id("settings-current-page")
+            .role(Role::Heading)
+            .aria_label(strings.get(page.title()))
+            .absolute()
+            .w(px(1.0))
+            .h(px(1.0))
+            .overflow_hidden()
+            .into_any_element();
+    }
     div()
         .mb(px(32.0))
         .when(

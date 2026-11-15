@@ -1,4 +1,4 @@
-//! Complete starter ownership while a read-only prompt-override request is pending.
+//! Complete starter ownership through prompt overrides and directory preparation.
 //!
 //! The composer and a capture are independent owners. Restart recovery restores
 //! captures to their original drafts and never resumes activation or creates a
@@ -11,10 +11,11 @@ use std::fmt;
 use openchamber_native_core::draft::{self, ContentConflict, Draft, DraftKey, DraftStore};
 use openchamber_native_core::ids::MessageId;
 use openchamber_native_core::permission_mode::PermissionMode;
-use openchamber_native_core::send_config::Selection;
+use openchamber_native_core::send_config::{ModelChoice, Selection};
 use openchamber_native_transport::prompt_parts::{PromptParts, SyntheticContext};
 
-/// Immutable source content and configuration captured before reading overrides.
+/// Source content and selection captured before preparation. An initially
+/// unprepared native provider binds its first execution model once it is ready.
 #[derive(Clone, PartialEq, Eq)]
 pub(crate) struct StarterCapture {
     /// Also the admission identity of the starter's instructions after rendering.
@@ -152,6 +153,25 @@ impl StarterCaptures {
 
     pub(crate) fn get(&self, id: &MessageId) -> Option<&StarterCapture> {
         self.entries.get(id)
+    }
+
+    /// Initial native preparation supplies an execution binding for the captured
+    /// provider. It cannot replace the activation's provider or agent choice.
+    pub(crate) fn bind_native_model(&mut self, id: &MessageId, model: ModelChoice) -> bool {
+        let Some(capture) = self.entries.get_mut(id) else {
+            return false;
+        };
+        if capture
+            .selection
+            .model
+            .as_ref()
+            .is_none_or(|original| original.provider_id != model.provider_id)
+            || model.variant.as_ref().is_none_or(String::is_empty)
+        {
+            return false;
+        }
+        capture.selection.model = Some(model);
+        true
     }
 
     pub(crate) fn discard_owner(&mut self, owner: &DraftKey) -> Vec<StarterCapture> {

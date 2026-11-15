@@ -28,6 +28,16 @@ Public author pages live in `packages/docs/content/docs/sdk.mdx`, `sdk/host.mdx`
 
 ## Invariants
 
+- The optional native-agent capability `prepareAfterSession` defaults to false.
+  True permits config-only draft preparation and requires the real session-first
+  workflow in `docs/rust-desktop/NATIVE_AGENT.md`; nullable draft execution remains
+  blocked. Optional `state.configComplete` defaults to false and is the sole
+  completeness authority for session-first validation and explicit removal of
+  captured config. The schema rejects non-boolean metadata, execution-bearing draft
+  states and session-first execution with incomplete config.
+
+- Native-agent protocol v1 is owned by `src/native-agent.ts` and `src/native-agent-schemas.ts`, independently of iframe guests and service processes. It carries opaque provider configuration, complete activation/revision-scoped snapshots, explicit permission ownership and validated answers through OpenCode RPC. Required nullable `state.execution` binds ordinary OpenCode provider/model/variant coordinates to a durable credential-free immutable plugin config snapshot; null blocks sending until persistence and catalog publication both succeed. Unknown execution snapshots fail closed. `fixtures/native-agent-v1.json` is shared with Rust and plugin consumers. The behavioral contract is `docs/rust-desktop/NATIVE_AGENT.md`; SDK validation never authorizes side effects, bypasses provider policy or proves live tool execution.
+
 Notification services can receive kind `pull-request` for a GitHub merge the user requested here. It carries no session identity. The fixed event title and repository reference use the ordinary notification text fields; enterprise mode strips the reference at the host boundary. Services that validate notification kinds with an older SDK must update that parser to accept this additive kind.
 
 - `scripts/bump-version.mjs` refreshes `bun.lock` after bumping package versions; include both in the release commit. Bun resolves `workspace:*` in published archives from lockfile versions, and a frozen install can succeed with stale versions. `scripts/bump-version.test.mjs` covers the bump, frozen install, and packed dependency versions together.
@@ -102,6 +112,10 @@ The maintainer asked for this order: an extension can already ship a provider's 
 ### Why an alias is another key and not a list under each logo
 
 The map already says everything a list would: two IDs with the same file are an alias, and the host checks each file once. A shape like `{ logo, providers: [...] }` reads better in a large icon pack, and it would add a second way to name a provider and more parsing, for a file name repeated a few times. The limit is 256 so a pack fits, with aliases counted as entries. The host fetches only the logos it draws, so a full map costs about 10 KB on the catalog row.
+
+### Why native agents use the OpenCode RPC transport
+
+OpenCode owns provider execution, credentials and session recovery. A generic RPC contract keeps those responsibilities in the plugin and lets every client validate the same wire data without a provider-specific service or direct service API client. Server identity remains with the captured transport so a plugin cannot choose the client's destination.
 
 ## Host hole
 

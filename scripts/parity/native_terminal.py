@@ -24,6 +24,7 @@ import json
 import os
 from pathlib import Path
 import select
+import shlex
 import socket
 import subprocess
 import threading
@@ -37,6 +38,7 @@ from native_adapter import NativeClient, accessibility_enabled, set_accessibilit
 from native_platform import binary_info, command, wait_for
 import runner
 import virtual_display
+from executables import require_executable
 
 UNICODE_SAMPLE = "héllo 日本語 \U0001f469‍\U0001f4bb é مرحبا ─│"
 
@@ -322,11 +324,13 @@ def qualify(args):
                                ("engines-order", "['xkb:us::eng', 'libpinyin']"), ("enable-by-default", "true")):
                 command(env, "gsettings", "set", "org.freedesktop.ibus.general", key, value)
             command(env, "gsettings", "set", "com.github.libpinyin.ibus-libpinyin.libpinyin", "lua-extension", "false")
-            start("ibus", ["ibus-daemon", "--xim", "--panel=disable", "--config=/usr/lib/ibus/ibus-dconf",
+            config = require_executable("ibus-dconf", "/usr/lib/ibus/ibus-dconf", "/usr/libexec/ibus-dconf")
+            engine = require_executable("ibus-engine-libpinyin", "/usr/lib/ibus-libpinyin/ibus-engine-libpinyin", "/usr/libexec/ibus-engine-libpinyin")
+            start("ibus", ["ibus-daemon", "--xim", "--panel=disable", f"--config={shlex.quote(str(config))}",
                            "--emoji-extension=disable", "--cache=none"], env)
             wait_for("IBus did not register libpinyin", lambda: "libpinyin" in command(env, "ibus", "list-engine"), timeout=90)
             env["IBUS_ADDRESS"] = command(env, "ibus", "address").strip()
-            start("libpinyin", ["/usr/lib/ibus-libpinyin/ibus-engine-libpinyin", "--ibus"], env)
+            start("libpinyin", [str(engine), "--ibus"], env)
 
             def set_engine(name):
                 call = ["gdbus", "call", "--address", env["IBUS_ADDRESS"], "--dest", "org.freedesktop.IBus",

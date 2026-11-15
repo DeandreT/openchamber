@@ -6,6 +6,18 @@ import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 import { extensionPowersI18n } from './extension-powers.i18n';
 export const settingsDict = {
+  'settings.sessions.auxiliary.noDirectory': '開啟專案或聊天後即可選擇這些模型。',
+  'settings.sessions.auxiliary.summary': '摘要模型',
+  'settings.sessions.auxiliary.title': '標題模型',
+  'settings.sessions.auxiliary.engineDefault': 'OpenCode 預設值',
+  'settings.sessions.auxiliary.info': '為 OpenCode 內建代理選擇一般文字模型。選擇 OpenCode 預設值會移除模型覆寫設定。',
+  'settings.sessions.auxiliary.privacy': 'OpenCode 可能會將對話內容傳送給此處選擇的供應商。供應商政策仍然適用。',
+  'settings.sessions.auxiliary.projectSource': '專案設定：{path}',
+  'settings.sessions.auxiliary.userSource': '使用者設定：{path}',
+  'settings.sessions.auxiliary.newSource': '明確選擇模型後會建立使用者層級的代理覆寫設定。',
+  'settings.sessions.auxiliary.loading': '正在讀取代理設定...',
+  'settings.sessions.auxiliary.saveFailed': '模型儲存失敗。請重新整理設定後再試。',
+  'settings.sessions.auxiliary.catalogFailed': '無法讀取模型或代理設定。已儲存的選擇會保留。請重試以重新整理。',
   'settings.openchamber.sessionRetention.field.archivedDescription': '保留期限從封存時開始計算。過期的工作階段會被刪除。',
   'settings.openchamber.sessionRetention.field.unarchivedArchiveDescription': '保留期限從工作階段的最後活動時間開始計算。過期的工作階段會被封存。',
   'settings.openchamber.sessionRetention.field.unarchivedDeleteDescription': '保留期限從工作階段的最後活動時間開始計算。過期的工作階段會被刪除。',

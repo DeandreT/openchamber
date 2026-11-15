@@ -317,7 +317,7 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
-        let directory = PathBuf::from("/tmp/opencode").join(format!(
+        let directory = std::env::temp_dir().join(format!(
             "native-host-profiles-{}-{nonce}",
             std::process::id()
         ));

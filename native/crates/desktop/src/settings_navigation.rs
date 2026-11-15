@@ -99,23 +99,41 @@ impl Page {
         }
     }
 
-    /// The header's description; split pages such as Commands, Magic Prompts
-    /// and Snippets have none.
+    /// These pages take their visible name from the Settings navigation.
+    pub(crate) fn named_by_sidebar(self) -> bool {
+        matches!(
+            self,
+            Self::General
+                | Self::Appearance
+                | Self::Chat
+                | Self::Notifications
+                | Self::Voice
+                | Self::Sessions
+                | Self::Shortcuts
+                | Self::Behavior
+        )
+    }
+
+    /// Descriptions belong only to pages with a visible header.
     pub(crate) fn description(self) -> Option<&'static str> {
         Some(match self {
-            Self::General => "settings.page.general.description",
-            Self::Appearance => "settings.page.appearance.description",
-            Self::Chat => "settings.page.chat.description",
-            Self::Notifications => "settings.page.notifications.description",
-            Self::Voice => "settings.page.voice.description",
             // A split page: its list stands in for a description.
             Self::Usage => "settings.usage.page.empty.selectProvider",
-            Self::Sessions => "settings.page.sessions.description",
-            Self::Shortcuts => "settings.page.shortcuts.description",
             Self::Hosts => "settings.remoteInstances.direct.description",
-            Self::Behavior => "settings.page.behavior.description",
             // About and Git have a title alone.
-            Self::About | Self::Git | Self::Commands | Self::MagicPrompts | Self::Snippets => {
+            Self::General
+            | Self::Appearance
+            | Self::Chat
+            | Self::Notifications
+            | Self::Voice
+            | Self::Sessions
+            | Self::Shortcuts
+            | Self::Behavior
+            | Self::About
+            | Self::Git
+            | Self::Commands
+            | Self::MagicPrompts
+            | Self::Snippets => {
                 return None;
             }
         })
@@ -292,6 +310,20 @@ pub(crate) const SEARCH_ITEMS: &[SearchItem] = &[
         title: "settings.openchamber.defaults.compaction.auto",
         description: Some("settings.openchamber.defaults.compaction.autoInfo"),
         keywords: "compaction compact auto automatic context limit summary overflow",
+    },
+    SearchItem {
+        id: "sessions.summary-model",
+        page: Page::Sessions,
+        title: "settings.sessions.auxiliary.summary",
+        description: Some("settings.sessions.auxiliary.info"),
+        keywords: "compaction summary summarize model provider text",
+    },
+    SearchItem {
+        id: "sessions.title-model",
+        page: Page::Sessions,
+        title: "settings.sessions.auxiliary.title",
+        description: Some("settings.sessions.auxiliary.info"),
+        keywords: "title naming model provider text",
     },
     SearchItem {
         id: "sessions.compaction-buffer",

@@ -452,7 +452,9 @@ impl Workspace {
             Command::OpenCommandPalette => self.toggle_command_palette(window, cx),
             Command::Quit => cx.quit(),
             Command::Close => self.request_close(window, cx),
-            Command::NewSession => self.show_new_session(window, cx),
+            Command::NewSession => {
+                self.open_new_session(crate::chat_draft::NewSession::FromSelected, window, cx)
+            }
             Command::ToggleRightSidebar => {
                 let surface = self.panels.open.unwrap_or(PanelSurface::Git);
                 self.toggle_panel(surface, cx);

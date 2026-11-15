@@ -157,6 +157,23 @@ impl Workspace {
                 cx,
             )
         });
+        let mode = self
+            .native_role_label(openchamber_native_core::native_agent::ConfigRole::Mode)
+            .map(|label| {
+                self.picker_control(
+                    PickerKind::NativeMode,
+                    PickerAppearance {
+                        label: label.into(),
+                        icon: "settings-3",
+                        color: palette.muted_foreground,
+                        label_color: palette.foreground,
+                        provider: None,
+                    },
+                    labels.agent,
+                    direction,
+                    cx,
+                )
+            });
         // The effort follows the model as its suffix, so the two sit closer
         // than the other controls: 4px between them and 12px before the
         // agent, as gap-x-1 and gap-x-3 place them. Each trigger's combobox
@@ -178,6 +195,7 @@ impl Workspace {
                     .child(model)
                     .children(effort),
             )
+            .children(mode)
             .children(agent)
     }
 

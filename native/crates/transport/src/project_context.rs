@@ -56,6 +56,7 @@ impl KnowledgeError {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TodoChange {
     Create { id: String, text: String },
+    Edit { id: String, text: String },
     Complete { id: String, completed: bool },
     Delete { id: String },
 }
@@ -276,6 +277,11 @@ impl ServerClient {
                 Method::PATCH,
                 self.context_url(project_id, &["todos", id]),
                 Some(json!({ "completed": completed })),
+            ),
+            TodoChange::Edit { id, text } => (
+                Method::PATCH,
+                self.context_url(project_id, &["todos", id]),
+                Some(json!({ "text": text })),
             ),
             TodoChange::Delete { id } => (
                 Method::DELETE,
@@ -526,6 +532,67 @@ fn plan_with_context(answer: &Value) -> Result<(Plan, Knowledge), KnowledgeError
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn todo_edits_patch_only_text_and_keep_missing_and_failed_outcomes_distinct() {
+        let (client, requests) =
+            crate::test_server::serve(Box::new(|request| match request.path.as_str() {
+                "/api/project-context/owner/todos/t1" => (
+                    200,
+                    json!({
+                        "todos": [{"id": "t1", "text": request.body["text"], "completed": true,
+                            "createdAt": 7, "planId": "p1", "dependsOn": ["t0"]}]
+                    }),
+                ),
+                "/api/project-context/owner/todos/gone" => (404, json!({"error": "missing"})),
+                _ => (500, json!({"error": "write failed"})),
+            }))
+            .await;
+        let edited = client
+            .change_todo(
+                "owner",
+                &TodoChange::Edit {
+                    id: "t1".into(),
+                    text: "Revised שלום".into(),
+                },
+            )
+            .await
+            .expect("edit succeeds")
+            .expect("todo exists");
+        assert_eq!(edited.todos[0].text, "Revised שלום");
+        assert!(edited.todos[0].completed);
+        assert_eq!(edited.todos[0].plan_id.as_deref(), Some("p1"));
+        assert_eq!(edited.todos[0].depends_on, ["t0"]);
+        assert!(
+            client
+                .change_todo(
+                    "owner",
+                    &TodoChange::Edit {
+                        id: "gone".into(),
+                        text: "Revised".into(),
+                    }
+                )
+                .await
+                .expect("missing is an outcome")
+                .is_none()
+        );
+        assert!(
+            client
+                .change_todo(
+                    "owner",
+                    &TodoChange::Edit {
+                        id: "failed".into(),
+                        text: "Revised".into(),
+                    }
+                )
+                .await
+                .is_err()
+        );
+        let requests = requests.lock().expect("requests");
+        assert_eq!(requests.len(), 3, "mutations are never retried");
+        assert_eq!(requests[0].method, "PATCH");
+        assert_eq!(requests[0].body, json!({"text": "Revised שלום"}));
+    }
 
     #[test]
     fn contexts_keep_valid_entries_and_drop_broken_badges() {

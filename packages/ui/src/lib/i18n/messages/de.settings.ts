@@ -6,6 +6,18 @@ import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 import { extensionPowersI18n } from './extension-powers.i18n';
 export const settingsDict = {
+  'settings.sessions.auxiliary.noDirectory': 'Öffne ein Projekt oder einen Chat, um diese Modelle auszuwählen.',
+  'settings.sessions.auxiliary.summary': 'Zusammenfassungsmodell',
+  'settings.sessions.auxiliary.title': 'Titelmodell',
+  'settings.sessions.auxiliary.engineDefault': 'OpenCode-Standard',
+  'settings.sessions.auxiliary.info': 'Wähle ein gewöhnliches Textmodell für den integrierten OpenCode-Agenten. OpenCode-Standard entfernt die Modellüberschreibung.',
+  'settings.sessions.auxiliary.privacy': 'OpenCode kann Gesprächsinhalte an den hier gewählten Anbieter senden. Anbieterrichtlinien gelten weiterhin.',
+  'settings.sessions.auxiliary.projectSource': 'Projektkonfiguration: {path}',
+  'settings.sessions.auxiliary.userSource': 'Benutzerkonfiguration: {path}',
+  'settings.sessions.auxiliary.newSource': 'Eine ausdrückliche Auswahl erstellt eine benutzerspezifische Agentenüberschreibung.',
+  'settings.sessions.auxiliary.loading': 'Agentenkonfiguration wird gelesen...',
+  'settings.sessions.auxiliary.saveFailed': 'Modell konnte nicht gespeichert werden. Aktualisiere die Konfiguration vor einem erneuten Versuch.',
+  'settings.sessions.auxiliary.catalogFailed': 'Modelle oder Agentenkonfiguration konnten nicht gelesen werden. Gespeicherte Auswahlen bleiben erhalten. Versuche es zum Aktualisieren erneut.',
   'settings.openchamber.sessionRetention.field.archivedDescription': 'Zählt die Aufbewahrungsdauer ab der Archivierung. Abgelaufene Sitzungen werden gelöscht.',
   'settings.openchamber.sessionRetention.field.unarchivedArchiveDescription': 'Zählt die Aufbewahrungsdauer ab der letzten Aktivität der Sitzung. Abgelaufene Sitzungen werden archiviert.',
   'settings.openchamber.sessionRetention.field.unarchivedDeleteDescription': 'Zählt die Aufbewahrungsdauer ab der letzten Aktivität der Sitzung. Abgelaufene Sitzungen werden gelöscht.',

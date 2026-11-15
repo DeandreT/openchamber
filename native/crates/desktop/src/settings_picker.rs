@@ -224,11 +224,7 @@ impl RenderOnce for Control {
         let hover = palette.hover;
         let direction = locale::strings(cx).direction();
         let aria = locale::strings(cx).get(self.field.aria());
-        let search = locale::strings(cx).get(if matches!(self.field, Field::Light | Field::Dark) {
-            "settings.openchamber.visual.field.searchThemes"
-        } else {
-            "settings.view.search.placeholder"
-        });
+        let search = locale::strings(cx).get("settings.view.search.placeholder");
         let empty = locale::strings(cx).get("commandPalette.empty.noResults");
         let state = self.state.clone();
         div()

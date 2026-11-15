@@ -23,12 +23,13 @@ import traceback
 
 from native_interactions import Interrupts, process_identity
 import virtual_display
+from executables import executable_path
 
 
-BACKEND = Path('/usr/lib/xdg-desktop-portal-gtk')
-FRONTEND = Path('/usr/lib/xdg-desktop-portal')
-DOCUMENTS = Path('/usr/lib/xdg-document-portal')
-PERMISSIONS = Path('/usr/lib/xdg-permission-store')
+BACKEND = executable_path('xdg-desktop-portal-gtk', '/usr/lib/xdg-desktop-portal-gtk', '/usr/libexec/xdg-desktop-portal-gtk')
+FRONTEND = executable_path('xdg-desktop-portal', '/usr/lib/xdg-desktop-portal', '/usr/libexec/xdg-desktop-portal')
+DOCUMENTS = executable_path('xdg-document-portal', '/usr/lib/xdg-document-portal', '/usr/libexec/xdg-document-portal')
+PERMISSIONS = executable_path('xdg-permission-store', '/usr/lib/xdg-permission-store', '/usr/libexec/xdg-permission-store')
 BUSCTL = Path('/usr/bin/busctl')
 BACKEND_NAME = 'org.freedesktop.impl.portal.desktop.gtk'
 FRONTEND_NAME = 'org.freedesktop.portal.Desktop'

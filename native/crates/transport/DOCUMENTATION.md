@@ -25,6 +25,7 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `request.rs` | The private authenticated request builder, preserving reqwest serialization and publishing a content-free signal on HTTP 401. |
 | `client.rs` | `ServerClient`: identity probe, password login, session pages, message pages, whole messages, running status, settings reads and writes (including the whole `shortcutOverrides` map), Chats roots, projects and worktrees. |
 | `catalog.rs` | Routing readiness (Auto and the safety net) and the composer's catalogs in one directory: agents, the flat model catalog with OpenCode's default model, folded config defaults, the skill count and the connected MCP count. |
+| `native_agent.rs` | Strict SDK native-agent v1 schema parsing and contextual scope checks; explicit provider-settings marker discovery retained in `ModelCatalog.native_agents`; authenticated OpenCode RPC bound to one captured client and exact scope; typed native events with independently checked RPC namespace and location. |
 | `mcp.rs` | One directory's MCP servers with their connection status (`GET /api/mcp`), OpenCode's connect and disconnect (`POST /api/experimental/mcp/:server/connect`, `/disconnect`), and the on/off switch, which first writes `disabled` into the config file that defines the server (`GET /api/config/mcp`, `PATCH /api/config/mcp/:name`) and stops at the first failed step. |
 | `workflows.rs` | The workflow runs a session proposed (`GET /api/openchamber/workflows?sessionId=`) and the user's approve, decline, stop and resume (`POST /api/openchamber/workflows/:runId/:action`), whose refusal keeps the server's reason. `control_stream.rs` decodes the run and removal events with the same summary decoder; a list with one unreadable run is a failed read. |
 | `project.rs` | A directory's Git status (`GET /api/git/status`) and a project's configured actions (`GET /api/projects/:projectId/config`, the path-derived ID). |
@@ -51,6 +52,7 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `behavior.rs` | Settings → Behavior: the global `AGENTS.md` (`/api/behavior/agents-md`), whose write sends the content last read and turns the server's 409 into `AgentsMdError::Conflict`, and the response-style fields of the settings document. |
 | `snippets.rs` | Settings → Snippets: list, create, update (rename and scope move), delete and preview through `/api/config/snippets`, with a taken name (409) as its own `SnippetError::NameTaken`, and the name rules of `lib/snippetNames.ts`. |
 | `opencode_config.rs` | OpenCode's effective config (`GET /api/config`, documents folded like `mergeConfigDocuments`) and the global writes Settings makes: compaction (`PUT /api/config/compaction`, one field per write) and OpenCode's warming switch (`PUT /api/config/warming`). |
+| `auxiliary_models.rs` | Source-owned summary/title model overrides through the existing agent config GET and PATCH, and configured ordinary text-model choices from OpenCode's directory-scoped model and provider envelopes. |
 | `public_asset.rs` | `PublicAssetClient`: public assets the web client loads from third-party hosts, such as models.dev's provider logos. |
 | `wire.rs` | Serde shapes of the fields the client reads. Private. |
 | `projection.rs` | Wire records to core records, mirroring `packages/ui/src/lib/opencode/projection.ts`. Private. |
@@ -66,13 +68,73 @@ in [`docs/rust-desktop/OPENCODE_ADAPTER.md`](../../../docs/rust-desktop/OPENCODE
 | `test_server.rs` | Test-only loopback server that answers through a route function and records each request, for the Settings transport modules. |
 | `tests/server.rs` | The transport against a scripted loopback HTTP and WebSocket server: login fields, bearer use, failure classes, redirects, paging, cancellation, resume and reset cursors, fragmented frames and the `ready` timeout. |
 | `tests/composer_catalog/` | The command list with each config read (a failed read keeps the listed command), snippets and the folder search against the scripted server. |
-| `tests/dictation.rs` | The dictation stream against a scripted loopback server: the bearer upgrade, chunk numbering with chunks buffered before the `ack`, the transcript, a start retried while the model downloads that sends every chunk again, a server failure, a cancel when the stream is dropped and a refused connection failing at finish. |
+| `tests/dictation.rs` | The dictation stream against a scripted loopback server: the bearer upgrade, chunk numbering with chunks buffered before the `ack`, the transcript, a start retried while the model downloads that sends every chunk again, a server failure, a cancel when the stream is dropped, and rejected and stalled upgrades retaining distinct failures at start and finish. |
 | `tests/terminal.rs` | The terminal socket and commands against scripted loopback servers: bearer upgrade, sequence handling, reconnect with snapshot replay, input under the frame limit, idle close, refused credentials, request fidelity and refusals. |
 
 `examples/probe.rs` exercises the crate against a running server and prints
 counts and identifiers only.
 
+### Why purpose configuration is independent of the send catalog
+
+The saved agent file remains authoritative when a provider is unavailable or a
+cold catalog is incomplete. Summary/title settings neither reconcile nor mutate
+the composer's model selection, and OpenCode owns their eventual execution and
+actual-session provider policy.
+
 ## Invariants
+
+- Purpose models retain their saved value independently of catalog availability.
+  Native-agent markers and packages cannot become ordinary text-model choices.
+  Each read and write uses the captured authenticated client and actual directory;
+  OpenChamber config routes carry the URI directory-encoding marker. A model-only
+  write rechecks source, scope, path and model, then submits the captured
+  `modelRevision` as `If-Match`. A missing precondition on an older server refuses
+  mutation while keeping reads usable. Null removes the override. Failed reads,
+  writes and conflicts stay errors; no mutation retries automatically.
+
+- Custom-theme changes arrive as `openchamber:themes-changed` on the authenticated
+  control stream without a required payload. Control-stream readiness also refreshes
+  the library because these notifications are not replayed.
+
+- Todo text edits PATCH only `text` on the captured project's named todo.
+  Completion, creation time, plan links and dependencies remain server-owned.
+  A missing todo returns `None`; failed writes remain errors and are never retried.
+
+- Managed Chat mkdir and cleanup use the captured client's authenticated
+  filesystem routes without a project directory header. Both require a strict
+  descendant of captured server-named roots. Cleanup treats an already missing
+  path as success; shared roots and their canonical aliases grant no authority.
+
+- Native-agent discovery uses only a strict
+  `provider.settings.openchamber.nativeAgent` v1 marker on an enabled provider.
+  Plain providers receive no probes. Native metadata stays separate from grouped
+  routing models so grouping cannot silently discard capability advertisement.
+- Native-agent RPC sends `{input: parameters}` to
+  `/api/rpc/openchamber.native-agent.<providerID>.v1/<method>` with the captured
+  bearer and percent-encoded actual directory header. Responses use `{output}`;
+  HTTP/RPC failures, malformed schemas and foreign request/scope identities fail
+  without an empty fallback or automatic mutation retry. Diagnostics omit raw
+  response content. JSON reads have an 8 MiB aggregate limit.
+- Native state includes nullable immutable `execution` routing. A non-null
+  binding must match the scope's provider; its variant is a credential-free
+  reference published by the plugin after persistence and catalog publication.
+   The native client never substitutes latest/default config for a missing token.
+- `capabilities.prepareAfterSession` is optional and defaults to false. Its true
+  null-session state is strictly config-only, with unprepared status, null execution,
+  empty requests and no pending submission. Invalid flag types fail the whole read.
+  Optional `configComplete` also defaults to false; session-first execution requires
+  true, while its null-session draft cannot claim complete SDK discovery.
+- Native events require both the inner SDK schema and the exact provider-owned
+  RPC event name and `location.directory`. A rejected event yields an explicit
+  invalid-domain event, preserving unrelated stream processing.
+- Tool execution provenance is projected from OpenCode's `tool.id` and explicit
+  `executed` field. History records set `live: false`; live called events establish
+  live execution. The executing provider is the assistant message's model,
+  independently of arbitrary input or metadata.
+  The stream consumer demotes `execution.live` before applying replayed tool
+  transitions, suppresses native progress through the inclusive `replay_through`
+  frame, and invalidates native owners on reconnect. The stateless frame decoder
+  cannot infer delivery provenance from an individual OpenCode event.
 
 - Attachment planning reads the captured server's `/api/info` and allocates an
   app-owned target without writing a file. The caller durably retains that target
@@ -121,6 +183,9 @@ counts and identifiers only.
   the grant in the path, reads the extension panels of `/api/guests` row by
   row, and posts answers to rendered pages. The client's credential goes only
   on these requests, never into an address a page reads.
+  Declining a rendered page posts `declined: true` with its captured session and
+  call IDs through that same authenticated answer route. Failed answers retain
+  their status and are not retried automatically.
 - `stat_file` asks with `optional=true`, so a missing file is
   `StatRead::Missing` and a failed stat is an error; the open-file poll needs
   that difference. `read_file` accepts only a `text/plain` body.
@@ -598,6 +663,14 @@ counts and identifiers only.
   while malformed entries are left out.
 
 ## Decisions
+
+### Why native-agent RPC has its own strict adapter
+
+The SDK owns a bounded, versioned plugin protocol layered inside OpenCode RPC.
+The installed pinned client sends `{input}` and unwraps `{output}`, while other
+OpenCode routes use different envelopes. Independent namespace, scope and
+location checks prevent one provider's response or event from controlling another
+owner. Native protocol diagnostics use allowlisted codes only.
 
 ### Why a command keeps its listing when its config read fails
 

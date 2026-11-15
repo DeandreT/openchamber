@@ -212,17 +212,36 @@ impl ServerClient {
         summary: &str,
         data: Value,
     ) -> Result<(), AnswerError> {
+        self.post_rendered_page_answer(json!({
+            "sessionId": session_id,
+            "callId": call_id,
+            "summary": summary,
+            "data": data,
+        }))
+        .await
+    }
+
+    /// Ends the page's wait without submitting an answer value.
+    pub async fn decline_rendered_page(
+        &self,
+        session_id: &str,
+        call_id: &str,
+    ) -> Result<(), AnswerError> {
+        self.post_rendered_page_answer(json!({
+            "sessionId": session_id,
+            "callId": call_id,
+            "declined": true,
+        }))
+        .await
+    }
+
+    async fn post_rendered_page_answer(&self, body: Value) -> Result<(), AnswerError> {
         let response = self
             .authorized(
                 Method::POST,
                 self.endpoint().url("api/openchamber/render/answer"),
             )
-            .json(&json!({
-                "sessionId": session_id,
-                "callId": call_id,
-                "summary": summary,
-                "data": data,
-            }))
+            .json(&body)
             .send()
             .await
             .map_err(TransportError::from_request)?;
@@ -249,6 +268,62 @@ mod tests {
     use super::*;
     use crate::credential::Credential;
     use crate::endpoint::Endpoint;
+
+    #[tokio::test]
+    async fn page_answers_and_declines_keep_their_exact_wire_shape() {
+        let (client, requests) = crate::test_server::serve(Box::new(|_| (200, json!({})))).await;
+        client
+            .answer_rendered_page("session-a", "call-a", "Picked A", json!({"pick":"a"}))
+            .await
+            .expect("answer");
+        client
+            .decline_rendered_page("session-b", "call-b")
+            .await
+            .expect("decline");
+        let requests = requests.lock().expect("requests");
+        assert_eq!(requests.len(), 2);
+        for request in requests.iter() {
+            assert_eq!(request.method, "POST");
+            assert_eq!(request.path, "/api/openchamber/render/answer");
+        }
+        assert_eq!(
+            requests[0].body,
+            json!({
+                "sessionId":"session-a", "callId":"call-a", "summary":"Picked A", "data":{"pick":"a"},
+            })
+        );
+        assert_eq!(
+            requests[1].body,
+            json!({
+                "sessionId":"session-b", "callId":"call-b", "declined":true,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn declined_page_failures_remain_errors_and_never_retry() {
+        for status in [401, 409, 500] {
+            let (client, requests) = crate::test_server::serve(Box::new(move |_| {
+                (status, json!({"error":"Synthetic page refusal"}))
+            }))
+            .await;
+            let error = client
+                .decline_rendered_page("session", "call")
+                .await
+                .expect_err("refused");
+            if status == 401 {
+                assert!(matches!(
+                    error,
+                    AnswerError::Transport(TransportError::AuthenticationRequired)
+                ));
+            } else {
+                assert!(
+                    matches!(error, AnswerError::Refused(ref message) if message == "Synthetic page refusal")
+                );
+            }
+            assert_eq!(requests.lock().expect("requests").len(), 1);
+        }
+    }
 
     fn client() -> ServerClient {
         ServerClient::new(

@@ -637,7 +637,7 @@ pub(crate) fn tool_part(tool: &wire::ToolItem) -> Part {
             error,
         ))
     };
-    let (status, output, elided, child, facts) = match &tool.state {
+    let (status, output, elided, child, mut facts) = match &tool.state {
         wire::ToolState::Streaming => (ToolStatus::Pending, None, None, None, Box::default()),
         wire::ToolState::Running { input, metadata } => (
             ToolStatus::Running,
@@ -686,6 +686,14 @@ pub(crate) fn tool_part(tool: &wire::ToolItem) -> Part {
             )
         }
     };
+    facts.execution =
+        tool.executed.map(
+            |executed| openchamber_native_core::tool_shells::ToolExecution {
+                call_id: tool.id.clone(),
+                provider_executed: executed,
+                live: false,
+            },
+        );
     // `projectToolPart`: a call runs from `ran` (else its creation) to its
     // completion (else its start); a streaming call has no time yet.
     let start = tool

@@ -256,6 +256,17 @@ pub(crate) struct Panels {
 }
 
 impl Panels {
+    #[cfg(test)]
+    pub(crate) fn retain_test_knowledge(
+        &mut self,
+        runtime: RuntimeId,
+        path: String,
+        view: Entity<KnowledgePanel>,
+        subscription: gpui_kit::Subscription,
+    ) {
+        self.notes.insert((runtime, path), (view, subscription));
+    }
+
     /// Every retained owner participates in the window's write barrier.
     pub(crate) fn all_knowledge_views(&self) -> Vec<Entity<KnowledgePanel>> {
         self.notes.values().map(|(view, _)| view.clone()).collect()
@@ -526,11 +537,13 @@ impl Workspace {
 
     /// The directory a panel surface shows (`pickEffectiveDirectory`): the
     /// selected session's, else the draft's project, else the active
-    /// project. The reference's Chats-root step is for a chat-target draft,
-    /// which native does not have: a draft here has a project or none.
+    /// project. A Chat uses its prepared directory, or its known root while
+    /// preparation is pending, with no project fallback.
     pub(crate) fn panel_directory(&self) -> Option<String> {
         if self.selected.is_some() {
             path::normalize_optional(self.selected_session()?.directory.as_deref())
+        } else if self.chat_draft_open() {
+            self.chat_execution_directory()
         } else {
             let project = self
                 .draft_projects

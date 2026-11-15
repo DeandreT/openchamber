@@ -412,6 +412,45 @@ fn bounded_metadata(input: &AttachmentIntake) -> bool {
 }
 
 impl Workspace {
+    /// Called only after accepted intake has stopped awaiting I/O. Failed local
+    /// inputs retain their bytes and retry action under the moved draft.
+    pub(crate) fn retarget_attachment_storage(&mut self, from: &DraftKey, to: &DraftKey) {
+        for row in self
+            .attachment_storage
+            .rows
+            .values_mut()
+            .filter(|row| &row.owner == from)
+        {
+            row.owner = to.clone();
+        }
+        for source in self
+            .attachment_storage
+            .sources
+            .values_mut()
+            .filter(|source| &source.owner == from)
+        {
+            source.owner = to.clone();
+            for member in &mut source.members {
+                member.hold.owner = to.clone();
+            }
+        }
+        for hold in self
+            .attachment_storage
+            .holds
+            .values_mut()
+            .filter(|hold| &hold.owner == from)
+        {
+            hold.owner = to.clone();
+        }
+        for hold in self
+            .attachment_preparations
+            .iter_mut()
+            .filter(|hold| &hold.owner == from)
+        {
+            hold.owner = to.clone();
+        }
+    }
+
     pub(crate) fn ingest_attachments(
         &mut self,
         owner: DraftKey,
@@ -720,8 +759,9 @@ impl Workspace {
                         }
                     }
                 }
-                let _ = this.update_in(cx, |this, _, cx| {
+                let _ = this.update_in(cx, |this, window, cx| {
                     this.attachment_storage.active = None;
+                    this.resume_chat_retarget(window, cx);
                     cx.notify();
                 });
             }

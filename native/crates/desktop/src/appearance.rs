@@ -3,12 +3,16 @@
 use gpui_kit::component::Theme;
 use gpui_kit::{App, Context, Global, Subscription, Task, Window, WindowAppearance, px};
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use tokio::sync::oneshot;
 
 use crate::appearance_storage::{AppearanceError, AppearanceSnapshot, AppearanceStore};
 use crate::fonts::{self, GenericFamilies};
 use crate::locale::{self, Strings};
 use crate::theme::{self, Appearance, Palette};
+
+#[path = "appearance_themes.rs"]
+mod themes;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "lowercase")]
@@ -29,6 +33,10 @@ pub(crate) struct AppearancePreferences {
     pub(crate) ui_font: String,
     pub(crate) mono_font: String,
     pub(crate) font_size: u16,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) runtime_themes: BTreeMap<String, themes::ThemePreferences>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) runtime_theme_pending: BTreeMap<String, themes::ThemeEdits>,
 }
 
 impl Default for AppearancePreferences {
@@ -41,6 +49,8 @@ impl Default for AppearancePreferences {
             ui_font: "system".to_owned(),
             mono_font: "system-mono".to_owned(),
             font_size: 100,
+            runtime_themes: BTreeMap::new(),
+            runtime_theme_pending: BTreeMap::new(),
         }
     }
 }
@@ -69,12 +79,34 @@ impl AppearancePreferences {
         if self.font_size != base.font_size {
             fresh.font_size = self.font_size;
         }
+        for (runtime, preferences) in &self.runtime_themes {
+            if base.runtime_themes.get(runtime) != Some(preferences) {
+                fresh
+                    .runtime_themes
+                    .insert(runtime.clone(), preferences.clone());
+            }
+        }
+        for (runtime, edits) in &self.runtime_theme_pending {
+            if base.runtime_theme_pending.get(runtime) != Some(edits) {
+                fresh
+                    .runtime_theme_pending
+                    .insert(runtime.clone(), edits.clone());
+            }
+        }
+        for runtime in base.runtime_theme_pending.keys() {
+            if !self.runtime_theme_pending.contains_key(runtime) {
+                fresh.runtime_theme_pending.remove(runtime);
+            }
+        }
         fresh
     }
 
     pub(crate) fn validate(&self) -> Result<(), AppearanceError> {
         let correct_variant = |id: &str, variant| {
-            Palette::by_id(id).is_some_and(|palette| palette.appearance == variant)
+            !id.trim().is_empty()
+                && id.len() <= 256
+                && !id.chars().any(char::is_control)
+                && Palette::by_id(id).is_none_or(|palette| palette.appearance == variant)
         };
         if !correct_variant(&self.light_theme_id, Appearance::Light)
             || !correct_variant(&self.dark_theme_id, Appearance::Dark)
@@ -82,6 +114,14 @@ impl AppearancePreferences {
             || !fonts::valid_ui_font(&self.ui_font)
             || !fonts::valid_mono_font(&self.mono_font)
             || !(50..=200).contains(&self.font_size)
+            || self
+                .runtime_themes
+                .iter()
+                .any(|(runtime, preferences)| runtime.is_empty() || !preferences.valid())
+            || self
+                .runtime_theme_pending
+                .keys()
+                .any(|runtime| !self.runtime_themes.contains_key(runtime))
         {
             return Err(AppearanceError::Invalid);
         }
@@ -145,6 +185,7 @@ pub(crate) fn root_font_size(cx: &App) -> f32 {
 }
 
 pub(crate) struct AppearanceState {
+    themes: themes::ThemeLibrary,
     preferences: AppearancePreferences,
     edit_base: AppearancePreferences,
     store: AppearanceStore,
@@ -179,6 +220,7 @@ impl AppearanceState {
             });
         preferences.initial_overrides();
         let state = Self {
+            themes: themes::ThemeLibrary::default(),
             edit_base: preferences.clone(),
             preferences,
             store,
@@ -237,8 +279,20 @@ impl AppearanceState {
         if self.closing {
             return Err(AppearanceError::Locked);
         }
+        let previous = themes::ThemePreferences::capture(&self.preferences);
+        self.apply_change(edit, cx)?;
+        self.publish_theme_preferences(previous, cx);
+        Ok(())
+    }
+
+    fn apply_change(
+        &mut self,
+        edit: impl FnOnce(&mut AppearancePreferences),
+        cx: &mut Context<Self>,
+    ) -> Result<(), AppearanceError> {
         let mut next = self.preferences.clone();
         edit(&mut next);
+        self.remember_theme_preferences(&mut next);
         next.validate()?;
         if next == self.preferences {
             return Ok(());
@@ -263,6 +317,13 @@ impl AppearanceState {
         id: &str,
         cx: &mut Context<Self>,
     ) -> Result<(), AppearanceError> {
+        if !self
+            .available_themes()
+            .iter()
+            .any(|theme| theme.id == id && theme.palette.appearance == Appearance::Light)
+        {
+            return Err(AppearanceError::Invalid);
+        }
         self.change(|p| p.light_theme_id = id.to_owned(), cx)
     }
     pub(crate) fn set_dark_theme(
@@ -270,6 +331,13 @@ impl AppearanceState {
         id: &str,
         cx: &mut Context<Self>,
     ) -> Result<(), AppearanceError> {
+        if !self
+            .available_themes()
+            .iter()
+            .any(|theme| theme.id == id && theme.palette.appearance == Appearance::Dark)
+        {
+            return Err(AppearanceError::Invalid);
+        }
         self.change(|p| p.dark_theme_id = id.to_owned(), cx)
     }
     pub(crate) fn set_locale(
@@ -302,9 +370,9 @@ impl AppearanceState {
     }
 
     fn apply(&self, cx: &mut Context<Self>) {
-        let palette = Palette::by_id(self.preferences.theme_id(self.system))
-            .expect("validated theme IDs resolve");
-        theme::apply(palette, cx);
+        if let Some(palette) = self.effective_palette() {
+            theme::apply(palette, cx);
+        }
         fonts::apply_preferences(
             &self.generic_fonts,
             &self.preferences.ui_font,
@@ -327,6 +395,7 @@ impl AppearanceState {
     /// Starts one ordered writer; subsequent edits coalesce behind its current write.
     pub(crate) fn save(&mut self, cx: &mut Context<Self>) {
         self.start_save(true, cx);
+        self.retry_theme_preferences(cx);
     }
 
     fn start_save(&mut self, recover_read: bool, cx: &mut Context<Self>) {
@@ -402,6 +471,7 @@ impl AppearanceState {
                 self.dirty = merged != fresh;
                 self.edit_base = fresh;
                 self.preferences = merged;
+                self.restore_runtime_theme_preferences();
                 self.baseline = Ok(snapshot);
                 self.apply(cx);
                 if self.dirty {
@@ -436,12 +506,23 @@ impl AppearanceState {
     pub(crate) fn take_quit_write(&mut self, cx: &Context<Self>) -> Option<Task<()>> {
         self.closing = true;
         self.task = None;
-        let pending = self.pending_io.take()?;
+        let theme_write = self
+            .themes
+            .writes
+            .take_quit_write(self.themes.network.take(), cx);
+        let pending = self.pending_io.take();
+        if pending.is_none() {
+            return theme_write;
+        }
         let store = self.store.clone();
         let preferences = self.preferences.clone();
         let edit_base = self.edit_base.clone();
         let dirty = self.dirty;
         Some(cx.background_executor().spawn(async move {
+            if let Some(theme_write) = theme_write {
+                theme_write.await;
+            }
+            let pending = pending.expect("pending appearance write");
             let (expected, next) = match pending.await {
                 WriteOutcome::Loaded(Ok(snapshot)) => {
                     let fresh = snapshot
@@ -483,14 +564,35 @@ impl AppearanceState {
         if self.error.is_none() {
             self.start_save(false, cx);
         }
-        self.task.take()
+        let theme_write = self.themes.writes.take_pending_write();
+        let local_write = self.task.take();
+        if theme_write.is_none() {
+            return local_write;
+        }
+        Some(cx.spawn(async move |this, cx| {
+            if let Some(theme_write) = theme_write {
+                let _ = theme_write.await;
+            }
+            if let Some(local_write) = local_write {
+                local_write.await;
+            }
+            // An accepted import may select its palette after the earlier
+            // local snapshot completed, while this close is waiting for it.
+            if let Ok(Some(write)) = this.update(cx, |this, _| this.task.take()) {
+                write.await;
+            }
+        }))
     }
 
     /// A failed save keeps the window and all live edits available for retry.
     pub(crate) fn finish_close(&mut self) -> bool {
-        let ready = !self.saving && !self.dirty;
+        let ready = !self.saving
+            && !self.dirty
+            && !self.themes.writes.is_pending()
+            && self.theme_close_ready();
         if !ready {
             self.closing = false;
+            self.themes.writes.cancel_close();
         }
         ready
     }
@@ -498,6 +600,7 @@ impl AppearanceState {
     /// Resumes appearance edits if a later host or draft-journal close barrier fails.
     pub(crate) fn cancel_close(&mut self) {
         self.closing = false;
+        self.themes.writes.cancel_close();
     }
 }
 
@@ -512,13 +615,13 @@ fn system_appearance(appearance: WindowAppearance) -> Appearance {
 mod tests {
     use super::*;
 
-    fn fixture() -> (std::path::PathBuf, AppearanceStore) {
+    pub(super) fn fixture() -> (std::path::PathBuf, AppearanceStore) {
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
-        let directory = std::path::PathBuf::from("/tmp/opencode")
-            .join(format!("appearance-owner-{}-{nonce}", std::process::id()));
+        let directory =
+            std::env::temp_dir().join(format!("appearance-owner-{}-{nonce}", std::process::id()));
         std::fs::create_dir_all(&directory).expect("owned fixture directory");
         let store = AppearanceStore::new(&directory);
         (directory, store)

@@ -6,6 +6,18 @@ import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 import { extensionPowersI18n } from './extension-powers.i18n';
 export const settingsDict = {
+  'settings.sessions.auxiliary.noDirectory': 'Відкрийте проєкт або чат, щоб вибрати ці моделі.',
+  'settings.sessions.auxiliary.summary': 'Модель підсумків',
+  'settings.sessions.auxiliary.title': 'Модель заголовків',
+  'settings.sessions.auxiliary.engineDefault': 'Типова модель OpenCode',
+  'settings.sessions.auxiliary.info': 'Виберіть звичайну текстову модель для вбудованого агента OpenCode. Типовий варіант OpenCode видаляє перевизначення моделі.',
+  'settings.sessions.auxiliary.privacy': 'OpenCode може надсилати вміст розмови вибраному тут постачальнику. Політики постачальників і далі діють.',
+  'settings.sessions.auxiliary.projectSource': 'Конфігурація проєкту: {path}',
+  'settings.sessions.auxiliary.userSource': 'Конфігурація користувача: {path}',
+  'settings.sessions.auxiliary.newSource': 'Явний вибір створює користувацьке перевизначення агента.',
+  'settings.sessions.auxiliary.loading': 'Читання конфігурації агента...',
+  'settings.sessions.auxiliary.saveFailed': 'Не вдалося зберегти модель. Оновіть конфігурацію перед повторною спробою.',
+  'settings.sessions.auxiliary.catalogFailed': 'Не вдалося прочитати моделі або конфігурацію агента. Збережені варіанти залишено. Повторіть спробу для оновлення.',
   'settings.openchamber.sessionRetention.field.archivedDescription': 'Період зберігання рахується від архівації. Сесії, строк яких минув, видаляються.',
   'settings.openchamber.sessionRetention.field.unarchivedArchiveDescription': 'Період зберігання рахується від останньої активності сесії. Сесії, строк яких минув, архівуються.',
   'settings.openchamber.sessionRetention.field.unarchivedDeleteDescription': 'Період зберігання рахується від останньої активності сесії. Сесії, строк яких минув, видаляються.',

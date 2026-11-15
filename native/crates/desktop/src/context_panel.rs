@@ -520,7 +520,7 @@ impl Workspace {
                 .justify_center()
                 .cursor_pointer()
                 .child(
-                    glyph("donut-chart-fill", RAIL_GLYPH, palette.muted_foreground)
+                    glyph("pie-chart", RAIL_GLYPH, palette.muted_foreground)
                         .group_hover("rail-context", move |style| style.text_color(foreground)),
                 ),
             cx,

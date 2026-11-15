@@ -634,8 +634,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
-        let directory = PathBuf::from("/tmp/opencode")
-            .join(format!("layout-test-{}-{nonce}", std::process::id()));
+        let directory =
+            std::env::temp_dir().join(format!("layout-test-{}-{nonce}", std::process::id()));
         let store = LayoutStore::new(&directory);
         assert_eq!(
             store.load(),

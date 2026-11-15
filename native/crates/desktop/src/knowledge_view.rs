@@ -5,11 +5,11 @@
 
 use chrono::{Datelike, Local, TimeZone as _, Timelike};
 use gpui_kit::component::WindowExt;
-use gpui_kit::component::input::{Input, Textarea};
+use gpui_kit::component::input::{Enter, Escape, Input, Textarea};
 use gpui_kit::{
-    AnyElement, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Render, Role,
-    SharedString, StatefulInteractiveElement, Styled, TestSupportExt, Window, div,
-    prelude::FluentBuilder, px, rems,
+    AnyElement, Context, EntityInputHandler, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, Render, Role, SharedString, StatefulInteractiveElement, Styled, TestSupportExt,
+    Window, div, prelude::FluentBuilder, px, rems,
 };
 use openchamber_native_core::knowledge::{self, Note, NoteSource, Plan, PlanSource, Section, Todo};
 use openchamber_native_core::message_time::{LocalDate, LocalDateTime};
@@ -688,10 +688,12 @@ impl KnowledgePanel {
         direction: Direction,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let expanded = self.expanded.contains(&todo.id);
+        let edit = self.todo_edit.as_ref().filter(|edit| edit.id == todo.id);
+        let editing = edit.is_some();
         let menu_open = self.todo_menu.as_deref() == Some(todo.id.as_str());
         let id = todo.id.clone();
-        let (check_id, expand_id, send_id, current_id, new_id, delete_id) = (
+        let (check_id, edit_id, send_id, current_id, new_id, delete_id, menu_edit_id) = (
+            id.clone(),
             id.clone(),
             id.clone(),
             id.clone(),
@@ -701,6 +703,109 @@ impl KnowledgePanel {
         );
         let sending = self.sending.as_deref() == Some(todo.id.as_str());
         let element_id = format!("knowledge-todo:{}", todo.id);
+        let edit_label = strings.format(
+            "rightSidebar.contextNotesTodo.todo.actions.editAria",
+            &[("text", &todo.text)],
+        );
+        let field = if let Some(edit) = edit {
+            let enter_input = edit.input.clone();
+            let escape_input = edit.input.clone();
+            let outside_input = edit.input.clone();
+            div()
+                .flex_1()
+                .min_w_0()
+                .capture_action(cx.listener(move |this: &mut Self, _: &Enter, window, cx| {
+                    cx.stop_propagation();
+                    this.finish_todo_edit(&enter_input, true, window, cx);
+                }))
+                .capture_action(cx.listener(move |this: &mut Self, _: &Escape, window, cx| {
+                    let composing = escape_input.update(cx, |input, cx| {
+                        input.marked_text_range(window, cx).is_some()
+                    });
+                    if !composing {
+                        cx.stop_propagation();
+                        this.finish_todo_edit(&escape_input, false, window, cx);
+                    }
+                }))
+                .on_action(|_: &Escape, _, cx| cx.stop_propagation())
+                .on_mouse_down_out(cx.listener(move |this: &mut Self, _, window, cx| {
+                    this.finish_todo_edit(&outside_input, true, window, cx);
+                }))
+                .child(
+                    Textarea::new(&edit.input)
+                        .disabled(self.closing)
+                        .appearance(false)
+                        .bordered(false)
+                        .text_size(rems(LABEL_SIZE))
+                        .accessibility_id(format!("knowledge-todo-editor:{}", todo.id))
+                        .aria_label(edit_label),
+                )
+                .into_any_element()
+        } else {
+            on_activate(
+                div()
+                    .id(SharedString::from(format!(
+                        "knowledge-todo-text:{}",
+                        todo.id
+                    )))
+                    .role(Role::Button)
+                    .accessibility_id(format!("knowledge-todo-text:{}", todo.id))
+                    .aria_label(edit_label)
+                    .flex_1()
+                    .min_w_0()
+                    .cursor_text()
+                    .child(
+                        text(
+                            todo.text.clone(),
+                            (LABEL_SIZE, LABEL_LINE),
+                            if todo.completed {
+                                palette.muted_foreground
+                            } else {
+                                palette.foreground
+                            },
+                            cx,
+                        )
+                        .when(todo.completed, |this| this.line_through())
+                        .truncate(),
+                    ),
+                cx,
+                move |this: &mut Self, window, cx| this.edit_todo(&edit_id, window, cx),
+            )
+            .test_support()
+            .into_any_element()
+        };
+        let mut menu = vec![option_row(
+            format!("knowledge-todo-edit:{}", todo.id),
+            strings.get("rightSidebar.contextNotesTodo.todo.menu.edit"),
+            false,
+            false,
+            palette,
+            direction,
+            cx,
+            move |this: &mut Self, window, cx| this.edit_todo(&menu_edit_id, window, cx),
+        )];
+        if todo.completed {
+            menu.push(option_row(
+                format!("knowledge-todo-clear-completed:{}", todo.id),
+                strings.get("rightSidebar.contextNotesTodo.todo.clearCompleted"),
+                false,
+                false,
+                palette,
+                direction,
+                cx,
+                |this: &mut Self, window, cx| this.clear_completed(window, cx),
+            ));
+        }
+        menu.push(option_row(
+            format!("knowledge-todo-delete:{}", todo.id),
+            strings.get("rightSidebar.contextNotesTodo.todo.menu.delete"),
+            false,
+            true,
+            palette,
+            direction,
+            cx,
+            move |this: &mut Self, window, cx| this.delete_todo(&delete_id, window, cx),
+        ));
         div()
             .id(SharedString::from(element_id.clone()))
             .role(Role::ListItem)
@@ -710,8 +815,8 @@ impl KnowledgePanel {
             .px(px(10.0))
             .py(px(6.0))
             .flex_row_from(direction)
-            .when(expanded, |this| this.items_start())
-            .when(!expanded, |this| this.items_center())
+            .when(editing, |this| this.items_start())
+            .when(!editing, |this| this.items_center())
             .gap(px(6.0))
             .child(
                 on_activate(
@@ -739,38 +844,7 @@ impl KnowledgePanel {
                 )
                 .test_support(),
             )
-            .child(
-                on_activate(
-                    div()
-                        .id(SharedString::from(format!("knowledge-todo-text:{}", todo.id)))
-                        .role(Role::Button)
-                        .accessibility_id(format!("knowledge-todo-text:{}", todo.id))
-                        .aria_label(strings.format(
-                            if expanded {
-                                "rightSidebar.contextNotesTodo.todo.actions.collapse"
-                            } else {
-                                "rightSidebar.contextNotesTodo.todo.actions.expand"
-                            },
-                            &[("text", &todo.text)],
-                        ))
-                        .flex_1()
-                        .min_w_0()
-                        .cursor_pointer()
-                        .child(
-                            text(
-                                todo.text.clone(),
-                                (LABEL_SIZE, LABEL_LINE),
-                                if todo.completed { palette.muted_foreground } else { palette.foreground },
-                                cx,
-                            )
-                            .when(todo.completed, |this| this.line_through())
-                            .when(!expanded, |this| this.truncate()),
-                        ),
-                    cx,
-                    move |this: &mut Self, _, cx| this.toggle_expanded(&expand_id, cx),
-                )
-                .test_support(),
-            )
+            .child(field)
             .child(
                 div()
                     .relative()
@@ -818,16 +892,7 @@ impl KnowledgePanel {
             )
             .child(self.row_menu(
                 todo.id.clone(),
-                vec![option_row(
-                    format!("knowledge-todo-delete:{}", todo.id),
-                    strings.get("rightSidebar.contextNotesTodo.todo.menu.delete"),
-                    false,
-                    true,
-                    palette,
-                    direction,
-                    cx,
-                    move |this: &mut Self, window, cx| this.delete_todo(&delete_id, window, cx),
-                )],
+                menu,
                 strings,
                 palette,
                 cx,
@@ -897,20 +962,6 @@ impl KnowledgePanel {
                 .children(list)
                 .into_any_element(),
         );
-        if todos.iter().any(|todo| todo.completed) {
-            rows.push(button(
-                "knowledge-todo-clear",
-                None,
-                Some(strings.get("rightSidebar.contextNotesTodo.todo.clearCompleted")),
-                strings.get("rightSidebar.contextNotesTodo.todo.clearCompleted"),
-                Variant::Ghost,
-                false,
-                palette,
-                direction,
-                cx,
-                |this: &mut Self, window, cx| this.clear_completed(window, cx),
-            ));
-        }
         rows
     }
 

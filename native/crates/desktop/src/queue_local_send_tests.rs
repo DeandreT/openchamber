@@ -2364,8 +2364,8 @@ mod durable {
     struct Profile(PathBuf);
     impl Profile {
         fn new() -> Self {
-            let path = PathBuf::from(format!(
-                "/tmp/opencode/ordinary-send-{}-{}",
+            let path = std::env::temp_dir().join(format!(
+                "ordinary-send-{}-{}",
                 std::process::id(),
                 SEQUENCE.fetch_add(1, Ordering::Relaxed)
             ));

@@ -1584,6 +1584,9 @@ impl Workspace {
             self.queue_persistence(cx);
         }
         self.autocomplete_after_edit(event, cx);
+        if self.chat_draft_open() && !event.text.to_string().trim().is_empty() {
+            self.prepare_chat_draft(window, cx);
+        }
         self.flush_citations(window, cx);
         self.resume_composer_close(window, cx);
         cx.notify();
@@ -1603,6 +1606,7 @@ impl Workspace {
         // A citation or its removal that waited for the composition.
         self.flush_citations(window, cx);
         self.resume_composer_close(window, cx);
+        self.resume_chat_retarget(window, cx);
         cx.notify();
     }
 

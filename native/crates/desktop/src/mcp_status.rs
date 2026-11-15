@@ -199,13 +199,16 @@ impl Workspace {
     /// the project the draft's first send will run in. `None` while neither
     /// is known, and then nothing is read or changed.
     pub(crate) fn mcp_directory(&self) -> Option<String> {
+        if self.selected.is_none() && self.chat_draft_open() {
+            return self.chat_prepared_directory();
+        }
         self.project_subject().map(|subject| subject.directory)
     }
 
     /// Reads the directory's status when the card's MCP section starts
     /// showing it, and wakes directories that went dormant. Called while
     /// rendering, so every way the directory or the card changes is covered.
-    pub(crate) fn ensure_mcp_status(&mut self, window: &Window, cx: &mut Context<Self>) {
+    pub(crate) fn ensure_mcp_status(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.mcp_status.dormant.is_empty() && window.is_window_active() {
             self.wake_dormant_mcp(cx);
         }
@@ -213,6 +216,13 @@ impl Workspace {
             && Layout::for_workspace(self, cx)
                 .visible_builtin_order()
                 .any(|id| id == "mcp");
+        if shown
+            && self.selected.is_none()
+            && self.chat_draft_open()
+            && self.chat_prepared_directory().is_none()
+        {
+            self.warm_chat_draft(window, cx);
+        }
         let attempt = self
             .connection
             .as_ref()

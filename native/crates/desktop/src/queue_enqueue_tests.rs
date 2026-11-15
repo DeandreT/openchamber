@@ -4543,8 +4543,8 @@ mod unpublished_chunk_recovery {
 
     #[test]
     fn explicit_retry_resumes_only_the_exact_committed_unpublished_chunk() {
-        let scratch = Scratch(PathBuf::from(format!(
-            "/tmp/opencode/enqueue-repair-{}-{}",
+        let scratch = Scratch(std::env::temp_dir().join(format!(
+            "enqueue-repair-{}-{}",
             std::process::id(),
             SEQUENCE.fetch_add(1, Ordering::Relaxed)
         )));

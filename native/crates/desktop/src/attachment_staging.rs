@@ -13,7 +13,7 @@
 use std::collections::VecDeque;
 
 use gpui_kit::{Context, Task, Window};
-use openchamber_native_core::draft::{DraftKey, DraftStore};
+use openchamber_native_core::draft::{Draft, DraftKey, DraftStore};
 use openchamber_native_core::draft_content::{DraftFile, DraftFileContent};
 use openchamber_native_core::ids::{AttachmentId, RuntimeId};
 use openchamber_native_transport::attachment::{AttachmentPlan, AttachmentUpload};
@@ -110,6 +110,12 @@ impl AttachmentStaging {
             || self.pending.iter().any(|request| &request.id == id)
     }
 
+    pub(crate) fn active_for(&self, owner: &DraftKey) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|job| &job.request.owner == owner)
+    }
+
     /// A captured Handle does not itself keep its original Tokio runtime alive.
     pub(crate) fn holds_runtime(&self, runtime: &RuntimeId) -> bool {
         self.active
@@ -184,6 +190,8 @@ impl Workspace {
     /// of the same immutable attachment must wait for that save to settle.
     pub(crate) fn prepared_attachment_ready(&self, owner: &DraftKey, id: &AttachmentId) -> bool {
         self.persistence_ready()
+            && (!matches!(owner.target(), openchamber_native_core::draft::DraftTarget::NewSession(id) if id.as_str() == openchamber_native_core::chat_draft::CHAT_DRAFT_ID)
+                || self.chat_creation_ready(owner))
             && !self.attachment_staging.stages_id(id)
             && owned_prepared(&self.drafts, &self.attachments, owner, id).is_some_and(
                 |(_, prepared)| {
@@ -207,6 +215,8 @@ impl Workspace {
         if self.close_in_progress() || !self.persistence_loaded() {
             return;
         }
+        let chat_waiting = matches!(owner.target(), openchamber_native_core::draft::DraftTarget::NewSession(id) if id.as_str() == openchamber_native_core::chat_draft::CHAT_DRAFT_ID)
+            && !self.chat_creation_ready(&owner);
         if !self
             .attachment_staging
             .enqueue(StagingRequest { owner, id })
@@ -214,7 +224,94 @@ impl Workspace {
             self.notify_mutation_failure(FAILED, window, cx);
             return;
         }
+        if chat_waiting {
+            self.prepare_chat_draft(window, cx);
+            return;
+        }
         self.start_attachment_staging(window, cx);
+    }
+
+    pub(crate) fn resume_chat_attachments(
+        &mut self,
+        owner: &DraftKey,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if matches!(owner.target(), openchamber_native_core::draft::DraftTarget::NewSession(id) if id.as_str() == openchamber_native_core::chat_draft::CHAT_DRAFT_ID)
+            && !self.chat_creation_ready(owner)
+        {
+            return;
+        }
+        self.start_attachment_staging(window, cx);
+    }
+
+    /// Uploads live in the server's temporary root. A quiescent owner change
+    /// retains their fixed URI and bytes and changes only the routing directory.
+    /// Captured sends keep their immutable descriptor until they settle.
+    pub(crate) fn retarget_draft_attachments(
+        &mut self,
+        from: &DraftKey,
+        to: &DraftKey,
+        draft: &Draft,
+    ) -> bool {
+        let ids: Vec<_> = draft
+            .content
+            .files
+            .iter()
+            .filter(|file| matches!(file.content, DraftFileContent::Prepared))
+            .map(|file| file.id.clone())
+            .collect();
+        let shared = |candidate: &Draft| {
+            candidate
+                .content
+                .files
+                .iter()
+                .any(|file| ids.contains(&file.id))
+        };
+        if self
+            .creations
+            .iter()
+            .any(|(_, attempt)| shared(&attempt.draft))
+            || self
+                .send_attempts
+                .iter()
+                .any(|(_, attempt)| shared(&attempt.draft))
+            || self
+                .starters
+                .captures
+                .iter()
+                .any(|capture| shared(&capture.draft))
+            || self
+                .drafts
+                .iter()
+                .any(|(owner, draft)| owner != from && owner != to && shared(draft))
+            || self.attachment_staging.active_for(from)
+        {
+            return false;
+        }
+        if ids.iter().any(|id| {
+            self.attachments
+                .get(id)
+                .and_then(|prepared| prepared.staging.as_ref())
+                .is_some_and(|target| target.runtime != *from.runtime())
+        }) {
+            return false;
+        }
+        for id in ids {
+            if let Some(target) = self
+                .attachments
+                .get_mut(&id)
+                .and_then(|prepared| prepared.staging.as_mut())
+            {
+                target.directory = to.directory().to_owned();
+            }
+        }
+        for request in &mut self.attachment_staging.pending {
+            if &request.owner == from {
+                request.owner = to.clone();
+            }
+        }
+        true
     }
 
     fn start_attachment_staging(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -367,7 +464,7 @@ impl Workspace {
                         }
                     });
                 }
-                let _ = this.update_in(cx, |this, _, cx| {
+                let _ = this.update_in(cx, |this, window, cx| {
                     if this
                         .attachment_staging
                         .active
@@ -375,6 +472,7 @@ impl Workspace {
                         .is_some_and(|active| active.generation == job.generation)
                     {
                         this.attachment_staging.active = None;
+                        this.resume_chat_retarget(window, cx);
                         cx.notify();
                     }
                 });
@@ -391,7 +489,17 @@ impl Workspace {
         if self.close_in_progress() {
             self.attachment_staging.pending.clear();
         }
-        while let Some(request) = self.attachment_staging.pending.pop_front() {
+        let waiting = self.attachment_staging.pending.len();
+        for _ in 0..waiting {
+            let Some(request) = self.attachment_staging.pending.pop_front() else {
+                break;
+            };
+            if matches!(request.owner.target(), openchamber_native_core::draft::DraftTarget::NewSession(id) if id.as_str() == openchamber_native_core::chat_draft::CHAT_DRAFT_ID)
+                && !self.chat_creation_ready(&request.owner)
+            {
+                self.attachment_staging.pending.push_back(request);
+                continue;
+            }
             let Some((file, prepared)) =
                 owned_prepared(&self.drafts, &self.attachments, &request.owner, &request.id)
             else {

@@ -150,7 +150,7 @@ fn the_projects_caption_opens_the_projects_with_the_widest_gap(cx: &mut TestAppC
 }
 
 #[gpui_kit::test]
-fn the_toolbar_holds_three_controls_and_the_more_menu(cx: &mut TestAppContext) {
+fn the_toolbar_holds_inline_search_and_trailing_controls(cx: &mut TestAppContext) {
     let (window, workspace) = crate::workspace_tests::open(cx);
     cx.update_window(window, |_, window, cx| {
         window.activate_accessibility_for_test();
@@ -163,13 +163,14 @@ fn the_toolbar_holds_three_controls_and_the_more_menu(cx: &mut TestAppContext) {
             };
         });
         window.render_frame(cx);
-        // `ms-[3px]` after `px-2.5`, 24 px buttons, `gap-1.5`, centred in
-        // the 40 px row under the title row.
+        // The search takes the remaining width; the three 24px controls keep
+        // the toolbar's end inset and 6px gaps.
+        let search = placed(window, "sidebar-search");
+        assert_eq!(search, rect(13.0, 52.0, 167.0, 32.0));
         for (id, x) in [
-            ("search-sessions", 13.0),
-            ("add-project", 43.0),
-            ("display-mode", 73.0),
-            ("sidebar-more", 103.0),
+            ("add-project", 186.0),
+            ("display-mode", 216.0),
+            ("sidebar-more", 246.0),
         ] {
             assert_eq!(
                 placed(window, id),
@@ -199,9 +200,10 @@ fn the_toolbar_holds_three_controls_and_the_more_menu(cx: &mut TestAppContext) {
         window.render_frame(cx);
         assert_eq!(
             placed(window, "sidebar-more-menu").origin,
-            point(px(103.0), px(84.0)),
+            point(px(246.0), px(84.0)),
             "the menu opens 4 px under its trigger, aligned to its start"
         );
+        let menu = placed(window, "sidebar-more-menu");
         for (index, id) in [
             "source-board",
             "scheduled-tasks",
@@ -215,7 +217,13 @@ fn the_toolbar_holds_three_controls_and_the_more_menu(cx: &mut TestAppContext) {
             let line = placed(window, id);
             assert_eq!(
                 (line.origin, line.size.height),
-                (point(px(107.0), px(88.0 + 28.0 * index as f32)), px(28.0)),
+                (
+                    point(
+                        menu.left() + px(4.0),
+                        menu.top() + px(4.0 + 28.0 * index as f32)
+                    ),
+                    px(28.0),
+                ),
                 "menu line `{id}`"
             );
         }
@@ -254,11 +262,12 @@ fn the_display_menu_opens_from_its_buttons_start(cx: &mut TestAppContext) {
     cx.update_window(window, |_, window, cx| {
         window.activate_accessibility_for_test();
         window.render_frame(cx);
+        let trigger = placed(window, "display-mode");
         window.click(name("display-mode"), cx);
         window.render_frame(cx);
         assert_eq!(
             placed(window, "display-menu").origin,
-            point(px(73.0), px(84.0)),
+            point(trigger.left(), trigger.bottom() + px(4.0)),
             "the menu is aligned to the start of its trigger"
         );
     })

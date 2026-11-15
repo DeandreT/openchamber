@@ -41,6 +41,7 @@ catalogs, so a small change with many locale files stays small.
 |---|---|
 | Web |  |
 | Desktop (Electron) |  |
+| Desktop (Rust) |  |
 | VS Code |  |
 | Hosted mobile |  |
 | Capacitor mobile |  |
@@ -66,6 +67,10 @@ catalogs, so a small change with many locale files stays small.
      A UI change with no screenshot here is labeled `needs-visual-evidence`
      and waits. No visible change: one concrete sentence on why the diff
      cannot affect rendered behavior; the maintainer lifts the label. -->
+
+<!-- Visual Rust desktop PRs follow docs/rust-desktop/PARITY.md,
+     "Visual pull request contract". Include labeled Before and After screenshots
+     here, with matched capture conditions and base/candidate revisions. -->
 
 ## Risks
 

@@ -6,6 +6,18 @@ import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 import { extensionPowersI18n } from './extension-powers.i18n';
 export const settingsDict = {
+  'settings.sessions.auxiliary.noDirectory': 'פתחו פרויקט או שיחה כדי לבחור את המודלים האלה.',
+  'settings.sessions.auxiliary.summary': 'מודל לסיכום',
+  'settings.sessions.auxiliary.title': 'מודל לכותרות',
+  'settings.sessions.auxiliary.engineDefault': 'ברירת המחדל של OpenCode',
+  'settings.sessions.auxiliary.info': 'בחרו מודל טקסט רגיל לסוכן המובנה של OpenCode. ברירת המחדל של OpenCode מסירה את עקיפת המודל.',
+  'settings.sessions.auxiliary.privacy': 'OpenCode עשוי לשלוח את תוכן השיחה לספק שנבחר כאן. מדיניות הספקים עדיין חלה.',
+  'settings.sessions.auxiliary.projectSource': 'הגדרות הפרויקט: {path}',
+  'settings.sessions.auxiliary.userSource': 'הגדרות המשתמש: {path}',
+  'settings.sessions.auxiliary.newSource': 'בחירה מפורשת יוצרת הגדרת עקיפה של הסוכן ברמת המשתמש.',
+  'settings.sessions.auxiliary.loading': 'קריאת הגדרות הסוכן...',
+  'settings.sessions.auxiliary.saveFailed': 'שמירת המודל נכשלה. רעננו את ההגדרות לפני ניסיון נוסף.',
+  'settings.sessions.auxiliary.catalogFailed': 'לא ניתן לקרוא את המודלים או את הגדרות הסוכן. הבחירות השמורות נשמרו. נסו שוב לרענון.',
   'settings.openchamber.sessionRetention.field.archivedDescription': 'תקופת השמירה נספרת מרגע ההעברה לארכיון. הפעלות שפג תוקפן נמחקות.',
   'settings.openchamber.sessionRetention.field.unarchivedArchiveDescription': 'תקופת השמירה נספרת מהפעילות האחרונה בהפעלה. הפעלות שפג תוקפן מועברות לארכיון.',
   'settings.openchamber.sessionRetention.field.unarchivedDeleteDescription': 'תקופת השמירה נספרת מהפעילות האחרונה בהפעלה. הפעלות שפג תוקפן נמחקות.',

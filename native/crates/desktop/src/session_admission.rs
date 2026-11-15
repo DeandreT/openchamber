@@ -430,6 +430,7 @@ impl Workspace {
                         if let Some(roots) = roots {
                             this.topology.chat_roots = roots;
                             this.session_admission.roots_ready = true;
+                            this.chat_roots_read(true, window, cx);
                         }
                         assessment
                     }

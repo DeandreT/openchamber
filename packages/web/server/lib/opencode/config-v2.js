@@ -820,6 +820,32 @@ const compactionUpdateSchema = z.object({
   background: z.boolean().optional(),
 }).strict();
 
+/** Only configured ordinary text protocols can serve automatic summary/title work. */
+export function isOrdinaryTextGenerationModel(provider, model) {
+  if (!provider || !model || provider.id !== model.providerID || provider.activation === 'disabled'
+    || model.enabled !== true || (model.type ?? 'chat') !== 'chat'
+    || !model.capabilities?.output?.includes('text') || provider.settings?.openchamber?.nativeAgent !== undefined) return false;
+  return isOrdinaryTextPackage(provider.package) && isOrdinaryTextPackage(model.package ?? provider.package);
+}
+
+function isOrdinaryTextPackage(protocol) {
+  const parsed = z.string().safeParse(protocol);
+  if (!parsed.success) return false;
+  protocol = parsed.data;
+  if (protocol.startsWith('@opencode/ai/providers/')) {
+    // Ordinary provider exports in the pinned @opencode/ai 2.2.7 package.
+    const [name, ...route] = protocol.slice('@opencode/ai/providers/'.length).split('/');
+    return ['alibaba', 'amazon-bedrock', 'anthropic', 'anthropic-compatible', 'azure', 'baseten', 'cerebras',
+      'cloudflare-ai-gateway', 'cloudflare-workers-ai', 'cohere', 'deepinfra', 'deepseek', 'digitalocean',
+      'fireworks', 'google', 'google-vertex', 'google-vertex-messages', 'groq', 'meta', 'minimax', 'mistral',
+      'moonshot', 'openai', 'openai-compatible', 'openai-compatible-responses', 'opencode', 'openrouter',
+      'togetherai', 'typesafe-ai', 'venice', 'vercel-ai-gateway', 'xai', 'zai', 'zai-coding-plan'].includes(name)
+      && (route.length === 0 || /^(?:mantle\/)?(?:chat|messages|responses)$/u.test(route.join('/')));
+  }
+  // Known ordinary AI SDK protocols. Unknown plugin packages can execute an agent.
+  return /^aisdk:@ai-sdk\/(openai|openai-compatible|anthropic|google|google-vertex|amazon-bedrock|azure|mistral|cohere|groq|xai|deepinfra|cerebras|togetherai|alibaba)(\/.*)?$/u.test(protocol);
+}
+
 /** Sets `owner[key]`, or removes it for `null`. */
 const setOrDelete = (owner, key, value) => {
   if (value === null) delete owner[key];

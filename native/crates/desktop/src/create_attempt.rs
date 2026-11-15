@@ -28,6 +28,7 @@ pub(crate) struct CreateAttempt {
     pub draft: Draft,
     /// Prepared resources retained by the first-send payload, independent of rollback text.
     pub resources: Vec<AttachmentId>,
+    pub native_config: Option<crate::native_agent::CreationConfig>,
     /// Original configuration, including Auto, independent of creation defaults.
     pub prompt: Prompt,
     pub created: i64,
@@ -68,6 +69,81 @@ impl CreateAttempts {
 
     pub(crate) fn get(&self, key: &SessionKey) -> Option<&CreateAttempt> {
         self.entries.get(key)
+    }
+
+    pub(crate) fn bind_native_execution(
+        &mut self,
+        key: &SessionKey,
+        model: openchamber_native_core::send_config::ModelChoice,
+    ) -> bool {
+        let Some(attempt) = self.entries.get_mut(key) else {
+            return false;
+        };
+        if attempt.phase != CreationPhase::Confirmed {
+            return false;
+        }
+        attempt.prompt.model = Some(model);
+        true
+    }
+
+    pub(crate) fn require_native_correction(&mut self, key: &SessionKey) -> bool {
+        let Some(config) = self
+            .entries
+            .get_mut(key)
+            .and_then(|attempt| attempt.native_config.as_mut())
+        else {
+            return false;
+        };
+        if !config.prepare_after_session {
+            return false;
+        }
+        config.correction_required = true;
+        true
+    }
+
+    /// Only an explicit pre-dispatch retry may accept corrected displayed choices.
+    /// The captured request, message, agent, directory and resources never change.
+    pub(crate) fn correct_native_config(
+        &mut self,
+        key: &SessionKey,
+        config: Vec<(String, String)>,
+        complete: bool,
+    ) -> bool {
+        if config.len() > crate::native_agent::CONFIG_CATALOG_LIMIT {
+            return false;
+        }
+        let Some(attempt) = self
+            .entries
+            .get_mut(key)
+            .filter(|attempt| attempt.phase == CreationPhase::Confirmed)
+        else {
+            return false;
+        };
+        let Some(prior) = &attempt.native_config else {
+            return false;
+        };
+        if !prior.prepare_after_session || !prior.correction_required {
+            return false;
+        }
+        let mut corrected = prior.clone();
+        corrected.config = if complete {
+            config
+        } else {
+            let mut merged: Vec<_> = prior
+                .config
+                .iter()
+                .filter(|(id, _)| !config.iter().any(|(known, _)| known == id))
+                .cloned()
+                .collect();
+            merged.extend(config);
+            merged
+        };
+        corrected.correction_required = false;
+        if !corrected.validate() {
+            return false;
+        }
+        attempt.native_config = Some(corrected);
+        true
     }
 
     pub(crate) fn phase(&mut self, key: &SessionKey, phase: CreationPhase) -> bool {

@@ -17,9 +17,6 @@ struct Scratch(PathBuf);
 
 impl Scratch {
     fn new() -> Self {
-        #[cfg(target_os = "linux")]
-        let root = PathBuf::from("/tmp/opencode");
-        #[cfg(not(target_os = "linux"))]
         let root = std::env::temp_dir();
         let path = root.join(format!(
             "openchamber-attachment-intake-{}-{}",

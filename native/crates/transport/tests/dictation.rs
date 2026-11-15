@@ -11,6 +11,7 @@ use openchamber_native_transport::credential::Credential;
 use openchamber_native_transport::dictation::{DictationStream, StartOptions, StreamEvent, Timing};
 use openchamber_native_transport::endpoint::Endpoint;
 use serde_json::{Value, json};
+use tokio::io::AsyncWriteExt;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::Message;
@@ -240,15 +241,24 @@ async fn a_dropped_stream_cancels_its_dictation() {
 }
 
 #[tokio::test]
-async fn a_refused_connection_fails_at_finish() {
-    // Nothing listens on this port once the listener is dropped.
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+async fn a_rejected_upgrade_fails_at_finish() {
+    failed_connection_at_finish(true, "Dictation connection failed").await;
+}
+
+#[tokio::test]
+async fn a_stalled_upgrade_times_out_at_finish() {
+    failed_connection_at_finish(false, "Dictation connection timed out").await;
+}
+
+async fn failed_connection_at_finish(reject_upgrade: bool, expected: &str) {
+    // A closed TCP port can take longer than the connect deadline to report
+    // ConnectionRefused on Windows. Script the upgrade outcome explicitly.
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let endpoint = Endpoint::parse(&format!(
         "http://{}",
         listener.local_addr().expect("address")
     ))
     .expect("endpoint");
-    drop(listener);
     let (stream, mut events) = DictationStream::open(
         client(endpoint),
         StartOptions::default(),
@@ -256,13 +266,31 @@ async fn a_refused_connection_fails_at_finish() {
         timing(),
     );
     stream.send_chunk("AAAA".into());
-    assert!(matches!(
-        event(&mut events).await,
-        StreamEvent::StartFailed(_)
-    ));
+    let first = connection_attempt(&listener, reject_upgrade).await;
+    let StreamEvent::StartFailed(error) = event(&mut events).await else {
+        panic!("the initial connection fails");
+    };
+    assert_eq!(error.message, expected);
     stream.finish();
+    let second = connection_attempt(&listener, reject_upgrade).await;
     let StreamEvent::Failed(error) = event(&mut events).await else {
         panic!("finish retries the start once and fails");
     };
-    assert_eq!(error.message, "Dictation connection failed");
+    assert_eq!(error.message, expected);
+    // Keep stalled sockets open until their attempts time out.
+    drop((first, second));
+}
+
+async fn connection_attempt(listener: &TcpListener, reject_upgrade: bool) -> tokio::net::TcpStream {
+    let (mut socket, _) = tokio::time::timeout(WAIT, listener.accept())
+        .await
+        .expect("a connection attempt")
+        .expect("accept");
+    if reject_upgrade {
+        socket
+            .write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
+            .await
+            .expect("reject upgrade");
+    }
+    socket
 }

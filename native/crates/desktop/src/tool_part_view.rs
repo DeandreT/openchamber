@@ -81,6 +81,8 @@ pub(crate) struct ToolRow<'a> {
     pub(crate) tool: &'a str,
     pub(crate) status: ToolStatus,
     pub(crate) output: Option<&'a str>,
+    /// Display-only text whose complete live execution identity core validated.
+    pub(crate) progress: Option<&'a str>,
     pub(crate) elided: Option<usize>,
     pub(crate) facts: &'a ToolFacts,
     pub(crate) start: Option<i64>,
@@ -298,11 +300,17 @@ impl Workspace {
         palette: &Palette,
         direction: Direction,
     ) -> AnyElement {
-        let text: Option<SharedString> = tool_shells::justification(row.tool, row.facts)
+        let text: Option<SharedString> = row
+            .progress
+            .filter(|_| row.running())
             .map(|text| SharedString::from(text.to_owned()))
             .or_else(|| {
-                tool_shells::description(row.tool, row.facts)
-                    .map(|described| describe(&described, row.directory, strings).into())
+                tool_shells::justification(row.tool, row.facts)
+                    .map(|text| SharedString::from(text.to_owned()))
+                    .or_else(|| {
+                        tool_shells::description(row.tool, row.facts)
+                            .map(|described| describe(&described, row.directory, strings).into())
+                    })
             });
         // Opened, the body carries the whole error.
         let failure = (row.failed() && !row.expanded)
@@ -325,7 +333,20 @@ impl Workspace {
             .gap(px(4.0))
             .text_color(palette.tools_description)
             .when_some(text.clone(), |this, text| {
-                this.child(div().min_w_0().truncate().child(text))
+                this.child(
+                    div()
+                        .id(ElementId::Name(
+                            format!("tool:{}:description", row.part).into(),
+                        ))
+                        .min_w_0()
+                        .truncate()
+                        .when(row.running() && row.progress.is_some(), |this| {
+                            this.accessibility_id(format!("tool:{}:progress", row.part))
+                                .role(Role::Status)
+                                .aria_label(text.clone())
+                        })
+                        .child(text),
+                )
             })
             .when_some(failure, |this, failure| {
                 this.when(text.is_some(), |this| {
@@ -427,7 +448,12 @@ impl Workspace {
                 column = column.child(scroll_box(
                     format!("tool:{}:script", row.part),
                     INPUT_MAX_HEIGHT,
-                    code_text(code, &mono, palette.muted_foreground),
+                    code_text(
+                        format!("tool:{}:script-text", row.part),
+                        code,
+                        &mono,
+                        palette.muted_foreground,
+                    ),
                 ));
             }
             if !row.facts.metadata.tool_calls.is_empty() {
@@ -501,7 +527,12 @@ impl Workspace {
                     .child(input.into_owned())
                     .into_any_element()
             } else {
-                code_text(&input, &mono, palette.muted_foreground)
+                code_text(
+                    format!("tool:{}:input-text", row.part),
+                    &input,
+                    &mono,
+                    palette.muted_foreground,
+                )
             };
             column = column.child(scroll_box(
                 format!("tool:{}:input", row.part),
@@ -565,6 +596,21 @@ impl Workspace {
             return column.into_any_element();
         }
         let output = row.output();
+        if row.running()
+            && let Some(progress) = row.progress
+        {
+            column = column.child(output_box(
+                row,
+                progress,
+                RESULT_MAX_HEIGHT,
+                &mono,
+                strings,
+                palette,
+                direction,
+                opened.copied.clone(),
+                cx,
+            ));
+        }
         let shows_result = row.status == ToolStatus::Completed
             || (tool_shells::is_shell(tool) && !output.trim().is_empty());
         if shows_result {
@@ -989,13 +1035,18 @@ fn label(text: SharedString, palette: &Palette) -> AnyElement {
 }
 
 /// Code-like text: mono, wrapping, left to right in every locale.
-fn code_text(text: &str, mono: &SharedString, color: Hsla) -> AnyElement {
+fn code_text(id: String, text: &str, mono: &SharedString, color: Hsla) -> AnyElement {
+    let text: SharedString = text.to_owned().into();
     div()
+        .id(ElementId::Name(id.clone().into()))
+        .role(Role::Paragraph)
+        .accessibility_id(id)
+        .aria_label(text.clone())
         .font_family(mono.clone())
         .text_size(rems(META_SIZE))
         .text_color(color)
         .whitespace_normal()
-        .child(text.to_owned())
+        .child(text)
         .into_any_element()
 }
 
@@ -1027,7 +1078,12 @@ fn output_box(
     cx: &Context<Workspace>,
 ) -> AnyElement {
     let Some(copied) = copied else {
-        return code_text(output, mono, palette.foreground.opacity(0.9));
+        return code_text(
+            format!("tool:{}:output-text", row.part),
+            output,
+            mono,
+            palette.foreground.opacity(0.9),
+        );
     };
     let is_copied = *copied.read(cx);
     let text = output.to_owned();
@@ -1060,7 +1116,12 @@ fn output_box(
         .child(scroll_box(
             format!("tool:{}:output", row.part),
             max_height,
-            code_text(output, mono, palette.foreground.opacity(0.9)),
+            code_text(
+                format!("tool:{}:output-text", row.part),
+                output,
+                mono,
+                palette.foreground.opacity(0.9),
+            ),
         ))
         .child(
             div()

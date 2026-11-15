@@ -5708,6 +5708,7 @@ dependencies = [
  "notify",
  "openchamber-native-core",
  "openchamber-native-transport",
+ "openchamber-windows-process",
  "quick-xml",
  "ratex-layout",
  "ratex-parser",
@@ -5739,6 +5740,13 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tracing",
+]
+
+[[package]]
+name = "openchamber-windows-process"
+version = "0.1.0"
+dependencies = [
+ "windows 0.62.2",
 ]
 
 [[package]]

@@ -137,6 +137,34 @@ fn capture_and_handoff_leave_newer_text_files_context_and_choices_independent() 
 }
 
 #[test]
+fn native_binding_preserves_captured_agent_and_refuses_another_provider() {
+    let owner = owner("server", "/chat/dated");
+    let original = capture("activation", owner.clone(), source("file", "kept"));
+    let mut drafts = DraftStore::new();
+    drafts.save(owner, original.draft.clone());
+    let mut captures = StarterCaptures::default();
+    assert!(captures.begin(original.clone(), &mut drafts));
+    let mut model = ModelChoice {
+        provider_id: "other-provider".into(),
+        model_id: "execution-model".into(),
+        variant: Some("immutable-binding".into()),
+    };
+    assert!(!captures.bind_native_model(&original.id, model.clone()));
+    assert_eq!(captures.get(&original.id), Some(&original));
+    model.provider_id = "provider".into();
+    model.variant = None;
+    assert!(!captures.bind_native_model(&original.id, model.clone()));
+    model.variant = Some("immutable-binding".into());
+    assert!(captures.bind_native_model(&original.id, model.clone()));
+    let bound = captures.get(&original.id).expect("capture");
+    assert_eq!(bound.selection.model.as_ref(), Some(&model));
+    assert_eq!(bound.selection.agent_name, original.selection.agent_name);
+    assert_eq!(bound.owner, original.owner);
+    assert_eq!(bound.draft, original.draft);
+    assert_eq!(bound.parts, original.parts);
+}
+
+#[test]
 fn preset_rollback_retains_full_content_and_rebases_source_mentions_in_utf16() {
     let mut original = source("original", "  😀 @plan  ");
     original.content.agents.push(AgentMention {
@@ -326,10 +354,8 @@ fn retained_prepared_bytes_survive_source_replacement_and_starter_handoff() {
     }
     let scratch = loop {
         let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let path = PathBuf::from(format!(
-            "/tmp/opencode/starter-capture-{}-{sequence}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("starter-capture-{}-{sequence}", std::process::id()));
         match fs::DirBuilder::new().mode(0o700).create(&path) {
             Ok(()) => break Scratch(path),
             Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,

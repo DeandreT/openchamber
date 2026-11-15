@@ -68,7 +68,7 @@ describe('native transport fixtures', () => {
 
   test('blocking requests preserve global ownership and explicit mutation shapes', async () => {
     const fixture = z.object({
-      client: z.literal('@opencode/client@2.2.5'),
+      client: z.literal('@opencode/client@2.2.7'),
       scopedDirectory: z.string(),
       blockingRequests: z.object({ requests: z.array(z.object({
         name: z.string(), method: z.string(), path: z.string(), directoryHeader: z.string().nullable(),

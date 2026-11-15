@@ -6,6 +6,18 @@ import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 import { extensionPowersI18n } from './extension-powers.i18n';
 export const settingsDict = {
+  'settings.sessions.auxiliary.noDirectory': 'Otwórz projekt lub czat, aby wybrać te modele.',
+  'settings.sessions.auxiliary.summary': 'Model podsumowań',
+  'settings.sessions.auxiliary.title': 'Model tytułów',
+  'settings.sessions.auxiliary.engineDefault': 'Domyślny model OpenCode',
+  'settings.sessions.auxiliary.info': 'Wybierz zwykły model tekstowy dla wbudowanego agenta OpenCode. Opcja domyślna OpenCode usuwa nadpisanie modelu.',
+  'settings.sessions.auxiliary.privacy': 'OpenCode może wysyłać treść rozmowy do wybranego tutaj dostawcy. Zasady dotyczące dostawców nadal obowiązują.',
+  'settings.sessions.auxiliary.projectSource': 'Konfiguracja projektu: {path}',
+  'settings.sessions.auxiliary.userSource': 'Konfiguracja użytkownika: {path}',
+  'settings.sessions.auxiliary.newSource': 'Jawny wybór tworzy nadpisanie agenta dla użytkownika.',
+  'settings.sessions.auxiliary.loading': 'Odczytywanie konfiguracji agenta...',
+  'settings.sessions.auxiliary.saveFailed': 'Nie udało się zapisać modelu. Odśwież konfigurację przed ponowną próbą.',
+  'settings.sessions.auxiliary.catalogFailed': 'Nie udało się odczytać modeli lub konfiguracji agenta. Zachowano zapisane wybory. Spróbuj ponownie, aby odświeżyć.',
   'settings.openchamber.sessionRetention.field.archivedDescription': 'Okres przechowywania liczy się od archiwizacji. Sesje po upływie tego okresu są usuwane.',
   'settings.openchamber.sessionRetention.field.unarchivedArchiveDescription': 'Okres przechowywania liczy się od ostatniej aktywności sesji. Sesje po upływie tego okresu są archiwizowane.',
   'settings.openchamber.sessionRetention.field.unarchivedDeleteDescription': 'Okres przechowywania liczy się od ostatniej aktywności sesji. Sesje po upływie tego okresu są usuwane.',

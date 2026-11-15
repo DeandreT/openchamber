@@ -58,7 +58,7 @@ use crate::send_attempt::{Admission, SendAttempt, SendOrigin, SessionKey};
 use crate::starter_capture::StarterCapture;
 use openchamber_native_transport::session_create::CreateSession;
 
-const VERSION: u32 = 8;
+const VERSION: u32 = 9;
 const MAX_FILE: u64 = 16 * 1024 * 1024;
 pub(crate) const MAX_TEXT: usize = 1024 * 1024;
 pub(crate) const MAX_ENTRIES: usize = 4096;
@@ -562,7 +562,22 @@ fn decode_store(bytes: &[u8]) -> Result<Store, JournalError> {
                 queue: QueueStorage::default(),
             });
         }
-        _ => return serde_json::from_slice(bytes).map_err(malformed),
+        _ => {
+            let mut store: Store = serde_json::from_slice(bytes).map_err(malformed)?;
+            if store.version == 8
+                && store.creations.iter().any(|creation| {
+                    creation.native_config.as_ref().is_some_and(|config| {
+                        config.prepare_after_session || config.correction_required
+                    })
+                })
+            {
+                return Err(JournalError::Invalid(
+                    "session-first capture requires journal version 9",
+                ));
+            }
+            store.version = VERSION;
+            return Ok(store);
+        }
     };
     Ok(Store {
         version: VERSION,
@@ -667,6 +682,8 @@ struct StoredCreation<D = StoredDraft, P = StoredPrompt> {
     request_model: Option<StoredModel>,
     #[serde(deserialize_with = "required_option")]
     request_agent: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_config: Option<crate::native_agent::CreationConfig>,
     created: i64,
     phase: StoredCreationPhase,
 }
@@ -843,6 +860,7 @@ impl LegacyCreation {
             resources: Vec::new(),
             request_model: self.request_model,
             request_agent: self.request_agent,
+            native_config: None,
             created: self.created,
             phase: self.phase,
         }
@@ -1269,6 +1287,7 @@ impl Store {
                     resources: attempt.resources.iter().map(ToString::to_string).collect(),
                     request_model: attempt.request.model().map(StoredModel::capture),
                     request_agent: attempt.request.agent().map(str::to_owned),
+                    native_config: attempt.native_config.clone(),
                     created: attempt.created,
                     phase: match attempt.phase {
                         CreationPhase::Preparing
@@ -1396,6 +1415,7 @@ impl Store {
                     created: stored.created,
                     project: stored.project,
                     navigation: None,
+                    native_config: stored.native_config,
                     phase: match stored.phase {
                         StoredCreationPhase::Uncertain => CreationPhase::Uncertain,
                         StoredCreationPhase::Confirmed => CreationPhase::Confirmed,
@@ -1460,10 +1480,12 @@ fn validate_snapshot(
                 creation.source == source.draft
                     && owner.draft.runtime() == &key.runtime
                     && owner.draft.target() == &DraftTarget::Session(key.session.clone())
-                    && owner
-                        .project
-                        .as_ref()
-                        .is_some_and(|project| project.as_str() == creation.project)
+                    && match &owner.project {
+                        Some(project) => project.as_str() == creation.project,
+                        None => {
+                            creation.project == openchamber_native_core::chat_draft::CHAT_PROJECT_ID
+                        }
+                    }
             });
             if !valid {
                 return Err(JournalError::Invalid("staged selection lacks its creation"));
@@ -1646,6 +1668,28 @@ fn validate_snapshot(
         )?;
         identifier(&attempt.project)?;
         validate_prompt(&mut size, &key.runtime, &attempt.prompt, &mut messages)?;
+        if let Some(config) = &attempt.native_config {
+            if !config.validate()
+                || attempt.prompt.model.as_ref().is_none_or(|model| {
+                    model.provider_id != config.provider_id
+                        || model.model_id != config.model_id
+                        || (!config.prepare_after_session && model.variant != config.variant)
+                })
+            {
+                return Err(JournalError::Invalid(
+                    "invalid captured native creation configuration",
+                ));
+            }
+            charge(
+                &mut size,
+                config.provider_id.len()
+                    + config.model_id.len()
+                    + config.variant.as_ref().map_or(0, String::len),
+            )?;
+            for (key, value) in &config.config {
+                charge(&mut size, key.len() + value.len())?;
+            }
+        }
         if attempt.source.runtime() != &key.runtime
             || !matches!(attempt.source.target(), DraftTarget::NewSession(_))
             || attempt.request.id() != &key.session

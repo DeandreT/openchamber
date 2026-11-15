@@ -6,6 +6,18 @@ import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 import { extensionPowersI18n } from './extension-powers.i18n';
 export const settingsDict = {
+  'settings.sessions.auxiliary.noDirectory': 'Abra um projeto ou chat para escolher esses modelos.',
+  'settings.sessions.auxiliary.summary': 'Modelo de resumo',
+  'settings.sessions.auxiliary.title': 'Modelo de título',
+  'settings.sessions.auxiliary.engineDefault': 'Padrão do OpenCode',
+  'settings.sessions.auxiliary.info': 'Escolha um modelo de texto convencional para o agente integrado do OpenCode. O padrão do OpenCode remove a escolha personalizada do modelo.',
+  'settings.sessions.auxiliary.privacy': 'O OpenCode pode enviar o conteúdo da conversa ao provedor escolhido aqui. As políticas de provedores continuam valendo.',
+  'settings.sessions.auxiliary.projectSource': 'Configuração do projeto: {path}',
+  'settings.sessions.auxiliary.userSource': 'Configuração do usuário: {path}',
+  'settings.sessions.auxiliary.newSource': 'Uma escolha explícita cria uma configuração personalizada do agente para o usuário.',
+  'settings.sessions.auxiliary.loading': 'Lendo a configuração do agente...',
+  'settings.sessions.auxiliary.saveFailed': 'Falha ao salvar o modelo. Atualize a configuração antes de tentar novamente.',
+  'settings.sessions.auxiliary.catalogFailed': 'Não foi possível ler os modelos ou a configuração do agente. As escolhas salvas foram mantidas. Tente novamente para atualizar.',
   'settings.openchamber.sessionRetention.field.archivedDescription': 'Conta o período de retenção a partir do arquivamento. As sessões expiradas são excluídas.',
   'settings.openchamber.sessionRetention.field.unarchivedArchiveDescription': 'Conta o período de retenção a partir da última atividade da sessão. As sessões expiradas são arquivadas.',
   'settings.openchamber.sessionRetention.field.unarchivedDeleteDescription': 'Conta o período de retenção a partir da última atividade da sessão. As sessões expiradas são excluídas.',

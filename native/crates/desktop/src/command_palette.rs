@@ -1723,7 +1723,9 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) {
         match command {
-            CommandId::NewSession => self.show_new_session(window, cx),
+            CommandId::NewSession => {
+                self.open_new_session(crate::chat_draft::NewSession::Plain, window, cx)
+            }
             CommandId::AddProject => self.open_add_project(None, window, cx),
             CommandId::ToggleSidebar => self.toggle_sidebar(cx),
             CommandId::ToggleTerminal => self.toggle_terminal(window, cx),

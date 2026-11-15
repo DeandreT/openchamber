@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const OXLINT_CONFIG = path.join(REPO_ROOT, 'oxlint.anti-slop.config.ts');
+const OXLINT_ENTRY = path.join(REPO_ROOT, 'node_modules', 'oxlint', 'bin', 'oxlint');
 const LINTABLE_FILE = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
 
 const git = (args) => execFileSync('git', args, {
@@ -94,13 +95,38 @@ export const parseOxlintReport = (stdout) => {
   return JSON.parse(stdout.slice(start)).diagnostics;
 };
 
+/** Keep each invocation below Windows' command-line limit, including quoting. */
+export const lintFileBatches = (files) => {
+  const batches = [];
+  let batch = [];
+  let size = 0;
+  for (const file of files) {
+    const argumentSize = file.length * 2 + 3;
+    if (batch.length && size + argumentSize > 16000) {
+      batches.push(batch);
+      batch = [];
+      size = 0;
+    }
+    batch.push(file);
+    size += argumentSize;
+  }
+  if (batch.length) batches.push(batch);
+  return batches;
+};
+
 const runOxlint = (files, cwd) => {
-  if (files.length === 0) return [];
-  const result = spawnSync('bunx', ['oxlint', '-c', OXLINT_CONFIG, '-f', 'json', ...files], {
-    cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
-  });
-  if (!result.stdout) throw new Error(`oxlint produced no report: ${result.stderr}`);
-  return parseOxlintReport(result.stdout);
+  const diagnostics = [];
+  for (const batch of lintFileBatches(files)) {
+    // Both revisions use the installed version, including outside the checkout.
+    // A portable Bun install can contain bun.exe without a bunx alias.
+    const result = spawnSync('bun', [OXLINT_ENTRY, '-c', OXLINT_CONFIG, '-f', 'json', ...batch], {
+      cwd, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024,
+    });
+    if (result.error) throw result.error;
+    if (!result.stdout) throw new Error(`oxlint produced no report: ${result.stderr}`);
+    diagnostics.push(...parseOxlintReport(result.stdout));
+  }
+  return diagnostics;
 };
 
 const checkAntiSlopRatchet = (base, files) => {

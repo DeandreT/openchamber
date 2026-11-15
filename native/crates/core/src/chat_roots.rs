@@ -44,6 +44,21 @@ impl ChatRoots {
         &self.configured
     }
 
+    /// The real root explicitly reported by the server, for execution paths.
+    pub fn canonical_configured(&self) -> &str {
+        &self.canonical_configured
+    }
+
+    pub fn canonical_session_directory(&self, directory: &str) -> Option<String> {
+        let (legacy, suffix) = self.session_suffix(directory)?;
+        let root = if legacy {
+            &self.canonical_legacy
+        } else {
+            &self.canonical_configured
+        };
+        Some(format!("{}/{suffix}", root.trim_end_matches('/')))
+    }
+
     /// The managed root containing `directory`, if any.
     pub fn root_of(&self, directory: Option<&str>) -> Option<&str> {
         let normalized = path::normalize_optional(directory)?;
@@ -62,6 +77,36 @@ impl ChatRoots {
 
     pub fn contains(&self, directory: Option<&str>) -> bool {
         self.root_of(directory).is_some()
+    }
+
+    /// A strict descendant of a server-named root. Shared roots, including
+    /// canonical aliases, never grant session-directory deletion authority.
+    pub fn session_suffix(&self, directory: &str) -> Option<(bool, String)> {
+        let directory = path::normalize(directory)?;
+        let roots = [
+            (&self.configured, false),
+            (&self.canonical_configured, false),
+            (&self.legacy, true),
+            (&self.canonical_legacy, true),
+        ];
+        if roots.iter().any(|(root, _)| **root == directory)
+            || directory
+                .split('/')
+                .any(|part| matches!(part, "." | "..") || part.chars().any(char::is_control))
+        {
+            return None;
+        }
+        roots.into_iter().find_map(|(root, legacy)| {
+            let suffix = directory.strip_prefix(root.as_str())?.strip_prefix('/')?;
+            (!suffix.is_empty() && !suffix.split('/').any(str::is_empty))
+                .then(|| (legacy, suffix.to_owned()))
+        })
+    }
+
+    /// Equivalence comes only from this server's explicit canonical aliases.
+    pub fn same_session_directory(&self, left: &str, right: &str) -> bool {
+        self.session_suffix(left)
+            .is_some_and(|left| Some(left) == self.session_suffix(right))
     }
 }
 

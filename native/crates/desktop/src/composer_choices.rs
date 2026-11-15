@@ -157,6 +157,7 @@ impl Workspace {
             return;
         }
         self.queue_persistence(cx);
+        self.ensure_native_agent(cx);
         cx.notify();
     }
 

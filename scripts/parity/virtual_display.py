@@ -21,6 +21,8 @@ import tempfile
 import time
 from pathlib import Path
 
+from executables import executable_path
+
 INSIDE = "OPENCHAMBER_PARITY_DISPLAY"
 XVFB_PID = "OPENCHAMBER_PARITY_XVFB_PID"
 RUNTIME_ROOT = "OPENCHAMBER_PARITY_RUNTIME_ROOT"
@@ -29,8 +31,8 @@ RUNTIME_ROOT = "OPENCHAMBER_PARITY_RUNTIME_ROOT"
 MAX_RUNTIME_ROOT_BYTES = 72
 MARGIN = 640
 SHUTDOWN_GRACE_S = 10.0
-AT_SPI_LAUNCHER = Path("/usr/lib/at-spi-bus-launcher")
-AT_SPI_REGISTRY = Path("/usr/lib/at-spi2-registryd")
+AT_SPI_LAUNCHER = executable_path("at-spi-bus-launcher", "/usr/lib/at-spi-bus-launcher", "/usr/libexec/at-spi-bus-launcher")
+AT_SPI_REGISTRY = executable_path("at-spi2-registryd", "/usr/lib/at-spi2-registryd", "/usr/libexec/at-spi2-registryd")
 BUS_CONFIG = """<!DOCTYPE busconfig PUBLIC "-//freedesktop//DTD D-Bus Bus Configuration 1.0//EN"
   "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
 <busconfig>
@@ -106,8 +108,8 @@ def available() -> str | None:
         if shutil.which(tool) is None:
             return f"{tool} is not installed"
     for daemon in (AT_SPI_LAUNCHER, AT_SPI_REGISTRY):
-        if not daemon.exists():
-            return f"{daemon} is not installed"
+        if not daemon.is_file() or not os.access(daemon, os.X_OK):
+            return f"required executable {daemon.name} is unavailable on PATH or in /usr/lib or /usr/libexec"
     return None
 
 
@@ -222,9 +224,9 @@ def _run_inside(command: list[str], width: int, height: int, stopping) -> int:
                 "#!/bin/sh\n"
                 f"cd {shlex.quote(os.getcwd())} || exit 1\n"
                 f'printf %s "$DBUS_SESSION_BUS_ADDRESS" > {shlex.quote(str(bus_record))}\n'
-                f"{AT_SPI_LAUNCHER} --launch-immediately &\n"
+                f"{shlex.quote(str(AT_SPI_LAUNCHER))} --launch-immediately &\n"
                 "for i in $(seq 50); do busctl --user status org.a11y.Bus >/dev/null 2>&1 && break; sleep 0.1; done\n"
-                f"{AT_SPI_REGISTRY} &\n"
+                f"{shlex.quote(str(AT_SPI_REGISTRY))} &\n"
                 "for i in $(seq 50); do busctl --user status org.a11y.atspi.Registry >/dev/null 2>&1 && break; sleep 0.1; done\n"
                 f"xsettingsd -c {shlex.quote(str(xsettings))} >/dev/null 2>&1 &\n"
                 "sleep 0.5\n"

@@ -165,7 +165,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> AnyElement {
         let slot = self.composer_slot.clone();
-        let dock_visible = self.active_request().is_some();
+        let dock_visible = self.active_request().is_some() || self.native_dock_visible();
         let list = self
             .selected
             .as_ref()
@@ -324,7 +324,7 @@ impl Workspace {
             && self.composer_editable()
             && ((self.selected.is_some() && (self.is_synthetic() || self.can_send_connected()))
                 || (self.selected.is_none() && self.can_create_connected()));
-        let strings = locale::strings(cx);
+        let strings = locale::strings(cx).clone();
         let paste_workspace = cx.weak_entity();
         let drop_workspace = cx.weak_entity();
         let drop_fill = palette.selection;
@@ -520,6 +520,7 @@ impl Workspace {
             .children(self.render_composer_attachments(palette, direction, cx))
             .children(self.render_revert_strip(palette, direction, cx))
             .child(recovery)
+            .children(self.render_native_status(palette, window, cx))
             .child(div().h(px(4.0)))
             .child(
                 // The editor insets its text by the size's padding; the
@@ -630,11 +631,30 @@ impl Workspace {
                 "chat.chatInput.permissionMode.auto",
             ),
         };
+        let (icon, color, key) = if self.native_permission_owner()
+            == Some(openchamber_native_core::native_agent::PermissionOwner::Native)
+        {
+            (
+                "shield-user",
+                palette.muted_foreground,
+                "chat.nativeAgent.permissionOwner",
+            )
+        } else {
+            (icon, color, key)
+        };
         let label = locale::strings(cx).get(key);
         // The tooltip reads the mode when it paints, so it follows a press
         // made while it is open, as the web's tooltip re-renders its label.
         let workspace = cx.weak_entity();
         let tooltip = move |_: &mut Window, cx: &mut gpui_kit::App| {
+            if workspace
+                .read_with(cx, |workspace, _| workspace.native_permission_owner())
+                .ok()
+                .flatten()
+                == Some(openchamber_native_core::native_agent::PermissionOwner::Native)
+            {
+                return locale::strings(cx).get("chat.nativeAgent.permissionOwner");
+            }
             let key = match workspace
                 .read_with(cx, |workspace, _| workspace.shown_permission_mode())
                 .unwrap_or_default()

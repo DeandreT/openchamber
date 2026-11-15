@@ -1,18 +1,19 @@
-//! The Sessions page's OpenCode-backed sections: the prompt cache
-//! (`SessionWarmingModeField.tsx`) and compaction (`CompactionSettings.tsx`).
-//! Both show what OpenCode reports, write one field at a time, and put a
-//! field back when its newest write fails.
+//! The Sessions page's OpenCode-backed prompt cache and compaction settings,
+//! with source-owned model overrides for the built-in summary and title agents.
+//! Purpose models retain their saved value until an authoritative write readback.
 
 use std::collections::{HashMap, HashSet};
 
 use gpui_kit::component::searchable_list::{SearchableListItem, SearchableVec};
 use gpui_kit::component::select::{Select, SelectEvent, SelectState};
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::{
     AnyElement, AppContext, Context, Entity, FocusHandle, FontWeight, InteractiveElement,
     IntoElement, ParentElement, Render, Role, SharedString, StatefulInteractiveElement, Styled,
     Subscription, Task, TestSupportExt, Toggled, WeakEntity, Window, div, prelude::FluentBuilder,
     px,
 };
+use openchamber_native_transport::auxiliary_models::{Purpose, PurposeModel, TextModel};
 use openchamber_native_transport::opencode_config::{
     Compaction, CompactionBuffer, CompactionChange, EffectiveConfig,
 };
@@ -20,6 +21,7 @@ use openchamber_native_transport::session_warming::WarmingSnapshot;
 use serde_json::Value;
 
 use crate::activation::on_activate;
+use crate::baseline::CssTextExt;
 use crate::locale;
 use crate::logical::LogicalStyledExt;
 use crate::network::{Network, NetworkTask};
@@ -113,6 +115,7 @@ enum PerSession {
 struct ValueOption {
     value: String,
     label: SharedString,
+    disabled: bool,
 }
 
 impl SearchableListItem for ValueOption {
@@ -122,6 +125,9 @@ impl SearchableListItem for ValueOption {
     }
     fn value(&self) -> &String {
         &self.value
+    }
+    fn disabled(&self) -> bool {
+        self.disabled
     }
 }
 
@@ -204,6 +210,16 @@ pub(crate) struct SessionDefaults {
     duration_picker: Picker,
     buffer_picker: Picker,
     keep_picker: Picker,
+    purpose_pickers: [Picker; 2],
+    purpose_directory: Option<String>,
+    purpose_revision: u64,
+    purpose_edits: [u64; 2],
+    purpose_reads: Vec<Task<()>>,
+    purpose_models: [Load<PurposeModel>; 2],
+    purpose_catalog: Load<Vec<TextModel>>,
+    purpose_catalog_failed: bool,
+    purpose_pending: HashSet<Purpose>,
+    purpose_failed: HashSet<Purpose>,
     picker_values: HashMap<&'static str, (Vec<ValueOption>, Option<String>)>,
     focus: HashMap<SharedString, FocusHandle>,
     _subscriptions: Vec<Subscription>,
@@ -221,6 +237,7 @@ impl SessionDefaults {
         let duration_picker = picker(window, cx);
         let buffer_picker = picker(window, cx);
         let keep_picker = picker(window, cx);
+        let purpose_pickers = [picker(window, cx), picker(window, cx)];
         let mut subscriptions = vec![
             cx.subscribe_in(&duration_picker, window, |this, _, event, window, cx| {
                 if let SelectEvent::Confirm(Some(value)) = event
@@ -250,11 +267,24 @@ impl SessionDefaults {
                 }
             }),
         ];
+        for purpose in [Purpose::Compaction, Purpose::Title] {
+            subscriptions.push(cx.subscribe_in(
+                &purpose_pickers[purpose.index()],
+                window,
+                move |this, _, event, _, cx| {
+                    if let SelectEvent::Confirm(Some(value)) = event {
+                        this.save_purpose(purpose, value.clone(), cx);
+                    }
+                },
+            ));
+        }
         if let Some(workspace) = owner.upgrade() {
             subscriptions.push(cx.observe(&workspace, |this, _, cx| {
                 let target = ServerTarget::capture(&this.owner, this.network.as_ref(), cx);
                 if !same_target(this.target.as_ref(), target.as_ref()) {
                     this.refresh(cx);
+                } else if this.purpose_directory != this.current_directory(cx) {
+                    this.refresh_purposes(cx);
                 }
             }));
         }
@@ -283,6 +313,16 @@ impl SessionDefaults {
             duration_picker,
             buffer_picker,
             keep_picker,
+            purpose_pickers,
+            purpose_directory: None,
+            purpose_revision: 0,
+            purpose_edits: [0; 2],
+            purpose_reads: Vec::new(),
+            purpose_models: [Load::Loading, Load::Loading],
+            purpose_catalog: Load::Loading,
+            purpose_catalog_failed: false,
+            purpose_pending: HashSet::new(),
+            purpose_failed: HashSet::new(),
             picker_values: HashMap::new(),
             focus: HashMap::new(),
             _subscriptions: subscriptions,
@@ -296,6 +336,12 @@ impl SessionDefaults {
             return;
         }
         if !same_target(self.target.as_ref(), target.as_ref()) {
+            self.purpose_directory = None;
+            self.purpose_models = [Load::Loading, Load::Loading];
+            self.purpose_catalog = Load::Loading;
+            self.purpose_catalog_failed = false;
+            self.purpose_pending.clear();
+            self.purpose_failed.clear();
             self.global = Load::Loading;
             self.per_session = PerSession::Loading;
             self.compaction = Load::Loading;
@@ -310,6 +356,7 @@ impl SessionDefaults {
         }
         self.read_revision += 1;
         self.target = target.clone();
+        self.refresh_purposes(cx);
         let Some(target) = target else {
             self.reads.clear();
             cx.notify();
@@ -387,6 +434,164 @@ impl SessionDefaults {
             enabled: snapshot.enabled,
             minutes: snapshot.minutes,
         };
+    }
+
+    fn current_directory(&self, cx: &gpui_kit::App) -> Option<String> {
+        self.owner.upgrade()?.read(cx).config_directory()
+    }
+
+    fn owns_purposes(&self, target: &ServerTarget, directory: &str, cx: &gpui_kit::App) -> bool {
+        self.owns(target, cx)
+            && self.purpose_directory.as_deref() == Some(directory)
+            && self.current_directory(cx).as_deref() == Some(directory)
+    }
+
+    fn refresh_purposes(&mut self, cx: &mut Context<Self>) {
+        let directory = self.current_directory(cx);
+        if self.purpose_directory != directory {
+            self.purpose_models = [Load::Loading, Load::Loading];
+            self.purpose_catalog = Load::Loading;
+            self.purpose_catalog_failed = false;
+            self.purpose_pending.clear();
+            self.purpose_failed.clear();
+        } else if !self.purpose_pending.is_empty() {
+            return;
+        }
+        self.purpose_directory = directory.clone();
+        self.purpose_revision += 1;
+        self.purpose_reads.clear();
+        let (Some(target), Some(directory)) = (self.target.clone(), directory) else {
+            return;
+        };
+        let revision = self.purpose_revision;
+        for purpose in [Purpose::Compaction, Purpose::Title] {
+            let target = target.clone();
+            let directory = directory.clone();
+            let client = target.client.clone();
+            let read_directory = directory.clone();
+            let edit = self.purpose_edits[purpose.index()];
+            let reading = NetworkTask::spawn_on(&target.network, async move {
+                client.purpose_model(&read_directory, purpose).await
+            });
+            self.purpose_reads.push(cx.spawn(async move |this, cx| {
+                let result = reading.await;
+                let _ = this.update(cx, |this, cx| {
+                    if this.purpose_revision != revision
+                        || this.purpose_edits[purpose.index()] != edit
+                        || !this.owns_purposes(&target, &directory, cx)
+                    {
+                        return;
+                    }
+                    let state = &mut this.purpose_models[purpose.index()];
+                    match result {
+                        Some(Ok(model)) => {
+                            *state = Load::Ready(model);
+                            this.purpose_failed.remove(&purpose);
+                        }
+                        _ if state.ready().is_none() => *state = Load::Failed,
+                        _ => {}
+                    }
+                    cx.notify();
+                });
+            }));
+        }
+        let client = target.client.clone();
+        let read_directory = directory.clone();
+        let reading = NetworkTask::spawn_on(&target.network, async move {
+            client.purpose_text_models(&read_directory).await
+        });
+        self.purpose_reads.push(cx.spawn(async move |this, cx| {
+            let result = reading.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.purpose_revision != revision || !this.owns_purposes(&target, &directory, cx)
+                {
+                    return;
+                }
+                match result {
+                    Some(Ok(models)) => {
+                        this.purpose_catalog = Load::Ready(models);
+                        this.purpose_catalog_failed = false;
+                    }
+                    _ => {
+                        this.purpose_catalog_failed = true;
+                        if this.purpose_catalog.ready().is_none() {
+                            this.purpose_catalog = Load::Failed;
+                        }
+                    }
+                }
+                cx.notify();
+            });
+        }));
+        cx.notify();
+    }
+
+    fn save_purpose(&mut self, purpose: Purpose, value: String, cx: &mut Context<Self>) {
+        if self.writes.closing() || self.purpose_pending.contains(&purpose) {
+            return;
+        }
+        let (Some(target), Some(directory), Some(expected)) = (
+            self.target.clone(),
+            self.purpose_directory.clone(),
+            self.purpose_models[purpose.index()].ready().cloned(),
+        ) else {
+            return;
+        };
+        if !self.owns_purposes(&target, &directory, cx) {
+            self.refresh_purposes(cx);
+            return;
+        }
+        let model = (!value.is_empty()).then_some(value);
+        if expected.model == model {
+            return;
+        }
+        // Retained unavailable values are display-only; clearing remains available.
+        if let Some(model) = &model
+            && !self
+                .purpose_catalog
+                .ready()
+                .is_some_and(|models| models.iter().any(|entry| &entry.value == model))
+        {
+            return;
+        }
+        self.purpose_edits[purpose.index()] += 1;
+        self.purpose_pending.insert(purpose);
+        let revision = self.purpose_revision;
+        let client = target.client.clone();
+        let write_directory = directory.clone();
+        let (id, writing) = self.writes.submit(&target, async move {
+            client
+                .save_purpose_model(&write_directory, purpose, &expected, model.as_deref())
+                .await
+        });
+        let completion = cx.spawn(async move |this, cx| {
+            let result = writing.await.ok();
+            let _ = this.update(cx, |this, cx| {
+                this.writes.finish(id);
+                if this.purpose_revision != revision || !this.owns_purposes(&target, &directory, cx)
+                {
+                    return;
+                }
+                this.purpose_pending.remove(&purpose);
+                match result {
+                    Some(Ok(model)) => {
+                        this.purpose_models[purpose.index()] = Load::Ready(model);
+                        this.purpose_failed.remove(&purpose);
+                    }
+                    _ => {
+                        this.purpose_failed.insert(purpose);
+                        // Select commits before Confirm; force this picker to
+                        // reconcile back to the still-confirmed saved model.
+                        this.picker_values.remove(match purpose {
+                            Purpose::Compaction => "summary-model",
+                            Purpose::Title => "title-model",
+                        });
+                    }
+                }
+                cx.notify();
+            });
+        });
+        self.writes.observe(id, completion);
+        cx.notify();
     }
 
     /// The mode shown, `None` while either source is still unknown.
@@ -642,7 +847,7 @@ impl SessionDefaults {
     }
 
     pub(crate) fn has_failed_writes(&self) -> bool {
-        self.failed
+        self.failed || !self.purpose_failed.is_empty()
     }
 
     pub(crate) fn cancel_close(&mut self, cx: &mut Context<Self>) {
@@ -660,6 +865,8 @@ impl SessionDefaults {
             "sessions.warming" => Some(&self.duration_picker),
             "sessions.compaction-buffer" => Some(&self.buffer_picker),
             "sessions.compaction-keep" => Some(&self.keep_picker),
+            "sessions.summary-model" => Some(&self.purpose_pickers[0]),
+            "sessions.title-model" => Some(&self.purpose_pickers[1]),
             _ => None,
         };
         if let Some(picker) = picker {
@@ -686,6 +893,8 @@ impl SessionDefaults {
         let picker = match id {
             "duration" => self.duration_picker.clone(),
             "buffer" => self.buffer_picker.clone(),
+            "summary-model" => self.purpose_pickers[0].clone(),
+            "title-model" => self.purpose_pickers[1].clone(),
             _ => self.keep_picker.clone(),
         };
         picker.update(cx, |picker, cx| {
@@ -789,6 +998,128 @@ impl SessionDefaults {
             )
             .into_any_element()
     }
+
+    fn purpose_row(
+        &mut self,
+        purpose: Purpose,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let strings = locale::strings(cx).clone();
+        let (id, item, label) = match purpose {
+            Purpose::Compaction => (
+                "summary-model",
+                "sessions.summary-model",
+                "settings.sessions.auxiliary.summary",
+            ),
+            Purpose::Title => (
+                "title-model",
+                "sessions.title-model",
+                "settings.sessions.auxiliary.title",
+            ),
+        };
+        let saved = self.purpose_models[purpose.index()].ready().cloned();
+        let mut options = vec![ValueOption {
+            disabled: false,
+            value: String::new(),
+            label: strings.get("settings.sessions.auxiliary.engineDefault"),
+        }];
+        if let Some(catalog) = self.purpose_catalog.ready() {
+            options.extend(catalog.iter().map(|model| ValueOption {
+                disabled: false,
+                value: model.value.clone(),
+                label: model.label.clone().into(),
+            }));
+        }
+        if let Some(model) = saved.as_ref().and_then(|saved| saved.model.as_ref())
+            && !options.iter().any(|entry| &entry.value == model)
+        {
+            options.push(ValueOption {
+                disabled: true,
+                value: model.clone(),
+                label: model.clone().into(),
+            });
+        }
+        let selected = saved
+            .as_ref()
+            .map(|saved| saved.model.clone().unwrap_or_default());
+        self.sync_picker(id, options, selected, window, cx);
+        let source = match saved.as_ref() {
+            Some(saved) => strings.format(
+                match saved.scope.as_deref() {
+                    Some("project") => "settings.sessions.auxiliary.projectSource",
+                    Some("user") => "settings.sessions.auxiliary.userSource",
+                    _ => "settings.sessions.auxiliary.newSource",
+                },
+                &[("path", saved.path.as_deref().unwrap_or_default())],
+            ),
+            None => strings.get(if self.purpose_directory.is_none() {
+                "settings.sessions.auxiliary.noDirectory"
+            } else if matches!(self.purpose_models[purpose.index()], Load::Failed) {
+                "settings.sessions.auxiliary.catalogFailed"
+            } else {
+                "settings.sessions.auxiliary.loading"
+            }),
+        };
+        let row = field_row(
+            item,
+            strings.get(label),
+            Some(strings.get("settings.sessions.auxiliary.info")),
+            Self::select(
+                &self.purpose_pickers[purpose.index()],
+                id,
+                strings.get(label),
+                saved.is_none() || self.writes.closing() || self.purpose_pending.contains(&purpose),
+            ),
+            None,
+            cx,
+        );
+        let status = if self.purpose_failed.contains(&purpose) {
+            strings.get("settings.sessions.auxiliary.saveFailed")
+        } else if self.purpose_pending.contains(&purpose) {
+            strings.get("settings.common.actions.saving")
+        } else {
+            SharedString::default()
+        };
+        let source_tooltip = source.clone();
+        let source_id: SharedString = format!("{id}-source").into();
+        let status_id: SharedString = format!("{id}-status").into();
+        div()
+            .min_w_0()
+            .child(row)
+            .child(
+                div()
+                    .id(source_id.clone())
+                    .accessibility_id(source_id)
+                    .role(Role::Paragraph)
+                    .aria_label(source.clone())
+                    .h(gpui_kit::rems(1.25))
+                    .css_text(0.8125, 1.25, cx)
+                    .text_color(cx.global::<Palette>().muted_foreground)
+                    .truncate()
+                    .child(source)
+                    .tooltip(move |window, cx| {
+                        Tooltip::new(source_tooltip.clone()).build(window, cx)
+                    }),
+            )
+            .child(
+                div()
+                    .id(status_id.clone())
+                    .accessibility_id(status_id)
+                    .role(Role::Status)
+                    .aria_label(status.clone())
+                    .h(gpui_kit::rems(1.25))
+                    .css_text(0.8125, 1.25, cx)
+                    .truncate()
+                    .text_color(if self.purpose_failed.contains(&purpose) {
+                        cx.global::<Palette>().status_error
+                    } else {
+                        cx.global::<Palette>().muted_foreground
+                    })
+                    .child(status),
+            )
+            .into_any_element()
+    }
 }
 
 impl Render for SessionDefaults {
@@ -807,6 +1138,7 @@ impl Render for SessionDefaults {
         let durations = WARMING_STEPS
             .iter()
             .map(|step| ValueOption {
+                disabled: false,
                 value: step.to_string(),
                 label: strings.get(&format!(
                     "settings.openchamber.defaults.sessionWarming.duration.{step}"
@@ -877,10 +1209,12 @@ impl Render for SessionDefaults {
             )],
         );
         let keep_options = std::iter::once(ValueOption {
+            disabled: false,
             value: DEFAULT_OPTION.into(),
             label: keep_default,
         })
         .chain(keep_steps.into_iter().map(|count| ValueOption {
+            disabled: false,
             value: count.to_string(),
             label: tokens(count),
         }))
@@ -901,6 +1235,7 @@ impl Render for SessionDefaults {
             buffer_steps.push(buffer_value(buffer));
         }
         let buffer_options = std::iter::once(ValueOption {
+            disabled: false,
             value: DEFAULT_OPTION.into(),
             label: strings.get("settings.openchamber.defaults.compaction.bufferDefault"),
         })
@@ -910,7 +1245,11 @@ impl Render for SessionDefaults {
             } else {
                 tokens(value.parse().unwrap_or_default())
             };
-            ValueOption { value, label }
+            ValueOption {
+                value,
+                label,
+                disabled: false,
+            }
         }))
         .collect();
         let buffer_selected = Some(
@@ -1005,6 +1344,8 @@ impl Render for SessionDefaults {
             .child(background)
             .into_any_element();
         let direction = strings.direction();
+        let summary_model = self.purpose_row(Purpose::Compaction, window, cx);
+        let title_model = self.purpose_row(Purpose::Title, window, cx);
         div()
             .id("sessions-opencode-sections")
             .child(section_with_info(
@@ -1025,12 +1366,36 @@ impl Render for SessionDefaults {
                         cx,
                     ),
                     keep,
+                    summary_model,
+                    title_model,
+                    helper(strings.get("settings.sessions.auxiliary.privacy"), cx),
                     auto,
                     nested,
                 ],
                 None,
                 cx,
             ))
+            .when(
+                self.purpose_catalog_failed
+                    || !self.purpose_failed.is_empty()
+                    || self
+                        .purpose_models
+                        .iter()
+                        .any(|state| matches!(state, Load::Failed)),
+                |view| {
+                    view.child(load_failed(
+                        "sessions-purpose-load-failed",
+                        strings.get(if self.purpose_failed.is_empty() {
+                            "settings.sessions.auxiliary.catalogFailed"
+                        } else {
+                            "settings.sessions.auxiliary.saveFailed"
+                        }),
+                        strings.get("desktopHostSwitcher.actions.retry"),
+                        cx,
+                        |this, cx| this.refresh_purposes(cx),
+                    ))
+                },
+            )
             .when(self.failed, |view| {
                 view.child(
                     div()
@@ -1116,6 +1481,222 @@ mod tests {
                 .clone()
                 .expect("the Sessions page has its OpenCode sections")
         })
+    }
+
+    #[gpui_kit::test]
+    fn purpose_models_keep_saved_values_with_cold_catalogs_and_failed_writes(
+        cx: &mut TestAppContext,
+    ) {
+        use crate::settings_controls::tests::ResponseGate;
+        use gpui_kit::base::actions::{Confirm, SelectUp};
+        use gpui_kit::test::TestWindowExt;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let gate = ResponseGate::new();
+        let write_gate = gate.clone();
+        let cold = Arc::new(AtomicBool::new(true));
+        let held = cold.clone();
+        let server = Server::new(move |request| {
+            if request.target.starts_with("/api/config/agents/") {
+                return if request.method == "PATCH" {
+                    write_gate.hold();
+                    (500, json!({"error":"fixture refusal"}))
+                } else {
+                    (
+                        200,
+                        json!({"source":"json","scope":"project","path":"/work/opencode.jsonc","config":{"model":"missing/saved"},"modelRevision":"a".repeat(64)}),
+                    )
+                };
+            }
+            if request.is("GET", "/api/model") {
+                return (
+                    200,
+                    if held.load(Ordering::SeqCst) {
+                        json!({"data":[]})
+                    } else {
+                        json!({"data":[{"providerID":"p","id":"text","enabled":true,"capabilities":{"output":["text"]}}]})
+                    },
+                );
+            }
+            if request.is("GET", "/api/provider") {
+                return (
+                    200,
+                    json!({"data":[{"id":"p","package":"@opencode/ai/providers/openai"}]}),
+                );
+            }
+            if request.is("GET", "/api/config") {
+                return (200, json!([]));
+            }
+            (404, json!({"error":"fixture unavailable"}))
+        });
+        let (window, workspace) = open(&server, Page::Sessions, cx);
+        workspace.update(cx, |workspace, cx| {
+            workspace.selected = None;
+            workspace
+                .draft_projects
+                .insert(workspace.runtime.clone(), "/work".into());
+            cx.notify();
+        });
+        settle(window, cx);
+        let page = defaults(&workspace, cx);
+        cx.read(|cx| {
+            let page = page.read(cx);
+            assert_eq!(
+                page.purpose_models[0]
+                    .ready()
+                    .expect("purpose model")
+                    .model
+                    .as_deref(),
+                Some("missing/saved")
+            );
+            assert!(page.purpose_catalog_failed);
+        });
+        cold.store(false, Ordering::SeqCst);
+        page.update(cx, |page, cx| page.refresh_purposes(cx));
+        settle(window, cx);
+        let picker = cx.read(|cx| page.read(cx).purpose_pickers[0].clone());
+        // Open the actual Select, move from the retained saved value to the
+        // eligible model above it, and confirm through its list action handler.
+        cx.update_window(window, |_, window, cx| {
+            picker.update(cx, |picker, cx| picker.focus(window, cx));
+            window.dispatch_action(Box::new(Confirm { secondary: false }), cx);
+        })
+        .expect("test window");
+        settle(window, cx);
+        cx.update_window(window, |_, window, cx| {
+            window.dispatch_action(Box::new(SelectUp), cx);
+        })
+        .expect("test window");
+        settle(window, cx);
+        cx.update_window(window, |_, window, cx| {
+            window.dispatch_action(Box::new(Confirm { secondary: false }), cx);
+        })
+        .expect("test window");
+        gate.entered(cx);
+        cx.read(|cx| {
+            assert_eq!(
+                picker.read(cx).selected_value().map(String::as_str),
+                Some("p/text"),
+                "the widget commits its selection before emitting Confirm"
+            );
+            assert_eq!(
+                page.read(cx).purpose_models[0]
+                    .ready()
+                    .expect("purpose model")
+                    .model
+                    .as_deref(),
+                Some("missing/saved"),
+                "pending selection must not become confirmed configuration"
+            );
+        });
+        gate.release();
+        settle(window, cx);
+        cx.update_window(window, |_, window, cx| {
+            window.activate_accessibility_for_test();
+            window.render_frame(cx);
+            let strings = locale::strings(cx);
+            let source = strings.format(
+                "settings.sessions.auxiliary.projectSource",
+                &[("path", "/work/opencode.jsonc")],
+            );
+            let failure = strings.get("settings.sessions.auxiliary.saveFailed");
+            let tree = window
+                .accessibility_tree_for_test()
+                .expect("accessible purpose controls");
+            assert_eq!(
+                tree.nodes
+                    .iter()
+                    .filter(|(_, node)| node.role() == Role::Paragraph
+                        && node.label() == Some(source.as_ref()))
+                    .count(),
+                2,
+                "each purpose exposes its source label as a named paragraph"
+            );
+            assert_eq!(
+                tree.nodes
+                    .iter()
+                    .filter(|(_, node)| node.role() == Role::Status
+                        && node.label() == Some(failure.as_ref()))
+                    .count(),
+                2,
+                "the purpose failure row is exposed alongside the existing retry status"
+            );
+        })
+        .expect("test window");
+        cx.read(|cx| {
+            let page = page.read(cx);
+            assert_eq!(
+                page.purpose_models[0]
+                    .ready()
+                    .expect("purpose model")
+                    .model
+                    .as_deref(),
+                Some("missing/saved")
+            );
+            assert!(page.purpose_failed.contains(&Purpose::Compaction));
+            assert!(page.has_failed_writes());
+            assert_eq!(
+                picker.read(cx).selected_value().map(String::as_str),
+                Some("missing/saved"),
+                "a refused save must restore the real picker to the confirmed model"
+            );
+        });
+        page.update(cx, |page, cx| page.refresh_purposes(cx));
+        settle(window, cx);
+        cx.read(|cx| {
+            assert!(!page.read(cx).purpose_failed.contains(&Purpose::Compaction));
+            assert_eq!(
+                picker.read(cx).selected_value().map(String::as_str),
+                Some("missing/saved"),
+                "explicit refresh must not leave the refused widget value visible"
+            );
+        });
+        assert_eq!(
+            server
+                .writes()
+                .iter()
+                .filter(|write| write.is("PATCH", "/api/config/agents/compaction"))
+                .count(),
+            1
+        );
+    }
+
+    #[gpui_kit::test]
+    fn purpose_directory_switch_retires_old_source_and_catalog_authority(cx: &mut TestAppContext) {
+        let server = Server::new(|request| {
+            if request.is("GET", "/api/config") {
+                return (200, json!([]));
+            }
+            if request.target.starts_with("/api/config/agents/") {
+                return (
+                    200,
+                    json!({"source":"json","scope":"project","path":"/work/opencode.jsonc","config":{"model":"missing/saved"},"modelRevision":"a".repeat(64)}),
+                );
+            }
+            (503, json!({"error":"fixture unavailable"}))
+        });
+        let (window, workspace) = open(&server, Page::Sessions, cx);
+        workspace.update(cx, |workspace, cx| {
+            workspace.selected = None;
+            workspace
+                .draft_projects
+                .insert(workspace.runtime.clone(), "/work".into());
+            cx.notify();
+        });
+        settle(window, cx);
+        let page = defaults(&workspace, cx);
+        cx.read(|cx| assert_eq!(page.read(cx).purpose_directory.as_deref(), Some("/work")));
+        workspace.update(cx, |workspace, cx| {
+            workspace
+                .draft_projects
+                .insert(workspace.runtime.clone(), "/another".into());
+            cx.notify();
+        });
+        settle(window, cx);
+        cx.read(|cx| assert_eq!(page.read(cx).purpose_directory.as_deref(), Some("/another")));
+        assert!(
+            server.writes().is_empty(),
+            "navigation cannot write or clear an override"
+        );
     }
 
     #[gpui_kit::test]

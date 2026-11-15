@@ -415,6 +415,8 @@ export const createFeatureRoutesRuntime = (dependencies) => {
     });
 
     registerConfigEntityRoutes(app, {
+      buildOpenCodeUrl,
+      getOpenCodeAuthHeaders,
       resolveProjectDirectory,
       resolveOptionalProjectDirectory,
       refreshOpenCodeAfterConfigChange,

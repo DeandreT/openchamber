@@ -32,6 +32,13 @@ const META_SIZE: f32 = 0.781_25;
 const META_LINE: f32 = 1.125;
 
 impl Workspace {
+    pub(crate) fn new_session_view_active(&self) -> bool {
+        self.selected.is_none()
+            && !self.archive_open
+            && !self.source_board_open
+            && !self.scheduled_tasks_open
+    }
+
     pub(crate) fn render_startup(
         &mut self,
         palette: &Palette,
@@ -39,6 +46,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
+        self.resume_starter_activation(window, cx);
         let strings = locale::strings(cx).clone();
         let project_label = self.draft_project_label();
         let title = if let Some(project) = &project_label {

@@ -521,6 +521,7 @@ impl Workspace {
         self.retired_networks.retain(|(runtime, network)| {
             !network.is_idle()
                 || self.attachment_staging.holds_runtime(runtime)
+                || self.chat_drafts.holds_runtime(runtime)
                 || self.queue.enqueues.holds_runtime(runtime)
                 || self.queue.takes.holds_runtime(runtime)
                 || self.queue.prefixes.holds_runtime(runtime)

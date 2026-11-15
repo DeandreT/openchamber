@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
-import { findRatchetViolations, parseOxlintReport } from './check-changed.mjs';
+import { findRatchetViolations, lintFileBatches, parseOxlintReport } from './check-changed.mjs';
 
 const counts = (entries) => new Map(entries.map(([file, rule, count]) => [`${file}\0${rule}`, count]));
 
@@ -35,4 +35,14 @@ test('a report with no files to lint is no findings, not a broken gate', () => {
   assert.deepEqual(parseOxlintReport(`No files found to lint.\n${empty}`), []);
   assert.deepEqual(parseOxlintReport(empty), []);
   assert.throws(() => parseOxlintReport(''), /oxlint produced no report/);
+});
+
+test('large changes retain every file within bounded lint command lines', () => {
+  const files = Array.from({ length: 2200 }, (_, index) => `C:/a long repository path/packages/ui/src/components/feature-${index}.tsx`);
+  const batches = lintFileBatches(files);
+  assert.ok(batches.length > 1);
+  assert.deepEqual(batches.flat(), files);
+  for (const batch of batches) assert.ok(batch.reduce((size, file) => size + file.length * 2 + 3, 0) <= 16000);
+  assert.deepEqual(lintFileBatches([]), []);
+  assert.deepEqual(lintFileBatches(['a.ts', 'b.ts']), [['a.ts', 'b.ts']]);
 });

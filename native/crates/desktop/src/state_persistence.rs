@@ -287,6 +287,8 @@ impl Workspace {
                         this.restore_draft_previews(cx);
                         this.restore_composer_draft(window, cx);
                         this.persistence.status = Status::Ready;
+                        this.settle_chat_folder(window, cx);
+                        if this.send_catalog.settings.is_some() { this.open_default_draft(window, cx); }
                     }
                     Err(error) => {
                         this.persistence.worker = None;
@@ -606,9 +608,7 @@ impl Workspace {
             }
             for panel in &panels {
                 panel.update(cx, |panel, cx| {
-                    if let Some(client) = &client {
-                        panel.refresh_write_client(&self.runtime, client);
-                    }
+                    panel.refresh_write_client(&self.runtime, client.as_ref());
                     panel.prepare_close(window, cx);
                 });
             }
@@ -860,9 +860,7 @@ impl Workspace {
         let mut pending = Vec::new();
         for panel in &panels {
             panel.update(cx, |panel, cx| {
-                if let Some(client) = &client {
-                    panel.refresh_write_client(&self.runtime, client);
-                }
+                panel.refresh_write_client(&self.runtime, client.as_ref());
                 panel.prepare_close(window, cx);
             });
             if let Some(receipt) = panel.update(cx, |panel, cx| panel.take_pending_write(cx)) {

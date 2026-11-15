@@ -49,6 +49,8 @@ struct MemoryFile {
     /// Runtime, then root directory.
     #[serde(default)]
     file_trees: BTreeMap<String, BTreeMap<String, TreeMemory>>,
+    #[serde(default)]
+    draft_destinations: BTreeMap<String, Option<String>>,
     /// The work status sections the user folded or unfolded, by section ID
     /// (`workStatusExpandedSections`). The web keeps one map for every
     /// runtime, so this one is not keyed by runtime either.
@@ -113,11 +115,49 @@ impl UiMemory {
         self.file.file_trees.get(runtime)?.get(root)
     }
 
+    pub(crate) fn draft_destination(
+        &self,
+        runtime: &str,
+    ) -> Option<openchamber_native_core::chat_draft::DraftDestination> {
+        use openchamber_native_core::chat_draft::DraftDestination;
+        self.file
+            .draft_destinations
+            .get(runtime)
+            .map(|directory| match directory {
+                Some(directory) => DraftDestination::Project(directory.clone()),
+                None => DraftDestination::Chat,
+            })
+    }
+
     /// Whether the user left the work status section `id` expanded; `None`
     /// until they fold or unfold it, when the section's default applies.
     pub(crate) fn work_status_section_expanded(&self, id: &str) -> Option<bool> {
         self.file.work_status_expanded_sections.get(id).copied()
     }
+}
+
+pub(crate) fn remember_draft_destination(
+    runtime: &str,
+    destination: &openchamber_native_core::chat_draft::DraftDestination,
+    cx: &mut App,
+) {
+    use openchamber_native_core::chat_draft::DraftDestination;
+    let directory = match destination {
+        DraftDestination::Chat => None,
+        DraftDestination::Project(directory) if directory.len() <= MAX_PATH_LENGTH => {
+            Some(directory.clone())
+        }
+        DraftDestination::Project(_) => return,
+    };
+    let memory = cx.default_global::<UiMemory>();
+    if memory.file.draft_destinations.get(runtime) == Some(&directory) {
+        return;
+    }
+    memory
+        .file
+        .draft_destinations
+        .insert(runtime.to_owned(), directory);
+    save(cx);
 }
 
 /// Remembers whether the work status section `id` is expanded.
@@ -302,6 +342,33 @@ mod tests {
         ));
         let _ = fs::remove_dir_all(&directory);
         directory
+    }
+
+    #[gpui_kit::test]
+    fn draft_destinations_are_scoped_to_the_runtime_and_survive_restart(cx: &mut TestAppContext) {
+        use openchamber_native_core::chat_draft::DraftDestination;
+        let directory = scratch("draft-target");
+        cx.update(|cx| {
+            cx.set_global(UiMemory::load(&directory));
+            remember_draft_destination("chat-host", &DraftDestination::Chat, cx);
+            remember_draft_destination(
+                "project-host",
+                &DraftDestination::Project("/work/project".into()),
+                cx,
+            );
+        });
+        cx.run_until_parked();
+        let restored = UiMemory::load(&directory);
+        assert_eq!(
+            restored.draft_destination("chat-host"),
+            Some(DraftDestination::Chat)
+        );
+        assert_eq!(
+            restored.draft_destination("project-host"),
+            Some(DraftDestination::Project("/work/project".into()))
+        );
+        assert_eq!(restored.draft_destination("another-host"), None);
+        let _ = fs::remove_dir_all(directory);
     }
 
     #[gpui_kit::test]

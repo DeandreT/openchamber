@@ -34,6 +34,11 @@ pub enum BlockingRequestEvent {
 /// One domain change announced by the server.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ServerEvent {
+    NativeAgent(openchamber_native_core::native_agent::AgentEvent),
+    /// A native RPC event failed namespace, location or strict SDK validation.
+    NativeAgentInvalid {
+        directory: Option<String>,
+    },
     /// A permission or form transition. Real-session events can omit location;
     /// location-owned forms always retain an explicit directory.
     BlockingRequest {
@@ -380,6 +385,17 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
         .get("type")
         .and_then(Value::as_str)
         .unwrap_or_default();
+    if kind.starts_with("rpc.openchamber.native-agent.") {
+        return vec![match crate::native_agent::published(kind, payload) {
+            Ok(event) => ServerEvent::NativeAgent(event),
+            Err(_) => ServerEvent::NativeAgentInvalid {
+                directory: payload
+                    .pointer("/location/directory")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+            },
+        }];
+    }
     if let Some(events) = translate_openchamber(kind, payload) {
         return events;
     }
@@ -896,8 +912,18 @@ fn translate(payload: &Value) -> Vec<ServerEvent> {
                 }
             };
             let child = projection::tool_child(data.get("metadata"), data.get("input"));
-            let facts =
+            let mut facts =
                 crate::tool_facts::tool_facts(data.get("input"), data.get("metadata"), failure);
+            facts.execution = data
+                .get("executed")
+                .and_then(Value::as_bool)
+                .map(
+                    |executed| openchamber_native_core::tool_shells::ToolExecution {
+                        call_id: call_id.to_owned(),
+                        provider_executed: executed,
+                        live: kind == "session.tool.called",
+                    },
+                );
             let mut events = vec![transcript(TranscriptEvent::ToolTransition {
                 message_id: message_id.clone(),
                 part_id: PartId::from(call_id),

@@ -7,6 +7,7 @@ from contextlib import ExitStack
 import hashlib
 import json
 import os
+import shlex
 from pathlib import Path
 import subprocess
 import sys
@@ -16,6 +17,7 @@ import time
 from clipboard_probe import ClipboardProbe
 from native_adapter import NativeClient, _atspi, accessibility_enabled, set_accessibility
 import virtual_display
+from executables import require_executable
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -143,10 +145,12 @@ def qualify(args):
                 for key, value in (("preload-engines", "['libpinyin', 'xkb:us::eng']"), ("engines-order", "['libpinyin', 'xkb:us::eng']"), ("enable-by-default", "true")):
                     command(env, "gsettings", "set", "org.freedesktop.ibus.general", key, value)
                 command(env, "gsettings", "set", "com.github.libpinyin.ibus-libpinyin.libpinyin", "lua-extension", "false")
-                start("ibus", ["ibus-daemon", "--xim", "--panel=disable", "--config=/usr/lib/ibus/ibus-dconf", "--emoji-extension=disable", "--cache=none"], env)
+                config = require_executable("ibus-dconf", "/usr/lib/ibus/ibus-dconf", "/usr/libexec/ibus-dconf")
+                engine = require_executable("ibus-engine-libpinyin", "/usr/lib/ibus-libpinyin/ibus-engine-libpinyin", "/usr/libexec/ibus-engine-libpinyin")
+                start("ibus", ["ibus-daemon", "--xim", "--panel=disable", f"--config={shlex.quote(str(config))}", "--emoji-extension=disable", "--cache=none"], env)
                 wait_for("IBus did not register libpinyin", lambda: "libpinyin" in command(env, "ibus", "list-engine"))
                 env["IBUS_ADDRESS"] = command(env, "ibus", "address").strip()
-                start("libpinyin", ["/usr/lib/ibus-libpinyin/ibus-engine-libpinyin", "--ibus"], env)
+                start("libpinyin", [str(engine), "--ibus"], env)
 
             clipboard = ClipboardProbe()
             set_accessibility(True)

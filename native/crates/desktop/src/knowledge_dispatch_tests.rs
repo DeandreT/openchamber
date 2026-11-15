@@ -299,20 +299,22 @@ fn accepted_implementation_transfers_pending_save_and_send_without_ui_callbacks(
         server.requests("POST", "/api/session").is_empty(),
         "save gates session creation"
     );
-    cx.update(|cx| {
-        cx.on_app_quit(move |cx| {
-            let pending = panel.update(cx, |panel, cx| panel.take_quit_write(cx));
-            workspace.update(cx, |workspace, _| workspace.connection = None);
-            gate.release();
-            async move {
-                if let Some(pending) = pending {
-                    pending.await;
-                }
-            }
-        })
-        .detach();
+    let pending = cx.update(|cx| {
+        let pending = panel
+            .update(cx, |panel, cx| panel.take_quit_write(cx))
+            .expect("accepted save and send transfer to an independent drain");
+        workspace.update(cx, |workspace, _| workspace.connection = None);
+        pending
     });
-    cx.quit();
+    gate.release();
+    // Block the UI session as final quit does, without making HTTP completion
+    // race GPUI's 200 ms best-effort shutdown deadline.
+    cx.foreground_executor().block_on(pending);
+    assert_eq!(
+        cx.read(|cx| panel.read(cx).pending_dispatches),
+        1,
+        "the complete I/O drain required no foreground dispatch callback"
+    );
     assert_one_send(&server);
     let operations = operations.lock().expect("request log");
     let save = operations
@@ -404,20 +406,20 @@ fn transfer_existing_save(previous: &str, expected_saves: usize, cx: &mut TestAp
         cx.read(|cx| panel.read(cx).sending.as_deref() == Some("p1")),
         "the send is accepted before save completion"
     );
-    cx.update(|cx| {
-        cx.on_app_quit(move |cx| {
-            let pending = panel.update(cx, |panel, cx| panel.take_quit_write(cx));
-            workspace.update(cx, |workspace, _| workspace.connection = None);
-            gate.release();
-            async move {
-                if let Some(pending) = pending {
-                    pending.await;
-                }
-            }
-        })
-        .detach();
+    let pending = cx.update(|cx| {
+        let pending = panel
+            .update(cx, |panel, cx| panel.take_quit_write(cx))
+            .expect("accepted saves and send transfer to an independent drain");
+        workspace.update(cx, |workspace, _| workspace.connection = None);
+        pending
     });
-    cx.quit();
+    gate.release();
+    cx.foreground_executor().block_on(pending);
+    assert_eq!(
+        cx.read(|cx| panel.read(cx).pending_dispatches),
+        1,
+        "the complete I/O drain required no foreground dispatch callback"
+    );
     assert_one_send(&server);
     let operations = operations.lock().expect("request log");
     let saves: Vec<_> = operations

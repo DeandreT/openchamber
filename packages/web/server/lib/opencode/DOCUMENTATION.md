@@ -24,6 +24,7 @@ Diagnostic logging for the timeline export (`proxy.js` error lines, the lifecycl
 - `packages/web/server/lib/opencode/network-runtime.js`: OpenCode URL construction, health-probe readiness checks, and API prefix runtime.
 - `packages/web/server/lib/opencode/project-directory-runtime.js`: request-scoped and settings-backed project directory resolution/validation runtime.
 - `packages/web/server/lib/opencode/config-entity-routes.js`: route registration for agent/command/MCP config orchestration. OpenCode 2 watches these files, so a write is live as soon as it lands and the route answers plain success.
+
 - `packages/web/server/lib/opencode/mcp-oauth.js`: MCP OAuth from a browser on another machine: the start interception, the generated redirects, and the public callback. See "Remote MCP OAuth" below.
 - `packages/web/server/lib/opencode/websearch-config.js`: writes OpenCode's `websearch` choice (`PUT /api/config/websearch` in `routes.js`; body `{ selection: false | null | "random" | "<provider id>" }`, `null` removes the key, so OpenCode falls back to the answer given in its chat consent form, which it keeps in its own store) to `OPENCODE_CONFIG` when set, else the user config. `GET /api/config/websearch` returns `{ projectPath }`: the project config whose `websearch` overrides that write (see the load order below), so Settings disables the choice and names the file instead of letting it snap back; `findWebSearchProjectOverride` in `config-v2.js` holds the rule. The pure transform is `writeWebSearchSelection` in `config-v2.js`, shared with the VS Code bridge (`api:config/websearch`). The same file writes OpenCode's compaction settings (`PUT /api/config/compaction`; body `{ auto?, buffer?, keepTokens?, background? }`, token counts (for `buffer` also a share of the window such as `"20%"`, the form Settings writes, which needs OpenCode 2.2.4) or `null` to remove the key and booleans written as they are, so `false` also overrides a `true` in a lower config layer; they set `compaction.auto`, `compaction.buffer`, `compaction.keep.tokens` and `experimental.background_compaction`) to the same target; `compactionUpdateSchema` and `writeCompactionSettings` in `config-v2.js` are shared with the bridge (`api:config/compaction`). Settings reads the global values back from OpenCode's config, not from the file. A project config can still set any of these for itself; Settings says so in one line and does not look for project overrides, since whoever wrote one knows it is there.
 
@@ -132,6 +133,41 @@ in that user's sessions. On the fallback path the same rules are merged into
 - `packages/web/server/lib/opencode/worktree-directory.js`: resolves OpenCode's `worktree.directory` into the absolute parent directory for new worktrees — relative paths start at the canonical checkout, absolute paths are used as-is, and a leading `~` means home. Pure; `shared.js` reads the merged config on the canonical checkout and the VS Code extension host re-exports the module through `packages/vscode/src/worktree-directory.ts`, so both runtimes put worktrees in the same place. Null when unset, so `packages/web/server/lib/git/service.js` keeps the data-dir default.
 - `packages/web/server/lib/ui-auth/ui-auth.js`: UI session authentication runtime (outside OpenCode module).
 - `packages/web/server/lib/ui-auth/ui-passkeys.js`: UI passkey storage and WebAuthn registration/authentication helpers (outside OpenCode module).
+
+## Built-in summary and title model selection
+
+The existing agent configuration routes own `agents.compaction.model` and
+`agents.title.model`. Only a changed, non-null model on those literal agent IDs
+requires a fresh configured ordinary text-generation catalog. Native-agent
+markers, native packages and unknown packages are ineligible. Primary and custom
+agent choices keep their existing behavior. Unrelated edits, unchanged saved
+models and explicit null removal need no catalog. Failed or cold catalog reads
+refuse a changed selection without writing a fallback.
+The ordinary protocol list mirrors text-provider exports in pinned
+`@opencode/ai` 2.2.7 and known AI SDK text packages. Its native transport twin
+must be updated with it when the engine's package contract changes.
+
+Model-only updates preserve the existing Markdown or JSONC source and scope.
+They edit the raw model field and remove its legacy variant, keeping unknown
+siblings, comments and the exact Markdown body. Deleted YAML fields retain their
+comments on the document. Built-in agents without a source use the existing user
+override path; removing an absent override creates no file.
+Markdown document edits retry the reader's existing `sanitizeFrontmatter`
+normalization only after strict YAML errors. This keeps accepted unquoted-colon
+scalars writable while retaining the document's unmanaged fields and comments.
+
+Purpose config reads include `modelRevision`, an opaque digest of source, scope,
+path and canonical saved model. A model PATCH can send its quoted value as
+`If-Match`. The route checks it after catalog validation, immediately before the
+synchronous source-owned update, and returns 409 if ownership or model changed.
+Unrelated sibling changes do not invalidate this model-only precondition.
+
+### Why purpose models use agent routes
+
+OpenCode already owns execution and watches these agent settings. A separate
+auxiliary-model route would duplicate configuration ownership. Settings never
+creates a session or grants `provider.use`; OpenCode evaluates provider policy
+against the actual session when the agent runs.
 
 ## Public exports (auth.js)
 `auth.js` is read-only. OpenCode 2.x owns every credential and, since 2.0.20,
@@ -254,6 +290,7 @@ Hard rules, verified against v2.0.8 (the completion stamp against v2.0.16)
 - `AGENT_SCOPE`, `COMMAND_SCOPE`, `SKILL_SCOPE`: Scope constants with USER and PROJECT values.
 - `ensureDirs()`: Creates required OpenCode directories.
 - `parseMdFile(filePath)`, `parseMdFileAsync(filePath)`, `writeMdFile(filePath, frontmatter, body)`: Markdown file operations with YAML frontmatter. A rewrite goes through `writeFileAtomic`; `flag: 'wx'` creates the file directly and passes EEXIST on.
+- `sanitizeFrontmatter(frontmatter)`: The existing lenient scalar normalization shared by Markdown reads and source-preserving purpose-model document edits. Strictly valid headers bypass it.
 - `getConfigPaths(workingDirectory)`, `readConfigLayers(workingDirectory)`, `readConfig(workingDirectory)`: Config file operations with layer merging (user, project, custom). `readConfigLayers` isolates `INVALID_JSONC` per layer: a broken file is omitted from the merge (`{}` for that layer only), recorded on `layerErrors`, and does not block valid sibling layers. Writes still refuse to overwrite the broken file.
 - `readConfigFile(filePath)`: Reads one config file. Missing, whitespace-only, and comment-only files return `{}`; a comment-only file is recognized by `ValueExpected` being the only parse error. A `jsonc-parser` error that produces a partial or non-object tree throws `INVALID_JSONC` — partial parse trees must never be treated as authoritative (avoids rewriting a `$schema`-only stub over a full config). Content that yields no JSON value for any other reason (YAML, plain text) also throws instead of reading as empty.
 - `readConfigLayer(filePath)`: Same parse as `readConfigFile`, but isolates `INVALID_JSONC` to `{ config: {}, error }` so plugin/MCP/agent readers can skip one broken layer without aborting valid siblings. Writes still refuse to overwrite the broken file.

@@ -89,6 +89,8 @@ implementation skills unless a specialized subsystem has to be interpreted.
 
 Before creating or updating a pull request, read `CONTRIBUTING.md` (*Pull Requests*) and fill `.github/PULL_REQUEST_TEMPLATE.md` with evidence for the final HEAD.
 
+For visual Rust desktop changes, follow `docs/rust-desktop/PARITY.md` (*Visual pull request contract*) before editing so the base-revision screenshots are captured before the change.
+
 A **product decision** belongs to the maintainer and is settled before the code,
 never inside the diff. A product decision is anything where two reasonable people
 could disagree about whether it should exist or how it should behave: a new

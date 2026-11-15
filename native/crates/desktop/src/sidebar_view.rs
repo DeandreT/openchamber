@@ -73,6 +73,7 @@ impl Workspace {
         &self,
         palette: &Palette,
         direction: Direction,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let strings = locale::strings(cx).clone();
@@ -102,8 +103,7 @@ impl Workspace {
                     .padding_start(direction, px(12.0))
                     .child(self.render_title_controls(palette, direction, cx)),
             )
-            .child(self.render_sidebar_toolbar(&strings, palette, direction, cx))
-            .children(self.render_sidebar_search(palette, direction, cx))
+            .child(self.render_sidebar_toolbar(&strings, palette, direction, window, cx))
             .children(self.render_bulk_bar(palette, direction, cx))
             .when_some(status, |this, status| {
                 this.child(
@@ -248,7 +248,7 @@ impl Workspace {
             )
             .child(
                 on_activate(new_session, cx, |this, window, cx| {
-                    this.show_new_session(window, cx);
+                    this.open_new_session(crate::chat_draft::NewSession::Plain, window, cx);
                 })
                 .test_support(),
             )
@@ -262,23 +262,11 @@ impl Workspace {
         strings: &Strings,
         palette: &Palette,
         direction: Direction,
+        window: &Window,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let display_menu = self.render_display_menu(palette, direction, cx);
         let more_menu = self.render_more_menu(palette, direction, cx);
-        let searching = self.session_management.search.is_some();
-        let search = toolbar_button(
-            "search-sessions",
-            "search",
-            strings.get("sessions.sidebar.header.actions.searchSessions"),
-            if searching {
-                ToolbarTone::Pressed
-            } else {
-                ToolbarTone::Idle
-            },
-            palette,
-        )
-        .aria_expanded(searching);
         div()
             .id("sidebar-toolbar")
             .h(px(TOOLBAR_HEIGHT))
@@ -288,12 +276,7 @@ impl Workspace {
             .gap(px(6.0))
             .padding_start(direction, px(13.0))
             .padding_end(direction, px(10.0))
-            .child(
-                on_activate(search, cx, |this, window, cx| {
-                    this.toggle_sidebar_search(window, cx)
-                })
-                .test_support(),
-            )
+            .children(self.render_sidebar_search(palette, direction, window, cx))
             .child(
                 on_activate(
                     toolbar_button(
@@ -611,7 +594,7 @@ impl Workspace {
                 collapsed,
             } => {
                 let toggled = item.clone();
-                self.header_row(
+                let header = self.header_row(
                     HeaderRow {
                         key,
                         label: zone_label(&strings, *activity),
@@ -624,7 +607,69 @@ impl Workspace {
                     direction,
                     cx,
                     move |this, _, cx| this.toggle_collapsed(&toggled, cx),
-                )
+                );
+                if *activity != ActivityKey::Chats {
+                    header
+                } else {
+                    let focus = window
+                        .use_keyed_state("chats-new-session-focus", cx, |_, cx| {
+                            cx.focus_handle().tab_index(0).tab_stop(true)
+                        })
+                        .read(cx)
+                        .clone();
+                    let add = on_activate(
+                        div()
+                            .id("chats-new-session")
+                            .role(Role::Button)
+                            .accessibility_id("chats-new-session")
+                            .aria_label(strings.get("sessions.sidebar.header.actions.newSession"))
+                            .absolute()
+                            .top(px((CAPTION_HEIGHT - 24.0) / 2.0))
+                            .inset_end(direction, px(2.0 - LIST_PADDING_END))
+                            .size(px(24.0))
+                            .rounded(px(CONTROL_RADIUS))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .opacity(0.0)
+                            .focus(|style| style.opacity(1.0))
+                            .group_hover("chats-zone", |style| style.opacity(1.0))
+                            .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation()
+                            })
+                            .on_key_down(cx.listener(
+                                |this, event: &gpui_kit::KeyDownEvent, window, cx| {
+                                    if matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                        && !event.keystroke.modifiers.control
+                                        && !event.keystroke.modifiers.platform
+                                        && !event.keystroke.modifiers.alt
+                                        && !event.keystroke.modifiers.shift
+                                    {
+                                        cx.stop_propagation();
+                                        this.open_new_session(
+                                            crate::chat_draft::NewSession::Chat,
+                                            window,
+                                            cx,
+                                        );
+                                    }
+                                },
+                            ))
+                            .child(glyph("add", 16.0, palette.muted_foreground)),
+                        cx,
+                        |this, window, cx| {
+                            this.open_new_session(crate::chat_draft::NewSession::Chat, window, cx)
+                        },
+                    )
+                    .track_focus(&focus)
+                    .test_support();
+                    div()
+                        .relative()
+                        .group("chats-zone")
+                        .child(header)
+                        .child(add)
+                        .into_any_element()
+                }
             }
             SidebarItem::Project {
                 key,
@@ -1174,13 +1219,10 @@ enum ToolbarTone {
     Idle,
     /// Foreground glyph: a page this button's menu opened is on screen.
     Lit,
-    /// The selection fill: what the button opened is on screen and the next
-    /// click closes it.
-    Pressed,
 }
 
 /// A 24 px toolbar button around a 16 px glyph (`headerActionButtonClass`
-/// with the idle or pressed page class).
+/// with the idle or lit page class).
 fn toolbar_button(
     id: &'static str,
     icon: &'static str,
@@ -1192,11 +1234,7 @@ fn toolbar_button(
     let rest = match tone {
         ToolbarTone::Idle => palette.muted_foreground,
         ToolbarTone::Lit => palette.foreground,
-        ToolbarTone::Pressed => palette.selection_foreground,
     };
-    let pressed = tone == ToolbarTone::Pressed;
-    // A pressed button keeps its selection colours under the pointer.
-    let hover = if pressed { rest } else { foreground };
     div()
         .id(id)
         .group(id)
@@ -1210,8 +1248,7 @@ fn toolbar_button(
         .items_center()
         .justify_center()
         .cursor_pointer()
-        .when(pressed, |this| this.bg(palette.selection))
-        .child(glyph(icon, 16.0, rest).group_hover(id, move |style| style.text_color(hover)))
+        .child(glyph(icon, 16.0, rest).group_hover(id, move |style| style.text_color(foreground)))
 }
 
 /// How a header is drawn.
