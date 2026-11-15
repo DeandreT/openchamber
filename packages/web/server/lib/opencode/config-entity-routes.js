@@ -178,7 +178,6 @@ export const registerConfigEntityRoutes = (app, dependencies) => {
 
       if (!(await validatePurposeModel(agentName, config, directory, res))) return;
       console.log('[Server] Creating agent:', agentName);
-      console.log('[Server] Config received:', JSON.stringify(config, null, 2));
       console.log('[Server] Scope:', scope, 'Working directory:', directory);
 
       const created = createAgent(agentName, config, directory, scope);
@@ -208,7 +207,6 @@ export const registerConfigEntityRoutes = (app, dependencies) => {
         return res.status(409).json({ code: 'purpose_model_conflict', error: 'Agent source or model changed. Refresh before saving.' });
       }
       console.log(`[Server] Updating agent: ${agentName}`);
-      console.log('[Server] Updates:', JSON.stringify(updates, null, 2));
       console.log('[Server] Working directory:', directory);
 
       const updated = updateAgent(agentName, updates, directory);
@@ -379,7 +377,6 @@ export const registerConfigEntityRoutes = (app, dependencies) => {
       }
 
       console.log('[Server] Creating command:', commandName);
-      console.log('[Server] Config received:', JSON.stringify(config, null, 2));
       console.log('[Server] Scope:', scope, 'Working directory:', directory);
 
       const created = createCommand(commandName, config, directory, scope);
@@ -403,7 +400,6 @@ export const registerConfigEntityRoutes = (app, dependencies) => {
       }
 
       console.log(`[Server] Updating command: ${commandName}`);
-      console.log('[Server] Updates:', JSON.stringify(updates, null, 2));
       console.log('[Server] Working directory:', directory);
 
       const updated = updateCommand(commandName, updates, directory);
