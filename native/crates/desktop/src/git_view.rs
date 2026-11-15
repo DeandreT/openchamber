@@ -439,7 +439,7 @@ impl GitView {
                         .w_full()
                         .flex_row_from(direction)
                         .items_center()
-                        .justify_end()
+                        .justify_line_end()
                         .gap(px(8.0))
                         .child(
                             button(

@@ -622,7 +622,7 @@ impl Workspace {
             .flex()
             .flex_row_from(direction)
             .items_center()
-            .justify_end()
+            .justify_line_end()
             .gap(px(6.))
             .px(px(12.))
             .py(px(8.));

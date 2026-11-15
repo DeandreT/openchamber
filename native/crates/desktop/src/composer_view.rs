@@ -588,7 +588,7 @@ impl Workspace {
                             .min_w_0()
                             .flex_row_from(direction)
                             .items_center()
-                            .justify_end()
+                            .justify_line_end()
                             .gap(px(END_GAP))
                             // Synthetic data has no catalogs to select from.
                             .when(!self.is_synthetic(), |this| {

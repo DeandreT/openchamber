@@ -184,7 +184,7 @@ impl Workspace {
             .min_w_0()
             .flex_row_from(direction)
             .items_center()
-            .justify_end()
+            .justify_line_end()
             .margin_end(direction, px(-4.0))
             .gap(px(8.0))
             .child(

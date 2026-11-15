@@ -173,7 +173,7 @@ pub(crate) fn delete_dialog(
             div()
                 .w_full()
                 .flex_row_from(direction)
-                .justify_end()
+                .justify_line_end()
                 .gap(px(8.0))
                 .child(
                     small(

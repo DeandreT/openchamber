@@ -437,6 +437,7 @@ mod tests {
                 window.render_frame(cx);
                 let state = workspace.read(cx);
                 let composer = window.find("composer").bounds();
+                let send = window.find("composer-submit").bounds();
                 let rail = window.find("rail-files").bounds();
                 let area = state.chat_area_width(window);
                 let reserved = state.panel_area(window) - area;
@@ -457,6 +458,16 @@ mod tests {
                     composer.left() + composer.size.width / 2.0,
                     center,
                     "the capped startup column stays centered in {language}"
+                );
+                let left = send.left() - composer.left();
+                let right = composer.right() - send.right();
+                assert!(
+                    if direction == Direction::LeftToRight {
+                        right < left
+                    } else {
+                        left < right
+                    },
+                    "the send control stays at the line end in {language}"
                 );
                 if panel_open {
                     let panel = window.find("side-panel").bounds();

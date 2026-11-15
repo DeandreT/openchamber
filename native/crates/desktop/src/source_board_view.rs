@@ -1863,7 +1863,7 @@ impl SourceBoard {
                 div()
                     .flex_row_from(direction)
                     .flex_wrap()
-                    .justify_end()
+                    .justify_line_end()
                     .gap(px(8.0))
                     .children(actions),
             )

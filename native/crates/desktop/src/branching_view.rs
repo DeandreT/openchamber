@@ -52,7 +52,7 @@ impl Workspace {
             .h(px(32.0))
             .pt(px(8.0))
             .flex_row_from(direction)
-            .justify_end()
+            .justify_line_end()
             .gap(px(6.0))
             .opacity(0.0)
             .group_hover(MESSAGE_GROUP, |style| style.opacity(1.0))

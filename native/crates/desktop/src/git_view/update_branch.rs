@@ -1190,7 +1190,7 @@ impl GitView {
                 this.child(
                     div()
                         .flex_row_from(direction)
-                        .justify_end()
+                        .justify_line_end()
                         .child(text_button(
                             "git-update-done",
                             strings.get(if failed {

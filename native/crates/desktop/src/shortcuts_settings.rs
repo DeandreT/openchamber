@@ -588,7 +588,7 @@ impl Render for Recorder {
             .child(
                 div()
                     .flex_row_from(direction)
-                    .justify_end()
+                    .justify_line_end()
                     .gap(px(8.0))
                     .child(on_activate(
                         button(

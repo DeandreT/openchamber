@@ -2,7 +2,7 @@
 //! counterpart of the web client's logical CSS properties (`ps-`, `me-`,
 //! `inset-s-`). English stays as measured; right-to-left locales mirror it.
 
-use gpui_kit::{Pixels, Styled, prelude::FluentBuilder};
+use gpui_kit::{JustifyContent, Pixels, Styled, prelude::FluentBuilder};
 
 use crate::locale::Direction;
 
@@ -14,6 +14,13 @@ pub trait LogicalStyledExt: Styled + Sized + FluentBuilder {
             .when(direction == Direction::RightToLeft, |this| {
                 this.flex_row_reverse()
             })
+    }
+
+    /// Pack a `flex_row_from` row toward the line end. `FlexEnd` follows
+    /// row reversal; `justify_end` does not.
+    fn justify_line_end(mut self) -> Self {
+        self.style().justify_content = Some(JustifyContent::FlexEnd);
+        self
     }
 
     fn padding_start(self, direction: Direction, value: Pixels) -> Self {

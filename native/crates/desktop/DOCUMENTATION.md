@@ -2023,6 +2023,11 @@ prompt. Attachments and worktree creation remain separate workflows.
 
 ## Decisions
 
+### Why line-end rows use flex-end
+
+Flex-end follows row reversal in right-to-left locales; GPUI's `justify_end`
+aligns to the physical axis instead.
+
 ### Why summary and title controls keep their own configuration state
 
 An unavailable provider cannot erase an agent's saved model or change the

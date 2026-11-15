@@ -641,7 +641,7 @@ impl GitView {
                         .child(
                             div()
                                 .flex_row_from(direction)
-                                .justify_end()
+                                .justify_line_end()
                                 .gap(px(6.0))
                                 .child(text_button(
                                     "git-conflict-later",

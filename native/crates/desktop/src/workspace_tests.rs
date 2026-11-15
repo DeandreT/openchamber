@@ -1801,3 +1801,59 @@ fn the_menu_button_opens_and_closes_the_app_menu(cx: &mut TestAppContext) {
     .expect("window is open");
     assert!(cx.read(|cx| !workspace.read(cx).app_menu.is_open()));
 }
+
+/// The user's bubble's distance from the row's left and right edges.
+fn user_bubble_margins(locale: &str, cx: &mut TestAppContext) -> (f32, f32) {
+    let (window, workspace) = open(cx);
+    cx.update(|cx| cx.set_global(Strings::load(locale)));
+    let session = session_rows(&workspace, cx)[0].1.clone();
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.select_session(session.clone(), window, cx)
+        });
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    let (row, user) = cx.read(|cx| {
+        let open = &workspace.read(cx).open_sessions[&session];
+        (0..open.transcript.len())
+            .find_map(|index| {
+                let message = open.transcript.message(index)?;
+                (message.info.role == Role::User).then(|| (index, message.info.id.clone()))
+            })
+            .expect("the synthetic session has a user message")
+    });
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.open_sessions[&session]
+                .list
+                .scroll_to_reveal_item(row);
+            cx.notify();
+        });
+        window.render_frame(cx);
+        let row = workspace.read(cx).open_sessions[&session]
+            .list
+            .bounds_for_item(row)
+            .expect("the user message is visible");
+        let bubble = window
+            .find(ElementId::Name(format!("user-bubble:{user}").into()))
+            .bounds();
+        (
+            f32::from(bubble.left() - row.left()),
+            f32::from(row.right() - bubble.right()),
+        )
+    })
+    .expect("window is open")
+}
+
+#[gpui_kit::test]
+fn user_bubbles_sit_at_the_line_end_in_english(cx: &mut TestAppContext) {
+    let (left, right) = user_bubble_margins("en", cx);
+    assert!(right < left, "left {left}, right {right}");
+}
+
+#[gpui_kit::test]
+fn user_bubbles_mirror_in_a_right_to_left_locale(cx: &mut TestAppContext) {
+    let (left, right) = user_bubble_margins("ar", cx);
+    assert!(left < right, "left {left}, right {right}");
+}

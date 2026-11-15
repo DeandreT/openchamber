@@ -2117,7 +2117,7 @@ impl FilesView {
                             div()
                                 .pt(px(4.0))
                                 .flex_row_from(direction)
-                                .justify_end()
+                                .justify_line_end()
                                 .gap(px(6.0))
                                 .child(text_button(
                                     "files-unsaved-cancel",
@@ -2412,7 +2412,7 @@ impl FilesView {
             .px(px(8.0))
             .flex_row_from(direction)
             .items_center()
-            .justify_end()
+            .justify_line_end()
             .gap(px(2.0))
             .child(
                 button(

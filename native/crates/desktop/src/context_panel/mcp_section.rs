@@ -205,7 +205,7 @@ fn switch(
         // The thumb rests at the start and moves to the end while on.
         .flex_row_from(direction)
         .items_center()
-        .when(connected, |track| track.justify_end())
+        .when(connected, |track| track.justify_line_end())
         .child(thumb);
     let control = div()
         .id(id.clone())

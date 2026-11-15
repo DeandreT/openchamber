@@ -1,13 +1,15 @@
 //! Text parts: the user's prompt bubble and an assistant's Markdown.
 
 use gpui_kit::{
-    AnyElement, App, IntoElement, ParentElement, Styled, div, prelude::FluentBuilder, px,
+    AnyElement, App, ElementId, InteractiveElement, IntoElement, ParentElement, Styled,
+    TestSupportExt, div, prelude::FluentBuilder, px,
 };
 use openchamber_native_core::ids::PartId;
 use openchamber_native_core::transcript::Message;
 
 use crate::attachment_part_view;
 use crate::locale::{self, Direction};
+use crate::logical::LogicalStyledExt;
 use crate::markdown_view::{self, Author};
 use crate::part_state::PartState;
 use crate::theme::Palette;
@@ -43,16 +45,20 @@ pub(crate) fn user_message(
         .map(|part| part.id.as_str().to_owned())
         .unwrap_or_default();
     div()
-        .flex()
-        .justify_end()
+        .flex_row_from(direction)
+        .justify_line_end()
         .child(
             div()
+                .id(ElementId::Name(
+                    format!("user-bubble:{}", message.info.id).into(),
+                ))
                 .max_w(gpui_kit::relative(0.85))
                 .px(px(BUBBLE_PADDING_X))
                 .py(px(BUBBLE_PADDING_Y))
                 .border_1()
                 .border_color(palette.primary.opacity(BUBBLE_BORDER_ALPHA))
                 .rounded(px(BUBBLE_RADIUS))
+                // Physical in the reference too (`borderBottomRightRadius`).
                 .rounded_br(px(BUBBLE_TAIL_RADIUS))
                 .bg(palette.user_message_background)
                 .flex()
@@ -68,7 +74,8 @@ pub(crate) fn user_message(
                                 markdown_view::markdown(&part_id, &text, palette, Author::User)
                             }),
                     )
-                }),
+                })
+                .test_support(),
         )
         .into_any_element()
 }

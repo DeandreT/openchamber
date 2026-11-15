@@ -754,7 +754,7 @@ impl Workspace {
                     div()
                         .w_full()
                         .flex_row_from(direction)
-                        .justify_end()
+                        .justify_line_end()
                         .gap(px(8.0))
                         .child(
                             dialog_button(
@@ -900,19 +900,23 @@ impl Workspace {
                 .title(strings.get("sessions.sidebar.project.actions.edit"))
                 .child(Input::new(&input))
                 .footer(
-                    div().w_full().flex_row_from(direction).justify_end().child(
-                        dialog_button(
-                            "edit-project-save",
-                            strings.get("sessions.sidebar.session.rename.save"),
-                            Some(palette.primary),
-                            palette.primary_foreground,
-                            &palette,
-                        )
-                        .on_click(move |_, window, cx| {
-                            let _ =
-                                on_save.update(cx, |this, cx| this.save_edit_project(window, cx));
-                        }),
-                    ),
+                    div()
+                        .w_full()
+                        .flex_row_from(direction)
+                        .justify_line_end()
+                        .child(
+                            dialog_button(
+                                "edit-project-save",
+                                strings.get("sessions.sidebar.session.rename.save"),
+                                Some(palette.primary),
+                                palette.primary_foreground,
+                                &palette,
+                            )
+                            .on_click(move |_, window, cx| {
+                                let _ = on_save
+                                    .update(cx, |this, cx| this.save_edit_project(window, cx));
+                            }),
+                        ),
                 )
         });
         cx.notify();
