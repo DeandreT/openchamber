@@ -1117,6 +1117,7 @@ export {
   SKILL_SCOPE,
   ensureDirs,
   parseMdFile,
+  sanitizeFrontmatter,
   parseMdFileAsync,
   writeMdFile,
   readConfigFile,

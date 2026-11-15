@@ -218,6 +218,15 @@ describe("projectUserParts", () => {
     const parts = projectUserParts({ text: "" }, { sessionID: "s", messageID: "m", created: 1 })
     expect(parts).toEqual([])
   })
+
+  test("server-file reference metadata survives projection for edit and fork replay", () => {
+    const mention = { start: 0, end: 4, text: '@pdf' }
+    const parts = projectUserParts({ text: '', files: [{ data: '', mime: 'application/pdf', name: '/server/report.pdf',
+      source: { type: 'uri', uri: 'file:///server/report.pdf' }, description: 'PDF source', mention }] },
+    { sessionID: 's', messageID: 'm', created: 1 })
+    expect(parts[0]).toMatchObject({ type: 'file', filename: '/server/report.pdf', url: 'file:///server/report.pdf',
+      description: 'PDF source', mention })
+  })
 })
 
 describe("projectMessage (other roles)", () => {

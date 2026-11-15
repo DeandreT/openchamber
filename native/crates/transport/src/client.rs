@@ -1,0 +1,2118 @@
+//! Requests to one OpenChamber server.
+
+use std::collections::{HashMap, HashSet};
+use std::time::Duration;
+
+use crate::request::RequestBuilder;
+use openchamber_native_core::chat_roots::ChatRoots;
+use openchamber_native_core::draft_starters::{self, StarterRef};
+use openchamber_native_core::ids::{MessageId, SessionId};
+use openchamber_native_core::message_queue::FollowUpBehavior;
+use openchamber_native_core::message_time::ClockPreference;
+use openchamber_native_core::ownership::{self, ConfiguredProject, WorktreeInfo};
+use openchamber_native_core::permission_mode::PermissionMode;
+use openchamber_native_core::project_sort::ProjectSortOrder;
+use openchamber_native_core::session::{LiveStatus, SessionRecord};
+use openchamber_native_core::session_goal::{DEFAULT_TOKEN_BUDGET, GoalChecker};
+use openchamber_native_core::shortcuts::{self, Overrides};
+use openchamber_native_core::sidebar_rows::SidebarViewMode;
+use openchamber_native_core::transcript::Message;
+use reqwest::header::{ACCEPT, AUTHORIZATION, CONTENT_TYPE, HeaderMap, HeaderValue};
+use reqwest::{Method, Response, StatusCode, Url};
+use serde::Serialize;
+use serde::de::DeserializeOwned;
+use serde_json::{Value, json};
+
+use crate::credential::Credential;
+use crate::dictation::SttProvider;
+use crate::endpoint::Endpoint;
+use crate::error::TransportError;
+use crate::identity::{PART_SHELLS_CAPABILITY, ServerIdentity};
+use crate::notification::NotificationTemplates;
+use crate::projection;
+use crate::wire;
+
+/// Page size of global session reads, as the web client uses.
+pub const SESSION_PAGE_SIZE: usize = 500;
+const MODEL_REF_LIMIT: usize = 1024;
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+/// Asks for message pages with finished tool results left out
+/// (`packages/web/server/lib/opencode/message-shells.js`).
+const PART_SHELLS_HEADER: &str = "x-openchamber-part-shells";
+const PART_SHELLS_VERSION: &str = "v1";
+/// Profile settings a client changes; fields left `None` are not sent, so
+/// the server keeps their values.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SettingsChanges {
+    /// Work-status profile layout. Omission preserves each stored field.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work_status_section_order: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work_status_hidden_sections: Option<Vec<String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub work_status_hidden_sections_explicit: Option<bool>,
+    /// The profile's complete effort map, oldest choice first. Each null value
+    /// is explicit Default. Omission leaves server memory unchanged.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_efforts"
+    )]
+    pub last_used_efforts: Option<Vec<(String, Option<String>)>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub auto_save_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_close_on_exit: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub terminal_shell: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code_block_line_wrap: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_deletion_dialog: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub worktree_archive_on_done_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub merged_worktree_cleanup_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub follow_up_behavior: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_navigator_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_prompting_subagent_sessions: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub draft_starters_visible: Option<bool>,
+    /// `ask`, `safety` or `auto`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permission_default_mode: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidebar_show_chats_section: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_work_enabled: Option<bool>,
+    /// `project` or `time`: how the sidebar lists sessions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidebar_grouping: Option<&'static str>,
+    /// `manual`, `a-z`, `z-a`, `date-added` or `recent`: the order of the
+    /// sidebar's projects.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidebar_project_sort_order: Option<&'static str>,
+    /// The global starters; written with both offered-starter markers set,
+    /// so a removed built-in stays removed.
+    #[serde(
+        skip_serializing_if = "Option::is_none",
+        serialize_with = "serialize_starters"
+    )]
+    pub draft_starters: Option<Vec<StarterRef>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub draft_starters_craft_goal_added: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub draft_starters_schedule_task_added: Option<bool>,
+    /// The complete map of the user's shortcut bindings; it replaces the
+    /// saved one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shortcut_overrides: Option<Overrides>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_notifications_enabled: Option<bool>,
+    /// `always` or `hidden-only`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notification_mode: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notify_on_completion: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notify_on_pull_requests: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notify_on_subtasks: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notify_on_error: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notify_on_question: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub notification_templates: Option<NotificationTemplates>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dictation_enabled: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dictation_auto_send: Option<bool>,
+    /// `local` or `openai-compatible`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stt_provider: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stt_server_url: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stt_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stt_endpoint_path: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stt_local_model: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stt_language: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stt_correct_transcript: Option<bool>,
+}
+
+fn serialize_efforts<S: serde::Serializer>(
+    efforts: &Option<Vec<(String, Option<String>)>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeMap;
+
+    let Some(efforts) = efforts else {
+        return serializer.serialize_none();
+    };
+    let mut map = serializer.serialize_map(Some(efforts.len()))?;
+    for (key, effort) in efforts {
+        map.serialize_entry(key, effort)?;
+    }
+    map.end()
+}
+
+fn serialize_starters<S: serde::Serializer>(
+    starters: &Option<Vec<StarterRef>>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeSeq;
+    let starters = starters.as_deref().unwrap_or_default();
+    let mut sequence = serializer.serialize_seq(Some(starters.len()))?;
+    for starter in starters {
+        sequence.serialize_element(&serde_json::json!({
+            "type": starter.kind.as_wire(),
+            "name": starter.name,
+        }))?;
+    }
+    sequence.end()
+}
+
+/// The settings surface this client reads and writes.
+const SURFACE: &str = "desktop";
+/// Directories per worktree request; the server caps a batch.
+const WORKTREE_BATCH_SIZE: usize = 200;
+
+/// One page of sessions and the cursor of the next.
+#[derive(Debug)]
+pub struct SessionPage {
+    pub sessions: Vec<SessionRecord>,
+    pub next: Option<String>,
+}
+
+/// What the server records about this client when it issues a token.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ClientDescription {
+    /// Shown in the server's device list.
+    pub label: String,
+    /// `desktop` for a desktop connected to a remote server.
+    pub kind: String,
+    /// Stable per install, such as `desktop:<install id>`.
+    pub dedupe_key: Option<String>,
+    /// `macos`, `windows` or `linux`.
+    pub device_platform: Option<String>,
+    pub app_version: Option<String>,
+}
+
+/// One project's worktree read.
+#[derive(Debug, PartialEq, Eq)]
+pub struct WorktreeRead {
+    pub project_path: String,
+    /// `None` when the server could not list this project; earlier topology
+    /// for it stays.
+    pub worktrees: Option<Vec<WorktreeInfo>>,
+}
+
+/// The pages of the global session list, newest first, without duplicates.
+///
+/// Paging stops when the server names no further cursor, repeats one, or
+/// returns a page with nothing new, so a misbehaving cursor cannot spin.
+#[derive(Debug)]
+pub struct SessionPages {
+    client: ServerClient,
+    cursor: Option<String>,
+    seen: HashSet<SessionId>,
+    done: bool,
+}
+
+impl SessionPages {
+    /// The next page's new sessions, or `None` after the last page.
+    pub async fn next(&mut self) -> Result<Option<Vec<SessionRecord>>, TransportError> {
+        if self.done {
+            return Ok(None);
+        }
+        let page = self.client.session_page(self.cursor.as_deref()).await?;
+        let mut accepted = Vec::with_capacity(page.sessions.len());
+        for session in page.sessions {
+            if self.seen.insert(session.id.clone()) {
+                accepted.push(session);
+            }
+        }
+        match page.next {
+            Some(next) if !accepted.is_empty() && self.cursor.as_deref() != Some(next.as_str()) => {
+                self.cursor = Some(next);
+            }
+            _ => self.done = true,
+        }
+        Ok(Some(accepted))
+    }
+}
+
+/// One page of a session's messages, oldest first.
+#[derive(Debug)]
+pub struct MessagePage {
+    pub messages: Vec<Message>,
+    /// The cursor of the next older page.
+    pub older: Option<String>,
+}
+
+/// The OpenChamber settings this client reads. Each value is checked on its
+/// own, as the web client's settings parsers do: a malformed value is left
+/// out, never the whole document.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ServerSettings {
+    /// Work-status profile layout, unknown until a valid field was read.
+    /// Section-id normalization belongs to the view's layout owner.
+    pub work_status_section_order: Option<WorkStatusSectionList>,
+    pub work_status_hidden_sections: Option<WorkStatusSectionList>,
+    pub work_status_hidden_sections_explicit: Option<bool>,
+    /// General settings; absent or malformed values preserve native defaults.
+    pub auto_save_enabled: Option<bool>,
+    pub terminal_close_on_exit: Option<bool>,
+    pub terminal_shell: Option<String>,
+    pub projects: Vec<ConfiguredProject>,
+    pub home_directory: Option<String>,
+    pub last_directory: Option<String>,
+    pub active_project_id: Option<String>,
+    pub default_model: Option<String>,
+    pub default_variant: Option<String>,
+    pub default_agent: Option<String>,
+    pub last_selected_model: Option<String>,
+    /// Profile effort memory by `provider/model`. A present `None` value is
+    /// explicit Default; an absent map or key supplies no effort choice.
+    pub last_used_efforts: Option<HashMap<String, Option<String>>>,
+    /// Encounter order of validated effort entries, oldest choice first.
+    pub last_used_effort_order: Vec<String>,
+    /// `(providerID, modelID)` pairs hidden from the picker.
+    pub hidden_models: Vec<(String, String)>,
+    pub routing_feature_available: Option<bool>,
+    /// `selectWorkflowsShown`: the server backs agent workflows
+    /// (`agentWorkflowFeatureAvailable`) and the user turned the workflow
+    /// tool on (`agentWorkflowToolEnabled`). Either one absent means off.
+    pub workflows_shown: bool,
+    /// `timeFormatPreference`: the clock message times use.
+    pub clock: ClockPreference,
+    /// `codeBlockLineWrap`, when the document carries it.
+    pub code_block_line_wrap: Option<bool>,
+    /// `messageSearchEnabled`: whether Ctrl+F searches the conversation;
+    /// absent means off.
+    pub message_search_enabled: Option<bool>,
+    /// Sidebar preferences; omitted values preserve the client's defaults.
+    pub sidebar_view: Option<SidebarViewMode>,
+    /// `sidebarProjectSortOrder`; absent keeps the registered order.
+    pub project_sort: Option<ProjectSortOrder>,
+    pub show_chats: Option<bool>,
+    pub show_pinned: Option<bool>,
+    pub show_work: Option<bool>,
+    pub keep_work_in_place: Option<bool>,
+    pub work_enabled: Option<bool>,
+    pub prompt_navigator_enabled: Option<bool>,
+    /// `allowPromptingSubagentSessions`: absent keeps subagent sessions
+    /// read-only.
+    pub allow_prompting_subagent_sessions: Option<bool>,
+    /// `sessionGoalEnabled`: absent shows the goal controls.
+    pub goal_enabled: Option<bool>,
+    /// `sessionGoalChecker`: who checks a goal's progress.
+    pub goal_checker: Option<GoalChecker>,
+    /// `sessionGoalDefaultBudget` while `sessionGoalDefaultBudgetEnabled`:
+    /// the budget an armed send's goal gets.
+    pub goal_default_budget: Option<u64>,
+    /// `showDeletionDialog`: archive and delete ask first; absent means yes.
+    pub show_deletion_dialog: Option<bool>,
+    /// `worktreeArchiveOnDoneEnabled`: Done on a worktree also archives it;
+    /// absent means off.
+    pub worktree_archive_on_done: Option<bool>,
+    /// `mergedWorktreeCleanupEnabled`: the server archives a worktree once
+    /// its pull request merges; absent means off.
+    pub merged_worktree_cleanup: Option<bool>,
+    /// `permissionDefaultMode`: the mode the server writes onto each new
+    /// top-level session.
+    pub permission_default_mode: Option<PermissionMode>,
+    /// The model defaults of registered projects that set any.
+    pub project_defaults: Vec<ProjectDefaults>,
+    /// The display labels of registered projects that set one.
+    pub project_labels: Vec<ProjectLabel>,
+    /// When registered projects were added and last opened, for those that
+    /// carry either time.
+    pub project_times: Vec<ProjectTimes>,
+    /// `followUpBehavior`, or the legacy `queueModeEnabled` it absorbs.
+    pub follow_up_behavior: Option<FollowUpBehavior>,
+    /// The global starters as saved, built-ins the user was never offered
+    /// added; absent until the user edits the list.
+    pub draft_starters: Option<Vec<StarterRef>>,
+    /// `draftStartersVisible`: absent shows the starters.
+    pub draft_starters_visible: Option<bool>,
+    /// `shortcutOverrides`; absent or malformed leaves the defaults.
+    pub shortcut_overrides: Option<Overrides>,
+    /// The Notifications page's fields; the server applies them itself.
+    pub native_notifications_enabled: Option<bool>,
+    /// `notificationMode` is `always`: notify while the window has focus.
+    pub notification_always: Option<bool>,
+    pub notify_on_completion: Option<bool>,
+    pub notify_on_pull_requests: Option<bool>,
+    pub notify_on_subtasks: Option<bool>,
+    pub notify_on_error: Option<bool>,
+    pub notify_on_question: Option<bool>,
+    pub notification_templates: Option<NotificationTemplates>,
+    /// Dictation: the composer's microphone and the server's transcription.
+    pub dictation_enabled: Option<bool>,
+    pub dictation_auto_send: Option<bool>,
+    pub stt_provider: Option<SttProvider>,
+    pub stt_server_url: Option<String>,
+    pub stt_model: Option<String>,
+    pub stt_endpoint_path: Option<String>,
+    pub stt_local_model: Option<String>,
+    pub stt_language: Option<String>,
+    pub stt_correct_transcript: Option<bool>,
+    /// `usageDisplayMode` is `remaining`: quota readouts show what is left.
+    /// Absent, or any other value, shows what was used.
+    pub usage_remaining: Option<bool>,
+    /// `usageDropdownProviders`: the providers the compact usage readouts
+    /// show. Absent means every quota provider; an empty list means none.
+    pub usage_providers: Option<Vec<String>>,
+    /// `usageSelectedModels`: per provider, the models the compact readouts
+    /// show, by their full quota names. A provider without names shows all.
+    pub usage_selected_models: Vec<(String, Vec<String>)>,
+}
+
+/// A present layout list. A malformed field grants no list authority while
+/// leaving unrelated fields of a successful settings document usable.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WorkStatusSectionList {
+    /// A valid array, with non-string entries independently discarded.
+    Valid(Vec<String>),
+    /// A present value that is not an array, including JSON null.
+    Malformed,
+    /// A malformed refresh with a retained, previously validated display list.
+    /// Created by the desktop publication boundary, never by wire decoding.
+    MalformedWithPrior(Vec<String>),
+}
+
+impl WorkStatusSectionList {
+    /// The validated entries. A malformed field supplies no collection authority.
+    pub fn entries(&self) -> Option<&[String]> {
+        match self {
+            Self::Valid(entries) => Some(entries),
+            Self::Malformed | Self::MalformedWithPrior(_) => None,
+        }
+    }
+
+    /// The last validated list for presentation, preserving malformed provenance.
+    pub fn last_valid_entries(&self) -> Option<&[String]> {
+        match self {
+            Self::Valid(entries) | Self::MalformedWithPrior(entries) => Some(entries),
+            Self::Malformed => None,
+        }
+    }
+
+    /// Whether the latest document supplied a malformed field.
+    pub fn is_malformed(&self) -> bool {
+        !matches!(self, Self::Valid(_))
+    }
+}
+
+/// A registered project's display label, trimmed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProjectLabel {
+    /// The project's normalized path, as in `ServerSettings::projects`.
+    pub path: String,
+    pub label: String,
+}
+
+/// A registered project's `addedAt` and `lastOpenedAt`, in milliseconds.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProjectTimes {
+    /// The project's normalized path, as in `ServerSettings::projects`.
+    pub path: String,
+    pub added_at: Option<i64>,
+    pub last_opened_at: Option<i64>,
+}
+
+/// A registered project's own model defaults, trimmed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ProjectDefaults {
+    /// The project's normalized path, as in `ServerSettings::projects`.
+    pub path: String,
+    pub agent: Option<String>,
+    pub model: Option<String>,
+    pub variant: Option<String>,
+}
+
+impl ServerSettings {
+    fn from_wire(settings: wire::Settings) -> Self {
+        let boolean = |value: &Option<Value>| value.as_ref().and_then(Value::as_bool);
+        // The reference's list parsers reject a non-array field and discard
+        // invalid entries independently. A successful empty array is explicit.
+        let section_list = |value: &Option<Value>| {
+            value.as_ref().map(|value| match value.as_array() {
+                Some(entries) => WorkStatusSectionList::Valid(
+                    entries
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .filter(|entry| !entry.is_empty())
+                        .map(str::to_owned)
+                        .collect(),
+                ),
+                None => WorkStatusSectionList::Malformed,
+            })
+        };
+        // `parseTrimmedStringUpTo`: trimmed, and dropped past the limit.
+        let text = |value: &Option<Value>, limit: usize| {
+            value
+                .as_ref()
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| text.chars().count() <= limit)
+                .map(str::to_owned)
+        };
+        let home_directory = non_empty_string(settings.home_directory);
+        let paths = settings
+            .projects
+            .iter()
+            .filter_map(|entry| entry.get("path").and_then(Value::as_str));
+        let projects = ownership::configured_projects(paths, home_directory.as_deref());
+        let mut project_defaults: Vec<ProjectDefaults> = Vec::new();
+        let mut project_labels: Vec<ProjectLabel> = Vec::new();
+        let mut project_times: Vec<ProjectTimes> = Vec::new();
+        for entry in &settings.projects {
+            let Some(raw) = entry.get("path").and_then(Value::as_str) else {
+                continue;
+            };
+            let Some(project) =
+                ownership::configured_projects([raw], home_directory.as_deref()).pop()
+            else {
+                continue;
+            };
+            // The first entry of a path is the registered one.
+            if project_defaults
+                .iter()
+                .any(|known| known.path == project.path)
+            {
+                continue;
+            }
+            let field = |key: &str| {
+                entry
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .map(str::trim)
+                    .filter(|text| !text.is_empty())
+                    .map(str::to_owned)
+            };
+            if let Some(label) = field("label") {
+                project_labels.push(ProjectLabel {
+                    path: project.path.clone(),
+                    label,
+                });
+            }
+            let time = |key: &str| entry.get(key).and_then(Value::as_i64);
+            let (added_at, last_opened_at) = (time("addedAt"), time("lastOpenedAt"));
+            if added_at.is_some() || last_opened_at.is_some() {
+                project_times.push(ProjectTimes {
+                    path: project.path.clone(),
+                    added_at,
+                    last_opened_at,
+                });
+            }
+            project_defaults.push(ProjectDefaults {
+                path: project.path,
+                agent: field("defaultAgent"),
+                model: field("defaultModel"),
+                variant: field("defaultVariant"),
+            });
+        }
+        project_defaults.retain(|defaults| {
+            defaults.agent.is_some() || defaults.model.is_some() || defaults.variant.is_some()
+        });
+        let (last_used_efforts, last_used_effort_order) = settings
+            .last_used_efforts
+            .as_deref()
+            .and_then(last_used_efforts)
+            .map_or((None, Vec::new()), |memory| {
+                (Some(memory.efforts), memory.order)
+            });
+        Self {
+            projects,
+            work_status_section_order: section_list(&settings.work_status_section_order),
+            work_status_hidden_sections: section_list(&settings.work_status_hidden_sections),
+            work_status_hidden_sections_explicit: boolean(
+                &settings.work_status_hidden_sections_explicit,
+            ),
+            project_defaults,
+            project_labels,
+            project_times,
+            home_directory,
+            last_directory: non_empty_string(settings.last_directory),
+            active_project_id: non_empty_string(settings.active_project_id),
+            default_model: non_empty_string(settings.default_model),
+            default_variant: non_empty_string(settings.default_variant),
+            default_agent: non_empty_string(settings.default_agent),
+            last_selected_model: non_empty_string(settings.last_selected_model),
+            last_used_efforts,
+            last_used_effort_order,
+            hidden_models: settings
+                .hidden_models
+                .as_ref()
+                .and_then(Value::as_array)
+                .map(|entries| model_refs(entries))
+                .unwrap_or_default(),
+            routing_feature_available: settings
+                .routing_feature_available
+                .as_ref()
+                .and_then(Value::as_bool),
+            workflows_shown: boolean(&settings.agent_workflow_feature_available) == Some(true)
+                && boolean(&settings.agent_workflow_tool_enabled) == Some(true),
+            clock: settings
+                .time_format_preference
+                .as_ref()
+                .and_then(Value::as_str)
+                .map(ClockPreference::from_setting)
+                .unwrap_or_default(),
+            code_block_line_wrap: settings
+                .code_block_line_wrap
+                .as_ref()
+                .and_then(Value::as_bool),
+            message_search_enabled: settings
+                .message_search_enabled
+                .as_ref()
+                .and_then(Value::as_bool),
+            auto_save_enabled: settings.auto_save_enabled.as_ref().and_then(Value::as_bool),
+            terminal_close_on_exit: settings
+                .terminal_close_on_exit
+                .as_ref()
+                .and_then(Value::as_bool),
+            terminal_shell: settings
+                .terminal_shell
+                .as_ref()
+                .and_then(Value::as_str)
+                .filter(|shell| {
+                    matches!(
+                        *shell,
+                        "auto"
+                            | "bash"
+                            | "zsh"
+                            | "sh"
+                            | "fish"
+                            | "pwsh"
+                            | "powershell"
+                            | "cmd"
+                            | "dash"
+                            | "ksh"
+                            | "nu"
+                    )
+                })
+                .map(str::to_owned),
+            sidebar_view: match settings.sidebar_grouping.as_ref().and_then(Value::as_str) {
+                Some("time") => Some(SidebarViewMode::WorksByTime),
+                Some("project") => Some(SidebarViewMode::Works),
+                _ => match settings.sidebar_view_mode.as_ref().and_then(Value::as_str) {
+                    Some("timeline")
+                        if settings
+                            .sidebar_list_session_grouping
+                            .as_ref()
+                            .and_then(Value::as_str)
+                            == Some("time") =>
+                    {
+                        Some(SidebarViewMode::WorksByTime)
+                    }
+                    Some("timeline" | "projects") => Some(SidebarViewMode::Works),
+                    _ => None,
+                },
+            },
+            project_sort: settings
+                .sidebar_project_sort_order
+                .as_ref()
+                .and_then(Value::as_str)
+                .and_then(ProjectSortOrder::from_setting),
+            show_chats: settings
+                .sidebar_show_chats_section
+                .as_ref()
+                .and_then(Value::as_bool),
+            show_pinned: settings
+                .sidebar_show_pinned_section
+                .as_ref()
+                .and_then(Value::as_bool),
+            show_work: settings
+                .sidebar_show_work_section
+                .as_ref()
+                .and_then(Value::as_bool),
+            keep_work_in_place: settings
+                .sidebar_keep_work_in_place
+                .as_ref()
+                .and_then(Value::as_bool),
+            work_enabled: settings
+                .session_work_enabled
+                .as_ref()
+                .and_then(Value::as_bool),
+            prompt_navigator_enabled: settings
+                .prompt_navigator_enabled
+                .as_ref()
+                .and_then(Value::as_bool),
+            allow_prompting_subagent_sessions: settings
+                .allow_prompting_subagent_sessions
+                .as_ref()
+                .and_then(Value::as_bool),
+            goal_enabled: settings
+                .session_goal_enabled
+                .as_ref()
+                .and_then(Value::as_bool),
+            goal_checker: match settings
+                .session_goal_checker
+                .as_ref()
+                .and_then(Value::as_str)
+            {
+                Some("classifier") => Some(GoalChecker::Classifier),
+                Some("small-model") => Some(GoalChecker::SmallModel),
+                _ => None,
+            },
+            goal_default_budget: (settings
+                .session_goal_default_budget_enabled
+                .as_ref()
+                .and_then(Value::as_bool)
+                == Some(true))
+            .then(|| {
+                settings
+                    .session_goal_default_budget
+                    .as_ref()
+                    .and_then(Value::as_f64)
+                    .filter(|budget| budget.is_finite() && *budget > 0.0)
+                    .map_or(DEFAULT_TOKEN_BUDGET, |budget| budget.floor() as u64)
+            }),
+            show_deletion_dialog: settings
+                .show_deletion_dialog
+                .as_ref()
+                .and_then(Value::as_bool),
+            worktree_archive_on_done: settings
+                .worktree_archive_on_done_enabled
+                .as_ref()
+                .and_then(Value::as_bool),
+            merged_worktree_cleanup: settings
+                .merged_worktree_cleanup_enabled
+                .as_ref()
+                .and_then(Value::as_bool),
+            follow_up_behavior: match (
+                settings.follow_up_behavior.as_ref().and_then(Value::as_str),
+                settings
+                    .queue_mode_enabled
+                    .as_ref()
+                    .and_then(Value::as_bool),
+            ) {
+                (None, None) => None,
+                (value, legacy) => Some(FollowUpBehavior::from_setting(value, legacy)),
+            },
+            draft_starters: settings
+                .draft_starters
+                .as_ref()
+                .and_then(Value::as_array)
+                .map(|entries| {
+                    let marker = |value: &Option<Value>| {
+                        value.as_ref().and_then(Value::as_bool) == Some(true)
+                    };
+                    draft_starters::with_offered_built_ins(
+                        draft_starters::sanitize(entries.iter().map(|entry| {
+                            (
+                                entry.get("type").and_then(Value::as_str),
+                                entry.get("name").and_then(Value::as_str),
+                            )
+                        })),
+                        marker(&settings.draft_starters_craft_goal_added),
+                        marker(&settings.draft_starters_schedule_task_added),
+                    )
+                }),
+            draft_starters_visible: settings
+                .draft_starters_visible
+                .as_ref()
+                .and_then(Value::as_bool),
+            shortcut_overrides: settings
+                .shortcut_overrides
+                .as_ref()
+                .and_then(Value::as_object)
+                .map(|entries| {
+                    shortcuts::parse_overrides(
+                        entries
+                            .iter()
+                            .filter_map(|(key, value)| Some((key.as_str(), value.as_str()?))),
+                    )
+                }),
+            native_notifications_enabled: boolean(&settings.native_notifications_enabled),
+            notification_always: match settings.notification_mode.as_ref().and_then(Value::as_str) {
+                Some("always") => Some(true),
+                Some("hidden-only") => Some(false),
+                _ => None,
+            },
+            notify_on_completion: boolean(&settings.notify_on_completion),
+            notify_on_pull_requests: boolean(&settings.notify_on_pull_requests),
+            notify_on_subtasks: boolean(&settings.notify_on_subtasks),
+            notify_on_error: boolean(&settings.notify_on_error),
+            notify_on_question: boolean(&settings.notify_on_question),
+            notification_templates: settings
+                .notification_templates
+                .as_ref()
+                .and_then(NotificationTemplates::parse),
+            dictation_enabled: boolean(&settings.dictation_enabled),
+            dictation_auto_send: boolean(&settings.dictation_auto_send),
+            stt_provider: match settings.stt_provider.as_ref().and_then(Value::as_str) {
+                Some("local") => Some(SttProvider::Local),
+                Some("openai-compatible") => Some(SttProvider::OpenAiCompatible),
+                _ => None,
+            },
+            stt_server_url: text(&settings.stt_server_url, 2048),
+            stt_model: text(&settings.stt_model, 256),
+            stt_endpoint_path: text(&settings.stt_endpoint_path, 1024),
+            stt_local_model: text(&settings.stt_local_model, 256),
+            stt_language: text(&settings.stt_language, 64),
+            stt_correct_transcript: boolean(&settings.stt_correct_transcript),
+            usage_remaining: settings
+                .usage_display_mode
+                .as_ref()
+                .and_then(Value::as_str)
+                .map(|mode| mode == "remaining"),
+            usage_providers: settings
+                .usage_dropdown_providers
+                .as_ref()
+                .and_then(Value::as_array)
+                .map(|providers| {
+                    providers
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect()
+                }),
+            usage_selected_models: settings
+                .usage_selected_models
+                .unwrap_or_default()
+                .into_iter()
+                .filter_map(|(provider, models)| {
+                    let models: Vec<String> = models
+                        .as_array()?
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_owned)
+                        .collect();
+                    Some((provider, models))
+                })
+                .collect(),
+            permission_default_mode: match settings
+                .permission_default_mode
+                .as_ref()
+                .and_then(Value::as_str)
+            {
+                Some("ask") => Some(PermissionMode::Ask),
+                Some("safety") => Some(PermissionMode::Safety),
+                Some("auto") => Some(PermissionMode::Auto),
+                _ => None,
+            },
+        }
+    }
+
+    /// The path of the active project, when it is registered.
+    pub fn active_project_path(&self) -> Option<&str> {
+        let id = self.active_project_id.as_deref()?;
+        self.projects
+            .iter()
+            .find(|project| project.id.as_str() == id)
+            .map(|project| project.path.as_str())
+    }
+}
+
+/// `parseNonEmptyString`: any string with at least one character.
+fn non_empty_string(value: Option<Value>) -> Option<String> {
+    match value {
+        Some(Value::String(text)) if !text.is_empty() => Some(text),
+        _ => None,
+    }
+}
+
+/// Valid remembered efforts with the order their keys first appeared.
+struct EffortMemory {
+    efforts: HashMap<String, Option<String>>,
+    order: Vec<String>,
+}
+
+/// `parseLastUsedEfforts`: invalid entries grant no authority, while null
+/// remains an explicit Default. A wholly invalid or empty map stays unknown.
+fn last_used_efforts(entries: &[(String, Value)]) -> Option<EffortMemory> {
+    let mut efforts = HashMap::new();
+    let mut order = Vec::new();
+    for (key, value) in entries {
+        let key = trim_effort_setting(key);
+        if key.is_empty() {
+            continue;
+        }
+        let effort = match value {
+            Value::Null => None,
+            Value::String(variant) => {
+                let variant = trim_effort_setting(variant);
+                if variant.is_empty() {
+                    continue;
+                }
+                Some(variant.to_owned())
+            }
+            _ => continue,
+        };
+        if !efforts.contains_key(key) {
+            order.push(key.to_owned());
+        }
+        efforts.insert(key.to_owned(), effort);
+    }
+    (!efforts.is_empty()).then_some(EffortMemory { efforts, order })
+}
+
+/// Settings parsers use ECMAScript `trim`, which includes BOM and excludes U+0085.
+fn trim_effort_setting(value: &str) -> &str {
+    value.trim_matches(|ch: char| (ch.is_whitespace() && ch != '\u{0085}') || ch == '\u{feff}')
+}
+
+/// `parseModelRefs(1024)`: trimmed, non-empty, first occurrence of each pair.
+fn model_refs(entries: &[Value]) -> Vec<(String, String)> {
+    let mut refs: Vec<(String, String)> = Vec::new();
+    let mut seen = HashSet::new();
+    for entry in entries {
+        let field = |key: &str| {
+            entry
+                .get(key)
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|text| !text.is_empty())
+        };
+        let (Some(provider_id), Some(model_id)) = (field("providerID"), field("modelID")) else {
+            continue;
+        };
+        if !seen.insert(format!("{provider_id}/{model_id}")) {
+            continue;
+        }
+        refs.push((provider_id.to_owned(), model_id.to_owned()));
+        if refs.len() >= MODEL_REF_LIMIT {
+            break;
+        }
+    }
+    refs
+}
+
+/// A server connection with its credential.
+///
+/// The credential stays inside the client; it is sent only in the
+/// `Authorization` header and never follows a redirect.
+#[derive(Clone, Debug)]
+pub struct ServerClient {
+    http: reqwest::Client,
+    endpoint: Endpoint,
+    credential: Credential,
+    /// Whether message pages are requested with finished tool results left out.
+    part_shells: bool,
+    authentication_failures: tokio::sync::watch::Sender<u64>,
+}
+
+/// Pending identity advertised by the host, without an actionable request body.
+#[derive(Clone, Debug)]
+pub struct PendingRequestStub {
+    pub owner: openchamber_native_core::request_owner::RequestOwner,
+    pub id: openchamber_native_core::pending_requests::RequestId,
+}
+
+/// Global status read that starts no directory. Missing pending support is explicit.
+#[derive(Debug)]
+pub struct HostSessionStatus {
+    pub statuses: HashMap<SessionId, LiveStatus>,
+    pub pending: Option<Vec<PendingRequestStub>>,
+    /// How long each running turn had run when the host answered, in
+    /// milliseconds: its clock minus the turn's start on that clock. Absent
+    /// for a session whose start the host did not report.
+    pub turn_elapsed: HashMap<SessionId, i64>,
+}
+
+impl ServerClient {
+    pub fn new(endpoint: Endpoint, credential: Credential) -> Result<Self, TransportError> {
+        let http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            // A mutation with a lost answer is reconciled by its caller.
+            // Disable reqwest's default protocol-NACK retry as well.
+            .retry(reqwest::retry::never())
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(REQUEST_TIMEOUT)
+            .build()
+            .map_err(TransportError::from_request)?;
+        Ok(Self {
+            http,
+            endpoint,
+            credential,
+            part_shells: false,
+            authentication_failures: tokio::sync::watch::channel(0).0,
+        })
+    }
+
+    /// Adopts the capabilities the server announced in its identity.
+    pub fn with_identity(mut self, identity: &ServerIdentity) -> Self {
+        self.part_shells = identity.supports(PART_SHELLS_CAPABILITY);
+        self
+    }
+
+    pub fn endpoint(&self) -> &Endpoint {
+        &self.endpoint
+    }
+
+    pub fn credential(&self) -> &Credential {
+        &self.credential
+    }
+
+    /// Revisions advance on definitive HTTP 401 responses from this client.
+    /// The channel carries no credentials or response contents.
+    pub fn authentication_failures(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.authentication_failures.subscribe()
+    }
+
+    /// Verifies the service identity without sending credentials.
+    pub async fn probe(&self) -> Result<ServerIdentity, TransportError> {
+        let response = self
+            .http
+            .get(self.endpoint.url("health"))
+            .header(ACCEPT, "application/json")
+            .send()
+            .await
+            .map_err(TransportError::from_request)?;
+        let health: wire::Health = match read_json(response).await {
+            Ok(health) => health,
+            Err(TransportError::Malformed(_) | TransportError::Http { .. }) => {
+                return Err(TransportError::NotOpenChamber);
+            }
+            Err(error) => return Err(error),
+        };
+        ServerIdentity::from_health(health)
+    }
+
+    /// The body of a password login that issues a client token.
+    pub fn login_body(password: &str, client: &ClientDescription) -> Value {
+        let mut body = json!({
+            "password": password,
+            "trustDevice": true,
+            "issueClientToken": true,
+            "clientLabel": client.label,
+            "clientKind": client.kind,
+        });
+        for (key, value) in [
+            ("dedupeKey", &client.dedupe_key),
+            ("devicePlatform", &client.device_platform),
+            ("appVersion", &client.app_version),
+        ] {
+            if let Some(value) = value {
+                body[key] = json!(value);
+            }
+        }
+        body
+    }
+
+    /// Exchanges the UI password for a trusted-device client token.
+    ///
+    /// The password is sent once in the request body and not retained. The
+    /// server records `client` with the token; the dedupe key makes a later
+    /// login replace this install's record instead of adding one.
+    pub async fn login(
+        &self,
+        password: &str,
+        client: &ClientDescription,
+    ) -> Result<Credential, TransportError> {
+        self.login_with_trust(password, client, crate::authentication::LoginTrust::Device)
+            .await
+    }
+
+    /// The URL of one global session page.
+    pub fn session_page_url(&self, cursor: Option<&str>) -> Url {
+        let mut url = self.endpoint.url("api/session");
+        {
+            let mut pairs = url.query_pairs_mut();
+            pairs.append_pair("limit", &SESSION_PAGE_SIZE.to_string());
+            if let Some(cursor) = cursor {
+                pairs.append_pair("cursor", cursor);
+            }
+        }
+        url
+    }
+
+    /// The URL of a session's newest `limit` messages.
+    pub fn messages_url(&self, session_id: &SessionId, limit: usize) -> Url {
+        let mut url = self.endpoint.url("api/session/");
+        url.path_segments_mut()
+            .expect("http and https URLs have path segments")
+            .pop_if_empty()
+            .extend([session_id.as_str(), "message"]);
+        url.query_pairs_mut()
+            .append_pair("limit", &limit.to_string());
+        url
+    }
+
+    /// One page of every session the server knows, newest first.
+    pub async fn session_page(&self, cursor: Option<&str>) -> Result<SessionPage, TransportError> {
+        let page: wire::Page<wire::Session> =
+            self.get_json(self.session_page_url(cursor), None).await?;
+        Ok(SessionPage {
+            sessions: page.data.into_iter().map(projection::session).collect(),
+            next: page.cursor.next,
+        })
+    }
+
+    /// Every session, walking pages until the list stops growing.
+    ///
+    /// A failed page fails the whole read: a partial list has no authority
+    /// to remove sessions it did not reach.
+    pub async fn all_sessions(&self) -> Result<Vec<SessionRecord>, TransportError> {
+        let mut pages = self.session_pages();
+        let mut sessions = Vec::new();
+        while let Some(page) = pages.next().await? {
+            sessions.extend(page);
+        }
+        Ok(sessions)
+    }
+
+    /// Pages of every session, for a caller that shows the first page early.
+    pub fn session_pages(&self) -> SessionPages {
+        SessionPages {
+            client: self.clone(),
+            cursor: None,
+            seen: HashSet::new(),
+            done: false,
+        }
+    }
+
+    /// The newest page of a session's messages, returned oldest first.
+    ///
+    /// Session routes resolve the session's own location, so no directory
+    /// header is sent.
+    ///
+    /// When the server supports it, finished tool results come as shells
+    /// (`PartContent::Tool::elided`); `session_message` completes one.
+    pub async fn latest_messages(
+        &self,
+        session_id: &SessionId,
+        limit: usize,
+    ) -> Result<MessagePage, TransportError> {
+        let response = self
+            .latest_messages_request(session_id, limit)
+            .send()
+            .await
+            .map_err(TransportError::from_request)?;
+        message_page(read_json(response).await?, limit)
+    }
+
+    pub(crate) fn latest_messages_request(
+        &self,
+        session_id: &SessionId,
+        limit: usize,
+    ) -> RequestBuilder {
+        self.message_page_request(self.messages_url(session_id, limit))
+    }
+
+    fn message_page_request(&self, url: Url) -> RequestBuilder {
+        let request = self.authorized(Method::GET, url);
+        if self.part_shells {
+            request.header(PART_SHELLS_HEADER, PART_SHELLS_VERSION)
+        } else {
+            request
+        }
+    }
+
+    /// Reads the next older message page using the server's opaque cursor.
+    /// A cursor request carries no explicit order, matching the official client.
+    pub async fn earlier_messages(
+        &self,
+        session_id: &SessionId,
+        cursor: &str,
+        limit: usize,
+    ) -> Result<MessagePage, TransportError> {
+        let response = self
+            .earlier_messages_request(session_id, cursor, limit)
+            .send()
+            .await
+            .map_err(TransportError::from_request)?;
+        message_page(read_json(response).await?, limit)
+    }
+
+    pub(crate) fn earlier_messages_request(
+        &self,
+        session_id: &SessionId,
+        cursor: &str,
+        limit: usize,
+    ) -> RequestBuilder {
+        let mut url = self.messages_url(session_id, limit);
+        url.query_pairs_mut().append_pair("cursor", cursor);
+        self.message_page_request(url)
+    }
+
+    /// The URL of one whole message.
+    pub fn session_message_url(&self, session_id: &SessionId, message_id: &MessageId) -> Url {
+        let mut url = self.endpoint.url("api/session/");
+        url.path_segments_mut()
+            .expect("http and https URLs have path segments")
+            .pop_if_empty()
+            .extend([session_id.as_str(), "message", message_id.as_str()]);
+        url
+    }
+
+    /// One whole message, with every tool result a page left out.
+    pub async fn session_message(
+        &self,
+        session_id: &SessionId,
+        message_id: &MessageId,
+    ) -> Result<Message, TransportError> {
+        let single: wire::Single<wire::MessageEnvelope> = self
+            .get_json(self.session_message_url(session_id, message_id), None)
+            .await?;
+        if single.data.id != message_id.as_str()
+            || (single.data.kind == "user"
+                && !single
+                    .data
+                    .body
+                    .get("text")
+                    .is_some_and(serde_json::Value::is_string))
+        {
+            return Err(TransportError::Malformed(
+                "invalid whole-message identity or user content".to_owned(),
+            ));
+        }
+        projection::message(single.data)?.ok_or_else(|| {
+            TransportError::Malformed("the message has a type this client does not know".to_owned())
+        })
+    }
+
+    /// The URL of the settings document as this client's surface reads it.
+    pub fn settings_url(&self) -> Url {
+        let mut url = self.endpoint.url("api/config/settings");
+        // A surface header forces a CORS preflight older servers refuse; the
+        // server reads the surface from the query.
+        url.query_pairs_mut().append_pair("surface", SURFACE);
+        url
+    }
+
+    /// The registered projects and the composer's defaults.
+    pub async fn settings(&self) -> Result<ServerSettings, TransportError> {
+        let settings: wire::Settings = self.get_json(self.settings_url(), None).await?;
+        Ok(ServerSettings::from_wire(settings))
+    }
+
+    /// Saves `changes` for this client's surface, as the web's settings
+    /// write does, and returns the merged settings the server answers with.
+    pub async fn save_settings(
+        &self,
+        changes: &SettingsChanges,
+    ) -> Result<ServerSettings, TransportError> {
+        let response = self
+            .authorized(Method::PUT, self.settings_url())
+            .json(changes)
+            .send()
+            .await
+            .map_err(TransportError::from_request)?;
+        let settings: wire::Settings = read_json(response).await?;
+        Ok(ServerSettings::from_wire(settings))
+    }
+
+    /// The URL of one worktree batch; `first` routes it as the UI does.
+    pub fn worktree_batch_url(&self, first: &str) -> Url {
+        let mut url = self.endpoint.url("api/git/project-worktrees");
+        url.query_pairs_mut().append_pair("directory", first);
+        url
+    }
+
+    /// The linked worktrees of each project, in batches.
+    ///
+    /// A failed batch fails the read; a directory the server could not list
+    /// is reported on its own, so it never erases another project's
+    /// worktrees.
+    pub async fn project_worktrees(
+        &self,
+        project_paths: &[String],
+    ) -> Result<Vec<WorktreeRead>, TransportError> {
+        let mut reads = Vec::with_capacity(project_paths.len());
+        for chunk in project_paths.chunks(WORKTREE_BATCH_SIZE) {
+            let response = self
+                .authorized(Method::POST, self.worktree_batch_url(&chunk[0]))
+                .json(&json!({ "directories": chunk }))
+                .send()
+                .await
+                .map_err(TransportError::from_request)?;
+            let batch: wire::WorktreeBatch = read_json(response).await?;
+            let mut by_directory: HashMap<String, Option<Vec<wire::WorktreeEntry>>> = batch
+                .projects
+                .into_iter()
+                .map(|entry| (entry.directory, entry.worktrees))
+                .collect();
+            for project_path in chunk {
+                let listing = by_directory.remove(project_path).flatten();
+                reads.push(WorktreeRead {
+                    project_path: project_path.clone(),
+                    worktrees: listing.map(|entries| {
+                        let listing = entries
+                            .into_iter()
+                            .filter_map(|entry| {
+                                Some(WorktreeInfo {
+                                    path: entry.path.filter(|path| !path.trim().is_empty())?,
+                                    label: None,
+                                    name: entry.name,
+                                    branch: entry.branch,
+                                })
+                            })
+                            .collect();
+                        ownership::linked_worktrees(project_path, listing)
+                    }),
+                });
+            }
+        }
+        Ok(reads)
+    }
+
+    /// The running state of every session the host tracks, from its own
+    /// event stream. The read starts no OpenCode location. Sessions it does
+    /// not list are idle; unknown states are left out.
+    pub async fn session_statuses(&self) -> Result<HashMap<SessionId, LiveStatus>, TransportError> {
+        Ok(self.host_session_status().await?.statuses)
+    }
+
+    /// Host-only bootstrap hints. Stubs never grant reply or removal authority.
+    pub async fn host_session_status(&self) -> Result<HostSessionStatus, TransportError> {
+        let snapshot: wire::StatusSnapshot = self
+            .get_json(self.endpoint.url("api/sessions/status"), None)
+            .await?;
+        let pending = snapshot
+            .pending
+            .as_ref()
+            .and_then(serde_json::Value::as_object)
+            .map(|owners| {
+                let mut stubs = Vec::new();
+                for (owner, entries) in owners {
+                    let Some(owner) =
+                        openchamber_native_core::request_owner::RequestOwner::from_wire(owner)
+                    else {
+                        continue;
+                    };
+                    for (field, permission) in [("permissions", true), ("forms", false)] {
+                        let Some(entries) =
+                            entries.get(field).and_then(serde_json::Value::as_array)
+                        else {
+                            continue;
+                        };
+                        for entry in entries {
+                            let Some(id) = entry
+                                .get("id")
+                                .and_then(serde_json::Value::as_str)
+                                .filter(|id| !id.is_empty())
+                            else {
+                                continue;
+                            };
+                            if !crate::request_wire::valid_id(
+                                id,
+                                if permission { "per" } else { "frm_" },
+                            ) {
+                                continue;
+                            }
+                            if entry.get("sessionID").and_then(serde_json::Value::as_str)
+                                != Some(owner.as_str())
+                            {
+                                continue;
+                            }
+                            if permission
+                                && matches!(
+                                    owner,
+                                    openchamber_native_core::request_owner::RequestOwner::Location
+                                )
+                            {
+                                continue;
+                            }
+                            let id = if permission {
+                                openchamber_native_core::pending_requests::RequestId::Permission(
+                                    id.into(),
+                                )
+                            } else {
+                                openchamber_native_core::pending_requests::RequestId::Form(
+                                    id.into(),
+                                )
+                            };
+                            stubs.push(PendingRequestStub {
+                                owner: owner.clone(),
+                                id,
+                            });
+                        }
+                    }
+                }
+                stubs
+            });
+        let server_time = snapshot
+            .server_time
+            .as_ref()
+            .and_then(serde_json::Value::as_f64)
+            .filter(|time| time.is_finite());
+        let mut statuses = HashMap::new();
+        let mut turn_elapsed = HashMap::new();
+        for (id, entry) in snapshot.sessions {
+            let status = match entry.status.as_str() {
+                "busy" => LiveStatus::Busy,
+                "retry" => LiveStatus::Retry,
+                "idle" => LiveStatus::Idle,
+                _ => continue,
+            };
+            let id = SessionId::new(id);
+            let started = entry
+                .turn_started_at
+                .as_ref()
+                .and_then(serde_json::Value::as_f64)
+                .filter(|time| time.is_finite());
+            if let (true, Some(now), Some(started)) =
+                (status != LiveStatus::Idle, server_time, started)
+            {
+                turn_elapsed.insert(id.clone(), (now - started).max(0.0) as i64);
+            }
+            statuses.insert(id, status);
+        }
+        Ok(HostSessionStatus {
+            statuses,
+            pending,
+            turn_elapsed,
+        })
+    }
+
+    /// The server's home directory and managed Chats roots.
+    pub async fn chat_roots(&self) -> Result<Option<ChatRoots>, TransportError> {
+        let home: wire::HomeInfo = self
+            .get_json(self.endpoint.url("api/fs/home"), None)
+            .await?;
+        Ok(ChatRoots::from_home_info(
+            home.home.as_deref(),
+            home.chats_root.as_deref(),
+            home.canonical_chats_root.as_deref(),
+            home.canonical_legacy_chats_root.as_deref(),
+        ))
+    }
+
+    pub(crate) fn authorized(&self, method: Method, url: Url) -> RequestBuilder {
+        let mut headers = HeaderMap::new();
+        headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+        if let Some(value) = self.credential.authorization() {
+            let mut value =
+                HeaderValue::from_str(&value).expect("client tokens are printable ASCII");
+            value.set_sensitive(true);
+            headers.insert(AUTHORIZATION, value);
+        }
+        RequestBuilder::new(
+            self.http.request(method, url).headers(headers),
+            self.authentication_failures.clone(),
+        )
+    }
+
+    /// A GET with the credential, scoped to `directory` when one is named.
+    pub(crate) async fn get_json<T: DeserializeOwned>(
+        &self,
+        url: Url,
+        directory: Option<&str>,
+    ) -> Result<T, TransportError> {
+        let response = self
+            .get_request(url, directory)
+            .send()
+            .await
+            .map_err(TransportError::from_request)?;
+        read_json(response).await
+    }
+
+    pub(crate) fn get_request(&self, url: Url, directory: Option<&str>) -> RequestBuilder {
+        let request = self.authorized(Method::GET, url);
+        match directory {
+            Some(directory) => request.header("x-opencode-directory", encode_directory(directory)),
+            None => request,
+        }
+    }
+}
+
+/// Projects a newest-first message page into server order.
+///
+/// A page shorter than `limit` is the oldest one, whatever cursor the server
+/// still names, as `getSessionMessages` in `lib/opencode/client.ts` decides.
+pub(crate) fn message_page(
+    page: wire::Page<wire::MessageEnvelope>,
+    limit: usize,
+) -> Result<MessagePage, TransportError> {
+    let mut messages = Vec::with_capacity(page.data.len());
+    for envelope in page.data {
+        if let Some(message) = projection::message(envelope)? {
+            messages.push(message);
+        }
+    }
+    let oldest = messages.len() < limit;
+    // The server lists newest first; transcripts hold server order oldest first.
+    messages.reverse();
+    Ok(MessagePage {
+        messages,
+        older: if oldest { None } else { page.cursor.next },
+    })
+}
+
+/// Percent-encodes a directory as `encodeURIComponent` does.
+pub fn encode_directory(directory: &str) -> String {
+    let mut encoded = String::with_capacity(directory.len());
+    for byte in directory.bytes() {
+        let unreserved = byte.is_ascii_alphanumeric()
+            || matches!(
+                byte,
+                b'-' | b'_' | b'.' | b'!' | b'~' | b'*' | b'\'' | b'(' | b')'
+            );
+        if unreserved {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
+/// Reads a JSON body after checking status and content type.
+pub(crate) async fn read_json<T: DeserializeOwned>(
+    response: Response,
+) -> Result<T, TransportError> {
+    let status = response.status();
+    if status.is_redirection() {
+        return Err(TransportError::Redirected);
+    }
+    if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+        return Err(TransportError::AuthenticationRequired);
+    }
+    if !status.is_success() {
+        return Err(TransportError::Http {
+            status: status.as_u16(),
+        });
+    }
+    let is_json = response
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.starts_with("application/json"));
+    if !is_json {
+        return Err(TransportError::Malformed(
+            "the response is not JSON".to_owned(),
+        ));
+    }
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(TransportError::from_request)?;
+    serde_json::from_slice(&bytes).map_err(|error| TransportError::Malformed(error.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use openchamber_native_core::ids::ProjectId;
+
+    use super::*;
+
+    #[test]
+    fn encodes_directories_like_encode_uri_component() {
+        assert_eq!(
+            encode_directory("/home/me/my project"),
+            "%2Fhome%2Fme%2Fmy%20project"
+        );
+        assert_eq!(encode_directory("C:\\work\\app"), "C%3A%5Cwork%5Capp");
+        assert_eq!(encode_directory("/tmp/ünï"), "%2Ftmp%2F%C3%BCn%C3%AF");
+        assert_eq!(encode_directory("a-b_c.d!e~f*g'h(i)"), "a-b_c.d!e~f*g'h(i)");
+    }
+
+    #[test]
+    fn settings_ignore_malformed_values_one_by_one() {
+        let wire: wire::Settings = serde_json::from_value(json!({
+            "projects": [{"id": "x", "path": "/work/app"}, {"path": 7}, "/ignored"],
+            "homeDirectory": "/home/me",
+            "lastDirectory": 3,
+            "activeProjectId": "",
+            "defaultModel": "perf/stream",
+            "defaultAgent": ["plan"],
+            "defaultVariant": " high ",
+            "hiddenModels": [
+                {"providerID": " perf ", "modelID": "a"},
+                {"providerID": "perf", "modelID": "a "},
+                {"providerID": "perf"},
+                {"providerID": "", "modelID": "b"},
+                "perf/c",
+                {"providerID": "perf", "modelID": "d"}
+            ],
+            "routingFeatureAvailable": "yes",
+            "timeFormatPreference": "24h",
+            "codeBlockLineWrap": false,
+            "worktreeArchiveOnDoneEnabled": "on",
+            "mergedWorktreeCleanupEnabled": true
+        }))
+        .expect("settings with malformed values still parse");
+        let settings = ServerSettings::from_wire(wire);
+        assert_eq!(settings.projects.len(), 1);
+        assert_eq!(settings.home_directory.as_deref(), Some("/home/me"));
+        assert_eq!(settings.last_directory, None);
+        assert_eq!(settings.active_project_id, None);
+        assert_eq!(settings.default_model.as_deref(), Some("perf/stream"));
+        assert_eq!(settings.default_agent, None);
+        assert_eq!(
+            settings.default_variant.as_deref(),
+            Some(" high "),
+            "non-empty strings are kept verbatim"
+        );
+        assert_eq!(
+            settings.hidden_models,
+            [
+                ("perf".to_owned(), "a".to_owned()),
+                ("perf".to_owned(), "d".to_owned())
+            ]
+        );
+        assert_eq!(settings.routing_feature_available, None);
+        assert!(!settings.workflows_shown, "absent flags mean off");
+        assert_eq!(settings.clock, ClockPreference::TwentyFourHour);
+        assert_eq!(settings.code_block_line_wrap, Some(false));
+        assert_eq!(settings.message_search_enabled, None, "absent means off");
+        assert_eq!(settings.worktree_archive_on_done, None);
+        assert_eq!(settings.merged_worktree_cleanup, Some(true));
+    }
+
+    #[test]
+    fn settings_effort_memory_preserves_named_default_and_missing_choices() {
+        let wire: wire::Settings = serde_json::from_value(json!({
+            "lastUsedEfforts": {
+                "perf/stream": "high",
+                "perf/plain": null,
+                "perf/named-default": "default"
+            }
+        }))
+        .expect("effort memory decodes with the settings document");
+        let settings = ServerSettings::from_wire(wire);
+        let efforts = settings
+            .last_used_efforts
+            .expect("the map has valid entries");
+        assert_eq!(efforts.get("perf/stream"), Some(&Some("high".to_owned())));
+        assert_eq!(
+            efforts.get("perf/plain"),
+            Some(&None),
+            "null remains an explicit Default"
+        );
+        assert_eq!(
+            efforts.get("perf/named-default"),
+            Some(&Some("default".to_owned())),
+            "a named default variant remains a named effort"
+        );
+        assert_eq!(
+            efforts.get("perf/missing"),
+            None,
+            "missing grants no choice"
+        );
+    }
+
+    #[test]
+    fn settings_effort_memory_preserves_json_order_for_bounded_profile_writes() {
+        let wire: wire::Settings = serde_json::from_str(
+            r#"{"lastUsedEfforts":{"z/model":"high","a/model":null,"m/model":"low"}}"#,
+        )
+        .expect("the wire map decodes directly in JSON encounter order");
+        let settings = ServerSettings::from_wire(wire);
+        assert_eq!(
+            settings.last_used_effort_order,
+            ["z/model", "a/model", "m/model"]
+        );
+        let changes = SettingsChanges {
+            last_used_efforts: Some(vec![
+                ("z/model".to_owned(), Some("high".to_owned())),
+                ("a/model".to_owned(), None),
+                ("m/model".to_owned(), Some("low".to_owned())),
+            ]),
+            ..SettingsChanges::default()
+        };
+        assert_eq!(
+            serde_json::to_string(&changes).expect("the effort map serializes as an object"),
+            r#"{"lastUsedEfforts":{"z/model":"high","a/model":null,"m/model":"low"}}"#,
+            "a write preserves oldest-first retention order and explicit Default"
+        );
+        assert_eq!(
+            serde_json::to_string(&SettingsChanges::default()).expect("omission serializes"),
+            "{}",
+            "omitted effort memory is not a request to clear it"
+        );
+    }
+
+    #[test]
+    fn settings_effort_memory_rejects_bad_entries_without_losing_valid_siblings() {
+        let wire: wire::Settings = serde_json::from_value(json!({
+            "defaultModel": "perf/stream",
+            "lastUsedEfforts": {
+                " \u{feff}perf/stream ": "\u{feff} high \u{feff}",
+                "perf/plain": null,
+                "perf/number": 4,
+                "perf/bool": false,
+                "perf/list": ["low"],
+                "perf/object": {"variant": "high"},
+                "perf/empty": "",
+                "perf/blank": " \u{feff} ",
+                " \u{feff} ": "high",
+                "perf/unicode": "\u{0085}high\u{0085}"
+            }
+        }))
+        .expect("a malformed effort does not reject the settings document");
+        let settings = ServerSettings::from_wire(wire);
+        assert_eq!(settings.default_model.as_deref(), Some("perf/stream"));
+        assert_eq!(
+            settings.last_used_efforts,
+            Some(HashMap::from([
+                ("perf/stream".to_owned(), Some("high".to_owned())),
+                ("perf/plain".to_owned(), None),
+                (
+                    "perf/unicode".to_owned(),
+                    Some("\u{0085}high\u{0085}".to_owned())
+                ),
+            ])),
+            "the projection follows the profile parser's trimming and per-entry rejection"
+        );
+    }
+
+    #[test]
+    fn missing_or_invalid_settings_effort_memory_stays_unknown() {
+        for document in [
+            json!({}),
+            json!({"lastUsedEfforts": null}),
+            json!({"lastUsedEfforts": {}}),
+            json!({"lastUsedEfforts": []}),
+            json!({"lastUsedEfforts": "high"}),
+            json!({"lastUsedEfforts": 4}),
+            json!({"lastUsedEfforts": {"perf/stream": false, "perf/plain": " "}}),
+        ] {
+            let settings = ServerSettings::from_wire(
+                serde_json::from_value(document).expect("individual malformed fields still decode"),
+            );
+            assert_eq!(
+                settings.last_used_efforts, None,
+                "unknown effort memory must not become an authoritative empty map"
+            );
+        }
+        assert!(
+            serde_json::from_str::<wire::Settings>("{\"lastUsedEfforts\":").is_err(),
+            "a malformed document remains a failed decode"
+        );
+    }
+
+    #[test]
+    fn settings_changes_carry_only_what_changed() {
+        let changes = SettingsChanges {
+            code_block_line_wrap: Some(false),
+            ..SettingsChanges::default()
+        };
+        assert_eq!(
+            serde_json::to_value(&changes).expect("serializes"),
+            json!({ "codeBlockLineWrap": false })
+        );
+        assert_eq!(
+            serde_json::to_value(SettingsChanges::default()).expect("serializes"),
+            json!({})
+        );
+    }
+
+    #[test]
+    fn work_status_retained_display_entries_do_not_grant_collection_authority() {
+        let prior = WorkStatusSectionList::MalformedWithPrior(vec!["ext:paused".to_owned()]);
+        assert_eq!(
+            prior.entries(),
+            None,
+            "retained display is not a newly validated array"
+        );
+        assert_eq!(
+            prior.last_valid_entries(),
+            Some(["ext:paused".to_owned()].as_slice())
+        );
+        assert!(
+            prior.is_malformed(),
+            "retaining a valid presentation cannot clear malformed status"
+        );
+    }
+
+    #[test]
+    fn work_status_settings_keep_unknown_fields_distinct_from_empty_lists() {
+        for value in [
+            json!(null),
+            json!(false),
+            json!(42),
+            json!({}),
+            json!("session"),
+        ] {
+            let settings = ServerSettings::from_wire(
+                serde_json::from_value(json!({
+                    "workStatusSectionOrder": value.clone(),
+                    "workStatusHiddenSections": value,
+                    "workStatusHiddenSectionsExplicit": "true",
+                    "autoSaveEnabled": false,
+                }))
+                .expect("a malformed field leaves the rest of the document usable"),
+            );
+            assert_eq!(
+                settings.work_status_section_order,
+                Some(WorkStatusSectionList::Malformed)
+            );
+            assert_eq!(
+                settings.work_status_hidden_sections,
+                Some(WorkStatusSectionList::Malformed)
+            );
+            assert_eq!(settings.work_status_hidden_sections_explicit, None);
+            assert_eq!(settings.auto_save_enabled, Some(false));
+        }
+        let settings = ServerSettings::from_wire(
+            serde_json::from_value(json!({
+                "workStatusSectionOrder": [],
+                "workStatusHiddenSections": [],
+                "workStatusHiddenSectionsExplicit": true,
+            }))
+            .expect("explicit empty lists decode"),
+        );
+        assert_eq!(
+            settings.work_status_section_order,
+            Some(WorkStatusSectionList::Valid(Vec::new()))
+        );
+        assert_eq!(
+            settings.work_status_hidden_sections,
+            Some(WorkStatusSectionList::Valid(Vec::new()))
+        );
+        assert_eq!(settings.work_status_hidden_sections_explicit, Some(true));
+        let absent = ServerSettings::from_wire(
+            serde_json::from_value(json!({})).expect("omitted settings decode"),
+        );
+        assert_eq!(absent.work_status_section_order, None);
+        assert_eq!(absent.work_status_hidden_sections, None);
+    }
+
+    #[test]
+    fn usage_preferences_read_field_by_field() {
+        let settings = ServerSettings::from_wire(
+            serde_json::from_value(json!({
+                "usageDisplayMode": "remaining",
+                "usageDropdownProviders": ["codex", 7, "claude"],
+                "usageSelectedModels": {"google": ["gemini/pro", false], "codex": "all"},
+            }))
+            .expect("usage fields decode"),
+        );
+        assert_eq!(settings.usage_remaining, Some(true));
+        assert_eq!(
+            settings.usage_providers,
+            Some(vec!["codex".to_owned(), "claude".to_owned()])
+        );
+        assert_eq!(
+            settings.usage_selected_models,
+            vec![("google".to_owned(), vec!["gemini/pro".to_owned()])],
+            "a provider whose value is no list is left out"
+        );
+        let none_selected = ServerSettings::from_wire(
+            serde_json::from_value(json!({
+                "usageDisplayMode": "usage",
+                "usageDropdownProviders": [],
+                "usageSelectedModels": null,
+            }))
+            .expect("usage fields decode"),
+        );
+        assert_eq!(none_selected.usage_remaining, Some(false));
+        assert_eq!(
+            none_selected.usage_providers,
+            Some(Vec::new()),
+            "an empty list is no providers, not every provider"
+        );
+        assert!(none_selected.usage_selected_models.is_empty());
+        let absent = ServerSettings::from_wire(
+            serde_json::from_value(json!({"usageDropdownProviders": "codex"}))
+                .expect("omitted settings decode"),
+        );
+        assert_eq!(absent.usage_remaining, None);
+        assert_eq!(absent.usage_providers, None);
+    }
+
+    #[test]
+    fn work_status_profile_lists_round_trip_without_replacing_unrelated_settings() {
+        let settings = ServerSettings::from_wire(
+            serde_json::from_value(json!({
+                "workStatusSectionOrder": ["ext:paused", "telemetry", 7, "session", ""],
+                "workStatusHiddenSections": ["ext:paused", false, "telemetry"],
+                "workStatusHiddenSectionsExplicit": true,
+                "terminalShell": "fish",
+            }))
+            .expect("invalid list entries are independently ignored"),
+        );
+        let changes = SettingsChanges {
+            work_status_section_order: settings
+                .work_status_section_order
+                .as_ref()
+                .and_then(WorkStatusSectionList::entries)
+                .map(<[String]>::to_vec),
+            work_status_hidden_sections: settings
+                .work_status_hidden_sections
+                .as_ref()
+                .and_then(WorkStatusSectionList::entries)
+                .map(<[String]>::to_vec),
+            work_status_hidden_sections_explicit: settings.work_status_hidden_sections_explicit,
+            ..SettingsChanges::default()
+        };
+        assert_eq!(
+            serde_json::to_value(changes).expect("layout fields serialize"),
+            json!({
+                "workStatusSectionOrder": ["ext:paused", "telemetry", "session"],
+                "workStatusHiddenSections": ["ext:paused", "telemetry"],
+                "workStatusHiddenSectionsExplicit": true,
+            }),
+            "layout writes retain extension positions and omit unrelated fields"
+        );
+        assert_eq!(settings.terminal_shell.as_deref(), Some("fish"));
+    }
+
+    #[test]
+    fn notification_and_voice_settings_read_and_write_the_exact_server_fields() {
+        let settings = ServerSettings::from_wire(
+            serde_json::from_value(json!({
+                "nativeNotificationsEnabled": true,
+                "notificationMode": "always",
+                "notifyOnSubtasks": false,
+                "notifyOnQuestion": "yes",
+                "notificationTemplates": {"completion": {"title": "Done", "message": ""}},
+                "dictationEnabled": false,
+                "sttProvider": "openai-compatible",
+                "sttServerUrl": "  http://localhost:8001/v1 ",
+                "sttLanguage": "x".repeat(65),
+                "sttCorrectTranscript": true,
+            }))
+            .expect("settings parse"),
+        );
+        assert_eq!(settings.native_notifications_enabled, Some(true));
+        assert_eq!(settings.notification_always, Some(true));
+        assert_eq!(settings.notify_on_subtasks, Some(false));
+        assert_eq!(
+            settings.notify_on_question, None,
+            "a malformed toggle is unknown"
+        );
+        assert_eq!(
+            settings
+                .notification_templates
+                .as_ref()
+                .map(|templates| templates.completion.title.as_str()),
+            Some("Done")
+        );
+        assert_eq!(settings.dictation_enabled, Some(false));
+        assert_eq!(settings.stt_provider, Some(SttProvider::OpenAiCompatible));
+        assert_eq!(
+            settings.stt_server_url.as_deref(),
+            Some("http://localhost:8001/v1")
+        );
+        assert_eq!(settings.stt_language, None, "past its limit");
+        assert_eq!(settings.stt_correct_transcript, Some(true));
+        let changes = SettingsChanges {
+            notification_mode: Some("hidden-only"),
+            notify_on_error: Some(false),
+            dictation_auto_send: Some(true),
+            stt_provider: Some("local"),
+            stt_local_model: Some("whisper-tiny-int8".into()),
+            notification_templates: Some(NotificationTemplates::default()),
+            ..SettingsChanges::default()
+        };
+        assert_eq!(
+            serde_json::to_value(&changes).expect("serializes"),
+            json!({
+                "notificationMode": "hidden-only",
+                "notifyOnError": false,
+                "dictationAutoSend": true,
+                "sttProvider": "local",
+                "sttLocalModel": "whisper-tiny-int8",
+                "notificationTemplates": {
+                    "completion": {"title": "", "message": ""},
+                    "error": {"title": "", "message": ""},
+                    "question": {"title": "", "message": ""},
+                    "subtask": {"title": "", "message": ""},
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn chat_and_sessions_settings_write_the_exact_server_fields() {
+        let changes = SettingsChanges {
+            follow_up_behavior: Some("steer"),
+            prompt_navigator_enabled: Some(false),
+            draft_starters_visible: Some(false),
+            permission_default_mode: Some("auto"),
+            sidebar_show_chats_section: Some(false),
+            session_work_enabled: Some(true),
+            show_deletion_dialog: Some(false),
+            worktree_archive_on_done_enabled: Some(true),
+            merged_worktree_cleanup_enabled: Some(false),
+            ..SettingsChanges::default()
+        };
+        assert_eq!(
+            serde_json::to_value(&changes).expect("serializes"),
+            json!({
+                "worktreeArchiveOnDoneEnabled": true,
+                "mergedWorktreeCleanupEnabled": false,
+                "followUpBehavior": "steer",
+                "promptNavigatorEnabled": false,
+                "draftStartersVisible": false,
+                "permissionDefaultMode": "auto",
+                "sidebarShowChatsSection": false,
+                "sessionWorkEnabled": true,
+                "showDeletionDialog": false,
+            })
+        );
+    }
+
+    #[test]
+    fn general_settings_read_and_write_the_exact_server_fields() {
+        let changes = SettingsChanges {
+            auto_save_enabled: Some(false),
+            terminal_close_on_exit: Some(false),
+            terminal_shell: Some("zsh".to_owned()),
+            ..SettingsChanges::default()
+        };
+        let document = json!({
+            "autoSaveEnabled": false,
+            "terminalCloseOnExit": false,
+            "terminalShell": "zsh"
+        });
+        assert_eq!(
+            serde_json::to_value(changes).expect("settings serialize"),
+            document
+        );
+        let settings =
+            ServerSettings::from_wire(serde_json::from_value(document).expect("settings parse"));
+        assert_eq!(settings.auto_save_enabled, Some(false));
+        assert_eq!(settings.terminal_close_on_exit, Some(false));
+        assert_eq!(settings.terminal_shell.as_deref(), Some("zsh"));
+        for document in [
+            json!({}),
+            json!({
+                "autoSaveEnabled": "false", "terminalCloseOnExit": 0, "terminalShell": "unknown"
+            }),
+        ] {
+            let settings = ServerSettings::from_wire(
+                serde_json::from_value(document).expect("settings parse"),
+            );
+            assert_eq!(settings.auto_save_enabled, None);
+            assert_eq!(settings.terminal_close_on_exit, None);
+            assert_eq!(settings.terminal_shell, None);
+        }
+        assert_eq!(
+            serde_json::to_value(SettingsChanges {
+                auto_save_enabled: Some(true),
+                ..SettingsChanges::default()
+            })
+            .expect("one field serializes"),
+            json!({"autoSaveEnabled": true})
+        );
+    }
+
+    #[test]
+    fn the_project_sort_order_and_project_times_are_read_and_written() {
+        let settings = ServerSettings::from_wire(
+            serde_json::from_value(json!({
+                "sidebarProjectSortOrder": "date-added",
+                "projects": [
+                    {"path": "/work/a", "addedAt": 20, "lastOpenedAt": 30},
+                    {"path": "/work/b", "addedAt": "soon"},
+                    {"path": "/work/c", "lastOpenedAt": 5},
+                ],
+            }))
+            .expect("settings"),
+        );
+        assert_eq!(settings.project_sort, Some(ProjectSortOrder::DateAdded));
+        assert_eq!(
+            settings.project_times,
+            [
+                ProjectTimes {
+                    path: "/work/a".to_owned(),
+                    added_at: Some(20),
+                    last_opened_at: Some(30),
+                },
+                ProjectTimes {
+                    path: "/work/c".to_owned(),
+                    added_at: None,
+                    last_opened_at: Some(5),
+                },
+            ]
+        );
+        for document in [json!({}), json!({"sidebarProjectSortOrder": "newest"})] {
+            let settings =
+                ServerSettings::from_wire(serde_json::from_value(document).expect("settings"));
+            assert_eq!(settings.project_sort, None, "an unknown order is no choice");
+        }
+        let changes = SettingsChanges {
+            sidebar_project_sort_order: Some(ProjectSortOrder::ZToA.as_setting()),
+            ..SettingsChanges::default()
+        };
+        assert_eq!(
+            serde_json::to_value(&changes).expect("changes"),
+            json!({"sidebarProjectSortOrder": "z-a"})
+        );
+    }
+
+    #[test]
+    fn sidebar_settings_read_new_grouping_and_legacy_choices() {
+        for (document, expected) in [
+            (
+                json!({"sidebarGrouping": "time"}),
+                Some(SidebarViewMode::WorksByTime),
+            ),
+            (
+                json!({"sidebarGrouping": "project", "sidebarViewMode": "timeline", "sidebarListSessionGrouping": "time"}),
+                Some(SidebarViewMode::Works),
+            ),
+            (
+                json!({"sidebarViewMode": "timeline", "sidebarListSessionGrouping": "time"}),
+                Some(SidebarViewMode::WorksByTime),
+            ),
+            (
+                json!({"sidebarViewMode": "projects"}),
+                Some(SidebarViewMode::Works),
+            ),
+            (json!({"sidebarGrouping": 42}), None),
+        ] {
+            let settings =
+                ServerSettings::from_wire(serde_json::from_value(document).expect("settings JSON"));
+            assert_eq!(settings.sidebar_view, expected);
+        }
+        let settings = ServerSettings::from_wire(
+            serde_json::from_value(json!({
+                "sidebarShowChatsSection": false, "sidebarShowPinnedSection": true,
+            "sidebarShowWorkSection": "invalid", "sidebarKeepWorkInPlace": true,
+            "sessionWorkEnabled": false,
+            }))
+            .expect("settings JSON"),
+        );
+        assert_eq!(settings.show_chats, Some(false));
+        assert_eq!(settings.show_pinned, Some(true));
+        assert_eq!(settings.show_work, None);
+        assert_eq!(settings.keep_work_in_place, Some(true));
+        assert_eq!(settings.work_enabled, Some(false));
+    }
+
+    #[test]
+    fn the_active_project_resolves_through_the_registered_projects() {
+        let wire: wire::Settings = serde_json::from_value(json!({
+            "projects": [
+                {"path": "/work/app", "defaultModel": " perf/stream ", "defaultAgent": " ", "label": " App "},
+                {"path": "/work/lib", "label": " "},
+                {"path": "/work/app/", "defaultAgent": "plan"}
+            ],
+            "activeProjectId": ProjectId::from_path("/work/lib").expect("a project ID").as_str(),
+        }))
+        .expect("settings parse");
+        let settings = ServerSettings::from_wire(wire);
+        assert_eq!(settings.active_project_path(), Some("/work/lib"));
+        assert_eq!(
+            settings.project_defaults,
+            [ProjectDefaults {
+                path: "/work/app".to_owned(),
+                agent: None,
+                model: Some("perf/stream".to_owned()),
+                variant: None,
+            }],
+            "defaults are trimmed and a later entry of the same path is ignored"
+        );
+        assert_eq!(
+            settings.project_labels,
+            [ProjectLabel {
+                path: "/work/app".to_owned(),
+                label: "App".to_owned(),
+            }],
+            "labels are trimmed and a blank one is none"
+        );
+        let unknown = ServerSettings {
+            active_project_id: Some("path_missing".to_owned()),
+            ..settings
+        };
+        assert_eq!(unknown.active_project_path(), None);
+    }
+}

@@ -1,0 +1,1114 @@
+//! Prompt submission, slash commands and interruption of a named session
+//! through OpenChamber.
+
+use std::fmt;
+
+use crate::request::RequestBuilder;
+use openchamber_native_core::ids::{MessageId, SessionId};
+use openchamber_native_core::send_config::ModelChoice;
+use openchamber_native_core::transcript::{Message, Role};
+use reqwest::{Method, Response, StatusCode};
+use serde::{Deserialize, Serialize};
+
+use crate::client::ServerClient;
+use crate::error::TransportError;
+use crate::prompt_parts::{
+    Command, CommandBody, PromptBody, PromptParts, SyntheticBody, SyntheticContext,
+};
+
+/// How OpenCode admits a prompt while a turn is running.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Delivery {
+    /// Make the input available to the active turn at a steering boundary.
+    Steer,
+    /// Wait for an idle boundary before starting the input.
+    Queue,
+}
+
+/// One user turn: its text, the parts it carries and the synthetic context
+/// admitted ahead of it. Slash commands use [`Command`]; a slash-prefixed
+/// string sent as a prompt is literal text.
+#[derive(Clone)]
+pub struct Prompt {
+    /// Stable client-generated ID retained across reconciliation.
+    pub message_id: MessageId,
+    /// Original text before server-side preparation hooks.
+    pub text: String,
+    /// Files, agent and skill references, metadata and context.
+    pub parts: PromptParts,
+    /// When present, persists this selection before admitting the prompt.
+    pub model: Option<ModelChoice>,
+    /// When present, persists the agent after selecting the model.
+    pub agent: Option<String>,
+    /// `None` leaves the delivery policy to OpenCode. Context items use the
+    /// same delivery as their prompt.
+    pub delivery: Option<Delivery>,
+}
+
+impl Prompt {
+    /// The local checks [`ServerClient::send_prompt`] applies before any
+    /// request: `msg_` IDs, unique context, some text, a file or context, and
+    /// nonblank references and selections.
+    pub fn is_well_formed(&self) -> bool {
+        self.message_id.as_str().starts_with("msg_")
+            && !(self.text.trim().is_empty()
+                && self.parts.files.is_empty()
+                && self.parts.context.is_empty())
+            && crate::prompt_parts::valid_parts(&self.parts, &self.message_id)
+            && valid_selection(self.model.as_ref(), self.agent.as_deref())
+    }
+}
+
+impl fmt::Debug for Prompt {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("Prompt")
+            .field("message_id", &self.message_id)
+            .field("text", &"[redacted]")
+            .field("parts", &self.parts)
+            .field("model", &self.model)
+            .field("agent", &self.agent)
+            .field("delivery", &self.delivery)
+            .finish()
+    }
+}
+
+/// Admission acknowledges a matching inbox item: the user prompt, or a
+/// synthetic context item. Prepared content comes from history and events;
+/// this receipt does not attest an exact text echo or turn completion.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PromptReceipt {
+    /// The session that admitted the item.
+    pub session_id: SessionId,
+    /// The admitted item, which may still be waiting in the inbox.
+    pub message_id: MessageId,
+    /// Server admission time in milliseconds since the Unix epoch.
+    pub created: u64,
+    /// Effective delivery after server-side preparation.
+    pub delivery: Delivery,
+}
+
+/// Read-only evidence for one retained prompt ID. No outcome permits an automatic resend.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PromptObservation {
+    /// The exact user item is admitted and still in the session inbox.
+    Pending(PromptReceipt),
+    /// The exact user message is in authoritative history, including prepared content.
+    Delivered(Box<Message>),
+    /// Neither read observed the ID. This does not establish rejection.
+    NotObserved,
+}
+
+/// Read-only evidence for every step of one retained prompt.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SendObservation {
+    /// The prompt is admitted and still in the inbox; its context preceded it.
+    Pending(PromptReceipt),
+    /// The prompt is in authoritative history.
+    Delivered(Box<Message>),
+    /// The prompt was not observed. `admitted` lists the leading context IDs
+    /// that were, in order; the rest of the context and the prompt are missing.
+    /// This does not establish rejection.
+    Missing { admitted: Vec<MessageId> },
+    /// A context item was observed after a missing one. Resending the missing
+    /// step would reorder the context, so no resend is safe.
+    OutOfOrder,
+}
+
+/// Which part of submission failed. Earlier selection changes and admitted
+/// context items can persist.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SendStage {
+    /// Local validation failed before any request.
+    Validation,
+    /// The server-owned queued prefix could not be reserved for this request.
+    Reservation,
+    /// The model-selection request failed.
+    Model,
+    /// The agent-selection request failed.
+    Agent,
+    /// The synthetic admission of the context item at this index failed.
+    Context { index: usize },
+    /// The admission request or its response failed.
+    Prompt,
+    /// The command request or its response failed.
+    Command,
+    /// The goal the prompt starts could not be saved; nothing was admitted.
+    Goal,
+}
+
+/// Whether the client has evidence that the prompt was admitted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PromptAdmission {
+    /// No admission request was made; earlier selections and context items
+    /// may have persisted. A definite context rejection also lands here.
+    NotAttempted,
+    /// The admission request received a definite rejection.
+    Rejected,
+    /// Reconcile the exact message IDs from inbox/events/history before any
+    /// resend. A lost context response is unknown too: that item may be
+    /// admitted while the prompt was never sent.
+    Unknown,
+    /// Context items were admitted, then a later step was refused or its
+    /// selection answer was lost; the prompt was not admitted. The admitted
+    /// items stay in the session, so the caller keeps the attempt for
+    /// recovery and never rolls it back to a draft.
+    Partial,
+}
+
+/// Classifies a failed step. `partial` says whether any context item of this
+/// prompt or command is already admitted, so a refusal cannot be rolled back.
+fn failed_admission(stage: SendStage, partial: bool, source: &TransportError) -> PromptAdmission {
+    let admitting = matches!(
+        stage,
+        SendStage::Context { .. } | SendStage::Prompt | SendStage::Command
+    );
+    match stage {
+        SendStage::Validation => PromptAdmission::NotAttempted,
+        // A lost admission answer may have admitted that item.
+        _ if admitting && !definitely_rejected(source) => PromptAdmission::Unknown,
+        _ if partial => PromptAdmission::Partial,
+        SendStage::Prompt | SendStage::Command => PromptAdmission::Rejected,
+        _ => PromptAdmission::NotAttempted,
+    }
+}
+
+/// Keeps the correlation IDs even when the response was lost. The caller keeps
+/// its draft; this transport never retries mutations or rolls selections back.
+#[derive(Debug, thiserror::Error)]
+#[error("prompt submission failed at {stage:?}: {source}")]
+pub struct SendError {
+    pub session_id: SessionId,
+    pub message_id: MessageId,
+    pub stage: SendStage,
+    pub admission: PromptAdmission,
+    #[source]
+    pub source: TransportError,
+}
+
+impl SendError {
+    /// Whether the server definitely refused the failed request (a declared
+    /// 400, 401, 403 or 404, or expired authentication), so sending it again
+    /// unchanged will be refused again. A lost answer is never definite.
+    pub fn is_definite(&self) -> bool {
+        definitely_rejected(&self.source)
+    }
+}
+
+/// A command failure. OpenCode assigns the command's message ID, so an
+/// `Unknown` outcome has no exact identity to look up: its message can only be
+/// recognized in events or history. Never resend one automatically.
+#[derive(Debug, thiserror::Error)]
+#[error("command failed at {stage:?}: {source}")]
+pub struct CommandError {
+    pub session_id: SessionId,
+    pub stage: SendStage,
+    pub admission: PromptAdmission,
+    #[source]
+    pub source: TransportError,
+}
+
+/// An interruption failure. A lost response can leave interruption applied.
+#[derive(Debug, thiserror::Error)]
+#[error("session interruption failed: {source}")]
+pub struct AbortError {
+    pub session_id: SessionId,
+    pub outcome_unknown: bool,
+    #[source]
+    pub source: TransportError,
+}
+
+#[derive(Serialize)]
+struct ModelBody<'a> {
+    model: ModelRef<'a>,
+}
+
+#[derive(Serialize)]
+struct ModelRef<'a> {
+    #[serde(rename = "providerID")]
+    provider_id: &'a str,
+    #[serde(rename = "id")]
+    model_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    variant: Option<&'a str>,
+}
+
+#[derive(Serialize)]
+struct AgentBody<'a> {
+    agent: &'a str,
+}
+
+/// The `{ data }` answer of both prompt and synthetic admission.
+#[derive(Deserialize)]
+struct PromptResponse {
+    data: InboxAdmitted,
+}
+
+#[derive(Deserialize)]
+struct InboxAdmitted {
+    id: String,
+    #[serde(rename = "sessionID")]
+    session_id: String,
+    #[serde(rename = "type")]
+    kind: String,
+    time: Created,
+    // Preparation hooks can transform payload and add attachments. Admission
+    // consumes only identity, time and delivery; history/events own content.
+    delivery: Delivery,
+}
+
+#[derive(Deserialize)]
+struct Created {
+    created: u64,
+}
+
+#[derive(Deserialize)]
+struct InboxResponse {
+    data: Vec<InboxIdentity>,
+}
+
+// Other items need only a valid identity. A matching user also requires its
+// admission time and delivery; malformed matching items cannot become absence.
+#[derive(Deserialize)]
+struct InboxIdentity {
+    id: String,
+    #[serde(rename = "sessionID")]
+    session_id: String,
+    #[serde(rename = "type")]
+    kind: InboxKind,
+    time: Option<Created>,
+    delivery: Option<Delivery>,
+}
+
+#[derive(Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+enum InboxKind {
+    User,
+    Synthetic,
+    Compaction,
+    Move,
+}
+
+#[derive(Deserialize)]
+struct InterruptResponse {
+    interrupted: bool,
+}
+
+impl ServerClient {
+    pub(crate) fn inbox_request(&self, session: &SessionId) -> RequestBuilder {
+        let mut url = self.endpoint().url("api/session/");
+        url.path_segments_mut()
+            .expect("HTTP URLs have path segments")
+            .pop_if_empty()
+            .extend([session.as_str(), "inbox"]);
+        self.authorized(Method::GET, url)
+    }
+
+    /// Reads the session inbox and validates every identity in it. Other items
+    /// need only a valid identity; a malformed one fails the whole read.
+    async fn read_inbox(&self, session: &SessionId) -> Result<Vec<InboxIdentity>, TransportError> {
+        let response = send_checked(self.inbox_request(session), StatusCode::OK).await?;
+        let inbox: InboxResponse = crate::client::read_json(response)
+            .await
+            .map_err(observation_error)?;
+        if inbox
+            .data
+            .iter()
+            .any(|item| !item.id.starts_with("msg_") || item.session_id != session.as_str())
+        {
+            return Err(malformed("invalid session inbox identity"));
+        }
+        Ok(inbox.data)
+    }
+
+    /// Observes inbox admission first, then exact-ID history. A missing message
+    /// can be between server states; this method never retries a submission.
+    pub async fn lookup_prompt(
+        &self,
+        session: &SessionId,
+        message_id: &MessageId,
+    ) -> Result<PromptObservation, TransportError> {
+        if session.as_str().is_empty() || !message_id.as_str().starts_with("msg_") {
+            return Err(malformed("invalid prompt observation identity"));
+        }
+        let inbox = self.read_inbox(session).await?;
+        self.observe_item(session, message_id, &inbox, InboxKind::User)
+            .await
+    }
+
+    /// Observes every step of a retained prompt with one inbox read and one
+    /// history read per step the inbox lacks. Items move from the inbox into
+    /// history, so reading the inbox first cannot miss an admitted step.
+    pub async fn observe_send(
+        &self,
+        session: &SessionId,
+        prompt: &Prompt,
+    ) -> Result<SendObservation, TransportError> {
+        if session.as_str().is_empty()
+            || !prompt.message_id.as_str().starts_with("msg_")
+            || !crate::prompt_parts::valid_context(&prompt.parts.context, Some(&prompt.message_id))
+        {
+            return Err(malformed("invalid prompt observation identity"));
+        }
+        let inbox = self.read_inbox(session).await?;
+        match self
+            .observe_item(session, &prompt.message_id, &inbox, InboxKind::User)
+            .await?
+        {
+            PromptObservation::Pending(receipt) => return Ok(SendObservation::Pending(receipt)),
+            PromptObservation::Delivered(message) => {
+                return Ok(SendObservation::Delivered(message));
+            }
+            PromptObservation::NotObserved => {}
+        }
+        let mut admitted = Vec::new();
+        let mut missing = false;
+        for item in &prompt.parts.context {
+            let observed = !matches!(
+                self.observe_item(session, &item.id, &inbox, InboxKind::Synthetic)
+                    .await?,
+                PromptObservation::NotObserved
+            );
+            match (observed, missing) {
+                (true, true) => return Ok(SendObservation::OutOfOrder),
+                (true, false) => admitted.push(item.id.clone()),
+                (false, _) => missing = true,
+            }
+        }
+        Ok(SendObservation::Missing { admitted })
+    }
+
+    async fn observe_item(
+        &self,
+        session: &SessionId,
+        message_id: &MessageId,
+        inbox: &[InboxIdentity],
+        kind: InboxKind,
+    ) -> Result<PromptObservation, TransportError> {
+        let mut pending = None;
+        for item in inbox.iter().filter(|item| item.id == message_id.as_str()) {
+            if pending.is_some() || item.kind != kind {
+                return Err(malformed("conflicting prompt inbox identity"));
+            }
+            pending = Some(PromptReceipt {
+                session_id: session.clone(),
+                message_id: message_id.clone(),
+                created: item
+                    .time
+                    .as_ref()
+                    .ok_or_else(|| malformed("missing prompt admission time"))?
+                    .created,
+                delivery: item
+                    .delivery
+                    .ok_or_else(|| malformed("missing prompt delivery"))?,
+            });
+        }
+        if let Some(receipt) = pending {
+            return Ok(PromptObservation::Pending(receipt));
+        }
+        let role = match kind {
+            InboxKind::Synthetic => Role::Synthetic,
+            _ => Role::User,
+        };
+        match self.session_message(session, message_id).await {
+            Ok(message) => {
+                if message.info.id != *message_id || message.info.role != role {
+                    return Err(malformed("conflicting prompt history identity"));
+                }
+                Ok(PromptObservation::Delivered(Box::new(message)))
+            }
+            Err(TransportError::Http { status: 404 }) => Ok(PromptObservation::NotObserved),
+            Err(error) => Err(observation_error(error)),
+        }
+    }
+
+    pub(crate) fn mutation_request(
+        &self,
+        session_id: &SessionId,
+        operation: &str,
+    ) -> RequestBuilder {
+        let mut url = self.endpoint().url("api/session/");
+        url.path_segments_mut()
+            .expect("HTTP URLs have path segments")
+            .pop_if_empty()
+            .extend([session_id.as_str(), operation]);
+        self.authorized(Method::POST, url)
+    }
+
+    pub(crate) fn prompt_request(&self, session: &SessionId, prompt: &Prompt) -> RequestBuilder {
+        self.mutation_request(session, "prompt").json(&PromptBody {
+            id: prompt.message_id.as_str(),
+            text: &prompt.text,
+            files: &prompt.parts.files,
+            agents: &prompt.parts.agents,
+            skills: &prompt.parts.skills,
+            metadata: prompt.parts.metadata.as_ref(),
+            delivery: prompt.delivery,
+        })
+    }
+
+    pub(crate) fn synthetic_request(
+        &self,
+        session: &SessionId,
+        context: &SyntheticContext,
+        delivery: Option<Delivery>,
+    ) -> RequestBuilder {
+        self.mutation_request(session, "synthetic")
+            .json(&SyntheticBody {
+                id: context.id.as_str(),
+                text: &context.text,
+                description: context.description.as_deref(),
+                metadata: context.metadata.as_ref(),
+                delivery,
+                resume: false,
+            })
+    }
+
+    pub(crate) fn command_request(&self, session: &SessionId, command: &Command) -> RequestBuilder {
+        self.mutation_request(session, "command")
+            .json(&CommandBody {
+                name: &command.name,
+                text: &command.text,
+                files: &command.files,
+                delivery: command.delivery,
+            })
+    }
+
+    pub(crate) fn model_request(&self, session: &SessionId, model: &ModelChoice) -> RequestBuilder {
+        self.mutation_request(session, "model").json(&ModelBody {
+            model: ModelRef {
+                provider_id: &model.provider_id,
+                model_id: &model.model_id,
+                variant: model
+                    .variant
+                    .as_deref()
+                    .filter(|variant| !variant.is_empty()),
+            },
+        })
+    }
+
+    pub(crate) fn agent_request(&self, session: &SessionId, agent: &str) -> RequestBuilder {
+        self.mutation_request(session, "agent")
+            .json(&AgentBody { agent })
+    }
+
+    /// Selects model, then agent, then admits each context item and finally
+    /// the exact client-generated prompt ID. Dropping the future cancels local
+    /// I/O only. Once polled, cancellation requires reconciliation just like
+    /// an unknown response; it cannot undo an admitted item or a selection.
+    pub async fn send_prompt(
+        &self,
+        session: &SessionId,
+        prompt: &Prompt,
+    ) -> Result<PromptReceipt, SendError> {
+        self.resume_prompt(session, prompt, &[]).await
+    }
+
+    /// [`Self::send_prompt`] after an uncertain attempt, skipping the context
+    /// items an observation found. `admitted` must be a leading run of the
+    /// prompt's context IDs in order (`SendObservation::Missing`); anything
+    /// else fails validation before any request. Selections are sent again.
+    pub async fn resume_prompt(
+        &self,
+        session: &SessionId,
+        prompt: &Prompt,
+        admitted: &[MessageId],
+    ) -> Result<PromptReceipt, SendError> {
+        let context = &prompt.parts.context;
+        let failure = |stage, source| SendError {
+            session_id: session.clone(),
+            message_id: prompt.message_id.clone(),
+            stage,
+            admission: failed_admission(
+                stage,
+                match stage {
+                    SendStage::Context { index } => index > 0,
+                    SendStage::Prompt => !context.is_empty(),
+                    _ => !admitted.is_empty(),
+                },
+                &source,
+            ),
+            source,
+        };
+        let resumable = admitted.len() <= context.len()
+            && admitted
+                .iter()
+                .zip(context)
+                .all(|(admitted, item)| *admitted == item.id);
+        if session.as_str().is_empty() || !prompt.is_well_formed() || !resumable {
+            return Err(failure(SendStage::Validation, malformed("invalid prompt")));
+        }
+        self.apply_selection(session, prompt.model.as_ref(), prompt.agent.as_deref())
+            .await
+            .map_err(|(stage, error)| failure(stage, error))?;
+        for (index, item) in context.iter().enumerate().skip(admitted.len()) {
+            self.admit_context(session, item, prompt.delivery)
+                .await
+                .map_err(|error| failure(SendStage::Context { index }, error))?;
+        }
+        let item = self
+            .admit(
+                self.prompt_request(session, prompt),
+                session,
+                &prompt.message_id,
+                "user",
+            )
+            .await
+            .map_err(|error| failure(SendStage::Prompt, error))?;
+        Ok(item)
+    }
+
+    /// Selects model and agent, admits the context items, then runs the
+    /// command. Its 204 answer carries no message ID (see [`CommandError`]).
+    pub async fn run_command(
+        &self,
+        session: &SessionId,
+        command: &Command,
+    ) -> Result<(), CommandError> {
+        let failure = |stage, source| CommandError {
+            session_id: session.clone(),
+            stage,
+            admission: failed_admission(
+                stage,
+                match stage {
+                    SendStage::Context { index } => index > 0,
+                    SendStage::Command => !command.context.is_empty(),
+                    _ => false,
+                },
+                &source,
+            ),
+            source,
+        };
+        if session.as_str().is_empty()
+            || command.name.trim().is_empty()
+            || command.name.starts_with('/')
+            || !crate::prompt_parts::valid_files(&command.files)
+            || !crate::prompt_parts::valid_context(&command.context, None)
+            || !valid_selection(command.model.as_ref(), command.agent.as_deref())
+        {
+            return Err(failure(SendStage::Validation, malformed("invalid command")));
+        }
+        self.apply_selection(session, command.model.as_ref(), command.agent.as_deref())
+            .await
+            .map_err(|(stage, error)| failure(stage, error))?;
+        for (index, item) in command.context.iter().enumerate() {
+            self.admit_context(session, item, command.delivery)
+                .await
+                .map_err(|error| failure(SendStage::Context { index }, error))?;
+        }
+        send_checked(
+            self.command_request(session, command),
+            StatusCode::NO_CONTENT,
+        )
+        .await
+        .map_err(|error| failure(SendStage::Command, error))?;
+        Ok(())
+    }
+
+    async fn apply_selection(
+        &self,
+        session: &SessionId,
+        model: Option<&ModelChoice>,
+        agent: Option<&str>,
+    ) -> Result<(), (SendStage, TransportError)> {
+        if let Some(model) = model {
+            send_checked(self.model_request(session, model), StatusCode::NO_CONTENT)
+                .await
+                .map_err(|error| (SendStage::Model, error))?;
+        }
+        if let Some(agent) = agent {
+            send_checked(self.agent_request(session, agent), StatusCode::NO_CONTENT)
+                .await
+                .map_err(|error| (SendStage::Agent, error))?;
+        }
+        Ok(())
+    }
+
+    async fn admit_context(
+        &self,
+        session: &SessionId,
+        item: &SyntheticContext,
+        delivery: Option<Delivery>,
+    ) -> Result<PromptReceipt, TransportError> {
+        self.admit(
+            self.synthetic_request(session, item, delivery),
+            session,
+            &item.id,
+            "synthetic",
+        )
+        .await
+    }
+
+    /// Posts one admission and checks that its receipt names the exact item.
+    async fn admit(
+        &self,
+        request: RequestBuilder,
+        session: &SessionId,
+        id: &MessageId,
+        kind: &str,
+    ) -> Result<PromptReceipt, TransportError> {
+        let response = send_checked(request, StatusCode::OK).await?;
+        let reply: PromptResponse = crate::client::read_json(response)
+            .await
+            .map_err(receipt_error)?;
+        let item = reply.data;
+        if item.id != id.as_str() || item.session_id != session.as_str() || item.kind != kind {
+            return Err(malformed("receipt does not match the submitted item"));
+        }
+        Ok(PromptReceipt {
+            session_id: session.clone(),
+            message_id: id.clone(),
+            created: item.time.created,
+            delivery: item.delivery,
+        })
+    }
+
+    /// Interrupts only this named session. `false` means no turn was running.
+    /// Neither cancellation nor a failed answer triggers another mutation.
+    pub async fn abort_session(&self, session: &SessionId) -> Result<bool, AbortError> {
+        let failure = |source| AbortError {
+            session_id: session.clone(),
+            outcome_unknown: !definitely_rejected(&source),
+            source,
+        };
+        if session.as_str().is_empty() {
+            return Err(AbortError {
+                session_id: session.clone(),
+                outcome_unknown: false,
+                source: malformed("a session ID is required"),
+            });
+        }
+        let response = send_checked(self.mutation_request(session, "interrupt"), StatusCode::OK)
+            .await
+            .map_err(failure)?;
+        let reply: InterruptResponse = crate::client::read_json(response)
+            .await
+            .map_err(|error| failure(receipt_error(error)))?;
+        Ok(reply.interrupted)
+    }
+}
+
+fn malformed(message: &str) -> TransportError {
+    TransportError::Malformed(message.to_owned())
+}
+
+fn observation_error(error: TransportError) -> TransportError {
+    match error {
+        TransportError::Malformed(_) => malformed("unrecognized prompt observation response"),
+        other => other,
+    }
+}
+
+fn receipt_error(error: TransportError) -> TransportError {
+    match error {
+        // Serde errors can quote rejected payload fields. Keep content out of diagnostics.
+        TransportError::Malformed(_) => malformed("unrecognized mutation receipt"),
+        other => other,
+    }
+}
+
+fn definitely_rejected(error: &TransportError) -> bool {
+    matches!(
+        error,
+        TransportError::AuthenticationRequired
+            | TransportError::Http {
+                status: 400 | 401 | 403 | 404
+            }
+    )
+}
+
+fn valid_selection(model: Option<&ModelChoice>, agent: Option<&str>) -> bool {
+    agent.is_none_or(|agent| !agent.trim().is_empty())
+        && model.is_none_or(|model| {
+            !model.provider_id.trim().is_empty() && !model.model_id.trim().is_empty()
+        })
+}
+
+pub(crate) async fn send_checked(
+    request: RequestBuilder,
+    expected: StatusCode,
+) -> Result<Response, TransportError> {
+    let response = request.send().await.map_err(TransportError::from_request)?;
+    let status = response.status();
+    if status.is_redirection() {
+        return Err(TransportError::Redirected);
+    }
+    if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) {
+        return Err(TransportError::AuthenticationRequired);
+    }
+    if status != expected {
+        return Err(TransportError::Http {
+            status: status.as_u16(),
+        });
+    }
+    Ok(response)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::Value;
+
+    use crate::credential::Credential;
+    use crate::endpoint::Endpoint;
+    use crate::prompt_parts::{AgentMention, Mention, Metadata, PromptFile, SkillRef};
+
+    use super::*;
+
+    #[test]
+    fn prompt_debug_never_contains_the_text() {
+        let prompt = Prompt {
+            message_id: MessageId::new("msg_test"),
+            text: "private prompt content".to_owned(),
+            parts: PromptParts::default(),
+            model: None,
+            agent: None,
+            delivery: None,
+        };
+        let debug = format!("{prompt:?}");
+        assert!(!debug.contains(&prompt.text));
+        assert!(debug.contains("[redacted]"));
+    }
+
+    #[test]
+    fn mutation_requests_match_the_pinned_client() {
+        let fixture: Value = serde_json::from_str(include_str!("../tests/fixtures/transport.json"))
+            .expect("generated fixture");
+        let client = ServerClient::new(
+            Endpoint::parse("http://127.0.0.1:4799").expect("endpoint"),
+            Credential::None,
+        )
+        .expect("client");
+        let session = SessionId::new("ses_e9b49c443ffefXcWWPhCOga6nH");
+        let model = ModelChoice {
+            provider_id: "fixture".to_owned(),
+            model_id: "text-model".to_owned(),
+            variant: Some("high".to_owned()),
+        };
+        let prompt = Prompt {
+            message_id: MessageId::new("msg_native_fixture_exact"),
+            text: "Hello\n世界 ".to_owned(),
+            parts: PromptParts::default(),
+            model: None,
+            agent: None,
+            delivery: Some(Delivery::Queue),
+        };
+        let with_parts = Prompt {
+            text: "@plan review this".to_owned(),
+            parts: fixture_parts(),
+            delivery: Some(Delivery::Steer),
+            ..prompt.clone()
+        };
+        let context = fixture_context();
+        let command = Command {
+            name: "review".to_owned(),
+            text: "src/lib.rs".to_owned(),
+            files: vec![PromptFile {
+                uri: "file:///home/synthetic/project/src/lib.rs".to_owned(),
+                name: Some("lib.rs".to_owned()),
+            }],
+            context: Vec::new(),
+            model: None,
+            agent: None,
+            delivery: Some(Delivery::Queue),
+        };
+        let requests = [
+            ("observe prompt inbox", client.inbox_request(&session)),
+            (
+                "observe exact prompt history",
+                client.authorized(
+                    Method::GET,
+                    client.session_message_url(&session, &prompt.message_id),
+                ),
+            ),
+            (
+                "select prompt model",
+                client.model_request(&session, &model),
+            ),
+            (
+                "clear prompt variant",
+                client.model_request(
+                    &session,
+                    &ModelChoice {
+                        variant: None,
+                        ..model
+                    },
+                ),
+            ),
+            (
+                "select prompt agent",
+                client.agent_request(&session, "build"),
+            ),
+            (
+                "submit text prompt",
+                client.prompt_request(&session, &prompt),
+            ),
+            (
+                "submit default delivery",
+                client.prompt_request(
+                    &session,
+                    &Prompt {
+                        delivery: None,
+                        ..prompt.clone()
+                    },
+                ),
+            ),
+            (
+                "submit prompt with parts",
+                client.prompt_request(&session, &with_parts),
+            ),
+            (
+                "admit synthetic context",
+                client.synthetic_request(&session, &context, Some(Delivery::Steer)),
+            ),
+            (
+                "admit synthetic default delivery",
+                client.synthetic_request(
+                    &session,
+                    &SyntheticContext {
+                        description: None,
+                        metadata: None,
+                        ..context.clone()
+                    },
+                    None,
+                ),
+            ),
+            ("run command", client.command_request(&session, &command)),
+            (
+                "run command without arguments",
+                client.command_request(
+                    &session,
+                    &Command {
+                        name: "init".to_owned(),
+                        text: String::new(),
+                        files: Vec::new(),
+                        delivery: None,
+                        ..command.clone()
+                    },
+                ),
+            ),
+            (
+                "interrupt named session",
+                client.mutation_request(&session, "interrupt"),
+            ),
+            (
+                "interrupt idle session",
+                client.mutation_request(&session, "interrupt"),
+            ),
+        ];
+        for (name, builder) in requests {
+            let expected = fixture["requests"]
+                .as_array()
+                .expect("requests")
+                .iter()
+                .find(|entry| entry["name"] == name)
+                .expect("recorded operation");
+            let actual = builder.build().expect("request");
+            assert_eq!(actual.method().as_str(), expected["method"], "{name}");
+            assert_eq!(actual.url().path(), expected["path"], "{name}");
+            assert!(actual.url().query().is_none(), "{name} has no query");
+            for (header, field) in [
+                ("x-opencode-directory", "directoryHeader"),
+                ("x-openchamber-part-shells", "partShellsHeader"),
+                ("content-type", "contentType"),
+            ] {
+                assert_eq!(
+                    actual
+                        .headers()
+                        .get(header)
+                        .map(|value| value.to_str().expect("header")),
+                    expected[field].as_str(),
+                    "{name}: {header}"
+                );
+            }
+            let actual_body: Option<Value> = actual
+                .body()
+                .and_then(reqwest::Body::as_bytes)
+                .map(|bytes| serde_json::from_slice(bytes).expect("JSON body"));
+            let expected_body: Option<Value> = expected["body"]
+                .as_str()
+                .map(|body| serde_json::from_str(body).expect("JSON fixture body"));
+            assert_eq!(actual_body, expected_body, "{name}");
+            if name.starts_with("submit") || name.contains("synthetic") || name.contains("command")
+            {
+                // Admission bodies are compared byte for byte, so a text-only
+                // prompt stays exactly what earlier releases sent.
+                assert_eq!(
+                    actual.body().and_then(reqwest::Body::as_bytes),
+                    expected["body"].as_str().map(str::as_bytes),
+                    "{name}: exact bytes"
+                );
+            }
+        }
+    }
+
+    fn fixture_parts() -> PromptParts {
+        PromptParts {
+            files: vec![
+                PromptFile {
+                    uri: "file:///home/synthetic/project/notes.md".to_owned(),
+                    name: Some("notes.md".to_owned()),
+                },
+                PromptFile {
+                    uri: "data:text/plain;base64,aGk=".to_owned(),
+                    name: None,
+                },
+            ],
+            agents: vec![
+                AgentMention {
+                    name: "plan".to_owned(),
+                    mention: Some(Mention {
+                        start: 0,
+                        end: 5,
+                        text: "@plan".to_owned(),
+                    }),
+                },
+                AgentMention {
+                    name: "build".to_owned(),
+                    mention: None,
+                },
+            ],
+            skills: vec![SkillRef {
+                id: "skill_fixture".to_owned(),
+            }],
+            metadata: Some(metadata(
+                serde_json::json!({ "openchamber": { "source": "native" } }),
+            )),
+            context: Vec::new(),
+        }
+    }
+
+    fn fixture_context() -> SyntheticContext {
+        SyntheticContext {
+            id: MessageId::new("msg_native_fixture_context"),
+            text: "Quoted context ✓".to_owned(),
+            description: Some("Selection".to_owned()),
+            metadata: Some(metadata(
+                serde_json::json!({ "openchamber": { "kind": "quote" } }),
+            )),
+        }
+    }
+
+    fn metadata(value: Value) -> Metadata {
+        let Value::Object(map) = value else {
+            panic!("fixture metadata is an object");
+        };
+        Metadata(map)
+    }
+
+    #[test]
+    fn synthetic_receipt_matches_sdk_unwrapping() {
+        let fixture: Value = serde_json::from_str(include_str!("../tests/fixtures/transport.json"))
+            .expect("fixture");
+        let parsed: PromptResponse = serde_json::from_str(include_str!(
+            "../tests/fixtures/wire/synthetic-admitted.json"
+        ))
+        .expect("synthetic receipt");
+        let sdk = &fixture["mutations"]["synthetic"];
+        assert_eq!(parsed.data.id, sdk["id"]);
+        assert_eq!(parsed.data.session_id, sdk["sessionID"]);
+        assert_eq!(parsed.data.kind, sdk["type"]);
+        assert_eq!(parsed.data.time.created, sdk["time"]["created"]);
+        assert_eq!(
+            serde_json::to_value(parsed.data.delivery).expect("delivery"),
+            sdk["delivery"]
+        );
+    }
+
+    #[test]
+    fn observation_responses_match_sdk_unwrapping() {
+        let fixture: Value = serde_json::from_str(include_str!("../tests/fixtures/transport.json"))
+            .expect("generated fixture");
+        let inbox: InboxResponse =
+            serde_json::from_str(include_str!("../tests/fixtures/wire/prompt-inbox.json"))
+                .expect("inbox response");
+        let item = &inbox.data[0];
+        let sdk = &fixture["observations"]["pending"][0];
+        assert_eq!(item.id, sdk["id"]);
+        assert_eq!(item.session_id, sdk["sessionID"]);
+        assert_eq!(
+            item.time.as_ref().expect("time").created,
+            sdk["time"]["created"]
+        );
+        assert_eq!(
+            serde_json::to_value(item.delivery.expect("delivery")).expect("delivery"),
+            sdk["delivery"]
+        );
+        let history: crate::wire::Single<crate::wire::MessageEnvelope> =
+            serde_json::from_str(include_str!("../tests/fixtures/wire/prompt-history.json"))
+                .expect("history response");
+        let message = crate::projection::message(history.data)
+            .expect("projection")
+            .expect("user");
+        let sdk = &fixture["observations"]["delivered"];
+        assert_eq!(message.info.id.as_str(), sdk["id"]);
+        assert_eq!(message.plain_text(), sdk["text"]);
+        assert_eq!(message.info.created, sdk["time"]["created"]);
+    }
+
+    #[test]
+    fn admitted_response_matches_sdk_unwrapping_without_projecting_content() {
+        let wire = include_str!("../tests/fixtures/wire/prompt-admitted.json");
+        let fixture: Value = serde_json::from_str(include_str!("../tests/fixtures/transport.json"))
+            .expect("fixture");
+        let parsed: PromptResponse = serde_json::from_str(wire).expect("receipt");
+        let sdk = &fixture["mutations"]["admitted"];
+        for (name, wire) in [
+            ("interrupted", r#"{"interrupted":true}"#),
+            ("idle", r#"{"interrupted":false}"#),
+        ] {
+            let parsed: InterruptResponse =
+                serde_json::from_str(wire).expect("interruption response");
+            assert_eq!(
+                parsed.interrupted, fixture["mutations"][name]["interrupted"],
+                "SDK response parity"
+            );
+        }
+        assert_eq!(parsed.data.id, sdk["id"]);
+        assert_eq!(parsed.data.session_id, sdk["sessionID"]);
+        assert_eq!(parsed.data.time.created, sdk["time"]["created"]);
+        assert_eq!(
+            serde_json::to_value(parsed.data.delivery).expect("delivery"),
+            sdk["delivery"]
+        );
+        for field in ["id", "sessionID", "type", "time", "delivery"] {
+            let mut body: Value = serde_json::from_str(wire).expect("wire");
+            body["data"]
+                .as_object_mut()
+                .expect("inbox object")
+                .remove(field);
+            assert!(
+                serde_json::from_value::<PromptResponse>(body).is_err(),
+                "{field} is required for admission"
+            );
+        }
+        for (key, value) in [
+            (
+                "parts",
+                serde_json::json!([{ "type": "future", "text": "keep me" }]),
+            ),
+            (
+                "files",
+                serde_json::json!([{ "uri": "file:///tmp/example" }]),
+            ),
+            ("agents", serde_json::json!([{ "name": "plan" }])),
+            ("skills", serde_json::json!([{ "id": "skill_example" }])),
+            ("metadata", serde_json::json!({ "extra": true })),
+        ] {
+            let mut body: Value = serde_json::from_str(wire).expect("wire");
+            body["data"]["payload"][key] = value;
+            let parsed: PromptResponse =
+                serde_json::from_value(body).expect("content is outside admission projection");
+            assert_eq!(
+                parsed.data.id, sdk["id"],
+                "{key} does not alter admission identity"
+            );
+        }
+        let mut body: Value = serde_json::from_str(wire).expect("wire");
+        body["data"]["parts"] = serde_json::json!([{ "type": "future" }]);
+        assert!(
+            serde_json::from_value::<PromptResponse>(body).is_ok(),
+            "additional content does not invalidate an admission receipt"
+        );
+    }
+}

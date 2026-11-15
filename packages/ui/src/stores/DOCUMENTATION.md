@@ -48,6 +48,11 @@ There are multiple store categories in this directory.
 
 ### Catalog refresh
 
+`useConfigStore.ts` owns provider grouping and the default agent/model cascade.
+The native desktop's differential fixtures call those same production functions,
+including agent-pinned and remembered effort selection. Configured choices remain
+selected through catalog gaps.
+
 `catalogRefresh.ts` re-reads the lists Settings and the composer show — agents,
 commands, skills, MCP servers, plugins, providers — when OpenCode reports that
 it rebuilt a catalog. The sync layer calls it from `reloadCatalog`; see
@@ -493,6 +498,16 @@ context-only messages without carrying full quotes or diffs. VS Code derives
 the same preview from its local full item. Preview text is display-only;
 editing and delivery always use the original content and captured context.
 
+Supported full non-blob takes retain `promptParts.fileReferences` as explicitly
+marked server-file references in the existing attachment editor. Each retains
+its exact URI, model-facing name, optional description and mention, including
+duplicate occurrences. Requeue serializes these records back into the typed
+field and keeps them out of inline byte attachments. Ordinary attachments keep
+their existing request shape. The default UI still receives a refusal for
+blob-backed manifest and payload takes; it does not acknowledge their byte
+ownership or materialize their compact pointers. VS Code's foreground queue
+retains the same reference metadata through its existing attachment state.
+
 A queued message is captured whole, so whoever delivers it sends exactly what the composer would have: `text` (the content with its agent mention stripped and `@file` mentions already resolved into `attachments`), `agentMention`, and `context` — every chip the composer had attached (inline comments, terminal selections, browser annotations, PR comments/checks, quotes, linked issue/PR/tracker item references, pending synthetic parts) plus the skill instruction derived from the text. `QueuedContextPart` distinguishes attached items (restored to the chips when the message is edited) from derived instructions (re-derived on send, never restored) and from synthetic parts other surfaces handed the composer (restored as pending). Context is captured by `buildComposerContext` and delivered by `queuedContextToParts` (`components/chat/composer/submit/buildOutgoingMessage.ts`), the same functions the composer uses for its own send. An armed "run as goal" is captured as `goal` and consumed from `useSessionGoalArmStore` at queue time, so the goal starts with this message and not with whatever is sent next; a send of taken items passes their goal to `sendMessage` as `queuedGoal`, and a send of taken items alone passes `null` when they have none, so it never consumes the arm that belongs to the composer text. Editing the item arms the composer again. Nothing is re-resolved at delivery: the server has no agent list, no confirmed mentions, and no draft store. Messages a previous build left in this browser are uploaded once on the first hydration of a runtime and then dropped from persistence for that runtime (`partialize` skips server-owned runtime keys). VS Code has no server and keeps the local queue with the foreground auto-send hook (`useQueuedMessageAutoSend`, enabled only there). While an auto-review runs, the server holds that session's queue itself (`packages/web/server/lib/auto-review/DOCUMENTATION.md`).
 
 `useAutoReviewStore` projects the server's auto-review runs for the active runtime, nothing persisted: the server drives the loop and keeps each run, finished ones included, until the user dismisses it. Runs are keyed by owner and reviewed session, and a chat reads its run with `selectAutoReviewRun(sessionId, directory)` under the owner of its own directory: a space's snapshot reaches the browser unfiltered, and this keeps a space that names a host session off the host's chat. It follows the queue's ownership rules. The host's snapshot (`hydrate`) owns the host's runs and each space's snapshot (`refreshSpace`) owns that space's, revisions compare per owner, a broadcast (`openchamber:auto-review.updated`, through `sync/auto-review-sync.ts`) applies only to a session of the owner that sent it, and a snapshot never undoes a newer broadcast. `auto-review-sync.ts` re-reads on every control-stream reconnect, when a space first appears, and when the host announces `openchamber:space-queue-stream`, which is the same connection inside the space. Stop and dismiss are one `removeRun`: optimistic, and a refused request puts the run back and re-reads the owner. A runtime switch clears the projection; the previous server's runs keep going there. VS Code has no server, so `isAutoReviewAvailable()` is false and the review dialog offers no auto-review.
@@ -726,6 +741,14 @@ Chat composer drafts, confirmed mentions, inline-comment drafts, and pinned sess
 Input history keeps both runtime-wide and runtime/directory/session buckets in one bounded browser-storage envelope. The per-bucket cap is configurable from 1 through 100 and defaults to 40. Recall defaults to the current session's bucket merged with the visible transcript's user prompts; the runtime-wide bucket is opt-in through the Chat setting. Lowering the limit trims older entries from every bucket at once and cannot restore what it discards. Every scope change, limit change, append, and session cleanup rereads the latest durable envelope before applying its mutation, so a stale tab preserves history written by another tab. A failed write retains bounded before/after snapshots. The next mutation applies that local delta to the latest durable data, preserving pending appends and session deletions together with unrelated changes from other tabs. A successful durable write clears the pending delta.
 
 Server-owned queue acceptance records the original prompt and restorable attachments against its captured runtime/directory/session identity. Rejection records nothing. Automatic delivery and manual take do not record the accepted item again. VS Code retains recording at dispatch, using the full messages actually taken for sending.
+
+Typed server-file references retain their complete `fileReference` record in the
+existing version-1 history attachment descriptor. Recall restores the exact URI,
+model-facing name, description and mention into the marked reference attachment,
+so resend and requeue preserve the typed field. Duplicate detection compares the
+complete reference metadata. Old history descriptors without this optional field
+retain their original defaults. A malformed typed record invalidates only its
+history entry; valid sibling entries and namespaces remain available.
 
 Composer draft edits remain immediate in memory and use a trailing durable-write debounce. Pending text and confirmed mentions flush synchronously when the document becomes hidden, freezes, receives `pagehide`, switches identity, or unmounts; authoritative deletion cancels pending work before any lifecycle flush can run. The shared chat-draft envelope reuses its parsed snapshot until the storage value changes. Inline-comment draft byte accounting indexes serialized buckets and recalculates only the changed session bucket during normal edits; deferred storage still performs the final full-envelope serialization and lifecycle flush.
 

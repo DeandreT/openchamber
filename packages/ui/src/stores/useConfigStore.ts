@@ -208,6 +208,27 @@ type ProviderModel = Model;
  */
 type ProviderWithModelList = Provider & { models: Model[] };
 
+/** Chat catalogs and Settings-only providers, shared with native parity fixtures. */
+export const groupProviderCatalog = (providers: Provider[], catalogModels: Model[]) => {
+    const modelsByProvider = new Map<string, Model[]>();
+    const imageModelsByProvider = new Map<string, Model[]>();
+    for (const model of catalogModels) {
+        if (!model.enabled) continue;
+        const byProvider = model.type === "image" ? imageModelsByProvider : modelsByProvider;
+        const bucket = byProvider.get(model.providerID);
+        if (bucket) bucket.push(model);
+        else byProvider.set(model.providerID, [model]);
+    }
+    return {
+        providers: providers
+            .filter((provider) => provider.activation !== "disabled" && modelsByProvider.has(provider.id))
+            .map((provider) => ({ ...provider, models: modelsByProvider.get(provider.id) ?? [] })),
+        settingsOnlyProviders: providers
+            .filter((provider) => provider.activation !== "disabled" && !modelsByProvider.has(provider.id))
+            .map((provider) => ({ ...provider, models: imageModelsByProvider.get(provider.id) ?? [] })),
+    };
+};
+
 type GitModelSelection = { providerId: string; modelId: string };
 type ProviderModelSelection = { providerId: string; modelId: string; variant?: string | null } | null;
 
@@ -527,7 +548,7 @@ type DirectoryDefaultSelection = {
 // an agent's pinned model wins, otherwise the global `model` config applies — so we check the
 // agent's model before opencodeDefaultModel. When the agent supplies the model, its `variant` is
 // carried through too (if the model actually exposes that variant).
-const resolveDefaultAgentModelSelection = ({
+export const resolveDefaultAgentModelSelection = ({
     agents,
     providers,
     catalogLoaded,
@@ -2513,35 +2534,7 @@ export const useConfigStore = create<ConfigStore>()(
                                 ? { [apiResult.default.providerID]: apiResult.default.id }
                                 : {};
 
-                            // The catalog carries chat and image models. Only chat models
-                            // (an unset type is chat) reach `providers` and the pickers.
-                            const modelsByProvider = new Map<string, ProviderModel[]>();
-                            const imageModelsByProvider = new Map<string, ProviderModel[]>();
-                            for (const model of catalogModels) {
-                                if (!model.enabled) continue;
-                                const byProvider = model.type === "image" ? imageModelsByProvider : modelsByProvider;
-                                const bucket = byProvider.get(model.providerID);
-                                if (bucket) bucket.push(model);
-                                else byProvider.set(model.providerID, [model]);
-                            }
-                            // A provider the user switched off, or one with no usable
-                            // model, is not offerable — v2 replaced the `connected` list
-                            // with these two facts.
-                            const processedProviders: ProviderWithModelList[] = providers
-                                .filter((provider) => provider.activation !== "disabled" && modelsByProvider.has(provider.id))
-                                .map((provider) => ({
-                                    ...provider,
-                                    models: modelsByProvider.get(provider.id) ?? [],
-                                }));
-                            // A provider with no chat model is still configured and
-                            // manageable, so Settings lists it; chat never offers it.
-                            const settingsOnlyProviders: ProviderWithModelList[] = providers
-                                .filter((provider) => provider.activation !== "disabled"
-                                    && !modelsByProvider.has(provider.id))
-                                .map((provider) => ({
-                                    ...provider,
-                                    models: imageModelsByProvider.get(provider.id) ?? [],
-                                }));
+                            const { providers: processedProviders, settingsOnlyProviders } = groupProviderCatalog(providers, catalogModels);
 
                             if (!isConfigRuntimeContextCurrent(runtimeContext)) return;
                             set((state) => {

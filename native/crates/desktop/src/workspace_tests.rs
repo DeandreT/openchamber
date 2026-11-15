@@ -1,0 +1,1803 @@
+//! Headless window tests through real hit testing and keyboard dispatch.
+//!
+//! These cover the stage-1 behaviors GPUI Kit's test platform can establish:
+//! selection, draft preservation, submit/newline keys, stream playback,
+//! anchor restoration, keyboard navigation and shutdown during playback.
+//! IME, Narrator/AT-SPI announcements and DPI changes still need real-window
+//! checks.
+
+use std::time::Duration;
+
+use gpui_kit::test::{TestAppContextExt, TestWindowExt};
+use gpui_kit::{
+    AnyWindowHandle, AppContext, Bounds, ElementId, Entity, ScrollDelta, SharedString,
+    TestAppContext, WindowBounds, WindowOptions, point, px, size,
+};
+use openchamber_native_core::ids::{PartId, SessionId};
+use openchamber_native_core::synthetic::{ConversationShape, ResponseScript, WorkloadSize};
+use openchamber_native_core::transcript::{Part, PartContent, PartTime, Role, TranscriptEvent};
+
+use crate::locale::Strings;
+use crate::sidebar_item::SidebarItem;
+use crate::theme::{self, Appearance, Palette};
+use crate::workspace::{Source, Workspace};
+use crate::workspace_view;
+
+pub(crate) fn open(cx: &mut TestAppContext) -> (AnyWindowHandle, Entity<Workspace>) {
+    open_source(cx, Source::Synthetic(WorkloadSize::Small))
+}
+
+pub(crate) fn open_source(
+    cx: &mut TestAppContext,
+    source: Source,
+) -> (AnyWindowHandle, Entity<Workspace>) {
+    cx.update(|cx| {
+        gpui_kit::init(cx);
+        cx.set_global(Strings::load("en"));
+        theme::apply(Palette::default_for(Appearance::Dark), cx);
+        workspace_view::bind_keys(cx);
+        let (window, workspace) = gpui_kit::open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds {
+                    origin: point(px(0.0), px(0.0)),
+                    size: size(px(1280.0), px(800.0)),
+                })),
+                ..WindowOptions::default()
+            },
+            cx,
+            |window, cx| {
+                window.set_layout_mode(gpui_kit::LayoutMode::Logical);
+                cx.new(|cx| Workspace::new(source, window, cx))
+            },
+        )
+        .expect("the test window opens");
+        (window, workspace)
+    })
+}
+
+/// Visible session rows as (row key, session ID), in display order.
+fn session_rows(
+    workspace: &Entity<Workspace>,
+    cx: &mut TestAppContext,
+) -> Vec<(SharedString, SessionId)> {
+    cx.read(|cx| {
+        workspace
+            .read(cx)
+            .sidebar_items
+            .iter()
+            .filter_map(|item| match item {
+                SidebarItem::Session {
+                    key, session_id, ..
+                } => Some((key.clone(), session_id.clone())),
+                _ => None,
+            })
+            .collect()
+    })
+}
+
+fn id(key: &SharedString) -> ElementId {
+    ElementId::Name(key.clone())
+}
+
+fn composer_text(workspace: &Entity<Workspace>, cx: &mut TestAppContext) -> String {
+    cx.read(|cx| workspace.read(cx).composer.read(cx).value().to_string())
+}
+
+fn selected(workspace: &Entity<Workspace>, cx: &mut TestAppContext) -> Option<SessionId> {
+    cx.read(|cx| workspace.read(cx).selected.clone())
+}
+
+fn transcript_len(
+    workspace: &Entity<Workspace>,
+    session: &SessionId,
+    cx: &mut TestAppContext,
+) -> usize {
+    cx.read(|cx| {
+        workspace
+            .read(cx)
+            .open_sessions
+            .get(session)
+            .map_or(0, |open| open.transcript.len())
+    })
+}
+
+#[gpui_kit::test]
+fn rejected_send_restores_its_owner_across_selection_and_runtime_switches(cx: &mut TestAppContext) {
+    use crate::send_attempt::tests::attempt;
+    use openchamber_native_core::draft::Draft;
+    use openchamber_native_core::ids::RuntimeId;
+    use openchamber_native_transport::error::TransportError;
+    use openchamber_native_transport::prompt::{PromptAdmission, SendError, SendStage};
+
+    let (window, workspace) = open(cx);
+    let rows = session_rows(&workspace, cx);
+    let origin = rows[0].1.clone();
+    let other = rows[1].1.clone();
+    for switch_runtime in [false, true] {
+        cx.update_window(window, |_, window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                workspace.select_session(origin.clone(), window, cx);
+                let key = workspace.mutation_key(&origin);
+                let owner = workspace
+                    .composer_key
+                    .clone()
+                    .expect("selected session owns draft");
+                let mut pending = attempt(&key);
+                pending.owner = owner.clone();
+                let message_id = pending.prompt.message_id.clone();
+                let open = workspace
+                    .open_sessions
+                    .get_mut(&origin)
+                    .expect("selected session is open");
+                let change = open.transcript.push(pending.optimistic.clone());
+                crate::server_sync::apply_list_change(open, &change, cx);
+                assert!(workspace.send_attempts.begin(key.clone(), pending));
+                workspace
+                    .composer
+                    .update(cx, |composer, cx| composer.set_value("", window, cx));
+                workspace.select_session(other.clone(), window, cx);
+                if switch_runtime {
+                    workspace.switch_runtime(RuntimeId::from("another-runtime"), window, cx);
+                }
+                workspace.composer.update(cx, |composer, cx| {
+                    composer.set_value("current owner text", window, cx)
+                });
+                workspace
+                    .drafts
+                    .save(owner.clone(), Draft::new("newer origin text"));
+                workspace.finish_send(
+                    &key,
+                    &message_id,
+                    Some(Err(SendError {
+                        session_id: origin.clone(),
+                        message_id: message_id.clone(),
+                        stage: SendStage::Prompt,
+                        admission: PromptAdmission::Rejected,
+                        source: TransportError::Cancelled,
+                    })),
+                    window,
+                    cx,
+                );
+                assert_eq!(
+                    workspace.composer.read(cx).value().to_string(),
+                    "current owner text"
+                );
+                assert_eq!(
+                    workspace
+                        .drafts
+                        .get(&owner)
+                        .expect("origin draft restored")
+                        .text,
+                    "newer origin text\n\nsubmitted text"
+                );
+                if !switch_runtime {
+                    assert!(
+                        workspace.open_sessions[&origin]
+                            .transcript
+                            .row_of(&message_id)
+                            .is_none()
+                    );
+                }
+            });
+        })
+        .expect("window remains open");
+    }
+}
+
+#[gpui_kit::test]
+fn failed_abort_does_not_change_live_status(cx: &mut TestAppContext) {
+    use openchamber_native_core::session::LiveStatus;
+    use openchamber_native_transport::error::TransportError;
+    use openchamber_native_transport::prompt::AbortError;
+    let (window, workspace) = open(cx);
+    let session = session_rows(&workspace, cx)[0].1.clone();
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace
+                .live_status
+                .insert(session.clone(), LiveStatus::Busy);
+            let key = workspace.mutation_key(&session);
+            assert!(workspace.send_attempts.begin_abort(key.clone()));
+            workspace.finish_abort(
+                &key,
+                Some(Err(AbortError {
+                    session_id: session.clone(),
+                    outcome_unknown: true,
+                    source: TransportError::Cancelled,
+                })),
+                window,
+                cx,
+            );
+            assert_eq!(workspace.live_status.get(&session), Some(&LiveStatus::Busy));
+            assert!(workspace.send_attempts.can_send(&key));
+        });
+    })
+    .expect("window remains open");
+}
+
+#[gpui_kit::test]
+fn project_chooser_pointer_selects_a_filtered_project_in_rtl(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let directory = cx.read(|cx| workspace.read(cx).topology.projects[1].path.clone());
+    cx.update_window(window, |_, window, cx| {
+        cx.set_global(Strings::load("ar"));
+        theme::apply(Palette::default_for(Appearance::Light), cx);
+        workspace.update(cx, |workspace, _| {
+            workspace.send_catalog.settings =
+                Some(openchamber_native_transport::client::ServerSettings {
+                    project_labels: vec![openchamber_native_transport::client::ProjectLabel {
+                        path: directory.clone(),
+                        label: "Custom project label".to_owned(),
+                    }],
+                    ..Default::default()
+                });
+        });
+        window.render_frame(cx);
+        window.click(ElementId::Name("choose-project".into()), cx);
+        window.render_frame(cx);
+        window.input("Custom project", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(
+            ElementId::Name(format!("project-option:{directory}").into()),
+            cx,
+        );
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    assert_eq!(
+        cx.read(|cx| workspace.read(cx).config_directory()),
+        Some(directory)
+    );
+    cx.read(|cx| {
+        let state = workspace.read(cx);
+        assert_eq!(
+            state.draft_project_label().as_deref(),
+            Some("Custom project label")
+        );
+        assert_eq!(
+            state
+                .header_project_meta()
+                .and_then(|metadata| metadata.project)
+                .as_deref(),
+            Some("Custom project label")
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn project_chooser_pointer_opens_search_and_keyboard_selects(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let directory = cx.read(|cx| workspace.read(cx).topology.projects[0].path.clone());
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(ElementId::Name("choose-project".into()), cx);
+        window.render_frame(cx);
+        // The first row is Chat; the next is the captured registered project.
+        window.press("ctrl-n", cx);
+        window.press("ctrl-n", cx);
+        window.press("enter", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    cx.read(|cx| {
+        let workspace = workspace.read(cx);
+        assert_eq!(
+            workspace.draft_projects.get(&workspace.runtime),
+            Some(&directory),
+            "choosing the project row commits its exact directory"
+        );
+        assert_eq!(workspace.config_directory().as_ref(), Some(&directory));
+        assert_eq!(
+            workspace.composer_key.as_ref().map(|key| key.directory()),
+            Some(directory.as_str())
+        );
+        assert!(workspace.selected.is_none());
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.input("after choosing", cx);
+    })
+    .expect("window is open");
+    assert_eq!(
+        composer_text(&workspace, cx),
+        "after choosing",
+        "selection returns focus to the composer"
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.press("ctrl-a", cx);
+    })
+    .expect("window is open");
+    cx.read(|cx| {
+        assert_eq!(
+            workspace
+                .read(cx)
+                .composer
+                .read(cx)
+                .selected_text()
+                .to_string(),
+            "after choosing"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn project_chooser_keyboard_confirmation_of_chat_removes_the_project(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let directory = workspace.topology.projects[0].path.clone();
+            workspace.choose_draft_project(&directory, window, cx);
+            assert_eq!(
+                workspace.draft_projects.get(&workspace.runtime),
+                Some(&directory)
+            );
+        });
+        window.render_frame(cx);
+        window.click(ElementId::Name("choose-project".into()), cx);
+        window.render_frame(cx);
+        window.press("ctrl-p", cx);
+        window.press("enter", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    cx.read(|cx| {
+        let workspace = workspace.read(cx);
+        assert!(!workspace.draft_projects.contains_key(&workspace.runtime));
+        assert!(workspace.chat_draft_open());
+        assert!(workspace.selected.is_none());
+        let chat = workspace.chat_draft_key().expect("Chat owns a draft");
+        assert_eq!(workspace.composer_key.as_ref(), Some(&chat));
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.input("after choosing Chat", cx);
+    })
+    .expect("window is open");
+    assert_eq!(composer_text(&workspace, cx), "after choosing Chat");
+}
+
+#[gpui_kit::test]
+fn project_chooser_preserves_directory_drafts_and_catalog_scope(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        let projects = workspace.read(cx).topology.projects.clone();
+        assert!(projects.len() >= 2, "the fixture has separate projects");
+        let first = projects[0].path.clone();
+        let second = projects[1].path.clone();
+        let sessions = workspace.read(cx).sessions.active().len();
+        workspace.update(cx, |workspace, cx| {
+            workspace.choose_draft_project(&first, window, cx)
+        });
+        window.render_frame(cx);
+        window.input("first project draft", cx);
+        workspace.update(cx, |workspace, cx| {
+            workspace.choose_draft_project(&second, window, cx)
+        });
+        assert_eq!(workspace.read(cx).composer.read(cx).value().as_ref(), "");
+        assert_eq!(
+            workspace.read(cx).config_directory().as_deref(),
+            Some(second.as_str())
+        );
+        window.input("second project draft", cx);
+        workspace.update(cx, |workspace, cx| {
+            workspace.choose_draft_project(&first, window, cx)
+        });
+        assert_eq!(
+            workspace.read(cx).composer.read(cx).value().as_ref(),
+            "first project draft"
+        );
+        assert_eq!(
+            workspace
+                .read(cx)
+                .composer_key
+                .as_ref()
+                .expect("draft key")
+                .directory(),
+            first
+        );
+        workspace.update(cx, |workspace, cx| {
+            workspace.choose_draft_project("/unregistered", window, cx)
+        });
+        assert_eq!(
+            workspace.read(cx).config_directory().as_deref(),
+            Some(first.as_str())
+        );
+        assert!(workspace.read(cx).selected.is_none());
+        assert_eq!(
+            workspace.read(cx).sessions.active().len(),
+            sessions,
+            "selection creates no server session"
+        );
+        workspace.update(cx, |workspace, cx| {
+            workspace.choose_draft_project(&second, window, cx)
+        });
+        assert_eq!(
+            workspace.read(cx).composer.read(cx).value().as_ref(),
+            "second project draft"
+        );
+    })
+    .expect("window is open");
+}
+
+#[gpui_kit::test]
+fn linked_worktree_drafts_keep_their_directory_and_require_registered_ownership(
+    cx: &mut TestAppContext,
+) {
+    use openchamber_native_core::ownership::{ProjectWorktrees, WorktreeInfo};
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let project = workspace.topology.projects[0].clone();
+            let directory = "/fixture-linked-worktree";
+            workspace.topology.worktrees.push(ProjectWorktrees {
+                project_path: project.path.clone(),
+                worktrees: vec![WorktreeInfo {
+                    path: directory.to_owned(),
+                    label: None,
+                    name: None,
+                    branch: Some("feature/fixture".to_owned()),
+                }],
+            });
+            workspace.choose_draft_project(directory, window, cx);
+            assert_eq!(
+                workspace
+                    .composer_key
+                    .as_ref()
+                    .expect("the worktree owns a draft")
+                    .directory(),
+                directory
+            );
+            assert_eq!(
+                workspace
+                    .draft_destination_project(directory)
+                    .map(|owner| &owner.id),
+                Some(&project.id)
+            );
+            assert!(
+                workspace
+                    .draft_destination_project("/fixture-linked-worktree/unregistered")
+                    .is_none()
+            );
+            workspace
+                .topology
+                .projects
+                .retain(|registered| registered.id != project.id);
+            assert!(
+                workspace.draft_destination_project(directory).is_none(),
+                "a worktree listing cannot register its absent project"
+            );
+        });
+    })
+    .expect("the window remains open");
+}
+
+#[gpui_kit::test]
+fn project_chooser_reselection_returns_to_the_composer(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let directory = cx.read(|cx| workspace.read(cx).topology.projects[0].path.clone());
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.choose_draft_project(&directory, window, cx)
+        });
+        window.render_frame(cx);
+        window.input("kept", cx);
+        window.click(ElementId::Name("choose-project".into()), cx);
+        window.render_frame(cx);
+        window.press("enter", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.input(" after selection", cx);
+    })
+    .expect("window is open");
+    assert_eq!(composer_text(&workspace, cx), "kept after selection");
+}
+
+#[gpui_kit::test]
+fn sidebar_drafts_reopen_and_discard_only_their_own_text(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let directories = cx.read(|cx| {
+        workspace
+            .read(cx)
+            .topology
+            .projects
+            .iter()
+            .take(2)
+            .map(|project| project.path.clone())
+            .collect::<Vec<_>>()
+    });
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.choose_draft_project(&directories[0], window, cx)
+        });
+        window.input("First line\nsecond line", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    let first = cx.read(|cx| {
+        workspace
+            .read(cx)
+            .sidebar_items
+            .iter()
+            .find_map(|item| match item {
+                SidebarItem::Draft { draft, title, .. } if title.as_ref() == "First line" => {
+                    Some(draft.clone())
+                }
+                _ => None,
+            })
+            .expect("the first nonempty line is shown in the sidebar")
+    });
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.choose_draft_project(&directories[1], window, cx)
+        });
+        window.input("Other project", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    let second = cx.read(|cx| {
+        workspace
+            .read(cx)
+            .composer_key
+            .clone()
+            .expect("second draft has a key")
+    });
+    let session = session_rows(&workspace, cx)[0].1.clone();
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.select_session(session, window, cx);
+            workspace.open_draft(&first, window, cx);
+        });
+    })
+    .expect("window is open");
+    assert_eq!(composer_text(&workspace, cx), "First line\nsecond line");
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.discard_draft(&second, window, cx)
+        });
+    })
+    .expect("window is open");
+    assert_eq!(composer_text(&workspace, cx), "First line\nsecond line");
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.discard_draft(&first, window, cx)
+        });
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    assert_eq!(composer_text(&workspace, cx), "");
+    cx.read(|cx| {
+        assert!(
+            !workspace
+                .read(cx)
+                .sidebar_items
+                .iter()
+                .any(|item| matches!(item, SidebarItem::Draft { .. }))
+        )
+    });
+}
+
+#[gpui_kit::test]
+fn project_chooser_isolates_the_same_directory_between_runtimes(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        let directory = workspace.read(cx).topology.projects[0].path.clone();
+        workspace.update(cx, |workspace, cx| {
+            workspace.choose_draft_project(&directory, window, cx)
+        });
+        window.render_frame(cx);
+        window.input("original runtime draft", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        let directory = workspace.read(cx).topology.projects[0].path.clone();
+        let original = workspace.read(cx).runtime.clone();
+        workspace.update(cx, |workspace, cx| {
+            let projects = workspace.topology.projects.clone();
+            workspace.switch_runtime("another-runtime".into(), window, cx);
+            workspace.topology.projects = projects;
+            workspace.choose_draft_project(&directory, window, cx);
+        });
+        assert_eq!(
+            workspace.read(cx).composer.read(cx).value().as_ref(),
+            "",
+            "the new runtime cannot inherit old text"
+        );
+        window.input("another runtime draft", cx);
+        workspace.update(cx, |workspace, cx| {
+            let projects = workspace.topology.projects.clone();
+            workspace.switch_runtime(original, window, cx);
+            workspace.topology.projects = projects;
+        });
+        assert_eq!(
+            workspace.read(cx).composer.read(cx).value().as_ref(),
+            "original runtime draft"
+        );
+        assert_eq!(
+            workspace.read(cx).config_directory().as_deref(),
+            Some(directory.as_str())
+        );
+    })
+    .expect("window is open");
+}
+
+#[gpui_kit::test]
+fn attachment_only_drafts_keep_their_owner_and_survive_text_edits(cx: &mut TestAppContext) {
+    use openchamber_native_core::draft_content::{DraftFile, DraftFileContent};
+    use openchamber_native_core::ids::AttachmentId;
+
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let directory = workspace.topology.projects[0].path.clone();
+            workspace.choose_draft_project(&directory, window, cx);
+            let owner = workspace.composer_key.clone().expect("project draft owner");
+            let mut draft = openchamber_native_core::draft::Draft::default();
+            draft.content.files.push(DraftFile {
+                id: AttachmentId::from("reference-one"),
+                name: Some("kept.png".to_owned()),
+                media_type: Some("image/png".to_owned()),
+                byte_len: None,
+                source_document_id: None,
+                content: DraftFileContent::Reference { uri: "file:///project/kept.png".to_owned() },
+            });
+            workspace.drafts.save(owner.clone(), draft);
+            workspace.restore_composer_draft(window, cx);
+            assert!(workspace.composer_has_sendable_content(cx), "file-only drafts are sendable");
+            assert!(workspace.sidebar_items.iter().any(|item| matches!(
+                item, SidebarItem::Draft { draft, title, .. } if draft == &owner && title.as_ref() == "kept.png"
+            )), "file-only drafts remain reachable from the sidebar");
+        });
+        window.render_frame(cx);
+        window.input("new text", cx);
+    }).expect("window remains open");
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let owner = workspace.composer_key.clone().expect("original owner");
+            let saved = workspace.drafts.get(&owner).expect("draft stays retained");
+            assert_eq!(saved.text, "new text");
+            assert_eq!(saved.content.files[0].name.as_deref(), Some("kept.png"));
+            let other = workspace.topology.projects[1].path.clone();
+            workspace.choose_draft_project(&other, window, cx);
+            assert!(
+                !workspace.composer_has_sendable_content(cx),
+                "another project inherits no content"
+            );
+            workspace.open_draft(&owner, window, cx);
+            assert_eq!(workspace.composer_draft(cx).content.files.len(), 1);
+            assert_eq!(workspace.composer.read(cx).value().as_ref(), "new text");
+        });
+    })
+    .expect("window remains open");
+}
+
+#[gpui_kit::test]
+fn restored_mentions_can_be_replaced_and_saved_to_the_real_journal(cx: &mut TestAppContext) {
+    use openchamber_native_core::draft::Draft;
+    use openchamber_native_core::draft_content::{
+        AgentMention, DraftContext, DraftFile, DraftFileContent, Mention,
+    };
+    use openchamber_native_core::ids::{AttachmentId, ContextItemId};
+
+    use crate::mutation_journal::{JournalCommit, JournalSnapshot, LoadedJournal, MutationJournal};
+    use crate::recovery_tests::Fixture;
+
+    let fixture = Fixture::new();
+    let (mut journal, _) = MutationJournal::open(&fixture.journal()).expect("journal opens");
+    let mut original = Draft::new("@plan @plan");
+    original.content.agents = [0, 6]
+        .into_iter()
+        .map(|start| AgentMention {
+            name: "plan".to_owned(),
+            mention: Some(Mention {
+                start,
+                end: start + 5,
+                text: "@plan".to_owned(),
+            }),
+        })
+        .collect();
+    original.content.files.push(DraftFile {
+        id: AttachmentId::from("kept-file"),
+        name: Some("kept.txt".to_owned()),
+        media_type: Some("text/plain".to_owned()),
+        byte_len: None,
+        source_document_id: None,
+        content: DraftFileContent::Reference {
+            uri: "file:///project/kept.txt".to_owned(),
+        },
+    });
+    original.content.context.push(DraftContext {
+        id: ContextItemId::from("kept-context"),
+        text: "kept context".to_owned(),
+        description: None,
+        metadata_json: Some("{\"source\":\"selection\"}".to_owned()),
+        instructions: Some("Read the selection".to_owned()),
+    });
+    original.content.metadata_json = Some("{\"kept\":true}".to_owned());
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let directory = workspace.topology.projects[0].path.clone();
+            workspace.choose_draft_project(&directory, window, cx);
+            let owner = workspace.composer_key.clone().expect("project draft owner");
+            workspace.drafts.save(owner, original.clone());
+            workspace.restore_composer_draft(window, cx);
+            workspace.focus_composer(window, cx);
+            workspace.composer.update(cx, |composer, cx| {
+                composer.set_selected_range(0..original.text.len(), cx);
+            });
+        });
+        window.render_frame(cx);
+        window.input("x", cx);
+    })
+    .expect("window remains open");
+    cx.run_until_parked();
+    let saved = cx.read(|cx| {
+        let workspace = workspace.read(cx);
+        let owner = workspace.composer_key.clone().expect("same project owner");
+        let draft = workspace.drafts.get(&owner).expect("edited draft retained");
+        assert_eq!(draft.text, "x");
+        assert_eq!(draft.selection, 1..1);
+        let mut expected = original.content.clone();
+        expected.agents = vec![AgentMention {
+            name: "plan".to_owned(),
+            mention: None,
+        }];
+        assert_eq!(draft.content, expected, "only replaced anchors change");
+        (owner, draft.clone())
+    });
+    let snapshot = JournalSnapshot {
+        drafts: vec![saved.clone()],
+        ..JournalSnapshot::default()
+    };
+    assert!(matches!(
+        journal
+            .save(&snapshot)
+            .expect("edited mentions remain journalable"),
+        JournalCommit::Durable
+    ));
+    drop(journal);
+    let (_, loaded) = MutationJournal::open(&fixture.journal()).expect("saved journal reopens");
+    let LoadedJournal::Present(restored) = loaded else {
+        panic!("the edited draft must be durable");
+    };
+    assert_eq!(restored.drafts, vec![saved]);
+}
+
+#[gpui_kit::test]
+fn composer_capture_rebases_mentions_before_a_change_callback(cx: &mut TestAppContext) {
+    use openchamber_native_core::draft::Draft;
+    use openchamber_native_core::draft_content::{AgentMention, Mention};
+
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let directory = workspace.topology.projects[0].path.clone();
+            workspace.choose_draft_project(&directory, window, cx);
+            let owner = workspace.composer_key.clone().expect("project draft owner");
+            let mut original = Draft::new("@plan");
+            original.content.agents.push(AgentMention {
+                name: "plan".to_owned(),
+                mention: Some(Mention {
+                    start: 0,
+                    end: 5,
+                    text: "@plan".to_owned(),
+                }),
+            });
+            workspace.drafts.save(owner.clone(), original.clone());
+            workspace.restore_composer_draft(window, cx);
+            for (text, expected) in [
+                (
+                    "😀@plan",
+                    Some(Mention {
+                        start: 2,
+                        end: 7,
+                        text: "@plan".to_owned(),
+                    }),
+                ),
+                ("x", None),
+            ] {
+                // set_value deliberately emits no Change, leaving the old owner
+                // available while an action captures the current widget value.
+                workspace.composer.update(cx, |composer, cx| {
+                    composer.set_value(text, window, cx);
+                    composer.set_selected_range(text.len()..text.len(), cx);
+                });
+                let captured = workspace.composer_draft(cx);
+                assert_eq!(captured.text, text);
+                assert_eq!(captured.selection, text.len()..text.len());
+                assert_eq!(captured.content.agents[0].mention, expected);
+                assert_eq!(workspace.drafts.get(&owner), Some(&original));
+                let mut size = 0;
+                crate::draft_storage::validate(&mut size, &captured)
+                    .expect("an immediate action captures a journalable draft");
+            }
+            let captured = workspace.composer_draft(cx);
+            workspace.save_composer_draft(cx);
+            assert_eq!(workspace.drafts.get(&owner), Some(&captured));
+        });
+    })
+    .expect("window remains open");
+}
+
+#[gpui_kit::test]
+fn consuming_a_capture_preserves_a_newer_attachment_with_the_same_text(cx: &mut TestAppContext) {
+    use openchamber_native_core::draft::Draft;
+    use openchamber_native_core::draft_content::{DraftFile, DraftFileContent};
+    use openchamber_native_core::ids::AttachmentId;
+
+    let file = |id: &str| DraftFile {
+        id: AttachmentId::from(id),
+        name: Some(format!("{id}.txt")),
+        media_type: Some("text/plain".to_owned()),
+        byte_len: None,
+        source_document_id: None,
+        content: DraftFileContent::Reference {
+            uri: format!("file:///project/{id}.txt"),
+        },
+    };
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let directory = workspace.topology.projects[0].path.clone();
+            workspace.choose_draft_project(&directory, window, cx);
+            let owner = workspace.composer_key.clone().expect("project draft owner");
+            let mut captured = Draft::new("same text");
+            captured.content.files.push(file("sent"));
+            let mut current = captured.clone();
+            current.content.files.push(file("newer"));
+            workspace.drafts.save(owner.clone(), current);
+            workspace.restore_composer_draft(window, cx);
+            workspace.consume_draft_capture(&owner, &captured, window, cx);
+            let remaining = workspace
+                .drafts
+                .get(&owner)
+                .expect("newer attachment retains the draft");
+            assert!(remaining.text.is_empty());
+            assert_eq!(remaining.content.files, vec![file("newer")]);
+            assert!(workspace.composer.read(cx).value().is_empty());
+            assert!(workspace.composer_has_sendable_content(cx));
+        });
+    })
+    .expect("window remains open");
+}
+
+#[gpui_kit::test]
+fn editing_a_hidden_draft_preserves_project_collapse(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        let project = workspace.read(cx).topology.projects[0].clone();
+        workspace.update(cx, |state, cx| {
+            state.choose_draft_project(&project.path, window, cx);
+            state.sidebar_state.collapsed_projects.insert(project.id);
+            state.rebuild_sidebar();
+        });
+        window.input("latest preview", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    cx.read(|cx| {
+        assert!(
+            !workspace
+                .read(cx)
+                .sidebar_items
+                .iter()
+                .any(|item| matches!(item, SidebarItem::Draft { .. }))
+        )
+    });
+    cx.update_window(window, |_, _, cx| {
+        workspace.update(cx, |state, cx| {
+            let id = &state.topology.projects[0].id;
+            let header = state.sidebar_items.iter().find(|item| matches!(item, SidebarItem::Project { project_id, .. } if project_id == id)).expect("project header exists").clone();
+            state.toggle_collapsed(&header, cx);
+        });
+    }).expect("window is open");
+    cx.read(|cx| assert!(workspace.read(cx).sidebar_items.iter().any(|item| matches!(item, SidebarItem::Draft { title, .. } if title.as_ref() == "latest preview"))));
+}
+
+#[gpui_kit::test]
+fn draft_discard_is_reachable_from_the_keyboard(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        let directory = workspace.read(cx).topology.projects[0].path.clone();
+        workspace.update(cx, |state, cx| {
+            state.choose_draft_project(&directory, window, cx)
+        });
+        window.input("keyboard draft", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        let key = workspace
+            .read(cx)
+            .sidebar_items
+            .iter()
+            .find_map(|item| match item {
+                SidebarItem::Draft { key, .. } => Some(key.clone()),
+                _ => None,
+            })
+            .expect("draft row is visible");
+        let discard = ElementId::Name(format!("{key}:discard").into());
+        for _ in 0..50 {
+            window.press("tab", cx);
+            window.render_frame(cx);
+            if window.find(discard.clone()).focused() == Some(true) {
+                window.press("space", cx);
+                break;
+            }
+        }
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    assert_eq!(
+        composer_text(&workspace, cx),
+        "",
+        "Space discards the focused draft"
+    );
+}
+
+#[gpui_kit::test]
+fn draft_preview_edits_preserve_unrelated_sidebar_rows(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        let directory = workspace.read(cx).topology.projects[0].path.clone();
+        workspace.update(cx, |state, cx| {
+            state.choose_draft_project(&directory, window, cx)
+        });
+        window.input("First", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    let before = cx.read(|cx| {
+        workspace
+            .read(cx)
+            .sidebar_items
+            .iter()
+            .filter(|item| !matches!(item, SidebarItem::Draft { .. }))
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    cx.update_window(window, |_, window, cx| window.input(" changed", cx))
+        .expect("window is open");
+    cx.run_until_parked();
+    cx.read(|cx| {
+        let state = workspace.read(cx);
+        let unrelated = state
+            .sidebar_items
+            .iter()
+            .filter(|item| !matches!(item, SidebarItem::Draft { .. }))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(unrelated, before);
+        let drafts: Vec<_> = state
+            .sidebar_items
+            .iter()
+            .filter_map(|item| match item {
+                SidebarItem::Draft { title, .. } => Some(title.as_ref()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(drafts, ["First changed"]);
+    });
+}
+
+#[gpui_kit::test]
+fn stale_draft_actions_cannot_touch_another_runtime(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let old = cx
+        .update_window(window, |_, window, cx| {
+            let directory = workspace.read(cx).topology.projects[0].path.clone();
+            workspace.update(cx, |state, cx| {
+                state.choose_draft_project(&directory, window, cx)
+            });
+            window.input("old runtime", cx);
+            workspace
+                .read(cx)
+                .composer_key
+                .clone()
+                .expect("draft key exists")
+        })
+        .expect("window is open");
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |state, cx| {
+            state.switch_runtime("other-runtime".into(), window, cx);
+        });
+        window.input("new runtime", cx);
+        workspace.update(cx, |state, cx| {
+            state.discard_draft(&old, window, cx);
+            state.open_draft(&old, window, cx);
+        });
+    })
+    .expect("window is open");
+    assert_eq!(composer_text(&workspace, cx), "new runtime");
+}
+
+#[gpui_kit::test]
+fn an_unassigned_draft_does_not_alias_a_project_at_filesystem_root(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.input("unassigned text", cx);
+        let unassigned = workspace
+            .read(cx)
+            .composer_key
+            .clone()
+            .expect("unassigned draft has a key");
+        workspace.update(cx, |state, cx| {
+            state
+                .topology
+                .projects
+                .push(openchamber_native_core::ownership::ConfiguredProject {
+                    id: "root-project".into(),
+                    path: "/".to_owned(),
+                });
+            state.choose_draft_project("/", window, cx);
+        });
+        assert_ne!(workspace.read(cx).composer_key.as_ref(), Some(&unassigned));
+        assert_eq!(workspace.read(cx).composer.read(cx).value().as_ref(), "");
+        window.input("root project text", cx);
+        workspace.update(cx, |state, cx| {
+            state.save_composer_draft(cx);
+            state.draft_projects.remove(&state.runtime);
+            state.composer_key = state.new_session_draft_key();
+            state.restore_composer_draft(window, cx);
+        });
+        assert_eq!(
+            workspace.read(cx).composer.read(cx).value().as_ref(),
+            "unassigned text"
+        );
+    })
+    .expect("window is open");
+}
+
+#[gpui_kit::test]
+fn clicking_a_row_selects_its_session(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let rows = session_rows(&workspace, cx);
+    let (key, session) = rows[1].clone();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id(&key), cx);
+        assert_eq!(window.find(id(&key)).selected(), Some(true));
+    })
+    .expect("window is open");
+    assert_eq!(selected(&workspace, cx), Some(session.clone()));
+    assert!(transcript_len(&workspace, &session, cx) > 0);
+}
+
+#[gpui_kit::test]
+fn multiline_unicode_paste_is_one_undo_step(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let (row, _) = session_rows(&workspace, cx)[0].clone();
+    let text = "First e\u{301} line\nمرحبا 你好 👩‍💻\nLast line";
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id(&row), cx);
+        cx.write_to_clipboard(gpui_kit::ClipboardItem::new_string(text.to_owned()));
+        window.press("ctrl-v", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    assert_eq!(composer_text(&workspace, cx), text);
+    cx.update_window(window, |_, window, cx| window.press("ctrl-z", cx))
+        .expect("window is open");
+    cx.run_until_parked();
+    assert_eq!(
+        composer_text(&workspace, cx),
+        "",
+        "one undo removes the whole paste"
+    );
+}
+
+#[gpui_kit::test]
+fn narrow_windows_offer_work_status_as_an_overlay(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        assert!(workspace.read(cx).work_status_inline(window));
+        workspace.update(cx, |workspace, _| workspace.initial_size = None);
+    })
+    .expect("window is open");
+    cx.simulate_window_resize(window, size(px(900.0), px(600.0)));
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(
+            !workspace.read(cx).work_status_inline(window),
+            "the panel leaves room for the transcript"
+        );
+        window.click(ElementId::Name("work-status-toggle".into()), cx);
+        assert!(
+            workspace.read(cx).work_status_overlay,
+            "the header opens the overlay"
+        );
+        window.render_frame(cx);
+        window.click(ElementId::Name("work-status-toggle".into()), cx);
+        assert!(
+            !workspace.read(cx).work_status_overlay,
+            "the same control closes it"
+        );
+    })
+    .expect("window is open");
+}
+
+#[gpui_kit::test]
+fn prompt_navigator_shortcut_preserves_the_draft_and_jumps_to_a_prompt(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let (key, session) = session_rows(&workspace, cx)[1].clone();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id(&key), cx);
+        window.input("keep this draft", cx);
+        window.press("ctrl-k", cx);
+        window.press("n", cx);
+    })
+    .expect("window is open");
+    let prompt_ids = cx.read(|cx| {
+        workspace.read(cx).open_sessions[&session]
+            .transcript
+            .messages()
+            .iter()
+            .filter(|message| message.info.role == openchamber_native_core::transcript::Role::User)
+            .map(|message| message.info.id.clone())
+            .collect::<Vec<_>>()
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find(ElementId::Name("prompt-list".into())).visible());
+        assert_eq!(
+            window
+                .find(ElementId::Name("prompt-list".into()))
+                .bounds()
+                .size
+                .width,
+            px(314.0),
+            "the list leaves the scroller's 6 px gutter of the 320 px panel"
+        );
+        window.press("ctrl-p", cx);
+        window.render_frame(cx);
+        let previous = &prompt_ids[prompt_ids.len() - 2];
+        assert_eq!(
+            window
+                .find(ElementId::Name(format!("prompt-row-{previous}").into()))
+                .selected(),
+            Some(true)
+        );
+        window.press("ctrl-n", cx);
+        window.render_frame(cx);
+        let last = prompt_ids.last().expect("prompts exist");
+        assert_eq!(
+            window
+                .find(ElementId::Name(format!("prompt-row-{last}").into()))
+                .selected(),
+            Some(true)
+        );
+        window.press("home", cx);
+        window.press("enter", cx);
+    })
+    .expect("window is open");
+    assert_eq!(composer_text(&workspace, cx), "keep this draft");
+    cx.read(|cx| {
+        let workspace = workspace.read(cx);
+        assert!(
+            workspace.prompt_panel.is_none(),
+            "choosing a prompt closes the panel"
+        );
+        let open = &workspace.open_sessions[&session];
+        assert_eq!(
+            open.list.logical_scroll_top().item_ix,
+            0,
+            "Home selects the first prompt"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn the_window_opens_on_a_new_session(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    assert_eq!(selected(&workspace, cx), None, "nothing is selected");
+    let zone = cx.read(|cx| {
+        workspace
+            .read(cx)
+            .sidebar_items
+            .iter()
+            .find_map(|item| match item {
+                SidebarItem::Zone { key, .. } => Some(key.clone()),
+                _ => None,
+            })
+            .expect("the synthetic sidebar has a zone")
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.find(id(&"new-session".into())).visible());
+        assert_eq!(
+            window.find(id(&zone)).expanded(),
+            Some(true),
+            "zone headers report their disclosure state"
+        );
+    })
+    .expect("window is open");
+    assert!(
+        cx.read(|cx| workspace.read(cx).composer_key.is_some()),
+        "the new session's draft has a key"
+    );
+}
+
+#[gpui_kit::test]
+fn new_session_keeps_both_drafts(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let rows = session_rows(&workspace, cx);
+    let (session_row, _) = rows[1].clone();
+    let new_session = id(&"new-session".into());
+    let owner = cx
+        .update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            // Synthetic startup has an unassigned owner until this entry point runs.
+            window.click(new_session.clone(), cx);
+            let workspace = workspace.read(cx);
+            assert!(workspace.chat_draft_open());
+            workspace
+                .composer_key
+                .clone()
+                .expect("the new draft has an owner")
+        })
+        .expect("window is open");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.input("a new idea", cx);
+        window.click(id(&session_row), cx);
+        window.input("a reply", cx);
+        window.click(new_session.clone(), cx);
+    })
+    .expect("window is open");
+    assert_eq!(selected(&workspace, cx), None);
+    assert_eq!(
+        cx.read(|cx| workspace.read(cx).composer_key.clone()),
+        Some(owner)
+    );
+    assert_eq!(composer_text(&workspace, cx), "a new idea");
+
+    cx.update_window(window, |_, window, cx| window.click(id(&session_row), cx))
+        .expect("window is open");
+    assert_eq!(composer_text(&workspace, cx), "a reply");
+}
+
+#[gpui_kit::test]
+fn a_draft_survives_switching_away_and_back(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let rows = session_rows(&workspace, cx);
+    let (first, _) = rows[1].clone();
+    let (second, _) = rows[2].clone();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id(&first), cx);
+        window.input("unsent — مسودة 👩‍💻", cx);
+    })
+    .expect("window is open");
+    assert_eq!(composer_text(&workspace, cx), "unsent — مسودة 👩‍💻");
+
+    cx.update_window(window, |_, window, cx| window.click(id(&second), cx))
+        .expect("window is open");
+    assert_eq!(
+        composer_text(&workspace, cx),
+        "",
+        "the other session has no draft"
+    );
+
+    cx.update_window(window, |_, window, cx| window.click(id(&first), cx))
+        .expect("window is open");
+    assert_eq!(composer_text(&workspace, cx), "unsent — مسودة 👩‍💻");
+}
+
+#[gpui_kit::test]
+fn composer_undo_takes_back_a_line_break_with_the_typing_after_it(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let rows = session_rows(&workspace, cx);
+    let (first, _) = rows[1].clone();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id(&first), cx);
+        window.input("first line", cx);
+        window.press("shift-enter", cx);
+        window.input("second line", cx);
+    })
+    .expect("window is open");
+    assert_eq!(composer_text(&workspace, cx), "first line\nsecond line");
+    // The reference composer's CodeMirror history: the line break starts a
+    // group and the typing after it joins that group.
+    for expected in ["first line", ""] {
+        cx.update_window(window, |_, window, cx| window.press("ctrl-z", cx))
+            .expect("window is open");
+        assert_eq!(composer_text(&workspace, cx), expected);
+    }
+    for expected in ["first line", "first line\nsecond line"] {
+        cx.update_window(window, |_, window, cx| window.press("ctrl-shift-z", cx))
+            .expect("window is open");
+        assert_eq!(composer_text(&workspace, cx), expected);
+    }
+}
+
+#[gpui_kit::test]
+fn a_returning_draft_is_selected_whole_so_typing_replaces_it(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let rows = session_rows(&workspace, cx);
+    let (first, _) = rows[1].clone();
+    let (second, _) = rows[2].clone();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id(&first), cx);
+        window.input("abcd", cx);
+        window.press("left", cx);
+        window.press("left", cx);
+    })
+    .expect("window is open");
+    cx.update_window(window, |_, window, cx| window.click(id(&second), cx))
+        .expect("window is open");
+    cx.update_window(window, |_, window, cx| window.click(id(&first), cx))
+        .expect("window is open");
+    cx.read(|cx| {
+        assert_eq!(
+            workspace.read(cx).composer.read(cx).selected_range(),
+            0..4,
+            "the reference selects the restored draft, not its old caret"
+        )
+    });
+    cx.update_window(window, |_, window, cx| window.input("X", cx))
+        .expect("window is open");
+    assert_eq!(composer_text(&workspace, cx), "X");
+}
+
+#[gpui_kit::test]
+async fn enter_sends_and_the_stream_plays_to_completion(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let rows = session_rows(&workspace, cx);
+    let (key, session) = rows[1].clone();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id(&key), cx);
+    })
+    .expect("window is open");
+    let before = transcript_len(&workspace, &session, cx);
+
+    cx.update_window(window, |_, window, cx| {
+        window.input("first line", cx);
+        window.press("shift-enter", cx);
+        window.input("second line", cx);
+    })
+    .expect("window is open");
+    assert_eq!(composer_text(&workspace, cx), "first line\nsecond line");
+    assert_eq!(
+        transcript_len(&workspace, &session, cx),
+        before,
+        "shift-enter only adds a line"
+    );
+
+    cx.update_window(window, |_, window, cx| window.press("enter", cx))
+        .expect("window is open");
+    assert_eq!(composer_text(&workspace, cx), "");
+    assert_eq!(transcript_len(&workspace, &session, cx), before + 2);
+
+    let probe = workspace.clone();
+    let streaming_session = session.clone();
+    cx.wait_for(window, Duration::from_secs(10), move |_, cx| {
+        !probe.read(cx).is_streaming(&streaming_session)
+    })
+    .await;
+    let reply = cx.read(|cx| {
+        let open = &workspace.read(cx).open_sessions[&session];
+        open.transcript
+            .message(open.transcript.len() - 1)
+            .map(|message| message.plain_text())
+            .unwrap_or_default()
+    });
+    assert_eq!(reply, ResponseScript::new(1).text());
+}
+
+#[gpui_kit::test]
+fn returning_restores_the_exact_scroll_anchor(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let rows = session_rows(&workspace, cx);
+    let rich = rows
+        .iter()
+        .find(|(_, session)| ConversationShape::for_session(session) == ConversationShape::Rich)
+        .cloned()
+        .expect("the small workload lists a rich conversation");
+    let other = rows
+        .iter()
+        .find(|(_, session)| *session != rich.1)
+        .cloned()
+        .expect("the small workload lists another session");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id(&rich.0), cx);
+        window.render_frame(cx);
+        window.scroll(
+            "transcript",
+            ScrollDelta::Pixels(point(px(0.0), px(1_337.0))),
+            cx,
+        );
+        window.render_frame(cx);
+    })
+    .expect("window is open");
+    let anchor = cx.read(|cx| {
+        workspace.read(cx).open_sessions[&rich.1]
+            .list
+            .logical_scroll_top()
+    });
+    assert!(
+        anchor.offset_in_item > px(0.0) || anchor.item_ix > 0,
+        "the wheel moved the reader away from the tail"
+    );
+
+    cx.update_window(window, |_, window, cx| {
+        window.click(id(&other.0), cx);
+        window.render_frame(cx);
+        window.click(id(&rich.0), cx);
+        window.render_frame(cx);
+    })
+    .expect("window is open");
+    let restored = cx.read(|cx| {
+        workspace.read(cx).open_sessions[&rich.1]
+            .list
+            .logical_scroll_top()
+    });
+    assert_eq!(restored.item_ix, anchor.item_ix);
+    assert_eq!(restored.offset_in_item, anchor.offset_in_item);
+}
+
+#[gpui_kit::test]
+fn opening_a_block_at_the_tail_keeps_its_row_in_place(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let rich = session_rows(&workspace, cx)
+        .into_iter()
+        .find(|(_, session)| ConversationShape::for_session(session) == ConversationShape::Rich)
+        .expect("a rich conversation");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id(&rich.0), cx);
+        window.render_frame(cx);
+    })
+    .expect("window is open");
+    // The last answer gains a reasoning block, so the row is on screen.
+    let block = PartId::from("tail-reasoning");
+    let (row, message) = cx
+        .update_window(window, |_, window, cx| {
+            let found = workspace.update(cx, |workspace, cx| {
+                let open = workspace
+                    .open_sessions
+                    .get_mut(&rich.1)
+                    .expect("session is open");
+                let (row, message) = open
+                    .transcript
+                    .messages()
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find(|(_, message)| message.info.role == Role::Assistant)
+                    .map(|(row, message)| (row, message.info.id.clone()))
+                    .expect("the rich conversation answers");
+                let change = open.transcript.apply(TranscriptEvent::PartUpdated {
+                    message_id: message.clone(),
+                    part: Part {
+                        id: block.clone(),
+                        content: PartContent::Reasoning {
+                            text: "Checking the order.\n\n".repeat(40),
+                        },
+                        time: PartTime::default(),
+                    },
+                });
+                crate::server_sync::apply_list_change(open, &change, cx);
+                cx.notify();
+                (row, message)
+            });
+            window.render_frame(cx);
+            found
+        })
+        .expect("window is open");
+    let top = cx.read(|cx| {
+        let open = &workspace.read(cx).open_sessions[&rich.1];
+        assert!(
+            open.list.is_following_tail(),
+            "a new session opens at its end"
+        );
+        open.list
+            .bounds_for_item(row)
+            .expect("the last answer is drawn at the end")
+            .top()
+    });
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.toggle_block(&rich.1, &message, &block, false, cx)
+        });
+        window.render_frame(cx);
+    })
+    .expect("window is open");
+    cx.read(|cx| {
+        let open = &workspace.read(cx).open_sessions[&rich.1];
+        assert!(open.parts.block_open(&block, false), "the block opened");
+        assert!(!open.list.is_following_tail(), "opening lets go of the end");
+        assert_eq!(
+            open.list.bounds_for_item(row).map(|bounds| bounds.top()),
+            Some(top),
+            "the opened row stays where the reader clicked it"
+        );
+    });
+}
+
+#[gpui_kit::test]
+fn resizing_keeps_the_reading_anchor(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let rich = session_rows(&workspace, cx)
+        .into_iter()
+        .find(|(_, session)| ConversationShape::for_session(session) == ConversationShape::Rich)
+        .expect("a rich conversation");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id(&rich.0), cx);
+        window.render_frame(cx);
+        window.scroll(
+            "transcript",
+            ScrollDelta::Pixels(point(px(0.0), px(1337.0))),
+            cx,
+        );
+        window.render_frame(cx);
+    })
+    .expect("window is open");
+    let anchor = |cx: &mut TestAppContext| {
+        cx.read(|cx| {
+            let open = &workspace.read(cx).open_sessions[&rich.1];
+            let top = open.list.logical_scroll_top();
+            (
+                open.transcript.messages()[top.item_ix].info.id.clone(),
+                top.offset_in_item,
+                open.list.is_following_tail(),
+            )
+        })
+    };
+    let before = anchor(cx);
+    assert!(!before.2, "the reader scrolled away from the end");
+    for width in [900.0, 1280.0] {
+        cx.simulate_window_resize(window, size(px(width), px(700.0)));
+        cx.update_window(window, |_, window, cx| window.render_frame(cx))
+            .expect("window is open");
+        assert_eq!(
+            anchor(cx),
+            before,
+            "a {width} px window keeps the message and offset"
+        );
+    }
+}
+
+#[gpui_kit::test]
+fn next_session_selects_the_next_session_row(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let rows = session_rows(&workspace, cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id(&rows[0].0), cx);
+        window.dispatch_action(Box::new(crate::workspace_view::SelectNextSession), cx);
+    })
+    .expect("window is open");
+    assert_eq!(selected(&workspace, cx), Some(rows[1].1.clone()));
+}
+
+#[gpui_kit::test]
+fn alt_arrows_are_no_session_shortcuts(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let rows = session_rows(&workspace, cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id(&rows[0].0), cx);
+        window.press("alt-down", cx);
+    })
+    .expect("window is open");
+    assert_eq!(selected(&workspace, cx), Some(rows[0].1.clone()));
+}
+
+#[gpui_kit::test]
+fn configured_shortcuts_dispatch_and_rebind(cx: &mut TestAppContext) {
+    use openchamber_native_core::shortcuts::{Overrides, save_override};
+
+    let (window, workspace) = open(cx);
+    let sidebar_open = |cx: &mut TestAppContext| cx.read(|cx| workspace.read(cx).sidebar_open);
+    assert!(sidebar_open(cx));
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.focus(&workspace.read(cx).focus_handle.clone(), cx);
+        window.press("ctrl-b", cx);
+    })
+    .expect("window is open");
+    assert!(!sidebar_open(cx), "the default binding toggles the sidebar");
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.save_shortcut_overrides(
+                save_override(&Overrides::new(), "toggle_sidebar", "mod+shift+y", None),
+                cx,
+            );
+        });
+        window.press("ctrl-b", cx);
+    })
+    .expect("window is open");
+    assert!(
+        !sidebar_open(cx),
+        "the replaced binding no longer dispatches"
+    );
+    cx.update_window(window, |_, window, cx| window.press("ctrl-shift-y", cx))
+        .expect("window is open");
+    assert!(sidebar_open(cx), "the new binding dispatches");
+}
+
+#[gpui_kit::test]
+fn prepending_history_preserves_the_visible_message_and_offset(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let rich = session_rows(&workspace, cx)
+        .into_iter()
+        .find(|(_, session)| ConversationShape::for_session(session) == ConversationShape::Rich)
+        .expect("a rich conversation");
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id(&rich.0), cx);
+        window.render_frame(cx);
+        window.scroll(
+            "transcript",
+            ScrollDelta::Pixels(point(px(0.0), px(1337.0))),
+            cx,
+        );
+        window.render_frame(cx);
+    })
+    .expect("window is open");
+    let before = cx.read(|cx| {
+        let open = &workspace.read(cx).open_sessions[&rich.1];
+        let anchor = open.list.logical_scroll_top();
+        (
+            open.transcript.messages()[anchor.item_ix].info.id.clone(),
+            anchor.offset_in_item,
+        )
+    });
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let open = workspace
+                .open_sessions
+                .get_mut(&rich.1)
+                .expect("session is open");
+            let mut older = open.transcript.messages()[0].clone();
+            older.info.id = "older-test-message".into();
+            let revision = open.transcript.revision();
+            let change = open.transcript.prepend_page(vec![older], revision);
+            crate::server_sync::apply_list_change(open, &change, cx);
+            cx.notify();
+        });
+        window.render_frame(cx);
+    })
+    .expect("window is open");
+    cx.read(|cx| {
+        let open = &workspace.read(cx).open_sessions[&rich.1];
+        let anchor = open.list.logical_scroll_top();
+        assert_eq!(open.transcript.messages()[anchor.item_ix].info.id, before.0);
+        assert_eq!(anchor.offset_in_item, before.1);
+    });
+}
+
+#[gpui_kit::test]
+async fn closing_during_playback_releases_the_workspace(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let rows = session_rows(&workspace, cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(id(&rows[1].0), cx);
+        window.input("stream please", cx);
+        window.press("enter", cx);
+    })
+    .expect("window is open");
+    assert!(cx.read(|cx| workspace.read(cx).is_streaming(&rows[1].1)));
+    let weak = workspace.downgrade();
+    drop(workspace);
+    cx.update_window(window, |_, window, _| window.remove_window())
+        .expect("window is open");
+    cx.run_until_parked();
+    assert!(
+        weak.upgrade().is_none(),
+        "the workspace and its playback task were released"
+    );
+}
+
+#[gpui_kit::test]
+fn dragging_the_sidebar_edge_resizes_and_saves_the_layout(cx: &mut TestAppContext) {
+    use crate::pane_resize::{LayoutStore, PaneLayout, SIDEBAR_MAX_WIDTH};
+
+    let directory = std::env::temp_dir().join(format!(
+        "openchamber-layout-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos()
+    ));
+    let store = LayoutStore::new(&directory);
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, _, cx| {
+        workspace.update(cx, |workspace, _| {
+            workspace.restore_layout(store.clone(), PaneLayout::default());
+        });
+    })
+    .expect("window is open");
+    cx.update_window(window, |_, window, cx| {
+        window.drag(point(px(279.0), px(300.0)), point(px(359.0), px(300.0)), cx);
+        window.render_frame(cx);
+    })
+    .expect("window is open");
+    let width = cx.read(|cx| workspace.read(cx).pane_sizes.sidebar_width());
+    assert!(
+        (width - 360.0).abs() < 1.5,
+        "the edge follows the pointer: {width}"
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.drag(
+            point(px(359.0), px(300.0)),
+            point(px(1100.0), px(300.0)),
+            cx,
+        );
+    })
+    .expect("window is open");
+    assert_eq!(
+        cx.read(|cx| workspace.read(cx).pane_sizes.sidebar_width()),
+        SIDEBAR_MAX_WIDTH
+    );
+    cx.update_window(window, |_, window, cx| {
+        window.click(ElementId::Name("sidebar-toggle".into()), cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    let started = std::time::Instant::now();
+    loop {
+        let saved = store.load();
+        if !saved.sidebar_open {
+            assert_eq!(saved.sidebar_width, SIDEBAR_MAX_WIDTH);
+            break;
+        }
+        assert!(
+            started.elapsed() < Duration::from_secs(3),
+            "the layout is written"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+        cx.run_until_parked();
+    }
+    let _ = std::fs::remove_dir_all(directory);
+}
+
+#[gpui_kit::test]
+fn the_side_panel_leaves_the_chat_its_minimum(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, _| {
+            workspace.pane_sizes.panel_width = Some(5000.0);
+        });
+        let area = workspace.read(cx).panel_area(window);
+        assert_eq!(
+            workspace.read(cx).fitted_panel_width(window),
+            area - crate::pane_resize::CHAT_MIN_WIDTH
+        );
+    })
+    .expect("window is open");
+}
+
+#[gpui_kit::test]
+fn the_menu_button_opens_and_closes_the_app_menu(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        window.click(ElementId::Name("app-menu".into()), cx);
+        window.render_frame(cx);
+    })
+    .expect("window is open");
+    assert!(cx.read(|cx| workspace.read(cx).app_menu.is_open()));
+    cx.update_window(window, |_, window, cx| {
+        window.click(ElementId::Name("app-menu".into()), cx);
+    })
+    .expect("window is open");
+    assert!(cx.read(|cx| !workspace.read(cx).app_menu.is_open()));
+}

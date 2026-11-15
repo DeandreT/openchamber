@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -37,6 +37,105 @@ describe('entity modules speak OpenCode 2 shapes', () => {
   afterAll(() => {
     fs.rmSync(root, { recursive: true, force: true });
     delete process.env.XDG_CONFIG_HOME;
+  });
+
+  it('purpose model-only JSONC edits preserve unknown siblings and comments', () => {
+    const file = write('opencode.jsonc', `{
+      // Keep this configuration comment.
+      "agents": { "compaction": { "model": "old/a", "custom": { "keep": true }, "system": "Keep instructions" },
+        "title": { "model": "other/b" } }
+    }`);
+    const result = updateAgent('compaction', { model: 'new/b' }, projectDir);
+    expect(result.path).toBe(file);
+    const raw = fs.readFileSync(file, 'utf8');
+    expect(raw).toContain('// Keep this configuration comment.');
+    expect(raw).toContain('"custom": { "keep": true }');
+    expect(raw).toContain('Keep instructions');
+    expect(getAgentConfig('compaction', projectDir).config.model).toBe('new/b');
+    expect(getAgentConfig('title', projectDir).config.model).toBe('other/b');
+  });
+
+  it('purpose model-only Markdown edits preserve unknown frontmatter comments and exact body', () => {
+    const file = write('.opencode/agents/title.md', '---\n# Keep frontmatter comment\nmodel: old/a # model comment\ncustom: keep\n---\n\nExact body.\n  Indented body.\n');
+    const result = updateAgent('title', { model: 'new/b' }, projectDir);
+    expect(result.path).toBe(file);
+    const raw = fs.readFileSync(file, 'utf8');
+    expect(raw).toContain('# Keep frontmatter comment');
+    expect(raw).toContain('custom: keep');
+    expect(raw).toContain('# model comment');
+    expect(raw).toContain('---\n\nExact body.\n  Indented body.\n');
+    expect(getAgentConfig('title', projectDir).config.model).toBe('new/b');
+  });
+
+  it.each([['assignment', 'new/b#high'], ['null removal', null]])('purpose model-only %s accepts the reader\'s lenient frontmatter', (_operation, model) => {
+    const body = '\r\n---\r\n\r\nExact body.\r\n  Indented body.\r\n\r\n';
+    const file = write('.opencode/agents/title.md', '\uFEFF---\r\n# Keep frontmatter comment\r\ndescription: Build agent: creates builds\r\nmodel: old/a # Keep model comment\r\nvariant: low # Keep variant comment\r\ncustom:\r\n  keep: true\r\n  note: "keep: nested value"' + body);
+    expect(parseMdFile(file).frontmatter.description).toBe('Build agent: creates builds');
+    expect(getAgentConfig('title', projectDir).config.model).toBe('old/a#low');
+    expect(updateAgent('title', { model }, projectDir)).toEqual({ source: 'md', scope: 'project', path: file });
+    const raw = fs.readFileSync(file, 'utf8');
+    expect(raw.startsWith('\uFEFF---\r\n')).toBe(true);
+    expect(raw.endsWith(body)).toBe(true);
+    expect(raw).toContain('# Keep frontmatter comment');
+    expect(raw).toContain('# Keep model comment');
+    expect(raw).toContain('# Keep variant comment');
+    const parsed = parseMdFile(file).frontmatter;
+    expect(parsed.description).toBe('Build agent: creates builds');
+    expect(parsed.custom).toEqual({ keep: true, note: 'keep: nested value' });
+    expect(parsed.variant).toBeUndefined();
+    expect(getAgentConfig('title', projectDir).config.model).toBe(model ?? undefined);
+  });
+
+  it('purpose model-only null removal retains legacy JSONC siblings and source', () => {
+    const file = write('opencode.jsonc', '{\n// keep\n"agent":{"compaction":{"model":"old/a","variant":"high","custom":7}},"other":true\n}');
+    expect(updateAgent('compaction', { model: null }, projectDir)).toEqual({ source: 'json', scope: 'project', path: file });
+    const raw = fs.readFileSync(file, 'utf8');
+    expect(raw).toContain('// keep');
+    expect(raw).toContain('"custom":7');
+    expect(getAgentConfig('compaction', projectDir).config.model).toBeUndefined();
+    expect(raw).not.toContain('"variant"');
+    expect(raw).not.toContain('"agents"');
+  });
+
+  it('purpose model-only null removal keeps BOM CRLF Markdown body exactly', () => {
+    const suffix = '\r\n---\r\n\r\n  Keep body.\r\n\r\n';
+    const file = write('.opencode/agent/title.md', '\uFEFF---\r\n# keep\r\nmodel: old/a\r\nvariant: high\r\ncustom: keep' + suffix);
+    updateAgent('title', { model: null }, projectDir);
+    const raw = fs.readFileSync(file, 'utf8');
+    expect(raw.startsWith('\uFEFF---\r\n')).toBe(true);
+    expect(raw.endsWith(suffix)).toBe(true);
+    expect(raw).toContain('# keep');
+    expect(raw).toContain('custom: keep');
+    expect(getAgentConfig('title', projectDir).config.model).toBeUndefined();
+    expect(raw).not.toContain('variant:');
+  });
+
+  it('purpose model-only writes retain both source formats after a failed atomic write', () => {
+    for (const [name, relative, original] of [
+      ['compaction', 'opencode.json', '{"agents":{"compaction":{"model":"old/a","custom":7}}}'],
+      ['title', '.opencode/agents/title.md', '---\nmodel: old/a\ncustom: keep\n---\n\nBody.\n'],
+    ]) {
+      const file = write(relative, original);
+      const failure = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => { throw new Error('fixture write refusal'); });
+      try { expect(() => updateAgent(name, { model: 'new/b' }, projectDir)).toThrow(); }
+      finally { failure.mockRestore(); }
+      expect(fs.readFileSync(file, 'utf8')).toBe(original);
+      expect(getAgentConfig(name, projectDir).config.model).toBe('old/a');
+    }
+  });
+
+  it('purpose model-only built-in override uses the existing user source and null fallback', () => {
+    const before = getAgentConfig('compaction', projectDir);
+    expect(before.source).toBe('none');
+    expect(updateAgent('compaction', { model: null }, projectDir).source).toBe('none');
+    const created = updateAgent('compaction', { model: 'ordinary/text#high' }, projectDir);
+    try {
+      expect(created.source).toBe('md');
+      expect(created.scope).toBe('user');
+      expect(getAgentConfig('compaction', projectDir).config.model).toBe('ordinary/text#high');
+      expect(updateAgent('compaction', { model: null }, projectDir).path).toBe(created.path);
+      expect(getAgentConfig('compaction', projectDir).config.model).toBeUndefined();
+    } finally { fs.unlinkSync(created.path); }
   });
 
   it('reads a v1 agent markdown file and answers the v2 shape', () => {

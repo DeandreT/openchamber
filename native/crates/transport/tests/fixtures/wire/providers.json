@@ -1,0 +1,23 @@
+{
+  "location": {
+    "directory": "/home/synthetic/my project/ünï"
+  },
+  "data": [
+    {
+      "id": "opencode",
+      "name": "OpenCode",
+      "activation": "enabled",
+      "integrationID": "opencode"
+    },
+    {
+      "id": "perf",
+      "name": "Performance fixture",
+      "activation": "enabled"
+    },
+    {
+      "id": "disabled-provider",
+      "name": "Switched off provider",
+      "activation": "disabled"
+    }
+  ]
+}

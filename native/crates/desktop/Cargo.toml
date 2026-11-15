@@ -1,0 +1,57 @@
+[package]
+name = "openchamber-native-desktop"
+description = "Native OpenChamber desktop client built with GPUI Kit."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "openchamber-native"
+path = "src/main.rs"
+
+[dependencies]
+chrono.workspace = true
+cpal.workspace = true
+gpui-kit.workspace = true
+heic-rs.workspace = true
+image.workspace = true
+libghostty-vt.workspace = true
+mermaid-rs-renderer.workspace = true
+keyring.workspace = true
+keyring-core.workspace = true
+notify.workspace = true
+openchamber-native-core.workspace = true
+openchamber-native-transport.workspace = true
+quick-xml.workspace = true
+ratex-layout.workspace = true
+ratex-parser.workspace = true
+ratex-svg.workspace = true
+ratex-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+zbus.workspace = true
+zip.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gdkx11.workspace = true
+gtk.workspace = true
+raw-window-handle.workspace = true
+webkit2gtk.workspace = true
+x11rb.workspace = true
+
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }
+# A fake notification service on a private peer connection.
+zbus = { workspace = true, features = ["p2p"] }
+
+[lints]
+workspace = true
+
+[target.'cfg(windows)'.dependencies]
+openchamber-windows-process = { path = "../windows-process" }

@@ -63,6 +63,47 @@ it('delivers oversized events live, but reports a replay gap instead of replayin
   }
 });
 
+// Runs under both vitest and `bun test`, which has no `expect.poll`.
+const until = async (done) => {
+  for (let attempt = 0; attempt < 500 && !done(); attempt++) await new Promise(resolve => setTimeout(resolve, 5));
+  expect(done()).toBe(true);
+};
+
+it('names the last replayed event on ready so a client knows where replay ends', async () => {
+  const hub = createGlobalMessageStreamHub({
+    buildOpenCodeUrl: path => `http://127.0.0.1:4096${path}`,
+    getOpenCodeAuthHeaders: () => ({}),
+    fetchImpl: async (_url, options) => createSseResponse({
+      signal: options.signal, holdOpen: true,
+      blocks: ['first', 'middle', 'last'].map(id => `data: {"id":"${id}","type":"${id}","properties":{}}\n\n`),
+    }),
+  });
+  const runtime = createMessageStreamWsRuntime({
+    server: new EventEmitter(), globalEventHub: hub, wsClients: new Set(),
+    uiAuthController: null, isRequestOriginAllowed: async () => true,
+    rejectWebSocketUpgrade() {}, buildOpenCodeUrl: path => `http://127.0.0.1:4096${path}`,
+    getOpenCodeAuthHeaders: () => ({}), processForwardedEventPayload() {},
+  });
+  const first = new FakeSocket();
+  const resumed = new FakeSocket();
+  const current = new FakeSocket();
+  try {
+    runtime.wsServer.emit('connection', first, { url: '/api/global/event/ws' });
+    await until(() => first.sent.filter(frame => frame.type === 'event').length === 3);
+    expect(first.sent[0]).toEqual({ type: 'ready', scope: 'global' });
+    runtime.wsServer.emit('connection', resumed, { url: '/api/global/event/ws?lastEventId=first' });
+    await until(() => resumed.sent.length === 3);
+    expect(resumed.sent[0]).toEqual({ type: 'ready', scope: 'global', replayThrough: 'last' });
+    expect(resumed.sent.slice(1).map(frame => frame.eventId)).toEqual(['middle', 'last']);
+    // An empty replay names nothing.
+    runtime.wsServer.emit('connection', current, { url: '/api/global/event/ws?lastEventId=last' });
+    await until(() => current.sent.length === 1);
+    expect(current.sent).toEqual([{ type: 'ready', scope: 'global' }]);
+  } finally {
+    first.close(); resumed.close(); current.close(); hub.stop(); await runtime.close();
+  }
+});
+
 class FakeSocket extends EventEmitter {
   constructor() {
     super();
@@ -293,7 +334,7 @@ describe('message stream websocket runtime', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 5));
 
-    expect(secondSocket.sent).toContainEqual({ type: 'ready', scope: 'global' });
+    expect(secondSocket.sent).toContainEqual({ type: 'ready', scope: 'global', replayThrough: 'evt-2' });
     expect(secondSocket.sent).toContainEqual({
       type: 'event',
       payload: { id: 'evt-2', type: 'session.renamed', location: { directory: '/tmp/project' }, data: { sessionID: 's1', title: 't' } },

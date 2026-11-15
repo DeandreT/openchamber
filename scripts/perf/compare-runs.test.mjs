@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { test } from "node:test"
 
 import { comparePrimary, compareResultDirs } from "./compare-runs.mjs"
+import { invalidReasons } from "./run-summary.mjs"
 
 const writeRuns = (root, scenario, runs) => runs.forEach((data, index) => {
   const directory = join(root, `${scenario}-${index + 1}`)
@@ -14,6 +15,14 @@ const writeRuns = (root, scenario, runs) => runs.forEach((data, index) => {
 
 const idle = (busy, extra = {}) => ({ metrics: { mainThreadBusyPercent: busy }, frameLiveness: { framesPerSecond: 60 }, ...extra })
 const row = (table, label) => table.split("\n").find((line) => line.startsWith(`| ${label} |`))
+
+test("failed attempts with partial measurements and numeric startup failures are excluded", () => {
+  assert.deepEqual(invalidReasons({ valid: false, rows: 20, opened: 4, readings: { loaded: { usedMb: 80 } } }), ["capture did not complete"])
+  assert.deepEqual(invalidReasons({ runs: 1, failures: 1, samples: [{ error: "net::ERR_ABORTED" }] }), ["every launch failed"])
+  assert.deepEqual(invalidReasons({ runs: 2, failures: 1 }), [])
+  assert.deepEqual(invalidReasons({ runs: 1, failures: ["failed"] }), ["every launch failed"])
+  assert.deepEqual(invalidReasons({ valid: true, rows: 20 }), [])
+})
 
 const primaryRow = (table, label) => row(table, `**${label}**`)
 const before = [1.0, 1.2, 1.4, 1.1, 1.3, 1.25, 1.15, 1.35]

@@ -1,0 +1,15 @@
+[package]
+name = "openchamber-native-core"
+description = "Renderer- and network-independent application model for the native OpenChamber desktop."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dev-dependencies]
+serde.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

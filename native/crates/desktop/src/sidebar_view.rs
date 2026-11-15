@@ -1,0 +1,1459 @@
+//! The sidebar column: title row, toolbar, session list and footer.
+//!
+//! Geometry follows the web client's timeline sidebar
+//! (`packages/ui/src/components/session/sidebar/`): rows keep a 256 px slot
+//! inside the list's `ps-2.5 pe-2` padding and the scroller's 6 px thumb
+//! gutter, while captions and project headers paint across the padding,
+//! compact rows retain their kind slot, and the gap that opens each section
+//! comes from the core row model.
+
+use gpui_kit::{
+    AnyElement, Context, FontWeight, Hsla, InteractiveElement, IntoElement, ParentElement, Role,
+    SharedString, StatefulInteractiveElement, Styled, TestSupportExt, Window, div, list,
+    prelude::FluentBuilder, px, rems,
+};
+use openchamber_native_core::grouping::GroupLabel;
+use openchamber_native_core::session_index::IndexStatus;
+use openchamber_native_core::sidebar_rows::{
+    ActivityKey, EmptyKind, GroupLoadState, SectionSpacing, ShowControl,
+};
+
+use crate::activation::{on_activate, on_activate_split};
+use crate::baseline::CssTextExt;
+use crate::chrome::{self, ButtonTone, CONTROL_RADIUS, IconButton, TITLE_ROW_HEIGHT, glyph};
+use crate::connection::{ConnectionFailure, ConnectionState};
+use crate::locale::{self, Direction, Strings};
+use crate::logical::LogicalStyledExt;
+use crate::sidebar_item::SidebarItem;
+use crate::theme::Palette;
+use crate::workspace::Workspace;
+use gpui_kit::component::Colorize as _;
+
+const TOOLBAR_HEIGHT: f32 = 40.0;
+const FOOTER_HEIGHT: f32 = 40.0;
+/// The list's inline padding (`ps-2.5 pe-2`); row slots span the rest.
+const LIST_PADDING_START: f32 = 10.0;
+const LIST_PADDING_END: f32 = 8.0;
+/// The room every overlay scroller keeps for its thumb, on the physical right
+/// in every language (`.overlay-scrollbar-wrapper`).
+const LIST_GUTTER: f32 = 6.0;
+/// A project header: `py-1` around the 22 px section line.
+const HEADER_HEIGHT: f32 = 30.0;
+/// A caption (Chats, Pinned, In work, Projects): `py-1` around the 20 px
+/// label line.
+const CAPTION_HEIGHT: f32 = 28.0;
+/// Captions and project headers start 16 px in (`ps-4`); a project's label
+/// follows its 14 px glyph and a 6 px gap.
+const HEADER_INSET_START: f32 = 16.0;
+const HEADER_GLYPH: f32 = 14.0;
+/// A session or draft row box: `py-[5px]` around the 20 px label line.
+const SESSION_HEIGHT: f32 = 30.0;
+/// Worktree, folder and group rows.
+const CONTAINER_HEIGHT: f32 = 32.0;
+/// `my-px` around every session row.
+const SESSION_MARGIN: f32 = 1.0;
+/// Trailing inset of compact rows and leading inset of flat notices.
+const TIMELINE_INSET: f32 = 10.0;
+/// Tree geometry: 12 px per level from an 8 px edge, then the slot and a gap.
+const TREE_BASE_PADDING: f32 = 6.0;
+const TREE_INDENT: f32 = 12.0;
+const TREE_SLOT: f32 = 14.0;
+const TREE_GAP: f32 = 6.0;
+/// The design system's type scale, in rems of the 16 px root.
+const LABEL_SIZE: f32 = 0.843_75;
+const LABEL_LINE: f32 = 1.25;
+const HEADER_SIZE: f32 = 0.9375;
+const HEADER_LINE: f32 = 1.375;
+const MICRO_SIZE: f32 = 0.75;
+const XS_SIZE: f32 = 0.75;
+const XS_LINE: f32 = 0.9375;
+
+impl Workspace {
+    pub(crate) fn render_sidebar(
+        &self,
+        palette: &Palette,
+        direction: Direction,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let strings = locale::strings(cx).clone();
+        let rows = list(
+            self.sidebar_list.clone(),
+            cx.processor(|this, index: usize, window, cx| {
+                this.render_sidebar_row(index, window, cx)
+            }),
+        )
+        .size_full();
+        let status = self.connection_status(&strings);
+        div()
+            .id("sidebar-column")
+            .relative()
+            .w(px(self.pane_sizes.sidebar_width()))
+            .flex_shrink_0()
+            .h_full()
+            .bg(palette.muted)
+            .flex()
+            .flex_col()
+            .child(
+                chrome::drag_region("sidebar-title", cx)
+                    .h(px(TITLE_ROW_HEIGHT))
+                    .flex_shrink_0()
+                    .flex_row_from(direction)
+                    .items_center()
+                    .padding_start(direction, px(12.0))
+                    .child(self.render_title_controls(palette, direction, cx)),
+            )
+            .child(self.render_sidebar_toolbar(&strings, palette, direction, window, cx))
+            .children(self.render_bulk_bar(palette, direction, cx))
+            .when_some(status, |this, status| {
+                this.child(
+                    div()
+                        .id("connection-status")
+                        .role(Role::Status)
+                        .accessibility_id("connection-status")
+                        .aria_label(status.clone())
+                        .flex_shrink_0()
+                        .padding_start(direction, px(LIST_PADDING_START + TIMELINE_INSET))
+                        .padding_end(direction, px(LIST_PADDING_END))
+                        .py_1()
+                        .text_size(rems(XS_SIZE))
+                        .text_color(palette.muted_foreground)
+                        .child(status),
+                )
+            })
+            .child(
+                div()
+                    .id("sidebar")
+                    .role(Role::Tree)
+                    .accessibility_id("sidebar")
+                    .flex_1()
+                    .min_h_0()
+                    .pr(px(LIST_GUTTER))
+                    .child(
+                        div()
+                            .size_full()
+                            .padding_start(direction, px(LIST_PADDING_START))
+                            .padding_end(direction, px(LIST_PADDING_END))
+                            .pb_1()
+                            .child(rows),
+                    ),
+            )
+            .child(self.render_sidebar_footer(&strings, palette, direction, cx))
+            .child(
+                div()
+                    .absolute()
+                    .inset_0()
+                    .inset_end(direction, px(1.0))
+                    .shadow(crate::elevation::sidebar(direction)),
+            )
+            // The edge toward the chat, over the column rather than inside it,
+            // so the rows keep their full slot.
+            .child(
+                div()
+                    .absolute()
+                    .top_0()
+                    .bottom_0()
+                    .inset_end(direction, px(0.0))
+                    .w(px(1.0))
+                    .bg(palette.border),
+            )
+            .child(self.render_resize_handle(
+                crate::pane_resize::Pane::Sidebar,
+                strings.get("sidebar.resize.leftPanelAria"),
+                palette,
+                direction,
+                cx,
+            ))
+    }
+
+    /// Menu, sidebar toggle and New session: the sidebar's title row, or the
+    /// start of the header while the sidebar is closed.
+    pub(crate) fn render_title_controls(
+        &self,
+        palette: &Palette,
+        direction: Direction,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let strings = locale::strings(cx);
+        let new_session_label = strings.get("sessions.sidebar.header.actions.newSession");
+        let foreground = palette.foreground;
+        // Labelled while the sidebar is open. Closed, it is a 24 px icon
+        // button whose glyph keeps its place.
+        let labelled = self.sidebar_open;
+        let new_session = div()
+            .id("new-session")
+            .group("new-session")
+            .role(Role::Button)
+            .accessibility_id("new-session")
+            .aria_label(new_session_label.clone())
+            .h(px(24.0))
+            .margin_start(direction, px(-4.0))
+            .map(|this| {
+                if labelled {
+                    // `ps-1 pe-1.5`: the glyph sits where the icon-only
+                    // button centres it.
+                    this.padding_start(direction, px(4.0))
+                        .padding_end(direction, px(6.0))
+                } else {
+                    this.w(px(24.0)).flex_shrink_0().justify_center()
+                }
+            })
+            .rounded(px(CONTROL_RADIUS))
+            .flex_row_from(direction)
+            .items_center()
+            .gap(px(8.0))
+            .cursor_pointer()
+            .text_color(palette.muted_foreground)
+            .hover(move |style| style.text_color(foreground))
+            .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation()
+            })
+            .child(
+                glyph("chat-new", 16.0, palette.muted_foreground)
+                    .group_hover("new-session", move |style| style.text_color(foreground)),
+            )
+            .when(labelled, |this| {
+                this.child(
+                    div()
+                        .css_text(LABEL_SIZE, LABEL_LINE, cx)
+                        .child(new_session_label),
+                )
+            });
+        div()
+            .flex_row_from(direction)
+            .items_center()
+            .gap(px(8.0))
+            .child(
+                IconButton::new(
+                    "app-menu",
+                    "menu-2",
+                    strings.get("header.actions.openAppMenuAria"),
+                )
+                .render(palette, cx, |this, window, cx| {
+                    this.toggle_app_menu(window, cx)
+                }),
+            )
+            .child(
+                IconButton::new(
+                    "sidebar-toggle",
+                    "layout-left",
+                    strings.get("header.actions.openSessionsAria"),
+                )
+                .tone(if self.sidebar_open {
+                    ButtonTone::Active
+                } else {
+                    ButtonTone::Quiet
+                })
+                .render(palette, cx, |this, _, cx| this.toggle_sidebar(cx)),
+            )
+            .child(
+                on_activate(new_session, cx, |this, window, cx| {
+                    this.open_new_session(crate::chat_draft::NewSession::Plain, window, cx);
+                })
+                .test_support(),
+            )
+    }
+
+    /// The list's own controls, then one menu with the pages the sidebar
+    /// opens (`SidebarHeader.tsx`). The first glyph sits 16 px from the
+    /// sidebar's edge, in line with the title row's.
+    fn render_sidebar_toolbar(
+        &self,
+        strings: &Strings,
+        palette: &Palette,
+        direction: Direction,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let display_menu = self.render_display_menu(palette, direction, cx);
+        let more_menu = self.render_more_menu(palette, direction, cx);
+        div()
+            .id("sidebar-toolbar")
+            .h(px(TOOLBAR_HEIGHT))
+            .flex_shrink_0()
+            .flex_row_from(direction)
+            .items_center()
+            .gap(px(6.0))
+            .padding_start(direction, px(13.0))
+            .padding_end(direction, px(10.0))
+            .children(self.render_sidebar_search(palette, direction, window, cx))
+            .child(
+                on_activate(
+                    toolbar_button(
+                        "add-project",
+                        "folder-add",
+                        strings.get("sessions.sidebar.header.actions.addProject"),
+                        ToolbarTone::Idle,
+                        palette,
+                    ),
+                    cx,
+                    |this, window, cx| this.open_add_project(None, window, cx),
+                )
+                .test_support(),
+            )
+            .child(
+                div()
+                    .relative()
+                    .child(
+                        on_activate(
+                            toolbar_button(
+                                "display-mode",
+                                "equalizer-2",
+                                strings.get("sessions.sidebar.header.displayMode.label"),
+                                ToolbarTone::Idle,
+                                palette,
+                            ),
+                            cx,
+                            |this, window, cx| this.toggle_display_menu(window, cx),
+                        )
+                        .test_support(),
+                    )
+                    .children(display_menu),
+            )
+            .child(
+                div()
+                    .relative()
+                    .child(
+                        on_activate(
+                            toolbar_button(
+                                crate::sidebar_more_menu::TRIGGER_ID,
+                                "more",
+                                strings.get("sessions.sidebar.header.actions.more"),
+                                // A page from the menu is open: the trigger
+                                // says where it came from.
+                                if self.more_page_open() {
+                                    ToolbarTone::Lit
+                                } else {
+                                    ToolbarTone::Idle
+                                },
+                                palette,
+                            ),
+                            cx,
+                            |this, window, cx| this.toggle_more_menu(window, cx),
+                        )
+                        .test_support(),
+                    )
+                    .children(more_menu),
+            )
+    }
+
+    /// Settings and the instance switcher (`SidebarFooter.tsx`). Usage lives
+    /// in the toolbar's More menu; shortcuts and About in the app menu.
+    fn render_sidebar_footer(
+        &self,
+        strings: &Strings,
+        palette: &Palette,
+        direction: Direction,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let instance = self.instance_name(strings);
+        let hover_fill = palette.hover.opacity(0.5);
+        let foreground = palette.foreground;
+        div()
+            .id("sidebar-footer")
+            .h(px(FOOTER_HEIGHT))
+            .flex_shrink_0()
+            .flex_row_from(direction)
+            .items_center()
+            .px(px(10.0))
+            .child(
+                div()
+                    .flex_row_from(direction)
+                    .gap(px(4.0))
+                    .child(on_activate(
+                        gpui_kit::base::Button::new("settings")
+                            .accessibility_id("settings")
+                            .accessibility_label(
+                                strings.get("sessions.sidebar.footer.actions.settings"),
+                            )
+                            .group("settings-footer")
+                            .size(px(24.0))
+                            .p_0()
+                            .rounded(px(CONTROL_RADIUS))
+                            .hover(move |style| style.bg(hover_fill))
+                            .child(
+                                glyph("settings-3", 16.0, palette.muted_foreground)
+                                    .group_hover("settings-footer", move |style| {
+                                        style.text_color(foreground)
+                                    }),
+                            ),
+                        cx,
+                        |this, window, cx| this.open_settings(window, cx),
+                    )),
+            )
+            .child(div().flex_1())
+            .child(
+                on_activate(
+                    div()
+                        .id("instance-switcher")
+                        .group("instance-switcher")
+                        .role(Role::Button)
+                        .accessibility_id("instance-switcher")
+                        .aria_label(
+                            strings.format(
+                                "header.services.openWithCurrent",
+                                &[("current", &instance)],
+                            ),
+                        )
+                        .h(px(24.0))
+                        .px(px(8.0))
+                        .rounded(px(CONTROL_RADIUS))
+                        .flex_row_from(direction)
+                        .items_center()
+                        .gap(px(6.0))
+                        .cursor_pointer()
+                        .text_color(palette.muted_foreground)
+                        .hover(move |style| style.bg(hover_fill).text_color(foreground))
+                        .child(
+                            glyph("server", 16.0, palette.muted_foreground)
+                                .group_hover("instance-switcher", move |style| {
+                                    style.text_color(foreground)
+                                }),
+                        )
+                        .child(
+                            div()
+                                .css_text(LABEL_SIZE, LABEL_LINE, cx)
+                                .child(instance.clone()),
+                        ),
+                    cx,
+                    |this, window, cx| this.open_host_picker(window, cx),
+                )
+                .test_support(),
+            )
+    }
+
+    /// The name of the instance this window shows: Local for this machine.
+    fn instance_name(&self, strings: &Strings) -> SharedString {
+        if let Some(label) = self
+            .connection
+            .as_ref()
+            .and_then(|connection| connection.display_label.as_ref())
+        {
+            return label.clone().into();
+        }
+        match &self.connection {
+            Some(connection) if !connection.config.endpoint.is_loopback() => {
+                connection.config.endpoint.authority().into()
+            }
+            _ => strings.get("desktopHostSwitcher.instance.local"),
+        }
+    }
+
+    /// What the sidebar says about the server, while there is something to say.
+    fn connection_status(&self, strings: &Strings) -> Option<SharedString> {
+        if let Some(status) = self.managed_host_status(strings) {
+            return Some(status);
+        }
+        let connection = self.connection.as_ref()?;
+        let host = connection.config.endpoint.authority();
+        let text = match connection.state {
+            ConnectionState::Connecting => strings.format(
+                "desktopHostSwitcher.startup.connectingTo",
+                &[("host", &host)],
+            ),
+            // The reference shows nothing while the stream reconnects; the
+            // last valid state stays on screen.
+            ConnectionState::Reconnecting => return None,
+            ConnectionState::Failed(failure) => failure_text(strings, failure, &host),
+            ConnectionState::Connected => match self.sessions.status() {
+                IndexStatus::Loading if self.sessions.active().is_empty() => {
+                    strings.get("sessions.sidebar.group.empty.loadingSessions")
+                }
+                IndexStatus::Failed => strings.get("sessions.sidebar.group.empty.loadFailed"),
+                _ => return None,
+            },
+        };
+        Some(text)
+    }
+
+    fn render_sidebar_row(
+        &mut self,
+        index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let Some(item) = self.sidebar_items.get(index).cloned() else {
+            return div().into_any_element();
+        };
+        let gap = self.sidebar_spacing.get(index).copied().flatten();
+        let spacing = gap.map_or(0.0, SectionSpacing::pixels);
+        let palette = cx.global::<Palette>().clone();
+        let strings = locale::strings(cx).clone();
+        let direction = strings.direction();
+        let searching = self.sidebar_state.search.is_some();
+        let row = match &item {
+            SidebarItem::Draft { key, draft, title } => {
+                let selected = self.selected.is_none() && self.composer_key.as_ref() == Some(draft);
+                let group: SharedString = format!("{key}:hover").into();
+                let open_key = draft.clone();
+                let discard_key = draft.clone();
+                let open_focus = window
+                    .use_keyed_state(
+                        SharedString::from(format!("{key}:open-focus")),
+                        cx,
+                        |_, cx| cx.focus_handle().tab_index(0).tab_stop(true),
+                    )
+                    .read(cx)
+                    .clone();
+                let discard_focus = window
+                    .use_keyed_state(
+                        SharedString::from(format!("{key}:discard-focus")),
+                        cx,
+                        |_, cx| cx.focus_handle().tab_index(0).tab_stop(true),
+                    )
+                    .read(cx)
+                    .clone();
+                let open = on_activate(
+                    div()
+                        .id(SharedString::from(format!("{key}:open")))
+                        .role(Role::Button)
+                        .accessibility_id(format!("{key}:open"))
+                        .aria_label(
+                            strings.format("sessions.sidebar.draft.openAria", &[("label", title)]),
+                        )
+                        .flex_1()
+                        .min_w_0()
+                        .padding_end(direction, px(10.0))
+                        .flex_row_from(direction)
+                        .items_center()
+                        .gap(px(6.0))
+                        .child(glyph("edit", 12.0, palette.muted_foreground))
+                        .child(
+                            div()
+                                .min_w_0()
+                                .truncate()
+                                .italic()
+                                .css_text(LABEL_SIZE, LABEL_LINE, cx)
+                                .text_color(if selected {
+                                    palette.selection_foreground
+                                } else {
+                                    resting_title(&palette)
+                                })
+                                .child(title.clone()),
+                        ),
+                    cx,
+                    move |this, window, cx| this.open_draft(&open_key, window, cx),
+                )
+                .test_support()
+                .track_focus(&open_focus);
+                let discard = on_activate(
+                    div()
+                        .id(SharedString::from(format!("{key}:discard")))
+                        .role(Role::Button)
+                        .accessibility_id(format!("{key}:discard"))
+                        .aria_label(strings.get("sessions.sidebar.draft.discard"))
+                        .absolute()
+                        .inset_end(direction, px(4.0))
+                        .top(px((SESSION_HEIGHT - 16.0) / 2.0))
+                        .size(px(16.0))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .opacity(0.0)
+                        .focus(|style| style.opacity(1.0))
+                        .group_hover(group.clone(), |style| style.opacity(1.0))
+                        .child(glyph("close", 12.0, palette.muted_foreground)),
+                    cx,
+                    move |this, window, cx| this.discard_draft(&discard_key, window, cx),
+                )
+                .test_support()
+                .track_focus(&discard_focus);
+                div()
+                    .id(key.clone())
+                    .role(Role::Group)
+                    .accessibility_id(key.clone())
+                    .aria_label(title.clone())
+                    // `my-0.5` around the row box.
+                    .h(px(SESSION_HEIGHT + 4.0))
+                    .py(px(2.0))
+                    .child(
+                        div()
+                            .relative()
+                            .tab_group()
+                            .group(group)
+                            .h(px(SESSION_HEIGHT))
+                            .px(px(8.0))
+                            .rounded(px(6.0))
+                            .cursor_pointer()
+                            .flex_row_from(direction)
+                            .items_center()
+                            .gap(px(4.0))
+                            .when(selected, |row| row.bg(palette.selection.opacity(0.7)))
+                            .when(!selected, |row| {
+                                row.hover(|row| row.bg(palette.hover.opacity(0.6)))
+                            })
+                            .child(open)
+                            .child(discard),
+                    )
+                    .test_support()
+                    .into_any_element()
+            }
+            SidebarItem::Zone {
+                key,
+                activity,
+                collapsed,
+            } => {
+                let toggled = item.clone();
+                let header = self.header_row(
+                    HeaderRow {
+                        key,
+                        label: zone_label(&strings, *activity),
+                        style: HeaderStyle::Caption,
+                        collapsed: *collapsed,
+                        expandable: true,
+                        spacing,
+                    },
+                    &palette,
+                    direction,
+                    cx,
+                    move |this, _, cx| this.toggle_collapsed(&toggled, cx),
+                );
+                if *activity != ActivityKey::Chats {
+                    header
+                } else {
+                    let focus = window
+                        .use_keyed_state("chats-new-session-focus", cx, |_, cx| {
+                            cx.focus_handle().tab_index(0).tab_stop(true)
+                        })
+                        .read(cx)
+                        .clone();
+                    let add = on_activate(
+                        div()
+                            .id("chats-new-session")
+                            .role(Role::Button)
+                            .accessibility_id("chats-new-session")
+                            .aria_label(strings.get("sessions.sidebar.header.actions.newSession"))
+                            .absolute()
+                            .top(px((CAPTION_HEIGHT - 24.0) / 2.0))
+                            .inset_end(direction, px(2.0 - LIST_PADDING_END))
+                            .size(px(24.0))
+                            .rounded(px(CONTROL_RADIUS))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .opacity(0.0)
+                            .focus(|style| style.opacity(1.0))
+                            .group_hover("chats-zone", |style| style.opacity(1.0))
+                            .on_mouse_down(gpui_kit::MouseButton::Left, |_, _, cx| {
+                                cx.stop_propagation()
+                            })
+                            .on_key_down(cx.listener(
+                                |this, event: &gpui_kit::KeyDownEvent, window, cx| {
+                                    if matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                        && !event.keystroke.modifiers.control
+                                        && !event.keystroke.modifiers.platform
+                                        && !event.keystroke.modifiers.alt
+                                        && !event.keystroke.modifiers.shift
+                                    {
+                                        cx.stop_propagation();
+                                        this.open_new_session(
+                                            crate::chat_draft::NewSession::Chat,
+                                            window,
+                                            cx,
+                                        );
+                                    }
+                                },
+                            ))
+                            .child(glyph("add", 16.0, palette.muted_foreground)),
+                        cx,
+                        |this, window, cx| {
+                            this.open_new_session(crate::chat_draft::NewSession::Chat, window, cx)
+                        },
+                    )
+                    .track_focus(&focus)
+                    .test_support();
+                    div()
+                        .relative()
+                        .group("chats-zone")
+                        .child(header)
+                        .child(add)
+                        .into_any_element()
+                }
+            }
+            SidebarItem::Project {
+                key,
+                project_id,
+                label,
+                collapsed,
+            } => {
+                let toggled = item.clone();
+                let header = self.header_row(
+                    HeaderRow {
+                        key,
+                        label: label.clone(),
+                        style: HeaderStyle::Project,
+                        collapsed: *collapsed,
+                        expandable: false,
+                        spacing,
+                    },
+                    &palette,
+                    direction,
+                    cx,
+                    move |this, _, cx| this.toggle_collapsed(&toggled, cx),
+                );
+                let menu = self.render_project_menu(project_id, &palette, cx);
+                let opened = project_id.clone();
+                div()
+                    .on_mouse_down(
+                        gpui_kit::MouseButton::Right,
+                        cx.listener(move |this, event: &gpui_kit::MouseDownEvent, window, cx| {
+                            this.open_project_menu(opened.clone(), event.position, window, cx)
+                        }),
+                    )
+                    .child(header)
+                    .children(menu)
+                    .into_any_element()
+            }
+            SidebarItem::Group {
+                key,
+                label,
+                collapsed,
+                empty,
+                ..
+            } => {
+                let (text, icon) = group_label(&strings, label);
+                let slot = if *empty {
+                    div().into_any_element()
+                } else {
+                    chevron(*collapsed, direction, &palette).into_any_element()
+                };
+                let row = tree_row(key, &palette, direction, 1, slot, false)
+                    .role(Role::Button)
+                    .aria_label(text.clone())
+                    .aria_expanded(!*collapsed)
+                    .h(px(CONTAINER_HEIGHT))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(glyph(icon, 16.0, palette.muted_foreground))
+                    .child(row_text(text, container_title(&palette), cx));
+                let toggled = item.clone();
+                on_activate(row, cx, move |this, _, cx| {
+                    this.toggle_collapsed(&toggled, cx)
+                })
+                .test_support()
+                .into_any_element()
+            }
+            SidebarItem::Folder {
+                key,
+                folder_id,
+                scope,
+                name,
+                collapsed,
+                empty,
+            } => {
+                let slot = if *empty {
+                    div().into_any_element()
+                } else {
+                    chevron(*collapsed, direction, &palette).into_any_element()
+                };
+                let renaming = self.render_folder_rename(folder_id, cx);
+                let row = tree_row(key, &palette, direction, 0, slot, false)
+                    .role(Role::TreeItem)
+                    .aria_label(name.clone())
+                    .aria_expanded(!*collapsed)
+                    .h(px(CONTAINER_HEIGHT))
+                    .child(glyph(
+                        if *collapsed { "folder" } else { "folder-open" },
+                        14.0,
+                        palette.muted_foreground,
+                    ))
+                    .children(renaming.is_none().then(|| {
+                        row_text(name.clone(), container_title(&palette), cx).into_any_element()
+                    }))
+                    .children(renaming);
+                let toggled = folder_id.clone();
+                let renamed = (scope.clone(), folder_id.clone());
+                on_activate(row, cx, move |this, _, cx| this.toggle_folder(&toggled, cx))
+                    .on_click(
+                        cx.listener(move |_, event: &gpui_kit::ClickEvent, window, cx| {
+                            if event.click_count() >= 2 {
+                                let (scope, id) = renamed.clone();
+                                cx.defer_in(window, move |this, window, cx| {
+                                    this.start_folder_rename(scope, id, window, cx)
+                                });
+                            }
+                        }),
+                    )
+                    .test_support()
+                    .into_any_element()
+            }
+            SidebarItem::Worktree {
+                key,
+                label,
+                expanded,
+                session_ids,
+                ..
+            } => {
+                let (text, icon) = group_label(&strings, label);
+                let selected = self
+                    .selected
+                    .as_ref()
+                    .is_some_and(|id| session_ids.contains(id));
+                let toggle = item.clone();
+                let slot = if session_ids.is_empty() {
+                    div().into_any_element()
+                } else {
+                    on_activate(
+                        div()
+                            .id(SharedString::from(format!("{key}:chevron")))
+                            .role(Role::Button)
+                            .aria_label(text.clone())
+                            .aria_expanded(*expanded)
+                            .child(chevron(!*expanded, direction, &palette)),
+                        cx,
+                        move |this, _, cx| {
+                            cx.stop_propagation();
+                            this.toggle_collapsed(&toggle, cx);
+                        },
+                    )
+                    .test_support()
+                    .into_any_element()
+                };
+                let row = tree_row(key, &palette, direction, 0, slot, selected)
+                    .role(Role::TreeItem)
+                    .aria_label(text.clone())
+                    .aria_expanded(*expanded)
+                    .aria_selected(selected)
+                    .h(px(CONTAINER_HEIGHT))
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(glyph(icon, 14.0, palette.muted_foreground))
+                    .child(row_text(
+                        text,
+                        if selected {
+                            palette.selection_foreground
+                        } else {
+                            container_title(&palette)
+                        },
+                        cx,
+                    ));
+                if let Some(id) = session_ids.first().cloned() {
+                    on_activate(row, cx, move |this, window, cx| {
+                        this.select_session(id.clone(), window, cx)
+                    })
+                    .test_support()
+                    .into_any_element()
+                } else {
+                    row.test_support().into_any_element()
+                }
+            }
+            SidebarItem::Session {
+                key,
+                session_id,
+                title,
+                depth,
+                has_children,
+                expanded,
+                expansion_key,
+                pinned,
+                ..
+            } => {
+                let selected = self.selected.as_ref() == Some(session_id);
+                let streaming = self.is_streaming(session_id);
+                let id = session_id.clone();
+                // Select sessions: the row checks instead of opening.
+                let selecting = self.session_management.selection.is_enabled();
+                let checked =
+                    selecting && self.session_management.selection.is_selected(session_id);
+                let slot = if *has_children {
+                    let expansion_key = expansion_key.clone();
+                    let label = if *expanded {
+                        strings.get("sessions.sidebar.session.subsessions.collapse")
+                    } else {
+                        strings.get("sessions.sidebar.session.subsessions.expand")
+                    };
+                    let button = div()
+                        .id(SharedString::from(format!("{key}:chevron")))
+                        .role(Role::Button)
+                        .aria_label(label)
+                        .aria_expanded(*expanded)
+                        .child(chevron(!*expanded, direction, &palette));
+                    on_activate(button, cx, move |this, _, cx| {
+                        cx.stop_propagation();
+                        this.toggle_expanded(&expansion_key, cx);
+                    })
+                    .test_support()
+                    .into_any_element()
+                } else {
+                    div().into_any_element()
+                };
+                let title = display_title(&strings, title);
+                let text_color = if selected {
+                    palette.selection_foreground
+                } else if streaming {
+                    palette.foreground
+                } else {
+                    resting_title(&palette)
+                };
+                let node = div()
+                    .id(key.clone())
+                    .accessibility_id(key.clone())
+                    .role(Role::TreeItem)
+                    .aria_label(title.clone())
+                    .aria_selected(selected)
+                    .aria_level(depth + 1)
+                    .when(selecting, |this| {
+                        this.aria_toggled(if checked {
+                            gpui_kit::Toggled::True
+                        } else {
+                            gpui_kit::Toggled::False
+                        })
+                    })
+                    .when(*has_children, |this| this.aria_expanded(*expanded))
+                    .pt(px(SESSION_MARGIN))
+                    .pb(px(SESSION_MARGIN + spacing));
+                let target_key = SharedString::from(format!("{key}:target"));
+                let row = tree_row(&target_key, &palette, direction, *depth, slot, selected)
+                    .h(px(SESSION_HEIGHT))
+                    .relative();
+                // Renaming keeps the row in place: the title line becomes
+                // the field, and the row takes no clicks meanwhile.
+                if let Some(rename) = self.render_rename(key, &palette, direction, cx) {
+                    return node
+                        .child(row.child(rename).test_support())
+                        .test_support()
+                        .into_any_element();
+                }
+                let menu_open = self
+                    .session_menu
+                    .as_ref()
+                    .is_some_and(|menu| menu.row_key == *key);
+                let row_group = SharedString::from(format!("{key}:hover"));
+                let trigger = self.render_session_menu_trigger(
+                    key, session_id, menu_open, &row_group, &palette, direction, window, cx,
+                );
+                let context_key = key.clone();
+                let context_id = session_id.clone();
+                let rename_key = key.clone();
+                let rename_id = session_id.clone();
+                let row = row
+                    .group(row_group)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex_row_from(direction)
+                            .items_center()
+                            .gap(px(4.0))
+                            .when(selecting, |this| {
+                                this.child(glyph(
+                                    if checked {
+                                        "checkbox"
+                                    } else {
+                                        "checkbox-blank"
+                                    },
+                                    14.0,
+                                    if checked {
+                                        palette.primary
+                                    } else {
+                                        palette.muted_foreground
+                                    },
+                                ))
+                            })
+                            .child(row_text(title, text_color, cx))
+                            .when(*pinned, |this| {
+                                this.child(glyph("pushpin", 12.0, palette.primary))
+                            })
+                            .when(streaming, |this| {
+                                this.child(glyph("circle", 12.0, palette.info))
+                            }),
+                    )
+                    .child(trigger)
+                    .on_mouse_down(
+                        gpui_kit::MouseButton::Right,
+                        cx.listener(move |this, event: &gpui_kit::MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.open_session_menu(
+                                context_key.clone(),
+                                context_id.clone(),
+                                Some(event.position),
+                                false,
+                                window,
+                                cx,
+                            );
+                        }),
+                    );
+                let toggled_key = key.clone();
+                let (node, row) = on_activate_split(node, row, cx, move |this, window, cx| {
+                    if this.session_management.selection.is_enabled() {
+                        let range = window.modifiers().shift;
+                        this.toggle_row_selected(&toggled_key, range, cx);
+                    } else {
+                        this.select_session(id.clone(), window, cx);
+                    }
+                });
+                let row = row.on_click(cx.listener(
+                    move |this, event: &gpui_kit::ClickEvent, window, cx| {
+                        if event.click_count() >= 2
+                            && !this.session_management.selection.is_enabled()
+                        {
+                            // After the click's selection has moved focus.
+                            let (key, id) = (rename_key.clone(), rename_id.clone());
+                            cx.defer_in(window, move |this, window, cx| {
+                                this.start_rename(key, id, window, cx)
+                            });
+                        }
+                    },
+                ));
+                node.child(row.test_support())
+                    .test_support()
+                    .into_any_element()
+            }
+            SidebarItem::Show {
+                key,
+                control,
+                depth,
+                flat,
+                ..
+            } => {
+                let label = match control {
+                    ShowControl::More => strings.get("sessions.sidebar.group.showMore"),
+                    ShowControl::Fewer => strings.get("sessions.sidebar.group.showFewer"),
+                };
+                let inset = if *flat {
+                    TIMELINE_INSET
+                } else {
+                    tree_text_inset(*depth)
+                };
+                let foreground = palette.foreground;
+                let row = div()
+                    .id(key.clone())
+                    .accessibility_id(key.clone())
+                    .role(Role::Button)
+                    .aria_label(label.clone())
+                    .mt(px(2.0))
+                    .py(px(2.0))
+                    .padding_start(direction, px(inset))
+                    .flex_row_from(direction)
+                    .cursor_pointer()
+                    .css_text(XS_SIZE, XS_LINE, cx)
+                    .text_color(palette.muted_foreground)
+                    .hover(move |style| style.text_color(foreground).underline())
+                    .child(label);
+                let revealed = item.clone();
+                on_activate(row, cx, move |this, _, cx| this.reveal(&revealed, cx))
+                    .test_support()
+                    .into_any_element()
+            }
+            SidebarItem::Status {
+                key,
+                state,
+                depth,
+                flat,
+            } => {
+                let label = status_label(&strings, *state);
+                let color = match state {
+                    GroupLoadState::Loading | GroupLoadState::Ready => palette.muted_foreground,
+                    _ => palette.error,
+                };
+                let inset = if *flat {
+                    TIMELINE_INSET
+                } else {
+                    tree_text_inset(*depth)
+                };
+                notice_row(key, direction, inset, label, color).into_any_element()
+            }
+            SidebarItem::Empty { key, kind, depth } => match kind {
+                EmptyKind::Archived => notice_row(
+                    key,
+                    direction,
+                    tree_text_inset(*depth),
+                    strings.get("sessions.sidebar.group.empty.noArchivedSessions"),
+                    palette.muted_foreground,
+                )
+                .into_any_element(),
+                EmptyKind::Sidebar => div()
+                    .id(key.clone())
+                    .px_3()
+                    .py_4()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(row_text(
+                        strings.get(if searching {
+                            "sessions.sidebar.empty.noMatches.title"
+                        } else {
+                            "sessions.sidebar.empty.noSessions.title"
+                        }),
+                        palette.foreground,
+                        cx,
+                    ))
+                    .child(
+                        div()
+                            .text_size(rems(XS_SIZE))
+                            .text_color(palette.muted_foreground)
+                            .child(strings.get(if searching {
+                                "sessions.sidebar.empty.noMatches.description"
+                            } else {
+                                "sessions.sidebar.empty.noSessions.description"
+                            })),
+                    )
+                    .into_any_element(),
+            },
+        };
+        let row = match item {
+            SidebarItem::Zone { .. } | SidebarItem::Project { .. } => row,
+            SidebarItem::Session { .. } => row,
+            _ => div().pb(px(spacing)).child(row).into_any_element(),
+        };
+        // `PROJECT_DIVIDER_CLASS`: a hairline in the gap that closes an open
+        // project before the next one. A caption or a closed project above a
+        // project header takes another gap and no line.
+        if gap == Some(SectionSpacing::Project) {
+            div()
+                .relative()
+                .child(row)
+                .child(
+                    div()
+                        .absolute()
+                        .inset_start(direction, px(6.0))
+                        .inset_end(direction, px(6.0))
+                        .bottom(px(5.5))
+                        .h(px(1.0))
+                        .bg(palette.foreground.opacity(0.08)),
+                )
+                .into_any_element()
+        } else {
+            row
+        }
+    }
+
+    /// A caption or project header: its accessible node keeps the row's slot
+    /// while its fill and pointer target span the list's padding.
+    fn header_row(
+        &self,
+        header: HeaderRow<'_>,
+        palette: &Palette,
+        direction: Direction,
+        cx: &Context<Self>,
+        action: impl Fn(&mut Workspace, &mut Window, &mut Context<Workspace>) + 'static,
+    ) -> AnyElement {
+        let group: SharedString = format!("{}:hover", header.key).into();
+        let node = div()
+            .id(header.key.clone())
+            .role(Role::Button)
+            .accessibility_id(header.key.clone())
+            .aria_label(header.label.clone())
+            .when(header.expandable, |this| {
+                this.aria_expanded(!header.collapsed)
+            })
+            .pb(px(header.spacing));
+        let target = div()
+            .id(SharedString::from(format!("{}:target", header.key)))
+            .group(group.clone())
+            .margin_start(direction, px(-LIST_PADDING_START))
+            .margin_end(direction, px(-LIST_PADDING_END))
+            .bg(palette.muted)
+            .flex_row_from(direction)
+            .items_center()
+            .padding_start(direction, px(HEADER_INSET_START))
+            .padding_end(direction, px(14.0))
+            .cursor_pointer();
+        let target = match header.style {
+            // A bare muted word at the row's size. The chevron follows it:
+            // always while the section is closed, on hover while it is open.
+            HeaderStyle::Caption => target
+                .h(px(CAPTION_HEIGHT))
+                .gap(px(4.0))
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .css_text(LABEL_SIZE, LABEL_LINE, cx)
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(palette.muted_foreground)
+                        .child(header.label),
+                )
+                .child(
+                    div()
+                        .flex_shrink_0()
+                        .when(!header.collapsed, |this| {
+                            this.invisible().group_hover(group, |style| style.visible())
+                        })
+                        .child(chevron(header.collapsed, direction, palette)),
+                ),
+            // The project's glyph, which the chevron replaces on hover, then
+            // its name a step larger than the rows under it.
+            HeaderStyle::Project => target
+                .h(px(HEADER_HEIGHT))
+                .gap(px(6.0))
+                .child(
+                    div()
+                        .size(px(HEADER_GLYPH))
+                        .flex_shrink_0()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            glyph("folder", HEADER_GLYPH, palette.muted_foreground)
+                                .group_hover(group.clone(), |style| style.invisible()),
+                        )
+                        .child(
+                            div()
+                                .absolute()
+                                .invisible()
+                                .group_hover(group, |style| style.visible())
+                                .child(chevron(header.collapsed, direction, palette)),
+                        ),
+                )
+                .child(
+                    div()
+                        .min_w_0()
+                        .truncate()
+                        .css_text(HEADER_SIZE, HEADER_LINE, cx)
+                        .font_weight(FontWeight::MEDIUM)
+                        .text_color(palette.foreground)
+                        .child(header.label),
+                ),
+        };
+        let (node, target) = on_activate_split(node, target, cx, action);
+        node.child(target.test_support())
+            .test_support()
+            .into_any_element()
+    }
+}
+
+/// How a sidebar toolbar button shows its state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ToolbarTone {
+    /// Muted glyph that turns foreground on hover, with no fill.
+    Idle,
+    /// Foreground glyph: a page this button's menu opened is on screen.
+    Lit,
+}
+
+/// A 24 px toolbar button around a 16 px glyph (`headerActionButtonClass`
+/// with the idle or lit page class).
+fn toolbar_button(
+    id: &'static str,
+    icon: &'static str,
+    label: SharedString,
+    tone: ToolbarTone,
+    palette: &Palette,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    let foreground = palette.foreground;
+    let rest = match tone {
+        ToolbarTone::Idle => palette.muted_foreground,
+        ToolbarTone::Lit => palette.foreground,
+    };
+    div()
+        .id(id)
+        .group(id)
+        .role(Role::Button)
+        .accessibility_id(id)
+        .aria_label(label)
+        .size(px(24.0))
+        .flex_shrink_0()
+        .rounded(px(CONTROL_RADIUS))
+        .flex()
+        .items_center()
+        .justify_center()
+        .cursor_pointer()
+        .child(glyph(icon, 16.0, rest).group_hover(id, move |style| style.text_color(foreground)))
+}
+
+/// How a header is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HeaderStyle {
+    /// Chats, Pinned, In work, the list by time and Projects.
+    Caption,
+    Project,
+}
+
+/// What a caption or project header shows.
+struct HeaderRow<'a> {
+    key: &'a SharedString,
+    label: SharedString,
+    style: HeaderStyle,
+    collapsed: bool,
+    /// Captions report their disclosure state; project headers do not.
+    expandable: bool,
+    /// The gap below that opens the next section.
+    spacing: f32,
+}
+
+fn display_title(strings: &Strings, title: &SharedString) -> SharedString {
+    if title.is_empty() {
+        strings.get("sessions.sidebar.session.untitled")
+    } else {
+        title.clone()
+    }
+}
+
+fn zone_label(strings: &Strings, activity: ActivityKey) -> SharedString {
+    match activity {
+        ActivityKey::Chats => strings.get("sessions.sidebar.activity.chatsTitle"),
+        ActivityKey::Pinned => strings.get("sessions.sidebar.activity.pinnedTitle"),
+        ActivityKey::Work => strings.get("sessions.sidebar.work.title"),
+        ActivityKey::Timeline | ActivityKey::Projects => {
+            strings.get("sessions.sidebar.activity.projectsTitle")
+        }
+    }
+}
+
+fn group_label(strings: &Strings, label: &GroupLabel) -> (SharedString, &'static str) {
+    match label {
+        GroupLabel::Chats => (
+            strings.get("sessions.sidebar.activity.chatsTitle"),
+            "folder",
+        ),
+        GroupLabel::ProjectRoot {
+            branch: Some(branch),
+        } => (
+            strings.format(
+                "sessions.sidebar.grouping.projectRootWithBranch",
+                &[("branch", branch)],
+            ),
+            "git-branch",
+        ),
+        GroupLabel::ProjectRoot { branch: None } => (
+            strings.get("sessions.sidebar.grouping.projectRoot"),
+            "folder",
+        ),
+        GroupLabel::Worktree { label } => (label.clone().into(), "git-branch"),
+        GroupLabel::Space { name: Some(name) } => (name.clone().into(), "box-3"),
+        GroupLabel::Space { name: None } => (
+            strings.get("sessions.sidebar.grouping.spaceUnnamed"),
+            "box-3",
+        ),
+        GroupLabel::Archived => (strings.get("sessions.sidebar.grouping.archived"), "archive"),
+    }
+}
+
+fn status_label(strings: &Strings, state: GroupLoadState) -> SharedString {
+    match state {
+        GroupLoadState::Ready | GroupLoadState::Loading => {
+            strings.get("sessions.sidebar.group.empty.loadingSessions")
+        }
+        GroupLoadState::LoadFailed => strings.get("sessions.sidebar.group.empty.loadFailed"),
+        GroupLoadState::InitializationFailed => {
+            strings.get("sessions.sidebar.group.empty.initializationFailed")
+        }
+        GroupLoadState::PermissionDenied => {
+            strings.get("sessions.sidebar.group.empty.permissionDenied")
+        }
+    }
+}
+
+/// A disclosure chevron; collapsed rows point toward the end side.
+pub(crate) fn chevron(
+    collapsed: bool,
+    direction: Direction,
+    palette: &Palette,
+) -> impl IntoElement {
+    let name = match (collapsed, direction) {
+        (false, _) => "arrow-down-s",
+        (true, Direction::LeftToRight) => "arrow-right-s",
+        (true, Direction::RightToLeft) => "arrow-left-s",
+    };
+    glyph(name, 14.0, palette.muted_foreground)
+}
+
+/// Where tree text starts at `depth`: past the level's slot and gap.
+fn tree_text_inset(depth: usize) -> f32 {
+    TREE_BASE_PADDING + depth as f32 * TREE_INDENT + TREE_SLOT + TREE_GAP
+}
+
+/// A tree row with its chevron slot; `slot` is empty for leaf rows.
+fn tree_row(
+    key: &SharedString,
+    palette: &Palette,
+    direction: Direction,
+    depth: usize,
+    slot: AnyElement,
+    selected: bool,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    let padding = TREE_BASE_PADDING + depth as f32 * TREE_INDENT;
+    let hover_fill = palette.hover.opacity(0.6);
+    div()
+        .id(key.clone())
+        .accessibility_id(key.clone())
+        .rounded(px(CONTROL_RADIUS))
+        .padding_start(direction, px(padding))
+        .padding_end(direction, px(TIMELINE_INSET))
+        .flex_row_from(direction)
+        .items_center()
+        .gap(px(TREE_GAP))
+        .cursor_pointer()
+        .when(selected, |this| this.bg(palette.selection.opacity(0.7)))
+        .when(!selected, |this| {
+            this.hover(move |style| style.bg(hover_fill))
+        })
+        .child(
+            div()
+                .w(px(TREE_SLOT))
+                .flex_shrink_0()
+                .flex()
+                .justify_center()
+                .child(slot),
+        )
+}
+
+fn notice_row(
+    key: &SharedString,
+    direction: Direction,
+    inset: f32,
+    label: SharedString,
+    color: Hsla,
+) -> gpui_kit::Stateful<gpui_kit::Div> {
+    div()
+        .id(key.clone())
+        .accessibility_id(key.clone())
+        .py_1()
+        .padding_start(direction, px(inset))
+        .flex_row_from(direction)
+        .text_size(rems(MICRO_SIZE))
+        .text_color(color)
+        .child(label)
+}
+
+/// The sidebar's opaque `oc-title-rest` mix, independent of the row background.
+fn resting_title(palette: &Palette) -> Hsla {
+    palette.foreground.mix_oklab(palette.muted_foreground, 0.5)
+}
+
+fn container_title(palette: &Palette) -> Hsla {
+    palette.foreground.mix_oklab(palette.muted_foreground, 0.75)
+}
+
+fn row_text(text: SharedString, color: Hsla, cx: &gpui_kit::App) -> impl IntoElement {
+    div()
+        .flex_1()
+        .min_w_0()
+        .truncate()
+        .css_text(LABEL_SIZE, LABEL_LINE, cx)
+        .text_color(color)
+        .child(text)
+}
+
+/// The sentence that explains a connection failure.
+pub(crate) fn failure_text(
+    strings: &Strings,
+    failure: ConnectionFailure,
+    host: &str,
+) -> SharedString {
+    match failure {
+        ConnectionFailure::Unreachable => strings.format(
+            "onboarding.desktopRecovery.remoteUnreachable.description",
+            &[("host", host)],
+        ),
+        ConnectionFailure::NotOpenChamber => strings.format(
+            "onboarding.desktopRecovery.incompatibleServer.description",
+            &[("host", host)],
+        ),
+        ConnectionFailure::Incompatible => {
+            strings.get("onboarding.remoteConnection.probe.incompatibleMessage")
+        }
+        ConnectionFailure::AuthenticationRequired => {
+            strings.get("onboarding.remoteConnection.probe.authMessage")
+        }
+        ConnectionFailure::AuthenticationRejected => {
+            strings.get("sessionAuth.error.incorrectPassword")
+        }
+        ConnectionFailure::ClientAuthenticationRequired => {
+            strings.get("sessionAuth.locked.tunnelDescription")
+        }
+        ConnectionFailure::AuthenticationRateLimited { .. } => {
+            strings.get("sessionAuth.error.rateLimitTitle")
+        }
+    }
+}

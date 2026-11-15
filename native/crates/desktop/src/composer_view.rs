@@ -1,0 +1,743 @@
+//! The retained multiline composer: in the startup view, and anchored below
+//! the transcript of a selected session.
+//!
+//! The box mirrors the web client's desktop composer (`.oc-surface-floating
+//! .oc-glass-floating .oc-composer-sheen`): an attachment strip, the editor
+//! and a toolbar of composer actions with send at the end.
+
+use gpui_kit::component::input::Textarea;
+use gpui_kit::component::tooltip::Tooltip;
+use gpui_kit::component::{Sizable, Size};
+use gpui_kit::{
+    AnyElement, Context, ExternalPaths, InteractiveElement, IntoElement, ParentElement, Role,
+    StatefulInteractiveElement, Styled, TestSupportExt, Window, canvas, div, linear_color_stop,
+    linear_gradient, prelude::FluentBuilder, px, rems,
+};
+
+use openchamber_native_core::permission_mode::PermissionMode;
+
+use crate::activation::on_activate;
+use crate::baseline::CssTextExt;
+use crate::chrome::{self, ButtonTone, IconButton, glyph};
+use crate::composer_autocomplete::PickerKey;
+use crate::context_panel;
+use crate::elevation;
+use crate::locale::{self, Direction};
+use crate::logical::LogicalStyledExt;
+use crate::theme::Palette;
+use crate::workspace::Workspace;
+
+pub(crate) const BOX_RADIUS: f32 = 12.0;
+const EDITOR_MIN_HEIGHT: f32 = 52.0;
+pub(crate) const TOOLBAR_HEIGHT: f32 = 44.0;
+const ACTION_SIZE: f32 = 24.0;
+const ACTION_GLYPH: f32 = 16.0;
+/// `stopIconSizeClass`: Stop is `h-5 w-5` in the same 24 px button.
+const STOP_GLYPH: f32 = 20.0;
+/// The toolbar's `px-2.5`, the start actions' and the groups' `gap-x-1.5`,
+/// and the end controls' `md:gap-x-3`.
+pub(crate) const TOOLBAR_PADDING_X: f32 = 10.0;
+const START_GAP: f32 = 6.0;
+const END_GAP: f32 = 12.0;
+/// Attach, permissions and goal.
+const START_ACTIONS: f32 = 3.0;
+/// A custom Kit size whose text is 14 px; its editor insets text by 8 px
+/// across and 2 px down.
+const EDITOR_SIZE: f32 = 16.0;
+const EDITOR_INSET_X: f32 = 8.0;
+const EDITOR_INSET_Y: f32 = 2.0;
+/// The editor's 14/21 px text, in rems of the 16 px root.
+const TEXT_SIZE: f32 = 0.875;
+const TEXT_LINE: f32 = 1.3125;
+
+/// The composer box's width around the editor's text: the web editor's
+/// 12 px on each side plus its content's 1 px start padding.
+const EDITOR_TEXT_INSET: f32 = 25.0;
+
+/// `composerTailInset.ts`: the gap between the transcript's last row and the
+/// resting composer, how far the composer grows before it pushes the
+/// transcript, and the slot height assumed before one is measured.
+const TAIL_GAP: f32 = 80.0;
+const GROWTH_ALLOWANCE: f32 = 88.0;
+const DEFAULT_SLOT_HEIGHT: f32 = 128.0;
+
+/// The docked composer's slot as last measured.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct ComposerSlot {
+    /// The smallest height measured: the composer at rest.
+    resting: Option<f32>,
+    height: Option<f32>,
+    dock_visible: bool,
+}
+
+impl ComposerSlot {
+    /// The inset covered by the floating composer, including its outer spacing.
+    pub(crate) fn height(self) -> f32 {
+        self.height.unwrap_or(DEFAULT_SLOT_HEIGHT)
+    }
+
+    /// Records a measured height; a zero height is a slot not laid out yet.
+    fn measured(self, height: f32) -> Self {
+        if height <= 0.0 {
+            return self;
+        }
+        Self {
+            resting: Some(self.resting.map_or(height, |resting| resting.min(height))),
+            height: Some(height),
+            dock_visible: self.dock_visible,
+        }
+    }
+
+    /// How much of the transcript's end the composer reserves
+    /// (`resolveComposerTailInset`).
+    pub(crate) fn tail_inset(self) -> f32 {
+        let resting = self.resting.unwrap_or(DEFAULT_SLOT_HEIGHT);
+        let height = self.height.unwrap_or(resting);
+        let inset = (resting + TAIL_GAP).max(height + TAIL_GAP - GROWTH_ALLOWANCE);
+        if self.dock_visible {
+            inset.max(height + 12.0)
+        } else {
+            inset
+        }
+    }
+}
+
+impl Workspace {
+    /// The chat area's width: the content between the sidebar and the work
+    /// status panel and rail.
+    pub(crate) fn chat_area_width(&self, window: &Window) -> f32 {
+        let mut area = self.panel_area(window);
+        if self.panels.open.is_some() || (self.terminal_open && self.terminal_panel.is_some()) {
+            // The fitted slot already includes side_panel_frame's gutters.
+            area -= self.fitted_panel_width(window);
+            if self.work_status_beside_zone(window) {
+                area -= context_panel::PANEL_WIDTH;
+            }
+        } else if self.work_status_inline(window) {
+            area -= context_panel::PANEL_WIDTH;
+        }
+        area
+    }
+
+    /// The composer box's width: the chat column capped and padded as
+    /// `.chat-input-column`.
+    pub(crate) fn composer_width(&self, window: &Window) -> f32 {
+        let column = self.chat_area_width(window);
+        column.min(chrome::CHAT_COLUMN_MAX_WIDTH)
+            - 2.0 * f32::from(chrome::chat_column_padding(window, column))
+    }
+
+    /// Shows the full placeholder, or the short one when the full one would
+    /// wrap (`usePlaceholderFitsOneLine` in the web composer).
+    pub(crate) fn sync_composer_placeholder(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let full = locale::strings(cx).get("chat.chatInput.placeholder.chat");
+        let available = self.composer_width(window) - EDITOR_TEXT_INSET;
+        let compact = editor_text_width(&full, window) > available;
+        let placeholder = locale::strings(cx).get(if compact {
+            "chat.chatInput.placeholder.chatCompact"
+        } else {
+            "chat.chatInput.placeholder.chat"
+        });
+        if self.composer_placeholder_compact == Some(compact)
+            && self.composer.read(cx).presentation().placeholder() == &placeholder
+        {
+            return;
+        }
+        self.composer_placeholder_compact = Some(compact);
+        self.composer.update(cx, |composer, cx| {
+            composer.set_placeholder(placeholder, window, cx);
+        });
+    }
+
+    /// The composer docked over the bottom of a selected session's
+    /// transcript, in the chat column beside the prompt navigation gutter.
+    /// Its slot is measured every frame; a new tail inset remeasures the
+    /// transcript's last row, which carries the spacer.
+    pub(crate) fn render_composer(
+        &self,
+        palette: &Palette,
+        direction: Direction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let slot = self.composer_slot.clone();
+        let dock_visible = self.active_request().is_some() || self.native_dock_visible();
+        let list = self
+            .selected
+            .as_ref()
+            .and_then(|id| self.open_sessions.get(id))
+            .map(|open| open.list.clone());
+        let measure = canvas(
+            move |bounds, window, _| {
+                let previous = slot.get();
+                let mut next = previous.measured(f32::from(bounds.size.height));
+                next.dock_visible = dock_visible;
+                slot.set(next);
+                if next.tail_inset() != previous.tail_inset()
+                    && let Some(list) = &list
+                {
+                    let count = list.item_count();
+                    if count > 0 {
+                        list.remeasure_items(count - 1..count);
+                    }
+                    window.refresh();
+                }
+            },
+            |_, _, _, _| {},
+        )
+        .absolute()
+        .inset_0();
+        div()
+            .id("composer-region")
+            .absolute()
+            .bottom_0()
+            .left_0()
+            .right_0()
+            .pb(px(16.0))
+            .flex()
+            .justify_center()
+            .child(measure)
+            .child(
+                div()
+                    .w_full()
+                    .max_w(px(chrome::CHAT_COLUMN_MAX_WIDTH))
+                    .px(chrome::chat_column_padding(
+                        window,
+                        self.chat_area_width(window),
+                    ))
+                    .map(|column| {
+                        if self.selected_prompt_read_only() {
+                            // The docks stay: a subagent still asks, and the
+                            // parent shows the same requests.
+                            column
+                                .children(self.render_request_dock(palette, window, cx))
+                                .child(self.render_read_only_banner(palette, direction, cx))
+                        } else {
+                            column
+                                .children(self.render_btw_panel(palette, direction, cx))
+                                .children(self.render_request_dock(palette, window, cx))
+                                .child(self.render_composer_box(palette, direction, window, cx))
+                        }
+                    }),
+            )
+            .into_any_element()
+    }
+
+    /// `ReadOnlyPromptBanner`: in place of the composer of a session that
+    /// takes no prompts, with Stop while its turn runs.
+    fn render_read_only_banner(
+        &self,
+        palette: &Palette,
+        direction: Direction,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let strings = locale::strings(cx);
+        let text = strings.get("chat.container.readOnlySubagentPromptBanner");
+        let running = self
+            .selected
+            .as_ref()
+            .is_some_and(|id| self.is_streaming(id));
+        let stop_label = strings.get("chat.chatInput.actions.stopGeneratingAria");
+        let hover = palette.hover;
+        let stop = running.then(|| {
+            on_activate(
+                div()
+                    .id("read-only-stop")
+                    .role(Role::Button)
+                    .accessibility_id("read-only-stop")
+                    .aria_label(stop_label.clone())
+                    .size(px(32.0))
+                    .my(px(-6.0))
+                    .margin_end(direction, px(-8.0))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(6.0))
+                    .cursor_pointer()
+                    .hover(move |style| style.bg(hover))
+                    .tooltip(move |window, cx| Tooltip::new(stop_label.clone()).build(window, cx))
+                    .child(glyph(crate::assets::STOP_ICON, 16.0, palette.status_error)),
+                cx,
+                |this, window, cx| this.stop(window, cx),
+            )
+            .test_support()
+        });
+        div()
+            .id("read-only-prompt-banner")
+            .accessibility_id("read-only-prompt-banner")
+            .role(Role::Status)
+            .aria_label(text.clone())
+            .w_full()
+            .pt(px(12.0))
+            .child(
+                div()
+                    .flex_row_from(direction)
+                    .items_center()
+                    .gap(px(8.0))
+                    .rounded(px(16.0))
+                    .border_1()
+                    .border_color(palette.border.opacity(0.7))
+                    .bg(palette.background)
+                    .px(px(16.0))
+                    .py(px(12.0))
+                    .css_text(0.843_75, 1.25, cx)
+                    .text_color(palette.muted_foreground)
+                    .child(div().min_w_0().flex_1().text_center().child(text))
+                    .children(stop),
+            )
+            .into_any_element()
+    }
+
+    /// The composer box itself.
+    pub(crate) fn render_composer_box(
+        &self,
+        palette: &Palette,
+        direction: Direction,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        let recovery = self.render_send_recovery(palette, direction, window, cx);
+        let queue_strip = self.render_queue_strip(palette, direction, cx);
+        // The width the effort, model and agent controls get: the web's
+        // `@container/model-controls` hides their labels by it.
+        let controls_width = self.composer_width(window)
+            - 2.0 * TOOLBAR_PADDING_X
+            - START_ACTIONS * ACTION_SIZE
+            - (START_ACTIONS - 1.0) * START_GAP
+            - START_GAP
+            - 2.0 * (END_GAP + ACTION_SIZE);
+        let streaming = self.selected.as_ref().is_some_and(|id| {
+            self.is_streaming(id) && self.requests_for_send(&self.mutation_key(id)).is_empty()
+        });
+        let empty = !self.composer_has_sendable_content(cx);
+        let intake_pending = self.composer_key.as_ref().is_some_and(|owner| {
+            self.attachment_storage.has_pending(owner)
+                || (self.selected.is_none() && !self.starters.captures.can_begin(owner))
+        });
+        let can_send = !empty
+            && !intake_pending
+            && self.composer_editable()
+            && ((self.selected.is_some() && (self.is_synthetic() || self.can_send_connected()))
+                || (self.selected.is_none() && self.can_create_connected()));
+        let strings = locale::strings(cx).clone();
+        let paste_workspace = cx.weak_entity();
+        let drop_workspace = cx.weak_entity();
+        let drop_fill = palette.selection;
+        // `ComposerActionButtons`: Stop in the error color, Send in the
+        // primary color once it can send and dimmed foreground until then.
+        let (label, icon, icon_size, icon_color) = if streaming {
+            (
+                strings.get("chat.chatInput.actions.stopGeneratingAria"),
+                crate::assets::STOP_ICON,
+                STOP_GLYPH,
+                palette.status_error,
+            )
+        } else {
+            (
+                strings.get("chat.chatInput.actions.sendMessageAria"),
+                "send-plane-2",
+                ACTION_GLYPH,
+                if can_send {
+                    palette.primary
+                } else {
+                    palette.foreground
+                },
+            )
+        };
+        // The microphone, while dictation is on and a server can transcribe.
+        let dictation = self.dictation_available().then(|| {
+            IconButton::new(
+                "composer-dictation",
+                "mic",
+                strings.get("chat.dictation.start"),
+            )
+            .size(ACTION_SIZE, ACTION_GLYPH)
+            .tone(ButtonTone::Active)
+            .render(palette, cx, |this, window, cx| {
+                this.start_dictation(window, cx)
+            })
+        });
+        let dictating = self.dictation.status != crate::composer_dictation::Status::Idle;
+        let send = on_activate(
+            div()
+                .id("composer-submit")
+                .role(Role::Button)
+                .accessibility_id("composer-submit")
+                .aria_label(label)
+                .when(!streaming && !can_send, |button| {
+                    button.a11y_synthetic_children(|builder| builder.parent_node().set_disabled())
+                })
+                .size(px(ACTION_SIZE))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .when(streaming || can_send, |this| this.cursor_pointer())
+                .when(!streaming && !can_send, |this| this.opacity(0.3))
+                .child(glyph(icon, icon_size, icon_color)),
+            cx,
+            move |this, window, cx| {
+                if streaming {
+                    this.stop(window, cx);
+                } else {
+                    this.submit(window, cx);
+                }
+            },
+        )
+        .test_support();
+        let picker_open = self.autocomplete.open.is_some();
+        div()
+            .id("composer")
+            .when(picker_open, |this| {
+                this.key_context(crate::workspace_view::PICKER_CONTEXT)
+            })
+            .can_drop(move |value, _, cx| {
+                value.is::<ExternalPaths>()
+                    && drop_workspace
+                        .read_with(cx, |workspace, _| {
+                            workspace.composer_editable()
+                                && workspace.persistence_loaded()
+                                && !workspace.close_in_progress()
+                        })
+                        .unwrap_or(false)
+            })
+            .drag_over::<ExternalPaths>(move |style, _, _, _| style.bg(drop_fill))
+            .on_drop::<ExternalPaths>(cx.listener(|this, paths: &ExternalPaths, window, cx| {
+                if this.composer_editable()
+                    && !this.close_in_progress()
+                    && let Some(owner) = this.composer_key.clone()
+                {
+                    this.attach_cited_paths(owner, paths.paths().to_vec(), window, cx);
+                }
+            }))
+            // While recording, Enter confirms and Escape cancels, before the
+            // editor's send.
+            .when(dictating, |this| {
+                this.capture_action(cx.listener(
+                    |this, _: &gpui_kit::component::input::Enter, _, cx| {
+                        if this.dictation.status == crate::composer_dictation::Status::Recording {
+                            this.confirm_dictation_default(cx);
+                            cx.stop_propagation();
+                        }
+                    },
+                ))
+                .capture_action(cx.listener(
+                    |this, _: &gpui_kit::component::input::Escape, _, cx| {
+                        if this.dictation.status == crate::composer_dictation::Status::Recording {
+                            this.cancel_dictation(cx);
+                            cx.stop_propagation();
+                        }
+                    },
+                ))
+            })
+            // An open picker takes Up, Down, Enter, Tab and Escape (and
+            // Ctrl+N/P) before the editor does.
+            .capture_action(cx.listener(
+                |this, _: &gpui_kit::component::input::MoveDown, window, cx| {
+                    if this.autocomplete_key(PickerKey::Down, window, cx) {
+                        cx.stop_propagation();
+                    }
+                },
+            ))
+            .capture_action(cx.listener(
+                |this, _: &gpui_kit::component::input::Enter, window, cx| {
+                    if this.autocomplete_key(PickerKey::Choose, window, cx) {
+                        cx.stop_propagation();
+                    }
+                },
+            ))
+            .capture_action(cx.listener(
+                |this, _: &gpui_kit::component::input::IndentInline, window, cx| {
+                    if this.autocomplete_key(PickerKey::Choose, window, cx) {
+                        cx.stop_propagation();
+                    }
+                },
+            ))
+            .capture_action(cx.listener(
+                |this, _: &gpui_kit::component::input::Escape, window, cx| {
+                    if this.autocomplete_key(PickerKey::Escape, window, cx) {
+                        cx.stop_propagation();
+                    }
+                },
+            ))
+            .on_action(
+                cx.listener(|this, _: &crate::workspace_view::PickerNext, window, cx| {
+                    this.autocomplete_key(PickerKey::Down, window, cx);
+                }),
+            )
+            .on_action(cx.listener(
+                |this, _: &crate::workspace_view::PickerPrevious, window, cx| {
+                    this.autocomplete_key(PickerKey::Up, window, cx);
+                },
+            ))
+            // ArrowUp in an empty composer over a queue edits the newest
+            // queued message, before the editor moves its caret.
+            .capture_action(cx.listener(
+                |this, _: &gpui_kit::component::input::MoveUp, window, cx| {
+                    if this.autocomplete_key(PickerKey::Up, window, cx) {
+                        cx.stop_propagation();
+                        return;
+                    }
+                    if this.composer.read(cx).value().is_empty()
+                        && let Some(id) = this.newest_editable_queued()
+                    {
+                        cx.stop_propagation();
+                        this.edit_queued(&id, window, cx);
+                    }
+                },
+            ))
+            .role(Role::Group)
+            .accessibility_id("composer")
+            .relative()
+            .w_full()
+            .rounded(px(BOX_RADIUS))
+            .bg(palette.elevated)
+            .text_color(palette.elevated_foreground)
+            .shadow(elevation::composer(palette))
+            .flex()
+            .flex_col()
+            .when_some(elevation::composer_sheen(palette), |this, sheen| {
+                this.child(
+                    div()
+                        .absolute()
+                        .inset_0()
+                        .rounded(px(BOX_RADIUS))
+                        .bg(linear_gradient(
+                            180.0,
+                            linear_color_stop(sheen, 0.0),
+                            linear_color_stop(sheen.opacity(0.0), 0.5),
+                        )),
+                )
+            })
+            .children(self.render_goal_row(palette, direction, cx))
+            .children(self.render_auto_review_strip(palette, direction, cx))
+            .children(queue_strip)
+            .children(self.render_composer_attachments(palette, direction, cx))
+            .children(self.render_revert_strip(palette, direction, cx))
+            .child(recovery)
+            .children(self.render_native_status(palette, window, cx))
+            .child(div().h(px(4.0)))
+            .child(
+                // The editor insets its text by the size's padding; the
+                // rest of the web editor's `16px 12px 8px` (plus its line's
+                // 1 px start padding) sits around it.
+                div()
+                    .min_h(px(EDITOR_MIN_HEIGHT))
+                    .pt(px(16.0 - EDITOR_INSET_Y))
+                    .padding_start(direction, px(13.0 - EDITOR_INSET_X))
+                    .padding_end(direction, px(12.0 - EDITOR_INSET_X))
+                    .pb(px(8.0 - EDITOR_INSET_Y))
+                    .child(
+                        Textarea::new(&self.composer)
+                            .on_paste(move |item, window, cx| {
+                                paste_workspace
+                                    .update(cx, |workspace, cx| {
+                                        let handled = workspace.paste_attachments(item, window, cx);
+                                        if !handled {
+                                            workspace.autocomplete.note_paste();
+                                        }
+                                        handled
+                                    })
+                                    .unwrap_or_else(|_| {
+                                        item.entries().iter().any(|entry| {
+                                            matches!(
+                                                entry,
+                                                gpui_kit::ClipboardEntry::Image(_)
+                                                    | gpui_kit::ClipboardEntry::ExternalPaths(_)
+                                            )
+                                        })
+                                    })
+                            })
+                            .readonly(!self.composer_editable())
+                            .appearance(false)
+                            .bordered(false)
+                            .with_size(Size::Size(px(EDITOR_SIZE)))
+                            .text_size(rems(TEXT_SIZE))
+                            .line_height(rems(TEXT_LINE))
+                            .aria_label(strings.get("chat.chatInput.placeholder.chat")),
+                    ),
+            )
+            .child(
+                div()
+                    .h(px(TOOLBAR_HEIGHT))
+                    .flex_shrink_0()
+                    .px(px(TOOLBAR_PADDING_X))
+                    .py(px(6.0))
+                    .flex_row_from(direction)
+                    .items_center()
+                    .gap(px(START_GAP))
+                    .child(
+                        div()
+                            .flex_shrink_0()
+                            .flex_row_from(direction)
+                            .items_center()
+                            .gap(px(START_GAP))
+                            .child(self.render_attachment_menu(palette, direction, cx))
+                            .child(self.render_permission_mode(palette, cx))
+                            .children(self.render_goal_button(palette, cx))
+                            .children(self.render_goal_counter(palette, cx)),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .flex_row_from(direction)
+                            .items_center()
+                            .justify_end()
+                            .gap(px(END_GAP))
+                            // Synthetic data has no catalogs to select from.
+                            .when(!self.is_synthetic(), |this| {
+                                this.child(self.render_model_controls(
+                                    palette,
+                                    direction,
+                                    controls_width,
+                                    cx,
+                                ))
+                            })
+                            .children(dictation)
+                            .child(send),
+                    ),
+            )
+            .children(self.render_autocomplete(palette, direction, cx))
+            .children(self.render_dictation_overlay(palette, cx))
+            .test_support()
+            .into_any_element()
+    }
+
+    /// The shield that cycles how the session answers tool permissions
+    /// (`PermissionAutoAcceptButton`): its glyph, color and label follow the
+    /// mode it shows.
+    fn render_permission_mode(&self, palette: &Palette, cx: &Context<Self>) -> AnyElement {
+        let mode = self.shown_permission_mode();
+        let (icon, color, key) = match mode {
+            PermissionMode::Ask => (
+                "shield-user",
+                palette.foreground,
+                "chat.chatInput.permissionMode.ask",
+            ),
+            PermissionMode::Safety => (
+                "shield-star",
+                palette.status_success,
+                "chat.chatInput.permissionMode.safety",
+            ),
+            PermissionMode::Auto => (
+                "shield-check",
+                palette.status_info,
+                "chat.chatInput.permissionMode.auto",
+            ),
+        };
+        let (icon, color, key) = if self.native_permission_owner()
+            == Some(openchamber_native_core::native_agent::PermissionOwner::Native)
+        {
+            (
+                "shield-user",
+                palette.muted_foreground,
+                "chat.nativeAgent.permissionOwner",
+            )
+        } else {
+            (icon, color, key)
+        };
+        let label = locale::strings(cx).get(key);
+        // The tooltip reads the mode when it paints, so it follows a press
+        // made while it is open, as the web's tooltip re-renders its label.
+        let workspace = cx.weak_entity();
+        let tooltip = move |_: &mut Window, cx: &mut gpui_kit::App| {
+            if workspace
+                .read_with(cx, |workspace, _| workspace.native_permission_owner())
+                .ok()
+                .flatten()
+                == Some(openchamber_native_core::native_agent::PermissionOwner::Native)
+            {
+                return locale::strings(cx).get("chat.nativeAgent.permissionOwner");
+            }
+            let key = match workspace
+                .read_with(cx, |workspace, _| workspace.shown_permission_mode())
+                .unwrap_or_default()
+            {
+                PermissionMode::Ask => "chat.chatInput.permissionMode.ask",
+                PermissionMode::Safety => "chat.chatInput.permissionMode.safety",
+                PermissionMode::Auto => "chat.chatInput.permissionMode.auto",
+            };
+            locale::strings(cx).get(key)
+        };
+        let tooltip = std::rc::Rc::new(tooltip);
+        let interactive = self.permission_mode_interactive();
+        on_activate(
+            div()
+                .id("composer-permissions")
+                .role(Role::Button)
+                .accessibility_id("composer-permissions")
+                .aria_label(label)
+                .size(px(ACTION_SIZE))
+                .flex_shrink_0()
+                .rounded(px(chrome::CONTROL_RADIUS))
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .when(!interactive, |this| this.opacity(0.3))
+                // A press here never moves focus out of the editor.
+                .on_mouse_down(gpui_kit::MouseButton::Left, |_, window, cx| {
+                    window.prevent_default();
+                    cx.stop_propagation();
+                })
+                .tooltip(move |window, cx| {
+                    let tooltip = tooltip.clone();
+                    Tooltip::element(move |window, cx| tooltip(window, cx)).build(window, cx)
+                })
+                .child(glyph(icon, ACTION_GLYPH, color)),
+            cx,
+            |this, window, cx| this.cycle_permission_mode(window, cx),
+        )
+        .test_support()
+        .into_any_element()
+    }
+}
+
+/// The width of `text` in the editor's font.
+fn editor_text_width(text: &str, window: &Window) -> f32 {
+    let run = window.text_style().to_run(text.len());
+    let size = rems(TEXT_SIZE).to_pixels(window.rem_size());
+    f32::from(
+        window
+            .text_system()
+            .layout_line(text, size, &[run], None)
+            .width,
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_tail_keeps_the_resting_composer_and_a_gap() {
+        let unmeasured = ComposerSlot::default();
+        assert_eq!(
+            unmeasured.tail_inset(),
+            208.0,
+            "the web's default before a measurement"
+        );
+        let resting = unmeasured.measured(0.0).measured(115.0);
+        assert_eq!(resting.tail_inset(), 195.0);
+        // Growth takes the gap first, then pushes the transcript.
+        assert_eq!(resting.measured(180.0).tail_inset(), 195.0);
+        assert_eq!(resting.measured(250.0).tail_inset(), 242.0);
+        assert_eq!(resting.measured(250.0).measured(115.0).tail_inset(), 195.0);
+    }
+
+    #[test]
+    fn the_fade_tracks_current_composer_height_without_the_tail_gap() {
+        let unmeasured = ComposerSlot::default();
+        assert_eq!(unmeasured.height(), DEFAULT_SLOT_HEIGHT);
+        let resting = unmeasured.measured(115.0);
+        assert_eq!(resting.height(), 115.0);
+        assert_eq!(resting.measured(250.0).height(), 250.0);
+        assert_eq!(resting.measured(250.0).measured(115.0).height(), 115.0);
+    }
+}

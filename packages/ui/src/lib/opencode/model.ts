@@ -338,6 +338,8 @@ export type FilePart = PartBase & {
   mime: string
   filename?: string
   url: string
+  description?: string
+  mention?: { start: number; end: number; text: string }
 }
 
 type AgentPart = PartBase & {

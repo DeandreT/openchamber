@@ -19,6 +19,7 @@ import type { SourceControlProvider } from '@/lib/api/types';
 import type { InlineCommentDraft } from '@/stores/useInlineCommentDraftStore';
 import type { QueuedContextPart, QueuedMessage } from '@/stores/messageQueueStore';
 import { contextPayloadFromDraft, createContextPart, type ContextPartMetadata, type ContextPartPayload } from '@/lib/messages/contextParts';
+import { orderFileReferenceAttachments } from '@/lib/messages/fileReferences';
 
 export interface OutgoingPart {
     text: string;
@@ -157,7 +158,7 @@ export function buildOutgoingMessage(
     for (const queued of input.queued) {
         noteAgent(queued.agentMention);
         addText(queued.text);
-        primaryAttachments.push(...deps.sanitizeAttachments(queued.attachments));
+        primaryAttachments.push(...orderFileReferenceAttachments(deps.sanitizeAttachments(queued.attachments)));
         additionalParts.push(...queuedContextToParts(queued.context ?? []));
     }
 
@@ -165,10 +166,10 @@ export function buildOutgoingMessage(
     if (input.composerText !== null) {
         const resolved = resolve(input.composerText.replace(/^\n+|\n+$/g, ''));
         addText(resolved.text);
-        primaryAttachments.push(
+        primaryAttachments.push(...orderFileReferenceAttachments([
             ...deps.sanitizeAttachments(input.composerAttachments),
             ...resolved.attachments,
-        );
+        ]));
     }
     const primaryText = texts.join('\n\n');
 

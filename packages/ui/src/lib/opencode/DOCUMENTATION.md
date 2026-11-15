@@ -25,6 +25,9 @@ to the shared UI domain model. Sync owns transcript membership and store writes.
   the model included. A failed or empty list lets the switch through. The class
   lives in `agent-unavailable-error.ts`, so code that only reads the error does
   not load the client.
+- Prompt file descriptions and mentions survive both wire projection and outgoing
+  SDK conversion. File URI identities remain references during edit and fork
+  replay; this adapter does not read their bytes.
 
 ## Decisions
 

@@ -12,6 +12,7 @@ import { useDirectorySync } from '@/sync/sync-context';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 import { useDirectoryStore } from '@/stores/useDirectoryStore';
 import { createInputHistorySubmission } from '@/stores/useInputHistoryStore';
+import { orderFileReferenceAttachments } from '@/lib/messages/fileReferences';
 
 type SessionStatusType = 'idle' | 'busy' | 'retry';
 
@@ -90,7 +91,7 @@ export const buildQueuedAutoSendPayload = (queue: QueuedMessage[]) => {
     queuedMessageId: queued.id,
     historySubmissions: [createInputHistorySubmission(queued.content, queued.attachments ?? [])],
     primaryText: queued.text,
-    primaryAttachments: queued.attachments ?? [],
+    primaryAttachments: orderFileReferenceAttachments(queued.attachments ?? []),
     agentMentionName: queued.agentMention,
     additionalParts: queuedContextToParts(queued.context ?? []),
     sendConfig: queued.sendConfig,

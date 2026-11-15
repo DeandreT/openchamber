@@ -53,6 +53,11 @@ import { z } from 'zod';
  *   crossing happens in the browser, so the UI is where it is held back.
  * - Web fonts that load from a public CDN fall back to the system fonts
  *   (`packages/ui` useFontPreferences); the stored choice is kept.
+ * - The experimental native desktop reads the same machine policy locally
+ *   before public provider-logo requests, and also follows the connected
+ *   server's `publicEnterprisePolicy`; enterprise mode from either uses
+ *   bundled logos only and hides the integrations catalog
+ *   (`native/crates/desktop/src/enterprise.rs`, `provider_logos.rs`).
  * - The integrations catalog, a bundled list of outside services to install,
  *   is hidden (`packages/ui` SidebarHeader); administrator-curated sources for
  *   it do not exist yet. MCP, plugin and skill entry in Settings is unchanged.

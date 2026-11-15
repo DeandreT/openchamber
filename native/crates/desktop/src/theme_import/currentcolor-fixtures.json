@@ -1,0 +1,458 @@
+{
+  "browser": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/157.0.0.0 Safari/537.36",
+  "cases": [
+    {
+      "dark": false,
+      "alpha": "none",
+      "mode": "own-background",
+      "foreground": "rgb(200 100 50 / none)",
+      "token": "color-mix(in srgb, currentColor, rgb(100 200 100 / 0.4))",
+      "authoredColor": "var(--foreground)",
+      "parentColor": "color(srgb 0.784314 0.392157 0.196078 / none)",
+      "computedColor": "color(srgb 0.784314 0.392157 0.196078 / none)",
+      "property": "background-color",
+      "computed": "color(srgb 0.588235 0.588235 0.294118 / 0.4)",
+      "samples": [
+        [
+          60,
+          60,
+          30
+        ],
+        [
+          213,
+          213,
+          183
+        ]
+      ],
+      "foregroundValid": true,
+      "tokenValid": true
+    },
+    {
+      "dark": false,
+      "alpha": "none",
+      "mode": "inherited-background",
+      "foreground": "rgb(200 100 50 / none)",
+      "token": "color-mix(in srgb, currentColor, rgb(100 200 100 / 0.4))",
+      "authoredColor": "var(--foreground)",
+      "parentColor": "color(srgb 0.784314 0.392157 0.196078 / none)",
+      "computedColor": "color(srgb 0.784314 0.392157 0.196078 / none)",
+      "property": "background-color",
+      "computed": "color(srgb 0.588235 0.588235 0.294118 / 0.4)",
+      "samples": [
+        [
+          60,
+          60,
+          30
+        ],
+        [
+          213,
+          213,
+          183
+        ]
+      ],
+      "foregroundValid": true,
+      "tokenValid": true
+    },
+    {
+      "dark": false,
+      "alpha": "none",
+      "mode": "inherited-border",
+      "foreground": "rgb(200 100 50 / none)",
+      "token": "color-mix(in srgb, currentColor, rgb(100 200 100 / 0.4))",
+      "authoredColor": "var(--foreground)",
+      "parentColor": "color(srgb 0.784314 0.392157 0.196078 / none)",
+      "computedColor": "color(srgb 0.784314 0.392157 0.196078 / none)",
+      "property": "border-top-color",
+      "computed": "color(srgb 0.588235 0.588235 0.294118 / 0.4)",
+      "samples": [
+        [
+          60,
+          60,
+          30
+        ],
+        [
+          213,
+          213,
+          183
+        ]
+      ],
+      "foregroundValid": true,
+      "tokenValid": true
+    },
+    {
+      "dark": false,
+      "alpha": "none",
+      "mode": "inherited-color",
+      "foreground": "rgb(200 100 50 / none)",
+      "token": "color-mix(in srgb, currentColor, rgb(100 200 100 / 0.4))",
+      "authoredColor": "var(--foreground)",
+      "parentColor": "color(srgb 0.784314 0.392157 0.196078 / none)",
+      "computedColor": "color(srgb 0.588235 0.588235 0.294118 / 0.4)",
+      "property": "color",
+      "computed": "color(srgb 0.588235 0.588235 0.294118 / 0.4)",
+      "samples": [
+        [
+          60,
+          60,
+          30
+        ],
+        [
+          213,
+          213,
+          183
+        ]
+      ],
+      "foregroundValid": true,
+      "tokenValid": true
+    },
+    {
+      "dark": false,
+      "alpha": "0",
+      "mode": "own-background",
+      "foreground": "rgb(200 100 50 / 0)",
+      "token": "color-mix(in srgb, currentColor, rgb(100 200 100 / 0.4))",
+      "authoredColor": "var(--foreground)",
+      "parentColor": "rgba(200, 100, 50, 0)",
+      "computedColor": "rgba(200, 100, 50, 0)",
+      "property": "background-color",
+      "computed": "color(srgb 0.392157 0.784314 0.392157 / 0.2)",
+      "samples": [
+        [
+          20,
+          40,
+          20
+        ],
+        [
+          224,
+          244,
+          224
+        ]
+      ],
+      "foregroundValid": true,
+      "tokenValid": true
+    },
+    {
+      "dark": false,
+      "alpha": "0",
+      "mode": "inherited-background",
+      "foreground": "rgb(200 100 50 / 0)",
+      "token": "color-mix(in srgb, currentColor, rgb(100 200 100 / 0.4))",
+      "authoredColor": "var(--foreground)",
+      "parentColor": "rgba(200, 100, 50, 0)",
+      "computedColor": "rgba(200, 100, 50, 0)",
+      "property": "background-color",
+      "computed": "color(srgb 0.392157 0.784314 0.392157 / 0.2)",
+      "samples": [
+        [
+          20,
+          40,
+          20
+        ],
+        [
+          224,
+          244,
+          224
+        ]
+      ],
+      "foregroundValid": true,
+      "tokenValid": true
+    },
+    {
+      "dark": false,
+      "alpha": "0",
+      "mode": "inherited-border",
+      "foreground": "rgb(200 100 50 / 0)",
+      "token": "color-mix(in srgb, currentColor, rgb(100 200 100 / 0.4))",
+      "authoredColor": "var(--foreground)",
+      "parentColor": "rgba(200, 100, 50, 0)",
+      "computedColor": "rgba(200, 100, 50, 0)",
+      "property": "border-top-color",
+      "computed": "color(srgb 0.392157 0.784314 0.392157 / 0.2)",
+      "samples": [
+        [
+          20,
+          40,
+          20
+        ],
+        [
+          224,
+          244,
+          224
+        ]
+      ],
+      "foregroundValid": true,
+      "tokenValid": true
+    },
+    {
+      "dark": false,
+      "alpha": "0",
+      "mode": "inherited-color",
+      "foreground": "rgb(200 100 50 / 0)",
+      "token": "color-mix(in srgb, currentColor, rgb(100 200 100 / 0.4))",
+      "authoredColor": "var(--foreground)",
+      "parentColor": "rgba(200, 100, 50, 0)",
+      "computedColor": "color(srgb 0.392157 0.784314 0.392157 / 0.2)",
+      "property": "color",
+      "computed": "color(srgb 0.392157 0.784314 0.392157 / 0.2)",
+      "samples": [
+        [
+          20,
+          40,
+          20
+        ],
+        [
+          224,
+          244,
+          224
+        ]
+      ],
+      "foregroundValid": true,
+      "tokenValid": true
+    },
+    {
+      "dark": false,
+      "mode": "explicit-missing-alpha-control",
+      "token": "color-mix(in srgb, rgb(200 100 50 / none), rgb(100 200 100 / 0.4))",
+      "computed": "color(srgb 0.588235 0.588235 0.294118 / 0.4)",
+      "samples": [
+        [
+          60,
+          60,
+          30
+        ],
+        [
+          213,
+          213,
+          183
+        ]
+      ]
+    },
+    {
+      "dark": true,
+      "alpha": "none",
+      "mode": "own-background",
+      "foreground": "rgb(200 100 50 / none)",
+      "token": "color-mix(in srgb, currentColor, rgb(100 200 100 / 0.4))",
+      "authoredColor": "var(--foreground)",
+      "parentColor": "color(srgb 0.784314 0.392157 0.196078 / none)",
+      "computedColor": "color(srgb 0.784314 0.392157 0.196078 / none)",
+      "property": "background-color",
+      "computed": "color(srgb 0.588235 0.588235 0.294118 / 0.4)",
+      "samples": [
+        [
+          60,
+          60,
+          30
+        ],
+        [
+          213,
+          213,
+          183
+        ]
+      ],
+      "foregroundValid": true,
+      "tokenValid": true
+    },
+    {
+      "dark": true,
+      "alpha": "none",
+      "mode": "inherited-background",
+      "foreground": "rgb(200 100 50 / none)",
+      "token": "color-mix(in srgb, currentColor, rgb(100 200 100 / 0.4))",
+      "authoredColor": "var(--foreground)",
+      "parentColor": "color(srgb 0.784314 0.392157 0.196078 / none)",
+      "computedColor": "color(srgb 0.784314 0.392157 0.196078 / none)",
+      "property": "background-color",
+      "computed": "color(srgb 0.588235 0.588235 0.294118 / 0.4)",
+      "samples": [
+        [
+          60,
+          60,
+          30
+        ],
+        [
+          213,
+          213,
+          183
+        ]
+      ],
+      "foregroundValid": true,
+      "tokenValid": true
+    },
+    {
+      "dark": true,
+      "alpha": "none",
+      "mode": "inherited-border",
+      "foreground": "rgb(200 100 50 / none)",
+      "token": "color-mix(in srgb, currentColor, rgb(100 200 100 / 0.4))",
+      "authoredColor": "var(--foreground)",
+      "parentColor": "color(srgb 0.784314 0.392157 0.196078 / none)",
+      "computedColor": "color(srgb 0.784314 0.392157 0.196078 / none)",
+      "property": "border-top-color",
+      "computed": "color(srgb 0.588235 0.588235 0.294118 / 0.4)",
+      "samples": [
+        [
+          60,
+          60,
+          30
+        ],
+        [
+          213,
+          213,
+          183
+        ]
+      ],
+      "foregroundValid": true,
+      "tokenValid": true
+    },
+    {
+      "dark": true,
+      "alpha": "none",
+      "mode": "inherited-color",
+      "foreground": "rgb(200 100 50 / none)",
+      "token": "color-mix(in srgb, currentColor, rgb(100 200 100 / 0.4))",
+      "authoredColor": "var(--foreground)",
+      "parentColor": "color(srgb 0.784314 0.392157 0.196078 / none)",
+      "computedColor": "color(srgb 0.588235 0.588235 0.294118 / 0.4)",
+      "property": "color",
+      "computed": "color(srgb 0.588235 0.588235 0.294118 / 0.4)",
+      "samples": [
+        [
+          60,
+          60,
+          30
+        ],
+        [
+          213,
+          213,
+          183
+        ]
+      ],
+      "foregroundValid": true,
+      "tokenValid": true
+    },
+    {
+      "dark": true,
+      "alpha": "0",
+      "mode": "own-background",
+      "foreground": "rgb(200 100 50 / 0)",
+      "token": "color-mix(in srgb, currentColor, rgb(100 200 100 / 0.4))",
+      "authoredColor": "var(--foreground)",
+      "parentColor": "rgba(200, 100, 50, 0)",
+      "computedColor": "rgba(200, 100, 50, 0)",
+      "property": "background-color",
+      "computed": "color(srgb 0.392157 0.784314 0.392157 / 0.2)",
+      "samples": [
+        [
+          20,
+          40,
+          20
+        ],
+        [
+          224,
+          244,
+          224
+        ]
+      ],
+      "foregroundValid": true,
+      "tokenValid": true
+    },
+    {
+      "dark": true,
+      "alpha": "0",
+      "mode": "inherited-background",
+      "foreground": "rgb(200 100 50 / 0)",
+      "token": "color-mix(in srgb, currentColor, rgb(100 200 100 / 0.4))",
+      "authoredColor": "var(--foreground)",
+      "parentColor": "rgba(200, 100, 50, 0)",
+      "computedColor": "rgba(200, 100, 50, 0)",
+      "property": "background-color",
+      "computed": "color(srgb 0.392157 0.784314 0.392157 / 0.2)",
+      "samples": [
+        [
+          20,
+          40,
+          20
+        ],
+        [
+          224,
+          244,
+          224
+        ]
+      ],
+      "foregroundValid": true,
+      "tokenValid": true
+    },
+    {
+      "dark": true,
+      "alpha": "0",
+      "mode": "inherited-border",
+      "foreground": "rgb(200 100 50 / 0)",
+      "token": "color-mix(in srgb, currentColor, rgb(100 200 100 / 0.4))",
+      "authoredColor": "var(--foreground)",
+      "parentColor": "rgba(200, 100, 50, 0)",
+      "computedColor": "rgba(200, 100, 50, 0)",
+      "property": "border-top-color",
+      "computed": "color(srgb 0.392157 0.784314 0.392157 / 0.2)",
+      "samples": [
+        [
+          20,
+          40,
+          20
+        ],
+        [
+          224,
+          244,
+          224
+        ]
+      ],
+      "foregroundValid": true,
+      "tokenValid": true
+    },
+    {
+      "dark": true,
+      "alpha": "0",
+      "mode": "inherited-color",
+      "foreground": "rgb(200 100 50 / 0)",
+      "token": "color-mix(in srgb, currentColor, rgb(100 200 100 / 0.4))",
+      "authoredColor": "var(--foreground)",
+      "parentColor": "rgba(200, 100, 50, 0)",
+      "computedColor": "color(srgb 0.392157 0.784314 0.392157 / 0.2)",
+      "property": "color",
+      "computed": "color(srgb 0.392157 0.784314 0.392157 / 0.2)",
+      "samples": [
+        [
+          20,
+          40,
+          20
+        ],
+        [
+          224,
+          244,
+          224
+        ]
+      ],
+      "foregroundValid": true,
+      "tokenValid": true
+    },
+    {
+      "dark": true,
+      "mode": "explicit-missing-alpha-control",
+      "token": "color-mix(in srgb, rgb(200 100 50 / none), rgb(100 200 100 / 0.4))",
+      "computed": "color(srgb 0.588235 0.588235 0.294118 / 0.4)",
+      "samples": [
+        [
+          60,
+          60,
+          30
+        ],
+        [
+          213,
+          213,
+          183
+        ]
+      ]
+    }
+  ],
+  "referenceHtmlSha256": "fca2d559a95acc91ab6ef62fc1b3218e1a442a63cfa73382eb6985f6c9ee402f"
+}

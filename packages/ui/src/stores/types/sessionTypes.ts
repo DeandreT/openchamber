@@ -1,3 +1,5 @@
+import type { FileReference, FileReferenceMention } from '@/lib/messages/fileReferences';
+
 export type SessionWorktreeAttachment = {
   worktreeRoot: string | null;
   cwd: string | null;
@@ -23,6 +25,10 @@ export interface AttachedFile {
     vscodeSource?: 'file' | 'selection';
     /** Original desktop file path used as the model-facing name. */
     agentPath?: string;
+    /** A server-file identity carries no attachment byte ownership. */
+    fileReference?: FileReference;
+    description?: string;
+    mention?: FileReferenceMention;
     /** Shared ID linking entries extracted from the same document (PPTX, DOCX, etc.).
      *  Removing any entry with this ID cascades to all entries in the group. */
     sourceDocumentId?: string;

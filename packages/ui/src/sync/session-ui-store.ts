@@ -28,7 +28,7 @@ import { useProjectsStore } from "@/stores/useProjectsStore"
 import { useSessionDisplayStore } from "@/stores/useSessionDisplayStore"
 import { syncSessionKnowledge } from "@/lib/sessionKnowledgeApi"
 import { fetchResponseStyleInstruction } from "@/lib/responseStyle"
-import { attachmentWireName } from "@/lib/attachmentIdentity"
+import { attachmentPromptFile } from "@/lib/attachmentIdentity"
 import { useGlobalSessionsStore, resolveGlobalSessionDirectory } from "@/stores/useGlobalSessionsStore"
 import { isDirectoryUnknown, useDirectoryStore } from "@/stores/useDirectoryStore"
 import { useSessionFoldersStore } from "@/stores/useSessionFoldersStore"
@@ -176,8 +176,8 @@ export async function routeMessage(params: {
   /** `null` is an explicit `Default` thinking level. */
   variant?: string | null
   inputMode?: "normal" | "shell"
-  files?: Array<{ type: "file"; mime: string; url: string; filename: string }>
-  additionalParts?: Array<{ text: string; synthetic?: boolean; metadata?: ContextPartMetadata; files?: Array<{ type: "file"; mime: string; url: string; filename: string }> }>
+  files?: Array<ReturnType<typeof attachmentPromptFile>>
+  additionalParts?: Array<{ text: string; synthetic?: boolean; metadata?: ContextPartMetadata; files?: Array<ReturnType<typeof attachmentPromptFile>> }>
   appendSubmissions?: () => void
   delivery?: 'steer'
   skills?: SkillMentions
@@ -2364,12 +2364,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
 
         markPendingUserSendAnimation(sessionId)
 
-        const files = attachments?.map((a) => ({
-          type: "file" as const,
-          mime: a.mimeType,
-          url: a.dataUrl,
-          filename: attachmentWireName(a),
-        }))
+        const files = attachments?.map(attachmentPromptFile)
 
         try {
           const draftRoute = await routeMessage({
@@ -2394,12 +2389,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
               text: p.text,
               synthetic: p.synthetic,
               metadata: p.metadata,
-              files: p.attachments?.map((a: AttachedFile) => ({
-                type: "file" as const,
-                mime: a.mimeType,
-                url: a.dataUrl,
-                filename: attachmentWireName(a),
-              })),
+              files: p.attachments?.map(attachmentPromptFile),
             })),
           })
           if (draftRoute !== "shell" && options?.recordEffort && isCurrentRuntimeInstance()) {
@@ -2484,12 +2474,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
         markPendingUserSendAnimation(targetSessionId)
       }
 
-      const files = attachments?.map((a) => ({
-        type: "file" as const,
-        mime: a.mimeType,
-        url: a.dataUrl,
-        filename: attachmentWireName(a),
-      }))
+      const files = attachments?.map(attachmentPromptFile)
 
       // Standing project context (pinned notes and plans, the memory index) and
       // the response style, written into the session alongside the goal write
@@ -2544,12 +2529,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
           text: p.text,
           synthetic: p.synthetic,
           metadata: p.metadata,
-          files: p.attachments?.map((a) => ({
-            type: "file" as const,
-            mime: a.mimeType,
-            url: a.dataUrl,
-            filename: attachmentWireName(a),
-          })),
+          files: p.attachments?.map(attachmentPromptFile),
         })),
       }).catch((error) => {
         const selection = useSelectionStore.getState()

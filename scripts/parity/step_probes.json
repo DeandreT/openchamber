@@ -1,0 +1,168 @@
+{
+  "$comment": "Runner self-checks: each probe drives one group of step kinds through both clients and checks their outcomes. They prove the runner's steps work, never a feature: no probe declares proofs. Run with --scenarios-file scripts/parity/step_probes.json. See DOCUMENTATION.md, Steps.",
+  "targets": {
+    "composer": {
+      "electron": { "selector": ".oc-composer-sheen" },
+      "native": "composer"
+    },
+    "new-session": {
+      "electron": { "button": "New session" },
+      "native": "new-session"
+    },
+    "window-close": {
+      "electron": { "selector": "button[aria-label=\"Close window\"]" },
+      "native": "window-close"
+    }
+  },
+  "scenarios": [
+    {
+      "id": "probe.input",
+      "feature": "composer.editing-drafts",
+      "description": "Typed text, a select-all chord, Backspace, an exact Unicode paste through the real clipboard, Shift+Return, a named control and a hover.",
+      "steps": [
+        { "clickNamed": { "name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox" } },
+        { "type": "draft one" },
+        { "wait": {
+          "electron": { "focusedText": "draft one" },
+          "native": { "focusedText": "draft one" }
+        } },
+        { "key": "ctrl+a" },
+        { "key": "BackSpace" },
+        { "wait": {
+          "electron": { "focusedText": "" },
+          "native": { "focusedText": "" }
+        } },
+        { "paste": "你好 👩‍💻 paste" },
+        { "key": "shift+Return" },
+        { "type": "x" },
+        { "wait": {
+          "electron": { "focusedText": "你好 👩‍💻 paste\nx" },
+          "native": { "focusedText": "你好 👩‍💻 paste\nx" }
+        } },
+        { "clickNamed": { "name": "Add attachment", "role": "button" } },
+        { "wait": {
+          "electron": { "expression": "[...document.querySelectorAll('[role=menuitem]')].some((item) => item.innerText.trim() === 'Attach files')" },
+          "native": { "named": { "name": "Attach files", "role": "menu item" } }
+        } },
+        { "key": "Escape" },
+        { "wait": {
+          "electron": { "expression": "!document.querySelector('[role=menuitem]')" },
+          "native": { "named": { "name": "Attach files", "role": "menu item" }, "present": false }
+        } },
+        { "hover": "new-session" },
+        { "wait": {
+          "electron": { "expression": "[...document.querySelectorAll('button')].find((button) => button.innerText.trim() === 'New session')?.matches(':hover') === true" },
+          "native": { "elements": ["new-session"] }
+        } }
+      ]
+    },
+    {
+      "id": "probe.restart-fixture",
+      "feature": "composer.configuration",
+      "description": "The Git fixture as the active project and a pinned default model, checked on disk and through the server, across a SIGTERM restart and a restart after the window's own close on the same profile.",
+      "fixture": "git",
+      "model": "perf/think-30s",
+      "steps": [
+        { "expect": { "git": ["status", "--porcelain=v1"], "contains": "?? notes/" } },
+        { "expect": { "git": ["branch", "--show-current"], "equals": "main\n" } },
+        { "expect": { "file": "{fixture}/docs/crlf.txt", "equals": "first\r\nsecond\r\nthird\r\n" } },
+        { "expect": { "api": "/api/config/settings", "select": ["defaultModel"], "equals": "perf/think-30s" } },
+        { "expect": { "api": "/api/session/{session:parity: long}/message?limit=200", "select": ["data"], "where": { "type": "user" }, "length": 12 } },
+        { "wait": {
+          "electron": { "expression": "document.querySelector('.model-controls__model-label')?.textContent.trim() === 'Fixture silence, 30s'" },
+          "native": { "named": { "id": "composer-model", "name": "Fixture silence, 30s" } },
+          "timeout": 30
+        } },
+        { "restart": {} },
+        { "wait": {
+          "electron": { "expression": "document.querySelector('.model-controls__model-label')?.textContent.trim() === 'Fixture silence, 30s'" },
+          "native": { "named": { "id": "composer-model", "name": "Fixture silence, 30s" } },
+          "timeout": 30
+        } },
+        { "expect": { "api": "/api/session?limit=200", "select": ["data"], "contains": { "title": "parity: long" } } },
+        { "clickTarget": "window-close" },
+        { "restart": { "after": "exit", "timeout": 20 } },
+        { "wait": {
+          "electron": { "expression": "document.querySelector('.model-controls__model-label')?.textContent.trim() === 'Fixture silence, 30s'" },
+          "native": { "named": { "id": "composer-model", "name": "Fixture silence, 30s" } },
+          "timeout": 30
+        } }
+      ]
+    },
+    {
+      "id": "probe.faults",
+      "feature": "workflow.create-send-stop-recovery",
+      "description": "A held message read released later, a read failed after the server answered and a read dropped before it, each counted, with the server's own state read directly.",
+      "steps": [
+        { "fault": { "id": "hold", "method": "GET", "path": "/api/session/{session:parity: short a}/message", "when": "before", "action": "hold" } },
+        { "click": { "zone": "activity:work:session:", "title": "parity: short a" } },
+        { "expect": { "fault": "hold", "hits": 1 } },
+        { "release": "hold" },
+        { "wait": {
+          "electron": { "expression": "document.querySelectorAll('[data-message-id]').length > 0" },
+          "native": { "marker": "history-shown" },
+          "timeout": 30
+        } },
+        { "fault": { "id": "fail", "method": "GET", "path": "/api/session/{session:parity: short b}/message", "when": "after", "action": "fail", "status": 503 } },
+        { "click": { "zone": "activity:work:session:", "title": "parity: short b" } },
+        { "expect": { "fault": "fail", "hits": 1 } },
+        { "expect": { "api": "/api/session/{session:parity: short b}/message?limit=200", "select": ["data"], "where": { "type": "user" }, "length": 3 } },
+        { "fault": { "id": "drop", "method": "GET", "path": "/api/session/{session:parity: tools}/message", "when": "before", "action": "drop" } },
+        { "click": { "zone": "activity:work:session:", "title": "parity: tools" } },
+        { "expect": { "fault": "drop", "hits": 1 } }
+      ]
+    },
+    {
+      "id": "probe.drop",
+      "feature": "composer.attachments-references",
+      "description": "A file dropped on the composer becomes an attachment.",
+      "steps": [
+        { "drop": { "target": "composer", "files": [{ "name": "dropped.txt", "text": "dropped bytes\n" }] } },
+        { "wait": {
+          "electron": { "expression": "document.body.innerText.includes('dropped.txt')" },
+          "native": { "named": { "name": "dropped.txt", "prefix": true } },
+          "timeout": 20
+        } }
+      ]
+    },
+    {
+      "id": "probe.pick",
+      "feature": "composer.attachments-references",
+      "description": "A file chosen through the Attach files picker becomes an attachment. The native half needs the portal fixture, which refuses to start without the Documents portal.",
+      "steps": [
+        { "clickNamed": { "name": "Add attachment", "role": "button" } },
+        { "wait": {
+          "electron": { "expression": "[...document.querySelectorAll('[role=menuitem]')].some((item) => item.innerText.trim() === 'Attach files')" },
+          "native": { "named": { "name": "Attach files", "role": "menu item" } }
+        } },
+        { "clickNamed": { "name": "Attach files", "role": "menuitem" } },
+        { "pick": { "files": [{ "name": "picked.txt", "text": "picked bytes\n" }], "timeout": 20 } },
+        { "wait": {
+          "electron": { "expression": "document.body.innerText.includes('picked.txt')" },
+          "native": { "named": { "name": "picked.txt", "prefix": true } },
+          "timeout": 20
+        } }
+      ]
+    },
+    {
+      "id": "probe.ime",
+      "feature": "composer.editing-drafts",
+      "description": "A pinyin composition committed as its first candidate, then another committed as the raw keys.",
+      "steps": [
+        { "clickNamed": { "name": "Plan, build, or ask. @ to mention, $ for skills, / for commands", "role": "textbox" } },
+        { "ime": { "compose": "nihao", "preedit": "你好" } },
+        { "ime": { "commit": "candidate", "text": "你好" } },
+        { "wait": {
+          "electron": { "focusedText": "你好" },
+          "native": { "focusedText": "你好" }
+        } },
+        { "ime": { "compose": "nihao" } },
+        { "ime": { "commit": "raw" } },
+        { "wait": {
+          "electron": { "focusedText": "你好nihao" },
+          "native": { "focusedText": "你好nihao" }
+        } }
+      ]
+    }
+  ]
+}

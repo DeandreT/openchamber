@@ -8,10 +8,12 @@
 
 import { spawn } from "node:child_process"
 import { createServer } from "node:net"
-import { existsSync, mkdtempSync, readdirSync, readlinkSync, rmSync } from "node:fs"
+import { existsSync, mkdtempSync } from "node:fs"
+import { rm } from "node:fs/promises"
 import { platform, tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import process from "node:process"
+import { stopProcessTree } from "./process-tree.mjs"
 
 export const wait = (milliseconds) => new Promise((resolveWait) => setTimeout(resolveWait, milliseconds))
 
@@ -127,40 +129,16 @@ const ANTI_THROTTLING_ARGS = [
   "--disable-features=CalculateNativeWinOcclusion,IntensiveWakeUpThrottling,MacAppCodeSignClone",
 ]
 
-const TEMPORARY_PROFILE_PREFIX = "openchamber-perf-"
-
-const isProcessAlive = (pid) => {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (error) {
-    return error.code === "EPERM"
-  }
-}
-
-/**
- * Removes temporary profiles left by earlier runs. Ad hoc probe scripts take
- * `.dir` and never call `removeAfter`, and a killed run never gets to it: about
- * 65 MB each, they once filled 32 GB of $TMPDIR in two days. A running Chrome
- * holds `SingletonLock`, a symlink to `<host>-<pid>`, so a profile whose lock
- * names a dead process is stale. A profile without that symlink stays: Windows
- * keeps a plain lock file, so there its age says nothing about a live Chrome.
- */
-const sweepStaleProfiles = () => {
-  const root = tmpdir()
-  let entries
-  try {
-    entries = readdirSync(root).filter((entry) => entry.startsWith(TEMPORARY_PROFILE_PREFIX))
-  } catch {
-    return
-  }
-  for (const entry of entries) {
-    const dir = join(root, entry)
+const removeTemporaryProfile = async (dir) => {
+  // Bun 1.4.3 does not honor fs.rm's retry options on a Windows file lock.
+  // Keep the same bounded, linear backoff for both supported runtimes.
+  for (let attempt = 0; ; attempt += 1) {
     try {
-      const pid = Number(readlinkSync(join(dir, "SingletonLock")).split("-").pop())
-      if (Number.isInteger(pid) && pid > 0 && !isProcessAlive(pid)) rmSync(dir, { recursive: true, force: true })
-    } catch {
-      // No lock symlink, another run removed it first, or a file is held open.
+      await rm(dir, { recursive: true, force: true })
+      return
+    } catch (error) {
+      if (attempt === 20 || !["EBUSY", "EPERM", "ENOTEMPTY", "EMFILE", "ENFILE"].includes(error.code)) throw error
+      await wait((attempt + 1) * 100)
     }
   }
 }
@@ -168,26 +146,17 @@ const sweepStaleProfiles = () => {
 /**
  * The Chrome profile for one run. `--profile-dir` keeps a directory the caller
  * owns; without it every run gets a fresh temporary profile, removed once
- * Chrome exits, and profiles earlier runs left behind are swept first. The app
- * keeps sidebar state, the last session, panel widths and the rail order in
+ * Chrome exits. The app keeps sidebar state, the last session, panel widths and the rail order in
  * localStorage per origin, so a shared default profile carried one run's (and
  * one build's) state into the next.
  */
 export const resolveProfileDir = (explicit, name) => {
-  if (explicit) return { dir: resolve(explicit), temporary: false, removeAfter: () => {} }
-  sweepStaleProfiles()
-  const dir = mkdtempSync(join(tmpdir(), `${TEMPORARY_PROFILE_PREFIX}${name}-`))
+  if (explicit) return { dir: resolve(explicit), temporary: false, remove: async () => {} }
+  const dir = mkdtempSync(join(tmpdir(), `openchamber-perf-${name}-`))
   return {
     dir,
     temporary: true,
-    /** Removes the profile when `chromeProcess` exits (now, if it already has). */
-    removeAfter: (chromeProcess) => {
-      // Chrome's helpers can still be writing into the profile as the main
-      // process exits; the retries ride out the ENOTEMPTY that throws.
-      const remove = () => rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
-      if (!chromeProcess || chromeProcess.exitCode !== null || chromeProcess.signalCode !== null) remove()
-      else chromeProcess.once("exit", remove)
-    },
+    remove: () => removeTemporaryProfile(dir),
   }
 }
 
@@ -207,6 +176,25 @@ export const launchChrome = ({ chrome, profileDir, port, headless, extraArgs = [
   // containers and CI runners usually run it.
   if (process.getuid?.() === 0) args.unshift("--no-sandbox")
   return spawn(chrome, args, { stdio: "ignore" })
+}
+
+/** Close the owned browser even when its Windows launcher has already exited. */
+export const stopChrome = async (chromeProcess, client) => {
+  // Attached desktop windows belong to the caller, not the profiler.
+  if (!chromeProcess) return
+  if (client) await client.send("Browser.close", {}, { timeoutMs: 5000 }).catch(() => {})
+  if (chromeProcess.exitCode !== null || chromeProcess.signalCode !== null) return
+  // Browser.close schedules shutdown. Killing it here interrupts child cleanup.
+  await new Promise((resolveExit) => {
+    const onExit = () => { clearTimeout(timer); resolveExit() }
+    const timer = setTimeout(() => {
+      chromeProcess.off("exit", onExit)
+      resolveExit()
+    }, 5000)
+    chromeProcess.once("exit", onExit)
+  })
+  if (chromeProcess.exitCode === null) await stopProcessTree(chromeProcess)
+  chromeProcess.unref?.()
 }
 
 export class CdpClient {
@@ -248,15 +236,25 @@ export class CdpClient {
   // an hour with its own --timeout unable to fire. Generous enough for
   // Profiler.stop and Tracing.end on long captures.
   send(method, params = {}, { timeoutMs = 300_000 } = {}) {
+    return this.request({ method, params }, timeoutMs)
+  }
+
+  // A command for a target attached to this browser connection with
+  // `Target.setAutoAttach({ flatten: true })`.
+  sendSession(sessionId, method, params = {}, { timeoutMs = 300_000 } = {}) {
+    return this.request({ sessionId, method, params }, timeoutMs)
+  }
+
+  request(message, timeoutMs) {
     const id = this.nextId++
     return new Promise((resolveSend, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(id)
-        reject(new Error(`CDP ${method} got no reply within ${Math.round(timeoutMs / 1000)}s`))
+        reject(new Error(`CDP ${message.method} got no reply within ${Math.round(timeoutMs / 1000)}s`))
       }, timeoutMs)
       const settle = (callback) => (value) => { clearTimeout(timer); callback(value) }
       this.pending.set(id, { resolve: settle(resolveSend), reject: settle(reject) })
-      this.socket.send(JSON.stringify({ id, method, params }))
+      this.socket.send(JSON.stringify({ id, ...message }))
     })
   }
 
@@ -265,6 +263,11 @@ export class CdpClient {
     listeners.add(listener)
     this.listeners.set(method, listeners)
     return () => listeners.delete(listener)
+  }
+
+  onClose(listener) {
+    this.socket.addEventListener("close", listener)
+    return () => this.socket.removeEventListener("close", listener)
   }
 
   once(method, timeoutMs = 15_000) {
@@ -289,4 +292,122 @@ export class CdpClient {
 export const evaluateValue = async (client, expression) => {
   const result = await client.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true })
   return result.result?.value ?? null
+}
+
+// Diagnostic text contains protocol failures only. Browser exception messages
+// and arbitrary server text can contain document content or credentials.
+export const captureError = (error) => {
+  const message = error instanceof Error ? error.message : String(error)
+  const networkCode = message.match(/\bnet::ERR_[A-Z0-9_]+\b/)?.[0]
+  if (networkCode) return networkCode
+  if (error instanceof Error && /^E[A-Z0-9_]+$/.test(error.code ?? "")) return error.code
+  if (/^(CDP [A-Za-z.]+ got no reply within \d+s|CDP connection closed|Timed out waiting for [A-Za-z.]+|Navigation command failed|Page evaluation failed)$/.test(message)) return message
+  return error instanceof Error ? error.name : "Capture error"
+}
+
+/** Preserve result-level failures and observe both waits from the outset.
+ * The load event remains the profiler's existing, uncorrelated load signal.
+ * Frame/loader evidence is recorded separately; it is not proof of readiness.
+ */
+export const navigateForCapture = async (client, method, params, diagnostic, { waitForLoad = true, timeoutMs = 60_000, recorder = null } = {}) => {
+  let finished = false
+  let timer
+  let removeLoad = () => {}
+  let removeClose = () => {}
+  diagnostic.command = method
+  diagnostic.result = null
+  diagnostic.loadEvent = null
+  try {
+    const loaded = waitForLoad ? new Promise((resolveLoad) => {
+      removeLoad = client.on("Page.loadEventFired", (event) => {
+        if (finished || diagnostic.loadEvent) return
+        diagnostic.loadEvent = { timestamp: event.timestamp ?? null }
+        resolveLoad()
+      })
+    }) : Promise.resolve()
+    const closed = new Promise((_, reject) => {
+      removeClose = client.onClose(() => reject(new Error("CDP connection closed")))
+    })
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Timed out waiting for ${waitForLoad ? "Page.loadEventFired" : method}`)), timeoutMs)
+    })
+    const command = Promise.resolve().then(() => {
+      recorder?.recordCommand("command-sent", diagnostic)
+      return client.send(method, params, { timeoutMs })
+    }).then((result) => {
+      if (finished) return
+      diagnostic.result = {
+        frameId: result.frameId ?? null,
+        loaderId: result.loaderId ?? null,
+        errorText: result.errorText ? captureError(result.errorText) : null,
+        isDownload: result.isDownload ?? false,
+      }
+      recorder?.recordCommand("command-result", diagnostic)
+      if (result.errorText) throw new Error(result.errorText.match(/\bnet::ERR_[A-Z0-9_]+\b/)?.[0] ?? "Navigation command failed")
+    })
+    await Promise.race([Promise.all([command, loaded]), closed, timeout])
+  } catch (error) {
+    diagnostic.error = captureError(error)
+    recorder?.recordCommand("navigation-error", diagnostic)
+    throw error
+  } finally {
+    finished = true
+    clearTimeout(timer)
+    removeLoad()
+    removeClose()
+  }
+}
+
+// Every attempt owns a result, including partial measurements and failures.
+// Cleanup proceeds independently and cannot replace the original capture error.
+export const recordCaptureAttempt = async ({ summary, run, onFailure, cleanup, persist }) => {
+  let failure = null
+  summary.valid = false
+  summary.cleanupErrors = []
+  try {
+    await run()
+    summary.valid = true
+  } catch (error) {
+    failure = error
+    summary.error = captureError(error)
+    try { await onFailure() } catch (snapshotError) { summary.snapshotError = captureError(snapshotError) }
+  } finally {
+    for (const release of cleanup) {
+      try { await release() } catch (error) {
+        summary.cleanupErrors.push(captureError(error))
+        failure ??= error
+      }
+    }
+    try { await persist(summary) } catch (error) {
+      if (failure) throw new AggregateError([failure, error], "Capture failed and its result could not be saved")
+      throw error
+    }
+  }
+  if (failure) throw failure
+}
+
+/** One bounded, content-free snapshot before a failed capture tears down. */
+export const capturePageState = async (client, expectedUrl, recorderName = null) => {
+  try {
+    const result = await client.send("Runtime.evaluate", {
+      expression: `(() => {
+        const expected = new URL(${JSON.stringify(expectedUrl)});
+        return {
+          protocol: location.protocol,
+          sameOrigin: location.origin === expected.origin,
+          expectedPath: location.pathname === expected.pathname,
+          browserError: location.protocol === 'chrome-error:',
+          readyState: document.readyState,
+          domNodes: document.getElementsByTagName('*').length,
+          scripts: document.scripts.length,
+          recorderPresent: ${recorderName ? `Boolean(window[${JSON.stringify(recorderName)}])` : "null"}
+        };
+      })()`,
+      returnByValue: true,
+    }, { timeoutMs: 3_000 })
+    if (result.exceptionDetails) return { evaluationError: "Page evaluation failed" }
+    return result.result?.value ?? { evaluationError: "No page-state value" }
+  } catch (error) {
+    return { evaluationError: captureError(error) }
+  }
 }

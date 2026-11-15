@@ -1,0 +1,8 @@
+{
+  "data": {
+    "id": "msg_native_fixture_exact",
+    "type": "user",
+    "time": { "created": 1792691938000 },
+    "text": "Prepared by the server"
+  }
+}

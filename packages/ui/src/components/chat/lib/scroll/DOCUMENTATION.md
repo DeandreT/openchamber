@@ -2,6 +2,8 @@
 
 The transcript is a LegendList (`@legendapp/list`) owned by `useChatTimelineScroll`. These files hold the scroll logic that list does not do on its own: anchoring, end-keeping, restore and the mobile keyboard glide.
 
+`MessageList` starts with a 2,000 px row-size estimate so the first pass mounts a small tail window before measuring rich replies. LegendList replaces the hint with measured sizes and fills the viewport for short rows. The browser history test covers short, tall and mixed-height rows in LTR and RTL, including bounded initial tall-row mounts, end reachability, viewport filling and prepend anchoring.
+
 ## Keeping the end
 
 - **A row that shrinks as the chat widens is measured in the same frame.** LegendList on the web applies a smaller row height a frame late, to ride out transient shrinks; for text re-wrapping at a new width that left the rows below and the pinned end a frame behind on every frame of a resize, and a pinned reader's text jumped up and back by 70 to 200 px each frame while the chat widened. Our patch (`bun-patches/@legendapp%2Flist@3.7.2.patch`, `processContainerLayout`) applies a shrink at once when the row's width changed; carry it over when bumping the library. The end is still taken from the measured bottom of the last real row (`resolveRealContentEndOffset` in `timelineScrollAnchoring.ts`), not from `scrollHeight`, which can trail the rows.

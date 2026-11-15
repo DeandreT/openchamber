@@ -185,6 +185,20 @@ test('a content-transformed attachment does not carry the path to the unsanitize
   expect(await file?.file?.text()).not.toContain('Bearer secret');
 });
 
+test('restoring a server-file reference for editing retains its complete resend metadata', async () => {
+  const { useInputStore } = await import('./input-store');
+  const { attachmentPromptFile } = await import('@/lib/attachmentIdentity');
+  useInputStore.getState().clearAttachedFiles();
+  const reference = { uri: 'file:///server/report.pdf', name: '/server/report.pdf', description: 'PDF source',
+    mention: { start: 0, end: 4, text: '@pdf' } };
+  useInputStore.getState().addRestoredAttachment({ url: reference.uri, filename: reference.name,
+    mimeType: 'application/pdf', description: reference.description, mention: reference.mention });
+  const [restored] = useInputStore.getState().attachedFiles;
+  expect(restored.fileReference).toEqual(reference);
+  expect(attachmentPromptFile(restored)).toEqual({ type: 'file', mime: 'application/pdf', url: reference.uri,
+    filename: reference.name, description: reference.description, mention: reference.mention });
+});
+
 test('only the extracted document text carries the original path', async () => {
   const { prepareLocalAttachments } = await import('./input-store');
   const file = new File([zipSync({

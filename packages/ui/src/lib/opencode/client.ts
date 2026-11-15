@@ -496,7 +496,11 @@ type FileInputLite = {
   mime: string
   filename?: string
   url: string
+  description?: string
+  mention?: { start: number; end: number; text: string }
 }
+
+type PromptFileInput = Pick<FileInputLite, 'description' | 'mention'> & { uri: string; name?: string }
 
 type DirectorySwitchResult = {
   success: boolean
@@ -1504,9 +1508,13 @@ class OpencodeService {
     }
   }
 
-  private async toPromptFile(file: FileInputLite): Promise<{ uri: string; name?: string }> {
+  private async toPromptFile(file: FileInputLite): Promise<PromptFileInput> {
     const normalized = await this.normalizeFilePart(file)
-    return { uri: normalized.url, name: normalized.filename }
+    // Serialized into the prompt body: absent metadata stays absent.
+    const promptFile: PromptFileInput = { uri: normalized.url, name: normalized.filename }
+    if (file.description !== undefined) promptFile.description = file.description
+    if (file.mention !== undefined) promptFile.mention = file.mention
+    return promptFile
   }
 
   /**
@@ -2559,7 +2567,7 @@ class OpencodeService {
   }
 
   async listLocalDirectory(directoryPath: string | null | undefined, options?: { respectGitignore?: boolean }): Promise<FilesystemEntry[]> {
-    const normalizedDirectoryPath = typeof directoryPath === "string" ? normalizeFsPath(directoryPath.trim()) : ""
+    const normalizedDirectoryPath = normalizeFsPath((directoryPath ?? "").trim())
     const cacheKey = `${normalizedDirectoryPath}|${options?.respectGitignore ? "1" : "0"}`
     const now = Date.now()
     const cached = this.listDirectoryCache.get(cacheKey)
@@ -2738,7 +2746,7 @@ class OpencodeService {
   }
 
   async setOpenCodeWorkingDirectory(directoryPath: string | null | undefined): Promise<DirectorySwitchResult | null> {
-    if (!directoryPath || typeof directoryPath !== "string" || !directoryPath.trim()) {
+    if (!directoryPath?.trim()) {
       console.warn("[OpencodeClient] setOpenCodeWorkingDirectory: invalid path", directoryPath)
       return null
     }

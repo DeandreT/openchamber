@@ -1,0 +1,13 @@
+{
+  "data": {
+    "id": "ses_e9b49c443ffefXcWWPhCOga6nH",
+    "projectID": "global",
+    "location": { "directory": "/home/synthetic/my project/ünï" },
+    "title": "Synthetic creation fixture",
+    "agent": "build",
+    "model": { "providerID": "fixture", "id": "text-model", "variant": "high" },
+    "cost": 0,
+    "tokens": { "input": 0, "output": 0, "reasoning": 0, "cache": { "read": 0, "write": 0 } },
+    "time": { "created": 1793209852000, "updated": 1793209852000 }
+  }
+}

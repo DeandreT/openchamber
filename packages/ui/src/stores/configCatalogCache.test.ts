@@ -260,7 +260,6 @@ describe('configCatalogCache', () => {
     expect(await readCachedCatalog('runtime-a', `/project-${CATALOG_CACHE_MAX_RECORDS + 2}`)).not.toBeNull();
   });
 });
-
 describe('writeCachedCatalogWhenSettled', () => {
   const manualSchedule = () => {
     const pending: Array<{ callback: () => void; delayMs: number }> = [];
@@ -293,4 +292,3 @@ describe('writeCachedCatalogWhenSettled', () => {
     expect(records.size).toBe(0);
   });
 });
-

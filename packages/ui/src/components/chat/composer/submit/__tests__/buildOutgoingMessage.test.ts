@@ -7,6 +7,7 @@ import type { AttachedFile } from '@/stores/types/sessionTypes';
 import type { InlineCommentDraft } from '@/stores/useInlineCommentDraftStore';
 import { CONTEXT_METADATA_KEY, contextPayloadFromDraft } from '@/lib/messages/contextParts';
 import type { QueuedContextPart, QueuedMessage } from '@/stores/messageQueueStore';
+import { materializeFileReference } from '@/lib/messages/fileReferences';
 import {
     buildComposerContext,
     buildOutgoingMessage,
@@ -82,6 +83,20 @@ describe('the composer text alone', () => {
 });
 
 describe('manual queue projection', () => {
+    test('queued and composer sources each keep bytes before references without losing occurrence metadata', () => {
+        const queuedReference = materializeFileReference({ uri: 'file:///server/queued.pdf', name: 'queued.pdf',
+            description: 'queued source', mention: { start: 0, end: 4, text: '@pdf' } }, 'queued-reference');
+        const composerReference = materializeFileReference({ uri: 'file:///server/composer.pdf', name: 'composer.pdf' }, 'composer-reference');
+        const result = buildOutgoingMessage(input({
+            queued: [{ text: '', attachments: [queuedReference, attachment('queued-bytes'), queuedReference] }],
+            composerText: 'composer', composerAttachments: [composerReference, attachment('composer-bytes')],
+        }), deps());
+        expect(result.primaryAttachments.map((file) => file.id)).toEqual([
+            'queued-bytes', 'queued-reference', 'queued-reference', 'composer-bytes', 'composer-reference',
+        ]);
+        expect(result.primaryAttachments[1].fileReference).toEqual(queuedReference.fileReference);
+    });
+
     const ordinary: QueuedMessage = {
         id: 'ordinary', content: 'User follow up', text: 'User follow up', createdAt: 1,
         sendConfig: { providerID: 'openai', modelID: 'chosen', agent: 'plan' },

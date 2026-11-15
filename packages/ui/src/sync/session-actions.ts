@@ -814,6 +814,9 @@ function restoreFilePartsToInput(fileParts: readonly FilePart[], target: ChatDra
       url: filePart.url,
       mimeType: filePart.mime,
       filename: filePart.filename ?? "attachment",
+      // addRestoredAttachment treats an undefined description or mention as absent.
+      description: filePart.description,
+      mention: filePart.mention,
     }, target)
   }
 }
@@ -878,9 +881,9 @@ function resolveSessionOwnedDirectory(session: Session): string | null {
     directory?: string | null
     project?: { worktree?: string | null } | null
   }
-  const raw = typeof record.directory === "string" && record.directory.trim().length > 0
+  const raw = record.directory?.trim()
     ? record.directory
-    : typeof record.project?.worktree === "string" && record.project.worktree.trim().length > 0
+    : record.project?.worktree?.trim()
       ? record.project.worktree
       : null
   return raw ? normalizePath(raw) : null
@@ -912,9 +915,7 @@ function resolveDirectoryForBlockingRequest(
       // form stays pending in the worktree instance, leaving the session
       // stuck on the running form tool. Fall back to the store
       // key only when the session record carries no directory.
-      const requestSessionID = typeof request.sessionID === "string" && request.sessionID.length > 0
-        ? request.sessionID
-        : sessionId
+      const requestSessionID = request.sessionID || sessionId
       const sessionRecord = requestSessionID
         ? state.session.find((s) => s.id === requestSessionID)
         : undefined
@@ -2205,7 +2206,7 @@ export async function optimisticSend(input: {
   sessionId: string
   content: string
   directory?: string | null
-  files?: Array<{ type: "file"; mime: string; url: string; filename: string }>
+  files?: Array<Pick<FilePart, 'type' | 'mime' | 'url' | 'description' | 'mention'> & { filename: string }>
   /** Context admitted ahead of the prompt; shown in the optimistic message until the server echoes it. */
   context?: SyntheticContextInput[]
   /**
@@ -2298,7 +2299,7 @@ export async function optimisticSend(input: {
   ]
   if (input.files) {
     input.files.forEach((file, index) => {
-      optimisticParts.push({
+      const filePart: FilePart = {
         id: partIds.userFile(messageID, index),
         sessionID: input.sessionId,
         messageID,
@@ -2306,7 +2307,11 @@ export async function optimisticSend(input: {
         mime: file.mime,
         url: file.url,
         filename: file.filename,
-      })
+      }
+      // Absent metadata stays absent from the optimistic part.
+      if (file.description !== undefined) filePart.description = file.description
+      if (file.mention !== undefined) filePart.mention = file.mention
+      optimisticParts.push(filePart)
     })
   }
 
@@ -3309,6 +3314,9 @@ export async function forkFromMessage(sessionId: string, messageId: string): Pro
         url: part.url,
         mimeType: part.mime,
         filename: part.filename ?? "attachment",
+        // Replayed through addRestoredAttachment, which treats undefined as absent.
+        description: part.description,
+        mention: part.mention,
       })),
     },
   })

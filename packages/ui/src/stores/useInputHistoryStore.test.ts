@@ -7,6 +7,10 @@ import {
   isInputHistoryScope,
 } from '@/lib/inputHistoryScope';
 import type { AttachedFile } from '@/stores/types/sessionTypes';
+import { materializeFileReference } from '@/lib/messages/fileReferences';
+import { attachmentPromptFile } from '@/lib/attachmentIdentity';
+import { mapInputHistoryEntriesToValues } from '@/components/chat/inputHistory';
+import { createHistoryState, stepOlder } from '@/components/chat/composer/state/useMessageHistory';
 
 const STORAGE_KEY = 'openchamber-input-history.v1';
 
@@ -331,6 +335,76 @@ describe('useInputHistoryStore', () => {
         reference: 'https://cdn.example.com/file.png',
       },
     ]);
+  });
+
+  test('reference history durable reload preserves full reference identity for ArrowUp resend', async () => {
+    const localStorage = createFakeStorage();
+    installWindow(localStorage);
+    const mod = await importStoreModule();
+    const identity = mod.createInputHistoryIdentity('runtime-a', '/repo', 'reference-history');
+    if (!identity) throw new Error('Expected a history identity');
+    const reference = { uri: 'file:///server/original%20report.pdf', name: '/server/original report.pdf',
+      description: 'original PDF source', mention: { start: 0, end: 4, text: '@pdf' } };
+    mod.useInputHistoryStore.getState().appendSubmissions(identity, [mod.createInputHistorySubmission('inspect', [
+      materializeFileReference(reference, 'reference-history-file', 'application/pdf'),
+    ])]);
+    const reloaded = await importStoreModule();
+    const entries = reloaded.selectInputHistoryEntries(reloaded.useInputHistoryStore.getState(), identity);
+    expect(entries[0]?.restorableAttachments[0]).toMatchObject({ fileReference: reference });
+    const values = mapInputHistoryEntriesToValues(entries);
+    const recalled = stepOlder(createHistoryState(values, 'reference-history'), values, { text: '', attachments: [] }).value;
+    expect(recalled?.attachments.map(attachmentPromptFile)).toEqual([{ type: 'file', mime: 'application/pdf',
+      url: reference.uri, filename: reference.name, description: reference.description, mention: reference.mention }]);
+  });
+
+  test('reference history deduplication preserves distinct captured descriptions and mentions', async () => {
+    installWindow(createFakeStorage());
+    const mod = await importStoreModule();
+    const identity = mod.createInputHistoryIdentity('runtime-a', '/repo', 'reference-history-distinct');
+    if (!identity) throw new Error('Expected a history identity');
+    const references = [
+      { uri: 'file:///server/report.pdf', name: '/server/report.pdf', description: 'first occurrence', mention: { start: 0, end: 4, text: '@one' } },
+      { uri: 'file:///server/report.pdf', name: '/server/report.pdf', description: 'second occurrence', mention: { start: 5, end: 9, text: '@two' } },
+    ];
+    mod.useInputHistoryStore.getState().appendSubmissions(identity, references.map((reference, index) =>
+      mod.createInputHistorySubmission('inspect', [materializeFileReference(reference, `reference-history-${index}`, 'application/pdf')])));
+    const entries = mod.selectInputHistoryEntries(mod.useInputHistoryStore.getState(), identity);
+    expect(entries).toHaveLength(2);
+    expect(mapInputHistoryEntriesToValues(entries).map((value) => value.attachments[0]?.fileReference)).toEqual(references);
+  });
+
+  test('legacy reference history descriptors retain their original defaults across durable reload', async () => {
+    const localStorage = createFakeStorage();
+    const old = { text: 'legacy', attachmentKeys: ['old-file'], restorableAttachments: [{ key: 'old-file', source: 'file-url',
+      filename: 'report.pdf', mimeType: 'application/pdf', size: 0, reference: 'file:///server/report.pdf' }], submittedAt: 1 };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, scope: 'session', global: {},
+      session: { [JSON.stringify(['runtime-a', '/repo', 'legacy-history'])]: { touchedAt: 1, entries: [old] } } }));
+    installWindow(localStorage);
+    const mod = await importStoreModule();
+    const identity = mod.createInputHistoryIdentity('runtime-a', '/repo', 'legacy-history');
+    if (!identity) throw new Error('Expected a history identity');
+    const entries = mod.selectInputHistoryEntries(mod.useInputHistoryStore.getState(), identity);
+    expect(entries).toEqual([old]);
+    const [restored] = mapInputHistoryEntriesToValues(entries)[0].attachments;
+    expect(restored.fileReference).toBeUndefined();
+    expect(attachmentPromptFile(restored)).toEqual({ type: 'file', mime: 'application/pdf',
+      url: 'file:///server/report.pdf', filename: 'report.pdf' });
+  });
+
+  test('reference history rejects malformed typed identities without dropping valid legacy siblings', async () => {
+    const localStorage = createFakeStorage();
+    const attachment = { key: 'old-file', source: 'file-url', filename: 'report.pdf', mimeType: 'application/pdf',
+      size: 0, reference: 'file:///server/report.pdf' };
+    const old = { text: 'legacy', attachmentKeys: ['old-file'], restorableAttachments: [attachment], submittedAt: 1 };
+    const malformed = { text: 'invalid typed reference', attachmentKeys: ['old-file'], submittedAt: 2,
+      restorableAttachments: [{ ...attachment, fileReference: { uri: 'https://untrusted.invalid/report.pdf', name: 'report.pdf' } }] };
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ version: 1, scope: 'session', global: {},
+      session: { [JSON.stringify(['runtime-a', '/repo', 'typed-history'])]: { touchedAt: 1, entries: [old, malformed] } } }));
+    installWindow(localStorage);
+    const mod = await importStoreModule();
+    const identity = mod.createInputHistoryIdentity('runtime-a', '/repo', 'typed-history');
+    if (!identity) throw new Error('Expected a history identity');
+    expect(mod.selectInputHistoryEntries(mod.useInputHistoryStore.getState(), identity)).toEqual([old]);
   });
 
   test('appends every submission to both scope buckets', async () => {

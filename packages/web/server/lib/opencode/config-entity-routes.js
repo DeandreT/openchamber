@@ -1,5 +1,8 @@
 import path from 'path';
+import { createHash } from 'node:crypto';
+import { OpenCode } from '@opencode/client';
 import { buildAppliedResponse } from './config-mutation-response.js';
+import { parseModelSelection, formatModelSelection, isOrdinaryTextGenerationModel } from './config-v2.js';
 
 // Agent and command names become file paths (`<dir>/<name>.md`), and Express
 // decodes `%2F` in a param. A nested name (`group/name`) is fine; one that
@@ -40,7 +43,40 @@ export const registerConfigEntityRoutes = (app, dependencies) => {
     deleteSnippet,
     expandSnippets,
     previewSnippet,
+    buildOpenCodeUrl,
+    getOpenCodeAuthHeaders,
+    readPurposeModelCatalog = async (directory) => {
+      const client = OpenCode.make({ baseUrl: buildOpenCodeUrl('/', '').replace(/\/$/u, ''),
+        headers: { ...getOpenCodeAuthHeaders(), 'x-opencode-directory': encodeURIComponent(directory) }, fetch });
+      const [models, providers] = await Promise.all([client.model.list(), client.provider.list()]);
+      if (!Array.isArray(models?.data) || !Array.isArray(providers?.data)) throw new Error('Catalog unavailable');
+      return { models: models.data, providers: providers.data };
+    },
   } = dependencies;
+
+  const validatePurposeModel = async (name, updates, directory, res) => {
+    if (!['compaction', 'title'].includes(name) || !Object.hasOwn(updates, 'model') || updates.model === null) return true;
+    const selection = parseModelSelection(updates.model);
+    if (!selection) { res.status(400).json({ error: 'Invalid model reference' }); return false; }
+    if (getAgentConfig && getAgentConfig(name, directory).config.model === formatModelSelection(selection)) return true;
+    let catalog;
+    try { catalog = await readPurposeModelCatalog(directory); }
+    catch { res.status(503).json({ code: 'purpose_model_unavailable', error: 'Model catalog unavailable; saved configuration was kept.' }); return false; }
+    if (!Array.isArray(catalog?.models) || !Array.isArray(catalog?.providers) || !catalog.models.length || !catalog.providers.length) {
+      res.status(503).json({ code: 'purpose_model_unavailable', error: 'Model catalog is not ready; saved configuration was kept.' }); return false;
+    }
+    const provider = catalog.providers.find((item) => item.id === selection.providerID);
+    const model = catalog.models.find((item) => item.providerID === selection.providerID && item.id === selection.modelID);
+    if (!isOrdinaryTextGenerationModel(provider, model) || (selection.variant && !model.variants?.some((variant) => variant.id === selection.variant))) {
+      res.status(403).json({ code: 'purpose_model_ineligible', error: 'Choose an available ordinary text-generation model.' }); return false;
+    }
+    return true;
+  };
+
+  // Source/model identity only. Unrelated agent fields may change independently.
+  const purposeRevision = (config) => createHash('sha256').update(JSON.stringify([
+    config.source, config.scope, config.path, formatModelSelection(config.config?.model),
+  ])).digest('hex');
 
   // Persist to disk immediately; OpenCode restart is deferred to an explicit
   // Apply & Restart so settings edits do not interrupt live sessions.
@@ -109,7 +145,8 @@ export const registerConfigEntityRoutes = (app, dependencies) => {
       }
 
       const configInfo = getAgentConfig(agentName, directory);
-      res.json(configInfo);
+      res.json(['compaction', 'title'].includes(agentName)
+        ? { ...configInfo, modelRevision: purposeRevision(configInfo) } : configInfo);
     } catch (error) {
       console.error('Failed to get agent config:', error);
       res.status(500).json({ error: 'Failed to get agent configuration' });
@@ -139,6 +176,7 @@ export const registerConfigEntityRoutes = (app, dependencies) => {
         return res.status(400).json({ error });
       }
 
+      if (!(await validatePurposeModel(agentName, config, directory, res))) return;
       console.log('[Server] Creating agent:', agentName);
       console.log('[Server] Config received:', JSON.stringify(config, null, 2));
       console.log('[Server] Scope:', scope, 'Working directory:', directory);
@@ -163,6 +201,12 @@ export const registerConfigEntityRoutes = (app, dependencies) => {
         return res.status(400).json({ error });
       }
 
+      if (!(await validatePurposeModel(agentName, updates, directory, res))) return;
+      const expectedRevision = req.get('if-match');
+      if (['compaction', 'title'].includes(agentName) && Object.hasOwn(updates, 'model') && expectedRevision
+        && expectedRevision !== `"${purposeRevision(getAgentConfig(agentName, directory))}"`) {
+        return res.status(409).json({ code: 'purpose_model_conflict', error: 'Agent source or model changed. Refresh before saving.' });
+      }
       console.log(`[Server] Updating agent: ${agentName}`);
       console.log('[Server] Updates:', JSON.stringify(updates, null, 2));
       console.log('[Server] Working directory:', directory);
@@ -416,8 +460,17 @@ export const registerConfigEntityRoutes = (app, dependencies) => {
       }
       // `content` asks for a snippet body's preview, `text` for a prompt's expansion.
       const content = req.body?.content;
+      if (req.body?.sourceMap === true) {
+        if (content !== undefined || typeof req.body?.text !== 'string') {
+          return res.status(400).json({ error: 'Source mapping requires prompt text', code: 'snippet_source_map_invalid_request' });
+        }
+        return res.json(expandSnippets(req.body.text, directory, { sourceMap: true }));
+      }
       res.json({ text: content !== undefined ? previewSnippet(String(content), directory) : expandSnippets(req.body?.text ?? '', directory) });
     } catch (error) {
+      if (error?.code === 'snippet_source_map_limit') {
+        return res.status(413).json({ error: 'Snippet source map exceeds its limit', code: error.code });
+      }
       console.error('[API:POST /api/config/snippets/expand] Failed:', error);
       res.status(500).json({ error: error.message || 'Failed to expand snippets' });
     }

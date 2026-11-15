@@ -42,13 +42,14 @@
 
 import { spawn, spawnSync } from "node:child_process"
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync, readdirSync } from "node:fs"
+import { rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import process from "node:process"
 
-import { CdpClient, createPageTarget, launchChrome, reservePort, resolveChrome, wait } from "./perf/cdp.mjs"
+import { CdpClient, captureError, capturePageState, createPageTarget, launchChrome, navigateForCapture, reservePort, resolveChrome, stopChrome, wait } from "./perf/cdp.mjs"
 import { round } from "./perf/metrics.mjs"
-import { createNetworkRecorder, summarizeRequests } from "./perf/network.mjs"
+import { createNavigationRecorder, createNetworkRecorder, summarizeRequests } from "./perf/network.mjs"
 import { buildStartupProbeSource, STARTUP_PROBE_GLOBAL } from "./perf/startup-probe.mjs"
 
 const HELP = `Usage: bun run profile:startup -- [options]
@@ -263,6 +264,38 @@ const readStartupMarks = (mainLog, since) => {
   return { marks, codeStartedAt }
 }
 
+// Pauses every new page until the startup recorder is installed in it. The
+// first page of a launch can already be the application document (Linux shows
+// no splash navigation), so a script added after the target appears would
+// only reach the next document and miss this one.
+const installRecorderOnNewPages = async (port, source, deadline) => {
+  let browserUrl = null
+  while (!browserUrl && Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/json/version`)
+      if (response.ok) browserUrl = (await response.json()).webSocketDebuggerUrl ?? null
+    } catch {
+    }
+    if (!browserUrl) await wait(10)
+  }
+  if (!browserUrl) return null
+  const browser = new CdpClient(browserUrl)
+  await browser.connect()
+  browser.on("Target.attachedToTarget", ({ sessionId, targetInfo, waitingForDebugger }) => {
+    const install = targetInfo.type === "page"
+      ? browser.sendSession(sessionId, "Page.enable")
+        .then(() => browser.sendSession(sessionId, "Page.addScriptToEvaluateOnNewDocument", { source }))
+      : Promise.resolve()
+    install
+      .catch(() => {})
+      .finally(() => {
+        if (waitingForDebugger) browser.sendSession(sessionId, "Runtime.runIfWaitingForDebugger").catch(() => {})
+      })
+  })
+  await browser.send("Target.setAutoAttach", { autoAttach: true, waitForDebuggerOnStart: true, flatten: true })
+  return browser
+}
+
 const listTargets = async (port) => {
   try {
     const response = await fetch(`http://127.0.0.1:${port}/json`)
@@ -451,7 +484,9 @@ const launchOnce = async ({ build, run, layout, env, cdpPort, options, outputDir
     : null
 
   const spawnAt = Date.now()
-  const child = spawn(build.executable, [`--remote-debugging-port=${cdpPort}`], { env, stdio: "ignore", detached: true })
+  const launchArgs = [`--remote-debugging-port=${cdpPort}`, "--disable-features=MacAppCodeSignClone"]
+  if (process.env.OPENCHAMBER_PARITY_DISPLAY) launchArgs.push("--ozone-platform=x11", "--password-store=basic")
+  const child = spawn(build.executable, launchArgs, { env, stdio: "ignore", detached: true })
   child.unref()
   const pid = child.pid
   // A crash at startup ends the launch as a failure at once: not a timeout
@@ -469,8 +504,10 @@ const launchOnce = async ({ build, run, layout, env, cdpPort, options, outputDir
   const window = []
   let error = null
   let recorder = null
+  let browser = null
 
   try {
+    browser = await installRecorderOnNewPages(cdpPort, buildStartupProbeSource({ modelLabel: options.modelLabel }), deadline)
     while (Date.now() < deadline) {
       if (exited) break
       if (!client) {
@@ -561,6 +598,7 @@ const launchOnce = async ({ build, run, layout, env, cdpPort, options, outputDir
     }
     client.close()
   }
+  browser?.close()
   const screen = sampler ? await sampler.stop() : null
   // Let the main log flush before reading it.
   await wait(300)
@@ -597,7 +635,7 @@ const launchOnce = async ({ build, run, layout, env, cdpPort, options, outputDir
 // One web launch: a fresh Chrome loads the URL; every milestone is measured
 // in the page against its own navigation start, so there is no polling error.
 const launchWebOnce = async ({ run, options, chrome, profileDir }) => {
-  if (options.cache === "cold") rmSync(profileDir, { recursive: true, force: true })
+  if (options.cache === "cold") await rm(profileDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
   mkdirSync(profileDir, { recursive: true })
   const port = await reservePort()
   const browser = launchChrome({ chrome, profileDir, port, headless: !options.headed })
@@ -608,6 +646,10 @@ const launchWebOnce = async ({ run, options, chrome, profileDir }) => {
   let quietSince
   const window = []
   let network = null
+  let recorderNetwork = null
+  let navigationRecorder = null
+  let navigatedAt = null
+  const diagnostic = { phase: "setup", navigation: {}, evaluationFailures: 0, lastEvaluationError: null, cleanupErrors: [] }
   try {
     const target = await createPageTarget(port)
     client = new CdpClient(target.webSocketDebuggerUrl)
@@ -618,18 +660,26 @@ const launchWebOnce = async ({ run, options, chrome, profileDir }) => {
       client.send("Performance.enable"),
       client.send("Network.enable", { maxTotalBufferSize: 0, maxResourceBufferSize: 0 }),
     ])
-    const recorderNetwork = createNetworkRecorder(client)
+    recorderNetwork = createNetworkRecorder(client)
+    navigationRecorder = createNavigationRecorder(client, options.url)
+    await client.send("Page.setLifecycleEventsEnabled", { enabled: true })
     await client.send("Emulation.setDeviceMetricsOverride", { width: WINDOW_WIDTH, height: WINDOW_HEIGHT, deviceScaleFactor: 1, mobile: false })
     await client.send("Page.addScriptToEvaluateOnNewDocument", { source: buildStartupProbeSource({ modelLabel: options.modelLabel }) })
-    const navigatedAt = Date.now()
-    await client.send("Page.navigate", { url: options.url })
+    navigatedAt = Date.now()
+    diagnostic.phase = "initial-navigation"
+    await navigateForCapture(client, "Page.navigate", { url: options.url }, diagnostic.navigation, { waitForLoad: false, timeoutMs: options.timeoutMs, recorder: navigationRecorder })
+    diagnostic.phase = "startup-recorder"
     const deadline = navigatedAt + options.timeoutMs
     while (Date.now() < deadline) {
       await wait(50)
       let value = null
       try {
-        value = (await sendBounded(client, "Runtime.evaluate", { expression: `window.${STARTUP_PROBE_GLOBAL}?.read() ?? null`, returnByValue: true })).result?.value ?? null
-      } catch {
+        const evaluated = await sendBounded(client, "Runtime.evaluate", { expression: `window.${STARTUP_PROBE_GLOBAL}?.read() ?? null`, returnByValue: true })
+        if (evaluated.exceptionDetails) throw new Error("Page evaluation failed")
+        value = evaluated.result?.value ?? null
+      } catch (evaluationError) {
+        diagnostic.evaluationFailures += 1
+        diagnostic.lastEvaluationError = captureError(evaluationError)
         continue
       }
       if (value) recorder = value
@@ -645,7 +695,7 @@ const launchWebOnce = async ({ run, options, chrome, profileDir }) => {
       else quietSince ??= window[0].at
       if (recorder?.marks.usable != null && quietSince && Date.now() - quietSince >= options.settleMs) break
     }
-    if (!recorder) error = "the startup recorder never ran in the page"
+    if (!recorder) error = "startup recorder data was unavailable before the deadline"
     else if (recorder.marks.reactMounted == null) error = `the application never mounted within ${options.timeoutMs} ms`
     else if (recorder.marks.usable == null) error = `the application mounted but never became usable within ${options.timeoutMs} ms`
     const metrics = (await sendBounded(client, "Performance.getMetrics")).metrics ?? []
@@ -661,10 +711,20 @@ const launchWebOnce = async ({ run, options, chrome, profileDir }) => {
     const usableAt = recorder?.marks.usable != null ? recorder.origin + recorder.marks.usable : Date.now()
     network = summarizeRequests(recorderNetwork.startedBetween(navigatedAt - 50, usableAt), options.url)
   } catch (caught) {
-    error = caught?.message ?? String(caught)
+    error = captureError(caught)
   } finally {
-    client?.close()
-    browser.kill()
+    if (error && client) diagnostic.pageState = await capturePageState(client, options.url, STARTUP_PROBE_GLOBAL)
+    if (navigationRecorder) diagnostic.documents = navigationRecorder.read()
+    navigationRecorder?.stop()
+    if (!network && recorderNetwork && navigatedAt !== null) network = summarizeRequests(recorderNetwork.startedBetween(navigatedAt - 50, Date.now()), options.url)
+    try { await stopChrome(browser, client) } catch (cleanupError) {
+      diagnostic.cleanupErrors.push(captureError(cleanupError))
+      error ??= "Browser cleanup failed"
+    }
+    try { client?.close() } catch (cleanupError) {
+      diagnostic.cleanupErrors.push(captureError(cleanupError))
+      error ??= "Browser cleanup failed"
+    }
     await wait(300)
   }
   const marks = recorder?.marks ?? {}
@@ -680,6 +740,7 @@ const launchWebOnce = async ({ run, options, chrome, profileDir }) => {
     msSinceSpawn: msSinceNavigation,
     renderer,
     network,
+    diagnostic,
     overlaySeen: recorder?.seen.overlay ?? null,
     splashSeen: recorder?.seen.splash ?? null,
     finalUrl: recorder?.url ? recorder.url.split("?")[0] : null,
@@ -791,7 +852,7 @@ const mainWeb = async (options) => {
   mkdirSync(outputDir, { recursive: true })
   const chrome = resolveChrome(options.chrome)
   const profileDir = resolve(options.home ?? join(tmpdir(), "openchamber-bench-startup-web"))
-  rmSync(profileDir, { recursive: true, force: true })
+  await rm(profileDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
   console.log(`web: ${options.url}, cache: ${options.cache}, runs: ${options.runs} (+${options.warmup} warm-up)`)
   const samples = []
   for (let run = 1 - options.warmup; run <= options.runs; run += 1) {
@@ -804,7 +865,7 @@ const mainWeb = async (options) => {
     // A warm-up that fails is a broken build, not a discarded launch.
     if (run >= 1 || sample.error) samples.push(sample)
   }
-  rmSync(profileDir, { recursive: true, force: true })
+  await rm(profileDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 100 })
   const valid = samples.filter((sample) => !sample.error)
   const summaries = { A: summarize(valid) }
   const failures = samples.length - valid.length

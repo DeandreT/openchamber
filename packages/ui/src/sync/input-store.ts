@@ -12,6 +12,7 @@ import { HeicConversionError, prepareAttachmentFiles } from "./attachment-files"
 import { getChatDraftIdentityKey, subscribeChatDraftDeletion, type ChatDraftIdentity } from "@/lib/chatDraftPersistence"
 import { pathForDroppedFile } from "@/lib/desktop"
 import { attachmentBasename } from "@/lib/attachmentIdentity"
+import { fileReferenceSchema, materializeFileReference, type FileReferenceMention } from '@/lib/messages/fileReferences'
 import { formatFileSize } from "@/lib/fileSize"
 import { formatMessage, useI18nStore } from "@/lib/i18n/store"
 import { opencodeClient } from "@/lib/opencode/client"
@@ -226,6 +227,9 @@ export type ComposerAddress = {
   attachments: ChatDraftIdentity | null
 }
 
+type RestoredAttachment = {
+  url: string; mimeType: string; filename: string; description?: string; mention?: FileReferenceMention
+}
 /**
  * How pending text meets the draft. `slash-command` text is a command name:
  * the draft starts with `/name` and the rest of it becomes the argument.
@@ -236,7 +240,7 @@ export type InputState = {
   pendingComposerRestore: {
     target: ChatDraftIdentity
     text: string
-    files: Array<{ url: string; mimeType: string; filename: string }>
+    files: RestoredAttachment[]
   } | null
   consumePendingComposerRestore: (target: ChatDraftIdentity | null) => InputState["pendingComposerRestore"]
   pendingInputText: string | null
@@ -314,7 +318,7 @@ export type InputState = {
   addVSCodeSelectionAttachment: (path: string, file: File) => Promise<void>
   setActiveEditorFile: (file: VSCodeActiveEditorFile | null) => void
   /** Add attachments restored from a reverted message (file already on server) */
-  addRestoredAttachment: (file: { url: string; mimeType: string; filename: string }, target?: ChatDraftIdentity | null) => void
+  addRestoredAttachment: (file: RestoredAttachment, target?: ChatDraftIdentity | null) => void
 }
 
 export const useInputStore = create<InputState>()((set, get) => ({
@@ -605,8 +609,14 @@ export const useInputStore = create<InputState>()((set, get) => ({
     set({ activeEditorFile: file })
   },
 
-  addRestoredAttachment: ({ url, mimeType, filename }, target) => {
+  addRestoredAttachment: ({ url, mimeType, filename, description, mention }, target) => {
     const id = `restored-${Date.now()}-${Math.random().toString(36).slice(2)}`
+    const reference = fileReferenceSchema.safeParse({ uri: url, name: filename, description, mention })
+    if (reference.success) {
+      const attached = materializeFileReference(reference.data, id, mimeType)
+      set((state) => appendAttachedFiles(state, [attached], target))
+      return
+    }
     const basename = attachmentBasename(filename)
     // Set serverPath to the URL so ImagePreview can use it as the img src
     // when dataUrl is not a data: URL. sanitizeAttachmentsForSend leaves
@@ -622,6 +632,8 @@ export const useInputStore = create<InputState>()((set, get) => ({
       source: "local",
       serverPath: url,
     }
+    if (description !== undefined) attached.description = description
+    if (mention !== undefined) attached.mention = mention
     set((state) => appendAttachedFiles(state, [attached], target))
   },
 }))

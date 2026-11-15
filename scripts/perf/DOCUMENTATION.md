@@ -5,6 +5,121 @@ DevTools Protocol plumbing. Read this before measuring OpenChamber performance
 or extending these scripts. The methodology rules they enforce come from
 `.agents/skills/performance-engineering/SKILL.md`.
 
+## Native selection qualification
+
+`--authentication` uses the same fresh-root owner as the interaction fixture,
+with an explicit synthetic UI password. It never
+inherits a password or token from the launching environment. The default,
+interaction and selection modes remain password-free; only one fixture mode
+can be selected. Authentication qualification uses the real server's login
+route while keeping all state under its new private root.
+
+`python3 scripts/parity/native_selections.py --scale 1.25` opens the native client
+on an owned private Xvfb display. `--binary`, `--opencode-binary` and `--dist`
+select existing build inputs. No build or dependency install runs. `--output`
+must name a new directory directly under `/tmp/opencode`.
+
+The runner starts this module with `--selections`, which uses the fresh-root
+interaction server owner with an opt-in configuration. It exposes only the local
+`perf` provider, `stream-1200cps` and `stream-20000cps`, their `high` variants,
+and 2 primary agents, `fixture-alpha` and `fixture-beta`. Both agents have a
+named default effort so an explicit Default selection must clear that choice.
+Tools are denied. The provider's existing stream responses make no tool calls.
+The default performance and `--interactions` configurations retain their behavior.
+
+`--workflows` uses the same fresh-root owner for the session goal and review
+loops. It registers `workflow` and `workflow-1s` (each turn starts after one
+second) as the only chat models, with `workflow-1s` the default. The workflow
+model answers from what the conversation says: a goal's objective takes
+`[turns:n]` turns (two by default) or, with `[blocked]`, stops on something only
+the user can give; a review gets a finding first and a clean final line on the
+re-review, `[clean]` makes the first review clean and `[dispute]` ends the
+re-review disputed. Only the latest goal of a session counts. The goal's
+progress check, whichever model it reaches, gets the JSON answer the turn's
+report lines call for. The provider gives none of these answers without
+`--workflows`, so the other modes keep their behavior.
+`python3 scripts/parity/native_goals_review.py` qualifies the native client on it.
+
+`--git-fixture` turns a fresh root's project into the Files and Git fixture
+repository (`ensureGitFixture`): two commits on `main` tracking `origin/main`
+in a bare remote at `<root>/remote.git`, a CRLF file, a gitignored folder, an
+untracked file and a nested repository, all with fixed commit times and no
+system or global Git configuration. A project that already has commits is
+left as a scenario changed it. `native_files.py` and `native_git.py` use it.
+
+`--provider-mode interactions` keeps a seeded root's state and project but
+runs the fixture provider with `--interactions` and gives OpenCode the
+interaction configuration: the shell and question models, and a permission
+ask for the fixture's shell command. The parity runner's `"provider":
+"interactions"` scenarios start the native client's server this way and give
+Electron's own server the same configuration.
+
+`--github-fixture <proxy> <ca>` points the project's `origin` at
+`https://github.com/acme/widgets.git` and gives only the server
+`HTTPS_PROXY=<proxy>`, a loopback `NO_PROXY` and `NODE_EXTRA_CA_CERTS=<ca>`,
+so its GitHub provider reaches `scripts/parity/github_fixture.py` and nothing
+else. No account is stored; `native_source_board.py` signs in through the
+server's device flow, which the fixture answers.
+
+Every model, agent, effort and prompt input goes through the real window.
+HTTP creates the fresh session and observes records. The runner checks the exact
+Unicode user message and the subsequent completed assistant step's model,
+agent and variant. It selects `fixture-beta` first, then explicitly chooses
+`stream-1200cps`, which differs from that agent's configured `stream-20000cps`
+default. The completed step must retain the explicit model after reopening.
+Pinned OpenCode 2.2 returns history newest-first and records the default effort
+as `variant: "default"`, including when the selection request omits the variant.
+The oracle reverses history for turn boundaries and requires that exact canonical
+variant. A retained `high` agent pin cannot satisfy the Default check.
+It also checks unsent choices and explicit Default after
+close/reopen, plus Escape cancellation and restored composer focus in each picker.
+Missing controls fail the run. A diagnostic marker alone cannot pass.
+
+The report records input identities, outcomes, native process exits and input
+substitutions. Evidence includes failure screenshots, messages on success and
+the fixture process cleanup receipt. Cleanup failures and accessibility action
+substitutions fail qualification. This is a Linux native outcome check; it
+does not establish matched-client visual parity.
+
+Focused checks:
+
+```sh
+python3 -m unittest discover -s scripts/parity -p native_selections_test.py
+node --test scripts/perf/isolated-server.test.mjs
+```
+
+The shared fresh-root server owner keeps process and credential isolation in
+one place. The selection configuration is a fixed opt-in branch, so the runner
+cannot inject arbitrary project settings into an interaction run.
+
+The synthetic provider's `/__fixture/turn-gate` control is off by default.
+Its PUT `{ "held": true }` holds delayed think turns until PUT
+`{ "held": false }`; GET reports the held state and waiting count. Client
+disconnection removes its waiter. Queue qualification uses this explicit
+release so UI interaction speed cannot make the base turn finish mid-scenario.
+Ordinary performance captures retain their configured think delay.
+
+## Native permission mode qualification
+
+`python3 scripts/parity/native_permission_modes.py --scale 1.25` takes the same
+inputs, display and `--output` rules as the selection qualification and uses the
+default `--interactions` fixture. It reads `/api/routing` with a 60-second
+timeout, because the engine computes routing on first read. Safety is expected
+in the cycle only when routing reports `available: true` and `jevAvailable` is
+not `false`.
+
+Every shield press goes through the real window. Each press must reach the
+server's `/api/permission-auto-accept` policy with a newer revision and the
+matching shield label; a label that changes without the server fails. The run
+then closes and reopens the window, which must show Auto again, and sends a
+shell prompt in Auto. The shell must complete with no permission card shown and
+no permission left pending. The report has the same input identities, process
+exits and substitution checks as the selection run.
+
+```sh
+python3 -m unittest discover -s scripts/parity -p native_permission_modes_test.py
+```
+
 ## Commands
 
 | Command | Answers |
@@ -66,7 +181,83 @@ OpenCode and the fixture provider on Ctrl-C. Pass `--dir tmp/perf-serve/project`
 to the session commands. Every command except `profile:animation` and
 `profile:startup` without `--url` needs a running server.
 
+On Windows, `profile:serve` sets `USERPROFILE`, `APPDATA`, `LOCALAPPDATA` and
+the XDG directories under its state directory as well as `HOME`. Its child
+environment retains OS launch variables and excludes inherited provider keys
+and application credentials. Pass `--opencode-binary` with the installed
+desktop's `resources/opencode-cli/opencode.exe` path. Shutdown discovers the
+server's descendants through Windows process information before stopping them.
+Captures using `perf/cdp.mjs` request `Browser.close`, allow graceful shutdown, and stop
+the owned process tree if it remains alive. Temporary Chrome profiles are
+removed asynchronously with 20 linearly delayed retries for busy-file errors.
+The delay starts at 100 ms, totaling at most 21 seconds of retry delays; failure
+after that remains a cleanup error. The helper implements these retries because
+Bun 1.4.3 ignores `fs.rm` retry options on Windows locks. A browser supplied
+through `--attach` is never closed by the capture.
+Use the same explicit `--chrome` binary for both sides of a comparison.
+
 ## Running An Isolated Copy
+
+### Permission and question fixtures
+
+`isolated-server.mjs --interactions --root /tmp/opencode/<new-name>
+--dist <built-ui> --opencode-binary <bundled-opencode>` starts a fresh Linux
+interaction fixture. The root must not exist. It prints one JSON readiness
+record containing `url`, `root`, `state`, `project` and `fixturePort`.
+SIGINT or SIGTERM stops its owned processes; files remain for inspection.
+The exported `startInteractionServer` takes the same paths and returns these
+fields plus `stop()`, for an enclosing test's `finally` block. It accepts an
+optional abort signal during startup. Signal-owning commands and smoke tests
+use `withInteractionServer(options, async (server, signal) => ...)`: it installs
+SIGINT/SIGTERM handlers before startup, cancels pending startup on interruption,
+stops the owned processes, and removes its handlers on every exit. The callback
+uses its signal to cancel ongoing requests. The CLI requires the actual
+`--opencode-binary` flag even when `OPENCODE_BINARY` exists in its environment.
+
+The run uses a private HOME, XDG directories and working directory, an
+allowlisted environment, and no seed or Git initialization. It refuses
+ancestor OpenCode configuration/instructions and system OpenCode configuration.
+The provider binds port zero and acknowledges its listener through its owned
+child's IPC channel. It never attaches to an existing provider. The server
+uses an available port and the existing isolated server launcher.
+
+Only `perf` is an allowed provider. Its auxiliary agents also use local fixture
+models. `perf/interaction-shell` asks for exactly
+`printf 'native-permission-ok\n'`; every other action is denied except
+`question`. `perf/interaction-question` presents single-choice, multiselect
+and custom-text fields. Both models make one tool call per user turn and
+then finish. They reject missing requested tools and non-streaming requests.
+Ordinary fixture modes keep their existing configuration and behavior.
+
+Create sessions in the readiness record's `project`, with agent `build` and
+model `{providerID: "perf", id: "interaction-shell"}` or
+`{providerID: "perf", id: "interaction-question"}`. The native UI runner owns
+input and assertions. Before an HTTP smoke answers a permission, it verifies
+the owned session's directory, `action: "shell"`, and the exact resource above.
+Question forms use keys `q0`, `q1`, `q2`; answers contain a string, an array of
+strings, and a string respectively. Use a separate fresh root when saved
+project approvals must not carry into another case.
+
+Run the engine smoke explicitly with
+`OPENCODE_INTERACTION_BINARY=<absolute-binary> node scripts/perf/interaction-engine.test.mjs`.
+`OPENCODE_INTERACTION_DIST` optionally selects the built UI; otherwise it uses
+`packages/electron/resources/web-dist`. It verifies once/reject/always, actual
+question answers and cancellation, process isolation, and closed listeners.
+It does not launch a window. Window tests use `scripts/parity/virtual_display.py`.
+The smoke records `smoke-ready.json` under its private root. Its signal regression
+test, `interaction-signals.test.mjs`, starts the smoke directly so the PID receiving
+SIGINT or SIGTERM owns the cleanup handler, without a `node --test` supervisor.
+The regression uses `OPENCODE_INTERACTION_ROOT` to select each fresh private root
+and checks provider startup, server startup and ready-state interruption.
+
+### Why interaction fixtures use the real tool engine
+
+The provider emits deterministic tool calls while OpenCode creates permission
+requests, runs the command, and owns question form state. This qualifies the
+same protocol the native client consumes without a second implementation of
+the permission or form APIs.
+
+### Other isolated captures
 
 Any server, dev shell or Electron an agent starts for a check runs beside the
 maintainer's own app and dev shell, on the same machine.
@@ -634,6 +825,12 @@ bun run profile:switch -- --url http://127.0.0.1:4599 --title "perf: long 120" -
 `--render-probe` counts renders across the switches after the last page load
 (with `--cold-reload`, the last cycle) and prints them per switch.
 
+With `--extra-categories disabled-by-default-devtools.timeline.invalidationTracking`,
+the switch profiler limits recorded JavaScript stacks to eight frames. Full React
+stacks for every node can overwhelm the trace buffer before the warm switch.
+Check that all planned switch marks survived; invalidation captures are for
+attribution, and ordinary production captures supply timing comparisons.
+
 `--sessions a,b,c` picks the rows to click; the default is the first rows in
 the sidebar, so pass explicit ids or titles to compare runs across days. The
 row must be present in the sidebar; the command fails rather than measuring a
@@ -647,7 +844,12 @@ the process was spawned: the main process's own `[startup-performance]` marks
 (entry module, Electron ready, window created and shown, main module loaded,
 server start and ready, OpenCode ready, application navigation and load), and
 renderer readiness from `startup-probe.mjs`, a recorder installed into the
-application document before it runs and checked once per animation frame:
+application document before it runs and checked once per animation frame.
+The run attaches to the browser target as soon as the DevTools endpoint
+answers and sets `Target.setAutoAttach` with `waitForDebuggerOnStart`, so each
+new page waits until the recorder is installed. The first page of a Linux
+launch is already the application document, and a script added after the
+target appeared would only reach the next document. The recorder marks:
 
 - `reactMounted`: a child of `#root` carries React's fiber expando. `#root`
   holds the HTML splash `#initial-loading` from the first parsed byte, so a
@@ -709,6 +911,12 @@ start its own OpenCode on every launch, the way a user's login does;
 every launch to it through `OPENCODE_PORT`, which isolates OpenChamber's own
 startup from OpenCode's. `--fresh` wipes the home before every launch to
 measure the first launch after an install.
+
+On Linux the checks need a window that keeps drawing. Under Wayland a covered
+window receives no frame callbacks, so `requestAnimationFrame` stops and
+`usable` is never recorded; run the benchmark under X11 with
+`env -u WAYLAND_DISPLAY XDG_SESSION_TYPE=x11`. Use `--opencode cold` there: the
+warm attachment does not reach a usable composer on Linux.
 
 `--screen` (macOS, with `--window-at`) samples the window's pixels from the
 screen and reports when they first changed and when they stopped changing.
@@ -779,8 +987,9 @@ back/forward-cache documents in a reused profile inflate later runs.
 bun run profile:heap -- --url http://127.0.0.1:4799 --count 20
 ```
 
-The rows are the first N in sidebar order, so compare runs only on the same
-server state and the same row count (`rows` in `heap-summary.json`). The heap
+The plan uses the first N distinct session IDs in sidebar order. A session shown
+in several sections consumes one visit. Compare runs only on the same server
+state and identical ordered `sessionIds` in `heap-summary.json`. The heap
 after opening includes the session cache by design: compare it between
 builds, not against zero.
 
@@ -1034,6 +1243,51 @@ its looks used), and compares any two directories of run directories
 named `<scenario>-<n>`, such as an ablation batch against its control. Runs pair
 up by `<n>`, so run ablations and their control in turn; a verdict needs 6 pairs.
 
+## Failed browser navigation captures
+
+Web startup, heap, switch and composer captures keep bounded document diagnostics: navigation
+command results, frame and loader IDs, document status, and the terminal
+`loadingFinished` or `loadingFailed` event. A failed request is finished for
+byte accounting; `unfinished: 0` does not establish success. Network summaries
+also report a separate `failed` count.
+
+Heap, switch and composer write their summary for failed attempts as well as
+successful ones. `valid` describes whether all measurement stages completed.
+`phase`, navigation attempts, completed switches or typed-line counts, partial
+readings, and cleanup errors remain available when an attempt fails. Switch
+captures record whether accessibility was requested separately from measured
+accessibility activity. Cleanup errors do not replace the original capture failure.
+Compare only completed attempts with matching workload counts.
+
+`Page.loadEventFired` remains an uncorrelated load signal. The diagnostic frame,
+loader, and lifecycle records allow an unrelated document load to be identified;
+the signal alone does not prove application readiness. Result-level navigation
+errors fail the attempt, and both the command and load wait are observed from
+the start so a timeout cannot become an unhandled rejection.
+
+Before teardown, a failed attempt takes one page-state snapshot with a 3-second
+bound. It records readiness, node/script counts, recorder presence when relevant,
+and whether the origin/path match the requested page. Diagnostic records omit
+URLs, query strings, headers, document text, and arbitrary browser exception
+messages. Startup records failed recorder evaluations separately from absent
+recorder data. Original failed artifacts stay available when a later run passes;
+the profilers do not retry navigation automatically.
+
+`documents.events` retains up to 128 events in receipt order, with increasing
+`sequence` values, host `receivedAtMs` timestamps and a `droppedEvents` count.
+It includes command send/result/error, `Page.frameStartedNavigating`, observed
+renderer navigation requests, document requests and terminal events, frame
+commits and lifecycle milestones. Document-start records keep CDP `timestamp`
+and `wallTime` together to relate browser monotonic time to wall-clock time.
+
+Receipt order does not establish browser causality. Enabling lifecycle events
+can replay old milestones; a navigation-start notification can arrive after an
+old request was cancelled. Multiple starts can belong to one navigation, and
+missing events cannot exclude activity before attachment or evicted records.
+`ERR_ABORTED` identifies cancellation but not its owner. A load-event timeout
+alone does not establish cancellation. Attribution needs an explicit link to
+the browser operation that replaced, discarded or stopped the aborted loader.
+
 ## Attribution
 
 Timings come from the production build. Names come from the diagnostic build
@@ -1221,18 +1475,86 @@ be a measurement, never a disabled instrument.
 
 The measurement rules are in `.agents/skills/performance-engineering/SKILL.md`, *Workflow* steps 0 and 1. This tooling encodes two of them: `profile:compare` reruns the unchanged build for every before/after, and `profile:session` reports output-normalised metrics because response lengths vary between runs.
 
+## Native desktop comparison
+
+`scripts/perf/native_bench.py` records native desktop diagnostics in `native/` and,
+with `--electron-app`, separate packaged Electron diagnostics in the same session,
+alternating clients A/B then B/A. It needs the native release build
+(`bun run native:build`); the switch scenario also needs PyGObject with
+AT-SPI and `busctl`.
+
+```bash
+python3 scripts/perf/native_bench.py --runs 5 --warmup 1 \
+  --electron-app packages/electron/dist/linux-unpacked/openchamber
+```
+
+| Scenario | Native boundary | Electron boundary |
+|---|---|---|
+| startup | process spawn to the native `composer-usable` marker line on stdout | `profile:startup`'s `usable`, from spawn |
+| memory | whole process-tree PSS, private and RSS bytes after the startup settle and after the switch sequence | whole process-tree bytes at `--electron-memory-delay`, split by process role (`openchamber:renderer`, `opencode`, …) |
+| idle | process-tree CPU over `--idle-seconds` | the same |
+| switch | AT-SPI dispatch to paint-marker receipt, including first-visit history, forward and reverse | not measured; `profile:switch` needs a seeded server |
+
+By default the native client runs offline: synthetic data, no server and no
+OpenCode. Its rows carry that scope in the printed table and in the receipt,
+and they never establish a full-application startup or memory gain.
+
+With `--server <url>` (an isolated server, such as `bun run profile:serve`)
+the native client runs connected. Startup waits for `composer-usable` and
+`sessions-shown` with no selected session. History belongs to the switch
+workload's explicit setup. `--server-pid` samples the server's process tree
+with each launch and reports the combined ownership separately. The
+native startup rows then measure a client joining a running server, while
+Electron's startup includes starting its server and OpenCode; the printed
+scopes say so.
+
+Connected switches require `--sessions <setup-id>,<target-id>,...` with
+exactly `--switches + 1` distinct IDs. Session rows are identified by their
+accessible keys; project headers and duplicate appearances do not add visits.
+The setup session is explicitly selected before the measured forward/reverse
+sequence. Each first connected visit waits for both `switch-completed` and
+`history-shown`; cached visits wait for `switch-completed`. Every visit checks
+the selected row, records its identity, and drains old marker lines before input.
+Receipts retain setup separately and include the ordered session IDs.
+
+These diagnostics do not establish a cross-client performance gain. The
+receipt sets `comparison.eligible` to false because Electron does not replay
+the same ordered sessions, ordered transcript content is unverified, and
+memory readiness boundaries differ. Native markers end at paint, before
+compositor presentation; stdout receipt adds observation overhead. A future
+comparison must verify identical session/content and visible end conditions
+in both clients in the same run. A failed sample or warmup suppresses its
+group's statistics while retaining every raw sample. A missing requested
+switch instrument fails the command.
+
+Both clients run on an authenticated, owned Xvfb display through the parity
+runner's `virtual_display.py`. The benchmark starts that display when needed
+and checks its ownership before each launch. Inherited Wayland and session-type
+variables are removed, and Chromium explicitly selects X11. The switch scenario
+turns the session accessibility flag on for its runs and restores the previous
+value. AT-SPI applications are matched by process ID, never by name: another
+copy of the app on the bus would otherwise receive the clicks. Every launch is
+a new process group that the script stops and reaps; the receipt lists any
+process that outlived `SIGTERM`. The Electron launch uses `profile:startup`'s
+isolation (own home, data directory and Electron profile).
+The native client also gets a disposable home and XDG directories, so connected
+runs cannot create or replace the installed application's client identity.
+
+Receipts go to `artifacts/native-bench-<time>/receipt.json` with the revision,
+binary hash, host, configuration, raw samples and summaries.
+
 ## Module Layout
 
 | File | Responsibility |
 |---|---|
-| `cdp.mjs` | Chrome launch, target discovery, minimal CDP client. Owns the anti-throttling launch flags and the per-run temporary Chrome profile (`resolveProfileDir`, which also removes the `openchamber-perf-*` profiles earlier runs left: those whose `SingletonLock` symlink names a dead process); `profile:browser` alone keeps a reusable profile, for a manually driven session. |
+| `cdp.mjs` | Chrome launch, target discovery, minimal CDP client, bounded navigation waits and capture-attempt persistence. Owns the anti-throttling launch flags and the per-run temporary Chrome profile (`resolveProfileDir`); `profile:browser` alone keeps a reusable profile, for a manually driven session. |
 | `metrics.mjs` | Metric derivations shared by the profilers: growth rates, percentiles, long-task, frame-budget, windowed longest-task, trace-event and per-thread summaries. |
 | `process-cpu.mjs` | CPU per process from cumulative counters: Chrome through browser-level `SystemInfo`, the server and its OpenCode child through `ps`. Context switches (wakes) and idle wakeups per process from macOS `top`, read around the measured window. Unresolved processes are reported as missing, never as zero. |
 | `fixture-provider.mjs` | Deterministic OpenAI-compatible provider: one fixed document at a rate chosen by model name. A prompt from `fixture-conversations.mjs` gets that conversation's scripted answer instead. |
 | `fixture-conversations.mjs` | Scripted conversations keyed by prompt, with tool steps OpenCode runs for real, and the scratch project files they edit. `scripts/design/shots.mjs` seeds its sessions from them; no perf scenario sends these prompts. |
 | `seed-long-session.mjs` | Builds a long session (default 120 turns) through the `openchamber session` CLI and the fixture provider's seeding models. |
 | `aggregate-runs.mjs` | Median, p95, min and max per metric over repeated single-run captures, excluding runs whose validity flags say they measured nothing. |
-| `network.mjs` | Request and byte accounting over the CDP Network domain, grouped by endpoint pattern. |
+| `network.mjs` | Request and byte accounting over the CDP Network domain, grouped by endpoint pattern; bounded document and navigation evidence in receipt order. |
 | `startup-probe.mjs` | Page-side startup recorder: React mounted, splash and overlay gone, composer usable, model picker, and the app's startup trace marks. |
 | `cpu-profile.mjs` | Aggregates `Profiler.stop()` output into self time per function. |
 | `idle-probe.mjs` | Page-side instrumentation installed before application code runs; attributes scheduled work to the call site that scheduled it. Must never change observable behaviour. |
@@ -1249,6 +1571,7 @@ The measurement rules are in `.agents/skills/performance-engineering/SKILL.md`, 
 | `trace-analysis.mjs` | Saved-trace analysis: pipeline per second, task classification, large style recalcs. |
 | `toggle-analysis.mjs` | `profile:toggle`'s pure analysis: refresh interval and frame pacing, per-window style/layout and forced layouts from the trace, renders per window, statistics per toggle type. |
 | `source-map.mjs` | Dependency-free source-map reader for the diagnostic build. |
+| `native_bench.py` | Native desktop measurements and the Electron comparison: startup, process-tree memory and CPU, AT-SPI session switching. |
 | `soak-system.mjs`, `soak-cdp.mjs`, `soak-capture.sh`, `soak-analyze.mjs` | `profile:soak`: OS samplers (ps, footprint, nettop), the light CDP recorder, the privileged packet and exec capture, and the per-second analysis. Every source writes JSON lines or raw text into the run directory, so a cut-short run still analyzes. |
 | `ablations/`, `controls/` | Injected scripts: ablations switch a suspect off, controls create the effect a metric must catch. |
 

@@ -1,13 +1,13 @@
-// Run with: bun packages/ui/tests/chat-history-scroll.browser.mjs
+// Run with: bun packages/ui/tests/chat-history-scroll.browser.mjs (optional CHROME_PATH)
 // Uses production React and the installed LegendList in a real Chromium page.
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
-import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
-    CdpClient, createPageTarget, evaluateValue, launchChrome, reservePort, resolveChrome, wait,
+    CdpClient, createPageTarget, evaluateValue, launchChrome, reservePort, resolveChrome,
+    resolveProfileDir, stopChrome, wait,
 } from '../../../scripts/perf/cdp.mjs';
 
 const repo = fileURLToPath(new URL('../../../', import.meta.url));
@@ -26,7 +26,7 @@ const legendList = join(
 // Prepend compensation loses sub-pixel remainders when row estimates are
 // fractional, and whether they are depends on the measured average. One
 // height profile can pass by luck, so the scenarios run over several.
-const heightProfiles = [[5, 137], [7, 137], [3, 101], [6, 53], [4, 211]];
+const heightProfiles = [[5, 137, 180], [7, 137, 180], [3, 101, 180], [6, 53, 180], [4, 211, 180], [1, 0, 40], [1, 0, 2400]];
 // The list's average estimate, our per-row estimate, and the touch layout,
 // whose corrections wait until the reader stops scrolling; the app on a phone
 // runs the last two together.
@@ -50,7 +50,9 @@ const useUIStore = () => true;
 const resolveTimelineIsAtEnd = () => false;
 const timelineKeyExtractor = item => item.key;
 const timelineItemType = item => item.kind;
+const mountedRows = new Set();
 function Row({ item }) {
+    React.useLayoutEffect(() => { mountedRows.add(item.key); }, [item.key]);
     const [settled, setSettled] = React.useState(!item.older);
     React.useEffect(() => {
         if (settled) return;
@@ -79,8 +81,10 @@ const frames = async count => {
 const params = new URLSearchParams(location.search);
 const heightPeriod = Number(params.get('period'));
 const heightStep = Number(params.get('step'));
+const baseHeight = Number(params.get('base') ?? 180);
+document.documentElement.dir = params.get('dir') ?? 'ltr';
 const rowsFrom = (from, count, older = false) => Array.from({ length: count }, (_, i) => ({
-    key: 'row-' + (from + i), kind: 'turn', height: 180 + ((from + i + 100) % heightPeriod) * heightStep, older,
+    key: 'row-' + (from + i), kind: 'turn', height: baseHeight + ((from + i + 100) % heightPeriod) * heightStep, older,
 }));
 const noop = () => {};
 let list;
@@ -91,6 +95,15 @@ function App() {
     window.runScenario = async (moveWhileLoading) => {
         await frames(40);
         const scroller = list.getScrollableNode();
+        const initialTail = scroller.querySelector('[data-probe-id="row-79"]');
+        const initialEndGap = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+        const initialMountCount = mountedRows.size;
+        const initialRows = [...scroller.querySelectorAll('[data-probe-id]')];
+        const initialViewportCovered = initialRows.some(node => {
+            const rect = node.getBoundingClientRect();
+            const viewport = scroller.getBoundingClientRect();
+            return rect.top <= viewport.top + 1 && rect.bottom > viewport.top;
+        });
         const moveTo = top => {
             scroller.dispatchEvent(new WheelEvent('wheel', { deltaY: -500, bubbles: true }));
             scroller.scrollTop = top;
@@ -137,6 +150,7 @@ function App() {
         await frames(20);
         const tailGrowthShift = read() - after;
         return {
+            initialTailMounted: Boolean(initialTail), initialEndGap, initialViewportCovered, initialMountCount,
             key, before, after, elapsed, frameCount: samples.length,
             dataCount: list.getState().data.length,
             missingFrames: samples.filter(value => value === null).length,
@@ -226,8 +240,8 @@ const build = await Bun.build({
 });
 assert.ok(build.success, build.logs.join('\n'));
 const javascript = await build.outputs[0].text();
-const chromePath = resolveChrome();
-const profileDir = mkdtempSync(join(tmpdir(), 'openchamber-history-scroll-'));
+const chromePath = resolveChrome(process.env.CHROME_PATH);
+const profile = resolveProfileDir(null, 'history-scroll');
 const server = Bun.serve({
     hostname: '127.0.0.1',
     port: 0,
@@ -240,7 +254,7 @@ const server = Bun.serve({
     },
 });
 const port = await reservePort();
-const chrome = launchChrome({ chrome: chromePath, port, profileDir, headless: true });
+const chrome = launchChrome({ chrome: chromePath, port, profileDir: profile.dir, headless: true });
 let client;
 try {
     const target = await createPageTarget(port);
@@ -250,10 +264,10 @@ try {
     await client.send('Page.enable');
     const exceptions = [];
     client.on('Runtime.exceptionThrown', event => exceptions.push(event.exceptionDetails));
-    for (const mode of modes) for (const [period, step] of heightProfiles) for (const moveWhileLoading of [false, true]) {
+    for (const direction of ['ltr', 'rtl']) for (const mode of modes) for (const [period, step, base] of heightProfiles) for (const moveWhileLoading of [false, true]) {
         const loaded = client.once('Page.loadEventFired');
         await client.send('Page.navigate', {
-            url: `http://127.0.0.1:${server.port}/?moving=${moveWhileLoading}&period=${period}&step=${step}&touch=${mode.touch}&estimate=${mode.estimate}`,
+            url: `http://127.0.0.1:${server.port}/?moving=${moveWhileLoading}&period=${period}&step=${step}&base=${base}&dir=${direction}&touch=${mode.touch}&estimate=${mode.estimate}`,
         });
         await loaded;
         let ready = false;
@@ -264,8 +278,14 @@ try {
         }
         assert.ok(ready, 'The browser fixture mounted');
         const result = await evaluateValue(client, `window.runScenario(${moveWhileLoading})`);
-        console.log(JSON.stringify({ ...mode, period, step, moveWhileLoading, ...result }));
+        console.log(JSON.stringify({ direction, ...mode, period, step, base, moveWhileLoading, ...result }));
         assert.deepEqual(exceptions, [], 'No browser runtime errors');
+        assert.equal(result.initialTailMounted, true, 'The initial tail is reachable after measurement');
+        assert.ok(Math.abs(result.initialEndGap) <= 1, 'Initial size estimates settle at the real end');
+        assert.equal(result.initialViewportCovered, true, 'Short rows fill the viewport after measurement');
+        if (base === 2400) {
+            assert.ok(result.initialMountCount <= 3, 'Opening tall history mounts only the tail and nearby overscan');
+        }
         assert.equal(result.dataCount, 81, 'The prepend and tail append actually committed');
         assert.equal(result.frameCount, 70);
         assert.ok(result.elapsed < 5_000, 'The renderer was producing frames without background throttling');
@@ -293,12 +313,11 @@ try {
     assert.ok(Math.abs(scrolls[true].correctedAtRestPx) > 1, 'The deferred correction lands at rest');
     assert.ok(scrolls[true].restShift !== null && Math.abs(scrolls[true].restShift) <= 1, `The correction at rest moved the reader's row by ${scrolls[true].restShift}px`);
 } finally {
-    client?.socket.close();
-    if (chrome.exitCode === null && chrome.signalCode === null) {
-        const exited = new Promise(resolve => chrome.once('exit', resolve));
-        chrome.kill();
-        await exited;
+    try {
+        await stopChrome(chrome, client);
+    } finally {
+        client?.socket.close();
+        server.stop(true);
+        await profile.remove();
     }
-    server.stop(true);
-    rmSync(profileDir, { recursive: true, force: true });
 }

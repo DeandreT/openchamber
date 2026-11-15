@@ -2594,6 +2594,17 @@ describe("forkFromMessage composer restore", () => {
     expect(replyCalls.find((call) => call.method === "session.fork")?.params.messageID).toBe("message-ctx")
   })
 
+  test("fork replay retains a server-file reference description and mention", async () => {
+    const referencePart = { ...filePart, url: 'file:///server/report.pdf', mime: 'application/pdf', filename: '/server/report.pdf',
+      description: 'PDF source', mention: { start: 0, end: 4, text: '@pdf' } }
+    const source = createStore({}, { session: [sourceSession], part: { 'message-fork': [textPart, referencePart] } })
+    const { forkFromMessage, setActionRefs } = await import('./session-actions')
+    setActionRefs(createChildStores([[sourceSession.directory, source]]), () => sourceSession.directory)
+    await forkFromMessage(sourceSession.id, 'message-fork')
+    expect(inputState.pendingComposerRestore?.files).toEqual([{ url: referencePart.url, mimeType: referencePart.mime,
+      filename: referencePart.filename, description: referencePart.description, mention: referencePart.mention }])
+  })
+
   test("uses the returned project worktree when the fork has no directory", async () => {
     const forkWithProject: Session & { project: { worktree: string } } = {
       ...forkedSession, directory: "", project: { worktree: "/canonical/worktree" },

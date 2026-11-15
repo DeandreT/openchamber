@@ -13,6 +13,7 @@ import { runtimeFetch, type RuntimeFetchOptions } from '@/lib/runtime-fetch';
 import { spaceIdOfDirectory } from '@/lib/spaces/space-route';
 import { normalizePath } from '@/lib/pathNormalization';
 import { getQueuedMessagePreview } from '@/lib/messages/queuedMessagePreview';
+import { fileReferenceSchema, materializeFileReference } from '@/lib/messages/fileReferences';
 
 export type FollowUpBehavior = 'steer' | 'queue';
 
@@ -212,6 +213,7 @@ const serverItemBaseSchema = z.object({
     /** Present only on a taken item; broadcasts and snapshots omit it like attachment payloads. */
     context: z.array(serverContextPartSchema).optional(),
     contextPreview: z.string().optional(),
+    promptParts: z.object({ fileReferences: z.array(fileReferenceSchema).max(4096).optional() }).optional(),
     sendConfig: serverSendConfigSchema,
     goal: serverGoalSchema.optional(),
 });
@@ -301,6 +303,10 @@ const toQueuedMessage = (item: ServerQueueItem): QueuedMessage => {
     if ('scheduledTask' in item) message.scheduledTask = item.scheduledTask;
     if (item.agentMention) message.agentMention = item.agentMention;
     if (item.attachments.length > 0) message.attachments = item.attachments.map(toAttachedFile);
+    if (item.promptParts?.fileReferences?.length) {
+        message.attachments = [...(message.attachments ?? []), ...item.promptParts.fileReferences.map((reference, index) =>
+            materializeFileReference(reference, `${item.id}-reference-${index}`, /\.pdf$/i.test(reference.name) ? 'application/pdf' : 'text/plain'))];
+    }
     if (item.context) message.context = item.context;
     if (item.contextPreview) message.contextPreview = item.contextPreview;
     return message;
@@ -315,6 +321,7 @@ type ServerQueueItemInput = {
     attachments: ServerQueueAttachmentInput[];
     context: QueuedContextPart[];
     contextPreview?: string;
+    promptParts?: { fileReferences: z.infer<typeof fileReferenceSchema>[] };
     sendConfig: QueuedMessageSendConfig;
     goal?: QueuedMessageGoal;
 };
@@ -341,12 +348,14 @@ const toServerItemInput = (message: QueuedMessageInput, sendConfig: QueuedMessag
     const item: ServerQueueItemInput = {
         content: message.content,
         text: message.text ?? message.content,
-        attachments: (message.attachments ?? []).filter((file) => Boolean(file.dataUrl)).map(toServerAttachment),
+        attachments: (message.attachments ?? []).filter((file) => !file.fileReference && Boolean(file.dataUrl)).map(toServerAttachment),
         context: message.context ?? [],
         sendConfig,
     };
     if (message.agentMention) item.agentMention = message.agentMention;
     if (message.goal) item.goal = message.goal;
+    const fileReferences = (message.attachments ?? []).flatMap((file) => file.fileReference ? [fileReferenceSchema.parse(file.fileReference)] : []);
+    if (fileReferences.length) item.promptParts = { fileReferences };
     const contextPreview = getQueuedMessagePreview({ content: '', context: message.context });
     if (contextPreview) item.contextPreview = contextPreview;
     return item;

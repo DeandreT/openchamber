@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { Window } from '../../../ui/node_modules/happy-dom/lib/index.js';
+import { Window } from '../../../ui/tests/dom';
 
 import type { HostClient } from '../host.ts';
 import { mountPopoverAnchor } from './popover-anchor.ts';

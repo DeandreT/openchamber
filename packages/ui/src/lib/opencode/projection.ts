@@ -345,6 +345,8 @@ export function projectUserParts(
         mime: file.mime,
         filename: file.name,
         url: fileAttachmentUrl(file),
+        description: file.description,
+        mention: file.mention,
       }),
     )
   })

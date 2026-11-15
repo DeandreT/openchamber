@@ -212,6 +212,12 @@ ends, and a row's own Send sends just that message. Like any send, it dismisses
 open permission requests and forms. Scheduled items stay visible in the
 queue rows with reorder and remove, but no edit or send action.
 
+Supported queue handoffs and restored server-file references keep their captured
+URI, name, description and mention through the existing attachment editor. Each
+queued source and the composer place prepared byte attachments before their own
+ordered reference occurrences when assembling a send. The default UI continues
+to refuse blob-backed take formats.
+
 The action button (`ComposerActionButtons`, and the same rule in the
 collapsed mobile pill) is one disc in one slot: 28px on desktop, the footer's
 button size in VS Code, and a 28px disc at the end of the 32px touch target on

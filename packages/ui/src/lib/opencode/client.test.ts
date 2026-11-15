@@ -492,6 +492,17 @@ describe("sendMessage", () => {
     })
   })
 
+  test("server-file reference descriptions, mentions and duplicate occurrences survive resend", async () => {
+    responses.push(json({ id: 'msg_reference_resend' }))
+    const reference = { uri: 'file:///server/report.pdf', name: '/server/report.pdf', description: 'PDF source',
+      mention: { start: 0, end: 4, text: '@pdf' } }
+    await opencodeClient.sendMessage({ id: 'ses_1', providerID: 'openai', text: 'look', messageId: 'msg_reference_resend',
+      files: [reference, reference].map((file) => ({ type: 'file' as const, mime: 'application/pdf', url: file.uri,
+        filename: file.name, description: file.description, mention: file.mention })) })
+    expect(requests).toHaveLength(1)
+    expect(requests[0].body).toEqual({ id: 'msg_reference_resend', text: 'look', files: [reference, reference] })
+  })
+
   // OpenCode's `ModelRef.variant` is an optional string: a `null` is a 400
   // ("Expected string at [model][variant]") and the prompt never goes out.
   test("an explicit Default thinking level switches the model without a variant, never as null", async () => {

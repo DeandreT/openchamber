@@ -9,6 +9,7 @@
  */
 
 import { round } from "./metrics.mjs"
+import { captureError } from "./cdp.mjs"
 
 // Path segments that identify an entity rather than a route.
 const ID_SEGMENT = [
@@ -126,11 +127,13 @@ export const summarizeRequests = (entries, baseUrl) => {
   let decodedBytes = 0
   let unfinished = 0
   let cached = 0
+  let failed = 0
   for (const entry of entries) {
     const encoded = entry.encoded ?? entry.streamedEncoded
     encodedBytes += encoded
     decodedBytes += entry.decoded
     if (entry.finishedAt === null) unfinished += 1
+    if (entry.failed) failed += 1
     if (entry.fromCache || entry.fromServiceWorker) cached += 1
     const pattern = `${entry.method} ${endpointPattern(entry.url, baseUrl)}`
     const group = groups.get(pattern) ?? { endpoint: pattern, count: 0, encodedBytes: 0, decodedBytes: 0 }
@@ -146,7 +149,107 @@ export const summarizeRequests = (entries, baseUrl) => {
     encodedKb: round(encodedBytes / 1024, 1),
     decodedKb: round(decodedBytes / 1024, 1),
     unfinished,
+    failed,
     cached,
     byEndpoint: [...groups.values()].sort((left, right) => right.decodedBytes - left.decodedBytes || right.count - left.count),
+  }
+}
+
+/** Bounded main-document evidence without URLs, headers or payloads. */
+export const createNavigationRecorder = (client, expectedUrl) => {
+  const expected = new URL(expectedUrl)
+  const documents = new Map()
+  const frames = []
+  const lifecycle = []
+  const events = []
+  let mainFrameId = null
+  let droppedDocuments = 0
+  let sequence = 0
+  let droppedEvents = 0
+  const location = (url) => {
+    try {
+      const parsed = new URL(url)
+      return { protocol: parsed.protocol, sameOrigin: parsed.origin === expected.origin, expectedPath: parsed.pathname === expected.pathname }
+    } catch { return { invalid: true } }
+  }
+  const append = (list, value) => {
+    if (list.length === 24) list.shift()
+    list.push(value)
+  }
+  // Receipt order differs from browser occurrence order. Lifecycle milestones
+  // can be replayed, and navigation-start notifications can follow a reset.
+  const record = (type, data) => {
+    if (events.length === 128) {
+      events.shift()
+      droppedEvents += 1
+    }
+    events.push({ sequence: ++sequence, receivedAtMs: Date.now(), type, ...data })
+  }
+  const subscriptions = [
+    client.on("Page.frameStartedNavigating", (event) => {
+      record("navigation-started", { frameId: event.frameId, loaderId: event.loaderId, navigationType: event.navigationType, location: location(event.url) })
+    }),
+    client.on("Page.frameRequestedNavigation", (event) => {
+      record("navigation-requested", { frameId: event.frameId, reason: event.reason, disposition: event.disposition, location: location(event.url) })
+    }),
+    client.on("Page.frameNavigated", ({ frame }) => {
+      if (!frame.parentId) mainFrameId = frame.id
+      const entry = { frameId: frame.id, loaderId: frame.loaderId, main: !frame.parentId, location: location(frame.url) }
+      append(frames, entry)
+      record("frame-navigated", entry)
+    }),
+    client.on("Page.lifecycleEvent", (event) => {
+      if (event.name !== "load" && event.name !== "DOMContentLoaded" && event.name !== "init") return
+      const entry = { name: event.name, frameId: event.frameId, loaderId: event.loaderId, timestamp: event.timestamp }
+      append(lifecycle, entry)
+      record("lifecycle", entry)
+    }),
+    client.on("Network.requestWillBeSent", (event) => {
+      if (event.type !== "Document") return
+      if (!documents.has(event.requestId) && documents.size === 24) {
+        documents.delete(documents.keys().next().value)
+        droppedDocuments += 1
+      }
+      const entry = {
+        requestId: event.requestId, frameId: event.frameId, loaderId: event.loaderId,
+        timestamp: event.timestamp ?? null, wallTime: event.wallTime ?? null,
+        location: location(event.request.url), status: null, failed: false, terminalEvents: [],
+        redirected: Boolean(event.redirectResponse),
+      }
+      documents.set(event.requestId, entry)
+      record("document-started", {
+        requestId: entry.requestId, frameId: entry.frameId, loaderId: entry.loaderId,
+        timestamp: entry.timestamp, wallTime: entry.wallTime, location: entry.location, redirected: entry.redirected,
+      })
+    }),
+    client.on("Network.responseReceived", (event) => {
+      const entry = documents.get(event.requestId)
+      if (entry) {
+        entry.status = event.response.status
+        record("document-response", { requestId: event.requestId, timestamp: event.timestamp, status: entry.status })
+      }
+    }),
+    client.on("Network.loadingFinished", (event) => {
+      const entry = documents.get(event.requestId)
+      if (entry) {
+        const terminal = { encodedBytes: event.encodedDataLength, timestamp: event.timestamp }
+        append(entry.terminalEvents, { type: "finished", ...terminal })
+        record("document-finished", { requestId: event.requestId, ...terminal })
+      }
+    }),
+    client.on("Network.loadingFailed", (event) => {
+      const entry = documents.get(event.requestId)
+      if (entry) {
+        entry.failed = true
+        const terminal = { cancelled: Boolean(event.canceled), error: captureError(event.errorText), timestamp: event.timestamp }
+        append(entry.terminalEvents, { type: "failed", ...terminal })
+        record("document-failed", { requestId: event.requestId, ...terminal })
+      }
+    }),
+  ]
+  return {
+    recordCommand: (type, { command, phase, result, error }) => record(type, { command, phase, result, error }),
+    read: () => ({ mainFrameId, droppedDocuments, droppedEvents, events: [...events], documents: [...documents.values()].map((entry) => ({ ...entry, main: mainFrameId === null ? null : entry.frameId === mainFrameId })), frames: [...frames], lifecycle: [...lifecycle] }),
+    stop: () => subscriptions.forEach((unsubscribe) => unsubscribe()),
   }
 }

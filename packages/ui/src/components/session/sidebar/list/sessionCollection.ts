@@ -99,6 +99,17 @@ export const projectSidebarCollection = (args: ProjectSidebarActiveSessionsArgs)
   return projectSidebarActiveSessions(args);
 };
 
+export const projectSidebarArchivedSessions = (
+  sessions: readonly Session[],
+  knownDirectories: ReadonlySet<string>,
+  isVSCode: boolean,
+): Session[] => {
+  const known = new Set([...knownDirectories].map((directory) => isVSCode ? directory.toLowerCase() : directory));
+  return sessions.filter((session) => (
+    isChatDirectoryPath(session.directory) ? !isVSCode : isKnownActiveSessionDirectory(session, known, isVSCode)
+  ));
+};
+
 const mergeSidebarSessionSources = (
   globalActiveSessions: readonly Session[],
   liveSessions: readonly Session[],
@@ -261,12 +272,10 @@ export const useSessionProjectCollection = ({
   const globalActiveSessions = useGlobalSessionsStore((state) => state.activeSessions);
   const globalStructure = useGlobalSessionsStore((state) => state.structure);
   const rawArchivedSessions = useGlobalSessionsStore((state) => state.archivedSessions);
-  const archivedSessions = React.useMemo(() => {
-    const known = new Set([...knownDirectories].map((directory) => isVSCode ? directory.toLowerCase() : directory));
-    return rawArchivedSessions.filter((session) => (
-      isChatDirectoryPath(session.directory) ? !isVSCode : isKnownActiveSessionDirectory(session, known, isVSCode)
-    ));
-  }, [isVSCode, knownDirectories, rawArchivedSessions]);
+  const archivedSessions = React.useMemo(
+    () => projectSidebarArchivedSessions(rawArchivedSessions, knownDirectories, isVSCode),
+    [isVSCode, knownDirectories, rawArchivedSessions],
+  );
   const hasAuthoritativeGlobalSessions = useGlobalSessionsStore((state) => state.status === 'ready');
   const pinnedSessionIds = useSessionPinnedStore((state) => state.ids);
   const sessionOrderRanks = useSessionOrderingStore(React.useCallback(
