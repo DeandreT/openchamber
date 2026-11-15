@@ -33,7 +33,7 @@ use openchamber_native_transport::client::ServerClient;
 
 use crate::activation::on_activate;
 use crate::baseline::CssTextExt;
-use crate::chrome::glyph;
+use crate::chrome::{glyph, glyph_in};
 use crate::connection::ConnectionState;
 use crate::files_view::PanelSurface;
 use crate::locale::{self, Direction, Strings};
@@ -1066,7 +1066,7 @@ impl CommandPalette {
                     div()
                         .flex_shrink_0()
                         .margin_end(direction, px(8.0))
-                        .child(glyph(row.icon, 16.0, muted)),
+                        .child(glyph_in(row.icon, 16.0, muted, direction)),
                 )
                 .child(
                     div()

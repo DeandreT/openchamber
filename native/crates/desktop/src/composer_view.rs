@@ -18,7 +18,7 @@ use openchamber_native_core::permission_mode::PermissionMode;
 
 use crate::activation::on_activate;
 use crate::baseline::CssTextExt;
-use crate::chrome::{self, ButtonTone, IconButton, glyph};
+use crate::chrome::{self, ButtonTone, IconButton, glyph, glyph_in};
 use crate::composer_autocomplete::PickerKey;
 use crate::context_panel;
 use crate::elevation;
@@ -379,7 +379,7 @@ impl Workspace {
                 .justify_center()
                 .when(streaming || can_send, |this| this.cursor_pointer())
                 .when(!streaming && !can_send, |this| this.opacity(0.3))
-                .child(glyph(icon, icon_size, icon_color)),
+                .child(glyph_in(icon, icon_size, icon_color, direction)),
             cx,
             move |this, window, cx| {
                 if streaming {

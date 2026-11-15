@@ -10,7 +10,7 @@ use gpui_kit::{
 
 use crate::activation::on_activate;
 use crate::baseline::CssTextExt;
-use crate::chrome::{CONTROL_RADIUS, glyph};
+use crate::chrome::{CONTROL_RADIUS, glyph, glyph_in};
 use crate::elevation;
 use crate::locale::Direction;
 use crate::logical::LogicalStyledExt;
@@ -84,7 +84,9 @@ pub(crate) fn button<V: 'static>(
         .when(variant == Variant::Outline, |this| {
             this.shadow(elevation::control(palette))
         })
-        .when_some(icon, |this, icon| this.child(glyph(icon, 16.0, text)))
+        .when_some(icon, |this, icon| {
+            this.child(glyph_in(icon, 16.0, text, direction))
+        })
         .when_some(label, |this, label| this.child(label));
     let element = if disabled {
         element

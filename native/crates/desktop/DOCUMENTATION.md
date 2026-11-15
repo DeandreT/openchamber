@@ -1879,6 +1879,8 @@ prompt. Attachments and worktree creation remain separate workflows.
 - Layout uses logical sides: English is laid out as measured from the
   reference and right-to-left locales mirror it. Window controls keep their
   physical order and the right edge in every language, as in the web client.
+- Directional sprite icons mirror in right-to-left layouts using the web
+  client's directional icon set; explicitly left-to-right content stays physical.
 - Captions (Chats, Pinned, In work, Projects) are a muted medium word at the
   row's size in a 28 px row, with their chevron after the word. Project
   headers use 15 px medium type on a 22 px line in a 30 px row, with their

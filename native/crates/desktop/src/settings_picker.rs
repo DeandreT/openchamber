@@ -257,7 +257,7 @@ impl RenderOnce for Control {
                     .empty(move |_, _| div().p(px(12.0)).child(empty.clone()))
                     .check_icon(
                         gpui_kit::component::Icon::default()
-                            .path(crate::assets::icon_path("check")),
+                            .path(crate::assets::icon_path_in("check", direction)),
                     )
                     .render_trigger(move |trigger, _, cx| {
                         let open = trigger.is_open();

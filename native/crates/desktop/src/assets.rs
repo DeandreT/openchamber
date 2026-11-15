@@ -9,9 +9,26 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use gpui_kit::{AssetSource, Result, SharedString};
+use quick_xml::events::Event;
+use quick_xml::reader::Reader;
+
+use crate::locale::Direction;
 
 const ICONS_JSON: &str = include_str!("../resources/icons.json");
 const ICON_PREFIX: &str = "openchamber/icons/";
+const DIRECTIONAL_ICONS: &[&str] = &[
+    "arrow-left",
+    "arrow-right",
+    "arrow-left-s",
+    "arrow-right-s",
+    "arrow-go-back",
+    "layout-left",
+    "layout-right",
+    "panel-left",
+    "panel-card",
+    "send-plane",
+    "send-plane-2",
+];
 pub(crate) const APP_LOGO: &str = "openchamber/logo.svg";
 const APP_LOGO_SVG: &str = include_str!("../../../../packages/web/public/logo-dark-512x512.svg");
 /// The name of the MCP mark, which the icon sprite does not carry
@@ -56,6 +73,62 @@ pub fn icon_path(name: &str) -> SharedString {
     format!("{ICON_PREFIX}{name}.svg").into()
 }
 
+/// The sprite path in the layout's direction.
+pub fn icon_path_in(name: &str, direction: Direction) -> SharedString {
+    if direction == Direction::RightToLeft && DIRECTIONAL_ICONS.contains(&name) {
+        format!("{ICON_PREFIX}{name}.rtl.svg").into()
+    } else {
+        icon_path(name)
+    }
+}
+
+fn mirror_icon(svg: &str) -> Option<String> {
+    let mut reader = Reader::from_str(svg);
+    let Event::Start(root) = reader.read_event().ok()? else {
+        return None;
+    };
+    if root.name().as_ref() != b"svg" {
+        return None;
+    }
+    let view_box = root
+        .attributes()
+        .filter_map(std::result::Result::ok)
+        .find(|attribute| attribute.key.as_ref() == b"viewBox")?;
+    let values = std::str::from_utf8(view_box.value.as_ref())
+        .ok()?
+        .split(|character: char| character == ',' || character.is_ascii_whitespace())
+        .filter(|value| !value.is_empty())
+        .map(str::parse::<f64>)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .ok()?;
+    let [min_x, min_y, width, height] = values.as_slice() else {
+        return None;
+    };
+    if ![min_x, min_y, width, height]
+        .iter()
+        .all(|value| value.is_finite())
+        || *width <= 0.0
+        || *height <= 0.0
+    {
+        return None;
+    }
+    let translate = 2.0 * min_x + width;
+    if !translate.is_finite() {
+        return None;
+    }
+    let start = reader.buffer_position() as usize;
+    let end = svg.rfind("</svg>")?;
+    if end < start {
+        return None;
+    }
+    Some(format!(
+        "{}<g transform=\"matrix(-1 0 0 1 {translate} 0)\">{}</g>{}",
+        &svg[..start],
+        &svg[start..end],
+        &svg[end..]
+    ))
+}
+
 impl AssetSource for AppAssets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
         if path == APP_LOGO {
@@ -67,6 +140,13 @@ impl AssetSource for AppAssets {
             .strip_prefix(ICON_PREFIX)
             .and_then(|rest| rest.strip_suffix(".svg"))
         {
+            if let Some(name) = name.strip_suffix(".rtl") {
+                return Ok(DIRECTIONAL_ICONS
+                    .contains(&name)
+                    .then(|| icons().get(name).and_then(|svg| mirror_icon(svg)))
+                    .flatten()
+                    .map(|svg| Cow::Owned(svg.into_bytes())));
+            }
             if name == MCP_ICON {
                 return Ok(Some(Cow::Borrowed(MCP_ICON_SVG.as_bytes())));
             }
@@ -110,6 +190,86 @@ mod tests {
                 .expect("unknown sprite icons are absent, not errors")
                 .is_none()
         );
+    }
+
+    #[test]
+    fn mirrors_directional_sprite_icons_for_right_to_left() {
+        let path = icon_path_in("send-plane-2", Direction::RightToLeft);
+        assert_eq!(path.as_ref(), "openchamber/icons/send-plane-2.rtl.svg");
+        let svg = AppAssets
+            .load(&path)
+            .expect("asset source")
+            .expect("directional sprite icon");
+        let text = std::str::from_utf8(&svg).expect("SVG is UTF-8");
+        assert!(text.contains("<g transform=\"matrix(-1 0 0 1 24 0)\">"));
+        assert!(text.ends_with("</g></svg>"));
+        assert_eq!(
+            icon_path_in("send-plane-2", Direction::LeftToRight),
+            icon_path("send-plane-2")
+        );
+        assert_eq!(
+            icon_path_in("add", Direction::RightToLeft),
+            icon_path("add")
+        );
+        assert!(
+            AppAssets
+                .load("openchamber/icons/add.rtl.svg")
+                .expect("asset source")
+                .is_none()
+        );
+        assert!(
+            !AppAssets
+                .list(ICON_PREFIX)
+                .expect("asset source")
+                .iter()
+                .any(|path| path.ends_with(".rtl.svg"))
+        );
+    }
+
+    #[test]
+    fn mirror_requires_a_valid_view_box() {
+        let svg = r#"<svg viewBox="-2, 3, 10, 12"><path/></svg>"#;
+        assert!(
+            mirror_icon(svg)
+                .expect("valid viewBox")
+                .contains("matrix(-1 0 0 1 6 0)")
+        );
+        for invalid in [
+            "<svg><path/></svg>",
+            r#"<svg viewBox="0 0 nope 24"><path/></svg>"#,
+            r#"<svg viewBox="0 0 NaN 24"><path/></svg>"#,
+            r#"<svg viewBox="0 0 0 24"><path/></svg>"#,
+        ] {
+            assert!(mirror_icon(invalid).is_none(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn directional_icon_set_matches_the_web() {
+        let web = include_str!("../../../../packages/ui/src/components/icon/Icon.tsx");
+        let literal = web
+            .split_once("const DIRECTIONAL_ICONS:")
+            .expect("the web directional set")
+            .1
+            .split_once("([")
+            .expect("the set's opening")
+            .1
+            .split_once("])")
+            .expect("the set's closing")
+            .0;
+        let names: Vec<_> = literal
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix('"')?.strip_suffix("\","))
+            .collect();
+        let web: std::collections::HashSet<_> = names.iter().copied().collect();
+        let native: std::collections::HashSet<_> = DIRECTIONAL_ICONS.iter().copied().collect();
+        assert_eq!(web.len(), names.len(), "duplicate names in the web set");
+        assert_eq!(
+            native.len(),
+            DIRECTIONAL_ICONS.len(),
+            "duplicate native names"
+        );
+        assert_eq!(native, web);
     }
 
     #[test]

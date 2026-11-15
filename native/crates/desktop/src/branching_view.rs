@@ -20,7 +20,7 @@ use gpui_kit::component::tooltip::Tooltip;
 
 use crate::activation::on_activate;
 use crate::baseline::CssTextExt;
-use crate::chrome::{ButtonTone, IconButton, glyph};
+use crate::chrome::{ButtonTone, IconButton, glyph, glyph_in};
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
 use crate::markdown_view::{self, Author};
@@ -185,7 +185,12 @@ impl Workspace {
                 strip
                     .child(
                         row()
-                            .child(glyph("arrow-go-back", 14.0, palette.muted_foreground))
+                            .child(glyph_in(
+                                "arrow-go-back",
+                                14.0,
+                                palette.muted_foreground,
+                                direction,
+                            ))
                             .child(line(text_of(&entry.preview)))
                             .child(restore),
                     )
@@ -208,7 +213,12 @@ impl Workspace {
                 .items_center()
                 .gap(px(8.0))
                 .cursor_pointer()
-                .child(glyph("arrow-go-back", 14.0, palette.muted_foreground))
+                .child(glyph_in(
+                    "arrow-go-back",
+                    14.0,
+                    palette.muted_foreground,
+                    direction,
+                ))
                 .child(line(header_label))
                 .child(glyph(
                     if expanded {
@@ -570,7 +580,7 @@ impl Workspace {
                             .border_color(palette.border)
                             .cursor_pointer()
                             .hover(move |style| style.bg(hover))
-                            .child(glyph("arrow-left", 16.0, palette.foreground))
+                            .child(glyph_in("arrow-left", 16.0, palette.foreground, direction))
                             .child(div().css_text(0.75, 1.0, cx).child(label)),
                         cx,
                         |this, window, cx| this.return_to_parent(window, cx),

@@ -204,6 +204,7 @@ impl Workspace {
                     icon_color,
                     row.expanded,
                     palette,
+                    direction,
                 )
             })
             .child(

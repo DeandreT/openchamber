@@ -16,7 +16,7 @@ use gpui_kit::{
 
 use crate::activation::on_activate;
 use crate::assets;
-use crate::locale::Strings;
+use crate::locale::{self, Direction, Strings};
 use crate::theme::Palette;
 use crate::workspace::Workspace;
 
@@ -123,8 +123,13 @@ const BUTTON_GROUP: &str = "icon-button";
 
 /// A sprite glyph of `size` logical pixels in `color`.
 pub fn glyph(name: &str, size: f32, color: Hsla) -> Svg {
+    glyph_in(name, size, color, Direction::LeftToRight)
+}
+
+/// A sprite glyph in the layout's direction.
+pub fn glyph_in(name: &str, size: f32, color: Hsla, direction: Direction) -> Svg {
     svg()
-        .path(assets::icon_path(name))
+        .path(assets::icon_path_in(name, direction))
         .size(px(size))
         .flex_shrink_0()
         .text_color(color)
@@ -208,8 +213,13 @@ impl IconButton {
             // A press here is the button's, never the start of a window move.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(
-                glyph(self.icon, self.icon_size, rest)
-                    .group_hover(BUTTON_GROUP, move |style| style.text_color(foreground)),
+                glyph_in(
+                    self.icon,
+                    self.icon_size,
+                    rest,
+                    locale::strings(cx).direction(),
+                )
+                .group_hover(BUTTON_GROUP, move |style| style.text_color(foreground)),
             );
         on_activate(button, cx, action)
             .test_support()

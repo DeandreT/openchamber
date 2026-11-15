@@ -639,7 +639,8 @@ impl RenderOnce for SelectionControl {
                         .child(empty.clone())
                 })
                 .check_icon(
-                    gpui_kit::component::Icon::default().path(crate::assets::icon_path("check")),
+                    gpui_kit::component::Icon::default()
+                        .path(crate::assets::icon_path_in("check", self.direction)),
                 )
                 .render_trigger(move |trigger, _, cx| {
                     let open = trigger.is_open();

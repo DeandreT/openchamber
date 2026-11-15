@@ -13,7 +13,7 @@ use openchamber_native_core::send_config;
 
 use crate::activation::on_activate;
 use crate::baseline::CssTextExt;
-use crate::chrome::glyph;
+use crate::chrome::{glyph, glyph_in};
 use crate::locale::{self, Direction};
 use crate::logical::LogicalStyledExt;
 use crate::theme::Palette;
@@ -198,10 +198,11 @@ impl Workspace {
                 .on_mouse_down(gpui_kit::MouseButton::Left, |_, window, _| {
                     window.prevent_default()
                 })
-                .child(glyph(
+                .child(glyph_in(
                     icon,
                     if icon == "close" { 16.0 } else { 14.0 },
                     palette.muted_foreground,
+                    direction,
                 ))
         };
         let captured_agent = message

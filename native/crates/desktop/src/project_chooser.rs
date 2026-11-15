@@ -252,7 +252,8 @@ impl Workspace {
                 )
                 .search_clearable(false)
                 .check_icon(
-                    gpui_kit::component::Icon::default().path(crate::assets::icon_path("check")),
+                    gpui_kit::component::Icon::default()
+                        .path(crate::assets::icon_path_in("check", direction)),
                 )
                 .search_placeholder(strings.get("chat.chatInput.draftPicker.searchProjects"))
                 .empty(move |_, cx| {

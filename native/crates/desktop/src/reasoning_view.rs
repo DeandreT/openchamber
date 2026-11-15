@@ -14,7 +14,7 @@ use gpui_kit::{
 };
 
 use crate::activation::on_activate;
-use crate::chrome::glyph;
+use crate::chrome::glyph_in;
 use crate::locale::Direction;
 use crate::logical::LogicalStyledExt;
 use crate::markdown_view::{self, Author};
@@ -112,6 +112,7 @@ pub(crate) fn render(
                 look.icon_color.unwrap_or(palette.tools_icon),
                 expanded,
                 palette,
+                direction,
             ))
             .child(
                 div()
@@ -179,6 +180,7 @@ pub(crate) fn toggle_icon(
     color: Hsla,
     expanded: bool,
     palette: &Palette,
+    direction: Direction,
 ) -> AnyElement {
     let chevron = if expanded {
         "arrow-down-s"
@@ -199,7 +201,7 @@ pub(crate) fn toggle_icon(
                 .justify_center()
                 .when(expanded, |this| this.invisible())
                 .group_hover(group.clone(), |style| style.invisible())
-                .child(glyph(icon, 14.0, color)),
+                .child(glyph_in(icon, 14.0, color, direction)),
         )
         .child(
             div()
@@ -210,7 +212,7 @@ pub(crate) fn toggle_icon(
                 .justify_center()
                 .when(!expanded, |this| this.invisible())
                 .group_hover(group.clone(), |style| style.visible())
-                .child(glyph(chevron, 14.0, palette.tools_icon)),
+                .child(glyph_in(chevron, 14.0, palette.tools_icon, direction)),
         )
         .into_any_element()
 }

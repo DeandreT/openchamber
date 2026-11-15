@@ -41,7 +41,7 @@ use openchamber_native_transport::git::{Branches, GitError};
 
 use crate::activation::on_activate;
 use crate::baseline::CssTextExt;
-use crate::chrome::{CONTROL_RADIUS, IconButton, glyph};
+use crate::chrome::{CONTROL_RADIUS, IconButton, glyph, glyph_in};
 use crate::context_panel::{ROW_LINE, ROW_SIZE, XS_LINE, XS_SIZE};
 use crate::diff_view::DiffPane;
 use crate::elevation;
@@ -1975,7 +1975,12 @@ impl GitView {
                 .when(!running, |this| {
                     this.cursor_pointer().hover(move |style| style.bg(tint))
                 })
-                .child(glyph("arrow-go-back", 14.0, palette.status_error))
+                .child(glyph_in(
+                    "arrow-go-back",
+                    14.0,
+                    palette.status_error,
+                    direction,
+                ))
                 .child(
                     div()
                         .css_text(LABEL_SIZE, LABEL_LINE, cx)

@@ -255,7 +255,7 @@ pub(crate) fn button(
                 Control::Details(expanded) => element
                     .aria_expanded(expanded)
                     .text_color(palette.muted_foreground)
-                    .child(crate::chrome::glyph(
+                    .child(crate::chrome::glyph_in(
                         if expanded {
                             "arrow-down-s"
                         } else {
@@ -263,12 +263,20 @@ pub(crate) fn button(
                         },
                         14.,
                         palette.muted_foreground,
+                        locale::strings(cx).direction(),
                     )),
-                Control::Icon(icon) => element
-                    .size(px(24.))
-                    .p_0()
-                    .justify_center()
-                    .child(crate::chrome::glyph(icon, 12., palette.muted_foreground)),
+                Control::Icon(icon) => {
+                    element
+                        .size(px(24.))
+                        .p_0()
+                        .justify_center()
+                        .child(crate::chrome::glyph_in(
+                            icon,
+                            12.,
+                            palette.muted_foreground,
+                            locale::strings(cx).direction(),
+                        ))
+                }
             })
             .when(enabled, |element| {
                 let pointer_focus = focus.clone();
