@@ -20,6 +20,14 @@
  *   environment (`core/environment`), which changes when the session moves to
  *   a worktree, a project or back from a removed worktree. The folder is the
  *   `Working directory` line of the text OpenCode gave the model.
+ * - A pull request watch waking the agent (`source: "openchamber-pr-watch"`,
+ *   `web/server/lib/pr-watch`): the row says what changed and opens the pull
+ *   request. It does not expand, because the text only repeats that in an
+ *   envelope and tells the agent what to do next.
+ * - An extension wait waking the agent (`source: "openchamber-wait"`,
+ *   `web/server/lib/extension-waits`): the row names the wait and opens to
+ *   the extension's report, which can run longer than the description's one
+ *   line.
  *
  * Hidden, and why:
  * - The rest about the session's instructions, as noise the maintainer saw in
@@ -49,11 +57,35 @@ import { readWorkflowReport } from "@/lib/workflows/report"
 import type { Message, Metadata, Part, ToolPart } from "./model"
 import { isSubagentCancellationNote, readSubagentRun } from "./subagent-run"
 
+const pullRequestNoticeSchema = z.object({
+  kind: z.literal("pull-request"),
+  url: z.string().min(1),
+  number: z.number(),
+  events: z.array(z.enum(["merged", "closed", "checks-failed", "checks-passed", "conflict", "behind", "activity"])).min(1),
+  failedChecks: z.array(z.string()),
+  authors: z.array(z.string()),
+  text: z.string(),
+})
+
+export type PullRequestNotice = z.infer<typeof pullRequestNoticeSchema>
+
+const extensionWaitNoticeSchema = z.object({
+  kind: z.literal("extension-wait"),
+  subject: z.string().min(1),
+  outcome: z.enum(["fired", "ended"]),
+  summary: z.string(),
+  text: z.string(),
+})
+
+export type ExtensionWaitNotice = z.infer<typeof extensionWaitNoticeSchema>
+
 export type SessionNotice =
   | { kind: "plugin"; label: string; text: string }
   | { kind: "restart"; text: string }
   | { kind: "command-failed"; command: string; text: string }
   | { kind: "moved"; folder: string | null; text: string }
+  | PullRequestNotice
+  | ExtensionWaitNotice
 
 const HIDDEN_DESCRIPTIONS = new Set(["ACP embedded context"])
 
@@ -72,6 +104,33 @@ const readMove = (message: Extract<Message, { role: "system" }>): SessionNotice 
   return { kind: "moved", folder, text: message.text }
 }
 
+// A message from before the wake carried its names has none, and reads without them.
+const pullRequestWakeSchema = pullRequestNoticeSchema.pick({ url: true, events: true }).extend({
+  source: z.literal("openchamber-pr-watch"),
+  failedChecks: z.array(z.string()).default([]),
+  authors: z.array(z.string()).default([]),
+})
+const PULL_REQUEST_NUMBER = /^\s*<openchamber-pull-request\b[^>]*\bnumber="(\d+)"/
+
+const readPullRequestWake = (text: string, metadata: Metadata): PullRequestNotice | undefined => {
+  const parsed = pullRequestWakeSchema.safeParse(metadata)
+  const number = text.match(PULL_REQUEST_NUMBER)?.[1]
+  if (!parsed.success || !number) return undefined
+  const { url, events, failedChecks, authors } = parsed.data
+  return { kind: "pull-request", url, number: Number(number), events, failedChecks, authors, text }
+}
+
+const extensionWaitWakeSchema = extensionWaitNoticeSchema.pick({ subject: true, outcome: true, summary: true }).extend({
+  source: z.literal("openchamber-wait"),
+})
+
+const readExtensionWaitWake = (text: string, metadata: Metadata): ExtensionWaitNotice | undefined => {
+  const parsed = extensionWaitWakeSchema.safeParse(metadata)
+  if (!parsed.success) return undefined
+  const { subject, outcome, summary } = parsed.data
+  return { kind: "extension-wait", subject, outcome, summary, text }
+}
+
 /** The notice a message carries, or undefined when the timeline does not show it. */
 export function readSessionNotice(message: Message): SessionNotice | undefined {
   if (message.role === "system") return readMove(message)
@@ -86,7 +145,7 @@ export function readSessionNotice(message: Message): SessionNotice | undefined {
   const text = message.text
   if (restartSchema.safeParse(metadata).success) return { kind: "restart", text }
   if (failedCommandSchema.safeParse(metadata).success) return { kind: "command-failed", command: description, text }
-  return { kind: "plugin", label: description, text }
+  return readPullRequestWake(text, metadata) ?? readExtensionWaitWake(text, metadata) ?? { kind: "plugin", label: description, text }
 }
 
 // --- Notice rows inside a turn's Activity -----------------------------------
@@ -105,6 +164,8 @@ const noticeSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("restart"), text: z.string() }),
   z.object({ kind: z.literal("command-failed"), command: z.string(), text: z.string() }),
   z.object({ kind: z.literal("moved"), folder: z.string().nullable(), text: z.string() }),
+  pullRequestNoticeSchema,
+  extensionWaitNoticeSchema,
 ])
 
 const noticePartMetadataSchema = z.object({ [NOTICE_METADATA_KEY]: noticeSchema })

@@ -10,7 +10,10 @@ import { canDriveBrowserPage } from './browser/hostCapability';
 import { messageQueueUpdatedEventSchema, type MessageQueueUpdatedEvent } from '@/stores/messageQueueStore';
 import { autoReviewUpdatedEventSchema, type AutoReviewUpdatedEvent } from '@/stores/useAutoReviewStore';
 import { prWatchUpdatedEventSchema, type PrWatchUpdatedEvent } from '@/sync/pr-watch';
+import { extensionWaitsUpdatedEventSchema, type ExtensionWaitsUpdatedEvent } from '@/sync/extension-waits';
 import { sessionWarmingSnapshotSchema, type SessionWarmingSnapshot } from '@/stores/useSessionWarmingStore';
+import { sessionTodosEventSchema, type SessionTodosEvent } from '@/stores/useSessionTodosStore';
+import { isJsonValue, type JsonValue } from '@openchamber/sdk';
 import { z } from 'zod';
 import { trackedItemRecordsSchema } from './trackedItems/model';
 import type { SyncEvent } from './opencode/events';
@@ -72,7 +75,8 @@ const UNKNOWN_BROWSER_CONTROL_CONTEXT: BrowserControlRequestContext = { director
 
 /**
  * The agent asked for a file to be shown in the user's file panel. Every
- * client receives it; one showing that project opens the file.
+ * client receives it; the desktop file panel opens the file, and the mobile
+ * shell opens it only for the session on screen and announces the others.
  */
 const fileOpenRequestSchema = z.object({
   path: z.string().min(1),
@@ -144,11 +148,27 @@ type SourceControlProvidersChangedEvent = { type: 'source-control-providers-chan
 type TrackerProvidersChangedEvent = { type: 'tracker-providers-changed' };
 
 /**
+ * The set of usage providers the server serves changed: an extension that
+ * reports usage was approved, enabled, updated, paused or removed. Carries
+ * nothing; listeners re-read the provider list.
+ */
+type QuotaProvidersChangedEvent = { type: 'quota-providers-changed' };
+
+/**
  * The extension catalog changed: an extension was installed, updated, approved,
  * paused, enabled or removed, or a folder install's files changed. Carries
  * nothing; listeners re-read the catalog.
  */
 type GuestsChangedEvent = { type: 'guests-changed' };
+
+/**
+ * The marks extensions put on sidebar rows changed (`marks.set`, or a service
+ * ended). Carries nothing; listeners re-read the marks.
+ */
+type GuestMarksChangedEvent = { type: 'guest-marks-changed' };
+
+/** An extension's service sent its open frames something (`emit`). */
+type GuestServiceEvent = { type: 'guest-service-event'; guestId: string; topic: string; data: JsonValue };
 
 /**
  * A theme file in the server's custom themes folder was added, removed or
@@ -291,10 +311,13 @@ type OpenChamberEvent =
   | MessageQueueUpdatedEvent
   | AutoReviewUpdatedEvent
   | PrWatchUpdatedEvent
+  | ExtensionWaitsUpdatedEvent
   | PermissionPolicyEvent
   | ControlStreamSyncEnvelope
   /** Which sessions the server keeps warm, as a full snapshot. */
   | { type: 'session-warming'; snapshot: SessionWarmingSnapshot }
+  /** A session's todo list changed, or has to be read again (`todos` null); `sessionId` null for a whole directory. */
+  | { type: 'session-todos'; event: SessionTodosEvent }
   /** The host follows this space's queue again; what changed in a gap is read from the space. */
   | { type: 'space-queue-stream'; spaceId: string }
   /** The host follows this space's permission modes again; what changed in a gap is read from the space. */
@@ -308,7 +331,10 @@ type OpenChamberEvent =
   | BrowserProviderResetEvent
   | SourceControlProvidersChangedEvent
   | TrackerProvidersChangedEvent
+  | QuotaProvidersChangedEvent
   | GuestsChangedEvent
+  | GuestMarksChangedEvent
+  | GuestServiceEvent
   | ThemesChangedEvent
   | LimitFailoverEvent
   | ProjectContextChangedEvent
@@ -481,6 +507,8 @@ const getEventProperties = (properties: unknown): Record<string, unknown> | null
   return properties as Record<string, unknown>;
 };
 
+const guestServiceEventSchema = z.object({ guestId: z.string().min(1), topic: z.string().min(1), data: z.json() });
+
 const dispatchFromEnvelope = (envelope: { type: string; properties: unknown }) => {
   if (envelope.type === 'openchamber:terminal-sessions-changed') {
     for (const listener of listeners) listener({ type: 'terminal-sessions-changed' });
@@ -532,6 +560,14 @@ const dispatchFromEnvelope = (envelope: { type: string; properties: unknown }) =
     return;
   }
 
+  if (envelope.type === 'openchamber:extension-waits.updated') {
+    const parsed = extensionWaitsUpdatedEventSchema.safeParse(envelope);
+    if (parsed.success) {
+      for (const listener of listeners) listener(parsed.data);
+    }
+    return;
+  }
+
   if (envelope.type === 'openchamber:auto-review.updated') {
     const parsed = autoReviewUpdatedEventSchema.safeParse(envelope);
     if (parsed.success) {
@@ -563,6 +599,12 @@ const dispatchFromEnvelope = (envelope: { type: string; properties: unknown }) =
   if (envelope.type === 'openchamber:session-warming') {
     const parsed = sessionWarmingSnapshotSchema.safeParse(envelope.properties);
     if (parsed.success) for (const listener of listeners) listener({ type: 'session-warming', snapshot: parsed.data });
+    return;
+  }
+
+  if (envelope.type === 'openchamber:session-todos') {
+    const parsed = sessionTodosEventSchema.safeParse(envelope.properties);
+    if (parsed.success) for (const listener of listeners) listener({ type: 'session-todos', event: parsed.data });
     return;
   }
 
@@ -634,8 +676,25 @@ const dispatchFromEnvelope = (envelope: { type: string; properties: unknown }) =
     return;
   }
 
+  if (envelope.type === 'openchamber:quota-providers-changed') {
+    for (const listener of listeners) listener({ type: 'quota-providers-changed' });
+    return;
+  }
+
   if (envelope.type === 'openchamber:guests-changed') {
     for (const listener of listeners) listener({ type: 'guests-changed' });
+    return;
+  }
+
+  if (envelope.type === 'openchamber:guest-marks-changed') {
+    for (const listener of listeners) listener({ type: 'guest-marks-changed' });
+    return;
+  }
+
+  if (envelope.type === 'openchamber:guest-service-event') {
+    const parsed = guestServiceEventSchema.safeParse(envelope.properties);
+    if (!parsed.success || !isJsonValue(parsed.data.data)) return;
+    for (const listener of listeners) listener({ type: 'guest-service-event', ...parsed.data });
     return;
   }
 

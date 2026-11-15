@@ -19,8 +19,7 @@ import { pickLiveBrowserTabs, touchRecentBrowserTab } from '@/lib/browser/liveTa
 import { subscribeOpenchamberEvents } from '@/lib/openchamberEvents';
 import { useGuestsStore } from '@/lib/guests/store';
 import { guestHasSharedSurface, guestSurfaceDocking, type GuestSurfaceDocking } from '@/lib/guests/surfaces';
-import { GUEST_SURFACE_DOCK_SIZE_MIN } from '@openchamber/sdk';
-import { isPluginContextPanelMode, pluginIdFromMode, type PluginContextPanelMode } from '@/lib/surfaces/modes';
+import { isPluginContextPanelMode, pluginIdFromMode } from '@/lib/surfaces/modes';
 import {
   getZoneView,
   resolveZoneActiveTab,
@@ -51,43 +50,7 @@ import { DockedPanelSurfaceContext } from '@/hooks/usePageColors';
 const WalkthroughView = lazyWithChunkRecovery(() => import('@/components/views/walkthrough/WalkthroughView').then((m) => ({ default: m.WalkthroughView })));
 const DiffView = lazyWithChunkRecovery(() => import('@/components/views/DiffView').then((m) => ({ default: m.DiffView })));
 const FilesView = lazyWithChunkRecovery(() => import('@/components/views/FilesView').then((m) => ({ default: m.FilesView })));
-const PluginPane = React.lazy(() => import('./PluginPane').then((module) => ({ default: module.PluginPane })));
-const GuestSurfacePane = React.lazy(() => import('./GuestSurfacePane').then((module) => ({ default: module.GuestSurfacePane })));
-
-// How an extension page sits beside its shared surface: flex direction puts
-// the page first on top/left and last on bottom/right; the page's size is
-// fixed across the docked edge and the picture takes the rest.
-const DOCK_LAYOUT = {
-  top: { container: 'flex-col', page: 'border-b border-border', vertical: true },
-  bottom: { container: 'flex-col-reverse', page: 'border-t border-border', vertical: true },
-  left: { container: 'flex-row', page: 'border-e border-border', vertical: false },
-  right: { container: 'flex-row-reverse', page: 'border-s border-border', vertical: false },
-} as const;
-
-/**
- * A shared-surface extension's own page, docked to one edge of the picture.
- * It starts at the manifest's `panel.size` and follows the page's
- * `host.setHeight` after that (the thickness across its edge, so a width
- * for a left or right dock), never below the manifest minimum and never past
- * half the panel, so the picture always stays in view.
- */
-const DockedGuestPage: React.FC<{ mode: PluginContextPanelMode; docking: GuestSurfaceDocking }> = ({ mode, docking }) => {
-  const [requested, setRequested] = React.useState<number | null>(null);
-  const layout = DOCK_LAYOUT[docking.dock];
-  const size = Math.max(GUEST_SURFACE_DOCK_SIZE_MIN, requested ?? docking.size);
-  return (
-    <div
-      className={cn(
-        'shrink-0 overflow-hidden duration-200 ease-[cubic-bezier(0.22,1,0.36,1)] motion-reduce:transition-none',
-        layout.vertical ? 'max-h-[50%] transition-[height]' : 'max-w-[50%] transition-[width]',
-        layout.page,
-      )}
-      style={layout.vertical ? { height: size } : { width: size }}
-    >
-      <PluginPane mode={mode} onResize={setRequested} />
-    </div>
-  );
-};
+const GuestPanelContent = React.lazy(() => import('./GuestPanelContent').then((module) => ({ default: module.GuestPanelContent })));
 
 /** A browser tab with the project it belongs to, which may not be the one on screen. */
 type PanelBrowserTab = {
@@ -587,6 +550,20 @@ export const ContextSurfacePanes: React.FC = () => {
   // The header slot goes to the pane on screen in its zone only.
   const headerSlotFor = (zone: ContextZone, active: boolean): HTMLElement | null => (active ? headerSlots[zone] : null);
 
+
+  // A tab restored from the last run starts its page the first time it shows:
+  // an extension nobody looked at this run runs nothing. After that it stays
+  // mounted, which keeps the page's state while another tab is in front.
+  const [seenPluginTabs, setSeenPluginTabs] = React.useState<ReadonlySet<string>>(() => new Set());
+  const newlyShownPluginTabs = pluginTabs.filter((tab) => {
+    if (seenPluginTabs.has(tab.id)) return false;
+    const zone = zoneFor(tab.mode);
+    return zone.isOpen && zone.activeTab?.id === tab.id;
+  });
+  if (newlyShownPluginTabs.length > 0) {
+    setSeenPluginTabs(new Set([...seenPluginTabs, ...newlyShownPluginTabs.map((tab) => tab.id)]));
+  }
+
   return (
     <>
       {hasFileTabs ? (
@@ -738,6 +715,7 @@ export const ContextSurfacePanes: React.FC = () => {
       {pluginTabs.map((tab) => {
         if (!isPluginContextPanelMode(tab.mode)) return null;
         const pluginZone = zoneFor(tab.mode);
+        if (!seenPluginTabs.has(tab.id)) return null;
         // A shared-surface extension's picture is drawn by the host and
         // mounted only while shown, so an unwatched surface holds no socket
         // and its service can idle out. Its own page, when it has one, is
@@ -759,18 +737,7 @@ export const ContextSurfacePanes: React.FC = () => {
             className={cn('absolute inset-0', shown ? 'block' : 'hidden')}
           >
             <React.Suspense fallback={null}>
-              {!sharedSurface ? (
-                <PluginPane mode={tab.mode} />
-              ) : !docking ? (
-                <GuestSurfacePane mode={tab.mode} />
-              ) : (
-                <div className={cn('flex h-full', DOCK_LAYOUT[docking.dock].container)}>
-                  <DockedGuestPage mode={tab.mode} docking={docking} />
-                  <div className="min-h-0 min-w-0 flex-1">
-                    {surfaceMounted ? <GuestSurfacePane mode={tab.mode} /> : null}
-                  </div>
-                </div>
-              )}
+              <GuestPanelContent mode={tab.mode} sharedSurface={sharedSurface} docking={docking ?? null} surfaceMounted={surfaceMounted} />
             </React.Suspense>
           </ZonePane>
         );

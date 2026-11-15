@@ -392,10 +392,13 @@ export const restoreState = (state, seed) => {
 
 /**
  * Starts `node <repo>/packages/web/bin/cli.js serve` on `dist` with an
- * isolated home under `state`. Resolves once it answers HTTP, with the served
- * main chunk checked against the build's index.html.
+ * isolated home under `state`. With `project` null it is a first run: no
+ * project directory, no settings written, the server started from the empty
+ * home, so it starts as a brand-new install does. Resolves once it answers HTTP, with the served
+ * main chunk checked against the build's index.html. `env` adds variables to
+ * the server's (and so OpenCode's) environment.
  */
-export const startIsolatedServer = async ({ repo, dist, state, project, port, fixturePort, opencodeBinary = defaultOpencodeBinary(), logFile, interactions = false, selections = false, workflows = false, authentication = false, gitFixture = false, githubFixture = null, providerMode = null, signal }) => {
+export const startIsolatedServer = async ({ repo, dist, state, project, port, fixturePort, opencodeBinary = defaultOpencodeBinary(), logFile, interactions = false, selections = false, workflows = false, authentication = false, gitFixture = false, githubFixture = null, providerMode = null, signal, env: extraEnv = {} }) => {
   signal?.throwIfAborted()
   if (await portInUse(port)) throw new Error(`Port ${port} is already in use; stop that server or pass another port.`)
   signal?.throwIfAborted()
@@ -403,10 +406,12 @@ export const startIsolatedServer = async ({ repo, dist, state, project, port, fi
   if (!built) throw new Error(`${dist}/index.html has no main chunk; build it first.`)
   mkdirSync(join(state, "home"), { recursive: true })
   mkdirSync(join(state, "oc-data"), { recursive: true })
-  if (!interactions) ensureProject(project)
+  if (project) {
+    if (!interactions) ensureProject(project)
+    writeSettings(state, project)
+  }
   if (gitFixture) ensureGitFixture(dirname(project), project)
   if (githubFixture) ensureGitHubRemote(project)
-  writeSettings(state, project)
   if (interactions) {
     const settingsFile = join(state, "oc-data", "settings.json")
     const settings = JSON.parse(readFileSync(settingsFile, "utf8"))
@@ -418,6 +423,7 @@ export const startIsolatedServer = async ({ repo, dist, state, project, port, fi
   const env = isolatedServerEnv({ state, dist, config, opencodeBinary, authentication,
     inherited: interactions ? { PATH: process.env.PATH, LANG: "C.UTF-8", SHELL: "/bin/sh", TMPDIR: join(state, "tmp") } : undefined,
   })
+  Object.assign(env, extraEnv)
   if (githubFixture) {
     // The server's own outbound proxy support reaches the fixture; loopback stays direct.
     env.HTTPS_PROXY = githubFixture.proxy
@@ -425,7 +431,7 @@ export const startIsolatedServer = async ({ repo, dist, state, project, port, fi
     env.NODE_EXTRA_CA_CERTS = githubFixture.ca
   }
   const child = spawn(process.execPath, [join(repo, "packages/web/bin/cli.js"), "serve", "--port", String(port), "--foreground"], {
-    cwd: project,
+    cwd: project ?? join(state, "home"),
     env,
     // Its own process group, so stopping it stops the OpenCode it manages.
     detached: true,

@@ -51,7 +51,8 @@ send never re-resolves mutable UI state:
     { kind: 'synthetic', text },                         // handed to the composer by another surface
   ],
   sendConfig: { providerID, modelID, agent?, variant? },  // required
-  goal?: { objective?, tokenBudget }  // queued with "run as goal" armed
+  goal?: { objective?, tokenBudget },  // queued with "run as goal" armed
+  syntheticIds?   // minted by the first delivery attempt, one per record admitted ahead of the message
 }
 ```
 
@@ -79,6 +80,8 @@ own display.
 context entry). Public snapshots and broadcasts strip the payloads —
 attachment `dataUrl` (megabytes of base64) and `context` (a PR diff, say) —
 so they do not ride every update; the only way to get them back is a `take`.
+`syntheticIds` comes only from the queue file: `parseQueuedItemInput` drops it
+from client input, and snapshots leave it out.
 
 Snapshots retain `contextPreview`, capped at 100 characters plus an ellipsis.
 It carries the attached comment or context label when `content` is empty and
@@ -169,20 +172,32 @@ whose `uncertain` value requires explicit retry after restart.
    scheduled goal does: `createSessionGoal` (`../session-goal/create.js`)
    saves the goal through the injected `persistSessionGoal` before anything is
    admitted, so a failed save leaves nothing for the retry to duplicate, and
-   the goal briefing goes as the last synthetic message. Then the message itself:
+   the goal briefing goes as the last synthetic message. Before the goal save
+   and the first synthetic message, the item's `syntheticIds` are minted and
+   saved, and a revert staged on the session (`revert` on its record) is
+   committed (`POST /session/:id/revert/commit`): OpenCode's commit deletes
+   everything admitted past the revert's boundary, so committing at the prompt
+   would delete the context admitted just before it. An item with nothing to
+   admit ahead of its message mints no ids and reads no record; a failed save
+   or an unreadable record fails the send. Then the message itself:
    - text starting with `/` that names a command in OpenCode's `/command`
      list (skills included) goes to `POST /session/:id/command` (body fields
      `name` and `text` since OpenCode 2.0.8) with its file attachments. The
      command route takes files only, which is why the context went ahead of
      it; sending "/name args" as a prompt instead would skip the template
      OpenCode expands only on that route. The command lookup runs before
-     anything is admitted, so a failed lookup fails the send without leaving
-     context behind for the retry to duplicate;
+     anything is admitted, so a failed lookup fails the send with nothing in
+     the session;
    - otherwise `POST /session/:id/prompt` with the user's text, files and
      agent mention.
    Success removes the item, persists, broadcasts, and calls `onPromptSent`.
    Failure keeps the item, backs off
    2 s → 60 s (doubling per consecutive failure of that item), and re-arms.
+   A retry, also after a restart, reuses the `syntheticIds`: OpenCode answers a
+   second admission of an id with the first one, so a failure between the
+   context and the message leaves each synthetic record in the session once.
+   The ids end at the mint time, one millisecond apart, so they sort in
+   admission order and ahead of the message, whose id OpenCode assigns.
 6. The next item goes out after the next busy → idle cycle.
 
 A 2xx HTML app-shell response is a failed dispatch, not acceptance. The queued item stays persisted and uses the existing retry backoff.
@@ -464,7 +479,9 @@ snapshot. Separate item and receipt ledgers would leave a crash window between
 their ownership transitions. Once the ledger exists, all subsequent snapshots sync the file before
 rename and sync the containing directory on platforms supporting directory sync.
 Windows uses the file sync and atomic replacement; directory sync is unavailable
-through this implementation.
+through this implementation. Corrupt-file backups are opened with write access
+for their sync on Windows, where flushing a read-only handle fails. The backup
+must be synced successfully before replacing the active queue file.
 
 #### Why terminal receipts keep a digest
 
@@ -1062,6 +1079,21 @@ The focused contract check uses the web package's Vitest runner:
 The existing `runtime.test.js` remains the owning package's legacy regression
 suite. A mocked OpenCode contract does not establish the behavior of an actual
 OpenCode deployment; runtime integration must exercise its real admissions.
+## A session that moves
+
+An ordinary legacy queue follows its session. The wire translator's move event is `session.updated` with
+`info.projectID`; the runtime rekeys that session's entry to the new directory
+and broadcasts before the next idle tick, so the delivery and every client
+follow the session. Usage and title updates also carry a directory but no
+`projectID`, so an in-flight event from the old location cannot move a queue
+back. The UI drops the session's other directory keys when the server speaks
+for one directory, so the queued row moves instead of appearing twice.
+
+Durable items and prefix captures retain their exact captured directory, as do
+their receipts, context claims and uploaded bytes. A move event cannot rekey
+that queue independently of those owners. An active transfer also retains its
+source directory until it finishes. Automatic relocation of this ownership needs
+a separate protocol; the existing exact-owner recovery remains available.
 
 ## UI ownership
 

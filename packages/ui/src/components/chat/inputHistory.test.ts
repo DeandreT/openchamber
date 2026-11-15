@@ -57,6 +57,20 @@ describe('buildChatInputHistorySubmissions', () => {
 });
 
 describe('mapInputHistoryEntriesToValues', () => {
+  test('recalls desktop notes alongside typed server-file references', () => {
+    const reference = { uri: 'file:///repo/report.pdf', name: 'report.pdf', description: 'Read the summary' };
+    const path = 'C:\\files\\archive.zip';
+    const note: AttachedFile = {
+      ...ATTACHMENT, filename: 'archive.zip', dataUrl: 'data:text/plain,File%20on%20disk',
+      agentPath: path, serverPath: path,
+    };
+    const submission = createInputHistorySubmission('inspect', [note, materializeFileReference(reference, 'reference', 'application/pdf')]);
+    const recalled = mapInputHistoryEntriesToValues([{ ...submission, submittedAt: 1 }])[0]!.attachments;
+    expect(recalled).toHaveLength(2);
+    expect(recalled[0]).toMatchObject({ dataUrl: note.dataUrl, serverPath: path, agentPath: path });
+    expect(recalled[1]!.fileReference).toEqual(reference);
+  });
+
   test('recalled equal reference occurrences remain independently removable', () => {
     const reference = { uri: 'file:///repo/report.pdf', name: 'report.pdf' };
     const submission = createInputHistorySubmission('inspect', [

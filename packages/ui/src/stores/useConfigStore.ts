@@ -1,13 +1,15 @@
 import { create } from "zustand";
-import { listModelVariantIds, modelVariantNames } from "@/lib/modelVariants";
+import { listModelVariantIds, modelVariantNames, nextThinkingVariant } from "@/lib/modelVariants";
 import { AUTO_MODEL_ID, AUTO_PROVIDER_ID, isAutoModel } from '@/lib/routing/autoModel';
 import { selectAutoReady, useRoutingStore } from '@/stores/useRoutingStore';
+import { notifyAutoUnavailable } from '@/lib/routing/autoUnavailableNotice';
 import type { StoreApi, UseBoundStore } from "zustand";
 import { devtools, persist } from "zustand/middleware";
 import { findCatalogModel, type Provider, type Model, type Agent, type Config } from "@/lib/opencode/model";
 import type { DesktopSettings } from "@/lib/desktop";
 import type { CatalogKind } from "@/lib/opencode/events";
-import { opencodeClient, type OpencodeHealthProbe } from "@/lib/opencode/client";
+import { OpencodeApiError, opencodeClient, type OpencodeHealthProbe } from "@/lib/opencode/client";
+import { isOpenCodeTrustPending } from "@/lib/opencodeTrust";
 import { isLocationNotFoundError } from "@/lib/opencode/location-errors";
 import { isSameProjectConfigError, readProjectConfigError, type ProjectConfigError } from "@/lib/opencode/configError";
 import { scopeMatches, subscribeToConfigChanges } from "@/lib/configSync";
@@ -23,6 +25,7 @@ import { useDirectoryStore } from "@/stores/useDirectoryStore";
 import { useProjectsStore } from "@/stores/useProjectsStore";
 import { resolveProjectForSessionDirectory } from "@/lib/projectResolution";
 import { isSpaceDirectory } from "@/lib/spaces/space-route";
+import { resolveChatsRootDirectory } from "@/lib/chatDirectories";
 import { streamDebugEnabled } from "@/stores/utils/streamDebug";
 import { parseModelIdentifier, parseModelSelection } from "@/lib/modelIdentifier";
 import { readRememberedEffort, rememberEffort, resolveEffortChoice, type EffortChoice } from "@/lib/modelEfforts";
@@ -306,24 +309,88 @@ export const isStaleAutoSelection = (providerId?: string | null, modelId?: strin
     return routing.loaded && !selectAutoReady(routing);
 };
 
+/**
+ * Whether a live catalog for the directory has arrived. Only a live load sets
+ * the snapshot's flag; a catalog shown from the local cache does not.
+ */
+const hasLiveCatalog = (state: Pick<ConfigStore, 'directoryScoped'>, directoryKey: string): boolean => (
+    state.directoryScoped[directoryKey]?.providersLoaded === true
+);
+
+/**
+ * A model the directory's live catalog does not list: its provider was removed
+ * or switched off, or no longer offers it. Before a live catalog arrives nothing
+ * is known to be missing, and neither is it from an empty one: a location still
+ * starting can answer empty, and with no model at all there is nothing better
+ * to pick. Auto is judged by `isStaleAutoSelection` instead.
+ */
+const isMissingFromCatalog = (
+    providers: ProviderWithModelList[],
+    catalogLoaded: boolean,
+    providerId: string,
+    modelId: string,
+): boolean => catalogLoaded
+    && providers.length > 0
+    && !isAutoModel(providerId, modelId)
+    && !hasProviderModel(providers, providerId, modelId);
+
+/** A configured default model with the thinking level configured for it. */
+type ConfiguredDefault = { model: string | undefined; variant: string | undefined };
+
+/** A directory's agent-pinned model and OpenCode `model`, as cascade candidates. */
+const inheritedDefaultsFor = (
+    agents: Agent[],
+    agentName: string | undefined,
+    opencodeDefaultModel: string | undefined,
+): ConfiguredDefault[] => {
+    const pinned = agents.find((agent) => agent.name === agentName)?.model;
+    const opencode = opencodeDefaultModel ? parseModelSelection(opencodeDefaultModel) : null;
+    return [
+        { model: pinned?.providerID && pinned.id ? `${pinned.providerID}/${pinned.id}` : undefined, variant: pinned?.variant },
+        { model: opencode ? `${opencode.providerID}/${opencode.modelID}` : undefined, variant: opencode?.variant },
+    ];
+};
+
+/** The first configured default that can still run, in the order given. */
+const pickConfiguredDefault = (
+    providers: ProviderWithModelList[],
+    catalogLoaded: boolean,
+    candidates: ConfiguredDefault[],
+): { providerId: string; modelId: string; variant: string | undefined } | null => {
+    for (const candidate of candidates) {
+        const parsed = candidate.model ? parseModelString(candidate.model) : null;
+        if (!parsed || isStaleAutoSelection(parsed.providerId, parsed.modelId)) continue;
+        if (isMissingFromCatalog(providers, catalogLoaded, parsed.providerId, parsed.modelId)) continue;
+        return { ...parsed, variant: candidate.variant };
+    }
+    return null;
+};
+
 const resolveProviderModelSelection = ({
     providers,
+    catalogLoaded,
     currentProviderId,
     currentModelId,
     currentVariant,
     preserveCurrent = false,
-    settingsDefaultModel,
-    settingsDefaultVariant,
+    configuredDefaults,
+    inheritedDefaults,
     allowFallback,
     fallbackPrefs,
 }: {
     providers: ProviderWithModelList[];
+    catalogLoaded: boolean;
     currentProviderId?: string;
     currentModelId?: string;
     currentVariant?: string;
     preserveCurrent?: boolean;
-    settingsDefaultModel?: string;
-    settingsDefaultVariant?: string;
+    /** The project default first, then the global one. */
+    configuredDefaults: ConfiguredDefault[];
+    /**
+     * The current agent's pinned model, then OpenCode's `model`: what the full
+     * default cascade tries next, once settings are known.
+     */
+    inheritedDefaults: ConfiguredDefault[];
     allowFallback: boolean;
     fallbackPrefs: FallbackModelPrefs;
 }): ProviderModelSelection => {
@@ -354,21 +421,29 @@ const resolveProviderModelSelection = ({
         };
     }
 
-    if (settingsDefaultModel) {
-        const parsed = parseModelString(settingsDefaultModel);
-        if (parsed && !isStaleAutoSelection(parsed.providerId, parsed.modelId)) {
-            return {
-                providerId: parsed.providerId,
-                modelId: parsed.modelId,
-                variant: hasProviderModel(providers, parsed.providerId, parsed.modelId)
-                    ? resolveVariantOrRemembered(parsed.providerId, parsed.modelId, settingsDefaultVariant)
-                    : settingsDefaultVariant,
-            };
-        }
+    const configured = pickConfiguredDefault(providers, catalogLoaded, configuredDefaults);
+    if (configured) {
+        return {
+            providerId: configured.providerId,
+            modelId: configured.modelId,
+            variant: hasProviderModel(providers, configured.providerId, configured.modelId)
+                ? resolveVariantOrRemembered(configured.providerId, configured.modelId, configured.variant)
+                : configured.variant,
+        };
     }
 
     if (!allowFallback) return null;
-    const fallback = resolveLastSelectedModel(fallbackPrefs) ?? resolveFallbackModel(providers, fallbackPrefs.hiddenModels);
+    const inherited = pickConfiguredDefault(providers, catalogLoaded, inheritedDefaults);
+    if (inherited) {
+        return {
+            providerId: inherited.providerId,
+            modelId: inherited.modelId,
+            variant: hasProviderModel(providers, inherited.providerId, inherited.modelId)
+                ? resolveVariantOrRemembered(inherited.providerId, inherited.modelId, inherited.variant)
+                : inherited.variant,
+        };
+    }
+    const fallback = resolveLastSelectedModel(fallbackPrefs, providers, catalogLoaded) ?? resolveFallbackModel(providers, fallbackPrefs.hiddenModels);
     if (!fallback) return null;
     return {
         ...fallback,
@@ -392,16 +467,20 @@ const isModelHidden = (hiddenModels: readonly ModelRef[], providerId: string, mo
 );
 
 // The model last picked in a chat composer, once nothing configured names one.
-// Like a configured default it survives catalog gaps: a provider that has not
-// registered yet must not move a new session onto Big Pickle. A model hidden
-// since, or an Auto pick this server cannot honour, is skipped.
+// Like a configured default it stands until the live catalog arrives, so a new
+// session does not start on Big Pickle while providers load. A model hidden
+// since, one the live catalog no longer lists, or an Auto pick this server
+// cannot honour, is skipped.
 const resolveLastSelectedModel = (
     { hiddenModels, lastSelectedModel }: FallbackModelPrefs,
+    providers: ProviderWithModelList[],
+    catalogLoaded: boolean,
 ): { providerId: string; modelId: string } | null => {
     const parsed = lastSelectedModel ? parseModelString(lastSelectedModel) : null;
     if (!parsed) return null;
     if (isModelHidden(hiddenModels, parsed.providerId, parsed.modelId)) return null;
     if (isStaleAutoSelection(parsed.providerId, parsed.modelId)) return null;
+    if (isMissingFromCatalog(providers, catalogLoaded, parsed.providerId, parsed.modelId)) return null;
     return parsed;
 };
 
@@ -461,8 +540,10 @@ type DirectoryDefaultSelection = {
 //          → last model picked in a chat → opencode/big-pickle → first (these three skip models hidden in the picker)
 //
 // The opencode default_agent / default model (config fields on the OpenCode server) are honored
-// only when our own settings have no default. A configured identifier remains
-// selected through discovery gaps; catalog absence must not select a different model.
+// only when our own settings have no default. Until the directory's live catalog
+// arrives (`catalogLoaded`), a configured identifier stays selected even when the
+// catalog does not list it. Once it has arrived, a model it does not list is skipped
+// for the next one down: its provider was removed or switched off.
 // OpenCode itself resolves a model the same way:
 // an agent's pinned model wins, otherwise the global `model` config applies — so we check the
 // agent's model before opencodeDefaultModel. When the agent supplies the model, its `variant` is
@@ -470,6 +551,7 @@ type DirectoryDefaultSelection = {
 export const resolveDefaultAgentModelSelection = ({
     agents,
     providers,
+    catalogLoaded,
     projectDefaultAgent,
     projectDefaultModel,
     projectDefaultVariant,
@@ -483,6 +565,7 @@ export const resolveDefaultAgentModelSelection = ({
 }: {
     agents: Agent[];
     providers: ProviderWithModelList[];
+    catalogLoaded: boolean;
     projectDefaultAgent?: string;
     projectDefaultModel?: string;
     projectDefaultVariant?: string;
@@ -540,20 +623,18 @@ export const resolveDefaultAgentModelSelection = ({
     let modelId: string | undefined;
     let variant: string | null | undefined;
 
-    const effectiveDefaultModel = projectDefaultModel || settingsDefaultModel;
-
-    if (effectiveDefaultModel) {
-        const parsed = parseModelString(effectiveDefaultModel);
-        if (parsed && !isStaleAutoSelection(parsed.providerId, parsed.modelId)) {
-            providerId = parsed.providerId;
-            modelId = parsed.modelId;
-            // A project default carries its own variant; the settings variant
-            // belongs to the settings model and must not leak onto it.
-            const configuredVariant = projectDefaultModel ? projectDefaultVariant : settingsDefaultVariant;
-            variant = hasProviderModel(providers, providerId, modelId)
-                ? resolveVariant(providerId, modelId, configuredVariant)
-                : configuredVariant;
-        }
+    // A project default carries its own variant; the settings variant belongs
+    // to the settings model and must not leak onto it.
+    const configured = pickConfiguredDefault(providers, catalogLoaded, [
+        { model: projectDefaultModel, variant: projectDefaultVariant },
+        { model: settingsDefaultModel, variant: settingsDefaultVariant },
+    ]);
+    if (configured) {
+        providerId = configured.providerId;
+        modelId = configured.modelId;
+        variant = hasProviderModel(providers, providerId, modelId)
+            ? resolveVariant(providerId, modelId, configured.variant)
+            : configured.variant;
     }
 
     if (providerId || !allowFallback) {
@@ -563,20 +644,20 @@ export const resolveDefaultAgentModelSelection = ({
         return { agentName: resolvedAgent?.name ?? projectDefaultAgent ?? settingsDefaultAgent, providerId, modelId, variant };
     }
 
-    if (!providerId
-        && resolvedAgent?.model?.providerID
-        && resolvedAgent.model?.id) {
-        providerId = resolvedAgent.model.providerID;
-        modelId = resolvedAgent.model.id;
+    const agentModel = resolvedAgent?.model;
+    if (agentModel?.providerID && agentModel.id
+        && !isMissingFromCatalog(providers, catalogLoaded, agentModel.providerID, agentModel.id)) {
+        providerId = agentModel.providerID;
+        modelId = agentModel.id;
         variant = hasProviderModel(providers, providerId, modelId)
-            ? resolveVariant(providerId, modelId, resolvedAgent.model.variant)
-            : resolvedAgent.model.variant;
+            ? resolveVariant(providerId, modelId, agentModel.variant)
+            : agentModel.variant;
     }
 
     // OpenCode's global default model — used when neither our settings nor the agent pin a model.
     if (!providerId && opencodeDefaultModel) {
         const parsed = parseModelSelection(opencodeDefaultModel);
-        if (parsed) {
+        if (parsed && !isMissingFromCatalog(providers, catalogLoaded, parsed.providerID, parsed.modelID)) {
             providerId = parsed.providerID;
             modelId = parsed.modelID;
             variant = hasProviderModel(providers, providerId, modelId)
@@ -586,7 +667,7 @@ export const resolveDefaultAgentModelSelection = ({
     }
 
     if (!providerId) {
-        const fallback = resolveLastSelectedModel(fallbackPrefs) ?? resolveFallbackModel(providers, fallbackPrefs.hiddenModels);
+        const fallback = resolveLastSelectedModel(fallbackPrefs, providers, catalogLoaded) ?? resolveFallbackModel(providers, fallbackPrefs.hiddenModels);
         providerId = fallback?.providerId;
         modelId = fallback?.modelId;
     }
@@ -1079,14 +1160,17 @@ const getFallbackProjectDirectory = (): string | null => {
 
 type ProjectDefaults = { projectDefaultAgent?: string; projectDefaultModel?: string; projectDefaultVariant?: string };
 
+const isChatDraftOpen = (): boolean => {
+    const session = useSessionUIStore.getState();
+    return !session.currentSessionId && Boolean(session.newSessionDraft?.open) && session.newSessionDraft.target === 'chat';
+};
+
 const getProjectDefaultsForConfigDirectory = (directory: string | null | undefined): ProjectDefaults => {
     const configDirectory = normalizeConfigPath(directory);
     if (!configDirectory) {
         return {};
     }
-    const session = useSessionUIStore.getState();
-    if (!session.currentSessionId && session.newSessionDraft?.open && session.newSessionDraft.target === 'chat'
-        && toDirectoryKey(configDirectory) === useConfigStore.getState().activeDirectoryKey) return {};
+    if (isChatDraftOpen() && toDirectoryKey(configDirectory) === useConfigStore.getState().activeDirectoryKey) return {};
     return readProjectDefaults(configDirectory);
 };
 
@@ -1807,6 +1891,28 @@ const EMPTY_PROVIDERS: ProviderWithModelList[] = [];
 const EMPTY_AGENTS: Agent[] = [];
 
 /**
+ * Whether `provider/model` is gone from this directory: its live catalog has
+ * loaded and does not list it. The same test the default cascade applies, so
+ * Settings can say why new sessions skip a configured model and the composer
+ * can mark a picked one a send would fail on.
+ */
+export const selectIsModelMissingFromCatalog = (
+    state: Pick<ConfigStore, "providers" | "directoryScoped" | "activeDirectoryKey">,
+    directory: string | null | undefined,
+    providerId: string,
+    modelId: string,
+): boolean => {
+    if (!providerId || !modelId) return false;
+    const directoryKey = directory == null ? state.activeDirectoryKey : toConfigDirectoryKey(directory);
+    return isMissingFromCatalog(
+        selectProvidersForDirectory(state, directory),
+        hasLiveCatalog(state, directoryKey),
+        providerId,
+        modelId,
+    );
+};
+
+/**
  * Providers of one project that offer no chat model. Settings → Providers
  * lists them next to `selectProvidersForDirectory`; no chat picker reads them.
  */
@@ -2466,14 +2572,23 @@ export const useConfigStore = create<ConfigStore>()(
                                     ? state.currentVariant
                                     : baseSnapshot.currentVariant;
                                 const projectDefaults = getProjectDefaultsForConfigDirectory(fromDirectoryKey(directoryKey));
+                                const isActive = state.activeDirectoryKey === directoryKey;
                                 const resolvedModel = resolveProviderModelSelection({
                                     providers: nextProviders,
+                                    catalogLoaded: true,
                                     currentProviderId,
                                     currentModelId,
                                     currentVariant,
-                                    preserveCurrent: (state.activeDirectoryKey === directoryKey ? state.selectionSource : baseSnapshot.selectionSource) === 'manual',
-                                    settingsDefaultModel: projectDefaults.projectDefaultModel || state.settingsDefaultModel,
-                                    settingsDefaultVariant: projectDefaults.projectDefaultModel ? projectDefaults.projectDefaultVariant : state.settingsDefaultVariant,
+                                    preserveCurrent: (isActive ? state.selectionSource : baseSnapshot.selectionSource) === 'manual',
+                                    configuredDefaults: [
+                                        { model: projectDefaults.projectDefaultModel, variant: projectDefaults.projectDefaultVariant },
+                                        { model: state.settingsDefaultModel, variant: state.settingsDefaultVariant },
+                                    ],
+                                    inheritedDefaults: inheritedDefaultsFor(
+                                        isActive ? state.agents : baseSnapshot.agents,
+                                        isActive ? state.currentAgentName : baseSnapshot.currentAgentName,
+                                        isActive ? state.opencodeDefaultModel : baseSnapshot.opencodeDefaultModel,
+                                    ),
                                     allowFallback: state.settingsDefaultsLoaded,
                                     fallbackPrefs: readFallbackModelPrefs(),
                                 });
@@ -2481,8 +2596,8 @@ export const useConfigStore = create<ConfigStore>()(
                                     ? state.selectedProviderId
                                     : baseSnapshot.selectedProviderId;
                                 // The Providers settings selection belongs to the user, not to this
-                                // loader. A refresh may report a different provider set — an OpenCode
-                                // restart drops plugin-registered providers until they re-register —
+                                // loader. A refresh may report a different provider set (one was
+                                // connected or removed meanwhile),
                                 // and re-deriving a selection here yanked the open provider away
                                 // mid-edit. Keep whatever is selected; only fill in an empty one.
                                 // The add-provider sentinel is kept for the same reason (issue #1765).
@@ -2840,14 +2955,7 @@ export const useConfigStore = create<ConfigStore>()(
                     const currentVariant = currentOverride === undefined
                         ? state.currentVariant
                         : currentOverride;
-                    let nextOverride: string | null;
-
-                    if (currentVariant === null || currentVariant === undefined) {
-                        nextOverride = variantKeys[0];
-                    } else {
-                        const index = variantKeys.indexOf(currentVariant);
-                        nextOverride = index >= 0 ? (variantKeys[index + 1] ?? null) : null;
-                    }
+                    const nextOverride = nextThinkingVariant(variantKeys, currentVariant);
 
                     get().setCurrentVariantOverride(nextOverride, inheritedVariant);
                     // Cycling is a picker choice too: it becomes the model's
@@ -3203,6 +3311,7 @@ export const useConfigStore = create<ConfigStore>()(
                             const resolvedDefault = resolveDefaultAgentModelSelection({
                                 agents: safeAgents,
                                 providers,
+                                catalogLoaded: hasLiveCatalog(get(), directoryKey),
                                 ...getProjectDefaultsForConfigDirectory(configDirectoryPath),
                                 settingsDefaultAgent: get().settingsDefaultAgent,
                                 settingsDefaultModel: get().settingsDefaultModel,
@@ -3707,8 +3816,12 @@ export const useConfigStore = create<ConfigStore>()(
                     const projectDefaults = getProjectDefaultsForConfigDirectory(fromDirectoryKey(current.activeDirectoryKey));
                     const resolved = resolveProviderModelSelection({
                         providers: current.providers,
-                        settingsDefaultModel: projectDefaults.projectDefaultModel || current.settingsDefaultModel,
-                        settingsDefaultVariant: projectDefaults.projectDefaultModel ? projectDefaults.projectDefaultVariant : current.settingsDefaultVariant,
+                        catalogLoaded: hasLiveCatalog(current, current.activeDirectoryKey),
+                        configuredDefaults: [
+                            { model: projectDefaults.projectDefaultModel, variant: projectDefaults.projectDefaultVariant },
+                            { model: current.settingsDefaultModel, variant: current.settingsDefaultVariant },
+                        ],
+                        inheritedDefaults: inheritedDefaultsFor(current.agents, current.currentAgentName, current.opencodeDefaultModel),
                         allowFallback: true,
                         fallbackPrefs: readFallbackModelPrefs(),
                     });
@@ -3751,6 +3864,7 @@ export const useConfigStore = create<ConfigStore>()(
                         selection.saveSessionModelSelection(sessionId, resolved.providerId, resolved.modelId);
                         if (current.currentAgentName) selection.saveAgentModelForSession(sessionId, current.currentAgentName, resolved.providerId, resolved.modelId);
                     }
+                    notifyAutoUnavailable();
                 },
 
                 applyDefaultModelAgentSelection: (options) => {
@@ -3773,6 +3887,7 @@ export const useConfigStore = create<ConfigStore>()(
                     } = resolveDefaultAgentModelSelection({
                         agents,
                         providers,
+                        catalogLoaded: hasLiveCatalog(get(), get().activeDirectoryKey),
                         ...projectDefaults,
                         settingsDefaultAgent,
                         settingsDefaultModel,
@@ -3846,6 +3961,7 @@ export const useConfigStore = create<ConfigStore>()(
                     const resolved = resolveDefaultAgentModelSelection({
                         agents: isActive ? state.agents : (snapshot?.agents ?? []),
                         providers: isActive ? state.providers : (snapshot?.providers ?? []),
+                        catalogLoaded: hasLiveCatalog(state, directoryKey),
                         ...readProjectDefaults(configDirectory),
                         settingsDefaultAgent: state.settingsDefaultAgent,
                         settingsDefaultModel: state.settingsDefaultModel,
@@ -3923,6 +4039,7 @@ export const useConfigStore = create<ConfigStore>()(
                         const resolved = resolveDefaultAgentModelSelection({
                             agents,
                             providers,
+                            catalogLoaded: hasLiveCatalog(state, directoryKey),
                             projectDefaultAgent: projectDefaults.projectDefaultAgent,
                             projectDefaultModel: projectDefaults.projectDefaultModel,
                             projectDefaultVariant: projectDefaults.projectDefaultVariant,
@@ -4470,6 +4587,12 @@ export const useConfigStore = create<ConfigStore>()(
                             const resolvedInitialDirectory = (resolvedProject || resolveProjectDirectory(initialDirectory))
                                 ? resolveConfigDirectory(initialDirectory)
                                 : null;
+                            // A chat draft reads the managed Chats root, so it does not start on the
+                            // agents and defaults of the project the app is on. The user can leave
+                            // the draft during this wait, so the session state is read after it.
+                            const chatsRoot = isChatDraftOpen() ? await resolveChatsRootDirectory().catch(() => null) : null;
+                            if (!isConfigRuntimeContextCurrent(runtimeContext)) return;
+                            const chatDraftDirectory = isChatDraftOpen() ? resolveConfigDirectory(chatsRoot) : null;
                             // An open session offers its own folder's agents and models,
                             // the catalog activateDirectory loads when it is opened. A
                             // folder outside every project (a chat) must not borrow the
@@ -4478,13 +4601,13 @@ export const useConfigStore = create<ConfigStore>()(
                             const openSessionDirectory = sessionState.currentSessionId
                                 ? resolveConfigDirectory(sessionState.currentSessionDirectory)
                                 : null;
-                            const configDirectory = openSessionDirectory ?? resolvedInitialDirectory ?? getFallbackProjectDirectory();
+                            const configDirectory = openSessionDirectory ?? chatDraftDirectory ?? resolvedInitialDirectory ?? getFallbackProjectDirectory();
                             if (!configDirectory) {
                                 markStartupTrace('initializeApp:noProjectConfigDirectory');
                                 set({ isInitialized: true, isConnected: true, hasEverConnected: true, connectionPhase: "connected", lastInitFailure: null });
                                 return;
                             }
-                            if (!openSessionDirectory && !resolvedInitialDirectory && initialDirectory !== configDirectory) {
+                            if (!openSessionDirectory && !chatDraftDirectory && !resolvedInitialDirectory && initialDirectory !== configDirectory) {
                                 markStartupTrace('initializeApp:normalizedUnknownDirectoryToProject', {
                                     initialDirectory,
                                     configDirectory,
@@ -4511,10 +4634,18 @@ export const useConfigStore = create<ConfigStore>()(
                                 // any other failure keeps the startup retry loop going.
                                 // A project whose folder is gone (an unplugged drive) is the
                                 // same: the app opens and the other projects stay reachable.
+                                // So is a folder the user has not trusted ("Not this time"):
+                                // its files stay browsable, and a new message asks again.
                                 const configError = get().projectConfigErrors[configDirectoryKey];
+                                const agentsError = _agentsLoadErrors.get(configDirectoryKey);
+                                const awaitsTrust = !configError && agentsError instanceof OpencodeApiError && agentsError.status === 403
+                                    && await isOpenCodeTrustPending(configDirectory);
+                                if (!isConfigRuntimeContextCurrent(runtimeContext)) return;
                                 if (configError) {
                                     markStartupTrace('initializeApp:projectConfigInvalid', { configDirectoryKey, name: configError.name });
-                                } else if (isLocationNotFoundError(_agentsLoadErrors.get(configDirectoryKey))
+                                } else if (awaitsTrust) {
+                                    markStartupTrace('initializeApp:projectAwaitsTrust', { configDirectoryKey });
+                                } else if (isLocationNotFoundError(agentsError)
                                     || await opencodeClient.getDirectoryAvailability(configDirectory) === 'missing') {
                                     if (!isConfigRuntimeContextCurrent(runtimeContext)) return;
                                     markStartupTrace('initializeApp:projectDirectoryMissing', { configDirectoryKey });
@@ -4796,6 +4927,8 @@ if (typeof window !== "undefined" && !unsubscribeConfigStoreDirectoryChanges) {
         }
 
         markStartupTrace('directoryStore:changed', { previous: prevKey, next: nextKey });
+        // A chat draft stays on the Chats root's catalog while the app moves between projects.
+        if (isChatDraftOpen()) return;
         void hydrateConfigCatalogFromCache(toConfigDirectoryKey(state.currentDirectory));
         void useConfigStore.getState().activateDirectory(state.currentDirectory);
     });

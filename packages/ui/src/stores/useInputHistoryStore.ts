@@ -26,6 +26,8 @@ export type InputHistoryAttachment = {
   size: number;
   reference: string;
   fileReference?: FileReference;
+  /** Set when `reference` is the note standing in for a desktop file on disk. */
+  path?: string;
 };
 
 export type InputHistorySubmission = {
@@ -126,6 +128,7 @@ const attachmentSchema = z.object({
   size: z.number().finite().nonnegative(),
   reference: z.string().min(1),
   fileReference: fileReferenceSchema.optional(),
+  path: z.string().min(1).optional(),
 }).refine((attachment) => !attachment.fileReference
   || (attachment.source === 'file-url' && attachment.reference === attachment.fileReference.uri));
 
@@ -412,7 +415,10 @@ const buildAttachmentKey = (attachment: AttachedFile): string => {
 
 const toRestorableAttachment = (attachment: AttachedFile): InputHistoryAttachment | null => {
   const reference = getAttachmentReference(attachment);
-  if (!reference || !canRestoreReference(reference)) return null;
+  if (!reference) return null;
+  // The note is a few lines, so unlike file content it may stay in history.
+  const path = attachment.agentPath && attachment.serverPath === attachment.agentPath ? attachment.agentPath : undefined;
+  if (!path && !canRestoreReference(reference)) return null;
   if (attachment.source === 'vscode' && attachment.vscodeSource === 'file') {
     return {
       key: buildAttachmentKey(attachment),
@@ -430,6 +436,7 @@ const toRestorableAttachment = (attachment: AttachedFile): InputHistoryAttachmen
     mimeType: attachment.mimeType,
     size: attachment.size,
     reference,
+    path,
   };
   // Persisted history: an attachment without a file reference has no such key.
   if (attachment.fileReference) restorable.fileReference = fileReferenceSchema.parse(attachment.fileReference);
@@ -461,6 +468,7 @@ const areAttachmentsEqual = (
       && attachment.mimeType === candidate.mimeType
       && attachment.size === candidate.size
       && attachment.reference === candidate.reference
+      && attachment.path === candidate.path
       && attachment.fileReference?.uri === candidate.fileReference?.uri
       && attachment.fileReference?.name === candidate.fileReference?.name
       && attachment.fileReference?.description === candidate.fileReference?.description

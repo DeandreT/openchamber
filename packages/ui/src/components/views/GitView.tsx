@@ -23,6 +23,7 @@ import {
 import { useNestedGitDirectory } from '@/hooks/useNestedGitDirectory';
 import { useWorktreeBootstrapPending } from '@/hooks/useWorktreeBootstrapPending';
 import { NestedRepoResolutionStates } from './git/NestedRepoResolutionStates';
+import { GitRepositoryUnreadableState } from './git/GitRepositoryUnreadableState';
 import { ScrollableOverlay } from '@/components/ui/ScrollableOverlay';
 import { ScrollShadow } from '@/components/ui/ScrollShadow';
 import { toast } from '@/components/ui';
@@ -57,6 +58,8 @@ import { getSessionWorktreeRepairActions, getMutationBlockingReasons } from '@/s
 import { IntegrateCommitsSection } from './git/IntegrateCommitsSection';
 
 import { GitHeader } from './git/GitHeader';
+import { gitRequestErrorMessage } from './git/gitRequestErrorMessage';
+import { ButtonTooltip } from '@/components/ui/action-toolbar';
 import { StashesDialog } from './git/StashesDialog';
 import { ChangesPanel, type ChangesGroupConfig } from './git/ChangesPanel';
 import { CommitSection } from './git/CommitSection';
@@ -297,7 +300,7 @@ export const GitView: React.FC<GitViewProps> = ({ isActive }) => {
   // repository all git data and actions operate on. The hook owns probing,
   // discovery, auto-select, and stale-selection recovery; data fetching below
   // keys off its result.
-  const { rootIsGitRepo, gitDirectory, nestedRepos, repositoryOptions } = useNestedGitDirectory(
+  const { rootIsGitRepo, gitDirectory, nestedRepos, repositoryOptions, unreadable } = useNestedGitDirectory(
     currentDirectory ?? null,
     { enabled: isActive, recheckOnOpen: true },
   );
@@ -1252,7 +1255,7 @@ export const GitView: React.FC<GitViewProps> = ({ isActive }) => {
               ? t('gitView.toast.contributorPublishCancelled')
               : t('gitView.toast.syncActionFailed', { action: actionLabel })
           : err instanceof Error
-          ? err.message
+          ? gitRequestErrorMessage(err, t)
           : t('gitView.toast.syncActionFailed', { action: actionLabel });
       toast.error(message);
     } finally {
@@ -1356,7 +1359,7 @@ export const GitView: React.FC<GitViewProps> = ({ isActive }) => {
           : err.code === 'contributor-publish-cancelled'
             ? t('gitView.toast.contributorPublishCancelled')
             : t('gitView.toast.syncActionFailed', { action: t('gitView.sync.syncChanges') })
-        : err instanceof Error ? err.message : t('gitView.toast.createCommitFailed');
+        : err instanceof Error ? gitRequestErrorMessage(err, t) : t('gitView.toast.createCommitFailed');
       toast.error(message);
     } finally {
       recovery?.finish();
@@ -2416,6 +2419,10 @@ export const GitView: React.FC<GitViewProps> = ({ isActive }) => {
     );
   }
 
+  if (unreadable) {
+    return <GitRepositoryUnreadableState directory={unreadable.directory} message={unreadable.message} />;
+  }
+
   if (isGitRepo === null || (isGitRepo === true && !status)) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -2661,32 +2668,33 @@ export const GitView: React.FC<GitViewProps> = ({ isActive }) => {
               <DialogTitle>
                 {gitLogDialogMode === 'graph' ? t('gitView.graph.title') : t('gitView.history.title')}
               </DialogTitle>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                className="me-6 h-7 shrink-0 gap-1.5 px-2"
-                onClick={() => {
-                  if (gitLogDialogMode === 'graph') {
-                    setGraphLogRefreshToken((token) => token + 1);
-                    return;
-                  }
-                  if (!gitDirectory) return;
-                  void fetchLog(gitDirectory, git, logMaxCountLocal);
-                }}
-                disabled={gitLogDialogMode === 'graph' ? graphLogLoading : isLogLoading}
-                title={t('gitView.history.refresh')}
-                aria-label={t('gitView.history.refresh')}
-              >
-                <Icon
-                  name="refresh"
-                  className={cn(
-                    'size-4',
-                    (gitLogDialogMode === 'graph' ? graphLogLoading : isLogLoading) && 'animate-spin'
-                  )}
-                />
-                {t('gitView.history.refresh')}
-              </Button>
+              <ButtonTooltip label={t('contextTooltips.git.reloadCommits')} side="bottom" className="shrink-0">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="me-6 h-7 shrink-0 gap-1.5 px-2"
+                  onClick={() => {
+                    if (gitLogDialogMode === 'graph') {
+                      setGraphLogRefreshToken((token) => token + 1);
+                      return;
+                    }
+                    if (!gitDirectory) return;
+                    void fetchLog(gitDirectory, git, logMaxCountLocal);
+                  }}
+                  disabled={gitLogDialogMode === 'graph' ? graphLogLoading : isLogLoading}
+                  aria-label={t('gitView.history.refresh')}
+                >
+                  <Icon
+                    name="refresh"
+                    className={cn(
+                      'size-4',
+                      (gitLogDialogMode === 'graph' ? graphLogLoading : isLogLoading) && 'animate-spin'
+                    )}
+                  />
+                  {t('gitView.history.refresh')}
+                </Button>
+              </ButtonTooltip>
             </div>
             <DialogDescription>
               {t('gitView.history.dialogDescription')}

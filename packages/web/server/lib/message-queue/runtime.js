@@ -15,6 +15,7 @@ import fs from 'fs';
 import path from 'path';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { createMessageId } from '../dispatch-results/runtime.js';
 import { assertPromptResponse } from '../opencode/prompt-response.js';
 import { unwrapOpenCodeResponse } from '../opencode/response-envelope.js';
 import { createSessionActivityProbe } from '../opencode/session-activity.js';
@@ -94,6 +95,7 @@ const prefixPromptOwnerSchema = z.object({
   directory: z.string().min(1).max(16384).refine((value) => value === value.trim()),
   state: z.enum(['reserved', 'consumed']),
 }).strict();
+const MESSAGE_ID_PATTERN = /^msg_[A-Za-z0-9]{8,64}$/;
 
 const getQueuedSendRetryDelayMs = (failures) =>
   Math.min(RETRY_BASE_DELAY_MS * 2 ** Math.max(failures - 1, 0), RETRY_MAX_DELAY_MS);
@@ -313,6 +315,9 @@ const parseStoredItem = (value) => {
     }
     // Persisted as JSON: an item without a request receipt has no requestId key.
     if (raw.requestId !== undefined) item.requestId = parseRequestId(raw.requestId);
+    // Only the file carries these: a delivery mints them, a client never does.
+    const syntheticIds = asList(raw.syntheticIds) ?? [];
+    if (syntheticIds.length > 0 && syntheticIds.every((entry) => MESSAGE_ID_PATTERN.test(asText(entry)))) item.syntheticIds = syntheticIds;
     return item;
   } catch {
     return null;
@@ -403,6 +408,22 @@ const extractDeletedSessionId = (payload) => {
   if (payload.type !== 'session.deleted') return null;
   const properties = asRecord(payload.properties) ?? {};
   return asNonEmptyString(asRecord(properties.info)?.id) || asNonEmptyString(properties.sessionID) || null;
+};
+
+/**
+ * The directory a session reports after a move. The wire translator tags a
+ * move with `info.projectID`; usage, title and other session updates also
+ * carry a directory but can still be in flight from the old location, so they
+ * must not drag a queue with them.
+ */
+const extractSessionDirectoryUpdate = (payload) => {
+  if (payload.type !== 'session.updated') return null;
+  const properties = asRecord(payload.properties) ?? {};
+  const info = asRecord(properties.info) ?? {};
+  const sessionId = asNonEmptyString(info.id) || asNonEmptyString(properties.sessionID);
+  const directory = asNonEmptyString(info.directory);
+  const projectID = asNonEmptyString(info.projectID);
+  return sessionId && directory && projectID ? { sessionId, directory } : null;
 };
 
 export function createMessageQueueRuntime({
@@ -549,7 +570,9 @@ export function createMessageQueueRuntime({
       // There is never a missing-file interval that grants fresh receipt
       // authority if this process stops during recovery.
       await fs.promises.copyFile(filePath, backup, fs.constants.COPYFILE_EXCL);
-      const retained = await fs.promises.open(backup, 'r');
+      // Windows FlushFileBuffers requires a writable handle even when the
+      // bytes came from copyFile. Keep the backup synced before replacement.
+      const retained = await fs.promises.open(backup, process.platform === 'win32' ? 'r+' : 'r');
       try { await retained.sync(); } finally { await retained.close(); }
       await writeSnapshot(JSON.stringify({ version: QUEUE_FILE_VERSION, revision: 0, sessions: {}, receiptRecoveryRequired: true }), true);
       console.warn(`[message-queue] queue file was unreadable and moved to ${backup}: ${error?.message ?? error}`);
@@ -1444,6 +1467,19 @@ export function createMessageQueueRuntime({
     return { promptFiles, promptBody, streamBody };
   };
 
+  /** Legacy deliveries persist synthetic identities before the first admission. */
+  const ensureSyntheticIds = async (item, count) => {
+    if (item.syntheticIds?.length === count) return;
+    const firstAt = now() - count + 1;
+    item.syntheticIds = Array.from({ length: count }, (_, index) => createMessageId(firstAt + index));
+    try {
+      await persist();
+    } catch (error) {
+      delete item.syntheticIds;
+      throw error;
+    }
+  };
+
   const sendPreparedItem = async (sessionId, directory, item) => {
     const request = requests.get(item.requestId);
     const receipt = request?.receipt;
@@ -1459,6 +1495,11 @@ export function createMessageQueueRuntime({
       assertManifestPromptBudget(streamBody.contentLength);
     }
     const contextMessages = capturedContext(item);
+    // The goal briefing goes last, right before the message the goal is about.
+    const synthetics = [
+      ...contextMessages,
+      ...(item.goal ? [{ text: buildGoalIntroText(item.goal.tokenBudget), resume: false }] : []),
+    ];
 
     // Jev routing, when the queued send named the Auto sentinel. A failure
     // inside resolves to the fallback model; only a missing fallback throws.
@@ -1497,7 +1538,7 @@ export function createMessageQueueRuntime({
     }
 
     // Resolved before anything is admitted: a failed command lookup fails the
-    // whole send, so a retry does not admit the context twice.
+    // whole send with nothing in the session.
     const command = await resolveSlashCommand(item.text, directory, Boolean(receipt));
     if (receipt && command) {
       request.blocked = 'command_identity_unsupported';
@@ -1510,6 +1551,19 @@ export function createMessageQueueRuntime({
     // this server delivery has no style text of its own, so the entry the
     // session already holds stays as it is.
     if (sessionKnowledgeRuntime) await sessionKnowledgeRuntime.sync(sessionId, directory);
+
+    // OpenCode's commit of a staged revert deletes everything admitted past the
+    // revert's boundary, so a staged revert is committed before the first
+    // synthetic message, and before the goal save so a failure here leaves no
+    // goal behind. A plain prompt leaves the commit to OpenCode, as a UI send does.
+    if (synthetics.length > 0) {
+      if (!receipt) await ensureSyntheticIds(item, synthetics.length);
+      const session = asRecord(await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}`, { directory }));
+      if (!session) throw new Error(`OpenCode returned no record for session ${sessionId}`);
+      if (session.revert) {
+        await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}/revert/commit`, { directory, method: 'POST' });
+      }
+    }
 
     // A message queued as a goal starts it now, as a direct send would. The
     // goal is saved before anything is admitted, so a failed save leaves
@@ -1532,25 +1586,17 @@ export function createMessageQueueRuntime({
     // holds for a command too: its route takes file attachments only, and
     // sending "/name args" as a prompt instead would skip the template
     // OpenCode 2.x expands only on the command route.
-    for (const [index, synthetic] of contextMessages.entries()) {
+    for (const [index, synthetic] of synthetics.entries()) {
       if (request?.attempt > 0 && await observeAdmission(sessionId, directory, receipt.contextIds[index], 'synthetic')) continue;
       const body = { ...synthetic };
       if (receipt) Object.assign(body, { id: receipt.contextIds[index], delivery: 'queue' });
+      else body.id ??= item.syntheticIds[index];
       const admitted = await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}/synthetic`, {
         directory,
         method: 'POST',
         body,
       });
       if (receipt) requireAdmission(admitted, sessionId, receipt.contextIds[index], 'synthetic');
-    }
-
-    // The goal briefing goes last, right before the message the goal is about.
-    if (item.goal) {
-      await openCodeFetch(`/api/session/${encodeURIComponent(sessionId)}/synthetic`, {
-        directory,
-        method: 'POST',
-        body: { text: buildGoalIntroText(item.goal.tokenBudget), resume: false },
-      });
     }
 
     if (command) {
@@ -2385,6 +2431,23 @@ export function createMessageQueueRuntime({
       failures.delete(deletedSessionId);
       commit(deletedSessionId);
       directories.delete(deletedSessionId);
+      return;
+    }
+
+    const moved = extractSessionDirectoryUpdate(payload);
+    if (moved) {
+      const queue = queues.get(moved.sessionId);
+      if (queue && queue.directory !== moved.directory) {
+        // Durable receipts, uploaded bytes and prefix captures keep their exact
+        // captured owner. Rekeying only the queue would make its next snapshot
+        // fail ownership validation on restart.
+        if (queue.items.some((item) => item.requestId || item.format)
+            || reservations.has(moved.sessionId) || preparingTransfers.has(moved.sessionId)) return;
+        // The session now reads and sends from its new directory; keep its
+        // queued messages there instead of delivering them to the old one.
+        setQueueItems(moved.sessionId, moved.directory, queue.items);
+        commit(moved.sessionId);
+      }
       return;
     }
 

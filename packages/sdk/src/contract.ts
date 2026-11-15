@@ -40,6 +40,12 @@ export type HostThemeTokens = {
   error: string;
   info: string;
   font: string;
+  /**
+   * The app's body text size as a pixel length, `14px` at the default
+   * interface font size and larger when the user raises it. `applyHostTheme`
+   * makes it the frame's `1rem`. Hosts before this token leave it out.
+   */
+  fontSize?: string;
   /** Monospace stack for code and identifiers. */
   mono: string;
   radius: string;
@@ -74,7 +80,23 @@ export type SessionSnapshot = {
  * Which host chrome mounted this iframe. Not `openSurface`. `status` is the
  * extension's section in the chat's Work Status panel.
  */
-export type GuestHostSurface = 'panel' | 'dialog' | 'page' | 'background' | 'status' | 'file' | 'popover';
+export type GuestHostSurface = 'panel' | 'dialog' | 'page' | 'background' | 'status' | 'file' | 'popover' | 'block';
+
+/**
+ * The call a `block` surface draws: the component's name and its arguments as
+ * the agent wrote them. A model wrote them, so text from a page or a ticket
+ * can steer them: treat them as untrusted, and do nothing with side effects
+ * until the user clicks.
+ */
+export type GuestBlockCall = {
+  name: string;
+  args: Record<string, string>;
+  /** What this frame answered the agent with (`answerBlock`), kept across a reload; `null` before that. */
+  answered: string | null;
+};
+
+/** Characters of the text a block's frame answers the agent with. */
+export const GUEST_BLOCK_ANSWER_MAX = 2_000;
 
 export type GuestConnection = {
   connected: boolean;
@@ -226,6 +248,8 @@ export type HostReadyContext = {
    * opened from the rail icon or the composer + menu.
    */
   item: GuestItem | null;
+  /** The call this frame draws; present only on the `block` surface. */
+  block?: GuestBlockCall;
   /** Present only in the host-created child frame for an active popover. */
   popover?: GuestPopoverContext;
   /** Optional capabilities advertised by a newer host. Absent remains compatible with older hosts. */
@@ -236,6 +260,25 @@ export type HostReadyContext = {
     /** The host keeps `generate` answers that arrive after their frame is gone (`onLateGenerateResult`). */
     lateGenerateResults?: true;
   };
+  /**
+   * The device the frame is drawn on, re-sent with `ready` when it changes
+   * (rotation, a keyboard opening). Hosts before this field leave it out.
+   */
+  device?: HostDevice;
+};
+
+export const DEVICE_FORM_FACTORS = ['phone', 'tablet', 'desktop'] as const;
+export const DEVICE_POINTERS = ['coarse', 'fine'] as const;
+
+export type HostDevice = {
+  /** `phone` and `tablet` are the app's touch layouts; `desktop` is everything else. */
+  formFactor: (typeof DEVICE_FORM_FACTORS)[number];
+  /** `coarse` for a finger: make hit targets at least 44px tall. */
+  pointer: (typeof DEVICE_POINTERS)[number];
+  /** Safe-area insets of the screen in CSS pixels: the notch, the home indicator, rounded corners. */
+  insets: { top: number; right: number; bottom: number; left: number };
+  /** Height in CSS pixels the on-screen keyboard covers at the bottom; 0 while it is closed. */
+  keyboard: number;
 };
 
 export type GuestItemRole = 'user' | 'assistant';
@@ -277,10 +320,59 @@ export type GuestSessionItem = {
   truncated?: boolean;
 };
 
-export type GuestItem = AttachIssueRequest | GuestMessageItem | GuestSessionItem;
+/** A `contributes.actions` entry with `where: "selection"` ran on text selected in a message. */
+export type GuestSelectionItem = {
+  kind: 'selection';
+  action: string;
+  sessionId: string;
+  directory: string | null;
+  messageId: string;
+  /** The selected text as Markdown, capped at `GUEST_ITEM_MESSAGE_TEXT_MAX`. */
+  text: string;
+};
+
+/** A `contributes.actions` entry with `where: "file"` ran on a row of the Files view. */
+export type GuestFileItem = {
+  kind: 'file';
+  action: string;
+  directory: string | null;
+  /** Absolute path. */
+  path: string;
+  isDirectory: boolean;
+};
+
+/** A `contributes.actions` entry with `where: "diff"` ran on selected lines of a file or a diff. */
+export type GuestDiffItem = {
+  kind: 'diff';
+  action: string;
+  directory: string | null;
+  /** The file as the view names it, relative to the project when it can be. */
+  path: string;
+  startLine: number;
+  endLine: number;
+  side?: 'additions' | 'deletions';
+};
+
+/**
+ * The user clicked an identifier or a link in a chat message that the
+ * extension's `contributes.links` claims, with `action: "open"`. Built by the
+ * host from the match: `identifier` is what `{id}` or the key matched. `url`
+ * is the clicked link without its fragment and without query parameters
+ * other than the template's own; for an identifier in text, the link the first
+ * template without `{segment}` builds from it, absent when there is none or
+ * the identifier does not have `urls.identifier`'s shape (`PROJ-12` and
+ * `number`).
+ */
+export type GuestLinkItem = {
+  kind: 'link';
+  identifier: string;
+  url?: string;
+};
+
+export type GuestItem = AttachIssueRequest | GuestMessageItem | GuestSessionItem | GuestSelectionItem | GuestFileItem | GuestDiffItem | GuestLinkItem;
 
 /** The captured target of a background action. Delivered once through `onAction`, not `onItem`. */
-export type GuestActionItem = GuestMessageItem | GuestSessionItem;
+export type GuestActionItem = GuestMessageItem | GuestSessionItem | GuestSelectionItem | GuestFileItem | GuestDiffItem;
 
 export type ActionResultPayload = { ok: true } | { ok: false; error: string };
 
@@ -292,9 +384,13 @@ export const isGuestSessionItem = (item: GuestItem | null): item is GuestSession
   item !== null && item.kind === 'session'
 );
 
+export const isGuestLinkItem = (item: GuestItem | null): item is GuestLinkItem => (
+  item !== null && item.kind === 'link'
+);
+
 /** The composer chip: what the guest handed to `attach`, with `text` filled from the chip. */
 export const isGuestAttachItem = (item: GuestItem | null): item is AttachIssueRequest => (
-  item !== null && item.kind !== 'message' && item.kind !== 'session'
+  item !== null && (item.kind === undefined || item.kind === 'issue' || item.kind === 'pull')
 );
 
 /** What the host asks a guest that declared `contributes.commands` when the user submits `/name args`. */
@@ -626,6 +722,8 @@ export type HostConnectionMessage = Envelope & { type: 'connection'; payload: { 
 export type HostSettingsMessage = Envelope & { type: 'settings'; payload: { settings: GuestSettings } };
 export type HostSessionLifecycleMessage = Envelope & { type: 'session-lifecycle'; payload: SessionLifecycleEvent };
 export type HostItemMessage = Envelope & { type: 'item'; payload: { item: GuestItem | null } };
+/** What the extension's service sent its frames (`emit`). */
+type HostServiceEventMessage = Envelope & { type: 'service-event'; payload: { topic: string; data: JsonValue } };
 export type HostStatusControlEventMessage = Envelope & { type: 'status-control-event'; payload: GuestStatusControlEvent };
 export type HostPopoverClosedMessage = Envelope & { type: 'popover-closed'; payload: GuestPopoverClosedEvent };
 /** Host → guest request. The guest answers with `resolve-result` carrying the same `id`. */
@@ -656,6 +754,7 @@ export type HostMessage =
   | HostSettingsMessage
   | HostSessionLifecycleMessage
   | HostItemMessage
+  | HostServiceEventMessage
   | HostStatusControlEventMessage
   | HostPopoverClosedMessage
   | HostResolveMessage
@@ -674,6 +773,7 @@ export type GuestHelloMessage = Envelope & { type: 'hello' };
 export type GuestToastMessage = GuestCall<'toast', ToastRequest>;
 export type GuestOpenUrlMessage = GuestCall<'open-url', { url: string }>;
 export type GuestOpenSurfaceMessage = GuestCall<'open-surface', { surfaceId: string }>;
+export type GuestBlockAnswerMessage = GuestCall<'block-answer', { text: string }>;
 export type GuestClipboardWriteMessage = GuestCall<'clipboard-write', { text: string }>;
 export type GuestComposeMessage = GuestCall<'compose', ComposeRequest>;
 export type GuestAttachMessage = GuestCall<'attach', AttachIssueRequest>;
@@ -732,6 +832,7 @@ export type GuestMessage =
   | GuestToastMessage
   | GuestOpenUrlMessage
   | GuestOpenSurfaceMessage
+  | GuestBlockAnswerMessage
   | GuestClipboardWriteMessage
   | GuestComposeMessage
   | GuestAttachMessage
@@ -801,7 +902,7 @@ export const isGenerateResult = (
 const HOST_PUSH_TYPES: ReadonlySet<string> = new Set([
   'workspace',
   'shells',
-  'ready', 'directory', 'session', 'connection', 'settings', 'session-lifecycle', 'item', 'resolve', 'action',
+  'ready', 'directory', 'session', 'connection', 'settings', 'session-lifecycle', 'item', 'resolve', 'action', 'service-event',
   'status-control-event', 'popover-closed',
   'file-open', 'file-snapshot', 'file-saved',
   'generate-late',
