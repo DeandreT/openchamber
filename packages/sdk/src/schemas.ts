@@ -1,6 +1,7 @@
 // Host-side parsing. OpenChamber (browser host and server) imports this to
 // validate an untrusted guest's manifest and messages with zod. Guests import
 // `@openchamber/sdk`, which carries no schema library.
+export { nativeAgentCapabilitySchema, nativeAgentScopeSchema, nativeAgentAnswerSchema, nativeAgentStateSchema, nativeAgentParametersSchemas, nativeAgentResultSchema, nativeAgentEventSchema } from './native-agent-schemas.ts';
 export {
   guestToolCardSchema,
   openChamberManifestSchema,

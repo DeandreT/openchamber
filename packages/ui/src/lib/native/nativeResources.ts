@@ -388,12 +388,15 @@ export const renderNativeMagicPromptSettings = (): string => {
 /** The variables `htmlRenderTheme` derives from the app's metrics, filled in by the native client. */
 const HTML_RENDER_METRIC_VARIABLES = ['--oc-rem', '--oc-text', '--radius', '--font-sans', '--font-mono'];
 const HTML_RENDER_SAMPLE_METRICS: HtmlRenderMetrics = { rem: 16, text: 14, sans: '"Inter", sans-serif', mono: '"JetBrains Mono", monospace' };
-const HTML_RENDER_SAMPLES: Array<{ html: string; contained?: boolean; answerState?: { waiting: boolean; answer: null | Record<string, string> } }> = [
+const HTML_RENDER_SAMPLES: Array<{ html: string; contained?: boolean; declineLabel?: string; answerState?: { waiting: boolean; answer: null | Record<string, string> } }> = [
   { html: '<p>Bare body</p>' },
   { html: '<!doctype html><html lang="en"><head><title>T</title></head><body>x</body></html>' },
   { html: '<html><body><script>var s = "<head>";</script></body></html>', contained: true },
   { html: '<!DOCTYPE html>\n<body><!-- <head> --><meta charset="latin1"></body>', answerState: { waiting: true, answer: null } },
   { html: '<head><meta name="viewport" content="width=400"></head><p>v</p>', answerState: { waiting: false, answer: { pick: '</script><b>' } } },
+  { html: '<div style="display:flex;flex-direction:column"><button class="oc-button">Choose</button></div>', answerState: { waiting: true, answer: null }, declineLabel: 'رفض' },
+  { html: '<p>A page without a button</p>', answerState: { waiting: true, answer: null }, declineLabel: 'דחייה' },
+  { html: '<button class="oc-button">Choose</button>', answerState: { waiting: true, answer: null }, declineLabel: '</script><b>Decline' },
 ];
 
 /**
@@ -405,7 +408,7 @@ const HTML_RENDER_SAMPLES: Array<{ html: string; contained?: boolean; answerStat
  */
 export const renderNativeHtmlRender = (): string => {
   const probe = buildHtmlRenderDocument('<head></head>', { appearance: 'light', variables: {} });
-  const parts = /^<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style id="oc-html-render-theme">:root\{color-scheme:light;\}([\s\S]*?)<\/style><script>([\s\S]*?)<\/script><script type="application\/json" id="oc-html-render-answer">\{"waiting":false,"answer":null\}<\/script><script>([\s\S]*?)<\/script><\/head>$/.exec(probe);
+  const parts = /^<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style id="oc-html-render-theme">:root\{color-scheme:light;\}([\s\S]*?)<\/style><script>([\s\S]*?)<\/script><script type="application\/json" id="oc-html-render-answer">\{"waiting":false,"answer":null,"declineLabel":"Decline"\}<\/script><script>([\s\S]*?)<\/script><\/head>$/.exec(probe);
   if (!parts) throw new Error('buildHtmlRenderDocument no longer has the shape the native export reads');
   const [, baseCss, bootstrapScript, answerScript] = parts;
   const exportedThemes = themes.map((theme) => {
@@ -422,9 +425,11 @@ export const renderNativeHtmlRender = (): string => {
   const samples = HTML_RENDER_SAMPLES.map((sample) => ({
     ...sample,
     contained: sample.contained ?? false,
+    declineLabel: sample.declineLabel ?? 'Decline',
     answerState: sample.answerState ?? { waiting: false, answer: null },
     document: buildHtmlRenderDocument(sample.html, htmlRenderTheme(sampleTheme, HTML_RENDER_SAMPLE_METRICS), {
       contained: sample.contained ?? false,
+      declineLabel: sample.declineLabel ?? 'Decline',
       answerState: sample.answerState ?? { waiting: false, answer: null },
     }),
   }));

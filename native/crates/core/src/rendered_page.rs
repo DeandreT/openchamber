@@ -56,6 +56,8 @@ pub enum Ask {
     ChatSentEarlier,
     /// The chat could not draw the page's UI blocks.
     NotDrawn,
+    /// The user declined to answer on the page.
+    Declined,
     Unanswered,
 }
 
@@ -122,6 +124,7 @@ pub fn rendered_page(
         Some(PageAnswer::NotAnswered { reason }) => page(match reason.as_deref() {
             Some("chat-sent-earlier") => Ask::ChatSentEarlier,
             Some("ui-not-drawn") => Ask::NotDrawn,
+            Some("declined") => Ask::Declined,
             _ => Ask::AnsweredInChat,
         }),
         None => page(Ask::Show),
@@ -308,6 +311,7 @@ mod tests {
         for (reason, ask) in [
             (Some("chat-sent-earlier"), Ask::ChatSentEarlier),
             (Some("ui-not-drawn"), Ask::NotDrawn),
+            (Some("declined"), Ask::Declined),
             (None, Ask::AnsweredInChat),
         ] {
             let result = accepted(Some(PageAnswer::NotAnswered {

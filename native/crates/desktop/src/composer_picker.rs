@@ -14,6 +14,7 @@ use gpui_kit::{
     Subscription, TestSupportExt, WeakEntity, Window, div, px,
 };
 use openchamber_native_core::composer_selection::{Effort, SelectionOwner};
+use openchamber_native_core::native_agent::ConfigRole;
 use openchamber_native_core::send_config::{self, AgentMode, AutoRouting, ModelChoice};
 
 use crate::baseline::CssTextExt;
@@ -29,6 +30,7 @@ pub(crate) enum PickerKind {
     Model,
     Agent,
     Effort,
+    NativeMode,
 }
 
 /// The triggers' `typography-meta`, in rems.
@@ -52,6 +54,7 @@ impl PickerKind {
             Self::Model => 380.0,
             Self::Agent => 280.0,
             Self::Effort => 320.0,
+            Self::NativeMode => 320.0,
         }
     }
     fn id(self) -> &'static str {
@@ -59,6 +62,7 @@ impl PickerKind {
             Self::Model => "composer-model",
             Self::Agent => "composer-agent",
             Self::Effort => "composer-variant",
+            Self::NativeMode => "composer-native-mode",
         }
     }
     fn search(self) -> &'static str {
@@ -66,6 +70,7 @@ impl PickerKind {
             Self::Model => "chat.modelControls.searchModels",
             Self::Agent => "chat.modelControls.searchAgents",
             Self::Effort => "chat.modelControls.default",
+            Self::NativeMode => "commandPalette.input.placeholder",
         }
     }
 }
@@ -75,6 +80,7 @@ pub(crate) enum Pick {
     Model(ModelChoice),
     Agent(String),
     Effort(Effort),
+    NativeConfig(crate::native_agent::ConfigPick),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,6 +96,7 @@ pub(crate) struct PickerOption {
     label: SharedString,
     search: String,
     current: bool,
+    disabled: bool,
     workspace: WeakEntity<Workspace>,
 }
 
@@ -99,6 +106,7 @@ impl PartialEq for PickerOption {
             && self.label == other.label
             && self.search == other.search
             && self.current == other.current
+            && self.disabled == other.disabled
     }
 }
 impl Eq for PickerOption {}
@@ -111,6 +119,9 @@ impl SearchableListItem for PickerOption {
     fn value(&self) -> &PickValue {
         &self.value
     }
+    fn disabled(&self) -> bool {
+        self.disabled
+    }
     fn matches(&self, query: &str) -> bool {
         query
             .to_lowercase()
@@ -120,6 +131,7 @@ impl SearchableListItem for PickerOption {
     fn render(&self, _: &mut Window, cx: &mut App) -> impl IntoElement {
         let workspace = self.workspace.clone();
         let value = self.value.clone();
+        let disabled = self.disabled;
         div()
             .id(self.id.clone())
             .accessibility_id(self.id.clone())
@@ -131,6 +143,9 @@ impl SearchableListItem for PickerOption {
                 gpui_kit::Toggled::False
             })
             .on_a11y_action(gpui_kit::AccessibleAction::Click, move |_, window, cx| {
+                if disabled {
+                    return;
+                }
                 let _ = workspace.update(cx, |workspace, cx| {
                     workspace.apply_composer_pick(&value, cx)
                 });
@@ -249,6 +264,11 @@ impl Workspace {
             Pick::Model(model) => self.choose_composer_model(&value.owner, model.clone(), cx),
             Pick::Agent(agent) => self.choose_composer_agent(&value.owner, agent, cx),
             Pick::Effort(effort) => self.choose_composer_effort(&value.owner, effort.clone(), cx),
+            Pick::NativeConfig(pick) => {
+                if self.selection_owner().as_ref() == Some(&value.owner) {
+                    self.choose_native_config(pick, cx);
+                }
+            }
         }
     }
 
@@ -271,6 +291,7 @@ impl Workspace {
             PickerKind::Model => &self.model_picker,
             PickerKind::Agent => &self.agent_picker,
             PickerKind::Effort => &self.effort_picker,
+            PickerKind::NativeMode => &self.native_mode_picker,
         };
         let mut items = Vec::new();
         if let (Some(owner), Some(inputs)) = (self.selection_owner(), self.choice_inputs()) {
@@ -281,6 +302,13 @@ impl Workspace {
                 .unwrap_or_default();
             let mut add =
                 |pick: Pick, key: String, label: String, search: String, current: bool| {
+                    let disabled = match &pick {
+                        Pick::NativeConfig(config) => {
+                            !self.native_agents.owner.can_set_config(&config.owner)
+                                || self.native_action_pending(&config.owner)
+                        }
+                        _ => false,
+                    };
                     items.push(PickerOption {
                         value: PickValue {
                             owner: owner.clone(),
@@ -290,11 +318,16 @@ impl Workspace {
                         label: label.into(),
                         search: search.to_lowercase(),
                         current,
+                        disabled,
                         workspace: cx.entity().downgrade(),
                     });
                 };
             match kind {
                 PickerKind::Model => {
+                    for (pick, label, current) in self.native_config_options(ConfigRole::Model) {
+                        let key = format!("native:{}:{}", pick.field_id, pick.choice_id);
+                        add(Pick::NativeConfig(pick), key, label.clone(), label, current);
+                    }
                     if inputs.defaults.auto_routing == AutoRouting::Ready {
                         let label = locale::strings(cx)
                             .get("chat.modelControls.autoModel")
@@ -314,6 +347,34 @@ impl Workspace {
                         );
                     }
                     for provider in inputs.providers {
+                        if self.native_provider_advertised(&provider.id) {
+                            if let Some(model) = provider.models.iter().find(|model| {
+                                !inputs
+                                    .defaults
+                                    .hidden_models
+                                    .contains(&(provider.id.clone(), model.id.clone()))
+                            }) {
+                                let label =
+                                    provider.name.clone().unwrap_or_else(|| provider.id.clone());
+                                let current = selected
+                                    .model
+                                    .as_ref()
+                                    .is_some_and(|choice| choice.provider_id == provider.id)
+                                    && self.native_config_fields(ConfigRole::Model).is_empty();
+                                add(
+                                    Pick::Model(ModelChoice {
+                                        provider_id: provider.id.clone(),
+                                        model_id: model.id.clone(),
+                                        variant: None,
+                                    }),
+                                    format!("native-provider:{}", provider.id),
+                                    label.clone(),
+                                    label,
+                                    current,
+                                );
+                            }
+                            continue;
+                        }
                         for model in &provider.models {
                             if inputs
                                 .defaults
@@ -357,7 +418,17 @@ impl Workspace {
                     }
                 }
                 PickerKind::Effort => {
-                    if let Some(choice) = &selected.model
+                    let native = selected
+                        .model
+                        .as_ref()
+                        .is_some_and(|model| self.native_provider_advertised(&model.provider_id));
+                    if native {
+                        for (pick, label, current) in self.native_config_options(ConfigRole::Effort)
+                        {
+                            let key = format!("native:{}:{}", pick.field_id, pick.choice_id);
+                            add(Pick::NativeConfig(pick), key, label.clone(), label, current);
+                        }
+                    } else if let Some(choice) = &selected.model
                         && let Some(model) = send_config::find_model(inputs.providers, choice)
                     {
                         let label = locale::strings(cx)
@@ -381,6 +452,12 @@ impl Workspace {
                         }
                     }
                 }
+                PickerKind::NativeMode => {
+                    for (pick, label, current) in self.native_config_options(ConfigRole::Mode) {
+                        let key = format!("native:{}:{}", pick.field_id, pick.choice_id);
+                        add(Pick::NativeConfig(pick), key, label.clone(), label, current);
+                    }
+                }
             }
         }
         let directory = self.config_directory();
@@ -399,7 +476,42 @@ impl Workspace {
                 crate::send_catalog::Load::Ready(_) => "commandPalette.empty.noResults",
             }),
             PickerKind::Effort => Some("commandPalette.empty.noResults"),
+            PickerKind::NativeMode => Some("commandPalette.empty.noResults"),
         };
+        let role = match kind {
+            PickerKind::Model => Some(ConfigRole::Model),
+            PickerKind::Effort => Some(ConfigRole::Effort),
+            PickerKind::NativeMode => Some(ConfigRole::Mode),
+            PickerKind::Agent => None,
+        };
+        let native_fields = role
+            .map(|role| self.native_config_fields(role))
+            .unwrap_or_default();
+        let native_labels = !native_fields.is_empty();
+        let accessible_label = if native_labels {
+            native_fields
+                .iter()
+                .filter_map(|field| {
+                    field
+                        .choices
+                        .iter()
+                        .find(|choice| choice.id == field.value)
+                        .map(|choice| format!("{}: {}", field.label, choice.label))
+                })
+                .collect::<Vec<_>>()
+                .join(" / ")
+                .into()
+        } else {
+            label.clone()
+        };
+        let search_placeholder = native_labels.then(|| {
+            native_fields
+                .iter()
+                .map(|field| field.label.as_str())
+                .collect::<Vec<_>>()
+                .join(" / ")
+                .into()
+        });
         SelectionControl {
             kind,
             label,
@@ -408,6 +520,9 @@ impl Workspace {
             label_color,
             provider,
             show_label,
+            accessible_label,
+            literal_label: native_labels,
+            search_placeholder,
             direction,
             state: picker.state.clone(),
             previous_items: picker.items.clone(),
@@ -429,6 +544,9 @@ pub(crate) struct SelectionControl {
     label_color: gpui_kit::Hsla,
     provider: Option<String>,
     show_label: bool,
+    accessible_label: SharedString,
+    literal_label: bool,
+    search_placeholder: Option<SharedString>,
     direction: Direction,
     state: Entity<ComboboxState<PickerItems>>,
     previous_items: Rc<RefCell<Vec<PickerOption>>>,
@@ -472,7 +590,10 @@ impl RenderOnce for SelectionControl {
         }
         let palette = cx.global::<Palette>().clone();
         let state = self.state.clone();
-        let placeholder = locale::strings(cx).get(self.kind.search());
+        let placeholder = self
+            .search_placeholder
+            .clone()
+            .unwrap_or_else(|| locale::strings(cx).get(self.kind.search()));
         let empty = locale::strings(cx).get(self.empty_key);
         let muted = palette.muted_foreground;
         let icon_width = if self.provider.is_some() { 17.0 } else { 16.0 };
@@ -552,7 +673,7 @@ impl RenderOnce for SelectionControl {
                                 .into_any_element(),
                         )
                     };
-                    let shown = if suffix {
+                    let shown = if suffix && !self.literal_label {
                         self.label.to_lowercase().into()
                     } else {
                         self.label.clone()
@@ -561,7 +682,7 @@ impl RenderOnce for SelectionControl {
                         .id(self.kind.id())
                         .role(Role::Button)
                         .accessibility_id(self.kind.id())
-                        .aria_label(self.label.clone())
+                        .aria_label(self.accessible_label.clone())
                         .aria_expanded(open)
                         .on_a11y_action(gpui_kit::AccessibleAction::Click, move |_, window, cx| {
                             if disabled {

@@ -1,5 +1,7 @@
 import fs from 'fs';
 import path from 'path';
+import yaml from 'yaml';
+import { writeFileAtomic } from './atomic-write.js';
 import {
   getAncestors,
   findWorktreeRoot,
@@ -9,6 +11,7 @@ import {
   AGENT_SCOPE,
   ensureDirs,
   parseMdFile,
+  sanitizeFrontmatter,
   writeMdFile,
   readConfigLayers,
   writeConfig,
@@ -19,6 +22,7 @@ import {
 } from './shared.js';
 import {
   toAgentEntity,
+  readSectionEntry,
   fromAgentEntity,
   isLegacyAgentFrontmatter,
   writeSectionEntry,
@@ -445,6 +449,48 @@ function updateAgent(agentName, updates, workingDirectory) {
   const lookupCache = createAgentLookupCache();
 
   const current = getAgentConfig(agentName, workingDirectory, lookupCache);
+  if (['compaction', 'title'].includes(agentName) && isRecord(updates)
+    && Object.keys(updates).length === 1 && Object.hasOwn(updates, 'model')) {
+    const model = updates.model === null ? null : formatModelSelection(updates.model);
+    if (updates.model !== null && !model) throw new Error('Invalid model reference');
+    if (current.source === 'md') {
+      const raw = fs.readFileSync(current.path, 'utf8');
+      const header = raw.match(/^(\uFEFF?---\r?\n)([\s\S]*?)(\r?\n---(?:\r?\n|$))/u);
+      let doc = yaml.parseDocument(header?.[2] ?? '');
+      if (doc.errors.length) doc = yaml.parseDocument(sanitizeFrontmatter(header?.[2] ?? ''));
+      if (doc.errors.length || (doc.contents !== null && !yaml.isMap(doc.contents))) throw new Error('Invalid agent frontmatter');
+      const removeField = (key) => {
+        const pair = doc.contents?.items.find((item) => item.key?.value === key);
+        const comments = [pair?.key?.commentBefore, pair?.key?.comment, pair?.value?.commentBefore, pair?.value?.comment].filter(Boolean);
+        if (comments.length) doc.commentBefore = [doc.commentBefore, ...comments].filter(Boolean).join('\n');
+        doc.delete(key);
+      };
+      if (model === null) removeField('model');
+      else doc.set('model', model);
+      removeField('variant');
+      const newline = header?.[1].endsWith('\r\n') ? '\r\n' : '\n';
+      const frontmatter = doc.toString().replace(/\n$/u, '').replaceAll('\n', newline);
+      const content = header
+        ? header[1] + frontmatter + header[3] + raw.slice(header[0].length)
+        : `---${newline}${frontmatter}${newline}---${newline}${raw}`;
+      writeFileAtomic(current.path, content);
+      return { source: current.source, scope: current.scope, path: current.path };
+    }
+    if (current.source === 'json') {
+      const layers = readConfigLayers(workingDirectory);
+      const source = getJsonEntrySource(layers, 'agents', agentName);
+      const entry = readSectionEntry(source.config, 'agents', agentName);
+      if (!isRecord(entry.value)) throw new Error('Invalid agent config');
+      const next = { ...entry.value };
+      if (model === null) delete next.model;
+      else next.model = model;
+      delete next.variant;
+      source.config[entry.key][agentName] = next;
+      writeConfig(source.config, source.path);
+      return { source: current.source, scope: current.scope, path: source.path };
+    }
+    if (model === null) return { source: current.source, scope: current.scope, path: current.path };
+  }
   const entity = applyAgentUpdates(current.config, updates);
 
   if (current.source === 'md') {

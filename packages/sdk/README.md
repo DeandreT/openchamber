@@ -262,6 +262,14 @@ The kit's look comes from the OpenChamber version that runs your extension: colo
 
 ## Schemas
 
+Native OpenCode providers can implement native-agent protocol v1 with the types
+and pure answer/config validators from `@openchamber/sdk` and the
+`nativeAgent*Schema` validators from `@openchamber/sdk/schemas`. The wire examples
+are in `fixtures/native-agent-v1.json`. The full contract is
+[`docs/rust-desktop/NATIVE_AGENT.md`](../../docs/rust-desktop/NATIVE_AGENT.md).
+This protocol uses OpenCode RPC and keeps execution and credentials in the
+provider plugin.
+
 `@openchamber/sdk/schemas` exports the zod schemas for the manifest and the messages, for tools that validate extensions. The main entry has no zod dependency, so a page bundle stays small.
 
 ## Scope

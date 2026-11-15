@@ -970,10 +970,22 @@ fn a_search_narrows_the_list_and_escape_restores_it(cx: &mut TestAppContext) {
     );
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
-        assert!(window.try_find(name("sidebar-search-count")).is_some());
+        assert!(window.try_find(name("sidebar-search-clear")).is_some());
         window.press("escape", cx);
         window.render_frame(cx);
-        assert!(window.try_find(name("sidebar-search")).is_none());
+        assert!(window.try_find(name("sidebar-search")).is_some());
+        assert!(window.try_find(name("sidebar-search-clear")).is_none());
+    })
+    .expect("window is open");
+    assert_eq!(rows(&workspace, cx).len(), all.len());
+    cx.update_window(window, |_, window, cx| {
+        // Clearing leaves focus in the field, so typing starts another search.
+        window.input(&title, cx);
+        window.render_frame(cx);
+        assert!(window.try_find(name("sidebar-search-clear")).is_some());
+        window.click(name("sidebar-search-clear"), cx);
+        window.render_frame(cx);
+        assert!(window.try_find(name("sidebar-search-clear")).is_none());
     })
     .expect("window is open");
     assert_eq!(rows(&workspace, cx).len(), all.len());

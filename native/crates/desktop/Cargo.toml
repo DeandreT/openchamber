@@ -52,3 +52,6 @@ zbus = { workspace = true, features = ["p2p"] }
 
 [lints]
 workspace = true
+
+[target.'cfg(windows)'.dependencies]
+openchamber-windows-process = { path = "../windows-process" }

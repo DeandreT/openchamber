@@ -1,4 +1,6 @@
 export { OPENCHAMBER_SDK_API_VERSION, OPENCHAMBER_SDK_CHANNEL, OPENCHAMBER_SDK_MANIFEST_API_VERSIONS } from './api-version.ts';
+export { NATIVE_AGENT_PROTOCOL_VERSION, NATIVE_AGENT_METHODS, NATIVE_AGENT_ERROR_CODES, nativeAgentRpcID, sameNativeAgentScope, validateNativeAgentAnswer, validateNativeAgentConfig } from './native-agent.ts';
+export type { NativeAgentMethod, NativeAgentErrorCode, NativeAgentScope, NativeAgentCapabilities, NativeAgentExecution, NativeAgentConfig, NativeAgentQuestionField, NativeAgentPendingRequest, NativeAgentAnswer, NativeAgentState, NativeAgentParameters, NativeAgentResult, NativeAgentToolProgress, NativeAgentEvent } from './native-agent.ts';
 export { GUEST_SCROLLBAR_CSS, GUEST_SCROLLBAR_SCRIPT } from './scrollbar-style.ts';
 export { guestFramePolicy } from './frame-policy.ts';
 export type { GuestLoadState, GuestProject, GuestWorktree, GuestSessionActivity, GuestSessionRecord, GuestSessionLink, GuestDirectoryCoverage, GuestProjectsSnapshot, GuestWorktreesSnapshot, GuestSessionsSnapshot, GuestWorkspaceSnapshot, GuestWorkspaceQuery, GuestWorkspaceSubscription, GuestWorkspaceUpdate, GuestStorageRequest, GuestStorageResult, GuestStorageOptions, GuestStorageScope, GuestSessionWorktree } from './workspace.ts';

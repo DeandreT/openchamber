@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import shlex
 import subprocess
 import tempfile
 import threading
@@ -17,10 +18,11 @@ import time
 from pathlib import Path
 
 import virtual_display
+from executables import executable_path, require_executable
 
 ENGINE = "libpinyin"
 LATIN = "xkb:us::eng"
-LIBPINYIN = Path("/usr/lib/ibus-libpinyin/ibus-engine-libpinyin")
+LIBPINYIN = executable_path("ibus-engine-libpinyin", "/usr/lib/ibus-libpinyin/ibus-engine-libpinyin", "/usr/libexec/ibus-engine-libpinyin")
 CLIENT_ENV = {"XMODIFIERS": "@im=ibus", "GTK_IM_MODULE": "ibus", "QT_IM_MODULE": "ibus"}
 # A Unix socket path holds 107 bytes. The daemon's default socket sits under
 # the profile's cache directory, and a longer path is cut short: scenarios
@@ -59,8 +61,9 @@ class IBusFixture:
     def start(self) -> dict[str, str]:
         """Starts the daemon and engine; returns the client's environment."""
         virtual_display.verify_owned_display()
-        if not LIBPINYIN.is_file():
+        if not LIBPINYIN.is_file() or not os.access(LIBPINYIN, os.X_OK):
             raise RuntimeError(f"IME steps need {LIBPINYIN}")
+        config = require_executable("ibus-dconf", "/usr/lib/ibus/ibus-dconf", "/usr/libexec/ibus-dconf")
         self.root.mkdir(parents=True)
         env = {key: os.environ[key] for key in ("PATH", "USER", "LANG") if key in os.environ}
         env.update(HOME=str(self.root), LANG="en_US.UTF-8", GSETTINGS_BACKEND="keyfile")
@@ -76,7 +79,7 @@ class IBusFixture:
         for key, value in (("preload-engines", f"['{ENGINE}', '{LATIN}']"), ("engines-order", f"['{ENGINE}', '{LATIN}']"), ("enable-by-default", "true")):
             self._command("gsettings", "set", "org.freedesktop.ibus.general", key, value)
         self._command("gsettings", "set", "com.github.libpinyin.ibus-libpinyin.libpinyin", "lua-extension", "false")
-        self._start("ibus", ["ibus-daemon", "--xim", "--panel=disable", "--config=/usr/lib/ibus/ibus-dconf", "--emoji-extension=disable", "--cache=none", f"--address=unix:path={bus}"])
+        self._start("ibus", ["ibus-daemon", "--xim", "--panel=disable", f"--config={shlex.quote(str(config))}", "--emoji-extension=disable", "--cache=none", f"--address=unix:path={bus}"])
         self._until("IBus did not register libpinyin", lambda: ENGINE in self._command("ibus", "list-engine"))
         self.env["IBUS_ADDRESS"] = self._command("ibus", "address").strip()
         self._start("libpinyin", [str(LIBPINYIN), "--ibus"])

@@ -28,6 +28,7 @@ type FixtureAgent = {
   hidden?: boolean; optionsHidden?: boolean; model?: Choice; color?: string;
 };
 type Defaults = {
+  catalogLoaded?: boolean;
   projectDefaultAgent?: string; projectDefaultModel?: string; projectDefaultVariant?: string;
   settingsDefaultAgent?: string; settingsDefaultModel?: string; settingsDefaultVariant?: string;
   opencodeDefaultAgent?: string; opencodeDefaultModel?: string;
@@ -100,6 +101,21 @@ const selectionScenarios = [
   scenario('unloaded settings preserve Auto despite unavailable feature', { allowFallback: false, settingsDefaultModel: 'openchamber/auto', settingsDefaultVariant: 'high', autoRouting: 'unavailable' }, { settingsLoaded: false }),
   scenario('unloaded settings preserve Auto despite unready routing', { allowFallback: false, settingsDefaultModel: 'openchamber/auto', settingsDefaultVariant: 'high', autoRouting: 'notReady' }, { settingsLoaded: false }),
   scenario('last selected visible through catalog gap', { lastSelectedModel: 'late/nested/model' }),
+  scenario('loaded catalog skips removed configured model', { catalogLoaded: true, settingsDefaultModel: 'removed/model' }),
+  scenario('loaded catalog skips removed remembered model', { catalogLoaded: true, lastSelectedModel: 'removed/model' }),
+  scenario('loaded catalog falls from project to settings with its own effort', { catalogLoaded: true, projectDefaultModel: 'removed/model', projectDefaultVariant: 'high', settingsDefaultModel: 'p/catalog', settingsDefaultVariant: 'low' }),
+  scenario('malformed project default falls to settings', { projectDefaultModel: 'noslash', settingsDefaultModel: 'p/catalog', settingsDefaultVariant: 'low' }),
+  scenario('loaded catalog skips removed agent pin for OpenCode default', { catalogLoaded: true, opencodeDefaultModel: 'p/catalog#low' }, { agents: [{ name: 'build', model: { providerId: 'removed', modelId: 'model', variant: 'high' } }] }),
+  scenario('loaded catalog skips removed OpenCode default for remembered model', { catalogLoaded: true, opencodeDefaultModel: 'removed/model#high', lastSelectedModel: 'p/catalog' }),
+  scenario('loaded catalog with fallback disabled drops removed model', { catalogLoaded: true, allowFallback: false, settingsDefaultModel: 'removed/model' }),
+  scenario('empty loaded catalog preserves configured model', { catalogLoaded: true, settingsDefaultModel: 'late/model', settingsDefaultVariant: 'high' }, { providers: [] }),
+  scenario('empty loaded catalog preserves agent pin', { catalogLoaded: true }, { providers: [], agents: [{ name: 'build', model: { providerId: 'late', modelId: 'model', variant: 'high' } }] }),
+  scenario('empty loaded catalog preserves remembered model', { catalogLoaded: true, lastSelectedModel: 'late/model' }, { providers: [] }),
+  scenario('loaded catalog preserves provider API alias', { catalogLoaded: true, settingsDefaultModel: 'p/api-name', settingsDefaultVariant: 'high' }, { providers: [{ id: 'p', models: [{ id: 'alias', providerModelId: 'api-name', variants: ['high'] }] }] }),
+  ...(['unknown', 'unavailable', 'ready', 'notReady'] as const).flatMap((autoRouting) => [
+    scenario(`loaded catalog Auto configured ${autoRouting}`, { catalogLoaded: true, settingsDefaultModel: 'openchamber/auto', autoRouting }),
+    scenario(`loaded catalog Auto agent pin ${autoRouting}`, { catalogLoaded: true, autoRouting }, { agents: [{ name: 'build', model: { providerId: 'openchamber', modelId: 'auto', variant: 'high' } }] }),
+  ]),
   scenario('last selected hidden skipped', { lastSelectedModel: 'p/catalog', hiddenModels: [['p', 'catalog']] }),
   scenario('last selected stale Auto skipped', { lastSelectedModel: 'openchamber/auto', autoRouting: 'notReady' }),
   scenario('Big Pickle preferred'),
@@ -131,6 +147,7 @@ const runSelection = ({ agents: entries, providers: catalog, defaults, settingsL
   useRoutingStore.setState({ loaded: routing !== 'unknown', available: routing === 'ready', autoReady: routing === 'ready' });
   const selected = resolveDefaultAgentModelSelection({
     ...defaults, agents: entries.map(toAgent), providers: catalog.map(toProvider),
+    catalogLoaded: defaults.catalogLoaded ?? false,
     fallbackPrefs: {
       lastSelectedModel: defaults.lastSelectedModel,
       hiddenModels: (defaults.hiddenModels ?? []).map(([providerID, modelID]) => ({ providerID, modelID })),

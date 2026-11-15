@@ -509,6 +509,16 @@ impl Workspace {
     /// background and recovered sends never create this profile write. Close
     /// freezes new records while already accepted edits finish draining.
     pub(crate) fn record_user_effort(&mut self, capture: UserEffort, cx: &mut Context<Self>) {
+        // A native model variant identifies an immutable execution snapshot,
+        // not a reasoning effort to remember in the OpenCode model profile.
+        if self.native_provider_advertised(&capture.model.provider_id)
+            || self.native_agents.owner.states().any(|(key, _)| {
+                key.server == capture.runtime.as_str()
+                    && key.scope.provider_id == capture.model.provider_id
+            })
+        {
+            return;
+        }
         if !self.effort_preferences.is_closing()
             && self.runtime == capture.runtime
             && self.effort_preferences.accepts(&capture)

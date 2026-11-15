@@ -6,6 +6,18 @@ import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 import { extensionPowersI18n } from './extension-powers.i18n';
 export const settingsDict = {
+  'settings.sessions.auxiliary.noDirectory': '打开项目或聊天后即可选择这些模型。',
+  'settings.sessions.auxiliary.summary': '摘要模型',
+  'settings.sessions.auxiliary.title': '标题模型',
+  'settings.sessions.auxiliary.engineDefault': 'OpenCode 默认值',
+  'settings.sessions.auxiliary.info': '为 OpenCode 内置代理选择普通文本模型。选择 OpenCode 默认值会移除模型覆盖设置。',
+  'settings.sessions.auxiliary.privacy': 'OpenCode 可能会将对话内容发送给此处选择的提供商。提供商策略仍然适用。',
+  'settings.sessions.auxiliary.projectSource': '项目配置：{path}',
+  'settings.sessions.auxiliary.userSource': '用户配置：{path}',
+  'settings.sessions.auxiliary.newSource': '明确选择模型后会创建用户级代理覆盖配置。',
+  'settings.sessions.auxiliary.loading': '正在读取代理配置...',
+  'settings.sessions.auxiliary.saveFailed': '模型保存失败。请刷新配置后重试。',
+  'settings.sessions.auxiliary.catalogFailed': '无法读取模型或代理配置。已保存的选择会保留。请重试以刷新。',
   'settings.openchamber.sessionRetention.field.archivedDescription': '保留期限从归档时开始计算。过期会话会被删除。',
   'settings.openchamber.sessionRetention.field.unarchivedArchiveDescription': '保留期限从会话的最后活动时间开始计算。过期会话会被归档。',
   'settings.openchamber.sessionRetention.field.unarchivedDeleteDescription': '保留期限从会话的最后活动时间开始计算。过期会话会被删除。',

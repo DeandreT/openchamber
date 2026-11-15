@@ -1,0 +1,64 @@
+{
+  "protocolVersion": 1,
+  "providers": [
+    {
+      "name": "Devin contract example, no service API implied",
+      "discovery": { "protocolVersion": 1 },
+      "state": {
+        "protocolVersion": 1,
+        "scope": { "directory": "C:\\work\\actual-draft", "providerID": "devin", "sessionID": null },
+        "activationID": "devin-activation-1", "revision": 3,
+        "status": "stopped", "authentication": "authenticated", "permissionOwner": "native",
+        "capabilities": { "authenticate": true, "setConfig": true, "answer": true, "toolProgress": true },
+        "execution": { "providerID": "devin", "modelID": "local", "variant": "immutable-config-3" },
+        "config": [
+          { "id": "runtime-model", "label": "Model", "role": "model", "value": "opaque-model-a", "choices": [{ "id": "opaque-model-a", "label": "Model A" }, { "id": "opaque-model-b", "label": "Model B" }] },
+          { "id": "reasoning-budget", "label": "Effort", "role": "effort", "value": "opaque-standard", "choices": [{ "id": "opaque-standard", "label": "Standard" }, { "id": "opaque-deep", "label": "Deep" }] },
+          { "id": "execution-mode", "label": "Mode", "role": "mode", "value": "opaque-plan", "choices": [{ "id": "opaque-plan", "label": "Plan" }, { "id": "opaque-build", "label": "Build" }] }
+        ],
+        "requests": [], "submission": { "status": "none" }, "diagnostic": null
+      }
+    },
+    {
+      "name": "Synthetic independent provider",
+      "discovery": { "protocolVersion": 1 },
+      "state": {
+        "protocolVersion": 1,
+        "scope": { "directory": "/work/synthetic", "providerID": "synthetic-native", "sessionID": "session-fixture" },
+        "activationID": "synthetic-activation-8", "revision": 12,
+        "status": "ready", "authentication": "authenticated", "permissionOwner": "native",
+        "capabilities": { "authenticate": false, "setConfig": true, "answer": true, "toolProgress": true },
+        "execution": { "providerID": "synthetic-native", "modelID": "synthetic-route", "variant": "immutable-config-12" },
+        "config": [{ "id": "flavour", "label": "Execution style", "role": "mode", "value": "careful", "choices": [{ "id": "careful", "label": "Careful" }, { "id": "quick", "label": "Quick" }] }],
+        "requests": [
+          { "id": "permission-fixture", "kind": "permission", "title": "Apply the proposed edit?", "description": "Synthetic permission request", "choices": [{ "id": "yes-once", "label": "Allow once", "decision": "allow" }, { "id": "no", "label": "Deny", "decision": "deny" }] },
+          { "id": "question-fixture", "kind": "question", "title": "Choose a target", "description": "Synthetic question", "fields": [{ "id": "target", "label": "Target", "required": true, "multiple": false, "allowText": false, "choices": [{ "id": "test", "label": "Test" }, { "id": "preview", "label": "Preview" }] }, { "id": "reason", "label": "Reason", "required": false, "multiple": false, "allowText": true, "choices": [] }] }
+        ],
+        "submission": { "status": "outcome-unknown", "id": "submission-fixture" },
+        "diagnostic": { "code": "outcome_unknown", "retryable": false }
+      }
+    }
+  ],
+  "sessionFirstDraft": {
+    "protocolVersion": 1,
+    "scope": { "directory": "/work/session-first", "providerID": "session-first-native", "sessionID": null },
+    "activationID": "config-only-1", "revision": 0,
+    "status": "unprepared", "authentication": "unknown", "permissionOwner": "native",
+    "capabilities": { "authenticate": true, "setConfig": true, "answer": false, "toolProgress": true, "prepareAfterSession": true },
+    "configComplete": false,
+    "execution": null, "config": [], "requests": [], "submission": { "status": "none" }, "diagnostic": null
+  },
+  "parameters": {
+    "getState": { "protocolVersion": 1, "requestID": "read-1", "scope": { "directory": "/work/synthetic", "providerID": "synthetic-native", "sessionID": "session-fixture" }, "activationID": null },
+    "prepare": { "protocolVersion": 1, "requestID": "prepare-1", "scope": { "directory": "C:\\work\\actual-draft", "providerID": "devin", "sessionID": null }, "activationID": null },
+    "authenticate": { "protocolVersion": 1, "requestID": "auth-1", "scope": { "directory": "C:\\work\\actual-draft", "providerID": "devin", "sessionID": null }, "activationID": "devin-activation-1", "expectedRevision": 3, "userInitiated": true },
+    "setConfig": { "protocolVersion": 1, "requestID": "config-1", "scope": { "directory": "C:\\work\\actual-draft", "providerID": "devin", "sessionID": null }, "activationID": "devin-activation-1", "expectedRevision": 3, "changes": [{ "id": "runtime-model", "value": "opaque-model-b" }] },
+    "answer": { "protocolVersion": 1, "requestID": "answer-1", "scope": { "directory": "/work/synthetic", "providerID": "synthetic-native", "sessionID": "session-fixture" }, "activationID": "synthetic-activation-8", "expectedRevision": 12, "answer": { "kind": "permission", "requestID": "permission-fixture", "choiceID": "yes-once" } }
+  },
+  "answers": [
+    { "kind": "permission", "requestID": "permission-fixture", "choiceID": "yes-once" },
+    { "kind": "question", "requestID": "question-fixture", "values": [{ "fieldID": "target", "choiceIDs": ["preview"] }, { "fieldID": "reason", "choiceIDs": [], "text": "Check the preview first" }] }
+  ],
+  "progress": { "protocolVersion": 1, "type": "toolProgress", "scope": { "directory": "/work/synthetic", "providerID": "synthetic-native", "sessionID": "session-fixture" }, "activationID": "synthetic-activation-8", "revision": 12, "messageID": "message-fixture", "partID": "part-fixture", "callID": "call-fixture", "sequence": 4, "text": "Synthetic live progress" },
+  "failure": { "protocolVersion": 1, "requestID": "answer-1", "ok": false, "error": { "code": "outcome_unknown", "outcome": "unknown" } }
+}

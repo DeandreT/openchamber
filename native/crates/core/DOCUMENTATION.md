@@ -9,6 +9,26 @@ rendering asks for a projection and dispatches an action.
 
 ## Ownership
 
+- `chat_draft.rs` owns Chat destination resolution, dated execution paths and
+  directory-preparation states. `chat_roots.rs` accepts canonical aliases only
+  when the server reported them. Strict descendant checks exclude every shared
+  root alias and traversal; equivalence requires the same root family and suffix.
+  New execution paths use the server's canonical root while configuration keeps
+  the configured root identity.
+
+- `native_agent.rs` owns the SDK v1 domain records, contextual config/answer
+  validation, and `NativeAgents`, keyed by captured server identity and exact
+  directory/provider/session scope. Requests carry generation-scoped tickets;
+  only the newest outstanding discovery can establish or replace an activation.
+  Provider selection does not remove another provider's pending approvals.
+   Transport owns JSON validation and RPC; the desktop owns tasks and controls.
+
+- Session-first native draft authority permits durable OpenCode session creation
+  from config-only state. It grants neither native authentication nor prompt
+  submission; those require the real session and the usual ready execution binding.
+  Session-first submission also requires the explicit `configComplete` marker.
+  Authentication, readiness and success never substitute for that authority.
+
 - `request_owner.rs`, `permission.rs` and `form.rs` define blocking requests,
   captured runtime/location ownership, explicit decisions and typed form values.
   `request_list.rs` carries validated siblings, scope/owner coverage and explicit
@@ -37,6 +57,9 @@ rendering asks for a projection and dispatches an action.
   `sessionLinks.ts`: link candidates in text, link keys, and the context text a
   session or message reference sends.
 - `send_config.rs` ports default agent/model selection, an existing session's selection from its record, catalog grouping, composer labels and agent color allocation from the web client.
+- A successful, nonempty directory catalog skips missing configured, pinned and
+  remembered models through the same fallback order as the web client. Cold or
+  empty catalogs retain them. Auto keeps its separate routing-readiness rule.
 - Default effort follows the configured choice, a supported matching agent pin,
   then the model's remembered choice from server settings. A remembered explicit
   Default stays distinct from an absent entry when restoring session effort.
@@ -253,6 +276,33 @@ crate owns wire parsing and authority checks, and hands the core records and
 
 ## Invariants
 
+- Native-agent snapshots replace only greater revisions in the accepted
+  activation. Equal revisions are no-ops; an explicit current discovery can
+  establish a new activation. Events cannot establish one. Invalidation keeps
+  snapshots but withdraws mutation authority until a nonstale read completes.
+- Native-agent failures preserve the last valid snapshot. An uncertain mutation
+  requires a read begun after its uncertainty was established, with no mutation
+  still in flight; a read captures the owner's mutation epoch for this check.
+  An uncertain answer remains blocked while its request
+  remains pending. No transition retries a mutation or submits a prompt.
+- A definitive native `stale_activation` failure withdraws action and progress
+  authority while retaining the displayed snapshot. Outstanding responses are
+  retired, and only a new null-activation discovery can establish current authority.
+- A native send requires ready, authenticated state, no pending/unknown
+  submission or mutation, and a published immutable `execution` binding.
+  `ExecutionBinding::model_choice` captures the exact provider/model/variant
+  triple for ordinary send, queue and recovery paths. Native config choice IDs
+   never substitute for OpenCode routing model IDs.
+- Read-only answer, config and authentication queries require current mutation
+  authority and their own capability. Answers additionally require native
+  permission ownership and the current request without an uncertain answer.
+  These actions remain available with no execution binding or authenticated
+  submission state; `begin` still validates each mutation and its payload.
+- Native progress requires the exact live message/part/call and its assistant
+  model's provider, an explicit OpenCode `executed` flag, running status, accepted
+  activation/state revision and increasing sequence. History projection never
+  establishes live execution. Final/error tool content takes precedence.
+
 - A board list read applies only while it is the newest read of the list.
   A failed first page is a failure, never an empty list; a failed refresh
   keeps the listed rows and says so; disconnected and no-repository answers
@@ -449,6 +499,20 @@ crate owns wire parsing and authority checks, and hands the core records and
   subtree's cost counts each session once, whatever the parent links say.
 
 ## Decisions
+
+### Why native-agent state keeps every provider owner
+
+Choosing the next message's provider changes that send only. Approvals already
+owned by another native provider must retain their captured routing and remain
+answerable. Server, directory and session switches retire outstanding request
+generations without erasing snapshots used for continuity.
+
+### Why native progress is separate from tool results
+
+Progress replaces a live display string for an existing running call. Its owner
+retains sequence watermarks across state revisions, while the authoritative
+OpenCode part controls execution status and final output. Metadata used by
+websearch has no execution authority.
 
 ### Why typed tool facts and not raw JSON in the core
 

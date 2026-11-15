@@ -957,6 +957,7 @@ mod tests {
         path: &'static str,
         gate: Arc<ResponseGate>,
         used: bool,
+        request_sequence: Option<usize>,
     }
 
     /// Separate connections can finish out of order. Each held response keeps
@@ -1029,13 +1030,24 @@ mod tests {
                         } else { (200, json!({"shells": []})) };
                         let gate = {
                             let mut held = held.lock().expect("gates");
-                            held.iter_mut().find(|entry| !entry.used && request.is(entry.method, entry.path)).map(|entry| {
-                                entry.used = true;
-                                entry.gate.clone()
-                            })
+                            held.iter_mut()
+                                .enumerate()
+                                .find(|(_, entry)| !entry.used && request.is(entry.method, entry.path))
+                                .map(|(index, entry)| {
+                                    entry.used = true;
+                                    (index, entry.gate.clone())
+                                })
                         };
-                        recorded.lock().expect("requests").push(request);
-                        if let Some(gate) = gate { gate.hold(); }
+                        let request_sequence = {
+                            let mut recorded = recorded.lock().expect("requests");
+                            recorded.push(request);
+                            recorded.len()
+                        };
+                        if let Some((index, gate)) = gate {
+                            held.lock().expect("gates")[index].request_sequence =
+                                Some(request_sequence);
+                            gate.hold();
+                        }
                         let body = body.to_string();
                         let _ = write!(stream, "HTTP/1.1 {status} Result\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
                     }));
@@ -1100,8 +1112,83 @@ mod tests {
                 path,
                 gate: gate.clone(),
                 used: false,
+                request_sequence: None,
             });
             gate
+        }
+
+        fn trace_first_general_read(
+            &self,
+            fail_newer: bool,
+            phase: &'static str,
+            workspace: &Entity<Workspace>,
+            general: &Entity<GeneralSettings>,
+            cx: &TestAppContext,
+        ) {
+            // Record metadata only. Bound every diagnostic collection and omit all values/headers.
+            let (request_count, requests) = {
+                let requests = self.requests.lock().expect("requests");
+                let summary: Vec<_> = requests
+                    .iter()
+                    .enumerate()
+                    .take(64)
+                    .map(|(index, request)| {
+                        let method = match request.method.as_str() {
+                            "GET" => "GET",
+                            "PUT" => "PUT",
+                            _ => "other",
+                        };
+                        let route = if request.is(method, "/api/config/settings") {
+                            "settings"
+                        } else if request.is(method, "/api/fs/home") {
+                            "home"
+                        } else {
+                            "other"
+                        };
+                        let keys: Vec<String> = if method == "PUT" {
+                            request
+                                .body
+                                .as_object()
+                                .into_iter()
+                                .flat_map(|body| body.keys())
+                                .take(16)
+                                .map(|key| key.chars().take(64).collect())
+                                .collect()
+                        } else {
+                            Vec::new()
+                        };
+                        (index + 1, method, route, keys)
+                    })
+                    .collect();
+                (requests.len(), summary)
+            };
+            let gates: Vec<_> = self
+                .gates
+                .lock()
+                .expect("gates")
+                .iter()
+                .take(64)
+                .enumerate()
+                .map(|(index, gate)| (index + 1, gate.request_sequence))
+                .collect();
+            let (ticket, general_state, visibility, order, status) = cx.read(|cx| {
+                let workspace = workspace.read(cx);
+                let general = general.read(cx);
+                let generation = workspace
+                    .connection
+                    .as_ref()
+                    .map(|connection| connection.generation);
+                (
+                    workspace.send_catalog.work_status_read_clock.get(),
+                    general.work_status_read_diagnostics(&workspace.runtime),
+                    general.work_status_visibility_editable(&workspace.runtime, generation),
+                    general.work_status_order_editable(&workspace.runtime, generation),
+                    general.status(false),
+                )
+            });
+            eprintln!(
+                "first-general-read fail_newer={fail_newer} phase={phase} shared_ticket={ticket} general_state_revision_read_pending_admitted_write_pending={general_state:?} put_issuer=unattributed visibility_authority={visibility} order_authority={order} status={status:?} request_count={request_count} requests_first64={requests:?} gates_first64={gates:?}"
+            );
         }
 
         fn saved(&self) -> Value {
@@ -1190,10 +1277,16 @@ mod tests {
             }));
             let (window, workspace) = server.open(cx);
             assert!(cx.read(|cx| workspace.read(cx).settings.is_none()));
-            let older = server.hold("GET", "/api/config/settings");
+            // Opening the dialog creates Settings, which issues two document
+            // reads; holding both keeps General's first read unanswered.
+            let older = [
+                server.hold("GET", "/api/config/settings"),
+                server.hold("GET", "/api/config/settings"),
+            ];
             click(window, "work-status-sections", cx);
-            older.entered(cx);
+            older.iter().for_each(|gate| gate.entered(cx));
             let general = general_owner(&workspace, cx);
+            server.trace_first_general_read(fail_newer, "older-entered", &workspace, &general, cx);
             server.document.lock().expect("unread extension state")["workStatusHiddenSections"] =
                 json!({"unread": ["ext:paused"]});
             server
@@ -1202,17 +1295,33 @@ mod tests {
             let newer = server.hold("GET", "/api/config/settings");
             refresh_topology(window, &workspace, cx);
             newer.entered(cx);
-            older.release();
+            server.trace_first_general_read(fail_newer, "newer-entered", &workspace, &general, cx);
+            older.iter().for_each(|gate| gate.release());
             settings_test_server::settle(window, cx);
+            server.trace_first_general_read(fail_newer, "older-released", &workspace, &general, cx);
             assert_eq!(
                 cx.read(|cx| general.read(cx).current_choice(PROMPT_NAVIGATOR)),
                 Choice::Boolean(false),
                 "unrelated fields of the completed General document remain available"
             );
             click(window, "work-status-visible-session", cx);
+            server.trace_first_general_read(
+                fail_newer,
+                "checkbox-returned",
+                &workspace,
+                &general,
+                cx,
+            );
             let runtime = cx.read(|cx| workspace.read(cx).runtime.clone());
             general.update(cx, |general, cx| {
+                let generation = workspace
+                    .read(cx)
+                    .connection
+                    .as_ref()
+                    .map(|connection| connection.generation);
+                eprintln!("first-general-read fail_newer={fail_newer} dispatch=General.set_work_status_hidden authority_before={} general_state_revision_read_pending_admitted_write_pending={:?}", general.work_status_visibility_editable(&runtime, generation), general.work_status_read_diagnostics(&runtime));
                 general.set_work_status_hidden(&runtime, &[], cx);
+                eprintln!("first-general-read fail_newer={fail_newer} dispatch=General.set_work_status_order authority_before={} general_state_revision_read_pending_admitted_write_pending={:?}", general.work_status_order_editable(&runtime, generation), general.work_status_read_diagnostics(&runtime));
                 general.set_work_status_order(
                     &runtime,
                     &["mcp".to_owned(), "session".to_owned()],
@@ -1220,6 +1329,13 @@ mod tests {
                 );
             });
             settings_test_server::settle(window, cx);
+            server.trace_first_general_read(
+                fail_newer,
+                "before-no-put-assertion",
+                &workspace,
+                &general,
+                cx,
+            );
             assert!(
                 server
                     .requests
@@ -1235,6 +1351,7 @@ mod tests {
             );
             newer.release();
             settings_test_server::settle(window, cx);
+            server.trace_first_general_read(fail_newer, "newer-released", &workspace, &general, cx);
             assert_eq!(
                 cx.read(|cx| general.read(cx).status(false)),
                 (
@@ -1248,6 +1365,13 @@ mod tests {
             general.update(cx, |general, cx| general.retry(cx));
             settings_test_server::settle(window, cx);
             click(window, "work-status-visible-session", cx);
+            server.trace_first_general_read(
+                fail_newer,
+                "retry-checkbox-returned",
+                &workspace,
+                &general,
+                cx,
+            );
             assert_eq!(
                 server.saved()["workStatusHiddenSections"],
                 json!(["ext:paused", "session"]),

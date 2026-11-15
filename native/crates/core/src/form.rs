@@ -490,7 +490,7 @@ impl FormRequest {
 
 /// ECMAScript TrimString's WhiteSpace and LineTerminator set. Rust's trim includes
 /// U+0085 and excludes U+FEFF, so it cannot implement the reference's String.trim().
-fn trim_ecmascript(value: &str) -> &str {
+pub(crate) fn trim_ecmascript(value: &str) -> &str {
     value.trim_matches(|character| {
         matches!(character,
         '\u{0009}'..='\u{000d}' | '\u{0020}' | '\u{00a0}' | '\u{1680}' |

@@ -29,6 +29,8 @@ pub enum ControlEvent {
     SessionCreated,
     /// A terminal was created, closed or exited on the server.
     TerminalSessionsChanged,
+    /// A custom theme was added, changed or removed on the server.
+    ThemesChanged,
     /// A scheduled task of `project_id` started or finished a run.
     ScheduledTaskRan {
         project_id: String,
@@ -229,6 +231,7 @@ fn decode(data: &[u8]) -> Result<Option<ControlEvent>, TransportError> {
         "openchamber:event-stream-ready" => Ok(Some(ControlEvent::Connected)),
         "openchamber:session-created" => Ok(Some(ControlEvent::SessionCreated)),
         "openchamber:terminal-sessions-changed" => Ok(Some(ControlEvent::TerminalSessionsChanged)),
+        "openchamber:themes-changed" => Ok(Some(ControlEvent::ThemesChanged)),
         "openchamber:scheduled-task-ran" | "openchamber:project-context-changed" => {
             let project_id = envelope
                 .properties
@@ -388,6 +391,18 @@ mod tests {
                 },
             ],
             "an event without its project is dropped"
+        );
+    }
+
+    #[test]
+    fn theme_changes_need_no_properties_and_preserve_ready_order() {
+        let mut decoder = Decoder::default();
+        let events = decoder
+            .push(b"data: {\"type\":\"openchamber:event-stream-ready\"}\n\ndata: {\"type\":\"openchamber:themes-changed\"}\n\n")
+            .expect("valid SSE");
+        assert_eq!(
+            events,
+            [ControlEvent::Connected, ControlEvent::ThemesChanged]
         );
     }
 

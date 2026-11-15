@@ -6,6 +6,18 @@ import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 import { extensionPowersI18n } from './extension-powers.i18n';
 export const settingsDict = {
+  'settings.sessions.auxiliary.noDirectory': 'Abre un proyecto o chat para elegir estos modelos.',
+  'settings.sessions.auxiliary.summary': 'Modelo de resumen',
+  'settings.sessions.auxiliary.title': 'Modelo de título',
+  'settings.sessions.auxiliary.engineDefault': 'Predeterminado de OpenCode',
+  'settings.sessions.auxiliary.info': 'Elige un modelo de texto convencional para el agente integrado de OpenCode. El valor predeterminado de OpenCode elimina la selección personalizada.',
+  'settings.sessions.auxiliary.privacy': 'OpenCode puede enviar el contenido de la conversación al proveedor seleccionado aquí. Las políticas de proveedores siguen vigentes.',
+  'settings.sessions.auxiliary.projectSource': 'Configuración del proyecto: {path}',
+  'settings.sessions.auxiliary.userSource': 'Configuración del usuario: {path}',
+  'settings.sessions.auxiliary.newSource': 'Una elección explícita crea una configuración personalizada del agente para el usuario.',
+  'settings.sessions.auxiliary.loading': 'Leyendo la configuración del agente...',
+  'settings.sessions.auxiliary.saveFailed': 'No se pudo guardar el modelo. Actualiza la configuración antes de volver a intentarlo.',
+  'settings.sessions.auxiliary.catalogFailed': 'No se pudieron leer los modelos o la configuración del agente. Se conservan las selecciones guardadas. Reintenta para actualizar.',
   'settings.openchamber.sessionRetention.field.archivedDescription': 'Cuenta el periodo de retención desde el archivado. Las sesiones caducadas se eliminan.',
   'settings.openchamber.sessionRetention.field.unarchivedArchiveDescription': 'Cuenta el periodo de retención desde la última actividad de la sesión. Las sesiones caducadas se archivan.',
   'settings.openchamber.sessionRetention.field.unarchivedDeleteDescription': 'Cuenta el periodo de retención desde la última actividad de la sesión. Las sesiones caducadas se eliminan.',

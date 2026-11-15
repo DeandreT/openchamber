@@ -2772,8 +2772,8 @@ mod tests {
     fn finish_receipt_releases_real_journal_lock() {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let directory = PathBuf::from(format!(
-            "/tmp/opencode/journal-worker-{}-{}",
+        let directory = std::env::temp_dir().join(format!(
+            "journal-worker-{}-{}",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
         ));

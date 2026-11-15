@@ -17,6 +17,20 @@ bundled OpenCode binary; the defaults point at the repository's build outputs.
 On Linux it also needs `Xvfb`, `xauth`, `xdpyinfo`, `xdotool`, libX11,
 PyGObject with AT-SPI, `busctl`, `dbus-run-session`, `xsettingsd` and fontconfig.
 
+AT-SPI, IBus and portal helpers use their exact executable name on `PATH`,
+then the known `/usr/lib` and `/usr/libexec` package locations. Each selected
+path must be an executable file. Missing prerequisites fail before their helper
+launches; discovery never substitutes another input method or portal backend.
+The private display, service ownership and process cleanup checks still apply.
+Run `python3 -m unittest executables_test` from this directory to check discovery.
+
+### Why helper discovery includes distro paths
+
+Ubuntu installs these service executables under `/usr/libexec`, while the
+existing Linux setup uses `/usr/lib`. Searching the same executable name and
+these explicit locations keeps both layouts usable without installing aliases
+or weakening the fixtures' service-identity checks.
+
 ## Layout
 
 | File | Owns |

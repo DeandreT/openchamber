@@ -122,6 +122,9 @@ pub struct ModelCatalog {
     pub models: Vec<FlatModel>,
     /// OpenCode's default model; absent when it has none.
     pub default_model: Option<ModelChoice>,
+    /// Explicit SDK v1 markers, retained separately from grouped model choices.
+    /// Plain providers never receive native-agent RPC probes.
+    pub native_agents: Vec<crate::native_agent::NativeAgentProvider>,
 }
 
 /// The defaults OpenCode's folded config names.
@@ -182,6 +185,12 @@ impl ServerClient {
             ),
         )?;
         Ok(ModelCatalog {
+            native_agents: providers
+                .data
+                .iter()
+                .filter(|p| p.activation.as_deref() != Some("disabled"))
+                .filter_map(|p| crate::native_agent::discovery(&p.id, p.settings.as_ref()))
+                .collect(),
             providers: providers
                 .data
                 .into_iter()

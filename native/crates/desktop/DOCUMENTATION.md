@@ -12,6 +12,33 @@ prompt. Attachments and worktree creation remain separate workflows.
 
 ## Ownership
 
+- `native_agent.rs` holds window-owned native-agent RPC tasks over the core's
+  activation/revision owner. Provider capability markers stay beside the
+  grouped send catalog. Selection prepares only the actual draft/session
+  directory; Chat roots supply configuration only until folder preparation
+  completes. Immutable execution variants travel through ordinary captured
+  prompt selections. First-session handoff retains credential-free native
+  preferences in the creation journal, prepares the new session and applies
+  those preferences through `setConfig` before admitting its first prompt.
+  Reconnect keeps snapshots but withdraws mutation authority, suppresses native
+  events through the replay cursor frame and demotes replayed tool provenance
+  before applying transcript events. Native permission state never changes
+   the saved OpenCode permission policy.
+
+  Session-first providers retain credential-free intent without a draft execution
+  variant. First Send creates and durably confirms the captured agent/model's real
+  OpenCode session before provider preparation. The pending message survives login
+  and invalid config; explicit correction preserves its content and identity.
+  Late config-only metadata promotes an accepted starter from its captured owner,
+  resolved agent, routing model and preferences even while another draft is shown.
+  Native RPC and state-event continuations read the real session again before
+  binding; a changed agent or routing model keeps the message pending as a mismatch.
+  Pending session-first intent may retain 64 pairs, the union of two maximum
+  32-field catalogs. Each current correction remains limited to 32 fields. A partial
+  correction exceeding the pending bound preserves the prior intent and remains
+  blocked; an explicit complete correction removes obsolete pairs. Journal
+  hydration enforces the same pending bound without changing the wire catalog limit.
+
 - `managed_host.rs` owns the managed local server: discovery of the Electron
   package layout it runs from, the server's environment and bootstrap, the
   loopback port store and the handle `main` stops after the window closes.
@@ -19,7 +46,12 @@ prompt. Attachments and worktree creation remain separate workflows.
   spawn, readiness, crash restarts and the bounded stop.
   `managed_host_lifecycle.rs` is the pure state machine between them, and
   `managed_host_view.rs` draws its states. `owned_process.rs` owns process
-  identity (PID plus start time), descendant snapshots and signals.
+  identity (PID plus start time), descendant snapshots and signals on Unix.
+  Windows delegates process creation and exact FILETIME identity to
+  `openchamber-windows-process`, which atomically assigns a suspended child to a
+  private non-breakaway kill-on-close job at creation. The supervisor retains this
+  job through root exit and observes its exhaustion during shutdown and crash
+  cleanup. Only the platform crate permits audited unsafe Win32 calls.
 - `blocking_requests.rs` owns location-scoped permission/form stores, selected
   subtree routing, host bootstrap hints, exact reconciliation and independent
   mutation tasks. The dock's active permission answers Alt+Enter (once),
@@ -68,6 +100,13 @@ prompt. Attachments and worktree creation remain separate workflows.
   `create_attempt.rs` retains the original draft, immutable create request and
   original prompt configuration. `session_id.rs` generates OpenCode's descending
   `ses_` identities using Unix milliseconds and the pinned 48-bit prefix layout.
+- `chat_draft.rs` owns the Chat target and its directory custody, keyed by runtime
+  and exact draft owner. Committed non-whitespace input, attachment intake, MCP
+  activation and send share one preparation operation. A named path grants no
+  execution authority until a journal save and mkdir complete. Creation handoff
+  retains custody through unknown outcomes. Cleanup uses the captured server and
+  roots, checks retained draft/create/starter/session ownership, and retains a
+  failed cleanup for the owner's next successful root read.
 - `mutation_journal.rs` owns the private versioned snapshot of drafts and pending
   sends and creations. Version 8 adds compact queue operation ownership and
   separately held spool chunks. Version 7 retains full draft content, immutable attachment
@@ -82,7 +121,9 @@ prompt. Attachments and worktree creation remain separate workflows.
   with their IDs, the prompt ID and delivery. Versions 1 to 3 load as prompts
   without parts. Unsupported or malformed snapshots grant no writer.
   `journal_worker.rs` holds its exclusive file lock and serializes disk I/O
-  on one thread, coalescing queued snapshots while preserving save barriers.
+   on one thread, coalescing queued snapshots while preserving save barriers.
+   Version 9 adds session-first native intent and explicit correction custody;
+   versions 1 through 8 remain readable and restore without automatic dispatch.
   `attachment_io.rs` uses the same worker and lock for the private SHA-256 spool.
   Only a validated load or durable save authorizes byte operations. Pending or
   uncertain snapshots grant no write or deletion authority. Read receipts retain
@@ -243,9 +284,12 @@ prompt. Attachments and worktree creation remain separate workflows.
   attachments, starting a session or a worktree (checkout) on an item, the
   narrow layout and the list's resize handle are not ported, nor the pull
   request rows of the Git surface and the work status card.
-- `sidebar_search.rs` owns the toolbar's session search: the field under the
-  toolbar, the match count and the filter that narrows the grouped sections
-  and Chats before the row model runs (`core::session_search`). While a query
+- `sidebar_search.rs` owns the desktop toolbar's inline search field and the
+  filter that narrows the grouped sections and Chats before the row model runs
+  (`core::session_search`). Its retained input stays visible at rest. Clear and
+  the first Escape empty a filled field while keeping input focus; Escape on
+  an empty field returns focus to the composer. Locale changes update the
+  placeholder without replacing the input. While a query
   is active the row model opens every container, applies no reveal limit and
   leaves drafts out. `display_mode_view.rs` draws the Display mode menu: Select
   sessions, the Sessions grouping submenu, saved as `sidebarGrouping`, the
@@ -343,6 +387,10 @@ prompt. Attachments and worktree creation remain separate workflows.
   reference's `pageOrder`, and indexes only implemented targets. General is
   the first page; reopening keeps the selected page and clears the search.
   Each page owns its scroll container and search anchors.
+  General, Appearance, Chat, Sessions, Shortcuts, Notifications, Voice and Behavior take
+  their visible page name from the navigation, matching the shared web layout.
+  Their accessible heading remains present without a repeated title or
+  descriptive subtitle taking space above the controls.
   Magic prompts, Commands, About and Git read only while they are the visible
   Settings page. Settings tells them through `set_shown`; a hidden page that
   sees the connection or directory change drops the old state and reads on
@@ -365,7 +413,11 @@ prompt. Attachments and worktree creation remain separate workflows.
   preferences as one load; any of them failing fails the page. A failed
   preference write restores that field from the last server-confirmed value.
 - `appearance.rs` owns process-local live theme, language, installed-font and
-  interface-size preferences. `appearance_storage.rs` owns the validated v1
+  interface-size preferences. Theme selections and pending remote-save intent
+  retain their authenticated runtime identity. The custom library and catalog
+  use captured authenticated targets; losing authentication withdraws request
+  authority while preserving the confirmed palette and library.
+  `appearance_storage.rs` owns the validated v1
   `appearance.json` snapshot, atomic writes and compare-and-swap authority.
   `appearance_view.rs` retains the controls; `settings_picker.rs` confirms only
   a selection gesture. A picker dismissal leaves its value unchanged.
@@ -429,6 +481,22 @@ prompt. Attachments and worktree creation remain separate workflows.
   read from OpenCode's effective config and the warming snapshot and written
   one field at a time; a failed write puts back only a field no later write
   changed.
+  Its summary/title pickers read the built-in agents through the existing config
+  routes in the workspace's actual configuration directory. They show the saved
+  value even when it is unavailable, identify the owning project or user file,
+  and expose explicit OpenCode-default removal. The configured text-model catalog
+  has independent failure state. Directory or connection changes retire old
+  presentation authority; accepted writes keep their captured client and directory
+  through the existing Settings close/quit barrier. Failed writes retain the saved
+  value and offer an explicit configuration refresh before another selection.
+  A Select commits its widget value before emitting Confirm. A failed purpose
+  save invalidates only that picker's applied-value cache so the next render
+  restores the confirmed model, including when the saved value itself did not
+  change. Refresh does not retry the failed write.
+  Source labels expose named Paragraph nodes and save messages expose named
+  Status nodes, each with stable per-purpose IDs. Their reserved heights and
+  full-text source tooltips stay unchanged; the source ID also keys the stateful
+  tooltip boundary.
 - `settings_controls.rs` holds the chrome the newer pages share (page frame,
   sections, field and checkbox rows, info hints, the load-failure line, the
    confirm dialog), the captured `ServerTarget`, `Load` and the serial
@@ -484,12 +552,12 @@ prompt. Attachments and worktree creation remain separate workflows.
   extension service, so no other native-owned crossing exists to gate; the
   server enforces its own routes. The reference's "Managed by" notice sits on
   the Providers page, which native does not have yet.
-- `project_chooser.rs` lists and searches registered projects for a new-session
-  draft, using saved project labels. Choosing a project changes the draft's
-  directory and catalog scope without creating a server session. Draft text
-  stays with its runtime and directory. Failed discovery remains distinct from
+- `project_chooser.rs` lists Chat followed by registered projects for a new-session
+  draft, using saved project labels. A picker choice changes the complete draft's
+  destination and preserves semantic content, selection and attachment recovery.
+  Failed discovery remains distinct from
   an empty project list, and a failed refresh keeps previously loaded projects.
-- `draft_sidebar.rs` projects local new-session drafts into project-grouped
+- `draft_sidebar.rs` projects local new-session drafts into Chat and project-grouped
   sidebar rows. The first nonempty line supplies the preview. Opening and
   discarding a row use its captured runtime/directory key. Preview edits update
   one row; adding or removing a draft rebuilds the structural projection. This
@@ -497,7 +565,8 @@ prompt. Attachments and worktree creation remain separate workflows.
 - `files_view.rs` owns the context panel's server surfaces: the rail's Files,
   Git and Diff buttons open one in place of the work status card, 640 px wide
   while the chat keeps 320 px, for the selected session's directory (else the
-  draft's project, else the active project). Each surface is its own view
+  draft's project, a Chat's prepared directory or known root, else the active
+  project). Each surface is its own view
   entity, retained per runtime and directory, and what the zone shows is kept
   per runtime and directory too. The same file holds the Files view: the zone
   header with the surface's tab, the column toggles and Close; the tree
@@ -820,17 +889,35 @@ prompt. Attachments and worktree creation remain separate workflows.
 
 ## Invariants
 
-- The managed host signals only processes it owns: the server it spawned, or a
-  descendant recorded from `/proc` while that server still ran. Every signal
-  re-reads PID and start time first and refuses a replaced process. An
-  external server, a saved host and any unrelated process are never stopped.
+- Chat configuration reads the managed root; execution, attachment staging and
+  MCP require the prepared dated directory. Panels may show the known root while
+  preparation is pending. An unknown root grants no project fallback.
+- Target changes merge complete semantic drafts before removing either owner.
+  Metadata or immutable-attachment conflicts leave both drafts untouched.
+  UTF-8 selection and citation offsets follow any inserted prefix. Accepted
+  attachment intake and staging finish under their captured owner before a
+  deferred target change runs. Retained sends and starter captures keep their
+  original immutable resources.
+- Directory preparation is shared per exact draft. A render-time activation
+  starts a named directory once; failures require another explicit interaction.
+  Root discovery distinguishes pending, absent and failed results. Hydration
+  restores content before naming and preparing its directory and never resends.
+
+- The managed host stops only processes it owns. Unix signals target the server
+  it spawned or a descendant recorded from `/proc` while the server still ran;
+  each signal rechecks PID and start time. Windows termination targets the
+  retained private job assigned before the server resumed. External servers,
+  saved hosts and unrelated processes are never stopped.
 - The managed server always listens on 127.0.0.1. It receives the inherited
   environment, so the enterprise policy file and variables reach it, minus the
   native client's own `OPENCHAMBER_NATIVE_*` settings and a UI password the
   desktop only passes with LAN access. Node mode and the launch variable never
   reach OpenCode or terminals.
+  Windows environment lookup, filtering and assignment are case-insensitive;
+  one proxy-bypass value preserves the user's entries and includes loopback.
 - Quit closes the server's stdin, waits up to 35 s, then terminates and kills
-  the recorded process groups and the server's own group. Nothing restarts a
+  the recorded Unix process groups or the private Windows job. Windows cleanup
+  observes both server exit and job exhaustion. Nothing restarts a
   server once quit was requested. Restarts after a crash stop after three in a
   row; a failed host waits for Retry Local, which relaunches the app.
 - No credential enters a web view. Previews and extension frames load by a
@@ -863,6 +950,22 @@ prompt. Attachments and worktree creation remain separate workflows.
   separate connection. Later entity drops perform no second native-window I/O.
 - A page's `openchamber.submit` reaches the server only while its call waits,
   after a real press in the page within five seconds, with a summary.
+  Decline shares the waiting-call and gesture checks. It sits beside the page's
+  submit button when the canonical bootstrap can place it, otherwise below the
+  page as a native secondary action. Submission and decline share one pending
+  state, so only one answer can be sent at a time. Failure restores the waiting
+  controls and reports the error. Requests retain their authenticated client,
+  runtime and connection generation; an old frame cannot receive a newer frame's
+  JSON-RPC acknowledgement.
+  Pending submission keeps Decline visible and disabled in its initiating frame.
+  A replacement frame stays non-actionable until delivery completes; failure
+  restores its waiting controls. Only the initiating frame owns the pending
+  script promise that disables its button.
+  Documents preserve the canonical answer script and append one native readiness
+  reporter after it. The reporter runs after the answer listener is installed
+  and the document's controls are parsed. Readiness replays current answer state
+  even when its value is unchanged, so a completion before listener installation
+  cannot strand the replacement. JSON-RPC replies are never replayed.
 
 - Connection startup verifies server identity and authentication before opening
   the event stream or loading sessions. A malformed status cannot become either
@@ -975,12 +1078,23 @@ prompt. Attachments and worktree creation remain separate workflows.
   already-sent deletes participate in the write drain. Runtime, connection generation
   and navigation identity guard session-opening completions.
 - Accepted knowledge sends join the panel's independent FIFO write owner.
+  Todo editing retains its input until the owner admits the write. Close and quit
+  supply the current runtime's live client, including its absence, before capturing
+  editor text while the workspace is borrowed. Missing credentials revoke admission
+  for unsubmitted todo edits; normal close keeps those drafts open for sign-in or
+  cancellation. Authentication loss revokes those credentials on every retained
+  panel of that runtime before focus changes, so a later instance switch cannot
+  preserve expired admission. Already-admitted FIFO jobs retain their captured
+  clients and drain.
   Plan persistence and dispatch share a typed receipt, so dispatch never waits
   for a foreground save callback and never queues its prerequisite behind itself.
   The acceptance captures session/message IDs, owner, prompt and model/agent
   selection once. Auto stays in the first prompt and is omitted only from session
   creation. Normal close waits for accepted create/link/prompt work; final quit
   transfers that work with the writer before releasing connection runtimes.
+  Final quit has GPUI's 200 ms best-effort deadline. Transfer tests block the
+  foreground session while awaiting the independent drain; they prove captured
+  I/O ownership, while normal request-close owns completion before shutdown.
 
 - Switching away from a dirty file asks Save, Discard or Cancel. Only a
   successful save with no remaining edits or an explicit Discard replaces
@@ -1483,6 +1597,14 @@ prompt. Attachments and worktree creation remain separate workflows.
   composer at the click and becomes a separate persisted starter capture until
   creation takes ownership. Newer typing and attachments remain in their own
   draft. Ordinary creation waits while its source has a retained starter capture.
+  Chat activation captures content and configuration before shared directory
+  preparation. Its continuation waits for the original runtime and draft to be
+  active, with Archive, Source board and Scheduled tasks closed. Navigation keeps
+  that continuation; returning to the new-session view resumes it once ready.
+  Published native configuration freezes before waiting. Otherwise retained
+  preferences bind to the first authoritative ready execution, even while hidden.
+  Terminal native preparation failure retires the continuation and restores the
+  complete source through its original window. Authentication waits retain it.
   A failed read restores source content after newer typing. Conflicting metadata
   or immutable identities retain both owners for explicit recovery. Hydration
   restores captures locally and never resumes activation. Local recovery remains
@@ -1901,6 +2023,28 @@ prompt. Attachments and worktree creation remain separate workflows.
 
 ## Decisions
 
+### Why summary and title controls keep their own configuration state
+
+An unavailable provider cannot erase an agent's saved model or change the
+composer's selection. The existing Sessions owner retains each purpose's source
+and model separately from eligible choices, with source-conditional model-only
+writes and no synthetic session authorization. OpenCode sends any conversation
+content and applies provider policy when the real agent executes.
+
+### Why Chat directories are canonical before session creation
+
+The server reports canonical aliases for its managed roots. A Chat execution
+path uses that reported root and the same dated suffix before any attachment or
+native-agent preparation. This preserves strict creation-location verification
+without accepting an arbitrary path merely because it lies under Chats.
+
+### Why target changes wait for accepted attachment work
+
+Attachment I/O retains exact owner and generation checks across every await.
+Finishing accepted intake or staging before a target change keeps its bytes,
+citations and failure actions together. Pending staging requests then move with
+the draft, while captured sends retain their original routing descriptors.
+
 ### Why the quotas are a workspace entity and not the Usage page's state
 
 The Usage page lives inside the Settings model, which exists only after
@@ -1958,19 +2102,21 @@ native modules.
 
 ### Why end of input stops the server and not a signal
 
-The crate forbids `unsafe` and has no libc binding, so it cannot install signal
-handlers. When the native process dies in any way, including SIGKILL, the
-kernel closes the server's stdin pipe and the bootstrap runs the server's own
-graceful stop. Signals go through the root-owned `kill` program only for the
-forced stop.
+The crate forbids `unsafe` and has no libc binding, so stdin provides a shared
+graceful shutdown request. On Unix, native-process death closes the pipe and
+the bootstrap runs the server's graceful stop. Forced Unix signals use the
+root-owned `kill` program. On Windows, normal quit preserves the same stdin
+request and 35-second grace; abrupt native-process death closes the private
+kill-on-close job and the kernel stops all its members.
 
 ### Why descendants are recorded before the stop request
 
-OpenCode and terminals run in their own process groups and are re-parented
+On Unix, OpenCode and terminals run in their own process groups and are re-parented
 once the server exits, after which nothing ties them to it. The snapshot taken
 while the server still runs is what the forced stop may signal. A server that
 crashed leaves its OpenCode to the next server's startup reaper, as in the
-desktop.
+desktop. Windows job ownership survives the root's exit, so the supervisor
+terminates and observes the old job before starting a replacement.
 
 ### Why the port is the native profile's own
 
@@ -2312,6 +2458,15 @@ session owner. Existing send recovery can then reconcile its exact message ID
 without ever returning to session creation. The original configuration remains
 separate from the reduced selection requests, because OpenCode emits an agent
 switch notice even when the selected agent is unchanged.
+
+### Why session-first configuration remains in the creation owner
+
+OpenCode provider policy requires a real session and its captured agent before
+native allocation. Config-only draft intent therefore owns the first message
+through real-session preparation and explicit correction. Requiring a draft
+execution variant would deadlock creation; weakening ordinary send readiness would
+permit unbound execution. The final handoff still records a real immutable binding
+and the ordinary send attempt in one durable snapshot.
 
 ### Why disk writes have a separate worker
 

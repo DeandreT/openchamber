@@ -719,8 +719,8 @@ mod tests {
             fn new() -> Self {
                 for _ in 0..32 {
                     let sequence = SEQUENCE.fetch_add(1, Ordering::Relaxed);
-                    let path = PathBuf::from(format!(
-                        "/tmp/opencode/attachment-spool-{}-{sequence}",
+                    let path = std::env::temp_dir().join(format!(
+                        "attachment-spool-{}-{sequence}",
                         std::process::id()
                     ));
                     match fs::DirBuilder::new().mode(0o700).create(&path) {

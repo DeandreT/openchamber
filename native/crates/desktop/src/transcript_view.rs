@@ -387,6 +387,16 @@ impl Workspace {
                         tool,
                         status: *status,
                         output: output.as_deref(),
+                        progress: facts.execution.as_ref().and_then(|execution| {
+                            self.native_progress(
+                                session,
+                                &openchamber_native_core::native_agent::ToolIdentity {
+                                    message_id: message.info.id.to_string(),
+                                    part_id: part.id.to_string(),
+                                    call_id: execution.call_id.clone(),
+                                },
+                            )
+                        }),
                         elided: *elided,
                         facts,
                         start: part.time.start,
@@ -654,6 +664,7 @@ impl Workspace {
                 output: None,
                 elided: None,
                 facts: &facts,
+                progress: None,
                 start: Some(message.info.created),
                 end: message.info.completed,
                 directory: "",

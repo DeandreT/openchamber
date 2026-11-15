@@ -116,7 +116,11 @@ impl Bundle {
 
     /// The Electron executable; with `ELECTRON_RUN_AS_NODE` it is Node.
     fn runtime(&self) -> PathBuf {
-        self.root.join("openchamber")
+        self.root.join(if cfg!(windows) {
+            "OpenChamber.exe"
+        } else {
+            "openchamber"
+        })
     }
 
     fn archive(&self) -> PathBuf {
@@ -140,7 +144,13 @@ impl Bundle {
 
     /// The server finds it through `process.resourcesPath` itself.
     fn opencode(&self) -> PathBuf {
-        self.resources().join("opencode-cli").join("opencode")
+        self.resources()
+            .join("opencode-cli")
+            .join(if cfg!(windows) {
+                "opencode.exe"
+            } else {
+                "opencode"
+            })
     }
 }
 
@@ -171,10 +181,98 @@ pub(crate) fn discover(
 }
 
 fn is_file(path: &Path, executable: bool) -> bool {
+    #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
     fs::metadata(path).is_ok_and(|metadata| {
-        metadata.is_file() && (!executable || metadata.permissions().mode() & 0o111 != 0)
+        #[cfg(unix)]
+        let runnable = !executable || metadata.permissions().mode() & 0o111 != 0;
+        #[cfg(windows)]
+        let runnable = !executable
+            || path
+                .extension()
+                .and_then(OsStr::to_str)
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("exe"));
+        metadata.is_file() && runnable
     })
+}
+
+#[cfg(all(test, windows))]
+mod windows_tests {
+    use super::*;
+
+    #[test]
+    fn windows_server_launch_preserves_proxy_bypass_and_case_insensitive_environment() {
+        let bundle = Bundle {
+            root: PathBuf::from("C:/synthetic bundle"),
+        };
+        for spelling in ["NO_PROXY", "no_proxy", "No_PrOxY"] {
+            let inherited = [
+                (spelling, "internal.example"),
+                ("openchamber_native_password", "synthetic-filtered-value"),
+                ("electron_run_as_node", "old"),
+                ("openchamber_host", "0.0.0.0"),
+                ("openchamber_skip_api_compression", "false"),
+            ]
+            .map(|(key, value)| (OsString::from(key), OsString::from(value)));
+            let launch = server_launch(&bundle, 4321, "fixture".to_owned(), inherited, None, None);
+            let proxy: Vec<_> = launch
+                .env
+                .iter()
+                .filter(|(key, _)| key.to_string_lossy().eq_ignore_ascii_case("NO_PROXY"))
+                .collect();
+            assert_eq!(
+                proxy.len(),
+                1,
+                "one effective Windows proxy bypass for {spelling}"
+            );
+            assert_eq!(proxy[0].1, "internal.example,localhost,127.0.0.1");
+            let mut command = std::process::Command::new(&launch.program);
+            command.env_clear().envs(launch.env);
+            let effective: Vec<_> = command.get_envs().collect();
+            let value = |key: &str| {
+                effective
+                    .iter()
+                    .find(|(name, _)| name.to_string_lossy().eq_ignore_ascii_case(key))
+                    .and_then(|(_, value)| *value)
+            };
+            assert_eq!(
+                value("NO_PROXY"),
+                Some(OsStr::new("internal.example,localhost,127.0.0.1"))
+            );
+            assert_eq!(value("OPENCHAMBER_NATIVE_PASSWORD"), None);
+            assert_eq!(value("OPENCHAMBER_HOST"), Some(OsStr::new("127.0.0.1")));
+            assert_eq!(
+                value("OPENCHAMBER_SKIP_API_COMPRESSION"),
+                Some(OsStr::new("false"))
+            );
+            assert_eq!(value("ELECTRON_RUN_AS_NODE"), Some(OsStr::new("1")));
+        }
+    }
+
+    #[test]
+    fn windows_bundle_uses_packaged_executables_and_kernel_nonce() {
+        let root = std::env::temp_dir().join(format!("oc-win-bundle-{}", std::process::id()));
+        fs::create_dir_all(root.join("resources/opencode-cli")).expect("fixture directories");
+        fs::create_dir_all(root.join("resources/web-dist")).expect("fixture directories");
+        for name in [
+            "OpenChamber.exe",
+            "resources/app.asar",
+            "resources/web-dist/index.html",
+            "resources/opencode-cli/opencode.exe",
+        ] {
+            fs::write(root.join(name), "").expect("synthetic package file");
+        }
+        let bundle = discover(Some(root.clone()), None).expect("Windows package discovery");
+        assert!(bundle.runtime().ends_with("OpenChamber.exe"));
+        assert!(bundle.opencode().ends_with("opencode.exe"));
+        assert_eq!(random_nonce().expect("kernel nonce").len(), 32);
+        fs::remove_file(root.join("OpenChamber.exe")).expect("remove fixture runtime");
+        assert!(matches!(
+            discover(Some(root.clone()), None),
+            Err(DiscoveryError::Missing(_))
+        ));
+        fs::remove_dir_all(root).expect("remove synthetic package");
+    }
 }
 
 #[derive(Serialize)]
@@ -197,6 +295,8 @@ fn server_environment(
         .into_iter()
         .filter(|(key, _)| {
             let key = key.to_string_lossy();
+            #[cfg(windows)]
+            let key = key.to_ascii_uppercase();
             // The native client's own settings, a password the desktop only
             // passes with LAN access, and a cache the desktop keeps out of
             // child environments.
@@ -208,8 +308,13 @@ fn server_environment(
         })
         .collect();
     let existing = |env: &[(OsString, OsString)], key: &str| {
-        env.iter()
-            .find(|(name, _)| name == key)
+        let entries = env.iter();
+        #[cfg(windows)]
+        let mut entries = entries.rev();
+        #[cfg(unix)]
+        let mut entries = entries;
+        entries
+            .find(|(name, _)| environment_key_eq(name, key))
             .map(|(_, value)| value.clone())
     };
     let opencode_cwd = existing(&env, "OPENCHAMBER_OPENCODE_CWD")
@@ -220,8 +325,27 @@ fn server_environment(
         });
     let compression =
         existing(&env, "OPENCHAMBER_SKIP_API_COMPRESSION").unwrap_or_else(|| "true".into());
+    #[cfg(unix)]
     let no_proxy = existing(&env, "NO_PROXY").unwrap_or_else(|| "localhost,127.0.0.1".into());
+    #[cfg(unix)]
     let no_proxy_lower = existing(&env, "no_proxy").unwrap_or_else(|| "localhost,127.0.0.1".into());
+    #[cfg(windows)]
+    let no_proxy = {
+        let mut value = existing(&env, "NO_PROXY").unwrap_or_default();
+        for host in ["localhost", "127.0.0.1"] {
+            if !value
+                .to_string_lossy()
+                .split(',')
+                .any(|entry| entry.trim().eq_ignore_ascii_case(host))
+            {
+                if !value.is_empty() {
+                    value.push(",");
+                }
+                value.push(host);
+            }
+        }
+        value
+    };
     let assignments: Vec<(&str, Option<OsString>)> = vec![
         ("OPENCHAMBER_HOST", Some(LOOPBACK.into())),
         (
@@ -234,23 +358,69 @@ fn server_environment(
         ("OPENCHAMBER_DESKTOP_NOTIFY", Some("true".into())),
         ("OPENCHAMBER_SKIP_API_COMPRESSION", Some(compression)),
         ("NO_PROXY", Some(no_proxy)),
+        #[cfg(unix)]
         ("no_proxy", Some(no_proxy_lower)),
     ];
     assign_injected(&mut env, assignments);
     env
 }
 
+fn environment_key_eq(name: &OsStr, key: &str) -> bool {
+    #[cfg(windows)]
+    {
+        name.to_string_lossy().eq_ignore_ascii_case(key)
+    }
+    #[cfg(unix)]
+    {
+        name == key
+    }
+}
+
+/// Sets one effective Windows key, preserving Unix's case-sensitive behavior.
+fn set_environment(env: &mut Vec<(OsString, OsString)>, key: &str, value: OsString) -> bool {
+    #[cfg(windows)]
+    {
+        let changed = env
+            .iter()
+            .rfind(|(name, _)| environment_key_eq(name, key))
+            .is_none_or(|(_, current)| *current != value);
+        env.retain(|(name, _)| !environment_key_eq(name, key));
+        env.push((key.into(), value));
+        changed
+    }
+    #[cfg(unix)]
+    {
+        match env.iter_mut().find(|(name, _)| name == key) {
+            Some((_, current)) if *current == value => false,
+            Some((_, current)) => {
+                *current = value;
+                true
+            }
+            None => {
+                env.push((key.into(), value));
+                true
+            }
+        }
+    }
+}
+
 /// `assignInjectedEnv`: set each defined value and record the names whose
 /// value changed, after the names already recorded.
 fn assign_injected(env: &mut Vec<(OsString, OsString)>, values: Vec<(&str, Option<OsString>)>) {
-    let mut recorded: Vec<String> = env
-        .iter()
-        .find(|(key, _)| key == INJECTED_ENV_KEY)
+    let entries = env.iter();
+    #[cfg(windows)]
+    let mut entries = entries.rev();
+    #[cfg(unix)]
+    let mut entries = entries;
+    let mut recorded: Vec<String> = entries
+        .find(|(key, _)| environment_key_eq(key, INJECTED_ENV_KEY))
         .map(|(_, value)| {
             value
                 .to_string_lossy()
                 .split(',')
-                .filter(|name| !name.is_empty() && *name != INJECTED_ENV_KEY)
+                .filter(|name| {
+                    !name.is_empty() && !environment_key_eq(OsStr::new(name), INJECTED_ENV_KEY)
+                })
                 .map(str::to_owned)
                 .collect()
         })
@@ -259,12 +429,13 @@ fn assign_injected(env: &mut Vec<(OsString, OsString)>, values: Vec<(&str, Optio
         let Some(value) = value else {
             continue;
         };
-        match env.iter_mut().find(|(name, _)| name == key) {
-            Some((_, current)) if *current == value => continue,
-            Some((_, current)) => *current = value,
-            None => env.push((key.into(), value)),
+        if !set_environment(env, key, value) {
+            continue;
         }
-        if !recorded.iter().any(|name| name == key) {
+        if !recorded
+            .iter()
+            .any(|name| environment_key_eq(OsStr::new(name), key))
+        {
             recorded.push(key.to_owned());
         }
     }
@@ -272,10 +443,7 @@ fn assign_injected(env: &mut Vec<(OsString, OsString)>, values: Vec<(&str, Optio
         return;
     }
     let record = OsString::from(recorded.join(","));
-    match env.iter_mut().find(|(name, _)| name == INJECTED_ENV_KEY) {
-        Some((_, current)) => *current = record,
-        None => env.push((INJECTED_ENV_KEY.into(), record)),
-    }
+    set_environment(env, INJECTED_ENV_KEY, record);
 }
 
 /// The complete launch of the bundled server on `port`.
@@ -363,9 +531,15 @@ impl PortStore {
 
 /// 128 random bits from the kernel, as hex.
 fn random_nonce() -> io::Result<String> {
-    use std::io::Read;
-    let mut bytes = [0u8; 16];
-    fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    #[cfg(unix)]
+    let bytes = {
+        use std::io::Read;
+        let mut bytes = [0u8; 16];
+        fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+        bytes
+    };
+    #[cfg(windows)]
+    let bytes = openchamber_windows_process::random_nonce()?;
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
@@ -425,7 +599,7 @@ impl ManagedHost {
             }
         };
         let log = config_directory.and_then(prepare_log);
-        let home = std::env::var_os("HOME");
+        let home = std::env::var_os(if cfg!(windows) { "USERPROFILE" } else { "HOME" });
         let launch = server_launch(
             &bundle,
             port,
@@ -507,7 +681,7 @@ impl Drop for ManagedHost {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

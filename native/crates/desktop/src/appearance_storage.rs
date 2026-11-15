@@ -188,8 +188,8 @@ mod tests {
             .duration_since(std::time::UNIX_EPOCH)
             .expect("clock")
             .as_nanos();
-        let directory = PathBuf::from("/tmp/opencode")
-            .join(format!("appearance-test-{}-{nonce}", std::process::id()));
+        let directory =
+            std::env::temp_dir().join(format!("appearance-test-{}-{nonce}", std::process::id()));
         let store = AppearanceStore::new(&directory);
         assert_eq!(store.load(), Ok(None));
         let mut draft = AppearancePreferences::default();

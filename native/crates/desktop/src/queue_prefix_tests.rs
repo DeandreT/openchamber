@@ -1458,8 +1458,8 @@ mod durable {
     impl Profile {
         fn new() -> Self {
             use std::os::unix::fs::DirBuilderExt;
-            let path = PathBuf::from(format!(
-                "/tmp/opencode/queue-prefix-{}-{}",
+            let path = std::env::temp_dir().join(format!(
+                "queue-prefix-{}-{}",
                 std::process::id(),
                 SEQUENCE.fetch_add(1, Ordering::Relaxed)
             ));

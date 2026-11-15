@@ -220,6 +220,12 @@ impl Workspace {
                         connection.retry_task = None;
                         connection.state =
                             ConnectionState::Failed(ConnectionFailure::AuthenticationRequired);
+                        for panel in this.panels.all_knowledge_views() {
+                            panel.update(cx, |panel, _| {
+                                panel.refresh_write_client(&this.runtime, None);
+                            });
+                        }
+                        this.refresh_appearance_runtime(cx);
                         this.reset_session_admission(window, cx);
                         this.show_authentication(
                             ConnectionFailure::AuthenticationRequired,
@@ -417,6 +423,7 @@ impl Workspace {
             });
         }));
         self.invalidate_terminal_client(cx);
+        self.refresh_appearance_runtime(cx);
         cx.notify();
     }
 }

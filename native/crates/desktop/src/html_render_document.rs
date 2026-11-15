@@ -4,17 +4,27 @@
 //! `packages/ui/src/components/chat/message/parts/htmlRender.ts`. The
 //! bootstrap's style and scripts and each built-in theme's variables come
 //! from `resources/html-render.json`, which `bun run native:resources` cuts
-//! out of the web's own document; this module only places them. The page
+//! out of the web's own document. A native readiness report follows the
+//! canonical answer listener so the host can replay current state. The page
 //! runs in a sandboxed frame without `allow-same-origin`, so its script has
 //! an opaque origin and no reach into the desktop.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const RESOURCE: &str = include_str!("../resources/html-render.json");
+pub(crate) const ANSWER_READY_MESSAGE: &str = "openchamber:html-render:answer-ready";
+
+// Installed after the canonical answer listener. DOMContentLoaded also waits
+// for the page's controls, and runs after the canonical placement callback.
+fn answer_ready_script() -> String {
+    format!(
+        r#"(function(){{if(window.parent===window)return;var ready=function(){{window.parent.postMessage({{type:"{ANSWER_READY_MESSAGE}"}},"*");}};if(document.readyState==="loading")document.addEventListener("DOMContentLoaded",ready,{{once:true}});else ready();}})();"#
+    )
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -155,12 +165,21 @@ pub(crate) struct AnswerState {
 impl AnswerState {
     /// JSON inside a script element, with `<` escaped so no `</script>` in
     /// the data can close it.
-    fn script_json(&self) -> String {
-        let json = serde_json::json!({
-            "waiting": self.waiting,
-            "answer": self.answer.clone().unwrap_or(Value::Null),
+    fn script_json(&self, decline_label: &str) -> String {
+        // Struct order matches JSON.stringify regardless of serde_json map features.
+        #[derive(Serialize)]
+        #[serde(rename_all = "camelCase")]
+        struct InitialState<'a> {
+            waiting: bool,
+            answer: &'a Option<Value>,
+            decline_label: &'a str,
+        }
+        let json = serde_json::to_string(&InitialState {
+            waiting: self.waiting,
+            answer: &self.answer,
+            decline_label,
         });
-        json.to_string().replace('<', "\\u003c")
+        json.expect("answer state is JSON").replace('<', "\\u003c")
     }
 
     /// The message that tells a loaded page its state changed.
@@ -343,6 +362,7 @@ pub(crate) fn build_document(
     theme: &PageTheme,
     contained: bool,
     answer: &AnswerState,
+    decline_label: &str,
 ) -> String {
     let scan = blank_non_markup(html);
     let charset_window = &scan[..scan.len().min(4096)];
@@ -363,9 +383,10 @@ pub(crate) fn build_document(
     bootstrap.push_str("<script>");
     bootstrap.push_str(&BOOTSTRAP.bootstrap_script);
     bootstrap.push_str("</script><script type=\"application/json\" id=\"oc-html-render-answer\">");
-    bootstrap.push_str(&answer.script_json());
+    bootstrap.push_str(&answer.script_json(decline_label));
     bootstrap.push_str("</script><script>");
     bootstrap.push_str(&BOOTSTRAP.answer_script);
+    bootstrap.push_str(&answer_ready_script());
     bootstrap.push_str("</script>");
     if let Some(at) = open_tag_end(&scan, "head") {
         return format!("{}{bootstrap}{}", &html[..at], &html[at..]);
@@ -413,6 +434,7 @@ mod tests {
         html: String,
         contained: bool,
         answer_state: SampleAnswer,
+        decline_label: String,
         document: String,
     }
 
@@ -423,7 +445,7 @@ mod tests {
     }
 
     #[test]
-    fn documents_match_the_web_builder() {
+    fn documents_match_the_web_builder_with_native_readiness_after_answer_script() {
         let samples: Samples = serde_json::from_str(RESOURCE).expect("samples");
         let metrics = Metrics {
             rem: samples.sample_metrics.rem,
@@ -437,8 +459,18 @@ mod tests {
                 waiting: sample.answer_state.waiting,
                 answer: sample.answer_state.answer,
             };
+            let document = build_document(
+                &sample.html,
+                &theme,
+                sample.contained,
+                &answer,
+                &sample.decline_label,
+            );
+            let ready = answer_ready_script();
+            assert_eq!(document.matches(&ready).count(), 1);
+            assert!(document.contains(&format!("{}{ready}</script>", BOOTSTRAP.answer_script)));
             assert_eq!(
-                build_document(&sample.html, &theme, sample.contained, &answer),
+                document.replacen(&ready, "", 1),
                 sample.document,
                 "{}",
                 sample.html
@@ -467,7 +499,7 @@ mod tests {
             waiting: false,
             answer: Some(serde_json::json!({ "x": "</script><img src=x>" })),
         };
-        assert!(!answer.script_json().contains("</script>"));
+        assert!(!answer.script_json("</script>Decline").contains("</script>"));
     }
 
     #[test]

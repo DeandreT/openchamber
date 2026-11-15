@@ -203,7 +203,9 @@ impl Workspace {
             self.close_app_menu(window, cx);
         }
         match id {
-            "new_chat" => self.show_new_session(window, cx),
+            "new_chat" => {
+                self.open_new_session(crate::chat_draft::NewSession::FromSelected, window, cx)
+            }
             "focus_input" => self.focus_composer(window, cx),
             "toggle_permission_auto_accept" => {
                 if !self.permission_mode_interactive() {

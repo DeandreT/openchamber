@@ -6,6 +6,18 @@ import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 import { extensionPowersI18n } from './extension-powers.i18n';
 export const settingsDict = {
+  'settings.sessions.auxiliary.noDirectory': '이 모델을 선택하려면 프로젝트나 채팅을 여세요.',
+  'settings.sessions.auxiliary.summary': '요약 모델',
+  'settings.sessions.auxiliary.title': '제목 모델',
+  'settings.sessions.auxiliary.engineDefault': 'OpenCode 기본값',
+  'settings.sessions.auxiliary.info': 'OpenCode 기본 에이전트에 사용할 일반 텍스트 모델을 선택하세요. OpenCode 기본값을 선택하면 모델 재정의가 제거됩니다.',
+  'settings.sessions.auxiliary.privacy': 'OpenCode는 대화 내용을 여기에서 선택한 제공업체로 보낼 수 있습니다. 제공업체 정책은 계속 적용됩니다.',
+  'settings.sessions.auxiliary.projectSource': '프로젝트 설정: {path}',
+  'settings.sessions.auxiliary.userSource': '사용자 설정: {path}',
+  'settings.sessions.auxiliary.newSource': '모델을 명시적으로 선택하면 사용자 에이전트 재정의가 생성됩니다.',
+  'settings.sessions.auxiliary.loading': '에이전트 설정 읽는 중...',
+  'settings.sessions.auxiliary.saveFailed': '모델을 저장하지 못했습니다. 설정을 새로 고친 후 다시 시도하세요.',
+  'settings.sessions.auxiliary.catalogFailed': '모델 또는 에이전트 설정을 읽지 못했습니다. 저장된 선택은 유지됩니다. 다시 시도하여 새로 고치세요.',
   'settings.openchamber.sessionRetention.field.archivedDescription': '보존 기간은 보관 시점부터 계산합니다. 기간이 지난 세션은 삭제됩니다.',
   'settings.openchamber.sessionRetention.field.unarchivedArchiveDescription': '보존 기간은 세션의 마지막 활동부터 계산합니다. 기간이 지난 세션은 보관됩니다.',
   'settings.openchamber.sessionRetention.field.unarchivedDeleteDescription': '보존 기간은 세션의 마지막 활동부터 계산합니다. 기간이 지난 세션은 삭제됩니다.',

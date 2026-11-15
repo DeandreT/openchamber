@@ -1,8 +1,10 @@
 //! Sidebar previews of client-owned new-session drafts.
 
 use gpui_kit::{App, Context, SharedString, Window};
+use openchamber_native_core::chat_draft::CHAT_DRAFT_ID;
 use openchamber_native_core::draft::{Draft, DraftKey, DraftTarget};
-use openchamber_native_core::sidebar_rows::SectionSpacing;
+use openchamber_native_core::grouping::GroupLabel;
+use openchamber_native_core::sidebar_rows::{ActivityKey, SectionSpacing};
 
 use crate::sidebar_item::SidebarItem;
 use crate::workspace::{PROJECT_DRAFT_ID, Workspace};
@@ -42,8 +44,8 @@ fn content_preview(draft: &Draft, cx: &App) -> Option<SharedString> {
         })
 }
 
-fn is_project_draft(key: &DraftKey) -> bool {
-    matches!(key.target(), DraftTarget::NewSession(id) if id.as_str() == PROJECT_DRAFT_ID)
+fn is_new_draft(key: &DraftKey) -> bool {
+    matches!(key.target(), DraftTarget::NewSession(id) if matches!(id.as_str(), PROJECT_DRAFT_ID | CHAT_DRAFT_ID))
 }
 
 impl Workspace {
@@ -51,14 +53,14 @@ impl Workspace {
         self.draft_previews = self
             .drafts
             .iter()
-            .filter(|(key, _)| is_project_draft(key))
+            .filter(|(key, _)| is_new_draft(key))
             .filter_map(|(key, draft)| content_preview(draft, cx).map(|label| (key.clone(), label)))
             .collect();
         for capture in self
             .starters
             .captures
             .iter()
-            .filter(|capture| is_project_draft(&capture.owner))
+            .filter(|capture| is_new_draft(&capture.owner))
         {
             if let Some(label) = content_preview(&capture.draft, cx) {
                 self.draft_previews
@@ -69,7 +71,7 @@ impl Workspace {
         self.rebuild_sidebar();
     }
     pub(crate) fn save_draft_preview(&mut self, key: &DraftKey, draft: &Draft, cx: &App) {
-        if !is_project_draft(key) {
+        if !is_new_draft(key) {
             return;
         }
         let label = content_preview(draft, cx).or_else(|| self.starter_draft_preview(key, cx));
@@ -87,7 +89,7 @@ impl Workspace {
     /// A changed first line updates one row. Only adding/removing a draft
     /// changes sidebar structure, including when its project is collapsed.
     pub(crate) fn sync_draft_preview(&mut self, cx: &mut Context<Self>) {
-        let Some(key) = self.composer_key.clone().filter(is_project_draft) else {
+        let Some(key) = self.composer_key.clone().filter(is_new_draft) else {
             return;
         };
         let label = self
@@ -143,7 +145,26 @@ impl Workspace {
                 .projects
                 .iter()
                 .find(|project| project.path == draft.directory());
-            let placement = if let Some(project) = project {
+            let chat = matches!(draft.target(), DraftTarget::NewSession(id) if id.as_str() == CHAT_DRAFT_ID);
+            let placement = if chat {
+                items
+                    .iter()
+                    .position(|item| {
+                        matches!(
+                            item,
+                            SidebarItem::Zone {
+                                activity: ActivityKey::Chats,
+                                collapsed: false,
+                                ..
+                            } | SidebarItem::Group {
+                                label: GroupLabel::Chats,
+                                collapsed: false,
+                                ..
+                            }
+                        )
+                    })
+                    .map(|index| (index, "chats".to_owned()))
+            } else if let Some(project) = project {
                 items.iter().position(|item| matches!(item, SidebarItem::Project { project_id, collapsed: false, .. } if project_id == &project.id)).map(|index| (index, project.id.to_string()))
             } else {
                 None
@@ -163,7 +184,12 @@ impl Workspace {
             items.insert(
                 index + 1,
                 SidebarItem::Draft {
-                    key: format!("{group}:root:draft:{id}").into(),
+                    key: if chat {
+                        format!("chats:draft:{}:{id}", draft.directory())
+                    } else {
+                        format!("{group}:root:draft:{id}")
+                    }
+                    .into(),
                     draft,
                     title,
                 },
@@ -196,9 +222,9 @@ impl Workspace {
         self.show_new_session(window, cx);
         self.save_composer_draft(cx);
         self.composer_key = Some(key.clone());
-        self.draft_projects
-            .insert(self.runtime.clone(), key.directory().to_owned());
+        self.open_draft_target(key, cx);
         self.restore_composer_draft(window, cx);
+        self.settle_chat_folder(window, cx);
         self.focus_composer(window, cx);
         self.rebuild_sidebar();
         cx.notify();
@@ -210,7 +236,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if key.runtime() != &self.runtime || !is_project_draft(key) || self.close_in_progress() {
+        if key.runtime() != &self.runtime || !is_new_draft(key) || self.close_in_progress() {
             return;
         }
         self.navigation_revision = self.navigation_revision.wrapping_add(1);
@@ -249,6 +275,7 @@ impl Workspace {
         }
         self.rebuild_sidebar();
         self.queue_persistence(cx);
+        self.cleanup_unused_chat_directory(key, window, cx);
         for id in resources {
             self.retire_attachment(id, window, cx);
         }

@@ -7,6 +7,7 @@
 
 pub mod attachment;
 pub mod authentication;
+pub mod auxiliary_models;
 pub mod behavior;
 pub mod catalog;
 pub mod client;
@@ -30,6 +31,7 @@ pub mod magic_prompts;
 pub mod mcp;
 pub mod message_queue;
 pub mod message_search;
+pub mod native_agent;
 pub mod notification;
 pub mod opencode_config;
 pub mod opencode_upgrade;
@@ -66,6 +68,7 @@ pub mod system;
 pub mod terminal;
 #[cfg(test)]
 mod test_server;
+pub mod themes;
 mod tool_facts;
 pub mod walkthrough;
 pub mod web_content;

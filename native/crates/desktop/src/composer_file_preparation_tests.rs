@@ -657,7 +657,7 @@ struct Scratch(PathBuf);
 
 impl Scratch {
     fn new() -> Self {
-        let path = PathBuf::from("/tmp/opencode").join(format!(
+        let path = std::env::temp_dir().join(format!(
             "mention-preparation-{}-{}",
             std::process::id(),
             SEQUENCE.fetch_add(1, Ordering::Relaxed)

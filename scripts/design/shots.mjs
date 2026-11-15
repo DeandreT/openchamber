@@ -20,7 +20,7 @@ import { fileURLToPath } from "node:url"
 import process from "node:process"
 import { DatabaseSync } from "node:sqlite"
 
-import { CdpClient, launchChrome, reservePort, resolveChrome, resolveProfileDir, wait } from "../perf/cdp.mjs"
+import { CdpClient, launchChrome, reservePort, resolveChrome, resolveProfileDir, stopChrome, wait } from "../perf/cdp.mjs"
 import { DESIGN_PROJECT_FILES, DESIGN_RETRY_EDITED, DESIGN_SESSIONS } from "../perf/fixture-conversations.mjs"
 import { REPO_ROOT, restoreState, startFixture, startIsolatedServer } from "../perf/isolated-server.mjs"
 
@@ -1009,14 +1009,20 @@ const main = async () => {
 
   const chromePort = await reservePort()
   const profile = resolveProfileDir(null, "ui-shots")
-  const chrome = launchChrome({ chrome: resolveChrome(options.chrome), profileDir: profile.dir, port: chromePort, headless: true, extraArgs: ["--window-size=1454,841", "--hide-scrollbars", `--lang=${LOCALE}`] })
-  profile.removeAfter(chrome)
+  let chrome
+  let browserClient
   cleanups.push(async () => {
-    if (chrome.exitCode !== null) return
-    chrome.kill("SIGTERM")
-    for (let attempt = 0; attempt < 20 && chrome.exitCode === null; attempt += 1) await wait(250)
-    if (chrome.exitCode === null) chrome.kill("SIGKILL")
+    try {
+      await stopChrome(chrome, browserClient)
+    } finally {
+      browserClient?.close()
+      await profile.remove()
+    }
   })
+  chrome = launchChrome({ chrome: resolveChrome(options.chrome), profileDir: profile.dir, port: chromePort, headless: true, extraArgs: ["--window-size=1454,841", "--hide-scrollbars", `--lang=${LOCALE}`] })
+  const browser = await browserInfo(chromePort)
+  browserClient = new CdpClient(browser.webSocketDebuggerUrl)
+  await browserClient.connect()
 
   const outDir = join(ROOT, options.label)
   rmSync(outDir, { recursive: true, force: true })
@@ -1062,4 +1068,3 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     void stop(1)
   })
 }
-

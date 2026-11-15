@@ -677,6 +677,17 @@ impl Workspace {
         if !self.can_start_send(&session) {
             return;
         }
+        let Some(configuration) = self
+            .selected_queue()
+            .iter()
+            .find(|item| &item.id == id)
+            .and_then(|item| item.send_config.clone())
+        else {
+            return;
+        };
+        if !self.native_queued_send_ready(&configuration, cx) {
+            return;
+        }
         self.begin_payload_take(id, TakePurpose::Send, window, cx);
     }
 

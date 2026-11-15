@@ -653,8 +653,8 @@ fn current_required_fields_unknown_fields_and_future_formats_fail_closed() {
         );
     }
     assert!(matches!(
-        decode_store(br#"{"version":9,"future":true}"#),
-        Err(JournalError::UnsupportedVersion(9))
+        decode_store(br#"{"version":10,"future":true}"#),
+        Err(JournalError::UnsupportedVersion(10))
     ));
 }
 
@@ -1451,10 +1451,8 @@ struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Self {
         let id = TEMP_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-        let path = PathBuf::from(format!(
-            "/tmp/opencode/mutation-journal-{}-{id}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("mutation-journal-{}-{id}", std::process::id()));
         private_directory(&path).expect("create private test directory");
         Self(path)
     }
@@ -1497,6 +1495,213 @@ fn sample() -> JournalSnapshot {
         selections: Vec::new(),
         ..JournalSnapshot::default()
     }
+}
+
+#[test]
+fn session_first_capture_and_correction_round_trip_without_replaying_or_fabricating_a_variant() {
+    let (key, mut attempt) = crate::create_attempt::tests::sample();
+    attempt.prompt.model = Some(ModelChoice {
+        provider_id: "native-provider".into(),
+        model_id: "captured-route".into(),
+        variant: None,
+    });
+    attempt.request = CreateSession::new(
+        key.session.clone(),
+        attempt.source.directory(),
+        attempt.prompt.model.clone(),
+        attempt.prompt.agent.clone(),
+    )
+    .expect("test fixture");
+    attempt.phase = CreationPhase::Confirmed;
+    attempt.native_config = Some(crate::native_agent::CreationConfig {
+        provider_id: "native-provider".into(),
+        model_id: "captured-route".into(),
+        variant: None,
+        prepare_after_session: true,
+        correction_required: true,
+        config: vec![("old-field".into(), "old-choice".into())],
+    });
+    let mut snapshot = JournalSnapshot::default();
+    snapshot.creations.push((key, attempt.clone()));
+    let restored = round_trip(&snapshot);
+    let held = &restored.creations[0].1;
+    assert_eq!(held.native_config, attempt.native_config);
+    assert_eq!(held.request, attempt.request);
+    assert_eq!(held.prompt.message_id, attempt.prompt.message_id);
+    assert_eq!(held.prompt.text, attempt.prompt.text);
+    assert_eq!(held.prompt.agent, attempt.prompt.agent);
+    assert_eq!(held.source, attempt.source);
+    assert!(held.navigation.is_none());
+    let mut old = value(&snapshot);
+    old["version"] = 8.into();
+    assert!(
+        restore_value(&old).is_err(),
+        "new deferred intent cannot masquerade as a legacy v8 capture"
+    );
+    let mut legacy = value(&JournalSnapshot::default());
+    legacy["version"] = 8.into();
+    assert!(
+        restore_value(&legacy).is_ok(),
+        "existing v8 captures remain readable"
+    );
+}
+
+#[test]
+fn native_creation_preferences_round_trip_and_refuse_a_different_model() {
+    let (key, mut attempt) = crate::create_attempt::tests::sample();
+    let model = openchamber_native_core::send_config::ModelChoice {
+        provider_id: "native-provider".into(),
+        model_id: "native-model".into(),
+        variant: Some("default".into()),
+    };
+    attempt.prompt.model = Some(model.clone());
+    attempt.request = CreateSession::new(
+        key.session.clone(),
+        attempt.source.directory(),
+        Some(model),
+        attempt.prompt.agent.clone(),
+    )
+    .expect("test fixture");
+    attempt.native_config = Some(crate::native_agent::CreationConfig {
+        provider_id: "native-provider".into(),
+        model_id: "native-model".into(),
+        variant: Some("default".into()),
+        prepare_after_session: false,
+        correction_required: false,
+        config: vec![("mode".into(), "safe".into())],
+    });
+    let mut snapshot = JournalSnapshot::default();
+    snapshot.creations.push((key, attempt));
+    let restored = round_trip(&snapshot);
+    assert_eq!(
+        restored.creations[0]
+            .1
+            .native_config
+            .as_ref()
+            .expect("test fixture")
+            .config,
+        vec![("mode".into(), "safe".into())]
+    );
+    let mut encoded = value(&snapshot);
+    encoded["creations"][0]["native_config"]["model_id"] = "different-model".into();
+    assert!(restore_value(&encoded).is_err());
+    encoded = value(&snapshot);
+    encoded["creations"][0]["native_config"]["config"] =
+        serde_json::json!([["apiKey", "never-retain"]]);
+    assert!(restore_value(&encoded).is_err());
+}
+
+#[test]
+fn session_first_partial_correction_preserves_bounded_union_across_restart_and_complete_cleanup() {
+    let (key, mut attempt) = crate::create_attempt::tests::sample();
+    attempt.prompt.model = Some(ModelChoice {
+        provider_id: "native-provider".into(),
+        model_id: "route".into(),
+        variant: None,
+    });
+    attempt.request = CreateSession::new(
+        key.session.clone(),
+        attempt.source.directory(),
+        attempt.prompt.model.clone(),
+        attempt.prompt.agent.clone(),
+    )
+    .expect("test fixture");
+    attempt.phase = CreationPhase::Confirmed;
+    attempt.native_config = Some(crate::native_agent::CreationConfig {
+        provider_id: "native-provider".into(),
+        model_id: "route".into(),
+        variant: None,
+        prepare_after_session: true,
+        correction_required: true,
+        config: (0..32)
+            .map(|index| (format!("captured-{index}"), "saved".into()))
+            .collect(),
+    });
+    let mut attempts = crate::create_attempt::CreateAttempts::default();
+    assert!(attempts.insert(key.clone(), attempt));
+    assert!(
+        attempts.correct_native_config(&key, vec![("runtime".into(), "corrected".into())], false),
+        "32 captured pairs plus a new live runtime field must remain correctable"
+    );
+    let mut snapshot = JournalSnapshot::default();
+    snapshot.creations = attempts.snapshot();
+    let restored = round_trip(&snapshot);
+    let config = restored.creations[0]
+        .1
+        .native_config
+        .as_ref()
+        .expect("native config");
+    assert_eq!(config.config.len(), 33);
+    assert!(
+        config
+            .config
+            .contains(&("runtime".into(), "corrected".into()))
+    );
+    assert!(config.validate());
+    let mut attempts = crate::create_attempt::CreateAttempts::restore(restored.creations);
+    // Repeated partial snapshots can retain at most two maximum wire catalogs.
+    for index in 0..31 {
+        assert!(attempts.require_native_correction(&key));
+        assert!(attempts.correct_native_config(
+            &key,
+            vec![(format!("later-{index}"), "accepted".into())],
+            false
+        ));
+    }
+    assert!(attempts.require_native_correction(&key));
+    let before = attempts.get(&key).expect("attempt").native_config.clone();
+    assert!(!attempts.correct_native_config(
+        &key,
+        vec![("overflow".into(), "choice".into())],
+        false
+    ));
+    assert_eq!(
+        attempts.get(&key).expect("attempt").native_config,
+        before,
+        "overflow preserves every accepted pair and correction status"
+    );
+    snapshot.creations = attempts.snapshot();
+    let restored = round_trip(&snapshot);
+    assert_eq!(
+        restored.creations[0]
+            .1
+            .native_config
+            .as_ref()
+            .expect("test fixture")
+            .config
+            .len(),
+        64
+    );
+    let mut attempts = crate::create_attempt::CreateAttempts::restore(restored.creations);
+    let oversized: Vec<_> = (0..33)
+        .map(|index| (format!("wire-{index}"), "choice".into()))
+        .collect();
+    assert!(
+        !attempts.correct_native_config(&key, oversized, true),
+        "current wire catalog stays bounded at 32"
+    );
+    assert!(attempts.correct_native_config(&key, vec![("runtime".into(), "final".into())], true));
+    snapshot.creations = attempts.snapshot();
+    let restored = round_trip(&snapshot);
+    assert_eq!(
+        restored.creations[0]
+            .1
+            .native_config
+            .as_ref()
+            .expect("test fixture")
+            .config,
+        vec![("runtime".into(), "final".into())]
+    );
+    let mut invalid = value(&snapshot);
+    invalid["creations"][0]["native_config"]["config"] = serde_json::json!(
+        (0..65)
+            .map(|index| (format!("too-many-{index}"), "choice"))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        restore_value(&invalid).is_err(),
+        "hydration enforces the same pending bound"
+    );
 }
 
 #[test]

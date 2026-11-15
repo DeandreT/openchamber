@@ -1,4 +1,4 @@
-//! Registered project selection for a client-owned new-session draft.
+//! Chat or registered-project selection for the complete client-owned draft.
 
 use gpui_kit::component::combobox::{Combobox, ComboboxEvent, ComboboxState};
 use gpui_kit::component::searchable_list::{SearchableListItem, SearchableVec};
@@ -17,6 +17,7 @@ use crate::logical::LogicalStyledExt;
 use crate::send_catalog::Load;
 use crate::theme::Palette;
 use crate::workspace::Workspace;
+use openchamber_native_core::chat_draft::CHAT_PROJECT_ID;
 
 /// The trigger's project mark. `ProjectLabel` asks for 14 px, but the
 /// `Button` it sits in sizes every icon without a `size-*` class to 16 px.
@@ -68,7 +69,15 @@ impl SearchableListItem for ProjectOption {
             .items_center()
             .gap(px(6.0))
             .min_w_0()
-            .child(glyph("folder", 14.0, palette.muted_foreground))
+            .child(glyph(
+                if self.directory == CHAT_PROJECT_ID {
+                    "chat-new"
+                } else {
+                    "folder"
+                },
+                14.0,
+                palette.muted_foreground,
+            ))
             .child(
                 div()
                     .min_w_0()
@@ -103,7 +112,7 @@ impl Workspace {
         cx: &mut Context<Self>,
     ) -> impl IntoElement + use<> {
         let strings = locale::strings(cx).clone();
-        let items: Vec<ProjectOption> = self
+        let mut items: Vec<ProjectOption> = self
             .topology
             .projects
             .iter()
@@ -134,6 +143,13 @@ impl Workspace {
                 }
             })
             .collect();
+        items.insert(
+            0,
+            ProjectOption {
+                directory: CHAT_PROJECT_ID.to_owned(),
+                label: strings.get("layout.mainTab.chat"),
+            },
+        );
         if self.project_chooser.is_none() {
             let state = cx.new(|cx| {
                 ComboboxState::new(SearchableVec::new(items.clone()), vec![], window, cx)
@@ -144,7 +160,7 @@ impl Workspace {
                 if let ComboboxEvent::Confirm(values) = event
                     && let Some(directory) = values.first()
                 {
-                    this.choose_draft_project(directory, window, cx);
+                    this.move_draft_to(directory, window, cx);
                 }
             });
             self.project_chooser = Some(ProjectChooser {
@@ -153,6 +169,7 @@ impl Workspace {
                 _subscription: subscription,
             });
         }
+        let chat_choice = self.chat_draft_open().then(|| CHAT_PROJECT_ID.to_owned());
         let chooser = self
             .project_chooser
             .as_mut()
@@ -163,12 +180,16 @@ impl Workspace {
             });
             chooser.items = items;
         }
-        let directory = self.draft_projects.get(&self.runtime).filter(|directory| {
-            chooser
-                .items
-                .iter()
-                .any(|item| &item.directory == *directory)
-        });
+        let directory = self
+            .draft_projects
+            .get(&self.runtime)
+            .or(chat_choice.as_ref())
+            .filter(|directory| {
+                chooser
+                    .items
+                    .iter()
+                    .any(|item| &item.directory == *directory)
+            });
         if chooser.state.read(cx).selected_value().as_ref() != directory {
             chooser.state.update(cx, |state, cx| {
                 state.set_selected_values(
@@ -187,7 +208,7 @@ impl Workspace {
             })
             .map(|item| item.label.clone())
             .unwrap_or_else(|| strings.get("chat.chatInput.chooseProject"));
-        let has_project = directory.is_some();
+        let has_project = directory.is_some_and(|directory| directory != CHAT_PROJECT_ID);
         let connection_failed = self
             .connection
             .as_ref()

@@ -271,10 +271,13 @@ fn project_chooser_pointer_selects_a_filtered_project_in_rtl(cx: &mut TestAppCon
 #[gpui_kit::test]
 fn project_chooser_pointer_opens_search_and_keyboard_selects(cx: &mut TestAppContext) {
     let (window, workspace) = open(cx);
+    let directory = cx.read(|cx| workspace.read(cx).topology.projects[0].path.clone());
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
         window.click(ElementId::Name("choose-project".into()), cx);
         window.render_frame(cx);
+        // The first row is Chat; the next is the captured registered project.
+        window.press("ctrl-n", cx);
         window.press("ctrl-n", cx);
         window.press("enter", cx);
     })
@@ -282,9 +285,15 @@ fn project_chooser_pointer_opens_search_and_keyboard_selects(cx: &mut TestAppCon
     cx.run_until_parked();
     cx.read(|cx| {
         let workspace = workspace.read(cx);
-        assert!(
-            workspace.draft_projects.contains_key(&workspace.runtime),
-            "choosing a popup row commits its directory"
+        assert_eq!(
+            workspace.draft_projects.get(&workspace.runtime),
+            Some(&directory),
+            "choosing the project row commits its exact directory"
+        );
+        assert_eq!(workspace.config_directory().as_ref(), Some(&directory));
+        assert_eq!(
+            workspace.composer_key.as_ref().map(|key| key.directory()),
+            Some(directory.as_str())
         );
         assert!(workspace.selected.is_none());
     });
@@ -312,6 +321,41 @@ fn project_chooser_pointer_opens_search_and_keyboard_selects(cx: &mut TestAppCon
             "after choosing"
         );
     });
+}
+
+#[gpui_kit::test]
+fn project_chooser_keyboard_confirmation_of_chat_removes_the_project(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let directory = workspace.topology.projects[0].path.clone();
+            workspace.choose_draft_project(&directory, window, cx);
+            assert_eq!(
+                workspace.draft_projects.get(&workspace.runtime),
+                Some(&directory)
+            );
+        });
+        window.render_frame(cx);
+        window.click(ElementId::Name("choose-project".into()), cx);
+        window.render_frame(cx);
+        window.press("ctrl-p", cx);
+        window.press("enter", cx);
+    })
+    .expect("window is open");
+    cx.run_until_parked();
+    cx.read(|cx| {
+        let workspace = workspace.read(cx);
+        assert!(!workspace.draft_projects.contains_key(&workspace.runtime));
+        assert!(workspace.chat_draft_open());
+        assert!(workspace.selected.is_none());
+        let chat = workspace.chat_draft_key().expect("Chat owns a draft");
+        assert_eq!(workspace.composer_key.as_ref(), Some(&chat));
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.input("after choosing Chat", cx);
+    })
+    .expect("window is open");
+    assert_eq!(composer_text(&workspace, cx), "after choosing Chat");
 }
 
 #[gpui_kit::test]
@@ -1189,6 +1233,19 @@ fn new_session_keeps_both_drafts(cx: &mut TestAppContext) {
     let rows = session_rows(&workspace, cx);
     let (session_row, _) = rows[1].clone();
     let new_session = id(&"new-session".into());
+    let owner = cx
+        .update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            // Synthetic startup has an unassigned owner until this entry point runs.
+            window.click(new_session.clone(), cx);
+            let workspace = workspace.read(cx);
+            assert!(workspace.chat_draft_open());
+            workspace
+                .composer_key
+                .clone()
+                .expect("the new draft has an owner")
+        })
+        .expect("window is open");
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
         window.input("a new idea", cx);
@@ -1198,6 +1255,10 @@ fn new_session_keeps_both_drafts(cx: &mut TestAppContext) {
     })
     .expect("window is open");
     assert_eq!(selected(&workspace, cx), None);
+    assert_eq!(
+        cx.read(|cx| workspace.read(cx).composer_key.clone()),
+        Some(owner)
+    );
     assert_eq!(composer_text(&workspace, cx), "a new idea");
 
     cx.update_window(window, |_, window, cx| window.click(id(&session_row), cx))

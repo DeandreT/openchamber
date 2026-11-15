@@ -16,17 +16,21 @@
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{Theme, WindowExt};
 use gpui_kit::{
-    Context, Entity, IntoElement, ParentElement, Render, SharedString, Styled, Subscription,
-    WeakEntity, Window, div, prelude::FluentBuilder, px,
+    Context, Entity, EntityId, FontWeight, InteractiveElement, IntoElement, ParentElement, Render,
+    SharedString, StatefulInteractiveElement, Styled, Subscription, WeakEntity, Window, div,
+    prelude::FluentBuilder, px, rems,
 };
 use openchamber_native_core::ids::{PartId, RuntimeId, SessionId};
 use openchamber_native_core::rendered_page::{Ask, RenderedPage};
 use serde_json::{Value, json};
 
+use crate::activation::on_activate;
 use crate::baseline::CssTextExt;
+use crate::connection::ConnectionState;
 use crate::context_panel::{XS_LINE, XS_SIZE};
 use crate::html_render_document::{self, AnswerState, Metrics, PageTheme};
 use crate::locale;
+use crate::logical::LogicalStyledExt;
 use crate::network::NetworkTask;
 use crate::theme::Palette;
 use crate::web_policy::{self, ViewPolicy};
@@ -38,6 +42,8 @@ use crate::workspace::Workspace;
 const SIZE_MESSAGE: &str = "openchamber:html-render:size";
 const OPEN_LINK_MESSAGE: &str = "openchamber:html-render:open-link";
 const POINTER_MESSAGE: &str = "openchamber:html-render:pointer";
+const DECLINE_MESSAGE: &str = "openchamber:html-render:decline";
+const DECLINE_PLACED_MESSAGE: &str = "openchamber:html-render:decline-placed";
 /// The frame's height before the page reports its own.
 const MIN_HEIGHT: f32 = 48.0;
 
@@ -56,6 +62,17 @@ struct Submission {
     data: Value,
 }
 
+/// One local answer operation per call. Server-recorded terminal state wins.
+#[derive(Clone, Debug, Default, PartialEq)]
+enum Delivery {
+    #[default]
+    Idle,
+    SendingAnswer(Option<EntityId>),
+    SendingDecline,
+    Answered(Submission),
+    Declined,
+}
+
 pub(crate) struct HtmlAnswerView {
     call: PageCall,
     owner: WeakEntity<Workspace>,
@@ -67,7 +84,9 @@ pub(crate) struct HtmlAnswerView {
     theme: Option<PageTheme>,
     answer: AnswerState,
     /// What this client sent, shown until the call records the answer.
-    sent: Option<Submission>,
+    delivery: Delivery,
+    /// Unknown until the frame reports whether it has a button to pair with.
+    decline_in_page: Option<bool>,
     _events: Option<Subscription>,
 }
 
@@ -87,7 +106,7 @@ fn page_theme(cx: &gpui_kit::App) -> Option<PageTheme> {
 
 impl HtmlAnswerView {
     pub(crate) fn new(call: PageCall, owner: WeakEntity<Workspace>, page: RenderedPage) -> Self {
-        let answer = answer_state(&page.ask, None);
+        let answer = answer_state(&page.ask, &Delivery::Idle, None);
         Self {
             call,
             owner,
@@ -97,7 +116,8 @@ impl HtmlAnswerView {
             height: MIN_HEIGHT,
             theme: None,
             answer,
-            sent: None,
+            delivery: Delivery::Idle,
+            decline_in_page: None,
             _events: None,
         }
     }
@@ -111,6 +131,7 @@ impl HtmlAnswerView {
         if page.html != self.page.html {
             self.host = None;
             self._events = None;
+            self.decline_in_page = None;
         }
         self.page = page;
         self.sync_answer(cx);
@@ -119,7 +140,11 @@ impl HtmlAnswerView {
 
     /// Tells a loaded page when its answer state changed.
     fn sync_answer(&mut self, cx: &Context<Self>) {
-        let next = answer_state(&self.page.ask, self.sent.as_ref());
+        let next = answer_state(
+            &self.page.ask,
+            &self.delivery,
+            self.host.as_ref().map(Entity::entity_id),
+        );
         if next != self.answer {
             self.answer = next;
             self.post(&self.answer.message(), cx);
@@ -134,9 +159,16 @@ impl HtmlAnswerView {
             self.unavailable = true;
             return;
         };
+        // A new frame has no pending RPC, even if the old frame submitted.
+        self.sync_answer(cx);
         let nonce = new_nonce();
-        let document =
-            html_render_document::build_document(&self.page.html, &theme, false, &self.answer);
+        let document = html_render_document::build_document(
+            &self.page.html,
+            &theme,
+            false,
+            &self.answer,
+            &locale::strings(cx).get("chat.htmlRender.decline"),
+        );
         let title = if self.page.title.is_empty() {
             locale::strings(cx)
                 .get("chat.htmlRender.untitled")
@@ -193,6 +225,7 @@ impl HtmlAnswerView {
             WebViewEvent::Crashed => {
                 self.host = None;
                 self._events = None;
+                self.decline_in_page = None;
                 cx.notify();
             }
             _ => {}
@@ -205,6 +238,18 @@ impl HtmlAnswerView {
             return;
         }
         match message.get("type").and_then(Value::as_str) {
+            // A completion before the new frame's listener existed may have
+            // lost its post. Readiness replays state even when it is unchanged.
+            Some(html_render_document::ANSWER_READY_MESSAGE) => {
+                self.post(&self.answer.message(), cx);
+            }
+            Some(DECLINE_MESSAGE) => self.decline(true, window, cx),
+            Some(DECLINE_PLACED_MESSAGE) => {
+                if let Some(placed) = message.get("placed").and_then(Value::as_bool) {
+                    self.decline_in_page = Some(placed);
+                    cx.notify();
+                }
+            }
             Some(SIZE_MESSAGE) => {
                 let Some(height) = message
                     .get("height")
@@ -242,60 +287,134 @@ impl HtmlAnswerView {
         let refuse = |this: &Self, reason: &str, cx: &Context<Self>| {
             this.post(&submit_reply(&id, Some(reason)), cx)
         };
-        if !self.answer.waiting || self.sent.is_some() {
+        if !self.answer.waiting || self.delivery != Delivery::Idle {
             return refuse(self, "This page is not waiting for an answer", cx);
         }
         // The page's own check can be skipped by the page; GTK only reports
         // real presses.
-        let gesture = self
-            .host
-            .as_ref()
-            .is_some_and(|host| host.read(cx).has_recent_gesture());
-        if !gesture {
+        if !self.has_gesture(cx) {
             return refuse(self, "openchamber.submit works only from a click", cx);
         }
         if submission.summary.is_empty() {
             return refuse(self, "summary is required: the choice in a few words", cx);
         }
+        self.deliver(Some((id, submission)), window, cx);
+    }
+
+    fn has_gesture(&self, cx: &Context<Self>) -> bool {
+        self.host
+            .as_ref()
+            .is_some_and(|host| host.read(cx).has_recent_gesture())
+    }
+
+    fn decline(&mut self, from_page: bool, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.answer.waiting
+            || self.delivery != Delivery::Idle
+            || (from_page && !self.has_gesture(cx))
+        {
+            // The frame disables Decline before asking; refusal restores it.
+            self.post(&self.answer.message(), cx);
+            return;
+        }
+        self.deliver(None, window, cx);
+    }
+
+    fn deliver(
+        &mut self,
+        submission: Option<(Value, Submission)>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let refuse = |this: &Self, cx: &mut Context<Self>, window: &mut Window| {
+            let message = "The answer was not delivered";
+            if let Some((id, _)) = &submission {
+                this.post(&submit_reply(id, Some(message)), cx);
+            }
+            this.post(&this.answer.message(), cx);
+            window.push_notification(
+                Notification::error(message)
+                    .title(locale::strings(cx).get("chat.htmlRender.answerFailed")),
+                cx,
+            );
+        };
         let Some(owner) = self.owner.upgrade() else {
-            return refuse(self, "The answer was not delivered", cx);
+            return refuse(self, cx, window);
         };
         let workspace = owner.read(cx);
-        let connection = workspace
-            .connection
-            .as_ref()
-            .filter(|_| workspace.runtime == self.call.runtime);
-        let Some((client, network)) = connection
-            .and_then(|connection| Some((connection.client.clone()?, connection.network.handle())))
-        else {
-            return refuse(self, "The answer was not delivered", cx);
+        let connection = workspace.connection.as_ref().filter(|connection| {
+            workspace.runtime == self.call.runtime
+                && matches!(
+                    connection.state,
+                    ConnectionState::Connected | ConnectionState::Reconnecting
+                )
+        });
+        let Some((client, network, generation)) = connection.and_then(|connection| {
+            Some((
+                connection.client.clone()?,
+                connection.network.handle(),
+                connection.generation,
+            ))
+        }) else {
+            return refuse(self, cx, window);
         };
         let session = self.call.session.to_string();
         let call = self.call.call.to_string();
-        let summary = submission.summary.clone();
-        let data = submission.data.clone();
+        let answer = submission.as_ref().map(|(_, answer)| answer.clone());
+        let source_host = self.host.as_ref().map(Entity::entity_id);
+        self.delivery = if submission.is_some() {
+            Delivery::SendingAnswer(source_host)
+        } else {
+            Delivery::SendingDecline
+        };
+        self.sync_answer(cx);
+        cx.notify();
         let request = NetworkTask::spawn_on(&network, async move {
-            client
-                .answer_rendered_page(&session, &call, &summary, data)
-                .await
-                .map_err(|error| error.to_string())
+            match answer {
+                Some(answer) => {
+                    client
+                        .answer_rendered_page(&session, &call, &answer.summary, answer.data)
+                        .await
+                }
+                None => client.decline_rendered_page(&session, &call).await,
+            }
+            .map_err(|error| error.to_string())
         });
         cx.spawn_in(window, async move |this, cx| {
             let result = request
                 .await
                 .unwrap_or_else(|| Err("The answer was not delivered".to_owned()));
-            let _ = this.update_in(cx, |this, window, cx| match result {
-                Ok(()) => {
-                    this.post(&submit_reply(&id, None), cx);
-                    this.sent = Some(submission);
-                    this.sync_answer(cx);
-                    cx.notify();
+            let _ = this.update_in(cx, |this, window, cx| {
+                let current_owner = this.owner.upgrade().is_some_and(|owner| {
+                    let workspace = owner.read(cx);
+                    workspace.runtime == this.call.runtime
+                        && workspace
+                            .connection
+                            .as_ref()
+                            .is_some_and(|connection| connection.generation == generation)
+                });
+                // A replaced/crashed frame can reuse a JSON-RPC id. Only its
+                // original document may receive the completion of that id.
+                if this.host.as_ref().map(Entity::entity_id) == source_host
+                    && let Some((id, _)) = &submission
+                {
+                    this.post(
+                        &submit_reply(id, result.as_ref().err().map(String::as_str)),
+                        cx,
+                    );
                 }
-                Err(message) => {
-                    this.post(&submit_reply(&id, Some(&message)), cx);
-                    let title = locale::strings(cx).get("chat.htmlRender.answerFailed");
-                    window.push_notification(Notification::error(message.clone()).title(title), cx);
-                }
+                this.delivery = match result {
+                    Ok(()) => submission
+                        .map_or(Delivery::Declined, |(_, answer)| Delivery::Answered(answer)),
+                    Err(message) => {
+                        if current_owner {
+                            let title = locale::strings(cx).get("chat.htmlRender.answerFailed");
+                            window.push_notification(Notification::error(message).title(title), cx);
+                        }
+                        Delivery::Idle
+                    }
+                };
+                this.sync_answer(cx);
+                cx.notify();
             });
         })
         .detach();
@@ -303,9 +422,9 @@ impl HtmlAnswerView {
 
     fn status(&self, cx: &Context<Self>) -> Option<SharedString> {
         let strings = locale::strings(cx);
-        let summary = match (&self.page.ask, &self.sent) {
+        let summary = match (&self.page.ask, &self.delivery) {
             (Ask::Answered { summary, .. }, _) => Some(summary.clone()),
-            (_, Some(sent)) => Some(sent.summary.clone()),
+            (Ask::Waiting, Delivery::Answered(sent)) => Some(sent.summary.clone()),
             _ => None,
         };
         if let Some(summary) = summary {
@@ -320,7 +439,9 @@ impl HtmlAnswerView {
             return Some(strings.format("chat.htmlRender.answered", &[("summary", &line)]));
         }
         let key = match self.page.ask {
+            Ask::Waiting if self.delivery == Delivery::Declined => "chat.htmlRender.declined",
             Ask::Waiting => "chat.htmlRender.waiting",
+            Ask::Declined => "chat.htmlRender.declined",
             Ask::AnsweredInChat => "chat.htmlRender.answeredInChat",
             Ask::ChatSentEarlier => "chat.htmlRender.chatSentEarlier",
             Ask::Unanswered => "chat.htmlRender.unanswered",
@@ -332,18 +453,22 @@ impl HtmlAnswerView {
 }
 
 /// The answer state a page loads with and is told about.
-fn answer_state(ask: &Ask, sent: Option<&Submission>) -> AnswerState {
-    match (ask, sent) {
+fn answer_state(ask: &Ask, delivery: &Delivery, host: Option<EntityId>) -> AnswerState {
+    match (ask, delivery) {
         (Ask::Answered { data, .. }, _) => AnswerState {
             waiting: false,
             answer: serde_json::from_str(data).ok(),
         },
-        (_, Some(sent)) => AnswerState {
+        (Ask::Waiting, Delivery::Answered(sent)) => AnswerState {
             waiting: false,
             answer: Some(sent.data.clone()),
         },
-        (ask, None) => AnswerState {
-            waiting: *ask == Ask::Waiting,
+        _ => AnswerState {
+            // Only the initiating frame has a pending RPC to disable Decline.
+            // A replacement frame and a pending decline must end waiting.
+            waiting: *ask == Ask::Waiting
+                && (*delivery == Delivery::Idle
+                    || matches!(delivery, Delivery::SendingAnswer(Some(source)) if Some(*source) == host)),
             answer: None,
         },
     }
@@ -412,7 +537,22 @@ impl Render for HtmlAnswerView {
         }
         let palette = cx.global::<Palette>().clone();
         let status = self.status(cx);
-        let waiting = self.page.ask == Ask::Waiting && self.sent.is_none();
+        let sending = matches!(
+            self.delivery,
+            Delivery::SendingAnswer(_) | Delivery::SendingDecline
+        );
+        let waiting = self.page.ask == Ask::Waiting
+            && matches!(
+                self.delivery,
+                Delivery::Idle | Delivery::SendingAnswer(_) | Delivery::SendingDecline
+            );
+        let strings = locale::strings(cx);
+        let direction = strings.direction();
+        let decline_label = strings.get("chat.htmlRender.decline");
+        let decline_id = SharedString::from(format!(
+            "html-page-decline:{}:{}:{}",
+            self.call.runtime, self.call.session, self.call.call,
+        ));
         div()
             .my(px(8.0))
             .flex()
@@ -426,6 +566,38 @@ impl Render for HtmlAnswerView {
                         this.child(HostElement::new(host))
                     }),
             )
+            .when(waiting && self.decline_in_page == Some(false), |this| {
+                this.child(
+                    div()
+                        .mt(rems(0.5))
+                        .flex_row_from(direction)
+                        .child(on_activate(
+                            gpui_kit::base::Button::new(decline_id.clone())
+                                .accessibility_id(decline_id)
+                                .accessibility_label(decline_label.clone())
+                                .disabled(sending)
+                                .h(rems(2.0))
+                                .px(rems(0.75))
+                                .rounded(rems(0.375))
+                                .bg(palette.muted)
+                                .text_color(palette.foreground)
+                                .font_weight(FontWeight::MEDIUM)
+                                .css_text(0.84375, 1.25, cx)
+                                .when(sending, |button| {
+                                    button.opacity(0.5).a11y_synthetic_children(|builder| {
+                                        builder.parent_node().set_disabled()
+                                    })
+                                })
+                                .cursor_pointer()
+                                .hover(|style| style.bg(palette.muted.blend(palette.hover)))
+                                .focus(|style| style.bg(palette.muted.blend(palette.hover)))
+                                .active(|style| style.bg(palette.muted.blend(palette.active)))
+                                .child(decline_label),
+                            cx,
+                            |this, window, cx| this.decline(false, window, cx),
+                        )),
+                )
+            })
             .when_some(status, |this, status| {
                 this.child(
                     div()
@@ -494,13 +666,14 @@ mod tests {
 
     #[test]
     fn a_sent_answer_ends_the_wait() {
-        let waiting = answer_state(&Ask::Waiting, None);
+        let waiting = answer_state(&Ask::Waiting, &Delivery::Idle, None);
         assert!(waiting.waiting);
         let sent = Submission {
             summary: "A".to_owned(),
             data: json!({ "pick": 1 }),
         };
-        let after = answer_state(&Ask::Waiting, Some(&sent));
+        let delivery = Delivery::Answered(sent);
+        let after = answer_state(&Ask::Waiting, &delivery, None);
         assert!(!after.waiting);
         assert_eq!(after.answer, Some(json!({ "pick": 1 })));
         let recorded = answer_state(
@@ -508,8 +681,54 @@ mod tests {
                 summary: "A".to_owned(),
                 data: "{\"pick\":2}".to_owned(),
             },
-            Some(&sent),
+            &delivery,
+            None,
         );
         assert_eq!(recorded.answer, Some(json!({ "pick": 2 })));
+    }
+
+    #[test]
+    fn pending_answer_keeps_frame_controls_while_decline_ends_waiting() {
+        // Admission remains Idle-only in submit/decline. The frame keeps its
+        // controls while its pending RPC disables Decline in place.
+        let source = EntityId::from(1);
+        let pending = Delivery::SendingAnswer(Some(source));
+        assert_eq!(
+            answer_state(&Ask::Waiting, &pending, Some(source)),
+            answer_state(&Ask::Waiting, &Delivery::Idle, Some(source)),
+        );
+        for host in [None, Some(EntityId::from(2))] {
+            assert_eq!(
+                answer_state(&Ask::Waiting, &pending, host),
+                AnswerState::default()
+            );
+            assert!(answer_state(&Ask::Waiting, &Delivery::Idle, host).waiting);
+        }
+        for delivery in [Delivery::SendingDecline, Delivery::Declined] {
+            assert_eq!(
+                answer_state(&Ask::Waiting, &delivery, Some(source)),
+                AnswerState::default()
+            );
+        }
+        // A failed delivery returns to Idle; an authoritative terminal result
+        // still wins, including over a locally successful answer.
+        assert!(answer_state(&Ask::Waiting, &Delivery::Idle, None).waiting);
+        for ask in [Ask::Declined, Ask::AnsweredInChat, Ask::Unanswered] {
+            assert_eq!(
+                answer_state(&ask, &Delivery::Idle, None),
+                AnswerState::default()
+            );
+            assert_eq!(
+                answer_state(
+                    &ask,
+                    &Delivery::Answered(Submission {
+                        summary: "A".into(),
+                        data: json!(1),
+                    }),
+                    None,
+                ),
+                AnswerState::default()
+            );
+        }
     }
 }

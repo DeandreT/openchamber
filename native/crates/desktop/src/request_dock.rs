@@ -24,7 +24,7 @@ use crate::workspace::Workspace;
 mod permission;
 
 #[derive(Clone, Copy)]
-enum Control {
+pub(crate) enum Control {
     Raised,
     /// A reply and the shortcut shown after its label.
     Permission(PermissionReply, Option<&'static str>),
@@ -75,7 +75,7 @@ fn permission_shortcut(decision: PermissionReply, names_patterns: bool) -> Optio
 /// against the window's content as the web reads its viewport.
 const SHORTCUT_MIN_WINDOW_WIDTH: f32 = 640.0;
 
-fn button(
+pub(crate) fn button(
     id: String,
     label: SharedString,
     enabled: bool,
@@ -382,6 +382,9 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Option<AnyElement> {
+        if self.native_dock_precedes_ordinary() {
+            return self.render_native_request_dock(palette, window, cx);
+        }
         let key = self.active_request()?;
         let entry = self.blocking.stores.get(&key.scope)?.get(&key)?;
         let id = identity(&key).to_owned();
@@ -571,6 +574,12 @@ impl Workspace {
             }
             return Some(panel.child(header).into_any_element());
         }
+        header = header.children(self.native_request_tabs(
+            matches!(key.id, RequestId::Permission(_)),
+            palette,
+            window,
+            cx,
+        ));
         if relevant.len() > 1 {
             header = header.child(
                 div()

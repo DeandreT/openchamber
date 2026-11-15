@@ -3,7 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use gpui_kit::{AnyWindowHandle, AppContext, Entity, TestAppContext};
+use gpui_kit::{AnyWindowHandle, AppContext, Entity, EntityInputHandler, TestAppContext};
 use openchamber_native_core::knowledge::Section;
 use serde_json::{Value, json};
 
@@ -55,7 +55,11 @@ impl Store {
                 let id = &todo["/todos/".len()..];
                 for stored in &mut self.todos {
                     if stored["id"] == json!(id) {
-                        stored["completed"] = body["completed"].clone();
+                        for key in ["completed", "text"] {
+                            if let Some(value) = body.get(key) {
+                                stored[key] = value.clone();
+                            }
+                        }
                     }
                 }
                 (200, self.context())
@@ -130,6 +134,179 @@ fn open_panel(
         })
         .expect("window is open");
     (window, panel, events)
+}
+
+#[gpui_kit::test]
+fn todo_edits_commit_once_preserve_metadata_and_revert_failed_writes(cx: &mut TestAppContext) {
+    let original = json!({"id": "t1", "text": "Original", "completed": true,
+        "createdAt": 7, "planId": "p1", "dependsOn": ["t0"]});
+    let (server, store) = serve(Store {
+        todos: vec![original.clone()],
+        ..Store::default()
+    });
+    let network = Network::new().expect("network runtime");
+    let (window, panel, _) = open_panel(cx, &server, &network);
+    wait(cx, |cx| cx.read(|cx| panel.read(cx).knowledge.is_some()));
+    cx.update_window(window, |_, window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.edit_todo("t1", window, cx);
+            let input = panel.todo_edit.as_ref().expect("editing").input.clone();
+            input.update(cx, |input, cx| {
+                input.set_value("  Revised\r\nשלום  ", window, cx)
+            });
+            panel.finish_todo_edit(&input, true, window, cx);
+            panel.finish_todo_edit(&input, true, window, cx);
+            let todo = &panel.knowledge.as_ref().expect("loaded").todos[0];
+            assert_eq!(todo.text, "Revised שלום");
+            assert!(todo.completed);
+            assert_eq!(todo.created_at, 7);
+            assert_eq!(todo.plan_id.as_deref(), Some("p1"));
+            assert_eq!(todo.depends_on, ["t0"]);
+        });
+    })
+    .expect("open window");
+    wait(cx, |cx| cx.read(|cx| panel.read(cx).todo_writes == 0));
+    assert_eq!(
+        server
+            .requests("PATCH", &format!("{}/todos/t1", base()))
+            .len(),
+        1
+    );
+    assert_eq!(
+        store.lock().expect("store").todos[0]["text"],
+        "Revised שלום"
+    );
+
+    store.lock().expect("store").fail_writes = true;
+    cx.update_window(window, |_, window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.edit_todo("t1", window, cx);
+            let input = panel.todo_edit.as_ref().expect("editing").input.clone();
+            input.update(cx, |input, cx| input.set_value("Rejected edit", window, cx));
+            panel.finish_todo_edit(&input, true, window, cx);
+            assert_eq!(
+                panel.knowledge.as_ref().expect("loaded").todos[0].text,
+                "Rejected edit"
+            );
+        });
+    })
+    .expect("open window");
+    wait(cx, |cx| {
+        cx.read(|cx| {
+            let panel = panel.read(cx);
+            panel.todo_writes == 0
+                && !panel.loading
+                && panel
+                    .knowledge
+                    .as_ref()
+                    .is_some_and(|k| k.todos[0].text == "Revised שלום")
+        })
+    });
+    assert!(cx.read(|cx| {
+        panel
+            .read(cx)
+            .toast
+            .as_ref()
+            .is_some_and(|toast| toast.error)
+    }));
+}
+
+#[gpui_kit::test]
+fn todo_editor_blur_commits_the_normalized_input(cx: &mut TestAppContext) {
+    let (server, store) = serve(Store {
+        todos: vec![json!({"id": "t1", "text": "Original", "createdAt": 1})],
+        ..Store::default()
+    });
+    let network = Network::new().expect("network runtime");
+    let (window, panel, _) = open_panel(cx, &server, &network);
+    wait(cx, |cx| cx.read(|cx| panel.read(cx).knowledge.is_some()));
+    let input = cx
+        .update_window(window, |_, window, cx| {
+            panel.update(cx, |panel, cx| {
+                panel.edit_todo("t1", window, cx);
+                let input = panel.todo_edit.as_ref().expect("editing").input.clone();
+                input.update(cx, |input, cx| {
+                    input.replace_text_in_range(Some(0..8), "  First\nsecond  ", window, cx);
+                });
+                input
+            })
+        })
+        .expect("open window");
+    cx.run_until_parked();
+    assert_eq!(
+        cx.read(|cx| input.read(cx).value().to_string()),
+        "  First second  "
+    );
+    cx.update(|cx| {
+        input.update(cx, |_, cx| {
+            cx.emit(gpui_kit::component::input::InputEvent::Blur);
+        })
+    });
+    wait(cx, |cx| {
+        cx.read(|cx| panel.read(cx).todo_edit.is_none() && panel.read(cx).todo_writes == 0)
+    });
+    assert_eq!(
+        store.lock().expect("store").todos[0]["text"],
+        "First second"
+    );
+    assert_eq!(
+        server
+            .requests("PATCH", &format!("{}/todos/t1", base()))
+            .len(),
+        1
+    );
+}
+
+#[gpui_kit::test]
+fn todo_edit_cancellation_composition_and_stale_inputs_make_no_writes(cx: &mut TestAppContext) {
+    let (server, _) = serve(Store {
+        todos: vec![json!({"id": "t1", "text": "Original", "createdAt": 1})],
+        ..Store::default()
+    });
+    let network = Network::new().expect("network runtime");
+    let (window, panel, _) = open_panel(cx, &server, &network);
+    wait(cx, |cx| cx.read(|cx| panel.read(cx).knowledge.is_some()));
+    cx.update_window(window, |_, window, cx| {
+        panel.update(cx, |panel, cx| {
+            for (value, commit) in [("Changed", false), ("  ", true), ("Original", true)] {
+                panel.edit_todo("t1", window, cx);
+                let input = panel.todo_edit.as_ref().expect("editing").input.clone();
+                input.update(cx, |input, cx| input.set_value(value, window, cx));
+                panel.finish_todo_edit(&input, commit, window, cx);
+                assert!(panel.todo_edit.is_none());
+            }
+            panel.edit_todo("t1", window, cx);
+            let old = panel.todo_edit.as_ref().expect("editing").input.clone();
+            old.update(cx, |input, cx| {
+                input.replace_and_mark_text_in_range(None, "仮", Some(0..1), window, cx)
+            });
+            panel.finish_todo_edit(&old, true, window, cx);
+            panel.finish_todo_edit(&old, false, window, cx);
+            assert!(panel.todo_edit.is_some(), "IME keys cannot finish the edit");
+            old.update(cx, |input, cx| input.unmark_text(window, cx));
+            panel.finish_todo_edit(&old, false, window, cx);
+            panel.edit_todo("t1", window, cx);
+            let current = panel.todo_edit.as_ref().expect("new edit").input.clone();
+            panel.finish_todo_edit(&old, true, window, cx);
+            assert_eq!(
+                panel.todo_edit.as_ref().expect("new edit stays").input,
+                current
+            );
+            panel.knowledge.as_mut().expect("loaded").todos.clear();
+            current.update(cx, |input, cx| {
+                input.set_value("Cannot recreate", window, cx)
+            });
+            panel.finish_todo_edit(&current, true, window, cx);
+            assert!(panel.todo_edit.is_none());
+        });
+    })
+    .expect("open window");
+    cx.run_until_parked();
+    assert!(
+        server
+            .requests("PATCH", &format!("{}/todos/t1", base()))
+            .is_empty()
+    );
 }
 
 #[gpui_kit::test]

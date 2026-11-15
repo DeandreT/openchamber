@@ -172,6 +172,9 @@ impl Workspace {
         if !self.persistence_ready() || self.close_in_progress() {
             return;
         }
+        if self.send_selection().is_none() {
+            return;
+        }
         let Some(session) = self.selected.clone() else {
             return;
         };
@@ -306,6 +309,11 @@ impl Workspace {
             || self.payload_prefix_blocks_session(&key.runtime, &key.session)
             || self.payload_local_send_blocks_session(&key.runtime, &key.session)
         {
+            return false;
+        }
+        if outgoing.model.as_ref().is_some_and(|model| {
+            !self.native_model_sendable(&key.runtime, owner.directory(), Some(&key.session), model)
+        }) {
             return false;
         }
         let Outgoing {

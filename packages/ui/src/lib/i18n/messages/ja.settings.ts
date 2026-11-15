@@ -6,6 +6,18 @@ import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 import { extensionPowersI18n } from './extension-powers.i18n';
 export const settingsDict = {
+  'settings.sessions.auxiliary.noDirectory': 'これらのモデルを選択するには、プロジェクトまたはチャットを開いてください。',
+  'settings.sessions.auxiliary.summary': '要約モデル',
+  'settings.sessions.auxiliary.title': 'タイトルモデル',
+  'settings.sessions.auxiliary.engineDefault': 'OpenCode の既定値',
+  'settings.sessions.auxiliary.info': 'OpenCode の組み込みエージェントに使う通常のテキストモデルを選択します。OpenCode の既定値を選ぶとモデルの上書きを解除します。',
+  'settings.sessions.auxiliary.privacy': 'OpenCode は会話の内容をここで選択したプロバイダーに送信する場合があります。プロバイダーポリシーは引き続き適用されます。',
+  'settings.sessions.auxiliary.projectSource': 'プロジェクト設定: {path}',
+  'settings.sessions.auxiliary.userSource': 'ユーザー設定: {path}',
+  'settings.sessions.auxiliary.newSource': 'モデルを明示的に選択すると、ユーザー用のエージェント設定を作成します。',
+  'settings.sessions.auxiliary.loading': 'エージェント設定を読み込み中...',
+  'settings.sessions.auxiliary.saveFailed': 'モデルを保存できませんでした。設定を更新してから再試行してください。',
+  'settings.sessions.auxiliary.catalogFailed': 'モデルまたはエージェント設定を読み込めませんでした。保存済みの選択は保持されます。再試行して更新してください。',
   'settings.openchamber.sessionRetention.field.archivedDescription': '保持期間はアーカイブ時点から数えます。期間を過ぎたセッションは削除されます。',
   'settings.openchamber.sessionRetention.field.unarchivedArchiveDescription': '保持期間はセッションの最終アクティビティから数えます。期間を過ぎたセッションはアーカイブされます。',
   'settings.openchamber.sessionRetention.field.unarchivedDeleteDescription': '保持期間はセッションの最終アクティビティから数えます。期間を過ぎたセッションは削除されます。',

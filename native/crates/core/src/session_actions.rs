@@ -86,7 +86,7 @@ impl SessionAction {
             Self::KeepWarm => "sessions.sidebar.session.menu.keepWarm",
             Self::StopWarm => "sessions.sidebar.session.menu.stopWarm",
             Self::ExportMarkdown => "sessions.sidebar.session.menu.exportMarkdown",
-            Self::MoveToWorktree => "sessions.sidebar.session.menu.moveToWorktreeTargets",
+            Self::MoveToWorktree => "sessions.sidebar.session.menu.moveTo",
             Self::MoveSession => "sessions.moveSession.menu",
             Self::OpenRunOverview => "sessions.sidebar.session.menu.openRunOverview",
             Self::MoveToFolder => "sessions.sidebar.folders.moveToFolder",

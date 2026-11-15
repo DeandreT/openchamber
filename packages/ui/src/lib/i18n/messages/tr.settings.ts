@@ -6,6 +6,18 @@ import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 import { extensionPowersI18n } from './extension-powers.i18n';
 export const settingsDict = {
+  'settings.sessions.auxiliary.noDirectory': 'Bu modelleri seçmek için bir proje veya sohbet açın.',
+  'settings.sessions.auxiliary.summary': 'Özet modeli',
+  'settings.sessions.auxiliary.title': 'Başlık modeli',
+  'settings.sessions.auxiliary.engineDefault': 'OpenCode varsayılanı',
+  'settings.sessions.auxiliary.info': 'Yerleşik OpenCode ajanı için normal bir metin modeli seçin. OpenCode varsayılanı, model geçersiz kılmasını kaldırır.',
+  'settings.sessions.auxiliary.privacy': 'OpenCode, konuşma içeriğini burada seçilen sağlayıcıya gönderebilir. Sağlayıcı ilkeleri geçerliliğini korur.',
+  'settings.sessions.auxiliary.projectSource': 'Proje yapılandırması: {path}',
+  'settings.sessions.auxiliary.userSource': 'Kullanıcı yapılandırması: {path}',
+  'settings.sessions.auxiliary.newSource': 'Açık bir seçim, kullanıcıya özel ajan yapılandırması oluşturur.',
+  'settings.sessions.auxiliary.loading': 'Ajan yapılandırması okunuyor...',
+  'settings.sessions.auxiliary.saveFailed': 'Model kaydedilemedi. Yeniden denemeden önce yapılandırmayı yenileyin.',
+  'settings.sessions.auxiliary.catalogFailed': 'Modeller veya ajan yapılandırması okunamadı. Kayıtlı seçimler korundu. Yenilemek için tekrar deneyin.',
   'settings.openchamber.sessionRetention.field.archivedDescription': 'Saklama süresi arşivleme anından itibaren sayılır. Süresi dolan oturumlar silinir.',
   'settings.openchamber.sessionRetention.field.unarchivedArchiveDescription': 'Saklama süresi oturumun son etkinliğinden itibaren sayılır. Süresi dolan oturumlar arşivlenir.',
   'settings.openchamber.sessionRetention.field.unarchivedDeleteDescription': 'Saklama süresi oturumun son etkinliğinden itibaren sayılır. Süresi dolan oturumlar silinir.',

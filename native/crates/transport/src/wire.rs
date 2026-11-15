@@ -176,6 +176,7 @@ pub(crate) struct ToolItem {
     pub name: String,
     pub state: ToolState,
     pub time: Option<ToolTime>,
+    pub executed: Option<bool>,
 }
 
 /// When a tool call was streamed, started running and finished.
@@ -492,6 +493,7 @@ pub(crate) struct ProviderInfo {
     pub id: String,
     pub name: Option<String>,
     pub activation: Option<String>,
+    pub settings: Option<Value>,
 }
 
 /// `GET /api/config`: every discovered config document and folder, lowest

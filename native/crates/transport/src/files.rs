@@ -561,6 +561,44 @@ impl ServerClient {
         )
         .await
     }
+
+    /// Managed Chats paths are authorized by the server independently of the
+    /// active project. The captured roots additionally restrict this client.
+    pub async fn create_chat_directory(
+        &self,
+        roots: &openchamber_native_core::chat_roots::ChatRoots,
+        directory: &str,
+    ) -> Result<(), FilesError> {
+        if roots.session_suffix(directory).is_none() {
+            return Err(FilesError::PermissionDenied);
+        }
+        expect_success(
+            self.authorized(Method::POST, self.endpoint().url("api/fs/mkdir"))
+                .json(&json!({ "path": directory })),
+        )
+        .await
+    }
+
+    /// Deletes one captured unsent Chat directory, never any shared root.
+    /// The caller must first establish that no draft or creation owns it.
+    pub async fn delete_chat_directory(
+        &self,
+        roots: &openchamber_native_core::chat_roots::ChatRoots,
+        directory: &str,
+    ) -> Result<(), FilesError> {
+        if roots.session_suffix(directory).is_none() {
+            return Err(FilesError::PermissionDenied);
+        }
+        match expect_success(
+            self.authorized(Method::POST, self.endpoint().url("api/fs/delete"))
+                .json(&json!({ "path": directory })),
+        )
+        .await
+        {
+            Err(FilesError::NotFound) => Ok(()),
+            result => result,
+        }
+    }
 }
 
 async fn files_json<T: DeserializeOwned>(request: RequestBuilder) -> Result<T, FilesError> {

@@ -89,6 +89,8 @@ pub enum AutoRouting {
 /// Model identifier parsing itself preserves whitespace, as the web parser does.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct SelectionDefaults {
+    /// A successful live model catalog has arrived for this directory.
+    pub catalog_loaded: bool,
     /// The project's default agent.
     pub project_default_agent: Option<String>,
     /// The project's default model identifier.
@@ -328,6 +330,17 @@ fn primary(agent: &AgentEntry) -> bool {
     agent.mode != Some(AgentMode::Subagent) && !agent.hidden
 }
 
+fn missing_from_catalog(
+    choice: &ModelChoice,
+    providers: &[CatalogProvider],
+    defaults: &SelectionDefaults,
+) -> bool {
+    defaults.catalog_loaded
+        && !providers.is_empty()
+        && !(choice.provider_id == "openchamber" && choice.model_id == "auto")
+        && find_model(providers, choice).is_none()
+}
+
 fn fallback_model(
     providers: &[CatalogProvider],
     defaults: &SelectionDefaults,
@@ -335,6 +348,7 @@ fn fallback_model(
     if let Some(choice) = nonempty(&defaults.last_selected_model).and_then(parse_identifier)
         && !hidden(defaults, &choice.provider_id, &choice.model_id)
         && !stale_auto(&choice, defaults.auto_routing)
+        && !missing_from_catalog(&choice, providers, defaults)
     {
         return Some(choice);
     }
@@ -398,20 +412,28 @@ pub fn resolve_default_selection(
         })
         .or_else(|| agents.iter().find(|agent| primary(agent)))
         .or_else(|| agents.first());
-    let configured = nonempty(&defaults.project_default_model)
-        .or_else(|| nonempty(&defaults.settings_default_model));
-    let model = configured
-        .and_then(parse_identifier)
-        .filter(|choice| !stale_auto(choice, defaults.auto_routing))
-        .map(|mut choice| {
-            choice.variant = if nonempty(&defaults.project_default_model).is_some() {
-                defaults.project_default_variant.clone()
-            } else {
-                defaults.settings_default_variant.clone()
-            };
-            let choice = validate_variant(choice, providers, defaults.auto_routing);
-            inherit_default_variant(choice, agent, providers, defaults)
-        });
+    let model = [
+        (
+            &defaults.project_default_model,
+            &defaults.project_default_variant,
+        ),
+        (
+            &defaults.settings_default_model,
+            &defaults.settings_default_variant,
+        ),
+    ]
+    .into_iter()
+    .find_map(|(identifier, variant)| {
+        let mut choice = nonempty(identifier).and_then(parse_identifier)?;
+        if stale_auto(&choice, defaults.auto_routing)
+            || missing_from_catalog(&choice, providers, defaults)
+        {
+            return None;
+        }
+        choice.variant = variant.clone();
+        let choice = validate_variant(choice, providers, defaults.auto_routing);
+        Some(inherit_default_variant(choice, agent, providers, defaults))
+    });
     if model.is_some() || !defaults.allow_fallback {
         return Selection {
             agent_name: agent
@@ -424,7 +446,12 @@ pub fn resolve_default_selection(
     let model = agent
         .and_then(|agent| agent.model.clone())
         .filter(|choice| !choice.provider_id.is_empty() && !choice.model_id.is_empty())
-        .or_else(|| nonempty(&defaults.opencode_default_model).and_then(parse_selection))
+        .filter(|choice| !missing_from_catalog(choice, providers, defaults))
+        .or_else(|| {
+            nonempty(&defaults.opencode_default_model)
+                .and_then(parse_selection)
+                .filter(|choice| !missing_from_catalog(choice, providers, defaults))
+        })
         .map(|choice| validate_variant(choice, providers, defaults.auto_routing))
         .or_else(|| fallback_model(providers, defaults))
         .map(|choice| inherit_default_variant(choice, agent, providers, defaults));

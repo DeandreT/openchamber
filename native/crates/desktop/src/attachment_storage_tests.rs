@@ -79,8 +79,8 @@ fn document() -> Vec<NormalizedAttachmentFile> {
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let path = PathBuf::from(format!(
-            "/tmp/opencode/attachment-storage-{}-{}",
+        let path = std::env::temp_dir().join(format!(
+            "attachment-storage-{}-{}",
             std::process::id(),
             NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
         ));

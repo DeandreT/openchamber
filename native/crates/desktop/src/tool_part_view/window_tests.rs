@@ -17,6 +17,54 @@ use crate::workspace_tests::open;
 
 const MESSAGE: &str = "msg_tool_rows";
 
+#[gpui_kit::test]
+fn expanded_plain_tool_output_is_accessible_until_collapsed(cx: &mut TestAppContext) {
+    let (window, workspace) = open(cx);
+    let output = "{\"records\":[{\"id\":\"synthetic-001\",\"status\":\"completed\"}]}";
+    let session = show_calls(window, &workspace, cx, |_| {
+        vec![call(
+            "call_inspect",
+            "synthetic_inspect",
+            ToolStatus::Completed,
+            Some(output),
+            ToolFacts::default(),
+        )]
+    });
+    cx.update_window(window, |_, window, cx| {
+        window.activate_accessibility_for_test();
+        window.render_frame(cx);
+    })
+    .expect("window is open");
+    let assert_output = |cx: &mut TestAppContext, expected: bool| {
+        cx.update_window(window, |_, window, cx| {
+            window.render_frame(cx);
+            let tree = window
+                .accessibility_tree_for_test()
+                .expect("accessible tool row");
+            let results: Vec<_> = tree
+                .nodes
+                .iter()
+                .filter(|(_, node)| node.label() == Some(output))
+                .collect();
+            assert_eq!(
+                results.len(),
+                usize::from(expected),
+                "only expanded output is exposed exactly once"
+            );
+            if expected {
+                assert_eq!(results[0].1.role(), gpui_kit::Role::Paragraph);
+            }
+        })
+        .expect("window is open");
+    };
+    assert_output(cx, false);
+    toggle(window, &workspace, &session, "call_inspect", cx);
+    assert!(shown(window, "tool:call_inspect:copy", cx));
+    assert_output(cx, true);
+    toggle(window, &workspace, &session, "call_inspect", cx);
+    assert_output(cx, false);
+}
+
 fn name(id: impl Into<String>) -> ElementId {
     ElementId::Name(SharedString::from(id.into()))
 }

@@ -231,6 +231,8 @@ impl Workspace {
     /// session's policy is not read here.
     pub(crate) fn permission_mode_interactive(&self) -> bool {
         !self.is_synthetic()
+            && self.native_permission_owner()
+                != Some(openchamber_native_core::native_agent::PermissionOwner::Native)
             && self
                 .selected
                 .as_ref()

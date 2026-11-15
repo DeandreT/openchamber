@@ -214,6 +214,8 @@ fn keys_move_the_selection_and_enter_runs_the_selected_command(cx: &mut TestAppC
 
 #[gpui_kit::test]
 fn a_click_on_a_session_row_opens_that_session(cx: &mut TestAppContext) {
+    // This test covers pointer activation at rest, independently of dialog entrance motion.
+    cx.update(|cx| cx.set_reduce_motion(true));
     let (window, workspace) = workspace_tests::open(cx);
     focus_composer(window, &workspace, cx);
     cx.update_window(window, |_, window, cx| {
@@ -236,6 +238,54 @@ fn a_click_on_a_session_row_opens_that_session(cx: &mut TestAppContext) {
     let session = SessionId::from(&key[SESSION_PREFIX.len()..]);
     cx.update_window(window, |_, window, cx| {
         window.render_frame(cx);
+        window.click(ElementId::Name(key.clone()), cx);
+    })
+    .expect("the workspace window is open");
+    cx.run_until_parked();
+    assert!(palette(&workspace, cx).is_none());
+    assert_eq!(
+        cx.read(|cx| workspace.read(cx).selected.clone()),
+        Some(session)
+    );
+}
+
+#[gpui_kit::test]
+fn a_click_on_a_session_row_with_default_motion_opens_that_session(cx: &mut TestAppContext) {
+    // The entrance animation reads the real clock, so wait it out instead of
+    // advancing the test clock.
+    cx.update(|cx| cx.set_reduce_motion(false));
+    let (window, workspace) = workspace_tests::open(cx);
+    focus_composer(window, &workspace, cx);
+    cx.update_window(window, |_, window, cx| {
+        assert!(
+            !cx.reduce_motion(),
+            "the production motion branch is enabled"
+        );
+        workspace.update(cx, |workspace, cx| {
+            workspace.toggle_command_palette(window, cx)
+        });
+    })
+    .expect("the workspace window is open");
+    cx.run_until_parked();
+    let rows = row_keys(&workspace, cx);
+    let sessions: Vec<&SharedString> = rows
+        .iter()
+        .filter(|key| key.starts_with(SESSION_PREFIX))
+        .collect();
+    assert!(
+        !sessions.is_empty() && sessions.len() <= 5,
+        "an empty query lists up to five recent sessions"
+    );
+    let key = sessions[sessions.len() - 1].clone();
+    let session = SessionId::from(&key[SESSION_PREFIX.len()..]);
+    std::thread::sleep(*gpui_kit::component::dialog::ANIMATION_DURATION);
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        let row = window.find(ElementId::Name(key.clone()));
+        let row_bounds = row.bounds();
+        let list_bounds = window.find("command-palette-list").bounds();
+        assert!(row.visible(), "the session row has visible observed bounds");
+        assert!(list_bounds.contains(&row_bounds.center()));
         window.click(ElementId::Name(key.clone()), cx);
     })
     .expect("the workspace window is open");

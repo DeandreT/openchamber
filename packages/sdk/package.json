@@ -42,6 +42,7 @@
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
   },
   "files": [
+    "fixtures/native-agent-v1.json",
     "dist",
     "scripts/bundle-guest.ts",
     "scripts/check-guest.ts",

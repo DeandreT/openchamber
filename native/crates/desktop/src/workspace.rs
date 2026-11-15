@@ -242,6 +242,9 @@ pub struct Workspace {
     pub(crate) general_close: Option<Task<()>>,
     /// The composer's catalogs and defaults; empty for synthetic data.
     pub(crate) send_catalog: SendCatalog,
+    pub(crate) native_agents: crate::native_agent::NativeAgentTasks,
+    pub(crate) native_requests: crate::native_request_dock::NativeRequests,
+    pub(crate) chat_drafts: crate::chat_draft::ChatDrafts,
     /// The workflow runs of the sessions on screen.
     pub(crate) workflow_runs: crate::workflow_runs::WorkflowRuns,
     /// The MCP servers of the directories being worked in.
@@ -252,6 +255,7 @@ pub struct Workspace {
     pub(crate) model_picker: crate::composer_picker::Picker,
     pub(crate) agent_picker: crate::composer_picker::Picker,
     pub(crate) effort_picker: crate::composer_picker::Picker,
+    pub(crate) native_mode_picker: crate::composer_picker::Picker,
     pub(crate) send_attempts: crate::send_attempt::SendAttempts,
     pub(crate) blocking: crate::blocking_requests::BlockingRequests,
     pub(crate) permission_modes: crate::permission_modes::PermissionModes,
@@ -425,6 +429,9 @@ impl Workspace {
             appearance_close: None,
             general_close: None,
             send_catalog: SendCatalog::default(),
+            native_agents: crate::native_agent::NativeAgentTasks::default(),
+            native_requests: crate::native_request_dock::NativeRequests::default(),
+            chat_drafts: crate::chat_draft::ChatDrafts::default(),
             workflow_runs: Default::default(),
             mcp_status: Default::default(),
             effort_preferences: Default::default(),
@@ -443,6 +450,11 @@ impl Workspace {
             ),
             effort_picker: crate::composer_picker::Picker::new(
                 crate::composer_picker::PickerKind::Effort,
+                window,
+                cx,
+            ),
+            native_mode_picker: crate::composer_picker::Picker::new(
+                crate::composer_picker::PickerKind::NativeMode,
                 window,
                 cx,
             ),
@@ -708,6 +720,9 @@ impl Workspace {
     }
 
     pub(crate) fn new_session_draft_key(&self) -> Option<DraftKey> {
+        if self.chat_draft_open() {
+            return self.chat_draft_key();
+        }
         let directory = self.draft_projects.get(&self.runtime);
         DraftKey::new(
             self.runtime.clone(),
@@ -744,6 +759,11 @@ impl Workspace {
             return;
         }
         self.save_composer_draft(cx);
+        self.chat_drafts.close(&self.runtime);
+        self.remember_draft_destination(
+            &openchamber_native_core::chat_draft::DraftDestination::Project(directory.to_owned()),
+            cx,
+        );
         self.draft_projects
             .insert(self.runtime.clone(), directory.to_owned());
         self.navigation_revision = self.navigation_revision.wrapping_add(1);

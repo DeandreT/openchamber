@@ -12,6 +12,8 @@
 //! binding. Every signal re-reads the target's identity right before it is
 //! sent and refuses a process whose start time no longer matches.
 
+#![cfg(unix)]
+
 use std::collections::HashMap;
 use std::fs;
 use std::io;

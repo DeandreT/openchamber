@@ -29,6 +29,7 @@ compass-3
 donut-chart
 edit
 star
+sun
 star-fill
 github-fill
 discord-fill
@@ -56,6 +57,7 @@ linear
 loader-4
 menu-2
 mic
+moon
 more
 more-2
 node-tree
@@ -188,7 +190,7 @@ more-fill
 gift
 arrow-up-down
 checkbox-multiple
-donut-chart-fill
+pie-chart
 slash-commands-2
 restart
 layout-right

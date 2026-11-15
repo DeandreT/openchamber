@@ -6,6 +6,18 @@ import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 import { extensionPowersI18n } from './extension-powers.i18n';
 export const settingsDict = {
+  'settings.sessions.auxiliary.noDirectory': 'Open een project of chat om deze modellen te kiezen.',
+  'settings.sessions.auxiliary.summary': 'Samenvattingsmodel',
+  'settings.sessions.auxiliary.title': 'Titelmodel',
+  'settings.sessions.auxiliary.engineDefault': 'OpenCode-standaard',
+  'settings.sessions.auxiliary.info': 'Kies een gewoon tekstmodel voor de ingebouwde OpenCode-agent. OpenCode-standaard verwijdert de modeloverschrijving.',
+  'settings.sessions.auxiliary.privacy': 'OpenCode kan gespreksinhoud naar de hier gekozen provider sturen. Providerbeleid blijft van toepassing.',
+  'settings.sessions.auxiliary.projectSource': 'Projectconfiguratie: {path}',
+  'settings.sessions.auxiliary.userSource': 'Gebruikersconfiguratie: {path}',
+  'settings.sessions.auxiliary.newSource': 'Een expliciete keuze maakt een gebruikersoverschrijving voor de agent.',
+  'settings.sessions.auxiliary.loading': 'Agentconfiguratie lezen...',
+  'settings.sessions.auxiliary.saveFailed': 'Model opslaan mislukt. Vernieuw de configuratie voordat je het opnieuw probeert.',
+  'settings.sessions.auxiliary.catalogFailed': 'Modellen of agentconfiguratie konden niet worden gelezen. Opgeslagen keuzes blijven behouden. Probeer opnieuw om te vernieuwen.',
   'settings.openchamber.sessionRetention.field.archivedDescription': 'Telt de bewaartermijn vanaf het archiveren. Verlopen sessies worden verwijderd.',
   'settings.openchamber.sessionRetention.field.unarchivedArchiveDescription': 'Telt de bewaartermijn vanaf de laatste activiteit van de sessie. Verlopen sessies worden gearchiveerd.',
   'settings.openchamber.sessionRetention.field.unarchivedDeleteDescription': 'Telt de bewaartermijn vanaf de laatste activiteit van de sessie. Verlopen sessies worden verwijderd.',

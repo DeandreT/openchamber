@@ -28,6 +28,25 @@ enum CreatedAction {
     Dispatch(Vec<RequestKey>, Vec<MessageId>),
 }
 
+fn native_creation_identity_matches(attempt: &CreateAttempt, session: &SessionRecord) -> bool {
+    if !attempt
+        .native_config
+        .as_ref()
+        .is_some_and(|config| config.prepare_after_session)
+    {
+        return true;
+    }
+    attempt.request.agent().is_some()
+        && session.agent.as_deref() == attempt.request.agent()
+        && attempt
+            .request
+            .model()
+            .zip(session.model.as_ref())
+            .is_some_and(|(expected, actual)| {
+                expected.provider_id == actual.provider_id && expected.model_id == actual.model_id
+            })
+}
+
 /// Auto always goes through OpenChamber's intercepted selection route. Ordinary
 /// unchanged agent selections are omitted because OpenCode adds a notice for each.
 pub(crate) fn first_prompt_selection(prompt: &Prompt, session: &SessionRecord) -> Prompt {
@@ -46,23 +65,55 @@ pub(crate) fn first_prompt_selection(prompt: &Prompt, session: &SessionRecord) -
 
 impl Workspace {
     pub(crate) fn can_create_connected(&self) -> bool {
-        if self.selected.is_some() || !self.persistence_ready() || self.close_in_progress() {
-            return false;
-        }
         let Some(owner) = self.composer_key.as_ref() else {
             return false;
         };
+        self.can_create_draft(owner)
+            && self.send_selection().is_some_and(|(directory, selection)| {
+                (self.chat_draft_open() || directory == owner.directory())
+                    && selection.model.is_some()
+            })
+    }
+
+    /// A retained activation keeps its selection while the composer accepts
+    /// independent choices. Creation still requires the original draft on screen.
+    pub(crate) fn can_create_starter(
+        &self,
+        capture: &crate::starter_capture::StarterCapture,
+    ) -> bool {
+        let owner = &capture.owner;
+        self.can_create_draft(owner)
+            && (if self.is_chat_creation(owner) {
+                capture.project == openchamber_native_core::chat_draft::CHAT_PROJECT_ID
+            } else {
+                self.draft_destination_project(owner.directory())
+                    .is_some_and(|project| project.id.as_str() == capture.project)
+            })
+            && capture.selection.model.as_ref().is_some_and(|model| {
+                self.native_model_sendable(owner.runtime(), owner.directory(), None, model)
+            })
+    }
+
+    fn can_create_draft(&self, owner: &DraftKey) -> bool {
+        if !self.new_session_view_active()
+            || self.composer_key.as_ref() != Some(owner)
+            || !self.persistence_ready()
+            || self.close_in_progress()
+        {
+            return false;
+        }
         owner.runtime() == &self.runtime
             && matches!(owner.target(), DraftTarget::NewSession(_))
-            && self
-                .draft_projects
-                .get(&self.runtime)
-                .is_some_and(|directory| directory == owner.directory())
-            && self.draft_destination_project(owner.directory()).is_some()
-            && self.creations.can_begin(owner)
-            && self.send_selection().is_some_and(|(directory, selection)| {
-                directory == owner.directory() && selection.model.is_some()
+            && (if self.chat_draft_open() {
+                self.chat_creation_ready(owner)
+                    && self.chat_prepared_directory().as_deref() == Some(owner.directory())
+            } else {
+                self.draft_projects
+                    .get(&self.runtime)
+                    .is_some_and(|directory| directory == owner.directory())
+                    && self.draft_destination_project(owner.directory()).is_some()
             })
+            && self.creations.can_begin(owner)
             && self.connection.as_ref().is_some_and(|connection| {
                 matches!(connection.state, ConnectionState::Connected)
                     && connection.client.is_some()
@@ -82,7 +133,19 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> bool {
-        if !self.can_create_connected() {
+        if starter.is_none() && self.chat_draft_open() && self.chat_prepared_directory().is_none() {
+            self.prepare_chat_draft(window, cx);
+            return false;
+        }
+        let eligible = match starter.as_ref() {
+            Some(starter) => self
+                .starters
+                .captures
+                .get(&starter.capture_id)
+                .is_some_and(|capture| self.can_create_starter(capture)),
+            None => self.can_create_connected(),
+        };
+        if !eligible {
             return false;
         }
         let Some(source) = self.composer_key.clone() else {
@@ -91,53 +154,90 @@ impl Workspace {
         if starter.is_none() && !self.starters.captures.can_begin(&source) {
             return false;
         }
-        let Some(project) = self.draft_destination_project(source.directory()) else {
-            return false;
-        };
-        let project = project.id.to_string();
-        let from_starter = starter.is_some();
-        let (draft, prompt_text, parts, selection, permission_mode, capture_id, effort) =
-            match starter {
-                // A definite failure gives back what the chip submitted, as the
-                // web restores `presetText`. All content and configuration belong
-                // to the activation, independently of the now-current composer.
-                Some(starter) => {
-                    let Some(capture) = self
-                        .starters
-                        .captures
-                        .get(&starter.capture_id)
-                        .filter(|capture| capture.owner == source && capture.project == project)
-                    else {
-                        return false;
-                    };
-                    (
-                        starter.draft,
-                        starter.prompt_text,
-                        starter.parts,
-                        capture.selection.clone(),
-                        capture.permission_mode,
-                        Some(starter.capture_id),
-                        starter.effort,
-                    )
-                }
-                None => {
-                    let Some((_, selection)) = self.send_selection() else {
-                        return false;
-                    };
-                    let draft = self.composer_draft(cx);
-                    let text = draft.text.clone();
-                    let effort = selection
-                        .model
-                        .as_ref()
-                        .map(|model| self.capture_user_effort(model));
-                    let Ok(parts) = self.capture_draft_parts(&source, &draft) else {
-                        self.notify_mutation_failure("chat.nativeRecovery.sendFailed", window, cx);
-                        return false;
-                    };
-                    (draft, text, parts, selection, None, None, effort)
-                }
+        let project = if self.is_chat_creation(&source) {
+            openchamber_native_core::chat_draft::CHAT_PROJECT_ID.to_owned()
+        } else {
+            let Some(project) = self.draft_destination_project(source.directory()) else {
+                return false;
             };
+            project.id.to_string()
+        };
+        let from_starter = starter.is_some();
+        let (
+            draft,
+            prompt_text,
+            parts,
+            selection,
+            permission_mode,
+            capture_id,
+            effort,
+            starter_native_config,
+        ) = match starter {
+            // A definite failure gives back what the chip submitted, as the
+            // web restores `presetText`. All content and configuration belong
+            // to the activation, independently of the now-current composer.
+            Some(starter) => {
+                let Some(capture) = self
+                    .starters
+                    .captures
+                    .get(&starter.capture_id)
+                    .filter(|capture| capture.owner == source && capture.project == project)
+                else {
+                    return false;
+                };
+                (
+                    starter.draft,
+                    starter.prompt_text,
+                    starter.parts,
+                    capture.selection.clone(),
+                    capture.permission_mode,
+                    Some(starter.capture_id),
+                    starter.effort,
+                    starter.native_config,
+                )
+            }
+            None => {
+                let Some((_, selection)) = self.send_selection() else {
+                    return false;
+                };
+                let draft = self.composer_draft(cx);
+                let text = draft.text.clone();
+                let effort = selection
+                    .model
+                    .as_ref()
+                    .map(|model| self.capture_user_effort(model));
+                let Ok(parts) = self.capture_draft_parts(&source, &draft) else {
+                    self.notify_mutation_failure("chat.nativeRecovery.sendFailed", window, cx);
+                    return false;
+                };
+                (draft, text, parts, selection, None, None, effort, None)
+            }
+        };
         if !draft.has_sendable_content() {
+            return false;
+        }
+        let native_config = if from_starter {
+            starter_native_config
+        } else {
+            selection
+                .model
+                .as_ref()
+                .and_then(|model| self.capture_native_creation(model))
+        };
+        if native_config
+            .as_ref()
+            .is_some_and(|config| config.prepare_after_session)
+            && selection.agent_name.is_none()
+        {
+            return false;
+        }
+        if selection.model.as_ref().is_some_and(|model| {
+            self.native_owner_key(&model.provider_id)
+                .is_some_and(|key| self.native_agents.owner.state(&key).is_some())
+        }) && native_config
+            .as_ref()
+            .is_none_or(|capture| !capture.validate())
+        {
             return false;
         }
         let id = self.session_ids.next();
@@ -157,12 +257,14 @@ impl Workspace {
             runtime: self.runtime.clone(),
             session: id,
         };
+        let native_creation = native_config.is_some();
         let attempt = CreateAttempt {
             source: source.clone(),
             project,
             request,
             draft: draft.clone(),
             resources: crate::attachment_preparation::prepared_resources(&draft),
+            native_config,
             prompt: Prompt {
                 message_id,
                 text: prompt_text,
@@ -181,6 +283,7 @@ impl Workspace {
             }
             return false;
         }
+        self.handoff_chat_directory(&source);
         if let Some(goal) = goal {
             self.goals.created.insert(effort_id.clone(), goal);
         }
@@ -190,7 +293,9 @@ impl Workspace {
         }
         // The draft's own permission choice goes with its session; the next
         // draft starts from the Settings default again.
-        let permission_mode = if from_starter {
+        let permission_mode = if native_creation {
+            None
+        } else if from_starter {
             permission_mode
         } else {
             self.permission_modes.drafts.remove(&key.runtime)
@@ -336,7 +441,7 @@ impl Workspace {
                     match result {
                         Some(Ok(session)) => {
                             this.creations.phase(&key, CreationPhase::Confirmed);
-                            this.bind_created_session(
+                            this.continue_created_session(
                                 &key,
                                 session,
                                 client,
@@ -368,6 +473,9 @@ impl Workspace {
     }
 
     fn creation_project_registered(&self, attempt: &CreateAttempt) -> bool {
+        if attempt.project == openchamber_native_core::chat_draft::CHAT_PROJECT_ID {
+            return self.is_chat_creation(&attempt.source);
+        }
         self.draft_destination_project(attempt.request.directory())
             .is_some_and(|project| project.id.as_str() == attempt.project)
     }
@@ -453,7 +561,7 @@ impl Workspace {
                     Some(Ok(SessionObservation::Found(session))) => {
                         this.creations.phase(&key, CreationPhase::Confirmed);
                         if retry {
-                            this.bind_created_session(
+                            this.continue_created_session(
                                 &key,
                                 *session,
                                 client,
@@ -542,7 +650,10 @@ impl Workspace {
         self.creation_tasks.insert(task_key, task);
     }
 
-    fn bind_created_session(
+    /// The accepted first Send already owns a durable capture. Publish and save
+    /// the real session before any session-first provider preparation. Restored
+    /// attempts reach this method only through an explicit recovery retry.
+    fn continue_created_session(
         &mut self,
         key: &SessionKey,
         session: SessionRecord,
@@ -552,12 +663,217 @@ impl Workspace {
         context: (&mut Window, &mut Context<Self>),
     ) {
         let (window, cx) = context;
+        let Some(attempt) = self.creations.get(key).cloned() else {
+            return;
+        };
+        let Some(config) = attempt
+            .native_config
+            .as_ref()
+            .filter(|config| config.prepare_after_session)
+        else {
+            self.bind_created_session(key, session, client, executor, requests, (window, cx));
+            return;
+        };
+        if !native_creation_identity_matches(&attempt, &session) {
+            self.creations
+                .checks
+                .insert(key.clone(), CreationCheck::Mismatch);
+            return;
+        }
+        if config.correction_required {
+            if self.selected.as_ref() != Some(&key.session) {
+                // Reveal the pending session's choices first. A retry on another
+                // composer must not accept a configuration the user cannot see.
+                self.select_session(key.session.clone(), window, cx);
+                return;
+            }
+            if self
+                .catalog_selection()
+                .and_then(|(_, selection)| selection.model)
+                .is_none_or(|model| model.provider_id != config.provider_id)
+            {
+                return;
+            }
+            let owner = openchamber_native_core::native_agent::OwnerKey {
+                server: key.runtime.as_str().to_owned(),
+                scope: openchamber_native_core::native_agent::Scope {
+                    directory: attempt.source.directory().to_owned(),
+                    provider_id: config.provider_id.clone(),
+                    session_id: Some(key.session.to_string()),
+                },
+            };
+            if !self.native_agents.owner.can_set_config(&owner) {
+                // An explicit retry may first recover the current config-only
+                // snapshot. It does not accept undisplayed corrections or send.
+                self.bind_created_session(key, session, client, executor, requests, (window, cx));
+                return;
+            }
+            let Some(state) = self.native_agents.owner.state(&owner) else {
+                return;
+            };
+            let complete = state.config_complete;
+            let choices = state
+                .config
+                .iter()
+                .map(|field| (field.id.clone(), field.value.clone()))
+                .collect();
+            if !self.creations.correct_native_config(key, choices, complete) {
+                return;
+            }
+        }
+        let owner = openchamber_native_core::native_agent::OwnerKey {
+            server: key.runtime.as_str().to_owned(),
+            scope: openchamber_native_core::native_agent::Scope {
+                directory: attempt.source.directory().to_owned(),
+                provider_id: config.provider_id.clone(),
+                session_id: Some(key.session.to_string()),
+            },
+        };
+        let ready = self.native_agents.owner.can_set_config(&owner)
+            && self.native_agents.owner.state(&owner).is_some_and(|state| {
+                state.status == openchamber_native_core::native_agent::Status::Ready
+                    && state.config_complete
+                    && state.authentication
+                        == openchamber_native_core::native_agent::Authentication::Authenticated
+            });
+        self.suspend_native_creation(&owner, ready);
+        if key.runtime == self.runtime {
+            self.save_composer_draft(cx);
+            let update = self
+                .sessions
+                .apply([SessionChange::Created(session.clone())]);
+            self.after_index_update(update, window, cx);
+            if attempt.navigation == Some(self.navigation_revision)
+                && self.composer_key.as_ref() == Some(&attempt.source)
+                && self.drafts.get(&attempt.source).is_none()
+            {
+                self.select_session(key.session.clone(), window, cx);
+            }
+        }
+        let Some((stamp, saved)) = self.persistence_barrier(cx) else {
+            return;
+        };
+        let key = key.clone();
+        let task_key = key.clone();
+        let task = cx.spawn_in(window, async move |this, cx| {
+            let saved = saved
+                .await
+                .unwrap_or(Err(crate::journal_worker::JournalFailure::WorkerStopped));
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.creation_tasks.remove(&key);
+                if this.record_persistence(stamp, &saved, cx) && this.persistence_ready() {
+                    this.bind_created_session(
+                        &key,
+                        session,
+                        client,
+                        executor,
+                        requests,
+                        (window, cx),
+                    );
+                }
+            });
+        });
+        self.creation_tasks.insert(task_key, task);
+    }
+
+    /// Native RPC/event continuations require a fresh real-session identity.
+    /// This does not accept configuration corrections or replay a creation.
+    pub(crate) fn resume_native_created_session(
+        &mut self,
+        key: &SessionKey,
+        client: ServerClient,
+        executor: tokio::runtime::Handle,
+        requests: Vec<RequestKey>,
+        context: (&mut Window, &mut Context<Self>),
+    ) {
+        let (window, cx) = context;
+        if self.creation_tasks.contains_key(key)
+            || key.runtime != self.runtime
+            || !self.persistence_ready()
+        {
+            return;
+        }
+        let Some(attempt) = self
+            .creations
+            .get(key)
+            .filter(|attempt| attempt.phase == CreationPhase::Confirmed)
+        else {
+            return;
+        };
+        let directory = attempt.source.directory().to_owned();
+        let session = key.session.clone();
+        let captured = client.clone();
+        let lookup = NetworkTask::spawn_on(&executor, async move {
+            captured.lookup_session(&session, &directory).await
+        });
+        let key = key.clone();
+        let task_key = key.clone();
+        let task = cx.spawn_in(window, async move |this, cx| {
+            let result = lookup.await;
+            let _ = this.update_in(cx, |this, window, cx| {
+                this.creation_tasks.remove(&key);
+                if this
+                    .creations
+                    .get(&key)
+                    .is_none_or(|attempt| attempt.phase != CreationPhase::Confirmed)
+                {
+                    return;
+                }
+                match result {
+                    Some(Ok(SessionObservation::Found(session))) => {
+                        this.bind_created_session(
+                            &key,
+                            *session,
+                            client,
+                            executor,
+                            requests,
+                            (window, cx),
+                        );
+                    }
+                    Some(Ok(SessionObservation::NotObserved)) => {
+                        this.mark_creation_deleted(&key, cx)
+                    }
+                    _ => {
+                        this.creations.checks.insert(key, CreationCheck::Failed);
+                    }
+                }
+                cx.notify();
+            });
+        });
+        self.creation_tasks.insert(task_key, task);
+    }
+
+    pub(crate) fn bind_created_session(
+        &mut self,
+        key: &SessionKey,
+        session: SessionRecord,
+        client: ServerClient,
+        executor: tokio::runtime::Handle,
+        requests: Vec<RequestKey>,
+        context: (&mut Window, &mut Context<Self>),
+    ) {
+        let (window, cx) = context;
+        if !self.send_attempts.can_send(key) {
+            return;
+        }
         let Some(attempt) = self
             .creations
             .get(key)
             .filter(|attempt| attempt.phase == CreationPhase::Confirmed)
             .cloned()
         else {
+            return;
+        };
+        if !native_creation_identity_matches(&attempt, &session) {
+            self.creations
+                .checks
+                .insert(key.clone(), CreationCheck::Mismatch);
+            return;
+        }
+        if !self.prepare_native_created_session(key, &client, &executor, &requests, (window, cx)) {
+            return;
+        }
+        let Some(attempt) = self.creations.get(key).cloned() else {
             return;
         };
         if !self.send_attempts.can_send(key) {
@@ -577,9 +893,8 @@ impl Workspace {
         let dispatched = first_prompt_selection(&attempt.prompt, &session);
         let selection_owner = openchamber_native_core::composer_selection::SelectionOwner {
             draft: owner.clone(),
-            project: Some(openchamber_native_core::ids::ProjectId::from(
-                attempt.project.clone(),
-            )),
+            project: (attempt.project != openchamber_native_core::chat_draft::CHAT_PROJECT_ID)
+                .then(|| openchamber_native_core::ids::ProjectId::from(attempt.project.clone())),
         };
         let selection = openchamber_native_core::send_config::Selection {
             model: attempt.prompt.model.clone(),
@@ -601,6 +916,7 @@ impl Workspace {
                 attempt.prompt.text.clone(),
             )],
         };
+        let native_creation = attempt.native_config.is_some();
         let send = SendAttempt {
             origin: SendOrigin::Created,
             owner,
@@ -639,16 +955,22 @@ impl Workspace {
             {
                 self.select_session(key.session.clone(), window, cx);
             }
+            if attempt.project == openchamber_native_core::chat_draft::CHAT_PROJECT_ID {
+                self.reveal_created_chat_section(window, cx);
+            }
         }
+        self.renew_chat_folder(&key.runtime, &attempt.source, window, cx);
         // Like the web's `finishDraftSession`, the mode write runs beside the
         // first send and never waits for or reorders it.
-        self.write_created_permission_mode(
-            key,
-            attempt.request.directory(),
-            client.clone(),
-            &executor,
-            (window, cx),
-        );
+        if !native_creation {
+            self.write_created_permission_mode(
+                key,
+                attempt.request.directory(),
+                client.clone(),
+                &executor,
+                (window, cx),
+            );
+        }
         // This barrier snapshots creation removal and the session-owned attempt
         // together. A failed write retains the message without issuing a prompt.
         self.start_created_send(
@@ -665,6 +987,39 @@ impl Workspace {
             executor,
             (window, cx),
         );
+    }
+
+    /// Use the retained settings writer after this workspace mutation releases
+    /// its borrow. The reveal belongs only to the runtime that created the chat.
+    fn reveal_created_chat_section(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self
+            .send_catalog
+            .settings
+            .as_ref()
+            .is_none_or(|settings| settings.show_chats != Some(false))
+        {
+            return;
+        }
+        let settings = self.ensure_settings_model(window, cx);
+        let general = settings.read(cx).general.clone();
+        let owner = cx.weak_entity();
+        let runtime = self.runtime.clone();
+        cx.defer(move |cx| {
+            let Some(owner) = owner.upgrade() else {
+                return;
+            };
+            if owner.read(cx).runtime != runtime {
+                return;
+            }
+            general.update(cx, |general, cx| {
+                general.refresh(cx);
+                general.change(
+                    crate::general_settings::SHOW_CHATS,
+                    crate::general_settings::Choice::Boolean(true),
+                    cx,
+                );
+            });
+        });
     }
 
     pub(crate) fn mark_creation_deleted(&mut self, key: &SessionKey, cx: &mut Context<Self>) {

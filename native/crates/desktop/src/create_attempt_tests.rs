@@ -3,6 +3,107 @@ use openchamber_native_core::draft::DraftTarget;
 use openchamber_native_core::ids::{DraftId, MessageId, RuntimeId, SessionId};
 use openchamber_native_core::send_config::ModelChoice;
 
+#[test]
+fn session_first_correction_is_explicit_and_preserves_the_captured_first_message() {
+    let (key, mut attempt) = sample();
+    attempt.phase = CreationPhase::Confirmed;
+    attempt.native_config = Some(crate::native_agent::CreationConfig {
+        provider_id: "native-provider".into(),
+        model_id: "captured-route".into(),
+        variant: None,
+        prepare_after_session: true,
+        correction_required: false,
+        config: vec![("retired-field".into(), "retired-value".into())],
+    });
+    attempt
+        .prompt
+        .parts
+        .files
+        .push(openchamber_native_transport::prompt_parts::PromptFile {
+            uri: "file:///project/captured.txt".into(),
+            name: Some("captured.txt".into()),
+        });
+    let before = attempt.clone();
+    let mut attempts = CreateAttempts::default();
+    assert!(attempts.insert(key.clone(), attempt));
+    let corrected = vec![("live-field".into(), "accepted-choice".into())];
+    assert!(
+        !attempts.correct_native_config(&key, corrected.clone(), true),
+        "ordinary updates cannot rewrite accepted intent"
+    );
+    assert!(attempts.require_native_correction(&key));
+    assert!(attempts.correct_native_config(&key, corrected.clone(), true));
+    let held = attempts.get(&key).expect("attempt");
+    assert_eq!(
+        held.native_config.as_ref().expect("native config").config,
+        corrected
+    );
+    assert_eq!(held.request, before.request);
+    assert_eq!(held.source, before.source);
+    assert_eq!(held.prompt.message_id, before.prompt.message_id);
+    assert_eq!(held.prompt.text, before.prompt.text);
+    assert_eq!(held.prompt.parts.files, before.prompt.parts.files);
+    assert_eq!(held.prompt.agent, before.prompt.agent);
+    assert_eq!(held.prompt.model, before.prompt.model);
+    assert_eq!(held.resources, before.resources);
+    let restored = CreateAttempts::restore(attempts.snapshot());
+    assert!(restored.get(&key).expect("attempt").navigation.is_none());
+    assert_eq!(
+        restored.get(&key).expect("attempt").native_config,
+        held.native_config
+    );
+    assert!(attempts.require_native_correction(&key));
+    assert!(attempts.correct_native_config(&key, Vec::new(), false));
+    assert_eq!(
+        attempts
+            .get(&key)
+            .expect("test fixture")
+            .native_config
+            .as_ref()
+            .expect("test fixture")
+            .config,
+        corrected,
+        "a later partial/empty snapshot cannot clear previously accepted choices"
+    );
+}
+
+#[test]
+fn session_first_preparation_correction_keeps_still_unknown_captured_pairs() {
+    let (key, mut attempt) = sample();
+    attempt.phase = CreationPhase::Confirmed;
+    attempt.native_config = Some(crate::native_agent::CreationConfig {
+        provider_id: "native-provider".into(),
+        model_id: "route".into(),
+        variant: None,
+        prepare_after_session: true,
+        correction_required: true,
+        config: vec![
+            ("runtime".into(), "old".into()),
+            ("not-discovered".into(), "frozen-choice".into()),
+        ],
+    });
+    let mut attempts = CreateAttempts::default();
+    assert!(attempts.insert(key.clone(), attempt));
+    assert!(attempts.correct_native_config(
+        &key,
+        vec![("runtime".into(), "corrected".into())],
+        false
+    ));
+    assert_eq!(
+        attempts
+            .get(&key)
+            .expect("test fixture")
+            .native_config
+            .as_ref()
+            .expect("test fixture")
+            .config,
+        vec![
+            ("not-discovered".into(), "frozen-choice".into()),
+            ("runtime".into(), "corrected".into())
+        ]
+    );
+}
+
 pub(crate) fn sample() -> (SessionKey, CreateAttempt) {
     let key = SessionKey {
         runtime: RuntimeId::from("creation-runtime"),
@@ -39,6 +140,7 @@ pub(crate) fn sample() -> (SessionKey, CreateAttempt) {
             request,
             draft: draft.clone(),
             resources: Vec::new(),
+            native_config: None,
             prompt: Prompt {
                 message_id: MessageId::from("msg_creation123"),
                 text: draft.text,

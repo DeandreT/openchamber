@@ -224,6 +224,26 @@ incomplete while its adapter or framework support is resolved. Removing the
 behavior or changing its design requires the user's decision. Performance gains
 cannot waive a parity failure.
 
+## Visual pull request contract
+
+Every pull request that changes the Rust desktop's rendered appearance includes
+before-and-after screenshots in its description. Capture Before from the PR's
+base revision and After from its final candidate, using the same synthetic
+scenario, window size, display scale, theme, locale, fonts and interaction state.
+Label each pair with its scenario, platform and source revisions. For a new
+feature, Before shows the existing screen where the feature is added.
+
+Include pairs for each affected visual state and configuration required by this
+method. Electron reference captures remain part of parity qualification; they do
+not replace the Rust Before capture. Recordings may supplement the screenshots
+for motion and interaction. Refresh After when later edits change the appearance.
+
+Attach or link the images in the PR description using the repository's evidence
+upload workflow. Keep raw captures outside deliverable source, with synthetic
+data and no credentials. A visual PR with either screenshot missing stays
+incomplete until both are attached and reviewed. Capture failures remain explicit
+blockers; mockups and generated images cannot stand in for running-app evidence.
+
 ## Evidence and references
 
 Each private run report contains the baseline/candidate and tool identities,

@@ -20,6 +20,7 @@ pub(crate) fn tool_facts(
     error: Option<String>,
 ) -> ToolFacts {
     ToolFacts {
+        execution: None,
         input: input.map(read_input).unwrap_or_default(),
         metadata: metadata.map(read_metadata).unwrap_or_default(),
         error,

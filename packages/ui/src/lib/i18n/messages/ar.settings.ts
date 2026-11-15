@@ -6,6 +6,18 @@ import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 import { extensionPowersI18n } from './extension-powers.i18n';
 export const settingsDict = {
+  'settings.sessions.auxiliary.noDirectory': 'افتح مشروعًا أو محادثة لاختيار هذه النماذج.',
+  'settings.sessions.auxiliary.summary': 'نموذج التلخيص',
+  'settings.sessions.auxiliary.title': 'نموذج العناوين',
+  'settings.sessions.auxiliary.engineDefault': 'إعداد OpenCode الافتراضي',
+  'settings.sessions.auxiliary.info': 'اختر نموذج نص عاديًا لوكيل OpenCode المدمج. يزيل إعداد OpenCode الافتراضي تجاوز النموذج.',
+  'settings.sessions.auxiliary.privacy': 'قد يرسل OpenCode محتوى المحادثة إلى المزوّد المحدد هنا. تظل سياسات المزوّدين سارية.',
+  'settings.sessions.auxiliary.projectSource': 'إعدادات المشروع: {path}',
+  'settings.sessions.auxiliary.userSource': 'إعدادات المستخدم: {path}',
+  'settings.sessions.auxiliary.newSource': 'ينشئ الاختيار الصريح إعداد تجاوز لوكيل المستخدم.',
+  'settings.sessions.auxiliary.loading': 'جارٍ قراءة إعدادات الوكيل...',
+  'settings.sessions.auxiliary.saveFailed': 'تعذر حفظ النموذج. حدّث الإعدادات قبل المحاولة مجددًا.',
+  'settings.sessions.auxiliary.catalogFailed': 'تعذرت قراءة النماذج أو إعدادات الوكيل. تم الاحتفاظ بالاختيارات المحفوظة. أعد المحاولة للتحديث.',
   'settings.openchamber.sessionRetention.field.archivedDescription': 'تُحسب مدة الاحتفاظ من وقت الأرشفة. تُحذف الجلسات التي انتهت مدتها.',
   'settings.openchamber.sessionRetention.field.unarchivedArchiveDescription': 'تُحسب مدة الاحتفاظ من آخر نشاط للجلسة. تُؤرشف الجلسات التي انتهت مدتها.',
   'settings.openchamber.sessionRetention.field.unarchivedDeleteDescription': 'تُحسب مدة الاحتفاظ من آخر نشاط للجلسة. تُحذف الجلسات التي انتهت مدتها.',

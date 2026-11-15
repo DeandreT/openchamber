@@ -60,6 +60,35 @@ struct HistoryRead {
 }
 
 impl Workspace {
+    /// Supplies theme requests with the verified runtime and current credentials.
+    /// An absent client withdraws new request authority during sign-in.
+    pub(crate) fn refresh_appearance_runtime(&self, cx: &mut Context<Self>) {
+        let Some(owner) = cx
+            .try_global::<crate::appearance_view::AppearanceOwner>()
+            .map(|owner| owner.0.clone())
+        else {
+            return;
+        };
+        let target = self.connection.as_ref().and_then(|connection| {
+            Some(crate::settings_controls::ServerTarget {
+                runtime: self.runtime.clone(),
+                generation: connection.generation,
+                client: connection.client.clone()?,
+                network: connection.network.handle(),
+            })
+        });
+        owner.update(cx, |owner, cx| owner.set_theme_runtime(target, cx));
+    }
+
+    fn reload_custom_themes(&self, cx: &mut Context<Self>) {
+        if let Some(owner) = cx
+            .try_global::<crate::appearance_view::AppearanceOwner>()
+            .map(|owner| owner.0.clone())
+        {
+            owner.update(cx, |owner, cx| owner.reload_custom_themes(cx));
+        }
+    }
+
     /// Starts a connection attempt, cancelling the previous one's work.
     pub(crate) fn connect(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.reset_session_admission(window, cx);
@@ -93,6 +122,7 @@ impl Workspace {
             });
         }));
         self.invalidate_terminal_client(cx);
+        self.refresh_appearance_runtime(cx);
         cx.notify();
     }
 
@@ -155,6 +185,7 @@ impl Workspace {
                     self.switch_runtime(runtime, window, cx);
                 }
                 self.invalidate_terminal_client(cx);
+                self.refresh_appearance_runtime(cx);
                 self.watch_authentication(generation, auth_failures, window, cx);
                 self.subscribe(generation, window, cx);
                 self.subscribe_control(generation, window, cx);
@@ -257,6 +288,7 @@ impl Workspace {
         self.sessions = SessionIndex::new();
         self.topology = Topology::default();
         self.reset_send_catalog();
+        self.native_agents.connected(false, None);
         self.permission_modes.reset();
         self.reset_project_readouts();
         self.reset_workflow_runs();
@@ -268,6 +300,7 @@ impl Workspace {
         self.subagents_reopened.set(false);
         self.selected = None;
         self.project_chooser = None;
+        self.chat_drafts.switch_runtime();
         self.composer_key = self.new_session_draft_key();
         self.restore_composer_draft(window, cx);
         self.rebuild_sidebar();
@@ -321,12 +354,16 @@ impl Workspace {
                         match item {
                             ControlItem::Event(ControlEvent::Connected) => {
                                 this.load_topology(window, cx);
+                                this.reload_custom_themes(cx);
                                 this.refresh_terminal_sessions(cx);
                                 // Workflow run events are not replayed.
                                 this.reload_workflow_runs(cx);
                             }
                             ControlItem::Event(ControlEvent::TerminalSessionsChanged) => {
                                 this.refresh_terminal_sessions(cx)
+                            }
+                            ControlItem::Event(ControlEvent::ThemesChanged) => {
+                                this.reload_custom_themes(cx)
                             }
                             ControlItem::Event(
                                 ControlEvent::WorktreeChanged { .. } | ControlEvent::SessionCreated,
@@ -394,6 +431,8 @@ impl Workspace {
                 resumed,
                 replay_through,
             } => {
+                self.native_agents
+                    .connected(resumed, replay_through.clone());
                 tracing::debug!(resumed, "the event stream is live");
                 let stale = std::mem::take(&mut connection.stale);
                 connection.state = ConnectionState::Connected;
@@ -428,8 +467,12 @@ impl Workspace {
                 // Nor are warming and folder broadcasts.
                 self.load_session_warming(cx);
                 self.sync_session_folders(cx);
+                if !self.native_agents.replaying() {
+                    self.refresh_native_owners(cx);
+                }
             }
             StreamItem::Disconnected(error) => {
+                self.native_agents.invalidate();
                 tracing::warn!(%error, "the event stream dropped");
                 let failure = ConnectionFailure::from_error(&error);
                 if matches!(
@@ -442,6 +485,12 @@ impl Workspace {
                     connection.restart();
                     connection.retry_task = None;
                     connection.state = ConnectionState::Failed(failure);
+                    for panel in self.panels.all_knowledge_views() {
+                        panel.update(cx, |panel, _| {
+                            panel.refresh_write_client(&self.runtime, None);
+                        });
+                    }
+                    self.refresh_appearance_runtime(cx);
                     self.reset_session_admission(window, cx);
                     self.show_authentication(failure, None, window, cx);
                     self.invalidate_terminal_client(cx);
@@ -461,7 +510,12 @@ impl Workspace {
                 }
             }
             StreamItem::Events { events, event_id } => {
+                let replaying = self.native_agents.replaying();
                 self.apply_server_events(events, window, cx);
+                self.native_agents.frame_applied(event_id.as_deref());
+                if replaying && !self.native_agents.replaying() {
+                    self.refresh_native_owners(cx);
+                }
                 if let Some(id) = event_id {
                     self.permission_modes.event_applied(&id);
                 }
@@ -829,10 +883,12 @@ impl Workspace {
                             Some(Ok(roots)) => {
                                 this.topology.chat_roots = roots;
                                 this.session_admission.roots_ready = true;
+                                this.chat_roots_read(true, window, cx);
                             }
                             Some(Err(error)) => {
                                 failed_roots = true;
                                 tracing::warn!(%error, "the Chats roots could not be read");
+                                this.chat_roots_read(false, window, cx);
                             }
                             None => {}
                         }
@@ -930,6 +986,9 @@ impl Workspace {
                                 Some(held) => *held = entry,
                                 None => this.topology.worktrees.push(entry),
                             }
+                        }
+                        if !failed_settings {
+                            this.open_default_draft(window, cx);
                         }
                         this.rebuild_sidebar();
                         this.reconcile_session_admission(window, cx);
@@ -1304,7 +1363,20 @@ impl Workspace {
                 ServerEvent::Notification(notification) => {
                     self.deliver_notification(notification, window, cx)
                 }
-                ServerEvent::Transcript { session_id, event } => {
+                ServerEvent::NativeAgent(event) => self.native_event(event, window, cx),
+                ServerEvent::NativeAgentInvalid { .. } => {
+                    self.native_agents.invalidate();
+                    if !self.native_agents.replaying() {
+                        self.refresh_native_owners(cx);
+                    }
+                }
+                ServerEvent::Transcript {
+                    session_id,
+                    mut event,
+                } => {
+                    if self.native_agents.replaying() {
+                        crate::native_agent::demote_replayed_execution(&mut event);
+                    }
                     if self.finishes_git_changing_call(&session_id, &event)
                         && !git_changed.contains(&session_id)
                     {

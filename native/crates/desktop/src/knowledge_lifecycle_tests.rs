@@ -2,7 +2,10 @@
 
 use std::sync::{Arc, Mutex};
 
-use gpui_kit::{AnyWindowHandle, AppContext, Entity, EntityInputHandler, TestAppContext};
+use gpui_kit::test::TestWindowExt;
+use gpui_kit::{
+    AnyWindowHandle, AppContext, Entity, EntityInputHandler, Focusable, TestAppContext,
+};
 use openchamber_native_core::knowledge::{self, Section, Todo};
 use openchamber_native_transport::project_context::PlanDocument;
 use serde_json::json;
@@ -13,6 +16,373 @@ use crate::knowledge_writes::{DocumentDraft, DocumentKey, KnowledgeWriter, SaveO
 use crate::network::Network;
 use crate::scheduled_tasks_tests::{Scripted, wait};
 use crate::settings_controls::tests::ResponseGate;
+
+fn workspace_todo_panel(
+    cx: &mut TestAppContext,
+    server: &Scripted,
+) -> (
+    AnyWindowHandle,
+    Entity<crate::workspace::Workspace>,
+    Entity<KnowledgePanel>,
+) {
+    use crate::connection::{Connection, ConnectionState, ServerConfig};
+    use crate::files_view::PanelScope;
+    use crate::knowledge::KnowledgeOwner;
+    use openchamber_native_transport::client::ClientDescription;
+
+    cx.executor().allow_parking();
+    let (window, workspace) = crate::workspace_tests::open(cx);
+    let panel = cx
+        .update_window(window, |_, window, cx| {
+            let scope = workspace.update(cx, |workspace, cx| {
+                let mut connection = Connection::new(ServerConfig {
+                    endpoint: server.endpoint.clone(),
+                    password: None,
+                    client: ClientDescription::default(),
+                })
+                .expect("fixture connection");
+                connection.client = Some(server.client());
+                connection.state = ConnectionState::Connected;
+                let scope = PanelScope {
+                    client: server.client(),
+                    network: connection.network.handle(),
+                    runtime: workspace.runtime.clone(),
+                    directory: super::ROOT.into(),
+                    owner: Some(cx.entity().downgrade()),
+                };
+                workspace.connection = Some(connection);
+                scope
+            });
+            let owner = KnowledgeOwner::new(super::ROOT, "project".into()).expect("owner");
+            cx.new(|cx| KnowledgePanel::new(scope, owner, window, cx))
+        })
+        .expect("open window");
+    wait(cx, |cx| cx.read(|cx| panel.read(cx).knowledge.is_some()));
+    cx.update_window(window, |_, window, cx| {
+        panel.update(cx, |panel, cx| {
+            panel.edit_todo("t1", window, cx);
+            panel
+                .todo_edit
+                .as_ref()
+                .expect("editor")
+                .input
+                .update(cx, |input, cx| {
+                    input.set_value("  Keep this draft  ", window, cx);
+                });
+        });
+    })
+    .expect("open editor");
+    cx.run_until_parked();
+    (window, workspace, panel)
+}
+
+fn held_todo_server() -> (Scripted, Arc<Mutex<Store>>, Arc<ResponseGate>) {
+    let store = Arc::new(Mutex::new(Store {
+        todos: vec![json!({"id": "t1", "text": "Original", "createdAt": 1})],
+        ..Store::default()
+    }));
+    let shared = store.clone();
+    let gate = ResponseGate::new();
+    let held = gate.clone();
+    let server = Scripted::new(move |request| {
+        if request.method == "PATCH" {
+            held.hold();
+        }
+        shared
+            .lock()
+            .expect("store")
+            .answer(&request.method, &request.path, &request.body)
+    });
+    (server, store, gate)
+}
+
+#[gpui_kit::test]
+fn close_captures_todo_before_freezing_while_workspace_is_borrowed(cx: &mut TestAppContext) {
+    let (server, store, gate) = held_todo_server();
+    let (window, workspace, panel) = workspace_todo_panel(cx, &server);
+    let mut pending = cx
+        .update_window(window, |_, window, cx| {
+            workspace.update(cx, |workspace, cx| {
+                let client = workspace
+                    .connection
+                    .as_ref()
+                    .expect("connection")
+                    .client
+                    .as_ref()
+                    .expect("client");
+                panel.update(cx, |panel, cx| {
+                    panel.refresh_write_client(&workspace.runtime, Some(client));
+                    panel.prepare_close(window, cx);
+                    panel.prepare_close(window, cx);
+                    assert!(panel.todo_edit.is_none());
+                    panel
+                        .take_pending_write(cx)
+                        .expect("close drains the captured edit")
+                })
+            })
+        })
+        .expect("open window");
+    gate.entered(cx);
+    assert!(matches!(
+        pending.try_recv(),
+        Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+    ));
+    gate.release();
+    cx.foreground_executor().block_test(async move {
+        pending.await.expect("write settles");
+    });
+    assert_eq!(
+        store.lock().expect("store").todos[0]["text"],
+        "Keep this draft"
+    );
+    assert_eq!(
+        server
+            .requests("PATCH", &format!("{}/todos/t1", base()))
+            .len(),
+        1
+    );
+    assert!(cx.read(|cx| panel.read(cx).is_flushed() && !panel.read(cx).has_failed_writes()));
+}
+
+#[gpui_kit::test]
+fn quit_captures_todo_and_drains_without_foreground_completion(cx: &mut TestAppContext) {
+    let (server, store, gate) = held_todo_server();
+    let (window, workspace, panel) = workspace_todo_panel(cx, &server);
+    let runtime = cx.read(|cx| workspace.read(cx).runtime.clone());
+    let client = server.client();
+    cx.update(|cx| {
+        cx.on_app_quit(move |cx| {
+            let pending = window
+                .update(cx, |_, window, cx| {
+                    workspace.update(cx, |_, cx| {
+                        panel.update(cx, |panel, cx| {
+                            // The workspace quit observer may already have
+                            // transferred its connection into its own drain.
+                            panel.refresh_write_client(&runtime, Some(&client));
+                            panel.prepare_close(window, cx);
+                            assert!(panel.todo_edit.is_none());
+                            panel
+                                .take_quit_write(cx)
+                                .expect("captured edit has an independent writer")
+                        })
+                    })
+                })
+                .expect("owning window");
+            gate.release();
+            pending
+        })
+        .detach();
+    });
+    cx.quit();
+    assert_eq!(
+        store.lock().expect("store").todos[0]["text"],
+        "Keep this draft"
+    );
+    assert_eq!(
+        server
+            .requests("PATCH", &format!("{}/todos/t1", base()))
+            .len(),
+        1
+    );
+}
+
+#[gpui_kit::test]
+fn authentication_expiry_then_runtime_switch_and_close_retain_todo_until_owner_login(
+    cx: &mut TestAppContext,
+) {
+    let (server, store) = serve(Store {
+        todos: vec![json!({"id": "t1", "text": "Original", "createdAt": 1})],
+        ..Store::default()
+    });
+    let (other_server, other_store) = serve(Store::default());
+    let (window, workspace, panel) = workspace_todo_panel(cx, &server);
+    let owner_runtime = cx.read(|cx| workspace.read(cx).runtime.clone());
+    let input = cx.read(|cx| {
+        panel
+            .read(cx)
+            .todo_edit
+            .as_ref()
+            .expect("editing")
+            .input
+            .clone()
+    });
+    let blurs = Arc::new(Mutex::new(0));
+    let observed = blurs.clone();
+    let (failures, receiver) = tokio::sync::watch::channel(0);
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            let subscription =
+                cx.subscribe_in(&panel, window, |workspace, panel, event, window, cx| {
+                    workspace.on_knowledge_event(panel, event, window, cx);
+                });
+            workspace.panels.retain_test_knowledge(
+                owner_runtime.clone(),
+                super::ROOT.into(),
+                panel.clone(),
+                subscription,
+            );
+            assert_eq!(workspace.panels.all_knowledge_views(), vec![panel.clone()]);
+            cx.subscribe(&input, move |_, _, event, _| {
+                if matches!(event, gpui_kit::component::input::InputEvent::Blur) {
+                    *observed.lock().expect("blur count") += 1;
+                }
+            })
+            .detach();
+            workspace.watch_authentication(0, receiver, window, cx);
+        });
+        // GPUI dispatches Blur by comparing rendered focus paths. This
+        // retained panel must be mounted before sign-in moves its focus.
+        panel.update(cx, |panel, cx| panel.select_section(Section::Todos, cx));
+        window.replace_root(cx, |window, cx| {
+            gpui_kit::component::Root::new(panel.clone(), window, cx)
+        });
+        input.update(cx, |input, cx| input.focus(window, cx));
+        window.render_frame(cx);
+        assert!(input.read(cx).focus_handle(cx).is_focused(window));
+        window.activate_window();
+    })
+    .expect("open window");
+    // Test windows start inactive and activation arrives asynchronously.
+    // Focus events require an active rendered frame, not only a focused handle.
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.render_frame(cx);
+        assert!(window.is_window_active(), "the todo's window is active");
+        assert!(input.read(cx).focus_handle(cx).is_focused(window));
+    })
+    .expect("render active todo focus");
+    failures.send(1).expect("authentication observer");
+    cx.run_until_parked();
+    cx.update_window(window, |_, window, cx| {
+        window.replace_root(cx, |window, cx| {
+            gpui_kit::component::Root::new(workspace.clone(), window, cx)
+        });
+        window.render_frame(cx);
+        assert!(
+            workspace
+                .read(cx)
+                .authentication
+                .password
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window),
+            "authentication moved focus to the rendered password input"
+        );
+    })
+    .expect("render sign-in");
+    cx.run_until_parked();
+    assert!(
+        *blurs.lock().expect("blur count") > 0,
+        "password focus actually blurred the todo"
+    );
+    cx.read(|cx| {
+        let workspace = workspace.read(cx);
+        assert!(workspace.authentication.visible);
+        assert!(
+            workspace
+                .connection
+                .as_ref()
+                .expect("connection")
+                .client
+                .is_none()
+        );
+        let edit = panel
+            .read(cx)
+            .todo_edit
+            .as_ref()
+            .expect("draft survives failed admission");
+        assert_eq!(edit.input, input);
+        assert_eq!(input.read(cx).value(), "  Keep this draft  ");
+    });
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.switch_runtime(
+                openchamber_native_core::ids::RuntimeId::from("other-runtime"),
+                window,
+                cx,
+            );
+            let connection = workspace.connection.as_mut().expect("connection");
+            connection.config.endpoint = other_server.endpoint.clone();
+            connection.client = Some(other_server.client());
+            connection.state = crate::connection::ConnectionState::Connected;
+            workspace.authentication.visible = false;
+            let client = workspace
+                .connection
+                .as_ref()
+                .and_then(|connection| connection.client.as_ref());
+            assert!(client.is_some(), "the other runtime is connected");
+            assert_ne!(workspace.runtime, owner_runtime);
+            let panels = workspace.panels.all_knowledge_views();
+            assert_eq!(
+                panels,
+                vec![panel.clone()],
+                "the expired owner's panel remains retained"
+            );
+            for retained in panels {
+                retained.update(cx, |panel, cx| {
+                    panel.refresh_write_client(&workspace.runtime, client);
+                    panel.prepare_close(window, cx);
+                    assert!(
+                        panel.take_pending_write(cx).is_none(),
+                        "expired credentials cannot admit a write"
+                    );
+                    assert!(
+                        panel.has_failed_writes(),
+                        "normal close must remain blocked"
+                    );
+                    let edit = panel
+                        .todo_edit
+                        .as_ref()
+                        .expect("close retains the unsubmitted draft");
+                    assert_eq!(edit.input, input);
+                    assert_eq!(input.read(cx).value(), "  Keep this draft  ");
+                    panel.cancel_close(cx);
+                });
+            }
+        });
+    })
+    .expect("close under the workspace borrow");
+    cx.run_until_parked();
+    assert!(
+        server
+            .requests("PATCH", &format!("{}/todos/t1", base()))
+            .is_empty(),
+        "close cannot submit through the expired captured client"
+    );
+    assert_eq!(store.lock().expect("store").todos[0]["text"], "Original");
+    assert!(
+        other_server
+            .requests("PATCH", &format!("{}/todos/t1", base()))
+            .is_empty()
+    );
+    assert!(other_store.lock().expect("other store").todos.is_empty());
+    cx.update_window(window, |_, window, cx| {
+        workspace.update(cx, |workspace, cx| {
+            workspace.switch_runtime(owner_runtime.clone(), window, cx);
+            let connection = workspace.connection.as_mut().expect("connection");
+            connection.config.endpoint = server.endpoint.clone();
+            connection.client = Some(server.client());
+            workspace.authentication.visible = false;
+        });
+        panel.update(cx, |panel, cx| {
+            panel.finish_todo_edit(&input, true, window, cx)
+        });
+    })
+    .expect("owner signs in again");
+    wait(cx, |cx| {
+        cx.read(|cx| panel.read(cx).todo_edit.is_none() && panel.read(cx).is_flushed())
+    });
+    assert_eq!(
+        store.lock().expect("store").todos[0]["text"],
+        "Keep this draft"
+    );
+    assert_eq!(
+        server
+            .requests("PATCH", &format!("{}/todos/t1", base()))
+            .len(),
+        1
+    );
+}
 
 fn notes() -> Store {
     Store {

@@ -1,0 +1,12 @@
+{
+  "name": "@openchamber/native-agent-devin",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./server.ts", "./server": "./server.ts", "./rpc": "./rpc.ts" },
+  "scripts": { "test": "bun test ./runtime.test.ts ./local-process.test.ts ./production.test.ts ./context.test.ts ./smoke-child.test.ts" },
+  "dependencies": {
+    "@opencode/plugin": "2.2.7",
+    "@cognition-ai/sdk": "0.0.1-beta.9"
+  }
+}

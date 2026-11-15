@@ -52,10 +52,8 @@ pub(crate) struct Fixture(PathBuf);
 impl Fixture {
     pub(crate) fn new() -> Self {
         let sequence = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
-        let path = PathBuf::from(format!(
-            "/tmp/opencode/native-recovery-{}-{sequence}",
-            std::process::id()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("native-recovery-{}-{sequence}", std::process::id()));
         fs::create_dir(&path).expect("unique test directory is created");
         Self(path)
     }

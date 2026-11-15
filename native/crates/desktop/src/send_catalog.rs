@@ -73,6 +73,7 @@ impl<T> Load<T> {
 pub(crate) struct DirectoryCatalog {
     pub agents: Load<Vec<AgentEntry>>,
     pub providers: Load<Vec<CatalogProvider>>,
+    pub native_agents: Vec<openchamber_native_transport::native_agent::NativeAgentProvider>,
     pub opencode: Load<OpenCodeDefaults>,
     pub skills: Load<usize>,
     pub mcp_connected: Load<usize>,
@@ -254,6 +255,9 @@ impl Workspace {
         if let Some(session) = self.selected_session() {
             return session.directory.as_deref().and_then(path::normalize);
         }
+        if self.chat_draft_open() {
+            return self.chat_config_directory();
+        }
         if let Some(directory) = self.draft_projects.get(&self.runtime) {
             return path::normalize(directory);
         }
@@ -311,6 +315,7 @@ impl Workspace {
     /// Called while rendering, so every way the directory changes is covered.
     pub(crate) fn ensure_send_catalog(&mut self, cx: &mut Context<Self>) {
         self.refresh_composer_choices(cx);
+        self.ensure_native_agent(cx);
         if self.connection.as_ref().is_some_and(|connection| {
             self.send_catalog.routing_generation != Some(connection.generation)
         }) {
@@ -432,6 +437,7 @@ impl Workspace {
                     return;
                 }
                 this.apply_catalog(&directory, revisions, outcome);
+                this.ensure_native_agent(cx);
                 cx.notify();
             });
         });
@@ -472,7 +478,10 @@ impl Workspace {
         }
         settle(&mut entry.agents, outcome.agents, "agents");
         let providers = outcome.models.map(|result| {
-            result.map(|catalog| send_config::group_catalog(&catalog.providers, &catalog.models))
+            result.map(|catalog| {
+                entry.native_agents = catalog.native_agents;
+                send_config::group_catalog(&catalog.providers, &catalog.models)
+            })
         });
         settle(&mut entry.providers, providers, "models");
         settle(&mut entry.opencode, outcome.config, "OpenCode config");
@@ -496,6 +505,11 @@ impl Workspace {
                 .find(|defaults| defaults.path == project)
         });
         SelectionDefaults {
+            catalog_loaded: self
+                .send_catalog
+                .directory(directory)
+                .and_then(|entry| entry.providers.ready())
+                .is_some(),
             project_default_agent: project.and_then(|project| project.agent.clone()),
             project_default_model: project.and_then(|project| project.model.clone()),
             project_default_variant: project.and_then(|project| project.variant.clone()),
@@ -516,6 +530,12 @@ impl Workspace {
     /// and config are known: the directory's default selection, refined by a
     /// selected session's record.
     pub(crate) fn send_selection(&self) -> Option<(String, Selection)> {
+        let (directory, selection) = self.catalog_selection()?;
+        self.native_send_selection(&selection)
+            .map(|selection| (directory, selection))
+    }
+
+    pub(crate) fn catalog_selection(&self) -> Option<(String, Selection)> {
         let directory = self.config_directory()?;
         let entry = self.send_catalog.directory(&directory)?;
         let agents = entry.agents.ready()?;
@@ -584,7 +604,7 @@ impl Workspace {
         let selection = self
             .config_directory()
             .zip(held)
-            .or_else(|| self.send_selection());
+            .or_else(|| self.catalog_selection());
         let Some((directory, selection)) = selection else {
             return ModelControl::Pending { unavailable };
         };
@@ -593,6 +613,20 @@ impl Workspace {
         };
         if is_auto(&choice) {
             return ModelControl::Auto;
+        }
+        if self.native_provider_advertised(&choice.provider_id) {
+            use openchamber_native_core::native_agent::ConfigRole;
+            return ModelControl::Model {
+                label: self
+                    .native_role_label(ConfigRole::Model)
+                    .unwrap_or_else(|| choice.provider_id.clone()),
+                provider_id: choice.provider_id,
+                model_id: choice.model_id,
+                variant: self
+                    .native_role_label(ConfigRole::Effort)
+                    .map(VariantControl::Selected)
+                    .unwrap_or(VariantControl::Hidden),
+            };
         }
         let providers = self
             .send_catalog

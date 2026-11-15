@@ -138,6 +138,15 @@ enum PendingDelete {
     Writing,
 }
 
+/// One editing session. Its input identity rejects callbacks from an older row.
+pub(crate) struct TodoEdit {
+    pub(crate) id: String,
+    initial: String,
+    client: Option<ServerClient>,
+    pub(crate) input: Entity<TextareaState>,
+    _subscription: Subscription,
+}
+
 pub(crate) struct KnowledgePanel {
     window: AnyWindowHandle,
     pub(crate) scope: PanelScope,
@@ -182,7 +191,7 @@ pub(crate) struct KnowledgePanel {
     pending_deletes: HashMap<String, PendingDelete>,
     pub(crate) todo_menu: Option<String>,
     pub(crate) entry_menu: Option<String>,
-    pub(crate) expanded: HashSet<String>,
+    pub(crate) todo_edit: Option<TodoEdit>,
     pub(crate) sending: Option<String>,
     /// Todo writes the server has not answered yet.
     pub(crate) todo_writes: usize,
@@ -304,7 +313,7 @@ impl KnowledgePanel {
             pending_deletes: HashMap::new(),
             todo_menu: None,
             entry_menu: None,
-            expanded: HashSet::new(),
+            todo_edit: None,
             sending: None,
             todo_writes: 0,
             moving: None,
@@ -432,6 +441,13 @@ impl KnowledgePanel {
                 self.open = None;
                 self.plan = None;
             }
+        }
+        if self
+            .todo_edit
+            .as_ref()
+            .is_some_and(|edit| !knowledge.todos.iter().any(|todo| todo.id == edit.id))
+        {
+            self.todo_edit = None;
         }
         self.knowledge = Some(knowledge);
         self.adopt_open_note(cx);
@@ -726,7 +742,7 @@ impl KnowledgePanel {
         if !self.closing
             && let Some(client) = self.scope.client(cx)
         {
-            self.refresh_write_client(&self.scope.runtime.clone(), &client);
+            self.refresh_write_client(&self.scope.runtime.clone(), Some(&client));
         }
         // Change events capture committed text. Navigation must not capture
         // provisional IME text directly from the editor.
@@ -738,13 +754,23 @@ impl KnowledgePanel {
         }
     }
 
-    /// Refreshes retry credentials only for this panel's original runtime.
-    pub(crate) fn refresh_write_client(&mut self, runtime: &RuntimeId, client: &ServerClient) {
+    /// Refreshes credentials only for this panel's original runtime. An absent
+    /// live client revokes admission of its still-unsubmitted todo edit.
+    pub(crate) fn refresh_write_client(
+        &mut self,
+        runtime: &RuntimeId,
+        client: Option<&ServerClient>,
+    ) {
         if &self.scope.runtime != runtime {
             return;
         }
-        for draft in self.documents.values_mut() {
-            draft.client = Some(client.clone());
+        if let Some(client) = client {
+            for draft in self.documents.values_mut() {
+                draft.client = Some(client.clone());
+            }
+        }
+        if let Some(edit) = &mut self.todo_edit {
+            edit.client = client.cloned();
         }
     }
 
@@ -999,6 +1025,16 @@ impl KnowledgePanel {
         if self.closing {
             return;
         }
+        // The workspace owns this update. Resolve no live scope here: its
+        // refresh_write_client call supplies current owner credentials first.
+        if let Some(input) = self.todo_edit.as_ref().map(|edit| edit.input.clone())
+            && let Some((next, change)) = self.capture_todo_edit(&input, true, window, cx)
+            && let Some(client) = self.todo_edit.as_ref().and_then(|edit| edit.client.clone())
+            && self.ensure_writer()
+        {
+            self.todo_edit = None;
+            self.submit_todo(next, change, client, window, cx);
+        }
         self.closing = true;
         self.note_timer = None;
         self.plan_timer = None;
@@ -1027,7 +1063,8 @@ impl KnowledgePanel {
     }
 
     pub(crate) fn has_failed_writes(&self) -> bool {
-        self.failed_note_creation
+        self.todo_edit.is_some()
+            || self.failed_note_creation
             || self.failed_plan_creation
             || self
                 .documents
@@ -1083,6 +1120,137 @@ impl KnowledgePanel {
 
     // Todos.
 
+    pub(crate) fn edit_todo(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.closing || self.todo_edit.as_ref().is_some_and(|edit| edit.id == id) {
+            return;
+        }
+        if let Some(input) = self.todo_edit.as_ref().map(|edit| edit.input.clone()) {
+            self.finish_todo_edit(&input, true, window, cx);
+            if self.todo_edit.is_some() {
+                return;
+            }
+        }
+        let Some(initial) = self.knowledge.as_ref().and_then(|knowledge| {
+            knowledge
+                .todos
+                .iter()
+                .find(|todo| todo.id == id)
+                .map(|todo| todo.text.clone())
+        }) else {
+            return;
+        };
+        let input = cx.new(|cx| {
+            let mut input = TextareaState::new(window, cx).auto_grow(1, TODO_TEXT_MAX_LENGTH);
+            input.set_value(initial.clone(), window, cx);
+            input.set_selected_range(initial.len()..initial.len(), cx);
+            input.focus(window, cx);
+            input
+        });
+        let subscription = cx.subscribe_in(&input, window, |this, input, event, window, cx| {
+            if this
+                .todo_edit
+                .as_ref()
+                .is_none_or(|edit| &edit.input != input)
+            {
+                return;
+            }
+            match event {
+                InputEvent::Blur => this.finish_todo_edit(input, true, window, cx),
+                InputEvent::Change => {
+                    input.update(cx, |input, cx| {
+                        if input.marked_text_range(window, cx).is_some() {
+                            return;
+                        }
+                        let value = input.value();
+                        let normalized = knowledge::single_line(&value, TODO_TEXT_MAX_LENGTH);
+                        if normalized != value.as_ref() {
+                            let cursor = knowledge::single_line(
+                                &value[..input.cursor()],
+                                TODO_TEXT_MAX_LENGTH,
+                            )
+                            .len();
+                            input.set_value(normalized, window, cx);
+                            input.set_selected_range(cursor..cursor, cx);
+                        }
+                    });
+                }
+                _ => {}
+            }
+        });
+        self.todo_edit = Some(TodoEdit {
+            id: id.to_owned(),
+            initial,
+            client: self.scope.client(cx),
+            input,
+            _subscription: subscription,
+        });
+        self.todo_menu = None;
+        self.entry_menu = None;
+        cx.notify();
+    }
+
+    pub(crate) fn finish_todo_edit(
+        &mut self,
+        input: &Entity<TextareaState>,
+        commit: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.closing {
+            return;
+        }
+        let Some((next, change)) = self.capture_todo_edit(input, commit, window, cx) else {
+            return;
+        };
+        let Some(client) = self.mutation_client(cx) else {
+            return;
+        };
+        // Admission succeeded. Clear before unmount/blur can submit it again.
+        self.todo_edit = None;
+        self.submit_todo(next, change, client, window, cx);
+    }
+
+    fn capture_todo_edit(
+        &mut self,
+        input: &Entity<TextareaState>,
+        commit: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<(Vec<Todo>, TodoChange)> {
+        if self
+            .todo_edit
+            .as_ref()
+            .is_none_or(|edit| &edit.input != input)
+            || input.update(cx, |input, cx| {
+                input.marked_text_range(window, cx).is_some()
+            })
+        {
+            return None;
+        }
+        let edit = self.todo_edit.as_ref().expect("the editing input matched");
+        let text = knowledge::single_line(&input.read(cx).value(), TODO_TEXT_MAX_LENGTH);
+        let text = text.trim().to_owned();
+        if !commit || text.is_empty() || text == edit.initial {
+            self.todo_edit = None;
+            cx.notify();
+            return None;
+        }
+        let mut next = self.todos();
+        let Some(todo) = next.iter_mut().find(|todo| todo.id == edit.id) else {
+            self.todo_edit = None;
+            cx.notify();
+            return None;
+        };
+        todo.text.clone_from(&text);
+        Some((
+            next,
+            TodoChange::Edit {
+                id: edit.id.clone(),
+                text,
+            },
+        ))
+    }
+
     fn todos(&self) -> Vec<Todo> {
         self.knowledge
             .as_ref()
@@ -1104,6 +1272,18 @@ impl KnowledgePanel {
         let Some(client) = self.mutation_client(cx) else {
             return;
         };
+        self.submit_todo(next, change, client, window, cx);
+    }
+
+    /// The caller has acquired the owner client and initialized the writer.
+    fn submit_todo(
+        &mut self,
+        next: Vec<Todo>,
+        change: TodoChange,
+        client: ServerClient,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let revision = self.begin_mutation();
         if let Some(knowledge) = &mut self.knowledge {
             knowledge.todos = next;
@@ -1189,6 +1369,10 @@ impl KnowledgePanel {
 
     pub(crate) fn delete_todo(&mut self, id: &str, window: &mut Window, cx: &mut Context<Self>) {
         self.todo_menu = None;
+        self.entry_menu = None;
+        if self.todo_edit.as_ref().is_some_and(|edit| edit.id == id) {
+            self.todo_edit = None;
+        }
         let next = self
             .todos()
             .into_iter()
@@ -1203,6 +1387,14 @@ impl KnowledgePanel {
             return;
         }
         let todos = self.todos();
+        self.entry_menu = None;
+        if self.todo_edit.as_ref().is_some_and(|edit| {
+            todos
+                .iter()
+                .any(|todo| todo.id == edit.id && todo.completed)
+        }) {
+            self.todo_edit = None;
+        }
         let next: Vec<Todo> = todos
             .iter()
             .filter(|todo| !todo.completed)
@@ -1244,13 +1436,6 @@ impl KnowledgePanel {
                 cx.notify();
             });
         }));
-        cx.notify();
-    }
-
-    pub(crate) fn toggle_expanded(&mut self, id: &str, cx: &mut Context<Self>) {
-        if !self.expanded.remove(id) {
-            self.expanded.insert(id.to_owned());
-        }
         cx.notify();
     }
 

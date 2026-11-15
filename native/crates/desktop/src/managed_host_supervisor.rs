@@ -1,7 +1,7 @@
 //! The thread that owns the managed server process.
 //!
-//! One supervisor runs per launch. It starts the server in its own process
-//! group, records the server's identity, reads its readiness line, restarts
+//! One supervisor runs per launch. It starts the server in its own Unix process
+//! group or private Windows job, records its identity, reads its readiness line, restarts
 //! it after a crash as [`Lifecycle`] allows and, on quit, stops it the way the
 //! desktop stops its in-process backend (`packages/electron/server-shutdown.mjs`):
 //! ask once, wait up to [`Timeouts::stop`], and only then force the processes
@@ -12,9 +12,13 @@
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Write};
+#[cfg(unix)]
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
+#[cfg(unix)]
 use std::process::{ChildStdin, Command, Stdio};
+#[cfg(windows)]
+type ChildStdin = File;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -22,8 +26,15 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::watch;
 
+#[cfg(all(test, windows))]
+#[path = "managed_host_windows_tests.rs"]
+mod windows_tests;
+
 use crate::managed_host_lifecycle::{Event, HostState, Lifecycle, Next};
+#[cfg(unix)]
 use crate::owned_process::{self, OwnedProcess, ProcessIdentity, Signal, Target};
+#[cfg(windows)]
+use openchamber_windows_process::{Identity as ProcessIdentity, Job};
 
 /// How long an exit waits for the output that preceded it.
 const OUTPUT_DRAIN: Duration = Duration::from_secs(1);
@@ -50,8 +61,9 @@ pub(crate) struct Timeouts {
     /// The desktop's 35 s: the terminal runtime's 20 s grace plus the rest of
     /// the backend's cleanup.
     pub(crate) stop: Duration,
-    /// Between the forced stop's terminate and kill, as the desktop's
+    /// Unix only. Between the forced stop's terminate and kill, as the desktop's
     /// detached OpenCode killer waits.
+    #[cfg(unix)]
     pub(crate) kill_grace: Duration,
     /// How long a forced stop waits for the server to be reaped.
     pub(crate) reap: Duration,
@@ -62,6 +74,7 @@ impl Default for Timeouts {
         Self {
             ready: Duration::from_secs(60),
             stop: Duration::from_secs(35),
+            #[cfg(unix)]
             kill_grace: Duration::from_millis(100),
             reap: Duration::from_secs(5),
         }
@@ -92,6 +105,8 @@ struct Running {
     stdin: Option<ChildStdin>,
     /// Set once the waiter reaped the server; its PID may be reused after.
     reaped: Arc<Mutex<bool>>,
+    #[cfg(windows)]
+    job: Job,
 }
 
 pub(crate) struct Supervisor {
@@ -187,10 +202,36 @@ impl Supervisor {
                     }
                 }
                 Some(Message::Exited { attempt }) if Some(attempt) == current => {
+                    #[cfg(windows)]
+                    let cleanup_complete = if let Some(server) = running.take() {
+                        // A crashed root can leave children holding output pipes.
+                        // Retain ownership until its private job is exhausted.
+                        if let Err(error) = server.job.terminate() {
+                            tracing::error!(%error, "the crashed server job could not be terminated");
+                        }
+                        match server.job.wait_empty(self.timeouts.reap) {
+                            Ok(true) => true,
+                            Ok(false) => {
+                                tracing::error!("the crashed server job did not become empty");
+                                false
+                            }
+                            Err(error) => {
+                                tracing::error!(%error, "the crashed server job state could not be read");
+                                false
+                            }
+                        }
+                    } else {
+                        false
+                    };
                     running = None;
                     ready_by = None;
                     tracing::warn!("the managed server exited");
                     self.apply(Event::Exited, &mut running, &mut spawn_at);
+                    #[cfg(windows)]
+                    if !cleanup_complete {
+                        // An unconfirmed old tree cannot authorize a replacement.
+                        self.apply(Event::SpawnFailed, &mut running, &mut spawn_at);
+                    }
                 }
                 Some(Message::Quit) => {
                     self.apply(Event::QuitRequested, &mut running, &mut spawn_at);
@@ -215,11 +256,19 @@ impl Supervisor {
         } = self.lifecycle.apply(event, Instant::now());
         self.publish();
         if stop_child && let Some(server) = running.take() {
+            #[cfg(unix)]
             let (outcome, quit) = stop(server, &self.messages, self.timeouts);
+            #[cfg(windows)]
+            let (outcome, quit, cleanup_complete) = stop(server, &self.messages, self.timeouts);
             *self.stopped.lock().expect("stop outcome lock") = Some(outcome);
             // A quit that arrived during the wait is handled next.
             if quit && event != Event::QuitRequested {
                 let _ = self.sender.send(Message::Quit);
+            }
+            #[cfg(windows)]
+            if !cleanup_complete && event != Event::QuitRequested {
+                self.apply(Event::SpawnFailed, running, spawn_at);
+                return;
             }
         }
         *spawn_at = spawn_after.map(|delay| Instant::now() + delay);
@@ -232,6 +281,7 @@ impl Supervisor {
     fn spawn(&mut self) -> io::Result<Running> {
         self.attempt += 1;
         let attempt = self.attempt;
+        #[cfg(unix)]
         let mut child = Command::new(&self.launch.program)
             .args(&self.launch.args)
             .env_clear()
@@ -244,14 +294,32 @@ impl Supervisor {
             .process_group(0)
             .spawn()?;
         // Unreaped, the PID cannot name another process yet.
+        #[cfg(unix)]
         let Some(identity) = owned_process::identify(child.id()) else {
             let _ = child.kill();
             let _ = child.wait();
             return Err(io::Error::other("the server's identity could not be read"));
         };
-        let stdin = child.stdin.take();
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
+        #[cfg(unix)]
+        let (stdin, stdout, stderr) =
+            (child.stdin.take(), child.stdout.take(), child.stderr.take());
+        #[cfg(windows)]
+        let (child, identity, stdin, stdout, stderr, job) = {
+            let started = openchamber_windows_process::spawn(
+                &self.launch.program,
+                &self.launch.args,
+                &self.launch.env,
+            )?;
+            let identity = started.process.identity();
+            (
+                started.process,
+                identity,
+                Some(started.stdin),
+                Some(started.stdout),
+                Some(started.stderr),
+                started.job,
+            )
+        };
         let log = self.launch.log.as_deref().and_then(open_log);
         // The reader says when the output ended, so an exit is reported only
         // after a readiness line written just before it.
@@ -300,6 +368,8 @@ impl Supervisor {
             identity,
             stdin,
             reaped,
+            #[cfg(windows)]
+            job,
         })
     }
 }
@@ -344,6 +414,7 @@ fn read_output(
 
 /// Stops one server: request, bounded wait, then force. Also says whether a
 /// quit arrived meanwhile.
+#[cfg(unix)]
 fn stop(
     mut server: Running,
     messages: &Receiver<Message>,
@@ -368,6 +439,7 @@ fn stop(
 /// Terminates the groups the server's descendants lead, then kills them and
 /// every remaining descendant, then the server's own group. Each signal
 /// checks the target's identity first.
+#[cfg(unix)]
 fn force(server: &Running, owned: &[OwnedProcess], grace: Duration) {
     let leaders: Vec<&OwnedProcess> = owned
         .iter()
@@ -392,6 +464,7 @@ fn force(server: &Running, owned: &[OwnedProcess], grace: Duration) {
 
 /// Waits for the exit of `attempt`. Other messages belong to replaced
 /// attempts, except a quit, which is noted.
+#[cfg(unix)]
 fn wait_exit(
     messages: &Receiver<Message>,
     attempt: u64,
@@ -410,7 +483,65 @@ fn wait_exit(
     }
 }
 
-#[cfg(test)]
+#[cfg(windows)]
+fn stop(
+    mut server: Running,
+    messages: &Receiver<Message>,
+    timeouts: Timeouts,
+) -> (StopOutcome, bool, bool) {
+    drop(server.stdin.take());
+    let mut quit = false;
+    if wait_tree(&server, messages, timeouts.stop, &mut quit) {
+        return (StopOutcome::Graceful, quit, true);
+    }
+    tracing::warn!(
+        pid = server.identity.pid,
+        "the managed server did not stop in time; forcing its job"
+    );
+    if let Err(error) = server.job.terminate() {
+        tracing::error!(%error, "the managed server job could not be terminated");
+    }
+    let cleanup_complete = wait_tree(&server, messages, timeouts.reap, &mut quit);
+    if !cleanup_complete {
+        tracing::error!("the managed server and its job could not be observed stopped");
+    }
+    (StopOutcome::Forced, quit, cleanup_complete)
+}
+
+#[cfg(windows)]
+fn wait_tree(
+    server: &Running,
+    messages: &Receiver<Message>,
+    timeout: Duration,
+    quit: &mut bool,
+) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let root_exited = *server.reaped.lock().expect("reaped lock");
+        match server.job.is_empty() {
+            Ok(true) if root_exited => return true,
+            Err(error) => {
+                tracing::error!(%error, "the managed job state could not be read");
+                return false;
+            }
+            _ => {}
+        }
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return false;
+        }
+        match messages.recv_timeout(left.min(Duration::from_millis(10))) {
+            Ok(Message::Quit) => *quit = true,
+            Ok(_) | Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {
+                *quit = true;
+                thread::sleep(left.min(Duration::from_millis(10)));
+            }
+        }
+    }
+}
+
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 

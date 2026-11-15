@@ -255,6 +255,11 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A native card owns only its advertised choices. Never let its
+        // keyboard input answer an ordinary request hidden behind that card.
+        if self.native_dock_precedes_ordinary() {
+            return;
+        }
         let Some(key) = self.active_request() else {
             return;
         };

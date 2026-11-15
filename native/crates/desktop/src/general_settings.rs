@@ -1011,7 +1011,8 @@ impl GeneralSettings {
             return;
         }
         let slot = self.runtimes.entry(target.runtime.clone()).or_default();
-        if slot.state.values[field] == value && !slot.state.failed[field] {
+        if slot.state.known[field] && slot.state.values[field] == value && !slot.state.failed[field]
+        {
             return;
         }
         slot.target = Some(target.clone());
@@ -1621,6 +1622,23 @@ mod tests {
     use serde_json::{Value, json};
 
     use super::*;
+
+    impl GeneralSettings {
+        /// Read revision, read in flight, admitted layout, and pending writer. No content or I/O.
+        pub(crate) fn work_status_read_diagnostics(
+            &self,
+            runtime: &RuntimeId,
+        ) -> Option<(u64, bool, bool, bool)> {
+            self.runtimes.get(runtime).map(|slot| {
+                (
+                    slot.read_revision,
+                    slot.read.is_some(),
+                    slot.work_status_layout_admitted,
+                    slot.write.is_some(),
+                )
+            })
+        }
+    }
 
     #[derive(Clone, Debug)]
     struct Request {

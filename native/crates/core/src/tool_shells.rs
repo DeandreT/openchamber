@@ -93,9 +93,21 @@ pub struct ToolMetadata {
     pub page_result: crate::rendered_page::PageResult,
 }
 
+/// Explicit OpenCode execution provenance, independent of display metadata.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ToolExecution {
+    /// OpenCode `tool.id`, also the projected part ID.
+    pub call_id: String,
+    /// OpenCode's explicit `executed` flag. Metadata grants no authority.
+    pub provider_executed: bool,
+    /// Established by a live called event, never by a history snapshot.
+    pub live: bool,
+}
+
 /// Everything a row reads about one call besides its status and result.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ToolFacts {
+    pub execution: Option<ToolExecution>,
     pub input: ToolInput,
     pub metadata: ToolMetadata,
     /// The failure's own message when the call failed.
@@ -108,6 +120,9 @@ pub struct ToolFacts {
 impl ToolFacts {
     /// Takes what a later transition reports; what it leaves out stays.
     pub fn merge(&mut self, next: ToolFacts) {
+        if next.execution.is_some() {
+            self.execution = next.execution;
+        }
         if next.input != ToolInput::default() {
             self.input = next.input;
         }

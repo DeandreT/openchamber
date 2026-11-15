@@ -6,6 +6,18 @@ import { thirdPartyIntegrationI18n } from './third-party-integrations.i18n';
 import { extensionCatalogI18n } from './extension-catalog.i18n';
 import { extensionPowersI18n } from './extension-powers.i18n';
 export const settingsDict = {
+  'settings.sessions.auxiliary.noDirectory': 'Open a project or chat to choose these models.',
+  'settings.sessions.auxiliary.summary': 'Summary model',
+  'settings.sessions.auxiliary.title': 'Title model',
+  'settings.sessions.auxiliary.engineDefault': 'OpenCode default',
+  'settings.sessions.auxiliary.info': 'Choose an ordinary text model for the built-in OpenCode agent. OpenCode default removes the model override.',
+  'settings.sessions.auxiliary.privacy': 'OpenCode may send conversation content to the provider selected here. Provider policies still apply.',
+  'settings.sessions.auxiliary.projectSource': 'Project configuration: {path}',
+  'settings.sessions.auxiliary.userSource': 'User configuration: {path}',
+  'settings.sessions.auxiliary.newSource': 'An explicit choice creates a user agent override.',
+  'settings.sessions.auxiliary.loading': 'Reading agent configuration...',
+  'settings.sessions.auxiliary.saveFailed': 'Model save failed. Refresh configuration before trying again.',
+  'settings.sessions.auxiliary.catalogFailed': 'Models or agent configuration could not be read. Saved choices are kept. Retry to refresh.',
   'settings.openchamber.sessionRetention.field.archivedDescription': 'Counts the retention period from archiving. Expired sessions are deleted.',
   'settings.openchamber.sessionRetention.field.unarchivedArchiveDescription': 'Counts the retention period from the session\'s last activity. Expired sessions are archived.',
   'settings.openchamber.sessionRetention.field.unarchivedDeleteDescription': 'Counts the retention period from the session\'s last activity. Expired sessions are deleted.',

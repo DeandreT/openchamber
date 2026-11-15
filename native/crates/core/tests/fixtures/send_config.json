@@ -1809,6 +1809,1098 @@
       }
     },
     {
+      "name": "loaded catalog skips removed configured model",
+      "input": {
+        "agents": [
+          {
+            "name": "plan",
+            "mode": "primary"
+          },
+          {
+            "name": "build",
+            "mode": "primary"
+          },
+          {
+            "name": "helper",
+            "mode": "subagent"
+          },
+          {
+            "name": "secret",
+            "mode": "primary",
+            "hidden": true
+          }
+        ],
+        "providers": [
+          {
+            "id": "p",
+            "name": "Provider",
+            "models": [
+              {
+                "id": "catalog",
+                "name": " Catalog model ",
+                "variants": [
+                  "high",
+                  "low"
+                ]
+              },
+              {
+                "id": "other"
+              }
+            ]
+          },
+          {
+            "id": "opencode",
+            "models": [
+              {
+                "id": "big-pickle",
+                "name": "Big Pickle"
+              }
+            ]
+          }
+        ],
+        "defaults": {
+          "allowFallback": true,
+          "catalogLoaded": true,
+          "settingsDefaultModel": "removed/model"
+        }
+      },
+      "expected": {
+        "agentName": "build",
+        "model": {
+          "providerId": "opencode",
+          "modelId": "big-pickle",
+          "variant": null
+        }
+      }
+    },
+    {
+      "name": "loaded catalog skips removed remembered model",
+      "input": {
+        "agents": [
+          {
+            "name": "plan",
+            "mode": "primary"
+          },
+          {
+            "name": "build",
+            "mode": "primary"
+          },
+          {
+            "name": "helper",
+            "mode": "subagent"
+          },
+          {
+            "name": "secret",
+            "mode": "primary",
+            "hidden": true
+          }
+        ],
+        "providers": [
+          {
+            "id": "p",
+            "name": "Provider",
+            "models": [
+              {
+                "id": "catalog",
+                "name": " Catalog model ",
+                "variants": [
+                  "high",
+                  "low"
+                ]
+              },
+              {
+                "id": "other"
+              }
+            ]
+          },
+          {
+            "id": "opencode",
+            "models": [
+              {
+                "id": "big-pickle",
+                "name": "Big Pickle"
+              }
+            ]
+          }
+        ],
+        "defaults": {
+          "allowFallback": true,
+          "catalogLoaded": true,
+          "lastSelectedModel": "removed/model"
+        }
+      },
+      "expected": {
+        "agentName": "build",
+        "model": {
+          "providerId": "opencode",
+          "modelId": "big-pickle",
+          "variant": null
+        }
+      }
+    },
+    {
+      "name": "loaded catalog falls from project to settings with its own effort",
+      "input": {
+        "agents": [
+          {
+            "name": "plan",
+            "mode": "primary"
+          },
+          {
+            "name": "build",
+            "mode": "primary"
+          },
+          {
+            "name": "helper",
+            "mode": "subagent"
+          },
+          {
+            "name": "secret",
+            "mode": "primary",
+            "hidden": true
+          }
+        ],
+        "providers": [
+          {
+            "id": "p",
+            "name": "Provider",
+            "models": [
+              {
+                "id": "catalog",
+                "name": " Catalog model ",
+                "variants": [
+                  "high",
+                  "low"
+                ]
+              },
+              {
+                "id": "other"
+              }
+            ]
+          },
+          {
+            "id": "opencode",
+            "models": [
+              {
+                "id": "big-pickle",
+                "name": "Big Pickle"
+              }
+            ]
+          }
+        ],
+        "defaults": {
+          "allowFallback": true,
+          "catalogLoaded": true,
+          "projectDefaultModel": "removed/model",
+          "projectDefaultVariant": "high",
+          "settingsDefaultModel": "p/catalog",
+          "settingsDefaultVariant": "low"
+        }
+      },
+      "expected": {
+        "agentName": "build",
+        "model": {
+          "providerId": "p",
+          "modelId": "catalog",
+          "variant": "low"
+        }
+      }
+    },
+    {
+      "name": "malformed project default falls to settings",
+      "input": {
+        "agents": [
+          {
+            "name": "plan",
+            "mode": "primary"
+          },
+          {
+            "name": "build",
+            "mode": "primary"
+          },
+          {
+            "name": "helper",
+            "mode": "subagent"
+          },
+          {
+            "name": "secret",
+            "mode": "primary",
+            "hidden": true
+          }
+        ],
+        "providers": [
+          {
+            "id": "p",
+            "name": "Provider",
+            "models": [
+              {
+                "id": "catalog",
+                "name": " Catalog model ",
+                "variants": [
+                  "high",
+                  "low"
+                ]
+              },
+              {
+                "id": "other"
+              }
+            ]
+          },
+          {
+            "id": "opencode",
+            "models": [
+              {
+                "id": "big-pickle",
+                "name": "Big Pickle"
+              }
+            ]
+          }
+        ],
+        "defaults": {
+          "allowFallback": true,
+          "projectDefaultModel": "noslash",
+          "settingsDefaultModel": "p/catalog",
+          "settingsDefaultVariant": "low"
+        }
+      },
+      "expected": {
+        "agentName": "build",
+        "model": {
+          "providerId": "p",
+          "modelId": "catalog",
+          "variant": "low"
+        }
+      }
+    },
+    {
+      "name": "loaded catalog skips removed agent pin for OpenCode default",
+      "input": {
+        "agents": [
+          {
+            "name": "build",
+            "model": {
+              "providerId": "removed",
+              "modelId": "model",
+              "variant": "high"
+            }
+          }
+        ],
+        "providers": [
+          {
+            "id": "p",
+            "name": "Provider",
+            "models": [
+              {
+                "id": "catalog",
+                "name": " Catalog model ",
+                "variants": [
+                  "high",
+                  "low"
+                ]
+              },
+              {
+                "id": "other"
+              }
+            ]
+          },
+          {
+            "id": "opencode",
+            "models": [
+              {
+                "id": "big-pickle",
+                "name": "Big Pickle"
+              }
+            ]
+          }
+        ],
+        "defaults": {
+          "allowFallback": true,
+          "catalogLoaded": true,
+          "opencodeDefaultModel": "p/catalog#low"
+        }
+      },
+      "expected": {
+        "agentName": "build",
+        "model": {
+          "providerId": "p",
+          "modelId": "catalog",
+          "variant": "low"
+        }
+      }
+    },
+    {
+      "name": "loaded catalog skips removed OpenCode default for remembered model",
+      "input": {
+        "agents": [
+          {
+            "name": "plan",
+            "mode": "primary"
+          },
+          {
+            "name": "build",
+            "mode": "primary"
+          },
+          {
+            "name": "helper",
+            "mode": "subagent"
+          },
+          {
+            "name": "secret",
+            "mode": "primary",
+            "hidden": true
+          }
+        ],
+        "providers": [
+          {
+            "id": "p",
+            "name": "Provider",
+            "models": [
+              {
+                "id": "catalog",
+                "name": " Catalog model ",
+                "variants": [
+                  "high",
+                  "low"
+                ]
+              },
+              {
+                "id": "other"
+              }
+            ]
+          },
+          {
+            "id": "opencode",
+            "models": [
+              {
+                "id": "big-pickle",
+                "name": "Big Pickle"
+              }
+            ]
+          }
+        ],
+        "defaults": {
+          "allowFallback": true,
+          "catalogLoaded": true,
+          "opencodeDefaultModel": "removed/model#high",
+          "lastSelectedModel": "p/catalog"
+        }
+      },
+      "expected": {
+        "agentName": "build",
+        "model": {
+          "providerId": "p",
+          "modelId": "catalog",
+          "variant": null
+        }
+      }
+    },
+    {
+      "name": "loaded catalog with fallback disabled drops removed model",
+      "input": {
+        "agents": [
+          {
+            "name": "plan",
+            "mode": "primary"
+          },
+          {
+            "name": "build",
+            "mode": "primary"
+          },
+          {
+            "name": "helper",
+            "mode": "subagent"
+          },
+          {
+            "name": "secret",
+            "mode": "primary",
+            "hidden": true
+          }
+        ],
+        "providers": [
+          {
+            "id": "p",
+            "name": "Provider",
+            "models": [
+              {
+                "id": "catalog",
+                "name": " Catalog model ",
+                "variants": [
+                  "high",
+                  "low"
+                ]
+              },
+              {
+                "id": "other"
+              }
+            ]
+          },
+          {
+            "id": "opencode",
+            "models": [
+              {
+                "id": "big-pickle",
+                "name": "Big Pickle"
+              }
+            ]
+          }
+        ],
+        "defaults": {
+          "allowFallback": false,
+          "catalogLoaded": true,
+          "settingsDefaultModel": "removed/model"
+        }
+      },
+      "expected": {
+        "agentName": "build",
+        "model": null
+      }
+    },
+    {
+      "name": "empty loaded catalog preserves configured model",
+      "input": {
+        "agents": [
+          {
+            "name": "plan",
+            "mode": "primary"
+          },
+          {
+            "name": "build",
+            "mode": "primary"
+          },
+          {
+            "name": "helper",
+            "mode": "subagent"
+          },
+          {
+            "name": "secret",
+            "mode": "primary",
+            "hidden": true
+          }
+        ],
+        "providers": [],
+        "defaults": {
+          "allowFallback": true,
+          "catalogLoaded": true,
+          "settingsDefaultModel": "late/model",
+          "settingsDefaultVariant": "high"
+        }
+      },
+      "expected": {
+        "agentName": "build",
+        "model": {
+          "providerId": "late",
+          "modelId": "model",
+          "variant": "high"
+        }
+      }
+    },
+    {
+      "name": "empty loaded catalog preserves agent pin",
+      "input": {
+        "agents": [
+          {
+            "name": "build",
+            "model": {
+              "providerId": "late",
+              "modelId": "model",
+              "variant": "high"
+            }
+          }
+        ],
+        "providers": [],
+        "defaults": {
+          "allowFallback": true,
+          "catalogLoaded": true
+        }
+      },
+      "expected": {
+        "agentName": "build",
+        "model": {
+          "providerId": "late",
+          "modelId": "model",
+          "variant": "high"
+        }
+      }
+    },
+    {
+      "name": "empty loaded catalog preserves remembered model",
+      "input": {
+        "agents": [
+          {
+            "name": "plan",
+            "mode": "primary"
+          },
+          {
+            "name": "build",
+            "mode": "primary"
+          },
+          {
+            "name": "helper",
+            "mode": "subagent"
+          },
+          {
+            "name": "secret",
+            "mode": "primary",
+            "hidden": true
+          }
+        ],
+        "providers": [],
+        "defaults": {
+          "allowFallback": true,
+          "catalogLoaded": true,
+          "lastSelectedModel": "late/model"
+        }
+      },
+      "expected": {
+        "agentName": "build",
+        "model": {
+          "providerId": "late",
+          "modelId": "model",
+          "variant": null
+        }
+      }
+    },
+    {
+      "name": "loaded catalog preserves provider API alias",
+      "input": {
+        "agents": [
+          {
+            "name": "plan",
+            "mode": "primary"
+          },
+          {
+            "name": "build",
+            "mode": "primary"
+          },
+          {
+            "name": "helper",
+            "mode": "subagent"
+          },
+          {
+            "name": "secret",
+            "mode": "primary",
+            "hidden": true
+          }
+        ],
+        "providers": [
+          {
+            "id": "p",
+            "models": [
+              {
+                "id": "alias",
+                "providerModelId": "api-name",
+                "variants": [
+                  "high"
+                ]
+              }
+            ]
+          }
+        ],
+        "defaults": {
+          "allowFallback": true,
+          "catalogLoaded": true,
+          "settingsDefaultModel": "p/api-name",
+          "settingsDefaultVariant": "high"
+        }
+      },
+      "expected": {
+        "agentName": "build",
+        "model": {
+          "providerId": "p",
+          "modelId": "api-name",
+          "variant": "high"
+        }
+      }
+    },
+    {
+      "name": "loaded catalog Auto configured unknown",
+      "input": {
+        "agents": [
+          {
+            "name": "plan",
+            "mode": "primary"
+          },
+          {
+            "name": "build",
+            "mode": "primary"
+          },
+          {
+            "name": "helper",
+            "mode": "subagent"
+          },
+          {
+            "name": "secret",
+            "mode": "primary",
+            "hidden": true
+          }
+        ],
+        "providers": [
+          {
+            "id": "p",
+            "name": "Provider",
+            "models": [
+              {
+                "id": "catalog",
+                "name": " Catalog model ",
+                "variants": [
+                  "high",
+                  "low"
+                ]
+              },
+              {
+                "id": "other"
+              }
+            ]
+          },
+          {
+            "id": "opencode",
+            "models": [
+              {
+                "id": "big-pickle",
+                "name": "Big Pickle"
+              }
+            ]
+          }
+        ],
+        "defaults": {
+          "allowFallback": true,
+          "catalogLoaded": true,
+          "settingsDefaultModel": "openchamber/auto",
+          "autoRouting": "unknown"
+        }
+      },
+      "expected": {
+        "agentName": "build",
+        "model": {
+          "providerId": "openchamber",
+          "modelId": "auto",
+          "variant": null
+        }
+      }
+    },
+    {
+      "name": "loaded catalog Auto agent pin unknown",
+      "input": {
+        "agents": [
+          {
+            "name": "build",
+            "model": {
+              "providerId": "openchamber",
+              "modelId": "auto",
+              "variant": "high"
+            }
+          }
+        ],
+        "providers": [
+          {
+            "id": "p",
+            "name": "Provider",
+            "models": [
+              {
+                "id": "catalog",
+                "name": " Catalog model ",
+                "variants": [
+                  "high",
+                  "low"
+                ]
+              },
+              {
+                "id": "other"
+              }
+            ]
+          },
+          {
+            "id": "opencode",
+            "models": [
+              {
+                "id": "big-pickle",
+                "name": "Big Pickle"
+              }
+            ]
+          }
+        ],
+        "defaults": {
+          "allowFallback": true,
+          "catalogLoaded": true,
+          "autoRouting": "unknown"
+        }
+      },
+      "expected": {
+        "agentName": "build",
+        "model": {
+          "providerId": "openchamber",
+          "modelId": "auto",
+          "variant": "high"
+        }
+      }
+    },
+    {
+      "name": "loaded catalog Auto configured unavailable",
+      "input": {
+        "agents": [
+          {
+            "name": "plan",
+            "mode": "primary"
+          },
+          {
+            "name": "build",
+            "mode": "primary"
+          },
+          {
+            "name": "helper",
+            "mode": "subagent"
+          },
+          {
+            "name": "secret",
+            "mode": "primary",
+            "hidden": true
+          }
+        ],
+        "providers": [
+          {
+            "id": "p",
+            "name": "Provider",
+            "models": [
+              {
+                "id": "catalog",
+                "name": " Catalog model ",
+                "variants": [
+                  "high",
+                  "low"
+                ]
+              },
+              {
+                "id": "other"
+              }
+            ]
+          },
+          {
+            "id": "opencode",
+            "models": [
+              {
+                "id": "big-pickle",
+                "name": "Big Pickle"
+              }
+            ]
+          }
+        ],
+        "defaults": {
+          "allowFallback": true,
+          "catalogLoaded": true,
+          "settingsDefaultModel": "openchamber/auto",
+          "autoRouting": "unavailable"
+        }
+      },
+      "expected": {
+        "agentName": "build",
+        "model": {
+          "providerId": "opencode",
+          "modelId": "big-pickle",
+          "variant": null
+        }
+      }
+    },
+    {
+      "name": "loaded catalog Auto agent pin unavailable",
+      "input": {
+        "agents": [
+          {
+            "name": "build",
+            "model": {
+              "providerId": "openchamber",
+              "modelId": "auto",
+              "variant": "high"
+            }
+          }
+        ],
+        "providers": [
+          {
+            "id": "p",
+            "name": "Provider",
+            "models": [
+              {
+                "id": "catalog",
+                "name": " Catalog model ",
+                "variants": [
+                  "high",
+                  "low"
+                ]
+              },
+              {
+                "id": "other"
+              }
+            ]
+          },
+          {
+            "id": "opencode",
+            "models": [
+              {
+                "id": "big-pickle",
+                "name": "Big Pickle"
+              }
+            ]
+          }
+        ],
+        "defaults": {
+          "allowFallback": true,
+          "catalogLoaded": true,
+          "autoRouting": "unavailable"
+        }
+      },
+      "expected": {
+        "agentName": "build",
+        "model": {
+          "providerId": "openchamber",
+          "modelId": "auto",
+          "variant": "high"
+        }
+      }
+    },
+    {
+      "name": "loaded catalog Auto configured ready",
+      "input": {
+        "agents": [
+          {
+            "name": "plan",
+            "mode": "primary"
+          },
+          {
+            "name": "build",
+            "mode": "primary"
+          },
+          {
+            "name": "helper",
+            "mode": "subagent"
+          },
+          {
+            "name": "secret",
+            "mode": "primary",
+            "hidden": true
+          }
+        ],
+        "providers": [
+          {
+            "id": "p",
+            "name": "Provider",
+            "models": [
+              {
+                "id": "catalog",
+                "name": " Catalog model ",
+                "variants": [
+                  "high",
+                  "low"
+                ]
+              },
+              {
+                "id": "other"
+              }
+            ]
+          },
+          {
+            "id": "opencode",
+            "models": [
+              {
+                "id": "big-pickle",
+                "name": "Big Pickle"
+              }
+            ]
+          }
+        ],
+        "defaults": {
+          "allowFallback": true,
+          "catalogLoaded": true,
+          "settingsDefaultModel": "openchamber/auto",
+          "autoRouting": "ready"
+        }
+      },
+      "expected": {
+        "agentName": "build",
+        "model": {
+          "providerId": "openchamber",
+          "modelId": "auto",
+          "variant": null
+        }
+      }
+    },
+    {
+      "name": "loaded catalog Auto agent pin ready",
+      "input": {
+        "agents": [
+          {
+            "name": "build",
+            "model": {
+              "providerId": "openchamber",
+              "modelId": "auto",
+              "variant": "high"
+            }
+          }
+        ],
+        "providers": [
+          {
+            "id": "p",
+            "name": "Provider",
+            "models": [
+              {
+                "id": "catalog",
+                "name": " Catalog model ",
+                "variants": [
+                  "high",
+                  "low"
+                ]
+              },
+              {
+                "id": "other"
+              }
+            ]
+          },
+          {
+            "id": "opencode",
+            "models": [
+              {
+                "id": "big-pickle",
+                "name": "Big Pickle"
+              }
+            ]
+          }
+        ],
+        "defaults": {
+          "allowFallback": true,
+          "catalogLoaded": true,
+          "autoRouting": "ready"
+        }
+      },
+      "expected": {
+        "agentName": "build",
+        "model": {
+          "providerId": "openchamber",
+          "modelId": "auto",
+          "variant": null
+        }
+      }
+    },
+    {
+      "name": "loaded catalog Auto configured notReady",
+      "input": {
+        "agents": [
+          {
+            "name": "plan",
+            "mode": "primary"
+          },
+          {
+            "name": "build",
+            "mode": "primary"
+          },
+          {
+            "name": "helper",
+            "mode": "subagent"
+          },
+          {
+            "name": "secret",
+            "mode": "primary",
+            "hidden": true
+          }
+        ],
+        "providers": [
+          {
+            "id": "p",
+            "name": "Provider",
+            "models": [
+              {
+                "id": "catalog",
+                "name": " Catalog model ",
+                "variants": [
+                  "high",
+                  "low"
+                ]
+              },
+              {
+                "id": "other"
+              }
+            ]
+          },
+          {
+            "id": "opencode",
+            "models": [
+              {
+                "id": "big-pickle",
+                "name": "Big Pickle"
+              }
+            ]
+          }
+        ],
+        "defaults": {
+          "allowFallback": true,
+          "catalogLoaded": true,
+          "settingsDefaultModel": "openchamber/auto",
+          "autoRouting": "notReady"
+        }
+      },
+      "expected": {
+        "agentName": "build",
+        "model": {
+          "providerId": "opencode",
+          "modelId": "big-pickle",
+          "variant": null
+        }
+      }
+    },
+    {
+      "name": "loaded catalog Auto agent pin notReady",
+      "input": {
+        "agents": [
+          {
+            "name": "build",
+            "model": {
+              "providerId": "openchamber",
+              "modelId": "auto",
+              "variant": "high"
+            }
+          }
+        ],
+        "providers": [
+          {
+            "id": "p",
+            "name": "Provider",
+            "models": [
+              {
+                "id": "catalog",
+                "name": " Catalog model ",
+                "variants": [
+                  "high",
+                  "low"
+                ]
+              },
+              {
+                "id": "other"
+              }
+            ]
+          },
+          {
+            "id": "opencode",
+            "models": [
+              {
+                "id": "big-pickle",
+                "name": "Big Pickle"
+              }
+            ]
+          }
+        ],
+        "defaults": {
+          "allowFallback": true,
+          "catalogLoaded": true,
+          "autoRouting": "notReady"
+        }
+      },
+      "expected": {
+        "agentName": "build",
+        "model": {
+          "providerId": "openchamber",
+          "modelId": "auto",
+          "variant": "high"
+        }
+      }
+    },
+    {
       "name": "last selected hidden skipped",
       "input": {
         "agents": [

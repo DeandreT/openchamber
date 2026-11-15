@@ -3,7 +3,8 @@
 //! edits that pin, remove, reorder and share them.
 //!
 //! A chip submits at once: the starter, then the composer's text, creates
-//! the selected project's session as Enter would. A built-in starter is one
+//! the selected draft's session as Enter would, after Chat directory and native
+//! provider preparation. A built-in starter is one
 //! of the composer's prompt-pair commands; it renders its visible prompt and
 //! its instructions from the overrides the server resolves for the project,
 //! read for each activation, over the built-in templates the resource
@@ -14,7 +15,7 @@ use std::sync::OnceLock;
 
 use gpui_kit::component::WindowExt;
 use gpui_kit::component::notification::Notification;
-use gpui_kit::{Context, Task, Window};
+use gpui_kit::{AnyWindowHandle, AppContext, Context, Task, Window};
 use openchamber_native_core::draft::{Draft, DraftKey, DraftTarget};
 use openchamber_native_core::draft_starters::{
     self, Available, ProjectStarter, ResolvedStarter, StarterGroup, StarterRef, StarterSource,
@@ -33,6 +34,10 @@ use crate::workspace::Workspace;
 
 const MAGIC_PROMPTS_JSON: &str = include_str!("../resources/magic-prompts.json");
 
+#[cfg(test)]
+#[path = "starter_continuation_tests.rs"]
+mod continuation_tests;
+
 /// A starter's first prompt for a new session.
 pub(crate) struct StarterPrompt {
     /// The retained owner transferred atomically into creation.
@@ -44,6 +49,56 @@ pub(crate) struct StarterPrompt {
     pub parts: PromptParts,
     /// Memory-only user intent from activation, before template preparation.
     pub effort: Option<crate::effort_preferences::UserEffort>,
+    pub native_config: Option<crate::native_agent::CreationConfig>,
+}
+
+/// Live continuation only. The journal recovers the complete capture as a draft
+/// after restart; it never replays this activation.
+struct StarterContinuation {
+    window: AnyWindowHandle,
+    rendered: Option<(String, String)>,
+    effort: Option<crate::effort_preferences::UserEffort>,
+    native: Option<StarterNative>,
+}
+
+struct StarterNative {
+    /// Existing choices are captured even when the provider is not ready yet.
+    /// None means preparation has not published any choices to the user.
+    preferences: Option<Vec<(String, String)>>,
+    /// A published execution binding and its preferences are immutable.
+    config: Option<crate::native_agent::CreationConfig>,
+    preparation: Option<u64>,
+}
+
+fn starter_native_config(
+    execution: &openchamber_native_core::native_agent::ExecutionBinding,
+    preferences: Vec<(String, String)>,
+) -> crate::native_agent::CreationConfig {
+    crate::native_agent::CreationConfig {
+        provider_id: execution.provider_id.clone(),
+        model_id: execution.model_id.clone(),
+        variant: Some(execution.variant.clone()),
+        prepare_after_session: false,
+        correction_required: false,
+        config: preferences,
+    }
+}
+
+/// Authentication can complete through the native provider's existing controls.
+/// A transport error or a terminal preparation response restores the source.
+pub(crate) fn native_preparation_failed(
+    outcome: Option<Result<(), openchamber_native_core::native_agent::ErrorCode>>,
+    state: Option<&openchamber_native_core::native_agent::State>,
+) -> bool {
+    use openchamber_native_core::native_agent::{ErrorCode, Status};
+    match outcome {
+        None => true,
+        Some(Err(code)) => code != ErrorCode::AuthenticationRequired,
+        // A successful reply may contain an older snapshot than a live event.
+        Some(Ok(())) => {
+            state.is_none_or(|state| matches!(state.status, Status::Error | Status::Stopped))
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -187,8 +242,10 @@ pub(crate) struct Starters {
     project_failures: HashMap<String, u32>,
     /// Each pending activation owns its complete source independently of typing.
     pub(crate) captures: StarterCaptures,
-    /// Override reads survive runtime reset so completion restores the old owner.
+    /// Override reads and completed continuations retain the original owner
+    /// through runtime switches. Only revisiting that owner can create a session.
     capture_tasks: HashMap<MessageId, Task<()>>,
+    continuations: HashMap<MessageId, StarterContinuation>,
     generation: u64,
     tasks: HashMap<u64, Task<()>>,
     next_task: u64,
@@ -196,12 +253,13 @@ pub(crate) struct Starters {
 
 impl Starters {
     pub(crate) fn capture_pending(&self, id: &MessageId) -> bool {
-        self.capture_tasks.contains_key(id)
+        self.capture_tasks.contains_key(id) || self.continuations.contains_key(id)
     }
 
     pub(crate) fn discard_captures(&mut self, owner: &DraftKey) {
         for capture in self.captures.discard_owner(owner) {
             self.capture_tasks.remove(&capture.id);
+            self.continuations.remove(&capture.id);
         }
     }
 
@@ -211,6 +269,7 @@ impl Starters {
             generation: self.generation + 1,
             captures: std::mem::take(&mut self.captures),
             capture_tasks: std::mem::take(&mut self.capture_tasks),
+            continuations: std::mem::take(&mut self.continuations),
             next_task: self.next_task,
             ..Self::default()
         };
@@ -390,19 +449,21 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !self.can_create_connected() {
+        if !self.new_session_view_active() || !self.persistence_ready() || self.close_in_progress()
+        {
             return;
         }
         let Some(chip) = self.chip(id) else {
             return;
         };
-        let Some(directory) = self.starter_project() else {
-            return;
-        };
         let Some(source) = self.composer_key.clone() else {
             return;
         };
-        if !self.starters.captures.can_begin(&source) {
+        if source.runtime() != &self.runtime
+            || !matches!(source.target(), DraftTarget::NewSession(_))
+            || !self.creations.can_begin(&source)
+            || !self.starters.captures.can_begin(&source)
+        {
             return;
         }
         let draft = self.composer_draft(cx);
@@ -416,18 +477,64 @@ impl Workspace {
             // Only built-ins resolve here, and each is a prompt pair.
             return;
         };
-        let Some(project) = self
-            .topology
-            .projects
-            .iter()
-            .find(|project| project.path == directory)
-            .map(|project| project.id.to_string())
-        else {
+        let project = if self.chat_draft_open() {
+            if !self.is_chat_creation(&source) {
+                self.retry_failed_chat_roots(window, cx);
+                return;
+            }
+            openchamber_native_core::chat_draft::CHAT_PROJECT_ID.to_owned()
+        } else {
+            let Some(project) = self.draft_destination_project(source.directory()) else {
+                return;
+            };
+            project.id.to_string()
+        };
+        let Some((directory, mut selection)) = self.catalog_selection() else {
             return;
         };
-        let Some((_, selection)) = self.send_selection() else {
+        let Some(model) = selection.model.as_ref() else {
             return;
         };
+        let native = if self.native_provider_advertised(&model.provider_id) {
+            let key = openchamber_native_core::native_agent::OwnerKey {
+                server: source.runtime().as_str().to_owned(),
+                scope: openchamber_native_core::native_agent::Scope {
+                    directory: source.directory().to_owned(),
+                    provider_id: model.provider_id.clone(),
+                    session_id: None,
+                },
+            };
+            let state = self.native_agents.owner.state(&key);
+            let preferences: Option<Vec<_>> = state.map(|state| {
+                state
+                    .config
+                    .iter()
+                    .map(|field| (field.id.clone(), field.value.clone()))
+                    .collect()
+            });
+            let config = self.capture_native_creation(model).or_else(|| {
+                state
+                    .and_then(|state| state.execution.as_ref())
+                    .map(|execution| {
+                        selection.model = Some(execution.model_choice());
+                        starter_native_config(execution, preferences.clone().unwrap_or_default())
+                    })
+            });
+            Some(StarterNative {
+                preferences,
+                config,
+                preparation: None,
+            })
+        } else {
+            None
+        };
+        if native
+            .as_ref()
+            .and_then(|native| native.config.as_ref())
+            .is_some_and(|config| !config.validate())
+        {
+            return;
+        }
         let effort = selection
             .model
             .as_ref()
@@ -439,7 +546,11 @@ impl Workspace {
             self.notify_mutation_failure("chat.nativeRecovery.sendFailed", window, cx);
             return;
         };
-        let Some(connection) = self.connection.as_ref() else {
+        let Some(connection) = self
+            .connection
+            .as_ref()
+            .filter(|connection| connection.state == crate::connection::ConnectionState::Connected)
+        else {
             return;
         };
         let Some(client) = connection.client.clone() else {
@@ -464,12 +575,20 @@ impl Workspace {
         self.composer
             .update(cx, |composer, cx| composer.set_value("", window, cx));
         self.save_draft_preview(&source, &Draft::default(), cx);
+        self.starters.continuations.insert(
+            capture_id.clone(),
+            StarterContinuation {
+                window: window.window_handle(),
+                rendered: None,
+                effort,
+                native,
+            },
+        );
         self.queue_persistence(cx);
         let read_directory = directory.clone();
         let read = crate::network::NetworkTask::spawn_on(&executor, async move {
             client.magic_prompt_overrides(Some(&read_directory)).await
         });
-        let generation = self.starters.generation;
         let task_id = capture_id.clone();
         let task = cx.spawn_in(window, async move |this, cx| {
             let result = read.await;
@@ -486,12 +605,8 @@ impl Workspace {
                         None
                     }
                 };
-                // The view may have moved on while the overrides were read.
-                let Some((visible, instructions)) = rendered
-                    .filter(|_| generation == this.starters.generation)
-                    .filter(|_| this.starter_project().as_deref() == Some(directory.as_str()))
-                    .filter(|_| this.composer_key.as_ref() == Some(&source))
-                else {
+                let Some(rendered) = rendered else {
+                    this.starters.continuations.remove(&capture_id);
                     this.restore_starter_capture(&capture_id, window, cx);
                     if source.runtime() == &this.runtime {
                         window.push_notification(
@@ -502,36 +617,343 @@ impl Workspace {
                     cx.notify();
                     return;
                 };
-                let capture = this
-                    .starters
-                    .captures
-                    .get(&capture_id)
-                    .expect("the completing read retains its capture");
-                let Ok(draft) = capture.rollback_draft() else {
-                    this.restore_starter_capture(&capture_id, window, cx);
-                    this.notify_mutation_failure("chat.nativeRecovery.sendFailed", window, cx);
-                    return;
-                };
-                let parts = capture.rendered_parts(instructions);
-                let created = this.submit_new_session_with(
-                    Some(StarterPrompt {
-                        capture_id: capture_id.clone(),
-                        draft,
-                        prompt_text: visible,
-                        parts,
-                        effort,
-                    }),
-                    window,
-                    cx,
-                );
-                if !created {
-                    this.restore_starter_capture(&capture_id, window, cx);
+                if let Some(continuation) = this.starters.continuations.get_mut(&capture_id) {
+                    continuation.rendered = Some(rendered);
                 }
+                this.resume_starter_activation(window, cx);
                 cx.notify();
             });
         });
         self.starters.capture_tasks.insert(task_id, task);
+        if self.chat_draft_open() {
+            // The preparation barrier includes the capture before mkdir starts.
+            self.prepare_chat_draft(window, cx);
+        }
+        self.resume_starter_activation(window, cx);
         cx.notify();
+    }
+
+    /// Directory completion belongs to its captured owner, including while hidden.
+    pub(crate) fn starter_chat_prepared(
+        &mut self,
+        owner: &DraftKey,
+        succeeded: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !succeeded {
+            let id = self
+                .starters
+                .captures
+                .iter()
+                .find(|capture| &capture.owner == owner)
+                .map(|capture| capture.id.clone());
+            if let Some(id) = id {
+                self.starters.capture_tasks.remove(&id);
+                self.starters.continuations.remove(&id);
+                self.restore_starter_capture(&id, window, cx);
+            }
+        } else {
+            self.resume_starter_activation(window, cx);
+        }
+    }
+
+    /// Called after readiness changes and when the original new-session view is
+    /// shown again. No timer or background create follows a different selection.
+    pub(crate) fn resume_starter_activation(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.new_session_view_active() || !self.persistence_ready() || self.close_in_progress()
+        {
+            return;
+        }
+        let Some(owner) = self
+            .composer_key
+            .clone()
+            .filter(|key| key.runtime() == &self.runtime)
+        else {
+            return;
+        };
+        let Some(id) = self
+            .starters
+            .captures
+            .iter()
+            .find(|capture| capture.owner == owner)
+            .map(|capture| capture.id.clone())
+        else {
+            return;
+        };
+        let Some(continuation) = self.starters.continuations.get(&id) else {
+            return;
+        };
+        if self.is_chat_creation(&owner) && !self.chat_creation_ready(&owner) {
+            return;
+        }
+        let Some(connection) = self.connection.as_ref().filter(|connection| {
+            connection.state == crate::connection::ConnectionState::Connected
+                && connection.client.is_some()
+        }) else {
+            return;
+        };
+        let generation = connection.generation;
+        if let Some(native) = &continuation.native {
+            let capture = self
+                .starters
+                .captures
+                .get(&id)
+                .expect("retained activation");
+            let Some(model) = capture.selection.model.as_ref() else {
+                return;
+            };
+            let key = openchamber_native_core::native_agent::OwnerKey {
+                server: capture.owner.runtime().as_str().to_owned(),
+                scope: openchamber_native_core::native_agent::Scope {
+                    directory: capture.owner.directory().to_owned(),
+                    provider_id: model.provider_id.clone(),
+                    session_id: None,
+                },
+            };
+            if self.native_action_pending(&key) {
+                if !self.native_agents.replaying() {
+                    // Join preparation already started by the composer. Its
+                    // failure must not trigger another automatic Prepare.
+                    self.starters
+                        .continuations
+                        .get_mut(&id)
+                        .expect("live continuation")
+                        .native
+                        .as_mut()
+                        .expect("native continuation")
+                        .preparation = Some(generation);
+                }
+                return;
+            }
+            if native
+                .config
+                .as_ref()
+                .is_some_and(|config| config.prepare_after_session)
+                || self.native_agents.owner.can_prepare_after_session(&key)
+            {
+                // Session-first intent has no draft execution binding.
+                if native.config.is_none() {
+                    self.retain_starter_native_ready(&key, cx);
+                    if self
+                        .starters
+                        .continuations
+                        .get(&id)
+                        .and_then(|next| next.native.as_ref())
+                        .is_none_or(|native| native.config.is_none())
+                    {
+                        return;
+                    }
+                }
+            } else if self.native_agents.owner.can_submit(&key) {
+                if native.config.is_none() {
+                    self.retain_starter_native_ready(&key, cx);
+                    if self
+                        .starters
+                        .continuations
+                        .get(&id)
+                        .and_then(|next| next.native.as_ref())
+                        .is_none_or(|native| native.config.is_none())
+                    {
+                        return;
+                    }
+                }
+            } else {
+                if native.preparation != Some(generation)
+                    && self.native_call(
+                        key,
+                        openchamber_native_core::native_agent::Call::Prepare,
+                        true,
+                        cx,
+                    )
+                {
+                    self.starters
+                        .continuations
+                        .get_mut(&id)
+                        .expect("live continuation")
+                        .native
+                        .as_mut()
+                        .expect("native continuation")
+                        .preparation = Some(generation);
+                }
+                return;
+            }
+        }
+        let capture = self
+            .starters
+            .captures
+            .get(&id)
+            .expect("retained activation");
+        if !self.can_create_starter(capture) {
+            return;
+        }
+        if self
+            .starters
+            .continuations
+            .get(&id)
+            .is_none_or(|next| next.rendered.is_none())
+        {
+            return;
+        }
+        let Ok(draft) = capture.rollback_draft() else {
+            self.starters.continuations.remove(&id);
+            self.restore_starter_capture(&id, window, cx);
+            self.notify_mutation_failure("chat.nativeRecovery.sendFailed", window, cx);
+            return;
+        };
+        let next = self
+            .starters
+            .continuations
+            .remove(&id)
+            .expect("ready continuation");
+        let (visible, instructions) = next.rendered.expect("rendered prompt");
+        let parts = capture.rendered_parts(instructions);
+        if !self.submit_new_session_with(
+            Some(StarterPrompt {
+                capture_id: id.clone(),
+                draft,
+                prompt_text: visible,
+                parts,
+                effort: next.effort,
+                native_config: next.native.and_then(|native| native.config),
+            }),
+            window,
+            cx,
+        ) {
+            self.restore_starter_capture(&id, window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Freeze the first ready binding even if its owner is hidden when the
+    /// native response arrives. Later preference edits belong to later sends.
+    pub(crate) fn retain_starter_native_ready(
+        &mut self,
+        key: &openchamber_native_core::native_agent::OwnerKey,
+        cx: &mut Context<Self>,
+    ) {
+        let deferred = self.native_agents.owner.can_prepare_after_session(key);
+        if key.scope.session_id.is_some() || !(deferred || self.native_agents.owner.can_submit(key))
+        {
+            return;
+        }
+        let Some(state) = self.native_agents.owner.state(key) else {
+            return;
+        };
+        let Some(id) = self
+            .starters
+            .captures
+            .iter()
+            .find(|capture| {
+                capture.owner.runtime().as_str() == key.server
+                    && capture.owner.directory() == key.scope.directory
+                    && capture
+                        .selection
+                        .model
+                        .as_ref()
+                        .is_some_and(|model| model.provider_id == key.scope.provider_id)
+            })
+            .map(|capture| capture.id.clone())
+        else {
+            return;
+        };
+        let capture = self
+            .starters
+            .captures
+            .get(&id)
+            .expect("retained activation");
+        let Some(model) = capture.selection.model.as_ref() else {
+            return;
+        };
+        if deferred && capture.selection.agent_name.is_none() {
+            return;
+        }
+        let Some(native) = self
+            .starters
+            .continuations
+            .get_mut(&id)
+            .and_then(|next| next.native.as_mut())
+            .filter(|native| native.config.is_none())
+        else {
+            return;
+        };
+        let preferences = native.preferences.clone().unwrap_or_else(|| {
+            state
+                .config
+                .iter()
+                .map(|field| (field.id.clone(), field.value.clone()))
+                .collect()
+        });
+        let (config, model) = if deferred {
+            (
+                crate::native_agent::CreationConfig {
+                    provider_id: model.provider_id.clone(),
+                    model_id: model.model_id.clone(),
+                    variant: None,
+                    prepare_after_session: true,
+                    correction_required: false,
+                    config: preferences,
+                },
+                model.clone(),
+            )
+        } else {
+            let Some(execution) = state.execution.as_ref() else {
+                return;
+            };
+            (
+                starter_native_config(execution, preferences),
+                execution.model_choice(),
+            )
+        };
+        if config.validate() && (deferred || self.starters.captures.bind_native_model(&id, model)) {
+            native.config = Some(config);
+            self.queue_persistence(cx);
+        }
+    }
+
+    /// Native reads complete without a Window. Retire the activation immediately,
+    /// then restore its full source through its original window after this borrow.
+    pub(crate) fn fail_starter_native_preparation(
+        &mut self,
+        key: &openchamber_native_core::native_agent::OwnerKey,
+        cx: &mut Context<Self>,
+    ) {
+        if key.scope.session_id.is_some() {
+            return;
+        }
+        let Some(capture) = self.starters.captures.iter().find(|capture| {
+            capture.owner.runtime().as_str() == key.server
+                && capture.owner.directory() == key.scope.directory
+                && capture
+                    .selection
+                    .model
+                    .as_ref()
+                    .is_some_and(|model| model.provider_id == key.scope.provider_id)
+        }) else {
+            return;
+        };
+        let id = capture.id.clone();
+        let runtime = capture.owner.runtime().clone();
+        let Some(next) = self.starters.continuations.remove(&id) else {
+            return;
+        };
+        self.starters.capture_tasks.remove(&id);
+        let entity = cx.weak_entity();
+        cx.defer(move |cx| {
+            let _ = cx.update_window(next.window, |_, window, cx| {
+                let _ = entity.update(cx, |this, cx| {
+                    this.restore_starter_capture(&id, window, cx);
+                    if this.runtime == runtime {
+                        this.notify_mutation_failure("chat.nativeRecovery.sendFailed", window, cx);
+                    }
+                    cx.notify();
+                });
+            });
+        });
     }
 
     /// Explicit recovery and late reads use the original complete draft owner.
@@ -564,6 +986,10 @@ impl Workspace {
                 }
                 if self.composer_key.as_ref() == Some(&capture.owner) {
                     self.restore_composer_draft(window, cx);
+                } else {
+                    // A failed empty starter can be the last owner of a folder
+                    // whose preparation finished while another view was open.
+                    self.cleanup_unused_chat_directory(&capture.owner, window, cx);
                 }
                 self.queue_persistence(cx);
                 true
