@@ -1301,6 +1301,28 @@ mod tests {
             });
         })
         .expect("window");
+        // Finish the real journal before GPUI can poll its hydration callback.
+        let finished = cx.read(|cx| {
+            workspace
+                .read(cx)
+                .attachment_worker()
+                .expect("isolated journal worker")
+                .finish()
+        });
+        assert_eq!(
+            finished.blocking_recv(),
+            Ok(Ok(crate::journal_worker::CommitOutcome::Durable))
+        );
+        assert!(
+            fixture
+                .journal()
+                .parent()
+                .expect("profile directory")
+                .is_dir()
+        );
+        // The window also owns the workspace; cancel its tasks before fixture cleanup.
+        drop(workspace);
+        cx.quit();
     }
 
     #[gpui_kit::test]
@@ -1362,9 +1384,34 @@ mod tests {
             });
         })
         .expect("window");
+        // Finish the real journal before the first scheduler pump below.
+        let finished_journal = cx.read(|cx| {
+            workspace
+                .read(cx)
+                .attachment_worker()
+                .expect("isolated journal worker")
+                .finish()
+        });
+        assert_eq!(
+            finished_journal.blocking_recv(),
+            Ok(Ok(crate::journal_worker::CommitOutcome::Durable))
+        );
+        assert!(
+            fixture
+                .journal()
+                .parent()
+                .expect("profile directory")
+                .is_dir()
+        );
         release.send(()).expect("old executor still alive");
         let started = Instant::now();
-        while !finished.load(Ordering::Acquire) {
+        let old_executor_idle = |cx: &gpui_kit::App| {
+            let [(_, network)] = workspace.read(cx).retired_networks.as_slice() else {
+                panic!("expected exactly one retained executor before reclamation");
+            };
+            network.is_idle()
+        };
+        while !finished.load(Ordering::Acquire) || !cx.read(old_executor_idle) {
             cx.run_until_parked();
             assert!(
                 started.elapsed() < Duration::from_secs(3),
@@ -1379,5 +1426,7 @@ mod tests {
                 assert!(workspace.retired_networks.is_empty());
             })
         });
+        drop(workspace);
+        cx.quit();
     }
 }
