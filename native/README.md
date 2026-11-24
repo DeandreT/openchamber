@@ -91,6 +91,36 @@ Profiles live in `hosts.json` beside the native mutation journal. A versioned
 snapshot and a file lock prevent one window from overwriting another's newer
 profile edit. A malformed or future-format file remains untouched.
 
+## Staged Linux package preflight
+
+Run this from the repository root against an already-staged filesystem tree:
+
+```sh
+node native/scripts/verify-linux-stage.mjs <stage-root> <x64|arm64> <desktop-file> <native-binary>
+node --test native/scripts/verify-linux-stage.test.mjs
+```
+
+Pass the launcher and `openchamber-native` paths relative to the stage root,
+using simple Linux path segments. The launcher must have a `Name`, use
+`Type=Application`, and point `Exec` at the absolute installed path of that binary,
+with optional `%U`. If present, `TryExec` must point at the same binary.
+D-Bus activation can bypass `Exec`, so the preflight rejects it.
+
+The checker uses the bundle layout beside the native executable, as the
+managed host does on a default launch. It checks the ELF machine type of
+`openchamber-native`, the `openchamber` Electron host and the bundled OpenCode
+CLI, along with execute bits when run on Unix. It checks that the packed
+byte ranges for the web server manifest and entrypoint in `app.asar` are
+in bounds and do not overlap. `web-dist/index.html` must name a staged
+JavaScript module under the exact lowercase `/assets/` path.
+Checked paths must match the spelling in the stage and resolve without links.
+
+This reads local files and runs no staged code. A pass covers the listed
+layout and launcher checks only. It does not establish OpenCode's version,
+the full asset or dependency tree, package signatures, install and removal,
+desktop activation, shutdown, updates or rollback. Those checks require a
+real release artifact and a disposable Linux desktop on the target architecture.
+
 ## Local recovery state
 
 Settings opens at General and retains its last page while the window lives.
