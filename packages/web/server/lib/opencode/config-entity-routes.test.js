@@ -24,6 +24,28 @@ const createApp = (overrides = {}) => {
   return { app, calls };
 };
 
+describe('config write logging', () => {
+  it.each([
+    ['post', 'agents', 'createAgent', 'prompt'],
+    ['patch', 'agents', 'updateAgent', 'prompt'],
+    ['post', 'commands', 'createCommand', 'template'],
+    ['patch', 'commands', 'updateCommand', 'template'],
+  ])('keeps %s %s content out of the server log', async (method, entity, writeName, field) => {
+    const text = 'private text from a test fixture';
+    const body = { [field]: text };
+    const write = vi.fn(() => ({}));
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const { app } = createApp({ [writeName]: write });
+      await request(app)[method](`/api/config/${entity}/fixture`).send(body).expect(200);
+      expect(write.mock.calls[0]?.[1]).toEqual(body);
+      expect(JSON.stringify(log.mock.calls)).not.toContain(text);
+    } finally {
+      log.mockRestore();
+    }
+  });
+});
+
 describe('MCP saves from a remote origin', () => {
   const createMcpApp = () => {
     const saved = [];
