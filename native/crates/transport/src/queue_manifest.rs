@@ -4024,7 +4024,7 @@ fn inline_payload_bytes(url: &str) -> Result<Vec<u8>, QueueManifestError> {
             _ => None,
         };
         let mut bytes = Vec::with_capacity(encoded.len() / 4 * 3);
-        for (ordinal, part) in encoded.as_bytes().chunks_exact(4).enumerate() {
+        for (ordinal, part) in encoded.as_bytes().as_chunks::<4>().0.iter().enumerate() {
             let a = digit(part[0]).ok_or(QueueManifestError::InvalidInput)?;
             let b = digit(part[1]).ok_or(QueueManifestError::InvalidInput)?;
             let c = if part[2] == b'=' {
@@ -5192,7 +5192,7 @@ fn parse_digest(value: &str) -> Option<[u8; 32]> {
         _ => None,
     };
     let mut digest = [0; 32];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         digest[index] = nibble(pair[0])? * 16 + nibble(pair[1])?;
     }
     Some(digest)

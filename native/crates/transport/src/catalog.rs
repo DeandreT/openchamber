@@ -56,65 +56,6 @@ impl RoutingReadiness {
     }
 }
 
-#[cfg(test)]
-mod routing_tests {
-    use super::*;
-    use openchamber_native_core::send_config::AutoRouting;
-
-    #[test]
-    fn readiness_requires_both_authoritative_flags() {
-        for (json, expected) in [
-            (
-                r#"{"available":false,"autoReady":true}"#,
-                AutoRouting::Unavailable,
-            ),
-            (
-                r#"{"available":true,"autoReady":false}"#,
-                AutoRouting::NotReady,
-            ),
-            (r#"{"available":true,"autoReady":true}"#, AutoRouting::Ready),
-        ] {
-            assert_eq!(
-                serde_json::from_str::<RoutingReadiness>(json)
-                    .expect("valid flags")
-                    .state()
-                    .auto,
-                expected
-            );
-        }
-        for (json, safety_net) in [
-            (r#"{"available":true,"autoReady":false}"#, true),
-            (
-                r#"{"available":true,"autoReady":true,"jevAvailable":false}"#,
-                false,
-            ),
-            (
-                r#"{"available":false,"autoReady":false,"jevAvailable":true}"#,
-                false,
-            ),
-        ] {
-            assert_eq!(
-                serde_json::from_str::<RoutingReadiness>(json)
-                    .expect("valid flags")
-                    .state()
-                    .safety_net,
-                safety_net,
-                "{json}"
-            );
-        }
-        for json in [
-            "{}",
-            r#"{"available":true}"#,
-            r#"{"available":true,"autoReady":"true"}"#,
-        ] {
-            assert!(
-                serde_json::from_str::<RoutingReadiness>(json).is_err(),
-                "an incomplete answer cannot establish readiness"
-            );
-        }
-    }
-}
-
 /// The flat model catalog of one directory and OpenCode's own default.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ModelCatalog {
@@ -300,5 +241,64 @@ pub(crate) fn opencode_defaults(config: &Map<String, Value>) -> OpenCodeDefaults
     OpenCodeDefaults {
         default_agent,
         model,
+    }
+}
+
+#[cfg(test)]
+mod routing_tests {
+    use super::*;
+    use openchamber_native_core::send_config::AutoRouting;
+
+    #[test]
+    fn readiness_requires_both_authoritative_flags() {
+        for (json, expected) in [
+            (
+                r#"{"available":false,"autoReady":true}"#,
+                AutoRouting::Unavailable,
+            ),
+            (
+                r#"{"available":true,"autoReady":false}"#,
+                AutoRouting::NotReady,
+            ),
+            (r#"{"available":true,"autoReady":true}"#, AutoRouting::Ready),
+        ] {
+            assert_eq!(
+                serde_json::from_str::<RoutingReadiness>(json)
+                    .expect("valid flags")
+                    .state()
+                    .auto,
+                expected
+            );
+        }
+        for (json, safety_net) in [
+            (r#"{"available":true,"autoReady":false}"#, true),
+            (
+                r#"{"available":true,"autoReady":true,"jevAvailable":false}"#,
+                false,
+            ),
+            (
+                r#"{"available":false,"autoReady":false,"jevAvailable":true}"#,
+                false,
+            ),
+        ] {
+            assert_eq!(
+                serde_json::from_str::<RoutingReadiness>(json)
+                    .expect("valid flags")
+                    .state()
+                    .safety_net,
+                safety_net,
+                "{json}"
+            );
+        }
+        for json in [
+            "{}",
+            r#"{"available":true}"#,
+            r#"{"available":true,"autoReady":"true"}"#,
+        ] {
+            assert!(
+                serde_json::from_str::<RoutingReadiness>(json).is_err(),
+                "an incomplete answer cannot establish readiness"
+            );
+        }
     }
 }
