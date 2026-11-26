@@ -13,6 +13,7 @@ const native = `${bundle}/openchamber-native`;
 const launcher = 'usr/share/applications/test-native.desktop';
 const electron = `${bundle}/openchamber`;
 const cli = `${bundle}/resources/opencode-cli/opencode`;
+const rg = `${bundle}/resources/ripgrep/rg`;
 const archive = `${bundle}/resources/app.asar`;
 const index = `${bundle}/resources/web-dist/index.html`;
 const asset = `${bundle}/resources/web-dist/assets/main-fixture.js`;
@@ -50,6 +51,7 @@ function fixture(t, arch = 'x64') {
     [native]: elf(arch),
     [electron]: elf(arch),
     [cli]: elf(arch),
+    [rg]: elf(arch),
     [archive]: asar(),
     [index]: '<script type="module" crossorigin src="/assets/main-fixture.js"></script>',
     [asset]: 'export {};',
@@ -57,7 +59,7 @@ function fixture(t, arch = 'x64') {
   for (const [name, content] of Object.entries(inputs)) {
     const file = path.join(root, name);
     fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, content, { mode: [native, electron, cli].includes(name) ? 0o755 : 0o644 });
+    fs.writeFileSync(file, content, { mode: [native, electron, cli, rg].includes(name) ? 0o755 : 0o644 });
   }
   return {
     root,
@@ -124,9 +126,9 @@ test('bad CLI input and bad launchers fail without a success message', (t) => {
   assert.equal(result.stdout, '');
 });
 
-test('all three executables must match the requested ELF architecture', (t) => {
+test('all bundled executables must match the requested ELF architecture', (t) => {
   const { run, write } = fixture(t);
-  for (const [name, label] of [[native, 'Native executable'], [electron, 'Electron host'], [cli, 'OpenCode CLI']]) {
+  for (const [name, label] of [[native, 'Native executable'], [electron, 'Electron host'], [cli, 'OpenCode CLI'], [rg, 'ripgrep']]) {
     write(name, elf('arm64'));
     assert.throws(run, new RegExp(`${label} architecture mismatch: expected x64, got arm64`));
     write(name, elf('x64'));
@@ -152,7 +154,7 @@ test('a directory link cannot supply a managed-host file from elsewhere', (t) =>
 });
 
 test('missing managed-host files fail by name', (t) => {
-  for (const name of [electron, cli, archive, index, asset]) {
+  for (const name of [electron, cli, rg, archive, index, asset]) {
     const { run, remove } = fixture(t);
     remove(name);
     assert.throws(run, { message: `Missing or empty staged file: ${name}` });

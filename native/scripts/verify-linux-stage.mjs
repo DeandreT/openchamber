@@ -154,6 +154,7 @@ export function verifyLinuxStage(root, arch, launcher, binary) {
     [binary, 'Native executable'],
     [path.posix.join(bundle, 'openchamber'), 'Electron host'],
     [path.posix.join(bundle, 'resources/opencode-cli/opencode'), 'OpenCode CLI'],
+    [path.posix.join(bundle, 'resources/ripgrep/rg'), 'ripgrep'],
   ]) {
     assertElfArchitecture(stagedFile(relative, true), arch, label);
   }
