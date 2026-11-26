@@ -339,7 +339,9 @@ jobs:
                 check: MISSING_SCREENSHOTS,
                 failing: evidence.missingScreenshots,
                 body: () => [
-                  "This PR changes UI, and its description has no screenshot. Please add before and after screenshots of what changed (a GIF for motion). " + howToAttach,
+                  (evidence.nativePairRequired
+                    ? "This PR changes a Rust desktop view. Put screenshots from the PR base under a `Before` heading and screenshots from the final candidate under an `After` heading. Keep Electron screenshots separate. "
+                    : "This PR changes UI, and its description has no screenshot. Please add before and after screenshots of what changed (a GIF for motion). ") + howToAttach,
                   "",
                   "Review starts once the description has them. If the change really shows nothing on screen, say why in the description and the maintainer will lift the label.",
                 ],
