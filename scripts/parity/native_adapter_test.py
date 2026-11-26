@@ -1,6 +1,7 @@
 """Content-size and row-state checks without launching an application."""
 
 import itertools
+import json
 import subprocess
 import unittest
 from pathlib import Path
@@ -20,6 +21,58 @@ class SizedClient(NativeClient):
 
     def _window(self):
         return "owned-window"
+
+
+class NativeCheckedWaitTest(unittest.TestCase):
+    def wait(self, states, expected, *, count=1, observed_name=None, condition=None):
+        client = NativeClient.__new__(NativeClient)
+        node = Mock()
+        node.get_name.return_value = observed_name or "Mark todo complete"
+        node.get_role_name.return_value = "check box"
+        reads = iter(states)
+        node.get_state_set.side_effect = lambda: SimpleNamespace(contains=next(reads, states[-1]).__contains__)
+        if condition is None:
+            condition = {"named": {"name": "Mark todo complete", "role": "check box"}, "checked": expected}
+        ticks = itertools.count(step=0.1)
+        with (
+            patch.object(client, "_walk", return_value=[node] * count),
+            patch.object(client, "_read_marks"),
+            patch("native_adapter._atspi", return_value=SimpleNamespace(StateType=SimpleNamespace(
+                CHECKED="checked", CHECKABLE="checkable", INDETERMINATE="mixed", DEFUNCT="defunct",
+            ))),
+            patch("native_adapter.time.monotonic", side_effect=lambda: next(ticks)),
+        ):
+            result = client.wait_for(condition, 0.5)
+        if result:
+            node.clear_cache.assert_called()
+        return result
+
+    def test_only_reported_binary_states_satisfy_their_wait(self):
+        for states, expected in (({"checkable"}, False), ({"checked", "checkable"}, True)):
+            with self.subTest(states=states):
+                self.assertTrue(self.wait([states], expected))
+                self.assertFalse(self.wait([states], not expected))
+        for states in (set(), {"defunct"}, {"checkable", "mixed"}, {"checked", "checkable", "defunct"}):
+            for expected in (False, True):
+                with self.subTest(states=states, expected=expected):
+                    self.assertFalse(self.wait([states], expected))
+
+    def test_missing_or_ambiguous_checkbox_cannot_prove_state(self):
+        self.assertFalse(self.wait([{"checked", "checkable"}], True, count=0))
+        self.assertFalse(self.wait([{"checked", "checkable"}], True, count=2))
+
+    def test_checked_wait_observes_the_later_transition(self):
+        self.assertTrue(self.wait([{"checkable"}, {"checked", "checkable"}], True))
+        self.assertTrue(self.wait([{"checked", "checkable"}, {"checkable"}], False))
+
+    def test_completed_todo_requires_the_reopen_action_name_even_when_checked(self):
+        scenarios = json.loads(Path(__file__).with_name("scenarios.json").read_text())["scenarios"]
+        case = next(case for case in scenarios if case["id"] == "panels.knowledge.todo-complete-reopen")
+        condition = next(step["wait"]["native"] for step in case["steps"]
+                         if step.get("wait", {}).get("native", {}).get("checked") is True)
+        observed = [{"checked", "checkable"}]
+        self.assertFalse(self.wait(observed, True, observed_name='Mark "Write release notes" complete', condition=condition))
+        self.assertTrue(self.wait(observed, True, observed_name='Mark "Write release notes" as not done', condition=condition))
 
 
 class NativeSizeTest(unittest.TestCase):

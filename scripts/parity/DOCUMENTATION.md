@@ -364,6 +364,45 @@ IDs and requirements remain stable. The supported configuration matrix in
 `docs/rust-desktop/PARITY.md` remains a separate replacement requirement; a
 feature passing in one run does not qualify other platforms, locales or scales.
 
+### Knowledge and schedules paired cases
+
+`fixture: "project"` registers a fresh empty directory in each independent
+server-data copy. Both clients see the same path and `{fixtureId}`. The panel
+cases start a draft with Ctrl+N, select that project, require an empty
+authoritative list before changing it, and check the exact focused text
+after typing.
+
+- `panels.knowledge.note-edit-search` creates and edits a note, checks the exact
+  saved body, filters to no matches and opens the matching search result.
+- `panels.knowledge.todo-complete-reopen` checks the exact single stored todo
+  after creation, completion and reopening. The checkbox must expose the
+  action for its current state, including `Mark "Write release notes" as not
+  done` after completion. A checked box with the old name fails.
+- `panels.knowledge.note-create-retry` fails one create before admission, observes
+  the visible error and retained draft, then requires an explicit retry to store
+  exactly one note in the same project. It captures the error before it clears.
+- `panels.knowledge.note-delete-undo` checks the note is hidden but still stored
+  during Undo. Undo must restore it without a delete or another create. A second
+  deletion must remove it from both the list and the project's records.
+- `panels.schedules.invalid-preview` opens the empty project schedule list,
+  sets an annual UTC schedule and checks all four displayed dates and times.
+  An invalid minute removes them. Cancelling keeps the project empty. A `PUT`
+  to any project's task list counts as an unexpected save.
+- `panels.schedules.list-read-retry` fails a list read and checks the error.
+  Selecting the same project again must issue a fresh read. The check holds
+  that read through the loading message and releases it before the empty-list
+  checkpoint.
+
+These cases exercise individual requirements. Even if all six pass, both panel
+entries still have uncovered requirements, including todo dependencies, plan
+dispatch, cross-project edit recovery, schedule save, target selection and
+execution. Observing the held read does not qualify a settled loading image.
+
+`python3 -m unittest panel_scenarios_test native_adapter_test` checks these
+contracts and the state reader without launching a desktop client. Genuine
+paired execution still requires the pinned clients, independent seed copies and
+the matched capture conditions in `docs/rust-desktop/PARITY.md`.
+
 ## Native Linux platform checks
 
 `native_platform.py` runs the synthetic native client on its own Xvfb display
@@ -541,6 +580,11 @@ Native waits can also match a named accessible node with
 `{"named": {"name": "Search projects...", "role": "entry"}}`. Optional `id`
 and `role` fields distinguish matching labels, `"prefix": true` matches the
 start of the name, and `"present": false` waits for the node to disappear.
+For one named node with `"role": "check box"`, a native condition may also use
+`"checked": true` or `false` to require its observed AT-SPI checked state. An
+absent, ambiguous, defunct, non-checkable or mixed-state node cannot satisfy
+this check. Pair it with the
+reference checkbox's `aria-checked` read and an authoritative mutation read.
 Typing starts only after the popup's search field mounts. Both clients accept
 `{"focusedText": text}`: the focused editable's exact text (a field's value or
 a contenteditable's text without its trailing line break).
@@ -581,6 +625,7 @@ launch exactly as before.
 | `key: "ctrl+shift+z"` | `Input.dispatchKeyEvent`: each modifier pressed, the key, the modifiers released, with the DOM key, code and virtual key code. Named keys carry no text; characters do unless a command modifier is held. | A bare key through AT-SPI key synthesis, as before; a chord through `xdotool key` (XTest). |
 | `paste: "text"` | The runner's GTK clipboard serves the exact text while Ctrl+V reads it. | The same clipboard and chord. |
 | `clickNamed: {"name", "role"}` | The one unignored node with that accessible name and ARIA role in Chromium's accessibility tree, clicked at its centre once nothing covers it. | The one node with that AT-SPI name and a role the ARIA role maps to (`steps.ATSPI_ROLES`), clicked like `click`. |
+| `clickTarget: {"electron": [...], "native": [...]}` | A nonempty sequence of named targets. The reference opens Scheduled tasks directly from Pages. | A nonempty sequence using native controls. Scheduled tasks opens through More. Each click requires a settled client. |
 | `hover: "<target>"` | A `mouseMoved` to the target's centre. | The real pointer moved there; a pointer that does not arrive fails, since hover has no accessibility equivalent. |
 | `drag: {"from", "to"}` | Pressed at the `from` target's centre, moved in ten steps onto the `to` target's centre and released. | The same through XTest; drag has no accessibility equivalent. |
 | `gate: "hold"` / `"release"` | The fixture provider's turn gate: while held, a delayed model's turn (`think-30s`) waits for the release instead of its delay. | The same, on the isolated server's fixture provider. |

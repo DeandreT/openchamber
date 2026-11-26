@@ -387,9 +387,28 @@ class NativeClient:
 
     # --- input -----------------------------------------------------------
 
+    def _checkbox_matches(self, wanted: dict, expected: bool) -> bool:
+        match = None
+        for node in self._walk():
+            if node.get_role_name() != "check box":
+                continue
+            node.clear_cache()
+            if node.get_name() == wanted["name"] and ("id" not in wanted or node.get_accessible_id() == wanted["id"]):
+                if match is not None:
+                    return False
+                match = node
+        if match is None:
+            return False
+        states = match.get_state_set()
+        flag = _atspi().StateType
+        return (states is not None and states.contains(flag.CHECKABLE)
+                and not states.contains(flag.DEFUNCT) and not states.contains(flag.INDETERMINATE)
+                and states.contains(flag.CHECKED) == expected)
+
     def wait_for(self, condition: dict, timeout_s: float) -> bool:
         """Whether the condition held within the timeout: ``{"elements": ids}``
-        for accessible elements, ``{"named": ...}`` for a node by name,
+        for accessible elements, ``{"named": ...}`` for a node by name
+        with optional ``checked`` for one checkbox's observed state,
         ``{"focusedText": text}`` for the focused editable's exact text, or
         ``{"marker": name}`` for a diagnostic marker emitted since the last input."""
         deadline = time.monotonic() + timeout_s
@@ -402,6 +421,10 @@ class NativeClient:
                     return True
                 except LookupError:
                     pass
+            elif "checked" in condition:
+                if self._checkbox_matches(condition["named"], condition["checked"]):
+                    self._read_marks(0.3)
+                    return True
             elif "named" in condition:
                 wanted = condition["named"]
                 present = any(
