@@ -69,8 +69,9 @@ catalogs, so a small change with many locale files stays small.
      cannot affect rendered behavior; the maintainer lifts the label. -->
 
 <!-- Visual Rust desktop PRs follow docs/rust-desktop/PARITY.md,
-     "Visual pull request contract". Include labeled Before and After screenshots
-     here, with matched capture conditions and base/candidate revisions. -->
+     "Visual pull request contract". Put screenshots under separate Markdown
+     headings named Before and After. Match the capture conditions and label
+     each pair with its base and candidate revisions. -->
 
 ## Risks
 

@@ -239,10 +239,16 @@ not replace the Rust Before capture. Recordings may supplement the screenshots
 for motion and interaction. Refresh After when later edits change the appearance.
 
 Attach or link the images in the PR description using the repository's evidence
-upload workflow. Keep raw captures outside deliverable source, with synthetic
-data and no credentials. A visual PR with either screenshot missing stays
-incomplete until both are attached and reviewed. Capture failures remain explicit
-blockers; mockups and generated images cannot stand in for running-app evidence.
+upload workflow. Put the screenshots under separate Markdown headings named
+`Before` and `After`. Keep Electron captures in their own section. The PR check
+looks for the pair on changes to native view files. Reviewers still check that
+the images are authentic, current and matched for every visual change. The fork's
+`native-visual-evidence` workflow updates the label on PR edits and commits.
+Comment `/recheck-native-evidence` on a PR to request a single recheck. Keep raw
+captures outside deliverable source, with synthetic data and no credentials.
+A visual PR with either screenshot missing stays incomplete. Capture failures
+remain explicit blockers; mockups and generated images cannot stand in for
+running-app evidence.
 
 ## Evidence and references
 

@@ -1,0 +1,37 @@
+name: native-visual-evidence
+
+on:
+  pull_request_target:
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft, edited]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  evidence:
+    if: >-
+      github.repository == 'DeandreT/openchamber' &&
+      (github.event_name == 'pull_request_target' ||
+       (github.event.issue.pull_request && github.event.comment.body == '/recheck-native-evidence'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    concurrency:
+      group: native-visual-evidence-${{ github.event.pull_request.number || github.event.issue.number }}
+      cancel-in-progress: true
+    steps:
+      # Load trusted base code only. PR files are read through the GitHub API.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
+          persist-credentials: false
+      - uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
+        with:
+          script: |
+            const check = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/native-visual-evidence.cjs`);
+            await check({ github, context, core });

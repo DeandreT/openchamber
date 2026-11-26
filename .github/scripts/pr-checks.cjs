@@ -5,8 +5,8 @@
 //
 // - The contribution gate: a PR from outside the team needs a linked issue
 //   that is a bug report or a feature request the maintainer marked `accepted`.
-// - Visual evidence: screenshots belong in the PR description, never in the
-//   branch, and a PR that changes UI shows one.
+// - Visual evidence: screenshots belong in the PR description. Native view
+//   changes need both Before and After screenshots.
 //
 // Each check's comment carries a marker and is posted once per PR. A PR with
 // the comment but not the label had the label taken off by a maintainer, which
@@ -45,7 +45,7 @@ const MISSING_SCREENSHOTS = {
   label: {
     name: "needs-visual-evidence",
     color: "fbca04",
-    description: "Changes UI with no screenshot in the PR description. Not reviewed until one is there.",
+    description: "Required screenshots are missing from the PR description.",
   },
   marker: "<!-- pr-intake:needs-visual-evidence -->",
 };
@@ -192,16 +192,101 @@ const isEvidenceFile = (file) =>
 const isRenderedUiFile = (file) =>
   /^packages\/ui\/src\/.+\.(tsx|css)$/.test(file) && !isTestFile(file) && !file.startsWith("packages/ui/src/lib/i18n/messages/");
 
+const isNativeViewFile = (file) =>
+  /^native\/crates\/desktop\/src\/.*(?:_view|_settings|_page|_surface)(?:\.rs|\/.+\.rs)$/.test(file) &&
+  !isTestFile(file) && !/(?:\/|_)tests?\.rs$/.test(file);
+
 // A Markdown or HTML image, or a file GitHub hosts for the description.
 const DESCRIPTION_IMAGE = /!\[[^\]]*\]\(\s*https?:\/\/|<img\s[^>]*src=["']?https?:\/\/|https:\/\/github\.com\/user-attachments\/assets\//i;
 
-const evaluateVisualEvidence = ({ pr, files }) => ({
-  committedMedia: files
-    .filter(({ status }) => status !== "removed")
-    .map(({ filename }) => filename)
-    .filter(isEvidenceFile),
-  missingScreenshots: !pr.draft && files.some(({ filename }) => isRenderedUiFile(filename)) && !DESCRIPTION_IMAGE.test(pr.body ?? ""),
-});
+function markdownDestination(tail) {
+  const close = /^(?:\s+(["'])(?:\\.|(?!\1)[^\\])*\1)?\s*\)/;
+  if (tail.startsWith("<")) {
+    const angle = /^<(https?:\/\/[^\s<>]+)>/i.exec(tail);
+    if (angle && close.test(tail.slice(angle[0].length))) return angle[1];
+    return;
+  }
+  if (!/^https?:\/\//i.test(tail)) return;
+  let depth = 0;
+  for (let i = 0; i < tail.length; i++) {
+    if (tail[i] === "(") depth++;
+    if (tail[i] === ")" && --depth < 0) return tail.slice(0, i);
+    if (/\s/.test(tail[i])) {
+      if (depth === 0 && close.test(tail.slice(i))) return tail.slice(0, i);
+      return;
+    }
+  }
+}
+
+function markdownScreenshot(line) {
+  const start = /^ {0,3}(!?)\[/.exec(line);
+  if (!start) return;
+  let depth = 1;
+  for (let i = start[0].length; i < line.length; i++) {
+    if (line[i] === "\\") {
+      i++;
+      continue;
+    }
+    if (line[i] === "[") depth++;
+    if (line[i] !== "]" || --depth !== 0) continue;
+    if (line[i + 1] !== "(") return;
+    const destination = markdownDestination(line.slice(i + 2).trimStart());
+    if (destination) return { destination, embedded: start[1] === "!" };
+    return;
+  }
+}
+
+function hasNativeScreenshotPair(body) {
+  const images = { before: new Set(), after: new Set() };
+  let section;
+  let fence;
+  for (const line of body.replace(/<!--[\s\S]*?(?:-->|$)/g, "").split(/\r?\n/)) {
+    const marker = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    if (fence) {
+      if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length &&
+          line.trim() === marker[1]) fence = undefined;
+      continue;
+    }
+    if (marker) {
+      fence = marker[1];
+      continue;
+    }
+    const heading = /^ {0,3}#{1,6}\s+(.+?)\s*#*\s*$/.exec(line);
+    if (heading) {
+      const label = heading[1].toLowerCase();
+      section = label === "before" || label === "after" ? label : undefined;
+      continue;
+    }
+    if (!section) continue;
+    const item = line.replace(/^ {0,3}(?:[-+*]|\d{1,9}[.)])\s+/, "");
+    const markdown = markdownScreenshot(item);
+    const html = /^ {0,3}<img(?=\s)[^>]*?\s+src=["'](https?:\/\/[^"']+)["'][^>]*>/i.exec(item);
+    const destination = markdown?.destination ?? html?.[1];
+    if (!destination) continue;
+    const url = URL.parse(destination);
+    if (!url || /\.(gif|mp4|mov|webm|m4v|avi)$/i.test(url.pathname)) continue;
+    const attachment = url.hostname === "github.com" && /^\/user-attachments\/assets\/[^/]+$/.test(url.pathname);
+    if (!markdown?.embedded && !html && !attachment && !/\.(png|jpe?g|webp|bmp)$/i.test(url.pathname)) continue;
+    images[section].add(url.origin + url.pathname + url.search);
+  }
+  return [...images.before].some((before) => [...images.after].some((after) => before !== after));
+}
+
+const evaluateVisualEvidence = ({ pr, files }) => {
+  const body = pr.body ?? "";
+  const nativePairRequired = files.some(({ filename, previous_filename }) =>
+    isNativeViewFile(filename) || (previous_filename && isNativeViewFile(previous_filename)));
+  return {
+    committedMedia: files
+      .filter(({ status }) => status !== "removed")
+      .map(({ filename }) => filename)
+      .filter(isEvidenceFile),
+    nativePairRequired,
+    missingScreenshots: !pr.draft && (nativePairRequired
+      ? !hasNativeScreenshotPair(body)
+      : files.some(({ filename }) => isRenderedUiFile(filename)) && !DESCRIPTION_IMAGE.test(body)),
+  };
+};
 
 const hasMarkerComment = (comments, marker) =>
   comments.some((comment) => comment.user?.type === "Bot" && (comment.body ?? "").includes(marker));
