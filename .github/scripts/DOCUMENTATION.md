@@ -13,8 +13,8 @@ workflow applies the native screenshot label using the same evaluator.
   They never check out or execute the PR head.
 - Native view changes require distinct screenshots under `Before` and `After`
   headings. Parsing links does not authenticate captures or matched conditions.
-- Drafts are exempt. Successful checks remove the label and retire the comment
-  marker, so a later missing pair can be flagged again.
+- Drafts are exempt. When the native pair is complete or no longer required,
+  the fork retires its comment marker and removes its native label.
 - Removing a label while its active bot comment remains is a maintainer waiver.
   Failed API reads propagate rather than clearing an evidence requirement.
 
@@ -25,3 +25,11 @@ workflow applies the native screenshot label using the same evaluator.
 The upstream intake requires an upstream GitHub App and also manages contribution
 gating and size labels. The fork checks native screenshot pairs with its scoped
 workflow token, keeping the upstream automation unchanged.
+
+### Why the fork has its own label and comment marker
+
+GitHub stores a label only once on a PR. A maintainer can still need
+`needs-visual-evidence` after the native check passes. The fork manages
+`needs-native-visual-evidence` and recognizes its notices by the Actions bot
+login and the marker at the start of the comment. Existing general labels,
+comments and waivers stay with their owner.
