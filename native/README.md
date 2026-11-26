@@ -108,8 +108,9 @@ D-Bus activation can bypass `Exec`, so the preflight rejects it.
 
 The checker uses the bundle layout beside the native executable, as the
 managed host does on a default launch. It checks the ELF machine type of
-`openchamber-native`, the `openchamber` Electron host and the bundled OpenCode
-CLI, along with execute bits when run on Unix. It checks that the packed
+`openchamber-native`, the `openchamber` Electron host, the bundled OpenCode
+CLI and the `rg` binary used by Find in files. On Unix, each must have an
+execute bit set. It checks that the packed
 byte ranges for the web server manifest and entrypoint in `app.asar` are
 in bounds and do not overlap. `web-dist/index.html` must name a staged
 JavaScript module under the exact lowercase `/assets/` path.
