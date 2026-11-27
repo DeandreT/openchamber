@@ -45,7 +45,7 @@ test('packed files cannot escape their workspace or supply an installed dependen
   assert.equal(fs.existsSync(path.join(sdk, 'node_modules')), false);
 });
 
-test('changed Sherpa or ripgrep inputs are refused before fetching notices', async (t) => {
+test('changed Sherpa, 7zip-bin or ripgrep inputs are refused before fetching notices', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'native-notice-inputs-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const put = (file, bytes) => {
@@ -58,6 +58,9 @@ test('changed Sherpa or ripgrep inputs are refused before fetching notices', asy
   manifest('sherpa-onnx-linux-arm64', '1.13.9');
   await assert.rejects(stageProgramNotices(dir, 'arm64', download), /No upstream notice mapping for sherpa-onnx-linux-arm64@1\.13\.9/);
   manifest('sherpa-onnx-linux-arm64', '1.13.8');
+  manifest('7zip-bin', '5.2.1');
+  await assert.rejects(stageProgramNotices(dir, 'arm64', download), /No upstream notice mapping for 7zip-bin@5\.2\.1/);
+  manifest('7zip-bin', '5.2.0');
   put('ripgrep/rg', 'a different Linux program');
   await assert.rejects(stageProgramNotices(dir, 'arm64', download), /SHA-256 mismatch for ripgrep\/rg/);
 });

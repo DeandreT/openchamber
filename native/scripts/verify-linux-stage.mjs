@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { assertElfArchitecture } from '../../packages/electron/scripts/verify-linux-appimage.mjs';
-import { programNotices } from './linux-program-notices.mjs';
+import { checkBytes, programNotices } from './linux-program-notices.mjs';
 
 const usage = 'Usage: node native/scripts/verify-linux-stage.mjs <stage-root> <x64|arm64> <desktop-file> <native-binary>';
 
@@ -117,6 +117,9 @@ function assertServer(stage, resources, stagedFile, arch) {
   const ripgrep = findPackage(web, '@vscode/ripgrep');
   stagedFile(`${ripgrep}/LICENSE`);
   stagedFile(`${findPackage(ripgrep, `@vscode/ripgrep-linux-${arch}`)}/LICENSE`);
+  const sevenZip = findPackage(web, '7zip-bin');
+  stagedFile(`${sevenZip}/LICENSE.txt`);
+  assertElfArchitecture(stagedFile(`${sevenZip}/linux/${arch}/7za`), arch, '7za');
   stagedFile(`${findPackage(web, '@openchamber/sdk')}/dist/index.js`);
   const bunPty = findPackage(web, 'bun-pty');
   const nodePty = findPackage(web, 'node-pty');
@@ -176,7 +179,11 @@ export function verifyLinuxStage(root, arch, launcher, binary) {
   }
   stagedFile(`${resources}/bun/LICENSE.md`);
   stagedFile(`${resources}/opencode-cli/LICENSE`);
-  for (const [file] of programNotices) stagedFile(`${resources}/notices/${file}`);
+  for (const [file, , sha256] of programNotices) {
+    const relative = `${resources}/notices/${file}`;
+    const staged = stagedFile(relative);
+    if (file.startsWith('p7zip/')) checkBytes(relative, fs.readFileSync(staged), sha256);
+  }
   assertServer(stage, resources, stagedFile, arch);
   const webDist = `${resources}/web-dist`;
   const html = fs.readFileSync(stagedFile(`${webDist}/index.html`), 'utf8');

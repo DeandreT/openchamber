@@ -113,7 +113,11 @@ The stage contains `/opt/openchamber-native` and a desktop entry. The bundler
 installs the web server's locked production dependencies at build time, sets
 Sherpa's library search path to its own directory, and runs the packaged Bun
 against the server modules and a real PTY. `resources/notices` holds the
-upstream ripgrep, Sherpa and ONNX Runtime texts for the packaged binaries.
+upstream ripgrep, Sherpa, ONNX Runtime and p7zip texts for the packaged binaries.
+For `7zip-bin` 5.2.0, staging checks the target `7za` against its locked
+package member. Preflight verifies the SHA-256 of p7zip 16.02's `License.txt`
+and `copying.txt` under `resources/notices/p7zip/`. The wrapper's MIT notice
+stays in `resources/node_modules/7zip-bin/LICENSE.txt`.
 Launching the installed desktop requires no package manager.
 
 ### Check an existing stage

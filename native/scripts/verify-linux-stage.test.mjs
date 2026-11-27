@@ -21,9 +21,13 @@ const registry = `${server}/server/built-in-extensions/registry.json`;
 const programTexts = ['ripgrep/COPYING', 'ripgrep/LICENSE-MIT', 'ripgrep/UNLICENSE',
   'sherpa-onnx/LICENSE', 'onnxruntime/LICENSE', 'onnxruntime/ThirdPartyNotices.txt']
   .map((file) => `${bundle}/resources/notices/${file}`);
+const p7zipTexts = Object.fromEntries(['License.txt', 'copying.txt'].map((name) => [
+  `${bundle}/resources/notices/p7zip/${name}`, fs.readFileSync(new URL(`./fixtures/p7zip/DOC/${name}`, import.meta.url)),
+]));
+const sevenZipLicense = `${modules}/7zip-bin/LICENSE.txt`;
 const webManifest = {
   name: '@openchamber/web', type: 'module', main: './server/index.js',
-  dependencies: { '@openchamber/sdk': '1', '@vscode/ripgrep': '1', 'bun-pty': '1', 'node-pty': '1', 'sherpa-onnx-node': '1' },
+  dependencies: { '@openchamber/sdk': '1', '@vscode/ripgrep': '1', '7zip-bin': '5.2.0', 'bun-pty': '1', 'node-pty': '1', 'sherpa-onnx-node': '1' },
 };
 const index = `${bundle}/resources/web-dist/index.html`;
 const asset = `${bundle}/resources/web-dist/assets/main-fixture.js`;
@@ -49,6 +53,9 @@ function fixture(t, arch = 'x64') {
     [`${bundle}/resources/opencode-cli/LICENSE`]: 'OpenCode license fixture',
     [rg]: elf(arch),
     ...Object.fromEntries(programTexts.map((file) => [file, 'upstream notice fixture'])),
+    ...p7zipTexts,
+    [sevenZipLicense]: '7zip-bin MIT wrapper fixture',
+    [`${modules}/7zip-bin/linux/${arch}/7za`]: elf(arch),
     [`${modules}/@vscode/ripgrep/LICENSE`]: 'Microsoft wrapper fixture',
     [`${modules}/@vscode/ripgrep-linux-${arch}/LICENSE`]: 'Microsoft platform package fixture',
     [`${server}/package.json`]: JSON.stringify(webManifest),
@@ -139,6 +146,7 @@ test('all bundled executables must match the requested ELF architecture', (t) =>
   const { run, write } = fixture(t);
   for (const [name, label] of [
     [native, 'Native executable'], [bun, 'Bun runtime'], [cli, 'OpenCode CLI'], [rg, 'ripgrep'],
+    [`${modules}/7zip-bin/linux/x64/7za`, '7za'],
     [`${modules}/bun-pty/rust-pty/target/release/librust_pty.so`, 'Bun PTY'],
     [`${modules}/node-pty/prebuilds/linux-x64/pty.node`, 'Node PTY'], [`${modules}/sherpa-onnx-linux-x64/sherpa-onnx.node`, 'Sherpa ONNX'],
   ]) {
@@ -177,13 +185,28 @@ test('missing managed-host files fail by name', (t) => {
 test('preflight requires each program notice even when the npm wrapper license is present', (t) => {
   for (const arch of ['x64', 'arm64']) {
     const { run, remove, write } = fixture(t, arch);
-    for (const file of [...programTexts, `${bundle}/resources/opencode-cli/LICENSE`,
+    for (const file of [...programTexts, ...Object.keys(p7zipTexts), sevenZipLicense, `${bundle}/resources/opencode-cli/LICENSE`,
       `${modules}/@vscode/ripgrep/LICENSE`, `${modules}/@vscode/ripgrep-linux-${arch}/LICENSE`]) {
       remove(file);
       assert.throws(run, { message: `Missing or empty staged file: ${file}` });
-      write(file, 'restored fixture');
+      write(file, p7zipTexts[file] ?? 'restored fixture');
     }
   }
+});
+
+test('preflight rejects altered p7zip notices and the wrapper at either program path', (t) => {
+  const { root, run, write } = fixture(t);
+  const wrapper = fs.readFileSync(path.join(root, sevenZipLicense));
+  for (const [file, original] of Object.entries(p7zipTexts)) {
+    const altered = Buffer.from(original);
+    altered[0] ^= 1;
+    for (const bytes of [altered, wrapper]) {
+      write(file, bytes);
+      assert.throws(run, { message: `SHA-256 mismatch for ${file}; check the upstream program and its notices` });
+    }
+    write(file, original);
+  }
+  assert.doesNotThrow(run);
 });
 
 test('the packaged server has its own manifest and built-in registry', (t) => {
