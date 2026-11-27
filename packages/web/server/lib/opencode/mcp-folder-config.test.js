@@ -96,10 +96,24 @@ describe('MCP servers from parent folders', () => {
 
   it('skips a broken parent file and still lists the rest', async () => {
     write(path.join(workspace, 'opencode.json'), '{ "mcp": ');
-    write(path.join(projectDir, '.opencode', 'opencode.json'), server('https://project.example.com'));
     const { listMcpConfigs } = await loadMcp();
+    expect(listMcpConfigs(projectDir)).toEqual([]);
 
+    write(path.join(projectDir, '.opencode', 'opencode.json'), server('https://project.example.com'));
     expect(listMcpConfigs(projectDir).map(({ name, url }) => [name, url])).toEqual([['docs', 'https://project.example.com']]);
+  });
+
+  it('reports a broken required config instead of an empty list', async () => {
+    const custom = write(path.join(root, 'custom.jsonc'), '{}');
+    process.env.OPENCODE_CONFIG = custom;
+    const { listMcpConfigs } = await loadMcp();
+    expect(listMcpConfigs(projectDir)).toEqual([]);
+
+    write(custom, '{"mcp":');
+    expect(() => listMcpConfigs(projectDir)).toThrow(expect.objectContaining({ code: 'INVALID_JSONC' }));
+
+    write(path.join(projectDir, 'opencode.json'), server('https://project.example.com'));
+    expect(listMcpConfigs(projectDir)).toEqual([expect.objectContaining({ name: 'docs', scope: 'project' })]);
   });
 
   it('does not read the global config twice when the project sits in the config folder', async () => {

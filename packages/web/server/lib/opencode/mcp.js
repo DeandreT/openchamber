@@ -104,8 +104,13 @@ function ensureProjectMcpConfigPath(workingDirectory) {
 
 function listMcpConfigs(workingDirectory) {
   const sources = readMcpSources(workingDirectory);
-  const names = readLayeredMcpEntries(sources.map((source) => source.config)).keys();
-  return Array.from(names, (name) => toMcpConfigEntry(name, findMcpSource(sources, name), workingDirectory));
+  const entries = readLayeredMcpEntries(sources.map((source) => source.config));
+  if (entries.size === 0) {
+    // No per-name lookup will run, so check whether a required file could hide servers.
+    const failed = sources.findLast((source) => source.required && source.error);
+    if (failed) throwIfLayerError(failed);
+  }
+  return Array.from(entries.keys(), (name) => toMcpConfigEntry(name, findMcpSource(sources, name), workingDirectory));
 }
 
 /**
