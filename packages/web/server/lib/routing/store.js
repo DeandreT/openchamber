@@ -14,6 +14,7 @@
  * malformed file is an error, not an empty config, so a bad write cannot
  * silently reset the user's categories.
  */
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
@@ -137,9 +138,18 @@ const readJsonFile = async (file, schema) => {
 
 const writeJsonFile = async (file, value, mode) => {
   await fs.mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}-${Date.now()}`;
-  await fs.writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, { encoding: 'utf8', mode });
-  await fs.rename(tmp, file);
+  const tmp = `${file}.tmp-${randomUUID()}`;
+  const handle = await fs.open(tmp, 'wx', mode);
+  try {
+    await handle.writeFile(`${JSON.stringify(value, null, 2)}\n`, 'utf8');
+    await handle.close();
+    await fs.rename(tmp, file);
+  } catch (error) {
+    // Keep the original error if closing or removing the temporary file also fails.
+    await handle.close().catch(() => {});
+    await fs.unlink(tmp).catch(() => {});
+    throw error;
+  }
   if (mode) await fs.chmod(file, mode);
 };
 
