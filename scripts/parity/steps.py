@@ -292,7 +292,7 @@ SESSION_PLACEHOLDER = re.compile(r"\{session:([^{}]+)\}")
 
 STEP_KINDS = ("wait", "click", "clickTarget", "clickNamed", "hover", "key", "type", "paste", "settle", "capture",
               "restart", "expect", "fault", "release", "drop", "pick", "ime", "gate", "drag")
-FIXTURES = ("git", "github")
+FIXTURES = ("project", "git", "github")
 # Fixture provider modes: `interactions` adds the shell and question models
 # and asks permission for the shell fixture command.
 PROVIDERS = ("interactions",)
@@ -319,7 +319,29 @@ def _check_files(files) -> list[str]:
 def _check_condition_pair(value) -> list[str]:
     if not isinstance(value, dict) or set(value) - {"timeout"} != {"electron", "native"}:
         return ["needs a condition for each client"]
+    native = value["native"]
+    if isinstance(native, dict) and "checked" in native and (
+        set(native) - {"named", "checked", "present"}
+        or type(native["checked"]) is not bool
+        or not isinstance(native.get("named"), dict)
+        or not isinstance(native["named"].get("name"), str) or not native["named"]["name"]
+        or set(native["named"]) - {"name", "role", "id"}
+        or native["named"].get("role") != "check box"
+        or native.get("present", True) is not True
+    ):
+        return ["native checked needs a named, present checkbox and a boolean state"]
     return []
+
+
+def click_path(value, kind: str) -> list[str]:
+    if isinstance(value, str):
+        return [value]
+    if not isinstance(value, dict) or set(value) != {"electron", "native"}:
+        raise ValueError("needs a target or a click path for each client")
+    path = value[kind]
+    if not isinstance(path, list) or not path or not all(isinstance(name, str) and name for name in path):
+        raise ValueError(f"{kind} needs a nonempty list of target names")
+    return path
 
 
 def check_step(step: dict, targets: dict[str, dict]) -> list[str]:
@@ -332,7 +354,14 @@ def check_step(step: dict, targets: dict[str, dict]) -> list[str]:
     problems = []
     if kind == "wait":
         problems += _check_condition_pair(value)
-    elif kind in ("clickTarget", "hover", "drop"):
+    elif kind == "clickTarget":
+        try:
+            names = {name for client in ("electron", "native") for name in click_path(value, client)}
+            problems.extend(f"references undefined target {name}" for name in sorted(names)
+                            if set(targets.get(name, {})) != {"electron", "native"})
+        except ValueError as error:
+            problems.append(str(error))
+    elif kind in ("hover", "drop"):
         target = value.get("target") if kind == "drop" and isinstance(value, dict) else value
         if set(targets.get(target, {})) != {"electron", "native"}:
             problems.append(f"references undefined target {target}")

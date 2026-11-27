@@ -253,20 +253,21 @@ def serve_fixture_remote(project: Path):
 
 def prepare_fixture(root: Path, kind: str, state: Path, scenario_id: str | None = None) -> Path:
     """Recreates the fixture project and registers it as the copy's active
-    project. `git` is `isolated-server.mjs --git-fixture`'s repository, with
-    its bare remote beside it."""
+    project. Panels use an empty directory; source-control cases need a
+    populated repository and remote."""
     project = fixture_project(root, kind)
     shutil.rmtree(project.parent, ignore_errors=True)
     project.parent.mkdir(parents=True)
-    # The isolated server's own order for --git-fixture.
-    script = (
-        f"import {{ ensureGitFixture, ensureProject }} from {json.dumps(ISOLATED_SERVER.as_uri())};"
-        f"ensureProject({json.dumps(str(project))});"
-        f"ensureGitFixture({json.dumps(str(project.parent))}, {json.dumps(str(project))})"
-    )
     project.mkdir()
-    subprocess.run(["node", "--input-type=module", "-e", script], cwd=REPO_ROOT, check=True, capture_output=True,
-                   env={key: os.environ[key] for key in ("PATH", "LANG") if key in os.environ})
+    if kind in ("git", "github"):
+        # The isolated server's own order for --git-fixture.
+        script = (
+            f"import {{ ensureGitFixture, ensureProject }} from {json.dumps(ISOLATED_SERVER.as_uri())};"
+            f"ensureProject({json.dumps(str(project))});"
+            f"ensureGitFixture({json.dumps(str(project.parent))}, {json.dumps(str(project))})"
+        )
+        subprocess.run(["node", "--input-type=module", "-e", script], cwd=REPO_ROOT, check=True, capture_output=True,
+                       env={key: os.environ[key] for key in ("PATH", "LANG") if key in os.environ})
     if kind == "github":
         subprocess.run(["git", "remote", "set-url", "origin", "https://github.com/acme/widgets.git"], cwd=project,
                        check=True, capture_output=True, env={"PATH": os.environ.get("PATH", ""), "HOME": str(state / "home"),
@@ -552,10 +553,9 @@ def perform(client, kind: str, steps: list[dict], targets: dict[str, dict], dire
         elif "key" in step:
             client.key(step["key"])
         elif "clickTarget" in step:
-            if not settle(client):
-                pending = getattr(client, "pending_requests", lambda: [])()
-                raise TimeoutError(f"the client never settled before control activation; pending route prefixes: {pending}")
-            client.click_target(targets[step["clickTarget"]][kind])
+            for name in scenario_steps.click_path(step["clickTarget"], kind):
+                require_settled(client, "control activation")
+                client.click_target(targets[name][kind])
         elif "clickNamed" in step:
             require_settled(client, "named control activation")
             client.click_named(scenario_steps.named_control(step["clickNamed"], kind))

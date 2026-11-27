@@ -358,18 +358,18 @@
     {
       "id": "panels.knowledge-plans-todos", "group": "panels",
       "title": "Project knowledge, notes, plans and todos support search, editing, linking and session dispatch",
-      "reference": ["packages/ui/src/components/session/project-context/ProjectNotesTodoPanel.tsx", "packages/ui/src/lib/sessionKnowledgeApi.ts"],
-      "requiredBehaviors": ["appearance", "search and open entries", "create edit and delete notes plans todos", "todo completion and dependencies", "plan linking and dispatch", "failure retains edits and owner"],
+      "reference": ["packages/ui/src/components/session/project-context/ProjectNotesTodoPanel.tsx", "packages/ui/src/lib/projectContextApi.ts", "packages/ui/src/lib/sessionKnowledgeApi.ts"],
+      "requiredBehaviors": ["appearance", "search and open entries", "reopen an edited note from search", "undo and commit a note deletion", "retry a rejected note creation", "complete and reopen a todo", "create edit and delete notes plans todos", "todo completion and dependencies", "plan linking and dispatch", "failure retains edits and owner"],
       "states": ["loading", "empty", "selected", "editing", "saving", "failed", "completed"],
-      "scenarios": [], "coverage": "automated"
+      "scenarios": ["panels.knowledge.note-edit-search", "panels.knowledge.todo-complete-reopen", "panels.knowledge.note-create-retry", "panels.knowledge.note-delete-undo"], "coverage": "automated"
     },
     {
       "id": "panels.schedules", "group": "panels",
       "title": "Scheduled tasks can be created, edited, enabled, disabled, run and deleted with correct timezone and target",
-      "reference": ["packages/ui/src/components/session/ScheduledTasksDialog.tsx"],
-      "requiredBehaviors": ["appearance", "schedule creation and editing", "timezone and target selection", "enable disable and delete", "run now and observe result", "failed operation recovery"],
+      "reference": ["packages/ui/src/components/session/ScheduledTasksDialog.tsx", "packages/ui/src/components/session/ScheduledTaskEditorDialog.tsx"],
+      "requiredBehaviors": ["appearance", "invalid cron clears the preview without saving", "retry a failed project task list read", "schedule creation and editing", "timezone and target selection", "enable disable and delete", "run now and observe result", "failed operation recovery"],
       "states": ["loading", "empty", "editing", "invalid", "enabled", "disabled", "running", "failed"],
-      "scenarios": [], "coverage": "automated"
+      "scenarios": ["panels.schedules.invalid-preview", "panels.schedules.list-read-retry"], "coverage": "automated"
     },
     {
       "id": "panels.usage-integrations-context", "group": "panels",
