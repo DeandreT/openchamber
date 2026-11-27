@@ -45,6 +45,20 @@ describe('routing store', () => {
     expect(await store.readConfig()).toEqual(config);
   });
 
+  it('removes only its own temporary file when replacing routing.json fails', async (context) => {
+    const dir = await tempDir();
+    context.onTestFinished(() => fs.rm(dir, { recursive: true, force: true }));
+    const target = path.join(dir, 'routing.json');
+    const neighbor = 'routing.json.tmp-another-writer';
+    await fs.mkdir(target); // A file cannot replace a directory.
+    await fs.writeFile(path.join(dir, neighbor), 'other write');
+
+    const store = createRoutingStore({ dataDir: dir });
+    await expect(store.writeConfig(sampleConfig())).rejects.toMatchObject({ syscall: 'rename', dest: target });
+    expect((await fs.readdir(dir)).sort()).toEqual(['routing.json', neighbor]);
+    expect(await fs.readFile(path.join(dir, neighbor), 'utf8')).toBe('other write');
+  });
+
   it('keeps the cache setting on until it is turned off, also for clients that do not send it', async () => {
     expect(resolveEffectiveConfig(null).preserveCache).toBe(true);
     expect(resolveEffectiveConfig({ version: 1, enabled: true }).preserveCache).toBe(true);

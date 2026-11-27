@@ -155,6 +155,13 @@ Auto. There is no env gate — the feature shipped dark behind
 
 ## Decisions
 
+### Why each save owns a separate temporary file
+
+Two stores can write in the same data directory. Each save exclusively creates
+a file beside its destination and renames it into place. If the write or rename
+fails, the store removes only the file it created. The caller gets the original
+error even if cleanup also fails. Reads use only the destination.
+
 ### Why the server puts the agent back and not the composer
 
 In Auto the composer hides the agent control and shows the session's agent,
