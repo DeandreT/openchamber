@@ -2252,6 +2252,13 @@ The palette, locale and fonts affect existing editors and retained transcripts.
 Updating their shared bindings preserves those entities and their selections;
 recreating the workspace would discard editing and scroll state.
 
+### Why appearance limits encoded bytes
+
+Valid selections from many runtimes share one v1 file. Reads and writes accept
+up to 64 MiB of pretty-printed JSON, including escaped text. Serialization
+stops at the limit before a temporary file is opened, so a size refusal keeps
+the previous file and every saved runtime.
+
 ### Why preference retries merge individual fields
 
 A second window can change an unrelated preference before a failed write is

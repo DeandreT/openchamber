@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::appearance::AppearancePreferences;
 
-const MAX_BYTES: u64 = 16 * 1024;
+const MAX_BYTES: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum AppearanceError {
@@ -105,7 +105,7 @@ impl AppearanceStore {
                 .ok_or(AppearanceError::Invalid)?,
             preferences: preferences.clone(),
         };
-        let bytes = serde_json::to_vec_pretty(&next).map_err(|_| AppearanceError::Invalid)?;
+        let bytes = encode_snapshot(&next, MAX_BYTES as usize)?;
         AppearanceSnapshot::parse(&bytes)?;
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -132,6 +132,41 @@ impl AppearanceStore {
     }
 }
 
+/// Refuse oversized encoded output before opening a temporary file.
+fn encode_snapshot(
+    snapshot: &AppearanceSnapshot,
+    limit: usize,
+) -> Result<Vec<u8>, AppearanceError> {
+    let mut output = SnapshotBuffer {
+        bytes: Vec::new(),
+        limit,
+    };
+    serde_json::to_writer_pretty(&mut output, snapshot).map_err(|_| AppearanceError::Invalid)?;
+    Ok(output.bytes)
+}
+
+struct SnapshotBuffer {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+
+impl Write for SnapshotBuffer {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > self.limit.saturating_sub(self.bytes.len()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::FileTooLarge,
+                "appearance snapshot exceeds its encoded size limit",
+            ));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
 fn private_options() -> OpenOptions {
     let mut options = OpenOptions::new();
     options.read(true).write(true);
@@ -146,6 +181,50 @@ fn private_options() -> OpenOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn byte_budget_includes_json_escaping_and_pretty_formatting() {
+        let snapshot = AppearanceSnapshot {
+            version: 1,
+            revision: 1,
+            preferences: AppearancePreferences {
+                dark_theme_id: "custom-\"🎨\"".into(),
+                ..Default::default()
+            },
+        };
+        let encoded = serde_json::to_vec_pretty(&snapshot).expect("v1 JSON");
+        assert_eq!(
+            encode_snapshot(&snapshot, encoded.len() - 1),
+            Err(AppearanceError::Invalid)
+        );
+        assert_eq!(encode_snapshot(&snapshot, encoded.len()), Ok(encoded));
+    }
+
+    #[test]
+    fn saves_valid_runtime_selections_that_together_exceed_16_kib() {
+        let nonce = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_nanos();
+        let directory =
+            std::env::temp_dir().join(format!("appearance-scopes-{}-{nonce}", std::process::id()));
+        let store = AppearanceStore::new(&directory);
+        let scope = serde_json::json!({
+            "mode": "dark", "lightThemeId": "openchamber-light", "darkThemeId": "imported-dark"
+        });
+        let scopes: serde_json::Map<_, _> = (0..160)
+            .map(|i| (format!("https://runtime-{i}.example.test"), scope.clone()))
+            .collect();
+        let preferences = AppearancePreferences {
+            runtime_themes: serde_json::from_value(scopes.into()).expect("valid runtime map"),
+            ..Default::default()
+        };
+        let saved = store.save(None, &preferences).expect("save all runtimes");
+        assert!(fs::metadata(&store.path).expect("written file").len() > 16 * 1024);
+        assert_eq!(saved.preferences, preferences);
+        assert_eq!(AppearanceStore::new(&directory).load(), Ok(Some(saved)));
+        fs::remove_dir_all(directory).expect("remove owned fixture");
+    }
 
     #[test]
     fn validated_v1_roundtrip_rejects_future_versions_and_invalid_fields() {
