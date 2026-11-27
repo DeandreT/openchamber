@@ -1097,8 +1097,11 @@ with a `CommandEntity`.
 parent folders included. `scope` is `project` only for the project folder's
 own files; a parent folder's server reads as `user`. `PATCH` and `DELETE`
 write the file whose definition OpenCode uses, a parent folder's file
-included; a broken folder file is skipped, a broken global or custom file
-fails the request.
+included. A broken folder file is skipped. A broken global or custom file fails
+a lookup that reaches it. A list whose names all resolve in higher-priority
+files still succeeds.
+When no names are found, a broken required file returns HTTP 500 because it
+could contain servers. A valid empty configuration returns `[]`.
 `GET /api/config/mcp/:name` — one such entry, or 404.
 `POST` / `PATCH` / `DELETE /api/config/mcp/:name` — body is an `McpEntity`
 (plus `scope` on create). Answers `{ success: true, message, path }`.
