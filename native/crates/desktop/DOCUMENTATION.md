@@ -2,10 +2,11 @@
 
 `openchamber-native-desktop` is the GPUI Kit client. `main` initializes
 diagnostics, assets, locale and theme, opens the window and hands application
-lifetime to the `Workspace` entity. Without a configured server the window
-runs on deterministic synthetic data from the core and makes no network or
-provider calls. With `OPENCHAMBER_NATIVE_SERVER` it reads one OpenChamber
-server through `openchamber-native-transport`. Existing selected sessions accept
+lifetime to the `Workspace` entity. A default launch starts the bundled
+OpenChamber server on loopback. A saved default host or `OPENCHAMBER_NATIVE_SERVER`
+connects through `openchamber-native-transport`. For parity checks,
+`OPENCHAMBER_NATIVE_WORKLOAD` selects synthetic data when no server URL is set.
+Existing selected sessions accept
 prompts, steering while busy and interruption through that server. A new-session draft creates
 a root session in its selected registered project before sending its first text
 prompt. Attachments and worktree creation remain separate workflows.
@@ -39,8 +40,8 @@ prompt. Attachments and worktree creation remain separate workflows.
   blocked; an explicit complete correction removes obsolete pairs. Journal
   hydration enforces the same pending bound without changing the wire catalog limit.
 
-- `managed_host.rs` owns the managed local server: discovery of the Electron
-  package layout it runs from, the server's environment and bootstrap, the
+- `managed_host.rs` owns the managed local server: discovery of the bundled Bun
+  runtime and web package, the server's environment and bootstrap, the
   loopback port store and the handle `main` stops after the window closes.
   `managed_host_supervisor.rs` owns the server process on its own thread:
   spawn, readiness, crash restarts and the bounded stop.
@@ -2091,14 +2092,19 @@ The walkthrough cache and current diff share opaque hunk identities. Keeping tho
 IDs allows stale stops and uncovered changes to remain distinguishable without
 inventing client-side line-based matches.
 
-### Why the managed server runs under the bundled Electron in Node mode
+### Why the native package ships Bun and an unpacked server
 
-The desktop hosts the server in its main process; the native client has no
-Node runtime, and porting the server is far larger than parity needs. The
-packaged Electron executable with `ELECTRON_RUN_AS_NODE=1` reads `app.asar`,
-sets `process.resourcesPath` so the server finds the bundled OpenCode, and
-matches the ABI of the unpacked `node-pty`. A separate Node would need its own
-native modules.
+The Rust window needs the OpenChamber server, not Electron's renderer or ASAR
+loader. Its bundled Bun loads the same web server from disk, including files
+that extensions and native modules open at runtime. The server starts in its
+own package directory with automatic dependency installation and `.env` loading
+disabled. The native launcher points it at the bundled OpenCode and search
+tools; an administrator's OpenCode pin still takes precedence.
+
+On Windows the launcher marks Bun's `-e` bootstrap as an ES module. With a
+canonical `\\?\` package cwd, Bun 1.4.4 can exit successfully before evaluating
+a CommonJS script that uses `require('node:url')`. The module marker lets Bun
+keep the exact package path for `--cwd`, including its Windows namespace.
 
 ### Why end of input stops the server and not a signal
 

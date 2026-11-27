@@ -2,14 +2,15 @@
 """The managed local host, end to end on a private display.
 
 The native client starts with no configured host, so it starts the bundled
-server from an Electron package layout. The check sends a prompt through the
+server under the native bundle's Bun runtime. The check sends a prompt through the
 fixture provider, kills the managed server and waits for recovery, quits
 through the window's close button and verifies that no process the launch
 owned remains, while an external server started here keeps running. A second
 launch keeps the port; a launch without a bundle shows the failure screen.
+Opening the external server displays its own session and leaves it running on close.
 
     python3 scripts/parity/native_managed_host.py --binary <openchamber-native> \\
-        --electron-app <linux-unpacked>/openchamber --opencode-binary <opencode> \\
+        --bundle <native-bundle-directory> \\
         --output /tmp/opencode/<new directory>
 """
 
@@ -81,12 +82,28 @@ def descendants(pid):
 
 
 def alive(pid, start):
-    return process_identity(pid) == start
+    return start is not None and process_identity(pid) == start
+
+
+def signal_owned(pid, start, sig):
+    if not alive(pid, start):
+        return False
+    try:
+        descriptor = os.pidfd_open(pid)
+        try:
+            if not alive(pid, start):
+                return False
+            signal.pidfd_send_signal(descriptor, sig)
+            return True
+        finally:
+            os.close(descriptor)
+    except ProcessLookupError:
+        return False
 
 
 def environ_mentions(pid, needle):
     try:
-        return needle in Path(f"/proc/{pid}/environ").read_bytes()
+        return needle in Path(f"/proc/{pid}/environ").read_bytes().split(b"\0")
     except (FileNotFoundError, ProcessLookupError, PermissionError):
         return False
 
@@ -116,36 +133,71 @@ def loopback_only(port):
 class ExternalServer:
     """A server this script owns and the native client must never stop."""
 
-    def __init__(self, app, root):
+    def __init__(self, bundle, root, opencode_config):
         self.port = runner.free_port()
-        root.mkdir(parents=True)
-        resources = app.parent / "resources"
+        self.project = root / "project"
+        prepare_state(root, self.project)
+        resources = bundle / "resources"
         env = {key: os.environ[key] for key in ("PATH", "LANG") if key in os.environ}
-        env.update(HOME=str(root), XDG_CONFIG_HOME=str(root / "config"), XDG_DATA_HOME=str(root / "data"),
-                   XDG_CACHE_HOME=str(root / "cache"), XDG_STATE_HOME=str(root / "state"),
-                   OPENCHAMBER_DATA_DIR=str(root / "oc-data"), OPENCHAMBER_SKIP_OPENCODE_START="true",
-                   OPENCHAMBER_DIST_DIR=str(resources / "web-dist"), ELECTRON_RUN_AS_NODE="1", SHELL="/bin/sh")
+        env.update(runner.state_dirs(root))
+        env.update(OPENCHAMBER_DATA_DIR=str(root / "oc-data"), OPENCODE_CONFIG_CONTENT=opencode_config,
+                   OPENCHAMBER_BUNDLED_OPENCODE_CLI_DIR=str(resources / "opencode-cli"),
+                   OPENCHAMBER_OPENCODE_CWD=str(self.project),
+                   OPENCHAMBER_DIST_DIR=str(resources / "web-dist"), SHELL="/bin/sh")
         self.log = (root / "external.log").open("w")
-        entry = resources / "app.asar/node_modules/@openchamber/web/server/index.js"
-        self.process = subprocess.Popen([str(app), str(entry), "--port", str(self.port), "--host", "127.0.0.1"],
-                                        env=env, stdin=subprocess.DEVNULL, stdout=self.log, stderr=subprocess.STDOUT,
-                                        start_new_session=True)
+        package = resources / "server"
+        self.process = subprocess.Popen([str(resources / "bun/bun"), "--cwd", str(package), "--no-env-file",
+                                         "--no-install", str(package / "server/index.js"), "--port", str(self.port), "--host", "127.0.0.1"],
+                                         env=env, stdin=subprocess.DEVNULL, stdout=self.log, stderr=subprocess.STDOUT,
+                                         start_new_session=True)
         self.url = f"http://127.0.0.1:{self.port}"
-        until("the external server did not start", lambda: healthy(self.url), 60)
+        try:
+            self.engine = until("the external server did not start its bundled OpenCode",
+                                lambda: self.ready_engine(resources / "opencode-cli/opencode"), 90)
+            self.session = create_session(self.url, self.project, "External host")
+        except BaseException:
+            self.stop()
+            raise
+
+    def ready_engine(self, executable):
+        if self.process.poll() is not None:
+            raise RuntimeError("the external server exited during startup")
+        try:
+            health = http_json(f"{self.url}/health", 2)
+        except OSError:
+            return None
+        if health.get("opencodeBinarySource") == "bundled" and health.get("isOpenCodeReady") is True:
+            for pid in children(self.process.pid):
+                start = process_identity(pid)
+                if start is not None and program_matches(pid, executable):
+                    return pid, start
+        return None
+
+    def check_session(self):
+        if self.process.poll() is not None or not alive(*self.engine):
+            raise RuntimeError("closing the native client stopped the external server or its OpenCode")
+        data = http_json(f"{self.url}/api/session/{self.session}")["data"]
+        if data.get("id") != self.session or data.get("title") != "External host":
+            raise RuntimeError("the external server lost its session")
 
     def stop(self):
         # Its OpenCode leads a group of its own; stop whatever is left of it.
-        tree = descendants(self.process.pid)
+        engine = getattr(self, "engine", None)
+        owned = descendants(self.process.pid) if self.process.poll() is None else {}
+        if engine:
+            owned[engine[0]] = engine[1]
         try:
-            os.killpg(self.process.pid, signal.SIGTERM)
-            self.process.wait(timeout=40)
-        except (ProcessLookupError, subprocess.TimeoutExpired):
-            os.killpg(self.process.pid, signal.SIGKILL)
-            self.process.wait(timeout=10)
-        for pid, start in tree.items():
-            if alive(pid, start):
-                os.kill(pid, signal.SIGKILL)
-        self.log.close()
+            if self.process.poll() is None:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=40)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    self.process.wait(timeout=10)
+        finally:
+            self.log.close()
+            for pid, start in owned.items():
+                signal_owned(pid, start, signal.SIGKILL)
 
 
 def prepare_state(state, project):
@@ -167,7 +219,7 @@ def prepare_state(state, project):
     }, indent=2))
 
 
-def client_env(state, args, opencode_config, bundle):
+def client_env(state, opencode_config, bundle):
     env = {key: os.environ[key] for key in runner.CLIENT_ENV_KEYS if key in os.environ}
     env.update(runner.state_dirs(state))
     env.update(
@@ -178,17 +230,22 @@ def client_env(state, args, opencode_config, bundle):
         OPENCHAMBER_NATIVE_THEME="openchamber-dark",
         OPENCHAMBER_NATIVE_LOCALE="en",
         OPENCHAMBER_NATIVE_LOG="info",
-        OPENCODE_BINARY=str(args.opencode_binary),
         OPENCODE_CONFIG_CONTENT=opencode_config,
     )
     return env
 
 
-def managed_server(client):
+def program_matches(pid, expected):
+    try:
+        return Path(f"/proc/{pid}/exe").samefile(expected)
+    except (FileNotFoundError, ProcessLookupError):
+        return False
+
+
+def managed_server(client, bun):
     """The native client's owned server: its only child running the runtime."""
     def find():
-        servers = [pid for pid in children(client.process.pid)
-                   if Path(f"/proc/{pid}/comm").read_text().strip() == "openchamber"]
+        servers = [pid for pid in children(client.process.pid) if program_matches(pid, bun)]
         return servers[0] if len(servers) == 1 else None
     pid = until("the native client started no server", find, 30)
     return pid, process_identity(pid)
@@ -217,16 +274,19 @@ def composer_entry(client):
     return None
 
 
-def send_prompt(client, url, project):
-    """Creates a session in the project, opens it in the window and sends the
-    prompt from the composer."""
-    body = json.dumps({"title": "Managed host", "agent": "build",
+def create_session(url, project, title):
+    body = json.dumps({"title": title, "agent": "build",
                        "model": {"providerID": "perf", "id": "stream-300cps"},
                        "location": {"directory": str(project)}}).encode()
     created = urllib.request.Request(f"{url}/api/session", data=body, method="POST",
                                      headers={"Content-Type": "application/json"})
     with urllib.request.urlopen(created, timeout=15) as response:
-        session = json.load(response)["data"]["id"]
+        return json.load(response)["data"]["id"]
+
+
+def send_prompt(client, url, project):
+    """Opens a new session in the window and sends the prompt from its composer."""
+    session = create_session(url, project, "Managed host")
     key = until("the new session's row did not appear", lambda: next(
         (row["key"] for row in client.rows() if row["key"].endswith(":session:" + session)), None), 30)
     client.click(key)
@@ -253,8 +313,10 @@ def send_prompt(client, url, project):
 
 def quit_by_close(client, timeout):
     client.click("window-close")
-    client.process.wait(timeout=timeout)
-    return client.process.returncode
+    code = client.process.wait(timeout=timeout)
+    if code != 0:
+        raise RuntimeError(f"the native client exited with status {code} on window close")
+    return code
 
 
 def qualify(args):
@@ -264,21 +326,21 @@ def qualify(args):
     report = {"passed": False, "binary": identity, "display": "owned-xvfb", "checks": []}
     checks = report["checks"]
     enabled = accessibility_enabled()
-    bundle = args.electron_app.parent
+    bundle = args.bundle
+    bun = bundle / "resources/bun/bun"
     try:
         set_accessibility(True)
         with Interrupts(), ExitStack() as cleanup:
             fixture = runner.FixtureProvider(args.output)
             cleanup.callback(fixture.stop)
             fixture.wait_ready(20)
-            external = ExternalServer(args.electron_app, args.output / "external")
+            external = ExternalServer(bundle, args.output / "external", fixture.opencode_config)
             cleanup.callback(external.stop)
-            external_start = process_identity(external.process.pid)
 
             state = args.output / "state"
             project = args.output / "project"
             prepare_state(state, project)
-            env = client_env(state, args, fixture.opencode_config, bundle)
+            env = client_env(state, fixture.opencode_config, bundle)
             needle = f"OPENCHAMBER_DATA_DIR={state / 'oc-data'}".encode()
 
             log = cleanup.enter_context((args.output / "native.log").open("w"))
@@ -288,7 +350,7 @@ def qualify(args):
             client.wait_ready(120, connected=True)
             port = json.loads((Path(env["XDG_CONFIG_HOME"]) / "openchamber-native/managed-host.json").read_text())["port"]
             url = f"http://127.0.0.1:{port}"
-            server, server_start = managed_server(client)
+            server, server_start = managed_server(client, bun)
             health = http_json(f"{url}/health")
             if health.get("runtime") != "desktop":
                 raise RuntimeError(f"the managed server runs as {health.get('runtime')}")
@@ -302,14 +364,15 @@ def qualify(args):
             checks.append("prompt-through-fixture")
             owned = descendants(server)
             first_opencode = {pid: start for pid, start in owned.items() if pid != server}
-            if not first_opencode:
-                raise RuntimeError("the managed server runs no OpenCode")
+            if not any(program_matches(pid, bundle / "resources/opencode-cli/opencode") for pid in first_opencode):
+                raise RuntimeError("the managed Bun server runs no bundled OpenCode")
 
-            os.kill(server, signal.SIGKILL)
+            if not signal_owned(server, server_start, signal.SIGKILL):
+                raise RuntimeError("the managed Bun server exited before the crash check")
             until("the window never said the server is restarting",
                   lambda: status_text(client) == "Server restarting...", 15)
             client.screenshot(args.output / "managed-recovering.png")
-            replacement, replacement_start = managed_server(client)
+            replacement, replacement_start = managed_server(client, bun)
             if (replacement, replacement_start) == (server, server_start):
                 raise RuntimeError("the killed server was not replaced")
             until("the restarted server did not become healthy", lambda: healthy(url), 60)
@@ -328,8 +391,7 @@ def qualify(args):
             survivors += [pid for pid in processes_with(needle) if pid not in survivors]
             if survivors:
                 raise RuntimeError(f"owned processes survived quit: {survivors}")
-            if not alive(external.process.pid, external_start) or not healthy(external.url):
-                raise RuntimeError("quitting stopped the external server")
+            external.check_session()
             checks += ["quit-stops-owned", "external-survives"]
 
             log2 = cleanup.enter_context((args.output / "native-relaunch.log").open("w"))
@@ -342,7 +404,7 @@ def qualify(args):
                 raise RuntimeError(f"the relaunch moved the server from {port} to {again}")
             until("the relaunch did not show the earlier session",
                   lambda: any(row["key"].endswith(":session:" + session) for row in client.rows()), 30)
-            relaunched, _ = managed_server(client)
+            relaunched, _ = managed_server(client, bun)
             owned = descendants(relaunched)
             quit_by_close(client, 60)
             if any(alive(pid, start) for pid, start in owned.items()) or processes_with(needle):
@@ -365,6 +427,23 @@ def qualify(args):
             checks.append("missing-bundle-failure")
             if client.substitutions:
                 raise RuntimeError("pointer input used an accessibility substitute")
+
+            remote_env = runner.native_env(args.output / "remote-state", external.url, "openchamber-dark")
+            remote_env["OPENCHAMBER_NATIVE_BUNDLE"] = str(bundle)
+            log4 = cleanup.enter_context((args.output / "native-external.log").open("w"))
+            remote = NativeClient(args.binary, remote_env, args.scale, 1280, 800, stderr=log4)
+            cleanup.callback(remote.close)
+            remote.launch()
+            remote.wait_ready(120, connected=True)
+            until("the external session did not appear", lambda: any(
+                row["key"].endswith(":session:" + external.session) for row in remote.rows()), 30)
+            if any(program_matches(pid, bun) for pid in children(remote.process.pid)):
+                raise RuntimeError("the native client started a managed server in external mode")
+            quit_by_close(remote, 60)
+            external.check_session()
+            if remote.substitutions:
+                raise RuntimeError("external window close used an accessibility substitute")
+            checks.append("connected-external-survives")
         report["passed"] = True
     except Exception as error:
         report["error"] = f"{type(error).__name__}: {error}"
@@ -381,11 +460,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--binary", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--electron-app", type=Path, default=runner.DEFAULT_ELECTRON)
-    parser.add_argument("--opencode-binary", type=Path, default=runner.DEFAULT_OPENCODE)
+    parser.add_argument("--bundle", type=Path, help="native package root (default: beside the binary)")
     parser.add_argument("--scale", type=float, choices=(1, 1.25, 1.5, 2), default=1.25)
     args = parser.parse_args()
-    for key in ("binary", "output", "electron_app", "opencode_binary"):
+    args.bundle = args.bundle or args.binary.parent
+    for key in ("binary", "output", "bundle"):
         setattr(args, key, getattr(args, key).resolve())
     if args.output.parent != Path("/tmp/opencode") or args.output.exists():
         parser.error("--output must be a new directory directly under /tmp/opencode")

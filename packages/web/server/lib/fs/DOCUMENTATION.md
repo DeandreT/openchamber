@@ -152,13 +152,13 @@ and ripgrep's reason as `error`; a server without ripgrep answers `501` with
 `reason: 'search-failed'`. ripgrep exits with code 2 after a search that found
 matches but could not read every file, which counts as a success.
 
-ripgrep itself (`ripgrep.js`, composed in `feature-routes-runtime.js`) is taken
-from, in order: `Resources/ripgrep` in a packaged desktop build, staged for the
-target architecture by `packages/electron/scripts/prepare-ripgrep.mjs`; the
-`@vscode/ripgrep` platform package, an optional dependency of this package that
-npm and Bun install for the current platform; `rg` on the PATH user commands
-get. A found binary is kept for the process lifetime; a miss is looked up again
-on the next search. The stderr pipe is read to the end, for the reason below.
+Content search checks the desktop's `ripgrep` resource directory first.
+Electron supplies `process.resourcesPath`; the Rust desktop passes its package's
+resource directory when it starts the Bun server. Both stage the binary for
+the target architecture. The resolver then checks the installed `@vscode/ripgrep`
+platform package and finally `rg` on the PATH user commands get. It keeps a
+found binary for the process lifetime and retries a miss on the next search.
+The stderr pipe is read to the end, for the reason below.
 
 Both search and directory listing discard Git ignore-read stderr at spawn.
 They consume stdout for ignore matches. Never create an unread stderr pipe:

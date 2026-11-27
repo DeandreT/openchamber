@@ -146,18 +146,19 @@ settings, source control, project knowledge, schedules, goals, shortcuts, menus,
 notifications, remote hosts and runtime switching. Each feature retains its
 server or platform owner until a qualified Rust implementation replaces it.
 
-Define managed server lifetime, process ownership and shutdown before bundling
-local services. Port OpenChamber server modules in complete contract-sized units
-when ownership moves to Rust. An externally connected server remains supported.
-Preserve enterprise policy, relay encryption, provider ownership and host trust
-checks in every applicable path.
+Ship the managed OpenChamber server with the repository's pinned Bun. Stage
+its web package, production dependencies, built-in extensions, web assets,
+OpenCode and ripgrep as described in the [native package instructions](../../native/README.md#stage-the-linux-desktop).
+From the installed package, verify loopback startup, asset serving, search,
+terminals, crash recovery and shutdown of owned processes. A separately
+connected server must survive desktop quit. Preserve enterprise policy, relay
+encryption, provider ownership and host trust checks.
 
-Add package identity, signed distribution, updater behavior, deep links and any
-required profile migration. A real install/update/rollback and shutdown exercise
-is required before replacing an installed application. Qualify each supported
-platform separately. Linux qualifies first; Windows and macOS remain separate
-release targets. Use existing organization-managed release infrastructure;
-this migration does not require a new pipeline.
+Qualify the unsigned Linux package first. Verify package identity, updates,
+rollback, deep links and profile compatibility using the existing release
+infrastructure. The installed app must reopen accepted writes after a failed
+update or rollback. Windows packaging and signing are deferred; macOS is
+outside the replacement scope.
 
 Replacement requires the full parity inventory and supported configuration
 matrix to pass, including manual platform checks and reviewed intentional

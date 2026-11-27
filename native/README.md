@@ -70,7 +70,7 @@ The desktop reads these environment variables:
 | `OPENCHAMBER_NATIVE_LOG` | A `tracing` filter for stderr, `warn` by default |
 | `OPENCHAMBER_NATIVE_SERVER` | The base URL of an OpenChamber server to read instead of synthetic data, including any path prefix |
 | `OPENCHAMBER_NATIVE_PASSWORD` | The UI password of that server, exchanged once for a client token |
-| `OPENCHAMBER_NATIVE_BUNDLE` | The directory of an Electron package layout (`openchamber` beside `resources/`) to run the managed server from, instead of the binary's own directory |
+| `OPENCHAMBER_NATIVE_BUNDLE` | Native package directory containing `resources/bun`, `resources/server`, `resources/web-dist`, `resources/ripgrep` and `resources/opencode-cli`. Defaults to the native binary's directory. |
 
 During development, connect only to an isolated server, such as
 `bun run profile:serve -- --root <dir> --port <port>`; see
@@ -81,7 +81,7 @@ The instance control also selects saved direct-server profiles. An explicit
 default profile. `OPENCHAMBER_NATIVE_WORKLOAD` explicitly selects synthetic
 data when no server environment variable is set. With none of these, the
 desktop starts the bundled OpenChamber server as an owned child on a loopback
-port (the managed local host) and connects once it is ready; without a bundle
+port using the package's own Bun runtime and connects once it is ready; without a bundle
 it opens on the Local OpenCode Unavailable screen. Quitting stops that server
 and every process it owns; external servers are never stopped. Its output goes
 to `logs/managed-host.log` and its port to `managed-host.json` in the native
@@ -91,13 +91,38 @@ Profiles live in `hosts.json` beside the native mutation journal. A versioned
 snapshot and a file lock prevent one window from overwriting another's newer
 profile edit. A malformed or future-format file remains untouched.
 
-## Staged Linux package preflight
+## Stage the Linux desktop
 
-Run this from the repository root against an already-staged filesystem tree:
+Build on the target x64 or arm64 glibc Linux host with the repository's pinned
+Bun and `patchelf`. From the repository root, build the desktop, SDK and web
+UI from the same checkout. `inputs` is an existing writable directory and
+`new_stage` is a new path outside the checkout and its `node_modules`:
 
 ```sh
-node native/scripts/verify-linux-stage.mjs <stage-root> <x64|arm64> <desktop-file> <native-binary>
-node --test native/scripts/verify-linux-stage.test.mjs
+bun install --frozen-lockfile
+bun run native:build
+bun run --cwd packages/sdk build
+bun run build:web
+bun pm pack --cwd packages/sdk --ignore-scripts --filename "$inputs/sdk.tgz"
+bun pm pack --cwd packages/web --ignore-scripts --filename "$inputs/web.tgz"
+bun run native:stage:linux "$new_stage" "$native_binary" "$inputs/web.tgz" "$inputs/sdk.tgz"
+```
+
+Set `native_binary` to the absolute path of the built `openchamber-native`.
+The stage contains `/opt/openchamber-native` and a desktop entry. The bundler
+installs the web server's locked production dependencies at build time, sets
+Sherpa's library search path to its own directory, and runs the packaged Bun
+against the server modules and a real PTY. `resources/notices` holds the
+upstream ripgrep, Sherpa and ONNX Runtime texts for the packaged binaries.
+Launching the installed desktop requires no package manager.
+
+### Check an existing stage
+
+Run this from the repository root:
+
+```sh
+bun native/scripts/verify-linux-stage.mjs <stage-root> <x64|arm64> <desktop-file> <native-binary>
+bun test native/scripts/verify-linux-stage.test.mjs native/scripts/stage-linux.test.mjs
 ```
 
 Pass the launcher and `openchamber-native` paths relative to the stage root,
@@ -108,11 +133,12 @@ D-Bus activation can bypass `Exec`, so the preflight rejects it.
 
 The checker uses the bundle layout beside the native executable, as the
 managed host does on a default launch. It checks the ELF machine type of
-`openchamber-native`, the `openchamber` Electron host, the bundled OpenCode
+`openchamber-native`, the bundled Bun runtime, the bundled OpenCode
 CLI and the `rg` binary used by Find in files. On Unix, each must have an
-execute bit set. It checks that the packed
-byte ranges for the web server manifest and entrypoint in `app.asar` are
-in bounds and do not overlap. `web-dist/index.html` must name a staged
+execute bit set. The server package and built-in extensions live under
+`resources/server`. The checker follows the server's dependencies into
+package-local and hoisted `node_modules` within `resources`. It checks
+the PTY and speech libraries for the target architecture. `web-dist/index.html` must name a staged
 JavaScript module under the exact lowercase `/assets/` path.
 Checked paths must match the spelling in the stage and resolve without links.
 

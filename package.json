@@ -43,6 +43,7 @@
     "native:check": "cd native && cargo fmt --all --check && cargo clippy --workspace --all-targets -- -D warnings",
     "native:test": "cd native && cargo nextest run --workspace",
     "native:build": "cd native && cargo build --release -p openchamber-native-desktop",
+    "native:stage:linux": "bun --no-install native/scripts/stage-linux.mjs",
     "native:dev": "cd native && cargo run -p openchamber-native-desktop",
     "type-check:electron": "bun run --cwd packages/electron type-check",
     "lint": "bun run --filter '*' lint",
