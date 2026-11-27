@@ -1,12 +1,12 @@
+import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { assertElfArchitecture } from '../../packages/electron/scripts/verify-linux-appimage.mjs';
+import { checkBytes, programNotices } from './linux-program-notices.mjs';
 
 const usage = 'Usage: node native/scripts/verify-linux-stage.mjs <stage-root> <x64|arm64> <desktop-file> <native-binary>';
-const webPackage = 'node_modules/@openchamber/web';
-const maxAsarHeaderBytes = 16 * 1024 * 1024;
 
 // The relative staging paths also name installed paths after adding a leading /.
 function assertStagePath(value, label) {
@@ -77,44 +77,62 @@ function localModuleScripts(html) {
   return scripts;
 }
 
-// Use the ASAR pickle layout from Electron's packaged-app-contents.cjs.
-// Only read the header and check the byte ranges the native bootstrap needs.
-function assertPackedServer(archive) {
-  const fd = fs.openSync(archive, 'r');
-  try {
-    const size = fs.fstatSync(fd).size;
-    const prefix = Buffer.alloc(16);
-    const badHeader = () => new Error('Invalid app.asar header');
-    if (fs.readSync(fd, prefix, 0, prefix.length, 0) !== prefix.length) throw badHeader();
-    const length = prefix.readUInt32LE(12);
-    const headerSize = prefix.readUInt32LE(4);
-    const dataStart = 8 + headerSize;
-    if (prefix.readUInt32LE(0) !== 4 || prefix.readUInt32LE(8) !== headerSize - 4
-        || length === 0 || length > maxAsarHeaderBytes
-        || headerSize !== 8 + Math.ceil(length / 4) * 4 || dataStart > size) throw badHeader();
-    const header = Buffer.alloc(length);
-    if (fs.readSync(fd, header, 0, length, 16) !== length) throw badHeader();
-    let tree;
-    try {
-      tree = JSON.parse(header.toString('utf8'));
-    } catch {
-      throw badHeader();
+// Follow Node's package-directory lookup only as far as the shipped resources.
+// require.resolve() here could accept a developer's node_modules or NODE_PATH.
+function assertServer(stage, resources, stagedFile, arch) {
+  const web = `${resources}/server`;
+  const json = (file) => JSON.parse(fs.readFileSync(stagedFile(file), 'utf8'));
+  const manifest = json(`${web}/package.json`);
+  if (manifest.name !== '@openchamber/web' || manifest.main !== './server/index.js' || manifest.type !== 'module') {
+    throw new Error('resources/server/package.json must be the @openchamber/web server package');
+  }
+  stagedFile(`${web}/server/index.js`);
+  const builtins = `${web}/server/built-in-extensions`;
+  const registry = json(`${builtins}/registry.json`);
+  if (registry.version !== 1 || !Array.isArray(registry.extensions)) throw new Error('Invalid built-in extension registry');
+  for (const { directory } of registry.extensions) {
+    assert.match(directory, /^[a-z][a-z0-9-]*$/, 'Invalid built-in extension directory');
+    stagedFile(`${builtins}/${directory}/package.json`);
+  }
+
+  const findPackage = (from, name, optional = false) => {
+    if (!/^(?:@[\w.-]+\/)?[\w-][\w.-]*$/.test(name)) throw new Error(`Invalid dependency name: ${name}`);
+    for (let dir = from; dir === resources || dir.startsWith(`${resources}/`); dir = path.posix.dirname(dir)) {
+      if (path.posix.basename(dir) === 'node_modules') continue;
+      const candidate = `${dir}/node_modules/${name}`;
+      if (fs.lstatSync(path.join(stage, candidate), { throwIfNoEntry: false })) return candidate;
     }
-    const [manifest, server] = [`${webPackage}/package.json`, `${webPackage}/server/index.js`].map((name) => {
-      const entry = name.split('/').reduce((node, part) => node?.files?.[part], tree);
-      const decimal = /^[0-9]+$/.exec(entry?.offset);
-      const offset = Number(decimal?.[0]);
-      if (!entry || entry.files || entry.link || entry.unpacked
-          || !decimal || decimal[0] !== entry.offset
-          || !Number.isSafeInteger(offset) || !Number.isSafeInteger(entry.size) || entry.size <= 0
-          || offset > size - dataStart - entry.size) throw new Error(`app.asar lacks packed bytes for ${name}`);
-      return { start: offset, end: offset + entry.size };
-    });
-    if (manifest.start < server.end && server.start < manifest.end) {
-      throw new Error('app.asar web server package.json and server/index.js have overlapping byte ranges');
+    if (!optional) throw new Error(`Missing staged dependency ${name} for ${from}`);
+  };
+  const visited = new Set();
+  const visit = (dir, pkg) => {
+    visited.add(dir);
+    for (const name of Object.keys({ ...pkg.dependencies, ...pkg.peerDependencies, ...pkg.optionalDependencies })) {
+      const optional = Object.hasOwn(pkg.optionalDependencies ?? {}, name) || pkg.peerDependenciesMeta?.[name]?.optional;
+      const dependency = findPackage(dir, name, optional);
+      if (dependency && !visited.has(dependency)) visit(dependency, json(`${dependency}/package.json`));
     }
-  } finally {
-    fs.closeSync(fd);
+  };
+  visit(web, manifest);
+  const ripgrep = findPackage(web, '@vscode/ripgrep');
+  stagedFile(`${ripgrep}/LICENSE`);
+  stagedFile(`${findPackage(ripgrep, `@vscode/ripgrep-linux-${arch}`)}/LICENSE`);
+  const sevenZip = findPackage(web, '7zip-bin');
+  stagedFile(`${sevenZip}/LICENSE.txt`);
+  assertElfArchitecture(stagedFile(`${sevenZip}/linux/${arch}/7za`), arch, '7za');
+  stagedFile(`${findPackage(web, '@openchamber/sdk')}/dist/index.js`);
+  const bunPty = findPackage(web, 'bun-pty');
+  const nodePty = findPackage(web, 'node-pty');
+  const sherpa = findPackage(findPackage(web, 'sherpa-onnx-node'), `sherpa-onnx-linux-${arch}`);
+  stagedFile(`${sherpa}/package.json`);
+  for (const [file, label] of [
+    [`${bunPty}/rust-pty/target/release/librust_pty${arch === 'arm64' ? '_arm64' : ''}.so`, 'Bun PTY'],
+    [`${nodePty}/prebuilds/linux-${arch}/pty.node`, 'Node PTY'],
+    [`${sherpa}/sherpa-onnx.node`, 'Sherpa ONNX'],
+    [`${sherpa}/libsherpa-onnx-c-api.so`, 'Sherpa C API'],
+    [`${sherpa}/libonnxruntime.so`, 'ONNX runtime'],
+  ]) {
+    assertElfArchitecture(stagedFile(file), arch, label);
   }
 }
 
@@ -150,16 +168,24 @@ export function verifyLinuxStage(root, arch, launcher, binary) {
   };
 
   assertLauncher(fs.readFileSync(stagedFile(launcher), 'utf8'), `/${binary}`);
+  const resources = path.posix.join(bundle, 'resources');
   for (const [relative, label] of [
     [binary, 'Native executable'],
-    [path.posix.join(bundle, 'openchamber'), 'Electron host'],
-    [path.posix.join(bundle, 'resources/opencode-cli/opencode'), 'OpenCode CLI'],
-    [path.posix.join(bundle, 'resources/ripgrep/rg'), 'ripgrep'],
+    [`${resources}/bun/bun`, 'Bun runtime'],
+    [`${resources}/opencode-cli/opencode`, 'OpenCode CLI'],
+    [`${resources}/ripgrep/rg`, 'ripgrep'],
   ]) {
     assertElfArchitecture(stagedFile(relative, true), arch, label);
   }
-  assertPackedServer(stagedFile(path.posix.join(bundle, 'resources/app.asar')));
-  const webDist = path.posix.join(bundle, 'resources/web-dist');
+  stagedFile(`${resources}/bun/LICENSE.md`);
+  stagedFile(`${resources}/opencode-cli/LICENSE`);
+  for (const [file, , sha256] of programNotices) {
+    const relative = `${resources}/notices/${file}`;
+    const staged = stagedFile(relative);
+    if (file.startsWith('p7zip/')) checkBytes(relative, fs.readFileSync(staged), sha256);
+  }
+  assertServer(stage, resources, stagedFile, arch);
+  const webDist = `${resources}/web-dist`;
   const html = fs.readFileSync(stagedFile(`${webDist}/index.html`), 'utf8');
   const scripts = localModuleScripts(html);
   if (scripts.length === 0) throw new Error('web-dist/index.html does not name a built /assets/ module script');

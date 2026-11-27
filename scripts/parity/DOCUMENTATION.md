@@ -62,6 +62,7 @@ or weakening the fixtures' service-identity checks.
 | `native_selections.py` | Real-pointer model, agent and effort selection, unsent restart persistence and exact completed-turn configuration. Server settings reads verify named effort and explicit Default while retaining another model's entry. |
 | `native_authentication.py`, `secret_service_fixture.py` | Password sign-in, secret accessibility, session-only and trusted restart, HTTP token revocation and retained drafts, against a protected real server and a private encrypted KDE Secret Service. |
 | `native_hosts.py` | Two isolated direct servers, saved profiles, default-host startup, runtime switching and per-server draft restoration. |
+| `native_managed_host.py` | Identify bundled Bun and OpenCode by executable, check crash recovery and port reuse, then open a separate server's session in the native window. After quit, the same external engine must still serve that session. |
 | `native_host_recovery.py` | Invalid and unreadable host files, preserved bytes, explicit retry and restored composer focus on the recovered default server. |
 | `native_policy.py` | Public-asset attempts observed through a rejecting loopback proxy, with enterprise mode on and off. No request reaches the public destination. |
 | `native_about.py` | Footer About activation, both server version rows, closing and retained composer text. |

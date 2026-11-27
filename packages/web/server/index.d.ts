@@ -33,8 +33,10 @@ export interface StartWebUiServerOptions {
   exitOnShutdown?: boolean;
   uiPassword?: string | null;
   desktopUpdater?: DesktopUpdater;
-  /** App-owned built-in resources outside Electron's ASAR archive. */
+  /** Physical directory holding the app's built-in extensions. */
   builtInExtensionsDir?: string;
+  /** Desktop resources, including the search binary. Electron supplies its own default. */
+  resourcesPath?: string;
 }
 
 export declare function startWebUiServer(

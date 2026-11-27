@@ -58,7 +58,7 @@ quit.
 
 | Runtime | Behavior during the desktop migration |
 | --- | --- |
-| Native Linux desktop | Initial qualification target: GPUI views with Rust application state; synthetic data first, explicit server connection next |
+| Native Linux desktop | GPUI views and Rust application state; connects to its bundled Bun server or a selected external server |
 | Native Windows desktop | Later, separately qualified target using the same application core and Windows host adapters |
 | Electron desktop | Existing React client and in-process OpenChamber backend |
 | Web | Existing React client and OpenChamber server |
@@ -340,11 +340,13 @@ VT state, rendering, clipboard/paste, input/IME and resize are separate owners.
 Disconnecting a client follows the server's terminal lifetime rules.
 
 Managed local services define spawn ownership, shutdown order and failure
-cleanup for each child. The managed host runs the packaged server under the
-bundled Electron executable in Node mode, in its own process group, on a
-loopback port. It records the server's PID and start time and, before a stop,
-the descendants it owns; it waits for the server's own 35 s shutdown before
-forcing only those processes. Ownership is never inferred from executable name.
+cleanup for each child. The Rust desktop starts the packaged OpenChamber server
+with its bundled Bun on a loopback port. The server and its dependencies are
+ordinary files, independent of the Electron package. On Linux the supervisor
+starts Bun in its own process group. It records the server's PID and start
+time and snapshots its descendants before stopping it. The server has 35 seconds
+to shut down before the supervisor forces those processes to stop. Ownership
+comes from the process tree.
 External servers remain externally owned.
 
 Server-owned enterprise policy continues to apply to native requests. Native

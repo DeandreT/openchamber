@@ -1,13 +1,9 @@
 //! The local OpenChamber server the desktop starts when no external host is
 //! configured.
 //!
-//! The desktop package runs the server inside its Electron main process
-//! (`packages/electron/main.mjs`, `spawnLocalServer`). The native client has
-//! no Node runtime of its own, so it starts the same package as an owned
-//! child: the bundled Electron executable in Node mode
-//! (`ELECTRON_RUN_AS_NODE=1`) importing the server from `app.asar` and calling
-//! `startWebUiServer` with the options and environment the desktop uses. The
-//! server then starts and owns OpenCode as it does in the desktop.
+//! The native client starts its bundled Bun as an owned child. Bun loads the
+//! packaged `@openchamber/web` files and calls `startWebUiServer`. That server
+//! starts and owns OpenCode.
 //!
 //! The listener is always loopback. The desktop binds a network address only
 //! for its LAN access setting, which enterprise mode can refuse; the native
@@ -30,8 +26,7 @@ use tokio::sync::watch;
 use crate::managed_host_lifecycle::{HostFailure, HostState};
 use crate::managed_host_supervisor::{Launch, Message, StopOutcome, Supervisor, Timeouts};
 
-/// `OPENCHAMBER_NATIVE_BUNDLE`: the directory of an Electron package layout
-/// to run the server from. Without it, the directory of the native binary.
+/// Optional native bundle directory. Defaults to the native binary's directory.
 pub(crate) const BUNDLE_VARIABLE: &str = "OPENCHAMBER_NATIVE_BUNDLE";
 /// The variable that carries the launch to the bootstrap, which removes it.
 const LAUNCH_VARIABLE: &str = "OPENCHAMBER_NATIVE_HOST_LAUNCH";
@@ -45,13 +40,11 @@ const LOG_LIMIT: u64 = 5 * 1024 * 1024;
 
 /// Starts the server with the options `spawnLocalServer` passes, stops it on
 /// end of input or a signal, and prints `<nonce> ready <port>` once it
-/// listens. Node mode and the launch variable are removed before the server
-/// loads, so neither reaches OpenCode or a terminal.
+/// listens. The launch variable is removed before the server loads.
 const BOOTSTRAP: &str = r#"'use strict';
 const { pathToFileURL } = require('node:url');
 const launch = JSON.parse(process.env.OPENCHAMBER_NATIVE_HOST_LAUNCH);
 delete process.env.OPENCHAMBER_NATIVE_HOST_LAUNCH;
-delete process.env.ELECTRON_RUN_AS_NODE;
 let handle = null;
 let stopping = false;
 const stop = async () => {
@@ -63,6 +56,7 @@ const stop = async () => {
     await handle.stop({ exitProcess: false });
   } catch (error) {
     console.error('[native-host] shutdown failed:', error);
+    process.exit(1);
   }
   process.exit(0);
 };
@@ -79,6 +73,7 @@ import(pathToFileURL(launch.entry).href)
     exitOnShutdown: false,
     apiOnly: false,
     builtInExtensionsDir: launch.builtInExtensionsDir,
+    resourcesPath: launch.resourcesPath,
   }))
   .then((started) => {
     handle = started;
@@ -94,7 +89,7 @@ import(pathToFileURL(launch.entry).href)
   });
 "#;
 
-/// The Electron package layout the server runs from.
+/// The native package layout the server runs from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Bundle {
     root: PathBuf,
@@ -114,43 +109,38 @@ impl Bundle {
         self.root.join("resources")
     }
 
-    /// The Electron executable; with `ELECTRON_RUN_AS_NODE` it is Node.
     fn runtime(&self) -> PathBuf {
-        self.root.join(if cfg!(windows) {
-            "OpenChamber.exe"
-        } else {
-            "openchamber"
-        })
+        self.resources()
+            .join("bun")
+            .join(if cfg!(windows) { "bun.exe" } else { "bun" })
     }
 
-    fn archive(&self) -> PathBuf {
-        self.resources().join("app.asar")
+    fn server_package(&self) -> PathBuf {
+        self.resources().join("server")
     }
 
     fn server_entry(&self) -> PathBuf {
-        self.archive()
-            .join("node_modules/@openchamber/web/server/index.js")
+        self.server_package().join("server/index.js")
     }
 
-    /// The unpacked copy, as the desktop passes it.
     fn built_in_extensions(&self) -> PathBuf {
-        self.resources()
-            .join("app.asar.unpacked/node_modules/@openchamber/web/server/built-in-extensions")
+        self.server_package().join("server/built-in-extensions")
     }
 
     fn web_dist(&self) -> PathBuf {
         self.resources().join("web-dist")
     }
 
-    /// The server finds it through `process.resourcesPath` itself.
+    fn opencode_dir(&self) -> PathBuf {
+        self.resources().join("opencode-cli")
+    }
+
     fn opencode(&self) -> PathBuf {
-        self.resources()
-            .join("opencode-cli")
-            .join(if cfg!(windows) {
-                "opencode.exe"
-            } else {
-                "opencode"
-            })
+        self.opencode_dir().join(if cfg!(windows) {
+            "opencode.exe"
+        } else {
+            "opencode"
+        })
     }
 }
 
@@ -169,7 +159,8 @@ pub(crate) fn discover(
     };
     for (path, executable) in [
         (bundle.runtime(), true),
-        (bundle.archive(), false),
+        (bundle.server_package().join("package.json"), false),
+        (bundle.server_entry(), false),
         (bundle.web_dist().join("index.html"), false),
         (bundle.opencode(), true),
     ] {
@@ -245,33 +236,76 @@ mod windows_tests {
                 value("OPENCHAMBER_SKIP_API_COMPRESSION"),
                 Some(OsStr::new("false"))
             );
-            assert_eq!(value("ELECTRON_RUN_AS_NODE"), Some(OsStr::new("1")));
+            assert_eq!(value("ELECTRON_RUN_AS_NODE"), None);
         }
     }
 
     #[test]
     fn windows_bundle_uses_packaged_executables_and_kernel_nonce() {
         let root = std::env::temp_dir().join(format!("oc-win-bundle-{}", std::process::id()));
-        fs::create_dir_all(root.join("resources/opencode-cli")).expect("fixture directories");
-        fs::create_dir_all(root.join("resources/web-dist")).expect("fixture directories");
         for name in [
-            "OpenChamber.exe",
-            "resources/app.asar",
+            "resources/bun/bun.exe",
+            "resources/server/package.json",
+            "resources/server/server/index.js",
             "resources/web-dist/index.html",
             "resources/opencode-cli/opencode.exe",
         ] {
-            fs::write(root.join(name), "").expect("synthetic package file");
+            let path = root.join(name);
+            fs::create_dir_all(path.parent().expect("fixture parent"))
+                .expect("fixture directories");
+            fs::write(path, "").expect("synthetic package file");
         }
         let bundle = discover(Some(root.clone()), None).expect("Windows package discovery");
-        assert!(bundle.runtime().ends_with("OpenChamber.exe"));
+        assert!(bundle.runtime().ends_with("bun/bun.exe"));
         assert!(bundle.opencode().ends_with("opencode.exe"));
         assert_eq!(random_nonce().expect("kernel nonce").len(), 32);
-        fs::remove_file(root.join("OpenChamber.exe")).expect("remove fixture runtime");
+        fs::remove_file(bundle.runtime()).expect("remove fixture runtime");
         assert!(matches!(
             discover(Some(root.clone()), None),
             Err(DiscoveryError::Missing(_))
         ));
         fs::remove_dir_all(root).expect("remove synthetic package");
+    }
+
+    #[test]
+    #[ignore = "set OPENCHAMBER_TEST_BUN to the pinned Windows bun.exe"]
+    fn windows_bun_enters_the_server_module_from_a_canonical_cwd() {
+        let bun = PathBuf::from(std::env::var_os("OPENCHAMBER_TEST_BUN").expect("test Bun"));
+        assert!(bun.is_absolute());
+        let nonce = random_nonce().expect("test nonce");
+        let root = std::env::temp_dir().join(format!("oc Bun # é {nonce}"));
+        fs::create_dir_all(root.join("resources/server/server")).expect("fixture directories");
+        let bundle = Bundle {
+            root: fs::canonicalize(&root).expect("canonical bundle"),
+        };
+        fs::write(
+            bundle.server_package().join("package.json"),
+            r#"{"type":"module"}"#,
+        )
+        .expect("fixture package");
+        // A distinct status proves the bootstrap called the entry, even when Bun
+        // would otherwise exit successfully without evaluating the script.
+        fs::write(
+            bundle.server_entry(),
+            "export function startWebUiServer() { process.exit(57); }",
+        )
+        .expect("fixture module");
+        let env = [
+            (
+                "SystemRoot".into(),
+                std::env::var_os("SystemRoot").expect("Windows system root"),
+            ),
+            ("USERPROFILE".into(), root.as_os_str().into()),
+            ("TEMP".into(), root.as_os_str().into()),
+        ];
+        let launch = server_launch(&bundle, 1, nonce, env, None, None);
+        let child = openchamber_windows_process::spawn(&bun, &launch.args, &launch.env)
+            .expect("run bundled bootstrap");
+        let empty = child.job.wait_empty(std::time::Duration::from_secs(10));
+        let status = empty.and_then(|done| done.then(|| child.process.wait()).transpose());
+        drop(child);
+        fs::remove_dir_all(root).expect("remove fixture");
+        assert_eq!(status.expect("observe child"), Some(57));
     }
 }
 
@@ -279,6 +313,7 @@ mod windows_tests {
 #[serde(rename_all = "camelCase")]
 struct LaunchOptions<'a> {
     entry: &'a Path,
+    resources_path: &'a Path,
     port: u16,
     built_in_extensions_dir: &'a Path,
     nonce: &'a str,
@@ -353,6 +388,10 @@ fn server_environment(
             Some("false".into()),
         ),
         ("OPENCHAMBER_DIST_DIR", Some(bundle.web_dist().into())),
+        (
+            "OPENCHAMBER_BUNDLED_OPENCODE_CLI_DIR",
+            Some(bundle.opencode_dir().into()),
+        ),
         ("OPENCHAMBER_RUNTIME", Some("desktop".into())),
         ("OPENCHAMBER_OPENCODE_CWD", opencode_cwd),
         ("OPENCHAMBER_DESKTOP_NOTIFY", Some("true".into())),
@@ -456,18 +495,33 @@ fn server_launch(
     log: Option<PathBuf>,
 ) -> Launch {
     let mut env = server_environment(inherited, bundle, home);
-    env.push(("ELECTRON_RUN_AS_NODE".into(), "1".into()));
     let options = LaunchOptions {
         entry: &bundle.server_entry(),
+        resources_path: &bundle.resources(),
         port,
         built_in_extensions_dir: &bundle.built_in_extensions(),
         nonce: &nonce,
     };
     let options = serde_json::to_string(&options).expect("launch options serialize");
     env.push((LAUNCH_VARIABLE.into(), options.into()));
+    let mut bootstrap = OsString::from(BOOTSTRAP);
+    if cfg!(windows) {
+        // With a verbatim package cwd, Bun 1.4.4 can exit before running a CommonJS
+        // eval that uses require(). Mark it as a module without rewriting the path.
+        bootstrap.push("export {};\n");
+    }
     Launch {
         program: bundle.runtime(),
-        args: vec!["-e".into(), BOOTSTRAP.into()],
+        // Bun reads configuration from its working directory. A project the
+        // desktop was launched from must not configure the bundled server.
+        args: vec![
+            "--cwd".into(),
+            bundle.server_package().into(),
+            "--no-env-file".into(),
+            "--no-install".into(),
+            "-e".into(),
+            bootstrap,
+        ],
         env,
         port,
         nonce,
@@ -705,8 +759,9 @@ mod tests {
     }
 
     fn package(root: &Path) {
-        write(&root.join("openchamber"), true);
-        write(&root.join("resources/app.asar"), false);
+        write(&root.join("resources/bun/bun"), true);
+        write(&root.join("resources/server/package.json"), false);
+        write(&root.join("resources/server/server/index.js"), false);
         write(&root.join("resources/web-dist/index.html"), false);
         write(&root.join("resources/opencode-cli/opencode"), true);
     }
@@ -743,11 +798,14 @@ mod tests {
         // A runtime that cannot run is missing too.
         package(&named);
         use std::os::unix::fs::PermissionsExt;
-        fs::set_permissions(named.join("openchamber"), fs::Permissions::from_mode(0o644))
-            .expect("test fixture");
+        fs::set_permissions(
+            named.join("resources/bun/bun"),
+            fs::Permissions::from_mode(0o644),
+        )
+        .expect("test fixture");
         assert!(matches!(
             discover(Some(named.clone()), None),
-            Err(DiscoveryError::Missing(path)) if path.ends_with("openchamber")
+            Err(DiscoveryError::Missing(path)) if path.ends_with("bun/bun")
         ));
         let _ = fs::remove_dir_all(&named);
         let _ = fs::remove_dir_all(&beside);
@@ -854,16 +912,26 @@ mod tests {
     }
 
     #[test]
-    fn the_launch_runs_the_bootstrap_in_node_mode() {
+    fn the_launch_uses_the_bundled_bun_and_server_files() {
         let bundle = Bundle {
             root: PathBuf::from("/opt/oc"),
         };
         let launch = server_launch(&bundle, 4321, "n0nce".to_owned(), [], None, None);
-        assert_eq!(launch.program, PathBuf::from("/opt/oc/openchamber"));
-        assert_eq!(launch.args[0], OsString::from("-e"));
+        assert_eq!(launch.program, PathBuf::from("/opt/oc/resources/bun/bun"));
         assert_eq!(
-            value(&launch.env, "ELECTRON_RUN_AS_NODE"),
-            Some(OsStr::new("1"))
+            &launch.args[..5],
+            [
+                "--cwd",
+                "/opt/oc/resources/server",
+                "--no-env-file",
+                "--no-install",
+                "-e"
+            ]
+        );
+        assert_eq!(value(&launch.env, "ELECTRON_RUN_AS_NODE"), None);
+        assert_eq!(
+            value(&launch.env, "OPENCHAMBER_BUNDLED_OPENCODE_CLI_DIR"),
+            Some(OsStr::new("/opt/oc/resources/opencode-cli"))
         );
         let options: serde_json::Value = serde_json::from_str(
             &value(&launch.env, LAUNCH_VARIABLE)
@@ -873,14 +941,12 @@ mod tests {
         .expect("test fixture");
         assert_eq!(options["port"], 4321);
         assert_eq!(options["nonce"], "n0nce");
-        assert_eq!(
-            options["entry"],
-            "/opt/oc/resources/app.asar/node_modules/@openchamber/web/server/index.js"
-        );
+        assert_eq!(options["entry"], "/opt/oc/resources/server/server/index.js");
         assert_eq!(
             options["builtInExtensionsDir"],
-            "/opt/oc/resources/app.asar.unpacked/node_modules/@openchamber/web/server/built-in-extensions"
+            "/opt/oc/resources/server/server/built-in-extensions"
         );
+        assert_eq!(options["resourcesPath"], "/opt/oc/resources");
         assert_eq!(value(&launch.env, "OPENCHAMBER_OPENCODE_CWD"), None);
     }
 

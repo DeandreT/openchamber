@@ -997,7 +997,9 @@ export const createFeatureRoutesRuntime = (dependencies) => {
     });
     // Content search looks for ripgrep on the same PATH user commands get, so
     // a desktop app launched from the Dock still finds a Homebrew install.
-    const { resolveRipgrepBinary } = createRipgrepResolver({ fs, path, buildSearchPath: buildAugmentedPath });
+    const { resolveRipgrepBinary } = createRipgrepResolver({
+      fs, path, resourcesPath: routeDependencies.resourcesPath, buildSearchPath: buildAugmentedPath,
+    });
     registerFsRoutes(app, {
       os,
       path,
