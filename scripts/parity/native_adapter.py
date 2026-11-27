@@ -21,6 +21,7 @@ import signal
 import subprocess
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -241,13 +242,80 @@ class NativeClient:
             raise LookupError(f"{len(matches)} native elements have the ID {accessible_id!r}")
         return matches[0]
 
+    def _project_note_control(self, target):
+        """The search card or open editor's menu, owned by this fixture note."""
+        panel = self._find("knowledge-panel")
+        panel.clear_cache()
+        if panel.get_role_name() != "landmark" or panel.get_name() != "Project knowledge":
+            raise LookupError("knowledge-panel is not the Project knowledge landmark")
+
+        def shown_in_panel(node):
+            api = _atspi()
+            current = node
+            while current is not None:
+                current.clear_cache()
+                states = current.get_state_set()
+                if (not states or states.contains(api.StateType.DEFUNCT)
+                        or not states.contains(api.StateType.VISIBLE) or not states.contains(api.StateType.SHOWING)
+                        or (current == node and not states.contains(api.StateType.ENABLED))):
+                    return False
+                if current == panel:
+                    box = node.get_extents(api.CoordType.WINDOW)
+                    frame = panel.get_extents(api.CoordType.WINDOW)
+                    return (box is not None and frame is not None and box.width > 0 and box.height > 0
+                            and frame.x <= box.x + box.width // 2 < frame.x + frame.width
+                            and frame.y <= box.y + box.height // 2 < frame.y + frame.height)
+                if current.get_role_name() == "landmark":
+                    break  # A different surface owns this control.
+                current = current.get_parent()
+            return False
+
+        def one(key, name, role):
+            matches = []
+            for node in self._walk():
+                accessible_id = node.get_accessible_id() or ""
+                if not (accessible_id.startswith(key) if key.endswith(":") else accessible_id == key):
+                    continue
+                node.clear_cache()
+                if node.get_name() == name and node.get_role_name() == role and shown_in_panel(node):
+                    matches.append(node)
+            if len(matches) != 1:
+                raise LookupError(f"{len(matches)} visible {role} controls named {name!r} in knowledge-panel ({key})")
+            return matches[0]
+
+        prefix = {"card": "knowledge-note:", "openMenu": "knowledge-more:"}[target["part"]]
+        button = one(prefix, target["name"], "button")
+        body = target["projectNote"]
+        if target["part"] == "openMenu":
+            editor = one("knowledge-note-editor", "Note text", "entry")
+            text = editor.get_text_iface()
+            if text is None or _atspi().Text.get_text(text, 0, -1) != body:
+                raise LookupError("the open note editor does not contain the expected note")
+
+        response = self.api_get("/api/project-context/" + urllib.parse.quote(target["projectId"], safe=""))
+        notes = response["body"].get("notes") if isinstance(response["body"], dict) else None
+        if not 200 <= response["status"] < 300 or not isinstance(notes, list):
+            raise LookupError("cannot identify the note in the fixture project")
+        if any(not isinstance(note, dict) or not isinstance(note.get("id"), str) or not note["id"] for note in notes):
+            raise LookupError("a stored note has no usable identity")
+        ids = [note["id"] for note in notes if note.get("body") == body]
+        if len(ids) != 1:
+            raise LookupError(f"{len(ids)} stored notes match the expected body")
+        note_id = ids[0]
+        if sum(note["id"] == note_id for note in notes) != 1 or button.get_accessible_id() != prefix + note_id:
+            raise LookupError("the visible control does not identify one matching stored note")
+        return button
+
     def _resolve(self, target):
         """A target's node: an accessible ID, or ``{"name", "role"?,
         "prefix"?}`` with an optional ``"within"`` query of the same form,
         the one node with that name (inside the one ancestor with that name),
-        for controls whose IDs the server assigns."""
+        for controls whose IDs the server assigns. A ``projectNote`` target
+        binds the observed button to its fixture project's stored note."""
         if isinstance(target, str):
             return self._find(target)
+        if "projectNote" in target:
+            return self._project_note_control(target)
 
         def named(query, nodes):
             return [node for node in nodes
@@ -332,6 +400,8 @@ class NativeClient:
             try:
                 result[name] = self._rect(self._resolve(accessible_id), content)
             except LookupError:
+                if isinstance(accessible_id, dict) and "projectNote" in accessible_id:
+                    raise  # A required note card cannot compare as two hidden rectangles.
                 result[name] = None
         return result
 
@@ -468,6 +538,9 @@ class NativeClient:
     def click_named(self, query: dict) -> None:
         """A pointer click on the one node with this accessible name and one
         of the AT-SPI roles its ARIA role maps to."""
+        if "projectNote" in query:
+            self.click_target(query)
+            return
         roles = query.get("roles")
         matches = [node for node in self._walk()
                    if node.get_name() == query["name"] and (roles is None or node.get_role_name() in roles)]

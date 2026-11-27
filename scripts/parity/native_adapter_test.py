@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from native_adapter import NativeClient
+import steps
 
 
 class SizedClient(NativeClient):
@@ -383,6 +384,103 @@ class InputClient(NativeClient):
 
     def _click_node(self, node, label):
         self.clicked.append((node, label))
+
+
+class NoteTargetTest(unittest.TestCase):
+    """The panel frame and Knowledge body have the same AT-SPI name and role."""
+
+    def setUp(self):
+        definitions = Path(__file__).with_name("scenarios.json").read_text(encoding="utf-8")
+        targets = json.loads(definitions.replace("{fixtureId}", "path_fixture"))["targets"]
+        self.card = targets["knowledge-matched-note"]["native"]
+        self.menu = targets["knowledge-open-note-menu"]["native"]
+        self.title = "Release checklist for 2.7"
+        self.body = "Keep the release checklist"
+        self.content = self.node("", "", "panel")
+        self.owner = self.node("knowledge-panel", "Project knowledge", "landmark", [self.content])
+        self.frame = self.node("side-panel", "Project knowledge", "landmark", [self.owner])
+        self.client = NativeClient.__new__(NativeClient)
+        self.client._app = self.frame
+        self.client.scale = 1
+        self.client._content = lambda: SimpleNamespace(x=0, y=0)
+        self.client._click_node = Mock()
+        self.records = [{"id": "n7", "body": self.title}, {"id": "n8", "body": self.body}]
+        self.client.api_get = Mock(return_value={"status": 200, "body": {"notes": self.records}})
+        api = SimpleNamespace(StateType=SimpleNamespace(VISIBLE="visible", SHOWING="showing", ENABLED="enabled", DEFUNCT="defunct"),
+                              CoordType=SimpleNamespace(WINDOW=1),
+                              Text=SimpleNamespace(get_text=lambda iface, start, end: iface.text))
+        binding = patch("native_adapter._atspi", return_value=api)
+        binding.start()
+        self.addCleanup(binding.stop)
+
+    @staticmethod
+    def node(key, name, role="button", children=(), *, text=None):
+        node = RowNode(key, ["enabled", "showing", "visible"], list(children))
+        node.get_name = lambda: name
+        node.get_role_name = lambda: role
+
+        def child(index):
+            result = node.children[index]
+            result.parent = node
+            return result
+
+        node.get_child_at_index = child
+        node.get_parent = lambda: getattr(node, "parent", None)
+        node.bounds = SimpleNamespace(x=1, y=2, width=30, height=26)
+        node.get_extents = lambda coord: node.bounds
+        node.get_text_iface = lambda: None if text is None else SimpleNamespace(text=text)
+        return node
+
+    def test_card_needs_one_visible_owned_row_and_its_stored_id(self):
+        row = self.node("knowledge-note:n7", self.title)
+        self.content.children.append(row)
+        self.frame.children.append(self.node("knowledge-note:n7", self.title))
+        hidden = self.node("knowledge-note:stale", self.title)
+        hidden.states.remove("showing")
+        self.content.children.append(hidden)
+        self.assertEqual(self.client.targets({"match": self.card}), {"match": [1, 2, 30, 26]})
+        self.client.api_get.assert_called_with("/api/project-context/path_fixture")
+        self.client.click_named(steps.named_control({"name": self.title, "role": "button", "projectNoteIn": "path_fixture"}, "native"))
+        self.assertIs(self.client._click_node.call_args.args[0], row)
+        self.content.children.append(self.node("knowledge-note:different", self.title))
+        with self.assertRaises(LookupError):
+            self.client.targets({"match": self.card})
+        self.content.children.remove(row)
+        with self.assertRaises(LookupError):
+            self.client.targets({"match": self.card})
+        self.content.children = [hidden]
+        with self.assertRaises(LookupError):
+            self.client.targets({"match": self.card})
+        self.content.children = [row]
+        self.records.append({"id": "other", "body": self.title})
+        with self.assertRaises(LookupError):
+            self.client.targets({"match": self.card})
+        self.client.api_get.return_value["status"] = 503
+        with self.assertRaisesRegex(LookupError, "fixture project"):
+            self.client.targets({"match": self.card})
+
+    def test_open_menu_belongs_to_the_note_in_the_editor(self):
+        menu = self.node("knowledge-more:n8", "More actions")
+        editor = self.node("knowledge-note-editor", "Note text", "entry", text=self.body)
+        def show(nodes):
+            self.content.children = [self.node("knowledge-note-editor-frame", "", "panel", [n])
+                                     if n.key == "knowledge-note-editor" else self.node("", "", "panel", [n]) for n in nodes]
+
+        show([editor, menu])
+        self.client.click_target(self.menu)
+        self.assertIs(self.client._click_node.call_args.args[0], menu)
+        self.frame.children.append(self.node("knowledge-more:n8", "More actions"))
+        for contents in ([editor], [menu], [self.node("knowledge-note-editor", "Note text", "entry", text=self.title), menu],
+                         [editor, self.node("knowledge-more:n7", "More actions")],
+                         [editor, menu, self.node("knowledge-more:n8", "More actions")]):
+            with self.subTest(contents=[node.key for node in contents]), self.assertRaises(LookupError):
+                show(contents)
+                self.client.click_target(self.menu)
+        show([editor, menu])
+        menu.states.add("defunct")
+        with self.assertRaises(LookupError):
+            self.client.click_target(self.menu)
+        self.client._click_node.assert_called_once()
 
 
 class NativeStepInputTest(unittest.TestCase):

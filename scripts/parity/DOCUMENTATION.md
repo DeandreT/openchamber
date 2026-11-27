@@ -398,6 +398,19 @@ entries still have uncovered requirements, including todo dependencies, plan
 dispatch, cross-project edit recovery, schedule save, target selection and
 execution. Observing the held read does not qualify a settled loading image.
 
+#### Why the native note targets use the inner panel and the stored note ID
+
+The side-panel frame and the Knowledge surface both have the AT-SPI name
+`Project knowledge` and role `landmark`. The target's `projectNote` is the
+exact stored body in `projectId`. Its `part` is `card` or `openMenu`. Both
+require one visible, enabled button with the declared name inside the
+`knowledge-panel` landmark. Its accessible ID must belong to the matching
+note in that project's records. The menu also requires that note's text in
+the open editor: a list row's menu has the same button ID. A missing or
+ambiguous note target stops the case, including at a geometry checkpoint.
+`clickNamed` with `projectNoteIn` uses that same lookup to open a native note
+card. Electron still clicks the unique accessible button by name and role.
+
 `python3 -m unittest panel_scenarios_test native_adapter_test` checks these
 contracts and the state reader without launching a desktop client. Genuine
 paired execution still requires the pinned clients, independent seed copies and

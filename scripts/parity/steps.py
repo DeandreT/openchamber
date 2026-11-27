@@ -158,6 +158,10 @@ def named_control(spec: dict, kind: str) -> dict:
     if not isinstance(query, dict) or not isinstance(query.get("name"), str) or not query["name"]:
         raise ValueError(f"clickNamed needs an accessible name for {kind}")
     role = query.get("role")
+    if kind == "native" and "projectNoteIn" in query:
+        if role != "button" or not isinstance(query["projectNoteIn"], str) or not query["projectNoteIn"]:
+            raise ValueError("projectNoteIn needs a project ID and a named note button")
+        return {"name": query["name"], "projectNote": query["name"], "projectId": query["projectNoteIn"], "part": "card"}
     if role is not None and kind == "native" and "roles" not in query:
         if role not in ATSPI_ROLES:
             raise ValueError(f"no AT-SPI mapping for role {role!r}; give a native override")
