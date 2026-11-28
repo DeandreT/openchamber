@@ -3,6 +3,7 @@ import { installRuntimeEndpointReset } from './runtimeEndpointReset';
 import { opencodeClient } from '@/lib/opencode/client';
 import { switchRuntimeEndpoint } from '@/lib/runtime-switch';
 import { useConfigStore } from '@/stores/useConfigStore';
+import { useMcpConfigStore } from '@/stores/useMcpConfigStore';
 import { useUIStore } from '@/stores/useUIStore';
 
 const originalWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
@@ -91,5 +92,26 @@ describe('installRuntimeEndpointReset', () => {
     switchRuntimeEndpoint({ apiBaseUrl: 'https://second.example', runtimeKey: 'second' });
 
     expect(opencodeClient.getBaseUrl().startsWith('https://first.example')).toBe(true);
+  });
+
+  test('a saved MCP row cannot reach the same directory on a different runtime', async () => {
+    installWindow();
+    stubFetch();
+    const directory = '/workspace/shared';
+    const row = { name: 'paused', type: 'local' as const, command: ['paused'], disabled: true };
+    const uninstall = installRuntimeEndpointReset();
+    try {
+      switchRuntimeEndpoint({ apiBaseUrl: 'http://localhost:4100', runtimeKey: 'first' });
+      useMcpConfigStore.setState({ mcpServers: [row], serversByDirectory: { [directory]: [row] } });
+      expect(useMcpConfigStore.getState().getMcpServersForDirectory(directory)).toEqual([row]);
+      switchRuntimeEndpoint({ apiBaseUrl: 'http://localhost:4200', runtimeKey: 'second' });
+      const state = useMcpConfigStore.getState();
+      expect(state.getMcpServersForDirectory(directory)).toEqual([]);
+      expect(state.mcpServers).toEqual([]);
+      expect(await state.loadMcpConfigs({ directory })).toBe(false);
+      expect(useMcpConfigStore.getState().getMcpServersForDirectory(directory)).toEqual([]);
+    } finally {
+      uninstall();
+    }
   });
 });

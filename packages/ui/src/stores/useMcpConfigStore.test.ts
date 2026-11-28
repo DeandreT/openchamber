@@ -16,11 +16,12 @@ type CapturedRequest = { url: string; method: string; body: CapturedMcpBody };
 
 let captured: CapturedRequest[] = [];
 let listResponse: unknown[] = [];
+const queuedReads: Array<Response | Promise<Response>> = [];
 
 const runtimeFetchMock = async (url: string, init?: RequestInit) => {
   const method = init?.method ?? 'GET';
   if (method === 'GET') {
-    return new Response(JSON.stringify(listResponse), { headers: { 'Content-Type': 'application/json' } });
+    return queuedReads.shift() ?? Response.json(listResponse);
   }
   captured.push({ url, method, body: JSON.parse(String(init?.body ?? '{}')) });
   return new Response(JSON.stringify({}), { headers: { 'Content-Type': 'application/json' } });
@@ -48,7 +49,7 @@ mock.module('@/stores/useAgentsStore', () => ({
   refreshAfterOpenCodeRestart: mock(async () => undefined),
 }));
 
-const { useMcpConfigStore } = await import('./useMcpConfigStore');
+const { hasLoadedMcpConfigsForDirectory, useMcpConfigStore } = await import('./useMcpConfigStore');
 
 /** What the MCP page hands the store for a remote server with nothing set. */
 const remoteDraft = (overrides: Partial<McpDraft> = {}): McpDraft => ({
@@ -176,5 +177,79 @@ describe('useMcpConfigStore round trip', () => {
     const entry = useMcpConfigStore.getState().getMcpByName('old');
     expect(entry?.legacy).toBe(true);
     expect(entry?.protocol).toBeUndefined();
+  });
+});
+
+describe('saved MCP list reads', () => {
+  const directory = '/workspace/project';
+  const server = { name: 'paused', type: 'local', command: ['example'], disabled: true };
+  const store = useMcpConfigStore.getState;
+  const failed = () => Response.json({ error: 'Invalid JSONC at offset 7' }, { status: 500 });
+
+  beforeEach(() => {
+    store().resetForRuntimeSwitch();
+    queuedReads.length = 0;
+    listResponse = [];
+  });
+
+  test('a failed first read is unknown; a successful empty read is authoritative', async () => {
+    queuedReads.push(failed());
+    expect(await store().loadMcpConfigs({ directory })).toBe(false);
+    expect(hasLoadedMcpConfigsForDirectory(store(), directory)).toBe(false);
+    expect(store().getReadErrorForDirectory(directory)).toBe('Invalid JSONC at offset 7');
+    expect(store().getReadErrorForDirectory('/other')).toBeUndefined();
+    expect(await store().loadMcpConfigs({ directory })).toBe(true);
+    expect(hasLoadedMcpConfigsForDirectory(store(), directory)).toBe(true);
+    expect(store().getReadErrorForDirectory(directory)).toBeUndefined();
+  });
+
+  test('a failed forced read keeps the row and a normal revisit retries even within its cache lifetime', async () => {
+    listResponse = [server];
+    await store().loadMcpConfigs({ directory });
+    queuedReads.push(failed());
+    expect(await store().loadMcpConfigs({ directory, force: true })).toBe(false);
+    expect(store().getMcpByName(server.name, directory)).toEqual(server);
+    listResponse = [];
+    expect(await store().loadMcpConfigs({ directory })).toBe(true);
+    expect(store().getMcpByName(server.name, directory)).toBeUndefined();
+    expect(store().getReadErrorForDirectory(directory)).toBeUndefined();
+  });
+
+  test('an unreadable list without a host diagnostic leaves the error wording to the localized grid', async () => {
+    queuedReads.push(Response.json({}));
+    expect(await store().loadMcpConfigs({ directory })).toBe(false);
+    expect(hasLoadedMcpConfigsForDirectory(store(), directory)).toBe(false);
+    expect(store().getReadErrorForDirectory(directory)).toBe('');
+  });
+
+  test('a late failure cannot replace the result of a newer read', async () => {
+    let finish!: (response: Response) => void;
+    queuedReads.push(new Promise<Response>((resolve) => { finish = resolve; }));
+    const older = store().loadMcpConfigs({ directory });
+    listResponse = [server];
+    expect(await store().loadMcpConfigs({ directory, force: true })).toBe(true);
+    finish(failed());
+    expect(await older).toBe(false);
+    expect(store().getReadErrorForDirectory(directory)).toBeUndefined();
+    expect(store().getMcpByName(server.name, directory)).toEqual(server);
+  });
+
+  test('switching hosts drops same-path rows and errors, including a late response from the old host', async () => {
+    listResponse = [server];
+    await store().loadMcpConfigs({ directory });
+    queuedReads.push(failed());
+    await store().loadMcpConfigs({ directory, force: true });
+    let finish!: (response: Response) => void;
+    queuedReads.push(new Promise<Response>((resolve) => { finish = resolve; }));
+    const oldHost = store().loadMcpConfigs({ directory });
+    store().resetForRuntimeSwitch();
+    expect(hasLoadedMcpConfigsForDirectory(store(), directory)).toBe(false);
+    expect(store().getReadErrorForDirectory(directory)).toBeUndefined();
+    listResponse = [];
+    expect(await store().loadMcpConfigs({ directory })).toBe(true);
+    finish(Response.json([server]));
+    expect(await oldHost).toBe(false);
+    expect(store().getMcpServersForDirectory(directory)).toEqual([]);
+    expect(store().mcpServers).toEqual([]);
   });
 });

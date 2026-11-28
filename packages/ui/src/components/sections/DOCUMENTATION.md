@@ -221,6 +221,11 @@ read-only while their config loads; a failed initial read therefore keeps
 runtime-only rows hidden until a read succeeds. These rows expose neither open
 nor delete because no config entry backs them.
 
+A successful empty live-status read says nothing about the saved list. If the
+config read fails, the grid shows the error alongside any saved rows it last
+read for this directory on this runtime. Reopening the page rereads the file;
+the status refresh button reads only live status.
+
 ### MCP OAuth
 
 A remote MCP server with OAuth enabled is registered by OpenCode as an

@@ -35,7 +35,7 @@ const runtimeStatuses = {
 };
 
 /** Renders the grid with one configured server and the runtime-added Console one. */
-const renderGrid = async (options?: { configsLoaded?: boolean }): Promise<string> => {
+const renderGrid = async (options?: { configsLoaded?: boolean; readError?: string }): Promise<string> => {
   await act(async () => root?.unmount());
   useMcpConfigStore.setState({
     selectedMcpName: null,
@@ -44,6 +44,7 @@ const renderGrid = async (options?: { configsLoaded?: boolean }): Promise<string
     loadMcpConfigs: async () => true,
     // An absent key means the directory's config catalog has not been read yet.
     serversByDirectory: options?.configsLoaded === false ? {} : { __default__: [configuredServer] },
+    readErrorsByDirectory: options?.readError ? { __default__: options.readError } : {},
   });
   useMcpStore.setState({
     refresh: async () => {},
@@ -79,4 +80,24 @@ test('a runtime row waits for the config catalog instead of flashing read-only r
   // config is still loading; every server would then read as runtime-only.
   const body = await renderGrid({ configsLoaded: false });
   expect(body).not.toContain('opencode_console');
+  expect(body).not.toContain('No MCP servers yet.');
+});
+
+test('a failed first saved-list read shows the diagnostic instead of an empty list', async () => {
+  const readError = 'Invalid JSONC at offset 7';
+  const body = await renderGrid({ configsLoaded: false, readError });
+  expect(body).not.toContain('No MCP servers yet.');
+  expect(body).not.toContain('opencode_console');
+  const alert = document.querySelector('[role="alert"]')?.textContent;
+  expect(alert).toContain("Couldn't read the saved MCP servers.");
+  expect(alert).toContain(readError);
+});
+
+test('a failed saved-list reread identifies the row as last known', async () => {
+  const readError = 'Invalid JSONC at offset 7';
+  const body = await renderGrid({ readError });
+  expect(body).toContain(configuredServer.name);
+  const alert = document.querySelector('[role="alert"]')?.textContent;
+  expect(alert).toContain('Showing the last list that loaded.');
+  expect(alert).toContain(readError);
 });

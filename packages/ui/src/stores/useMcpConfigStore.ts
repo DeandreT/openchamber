@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import { create } from 'zustand';
 import { devtools, persist } from 'zustand/middleware';
 import { createDeferredSafeJSONStorage } from './utils/safeStorage';
@@ -192,6 +193,8 @@ interface McpConfigStore {
   mcpServers: McpServerWithScope[];
   /** Every directory loaded so far, including the ambient one. */
   serversByDirectory: Record<string, McpServerWithScope[]>;
+  /** A present entry means the last read failed, even if the host sent no diagnostic. */
+  readErrorsByDirectory: Record<string, string | undefined>;
   selectedMcpName: string | null;
   isLoading: boolean;
   mcpDraft: McpDraft | null;
@@ -204,6 +207,8 @@ interface McpConfigStore {
   deleteMcp: (name: string, directory?: string | null) => Promise<McpMutationResult>;
   getMcpByName: (name: string, directory?: string | null) => McpServerWithScope | undefined;
   getMcpServersForDirectory: (directory?: string | null) => McpServerWithScope[];
+  getReadErrorForDirectory: (directory?: string | null) => string | undefined;
+  resetForRuntimeSwitch: () => void;
 }
 
 const invalidateMcpCache = (directory: string | null) => {
@@ -235,12 +240,30 @@ export const hasLoadedMcpConfigsForDirectory = (
   directory?: string | null,
 ): boolean => state.serversByDirectory[getMcpCacheKey(resolveDirectory(directory))] !== undefined;
 
+type McpConfigRead = { servers: McpServerWithScope[] } | { error: string };
+const readErrorSchema = z.object({ error: z.string() });
+
+const readMcpConfigs = async (directory: string | null): Promise<McpConfigRead> => {
+  const query = directory ? `?directory=${encodeURIComponent(directory)}` : '';
+  const response = await runtimeFetch(`/api/config/mcp${query}`, {
+    headers: directory ? { 'x-opencode-directory': directory } : undefined,
+  });
+  // A malformed reply has no host diagnostic. Use the grid's localized
+  // message; a decoder exception can include the response body.
+  const body: unknown = await response.json().catch(() => null);
+  if (!response.ok) {
+    return { error: readErrorSchema.safeParse(body).data?.error ?? `HTTP ${response.status}` };
+  }
+  return Array.isArray(body) ? { servers: body } : { error: '' };
+};
+
 export const useMcpConfigStore = create<McpConfigStore>()(
   devtools(
     persist(
       (set, get) => ({
         mcpServers: [],
         serversByDirectory: {},
+        readErrorsByDirectory: {},
         selectedMcpName: null,
         isLoading: false,
         mcpDraft: null,
@@ -249,56 +272,57 @@ export const useMcpConfigStore = create<McpConfigStore>()(
 
         setMcpDraft: (draft) => set({ mcpDraft: draft }),
 
+        getReadErrorForDirectory: (directory) => get().readErrorsByDirectory[getMcpCacheKey(resolveDirectory(directory))],
+
+        resetForRuntimeSwitch: () => {
+          mcpLastLoadedAt.clear();
+          mcpLoadInFlight.clear();
+          set({ mcpServers: [], serversByDirectory: {}, readErrorsByDirectory: {}, isLoading: false });
+        },
+
         loadMcpConfigs: async (options) => {
           const configDirectory = resolveDirectory(options?.directory);
           const cacheKey = getMcpCacheKey(configDirectory);
-          const isAmbient = cacheKey === getMcpCacheKey(getConfigDirectory());
-          const now = Date.now();
-          const loadedAt = mcpLastLoadedAt.get(cacheKey) ?? 0;
-          const hasCachedConfigs = (get().serversByDirectory[cacheKey] ?? (isAmbient ? get().mcpServers : [])).length > 0;
-
-          if (!options?.force && hasCachedConfigs && now - loadedAt < MCP_LOAD_CACHE_TTL_MS) {
-            return true;
-          }
-
           const inFlight = mcpLoadInFlight.get(cacheKey);
-          if (!options?.force && inFlight) {
-            return inFlight;
-          }
+          if (!options?.force && inFlight) return inFlight;
+          const loadedAt = mcpLastLoadedAt.get(cacheKey);
+          if (!options?.force && loadedAt !== undefined && get().serversByDirectory[cacheKey]?.length
+            && Date.now() - loadedAt < MCP_LOAD_CACHE_TTL_MS) return true;
 
-          const request = (async () => {
-            set({ isLoading: true });
-            try {
-              const queryParams = configDirectory ? `?directory=${encodeURIComponent(configDirectory)}` : '';
-              const response = await runtimeFetch(`/api/config/mcp${queryParams}`, {
-                headers: configDirectory ? { 'x-opencode-directory': configDirectory } : undefined,
-              });
-              if (!response.ok) {
-                throw new Error('Failed to load MCP configs');
+          // A forced reread can overtake this one, or the window can leave the host.
+          // Only the current read owns this directory's rows and its error.
+          const request: Promise<boolean> = readMcpConfigs(configDirectory)
+            .catch((cause: unknown) => ({ error: cause instanceof Error ? cause.message : '' }))
+            .then((result) => {
+              if (mcpLoadInFlight.get(cacheKey) !== request) return false;
+              if ('error' in result) {
+                invalidateMcpCache(configDirectory);
+                set((state) => ({ readErrorsByDirectory: { ...state.readErrorsByDirectory, [cacheKey]: result.error } }));
+                return false;
               }
-              const data: McpServerWithScope[] = await response.json();
+              mcpLastLoadedAt.set(cacheKey, Date.now());
               set((state) => {
                 const next: Partial<McpConfigStore> = {
-                  serversByDirectory: { ...state.serversByDirectory, [cacheKey]: data },
-                  isLoading: false,
+                  serversByDirectory: { ...state.serversByDirectory, [cacheKey]: result.servers },
                 };
-                if (isAmbient) next.mcpServers = data;
+                if (state.readErrorsByDirectory[cacheKey] !== undefined) {
+                  next.readErrorsByDirectory = { ...state.readErrorsByDirectory, [cacheKey]: undefined };
+                }
+                if (cacheKey === getMcpCacheKey(getConfigDirectory())) next.mcpServers = result.servers;
                 return next;
               });
-              mcpLastLoadedAt.set(cacheKey, Date.now());
               return true;
-            } catch (error) {
-              console.error('[McpConfigStore] Failed to load MCP configs:', error);
-              set({ isLoading: false });
-              return false;
-            }
-          })();
+            });
 
           mcpLoadInFlight.set(cacheKey, request);
+          set({ isLoading: true });
           try {
             return await request;
           } finally {
-            mcpLoadInFlight.delete(cacheKey);
+            if (mcpLoadInFlight.get(cacheKey) === request) {
+              mcpLoadInFlight.delete(cacheKey);
+              set({ isLoading: mcpLoadInFlight.size > 0 });
+            }
           }
         },
 
