@@ -1,4 +1,5 @@
 import type { Session } from '@/lib/opencode/model';
+import { captureRuntimeInstance } from '@/lib/runtime-switch';
 import { getBtwOriginalSessionID } from '@/lib/sessionBtwMetadata';
 import { ensureGlobalSessionsLoaded, resolveGlobalSessionDirectory, useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
 import { useBtwStore } from '@/stores/useBtwStore';
@@ -69,10 +70,11 @@ const selectTarget = (target: SessionOpenTarget, directoryHint: string | null): 
 export async function openSession(sessionId: string, options: SessionOpenOptions = {}): Promise<void> {
   const requestedId = sessionId.trim();
   if (!requestedId) return;
+  const isCurrentRuntime = captureRuntimeInstance();
   if (options.requireKnownSession) {
     const selectedBeforeLoad = useSessionUIStore.getState().currentSessionId;
     const snapshot = await ensureGlobalSessionsLoaded().catch(() => null);
-    if (useSessionUIStore.getState().currentSessionId !== selectedBeforeLoad) return;
+    if (!isCurrentRuntime() || useSessionUIStore.getState().currentSessionId !== selectedBeforeLoad) return;
     if (!snapshot || ![...snapshot.activeSessions, ...snapshot.archivedSessions].some((session) => session.id === requestedId)) return;
   }
 
@@ -89,7 +91,7 @@ export async function openSession(sessionId: string, options: SessionOpenOptions
   // record, so the first selection can guess. Once the global list is
   // available, re-select with what it says unless the user already moved.
   const snapshot = await ensureGlobalSessionsLoaded().catch(() => null);
-  if (!snapshot) return;
+  if (!snapshot || !isCurrentRuntime()) return;
 
   const latest = useSessionUIStore.getState();
   if (latest.currentSessionId !== initialTarget.sessionId) return;

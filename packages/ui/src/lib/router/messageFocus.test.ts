@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { getRuntimeKey, switchRuntimeEndpoint } from '@/lib/runtime-switch';
 
 import {
     markMessageFocusShown,
@@ -33,6 +34,52 @@ describe('message focus requests', () => {
         const newer = peekMessageFocus('ses_a');
         expect(newer?.messageId).toBe('msg_2');
         if (newer) settleMessageFocus(newer);
+    });
+
+    test('a shown link belongs to the runtime that requested it, even with identical IDs', () => {
+        const runtimeA = getRuntimeKey();
+        requestMessageFocus('ses_a', 'msg_1');
+        const fromA = peekMessageFocus('ses_a')!;
+        markMessageFocusShown(fromA);
+        try {
+            switchRuntimeEndpoint({ apiBaseUrl: '', runtimeKey: 'host:b' });
+            releaseMessageFocusOutside('ses_a');
+            const inherited = peekMessageFocus('ses_a');
+
+            requestMessageFocus('ses_a', 'msg_1');
+            const fromB = peekMessageFocus('ses_a')!;
+            expect(readMessageFocusInFlight('ses_a')).toBe('msg_1');
+            markMessageFocusShown(fromB);
+            markMessageFocusShown(fromA);
+            settleMessageFocus(fromA);
+            expect(peekMessageFocus('ses_a')).toBe(fromB);
+            expect({
+                inherited: inherited?.messageId ?? null,
+                inFlight: readMessageFocusInFlight('ses_a'),
+            }).toEqual({ inherited: null, inFlight: null });
+        } finally {
+            releaseMessageFocusOutside(null);
+            switchRuntimeEndpoint({ apiBaseUrl: '', runtimeKey: runtimeA });
+        }
+    });
+
+    test('an in-flight link survives a same-host reconnect but not a host round trip', () => {
+        const runtimeA = getRuntimeKey();
+        requestMessageFocus('ses_a', 'msg_1');
+        const request = peekMessageFocus('ses_a');
+        try {
+            switchRuntimeEndpoint({ apiBaseUrl: '/reconnected', runtimeKey: runtimeA });
+            expect(peekMessageFocus('ses_a')).toBe(request);
+            expect(readMessageFocusInFlight('ses_a')).toBe('msg_1');
+
+            switchRuntimeEndpoint({ apiBaseUrl: '', runtimeKey: 'host:b' });
+            switchRuntimeEndpoint({ apiBaseUrl: '', runtimeKey: runtimeA });
+            expect(readMessageFocusInFlight('ses_a')).toBeNull();
+            expect(peekMessageFocus('ses_a')).toBeNull();
+        } finally {
+            releaseMessageFocusOutside(null);
+            switchRuntimeEndpoint({ apiBaseUrl: '', runtimeKey: runtimeA });
+        }
     });
 
     test('a repeated link is a new request', () => {

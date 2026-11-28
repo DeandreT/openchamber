@@ -10,7 +10,7 @@
  * context — including, eventually, a tiny encoder shared with the native widget/extension.
  */
 
-import { isLinkIdentifier } from '@/lib/router/messageFocus';
+import { isLinkIdentifier } from '@/lib/sessionLinks';
 
 const DEEP_LINK_SCHEME = 'openchamber';
 

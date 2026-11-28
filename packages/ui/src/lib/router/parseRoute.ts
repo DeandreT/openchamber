@@ -5,7 +5,7 @@ import {
   VALID_SETTINGS_SECTIONS,
   ROUTE_PARAMS,
 } from './types';
-import { isLinkIdentifier } from './messageFocus';
+import { isLinkIdentifier } from '@/lib/sessionLinks';
 
 /**
  * Parse the current URL search parameters into a RouteState.

@@ -10,6 +10,7 @@ import {
 import type { TurnHistorySignals } from '../lib/turns/historySignals';
 import { getMemoryLimits, type SessionHistoryMeta } from '@/stores/types/sessionTypes';
 import { isMobileSurfaceRuntime } from '@/lib/runtimeSurface';
+import { captureRuntimeInstance } from '@/lib/runtime-switch';
 
 type ViewportAnchor = { messageId: string; offsetTop: number };
 type TimelineIdentityToken = { key: string | null; connected: boolean };
@@ -701,12 +702,14 @@ export const useChatTimelineController = ({
         options: { maxBatches: number },
     ): Promise<boolean> => {
         const targetIdentity = timelineIdentityRef.current;
+        const isCurrentRuntime = captureRuntimeInstance();
+        const isCurrent = () => targetIdentity.connected && timelineIdentityRef.current === targetIdentity && isCurrentRuntime();
         const isLoaded = () => messagesRef.current.some((message) => message.info.id === messageId);
         let batches = 0;
         // Another history load (the underfilled-viewport fill) can hold the
         // single loading slot; wait it out rather than give up.
         let waits = 0;
-        while (targetIdentity.connected && timelineIdentityRef.current === targetIdentity) {
+        while (isCurrent()) {
             if (isLoaded()) return true;
             if (batches >= options.maxBatches || !historySignalsRef.current.hasMoreAboveTurns) return false;
             if (isLoadingOlderRef.current) {
@@ -717,7 +720,7 @@ export const useChatTimelineController = ({
             }
             batches += 1;
             const grew = await fetchOlderHistory({ preserveViewport: true }).catch(() => false);
-            if (!grew) return timelineIdentityRef.current === targetIdentity && isLoaded();
+            if (!grew) return isCurrent() && isLoaded();
         }
         return false;
     }, [fetchOlderHistory, waitForNextRenderCommitOrTimeout]);

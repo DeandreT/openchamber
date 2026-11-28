@@ -1,5 +1,3 @@
-import { isLinkIdentifier } from '@/lib/router/messageFocus';
-
 // Links to a session, optionally to one message in it. They extend the links
 // the app already understands: the web route (`?session=<id>`) and the native
 // deep link (`openchamber://session/<id>`), each with a `message` parameter.
@@ -7,6 +5,12 @@ import { isLinkIdentifier } from '@/lib/router/messageFocus';
 // someone who can reach the same OpenChamber instance.
 //
 // Pure on purpose: the markdown sanitizer, which may run in a worker, uses it.
+
+// Session and message IDs travel through URLs and end up in DOM attribute
+// selectors, so only plain identifier characters are accepted.
+const LINK_IDENTIFIER_RE = /^[A-Za-z0-9_-]{1,128}$/;
+
+export const isLinkIdentifier = (value: string): boolean => LINK_IDENTIFIER_RE.test(value);
 
 export interface SessionLinkTarget {
     readonly sessionId: string;

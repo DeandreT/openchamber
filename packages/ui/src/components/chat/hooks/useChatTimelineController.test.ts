@@ -3,6 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { describe, expect, test } from 'bun:test';
 import { Window } from 'happy-dom';
 import type { Message } from '@/lib/opencode/model';
+import { getRuntimeKey, switchRuntimeEndpoint } from '@/lib/runtime-switch';
 
 import {
     isOlderHistoryPrependCommit,
@@ -143,6 +144,21 @@ describe('loadHistoryUntilMessage', () => {
             expect(await harness.controller.loadHistoryUntilMessage('msg_1', { maxBatches: 3 })).toBe(true);
             expect(harness.calls).toBe(2);
         } finally {
+            harness.dispose();
+        }
+    });
+
+    test('a host switch between batches stops a message lookup before its next read', async () => {
+        const harness = renderHarness({ pages: [[userMessage('msg_5', 5)], [userMessage('msg_1', 1)]] });
+        const runtimeA = getRuntimeKey();
+        try {
+            await harness.ready();
+            const search = harness.controller.loadHistoryUntilMessage('msg_1', { maxBatches: 3 });
+            expect(harness.calls).toBe(1);
+            switchRuntimeEndpoint({ apiBaseUrl: '', runtimeKey: 'host:b' });
+            expect({ found: await search, reads: harness.calls }).toEqual({ found: false, reads: 1 });
+        } finally {
+            switchRuntimeEndpoint({ apiBaseUrl: '', runtimeKey: runtimeA });
             harness.dispose();
         }
     });
