@@ -3,7 +3,8 @@ import React, { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { Window } from 'happy-dom';
 import { useChatTimelineScroll, type TimelineListHandle } from './useChatTimelineScroll';
-import { requestMessageFocus, releaseMessageFocusOutside } from '@/lib/router/messageFocus';
+import { peekMessageFocus, requestMessageFocus, releaseMessageFocusOutside } from '@/lib/router/messageFocus';
+import { getRuntimeKey, switchRuntimeEndpoint } from '@/lib/runtime-switch';
 import { dispatchPageWaiting, dispatchTabStep } from '@/components/chat/lib/scroll/timelineScrollIntent';
 import { isWaitingPageRevealPending, releaseWaitingPageRevealOutside, revealWaitingPage } from '@/sync/request-reveal';
 import { useUIStore } from '@/stores/useUIStore';
@@ -27,9 +28,11 @@ let dom: Window;
 let alignAnchor: (anchor: MessageViewportAnchor) => 'aligned' | 'missing';
 const descriptors = new Map<string, PropertyDescriptor | undefined>();
 
-function Harness() {
+const sessionKey = () => JSON.stringify([getRuntimeKey(), '/repo', 'session']);
+
+function Harness({ currentSessionKey }: { currentSessionKey: string }) {
     scroll = useChatTimelineScroll({
-        currentSessionId: 'session', currentSessionKey: 'runtime\n/repo\nsession', composerOverlayHeight: 0,
+        currentSessionId: 'session', currentSessionKey, composerOverlayHeight: 0,
         messageListRef: { current: { alignViewportAnchor: (anchor) => alignAnchor(anchor) } }, sessionIsWorking: working,
         checkLinkedMessage,
         loadHistoryUntilMessage: async () => { loads += 1; return false; },
@@ -57,7 +60,7 @@ function Harness() {
 }
 
 const render = async (mode: 'visible' | 'hidden') => {
-    await act(async () => root.render(<React.Activity mode={mode}><Harness /></React.Activity>));
+    await act(async () => root.render(<React.Activity mode={mode}><Harness currentSessionKey={sessionKey()} /></React.Activity>));
 };
 const frame = async () => {
     const pending = [...frames.values()];
@@ -269,6 +272,71 @@ test('does not start a history search from a linked-message check completed afte
     await act(async () => complete('exists'));
     expect(loads).toBe(0);
     expect(missing).toBe(0);
+});
+
+test('a linked-message check that finishes after a host switch cannot start paging on the new host', async () => {
+    let complete!: (value: 'exists') => void;
+    checkLinkedMessage = () => new Promise((resolve) => { complete = resolve; });
+    await render('visible'); await frame();
+    act(() => requestMessageFocus('session', 'old-message'));
+    const runtimeA = getRuntimeKey();
+    try {
+        switchRuntimeEndpoint({ apiBaseUrl: '', runtimeKey: 'host:b' });
+        // The old timeline is still mounted when its whole-message read finishes.
+        await act(async () => complete('exists'));
+        expect(loads).toBe(0);
+        expect(missing).toBe(0);
+    } finally {
+        switchRuntimeEndpoint({ apiBaseUrl: '', runtimeKey: runtimeA });
+    }
+});
+
+test('the outgoing timeline cannot align or dismiss a link on the next host', async () => {
+    const aligned: string[] = [];
+    alignAnchor = ({ messageId }) => { aligned.push(messageId); return 'aligned'; };
+    await render('visible'); await frame();
+    act(() => requestMessageFocus('session', 'same-message'));
+    expect(aligned).toEqual(['same-message']);
+    const runtimeA = getRuntimeKey();
+    try {
+        switchRuntimeEndpoint({ apiBaseUrl: '', runtimeKey: 'host:b' });
+        await frame();
+        const afterFrame = aligned.length;
+        act(() => requestMessageFocus('session', 'same-message'));
+        act(() => node.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 })));
+        expect({ afterFrame, aligned, standing: peekMessageFocus('session')?.messageId })
+            .toEqual({ afterFrame: 1, aligned: ['same-message'], standing: 'same-message' });
+
+        await act(async () => root.render(null));
+        await render('visible');
+        expect(aligned).toEqual(['same-message', 'same-message']);
+        act(() => node.dispatchEvent(new WheelEvent('wheel', { deltaY: -100 })));
+        expect(peekMessageFocus('session')).toBeNull();
+    } finally {
+        switchRuntimeEndpoint({ apiBaseUrl: '', runtimeKey: runtimeA });
+    }
+});
+
+test('a fresh timeline restores its own position when another host already showed the same message ID', async () => {
+    const aligned: string[] = [];
+    alignAnchor = ({ messageId }) => { aligned.push(messageId); return 'aligned'; };
+    await render('visible'); await frame();
+    act(() => requestMessageFocus('session', 'msg_112'));
+    await frame();
+    expect(aligned).toEqual(['msg_112', 'msg_112']);
+    await act(async () => root.render(null));
+
+    const runtimeA = getRuntimeKey();
+    try {
+        switchRuntimeEndpoint({ apiBaseUrl: '', runtimeKey: 'host:b' });
+        rememberSessionScrollPosition(sessionKey(), { messageId: 'msg_250', offsetTop: -10 });
+        aligned.length = 0;
+        await render('visible'); await frame();
+        expect(aligned).toEqual(['msg_250', 'msg_250']);
+    } finally {
+        rememberSessionScrollPosition(sessionKey(), null);
+        switchRuntimeEndpoint({ apiBaseUrl: '', runtimeKey: runtimeA });
+    }
 });
 
 // A waiting page whose block sits at content offsets `top` to 1800, below

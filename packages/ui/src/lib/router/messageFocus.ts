@@ -1,3 +1,6 @@
+import { captureRuntimeInstance } from '@/lib/runtime-switch';
+import { isLinkIdentifier } from '@/lib/sessionLinks';
+
 // A request to show one message of a session, raised by a message link (the
 // web route, a desktop or mobile deep link, a link clicked in the chat) and
 // served by that session's chat timeline: on entry when the link switches
@@ -8,20 +11,15 @@
 // mounts a new timeline, and the first may be torn down mid-search or may even
 // have shown the message already; the second must show it again. So the
 // request outlives being shown: it stays until the reader takes the viewport,
-// another session is entered, the message proves missing, or it expires.
+// another runtime or session is entered, the message proves missing, or it expires.
 // Only the newest request is kept.
 
 const MESSAGE_FOCUS_TTL_MS = 60_000;
 
-// Session and message IDs travel through URLs and end up in DOM attribute
-// selectors, so only plain identifier characters are accepted.
-const LINK_IDENTIFIER_RE = /^[A-Za-z0-9_-]{1,128}$/;
-
-export const isLinkIdentifier = (value: string): boolean => LINK_IDENTIFIER_RE.test(value);
-
 export type MessageFocusRequest = {
     readonly sessionId: string;
     readonly messageId: string;
+    readonly isCurrentRuntime: () => boolean;
     /** Tells a repeated click on the same link from the request it repeats. */
     readonly serial: number;
     readonly requestedAt: number;
@@ -43,7 +41,13 @@ const notifyStatus = () => {
 
 export const requestMessageFocus = (sessionId: string, messageId: string): void => {
     if (!isLinkIdentifier(sessionId) || !isLinkIdentifier(messageId)) return;
-    const request = { sessionId, messageId, serial: nextSerial++, requestedAt: Date.now() };
+    const request = {
+        sessionId,
+        messageId,
+        isCurrentRuntime: captureRuntimeInstance(),
+        serial: nextSerial++,
+        requestedAt: Date.now(),
+    };
     pending = request;
     if (expiryTimer !== null) clearTimeout(expiryTimer);
     // An expired request is dropped lazily by `peekMessageFocus`; progress
@@ -61,7 +65,7 @@ export const requestMessageFocus = (sessionId: string, messageId: string): void 
 export const peekMessageFocus = (sessionId: string | null): MessageFocusRequest | null => {
     const request = pending;
     if (!request || !sessionId || request.sessionId !== sessionId) return null;
-    if (Date.now() - request.requestedAt > MESSAGE_FOCUS_TTL_MS) {
+    if (!request.isCurrentRuntime() || Date.now() - request.requestedAt > MESSAGE_FOCUS_TTL_MS) {
         pending = null;
         return null;
     }
@@ -77,14 +81,13 @@ export const settleMessageFocus = (request: MessageFocusRequest): void => {
 
 /** Entering a session drops a request that names another one. */
 export const releaseMessageFocusOutside = (sessionId: string | null): void => {
-    if (!pending || pending.sessionId === sessionId) return;
-    pending = null;
-    notifyStatus();
+    if (!pending || (pending.sessionId === sessionId && pending.isCurrentRuntime())) return;
+    settleMessageFocus(pending);
 };
 
 /** The timeline put the requested message on screen (the request itself stands on). */
 export const markMessageFocusShown = (request: MessageFocusRequest): void => {
-    if (shownSerial === request.serial) return;
+    if (shownSerial === request.serial || peekMessageFocus(request.sessionId) !== request) return;
     shownSerial = request.serial;
     notifyStatus();
 };

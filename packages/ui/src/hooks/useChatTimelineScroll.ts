@@ -28,6 +28,7 @@ import {
     markMessageFocusShown,
     type MessageFocusRequest,
 } from '@/lib/router/messageFocus';
+import { captureRuntimeInstance } from '@/lib/runtime-switch';
 import { isMobileSurfaceRuntime } from '@/lib/runtimeSurface';
 import { useUIStore } from '@/stores/useUIStore';
 import type { TimelineRevealGate } from '@/components/chat/timelineRevealGate';
@@ -323,6 +324,9 @@ type PositionTarget =
     | { readonly kind: 'remembered'; readonly anchor: MessageViewportAnchor }
     | { readonly kind: 'link'; readonly anchor: MessageViewportAnchor; readonly request: MessageFocusRequest };
 
+const isTargetRuntimeCurrent = (target: PositionTarget): boolean =>
+    target.kind === 'remembered' || target.request.isCurrentRuntime();
+
 const linkTarget = (request: MessageFocusRequest, node: HTMLElement): PositionTarget => ({
     kind: 'link',
     request,
@@ -480,6 +484,12 @@ export const useChatTimelineScroll = ({
     checkLinkedMessageRef.current = checkLinkedMessage;
     const currentSessionIdRef = React.useRef(currentSessionId);
     currentSessionIdRef.current = currentSessionId;
+    const enteredSessionRef = React.useRef<{ key: string; isCurrentRuntime: () => boolean } | null>(null);
+    // The outgoing list can still be listening or receive a wheel event after
+    // the runtime switched. Only the new timeline may serve or settle its link.
+    const peekTimelineFocus = React.useCallback(() => (
+        enteredSessionRef.current?.isCurrentRuntime() ? peekMessageFocus(currentSessionIdRef.current) : null
+    ), []);
 
     const cancelShowButtonTimer = React.useCallback(() => {
         if (showButtonTimerRef.current !== null) {
@@ -511,7 +521,7 @@ export const useChatTimelineScroll = ({
         setUserOwnsScroll(true);
         // The reader took the viewport: a link already shown is done with and
         // must not pull them back if the session is entered again.
-        const linkRequest = peekMessageFocus(currentSessionIdRef.current);
+        const linkRequest = peekTimelineFocus();
         if (linkRequest) settleMessageFocus(linkRequest);
         // The end may already have been left by our own movement, in which
         // case no further at-end transition will fire — and while an animated
@@ -525,7 +535,7 @@ export const useChatTimelineScroll = ({
             cancelShowButtonTimer();
             setShowScrollButton(true);
         }
-    }, [cancelShowButtonTimer]);
+    }, [cancelShowButtonTimer, peekTimelineFocus]);
 
     const isLiveFollowActive = React.useCallback(() => (
         liveFollowGenerationRef.current === userGenerationRef.current
@@ -751,7 +761,7 @@ export const useChatTimelineScroll = ({
 
         const step = () => {
             frame = null;
-            if (finished || scrollRef.current !== node) {
+            if (finished || scrollRef.current !== node || !isTargetRuntimeCurrent(target)) {
                 finish();
                 return;
             }
@@ -805,6 +815,7 @@ export const useChatTimelineScroll = ({
         gate?.extendCap(REMEMBERED_POSITION_REVEAL_WAIT_MS);
         const generation = userGenerationRef.current;
         let cancelled = false;
+        const isCurrent = () => !cancelled && isTargetRuntimeCurrent(target);
         const search = {
             cancel: () => {
                 cancelled = true;
@@ -824,14 +835,14 @@ export const useChatTimelineScroll = ({
             ? checkLinked(target.anchor.messageId).catch(() => unknown)
             : Promise.resolve(unknown);
         void existence
-            .then((state) => (cancelled || state === 'missing' ? false : loadHistoryUntil(target.anchor.messageId, maxBatches)))
+            .then((state) => (!isCurrent() || state === 'missing' ? false : loadHistoryUntil(target.anchor.messageId, maxBatches)))
             .catch(() => false)
             .then((found) => {
                 if (restoreRef.current === search) restoreRef.current = null;
                 const node = scrollRef.current;
                 // Torn down meanwhile (session switched or re-selected): a
                 // link stays pending for whichever timeline serves it next.
-                const sameSession = !cancelled
+                const sameSession = isCurrent()
                     && currentSessionKeyRef.current === sessionKey
                     && listSessionKeyRef.current === sessionKey;
                 if (!sameSession) {
@@ -1515,12 +1526,11 @@ export const useChatTimelineScroll = ({
     // ── session lifecycle ───────────────────────────────────────────────────
     // A layout effect declared before the entry pin: a session entered with a
     // remembered position overrides this reset within the same commit.
-    const lastSessionKeyRef = React.useRef<string | null>(null);
     React.useLayoutEffect(() => {
-        if (!currentSessionId || !currentSessionKey || currentSessionKey === lastSessionKeyRef.current) {
+        if (!currentSessionId || !currentSessionKey || currentSessionKey === enteredSessionRef.current?.key) {
             return;
         }
-        lastSessionKeyRef.current = currentSessionKey;
+        enteredSessionRef.current = { key: currentSessionKey, isCurrentRuntime: captureRuntimeInstance() };
         MessageFreshnessDetector.getInstance().recordSessionStart(currentSessionId);
         restoreRef.current?.cancel();
         restoredEntryKeyRef.current = null;
@@ -1557,7 +1567,7 @@ export const useChatTimelineScroll = ({
         // only the list registered for this session decides the entry.
         if (scrollRef.current === scrollNode && handledEntryKeyRef.current !== currentSessionKey) {
             handledEntryKeyRef.current = currentSessionKey;
-            const linkRequest = peekMessageFocus(currentSessionIdRef.current);
+            const linkRequest = peekTimelineFocus();
             const remembered = !pinned && isWaitingPageRevealPending(currentSessionIdRef.current)
                 ? null
                 : readSessionScrollPosition(currentSessionKey);
@@ -1583,7 +1593,7 @@ export const useChatTimelineScroll = ({
             if (frame !== null) cancelAnimationFrame(frame);
             releaseReveal?.();
         };
-    }, [currentSessionKey, pinned, revealGate, scrollNode, showPositionTarget]);
+    }, [currentSessionKey, peekTimelineFocus, pinned, revealGate, scrollNode, showPositionTarget]);
 
     // ── message link in the open session ────────────────────────────────────
     // A link to a message of the session already on screen does not switch
@@ -1592,7 +1602,7 @@ export const useChatTimelineScroll = ({
         if (!scrollNode || !currentSessionKey) return;
         const showRequested = () => {
             if (scrollRef.current !== scrollNode || handledEntryKeyRef.current !== currentSessionKey) return;
-            const request = peekMessageFocus(currentSessionIdRef.current);
+            const request = peekTimelineFocus();
             if (!request) return;
             const served = linkServedRef.current;
             if (served?.key === currentSessionKey && served.serial === request.serial) return;
@@ -1600,7 +1610,7 @@ export const useChatTimelineScroll = ({
         };
         showRequested();
         return subscribeMessageFocus(showRequested);
-    }, [currentSessionKey, scrollNode, showPositionTarget]);
+    }, [currentSessionKey, peekTimelineFocus, scrollNode, showPositionTarget]);
 
     // ── waiting page's toast ────────────────────────────────────────────────
     // The click asks for the page, so it counts as a return to the end, where

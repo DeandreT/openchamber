@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 import type { Session } from '@/lib/opencode/model';
+import { getRuntimeKey, switchRuntimeEndpoint } from '@/lib/runtime-switch';
 
 import { useBtwStore } from '@/stores/useBtwStore';
 import { useGlobalSessionsStore } from '@/stores/useGlobalSessionsStore';
@@ -8,6 +9,7 @@ import { getRememberedSessionDirectory, useSessionUIStore } from '@/sync/session
 import { openSessionFromToast } from '@/sync/session-navigation';
 
 import { openSession, openSessionFromRoute, openSessionLink } from './openSessionFromRoute';
+import { peekMessageFocus, releaseMessageFocusOutside } from './messageFocus';
 
 const SESSION_ID = 'ses_linear_open';
 const PROJECT_DIR = '/projects/linear-from-url';
@@ -63,6 +65,21 @@ describe('openSessionFromRoute', () => {
     await opening;
     expect(useSessionUIStore.getState().currentSessionId).toBe(otherId);
     expect(useSessionUIStore.getState().currentSessionDirectory).toBe(OTHER_DIR);
+  });
+
+  test('a message link waiting for the session list cannot request focus on the next host', async () => {
+    useSessions([buildSession(SESSION_ID, PROJECT_DIR)]);
+    const runtimeA = getRuntimeKey();
+    const opening = openSession(SESSION_ID, { messageId: 'msg_link', requireKnownSession: true });
+    try {
+      switchRuntimeEndpoint({ apiBaseUrl: '', runtimeKey: 'host:b' });
+      await opening;
+      expect(peekMessageFocus(SESSION_ID)).toBeNull();
+      expect(useSessionUIStore.getState().currentSessionId).toBeNull();
+    } finally {
+      releaseMessageFocusOutside(null);
+      switchRuntimeEndpoint({ apiBaseUrl: '', runtimeKey: runtimeA });
+    }
   });
   beforeEach(() => {
     useProjectsStore.setState({ projects: [PROJECT_DIR, OTHER_DIR, WORKTREE_DIR].map((path) => ({ id: path, path })) });

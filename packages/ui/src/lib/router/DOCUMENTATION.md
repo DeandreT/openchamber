@@ -34,6 +34,13 @@ window focus, acknowledgement deadlines, and document-navigation fallback.
 
 ## Decisions
 
+### Why message focus follows the runtime and session, but not the directory
+
+A link can open under a guessed directory, then remount under its real one;
+both timelines need the target even if the first already showed it. Links,
+search hits and pins survive a transport change on one host, but a host switch
+retires them and their pending work: the next host can reuse both IDs.
+
 ### Why a `/btw` fork opens its parent
 
 A fork is hidden from session lists and rendered inside its parent's panel.
