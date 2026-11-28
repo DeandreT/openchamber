@@ -65,6 +65,16 @@ on disk. Once the entity exists, the page switches to the autosave rules above.
 `skills/` follows the same split for supporting files: editing an existing file
 writes when the dialog closes, while a new file is only created on confirm.
 
+## Routing
+
+### Why clearing the fallback applies to one visit
+
+The host stores the same empty fallback whether someone cleared it or never
+chose one. The open Routing editor remembers its own clear so a save reply or
+reread cannot trigger another save from Session Defaults. It still shows
+changes from other clients. Picking a model leaves prefill available, and
+reopening Routing starts a new visit.
+
 ## Providers
 
 Source-control cards whose descriptor carries `auth.login` show its service-owned sign-in hint when that instance has no account. With no PAT method, the instance renders its signed-in user without token, add-account or CLI-switch controls. The service owns sign-in outside the app. Opening that card rechecks status; a failed read keeps the auth store's prior account metadata and reports an error, while only a successful empty result removes the displayed login. The same card is used by the web, desktop and mobile Integrations pages.

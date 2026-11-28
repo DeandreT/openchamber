@@ -276,13 +276,13 @@ export const RoutingPage: React.FC = () => {
   // chose for new sessions is the natural fallback, and it saves a required step.
   const settingsDefaultModel = useConfigStore((state) => state.settingsDefaultModel);
   const settingsDefaultVariant = useConfigStore((state) => state.settingsDefaultVariant);
-  const prefilledRef = React.useRef(false);
+  const prefillHandledRef = React.useRef(false);
   React.useEffect(() => {
-    if (prefilledRef.current || !loaded || !serverConfig || serverConfig.fallback) return;
+    if (prefillHandledRef.current || !loaded || !serverConfig || serverConfig.fallback) return;
     const parsed = parseModelIdentifier(settingsDefaultModel);
     // A default of Auto is what this fallback exists to resolve; nothing to prefill from it.
     if (!parsed || isAutoModel(parsed.providerId, parsed.modelId)) return;
-    prefilledRef.current = true;
+    prefillHandledRef.current = true;
     update((config) => (config.fallback ? config : {
       ...config,
       fallback: { model: { providerID: parsed.providerId, modelID: parsed.modelId }, variant: settingsDefaultVariant ?? null },
@@ -396,10 +396,15 @@ export const RoutingPage: React.FC = () => {
                 <ModelSelector
                   providerId={draft.fallback?.model.providerID ?? ''}
                   modelId={draft.fallback?.model.modelID ?? ''}
-                  onChange={(providerID, modelID) => update((config) => ({
-                    ...config,
-                    fallback: !providerID && !modelID ? null : { model: { providerID, modelID }, variant: null },
-                  }))}
+                  onChange={(providerID, modelID) => {
+                    const cleared = !providerID && !modelID;
+                    // A cleared fallback is a choice; don't prefill it again during this visit.
+                    if (cleared) prefillHandledRef.current = true;
+                    update((config) => ({
+                      ...config,
+                      fallback: cleared ? null : { model: { providerID, modelID }, variant: null },
+                    }));
+                  }}
                   className={SETTINGS_CUSTOM_TRIGGER_CLASS}
                   placeholder={t('settings.routing.model.placeholder')}
                 />
