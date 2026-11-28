@@ -26,6 +26,12 @@ animation. Do not restore separate draft and session composer branches:
 remounting the editor loses focus and interrupts the transition. Keep the
 existing mobile fixed-position rules unchanged.
 
+Closing an unsent Chat releases its prepared directory from the composer and
+keeps the files on disk. Choosing a project does the same for the Chat folder.
+Another OpenCode session can already use it. The store that owns this rule,
+including late directory preparation and first Send, is documented under
+[Managed chat directories](../../../sync/DOCUMENTATION.md#managed-chat-directories).
+
 `ComposerFloatingPanel` is the shared frame for `BtwPanel`, `PermissionDock`
 and `FormDock`. They mount inside the composer form, outside both the
 full editor and collapsed mobile pill, with one absolute `bottom-full`

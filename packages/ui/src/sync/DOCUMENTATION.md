@@ -49,12 +49,11 @@ published without claiming a complete snapshot.
 
 ## Cleanup after a runtime switch
 
-Draft creation captures its cleanup owner before creating a session or chat
-folder. `lib/runtime-cleanup.ts` keeps direct HTTP cleanup on that owner's URL
-and credentials, bypassing the active runtime's fetch bridge. Chat cleanup
-accepts only descendants of the roots captured from that owner and never a
-shared root. Session cleanup uses the SDK with the captured transport and
-directory header.
+Before creating a session, the client captures its runtime so it can roll back
+that session ID if the user switches servers. `lib/runtime-cleanup.ts` keeps
+the SDK request on the original runtime's URL, credentials and directory
+header, bypassing the active runtime's fetch bridge. A prepared Chat folder
+never enters this rollback queue.
 
 Relay and same-origin cleanup waits until the owner returns. Failed cleanup
 stays in an in-memory queue and retries on that owner's endpoint-change event
@@ -1462,7 +1461,11 @@ context owner) once it does. With `OPENCHAMBER_DATA_DIR` the root is outside the
 home and the home's legacy folder does not exist, so a guessed root failed to
 initialize and the chats group said "Could not initialize workspace."
 
-Typing the first character in a managed Chat draft starts one deduplicated directory preparation for that draft. The first send consumes the prepared directory before `createSession`, removing filesystem creation from the usual submit path. Closing the draft, changing it to a project target, or completing preparation after the runtime/draft changed deletes the unclaimed directory. A create failure also deletes the consumed directory.
+Typing the first character in a managed Chat draft starts one directory preparation for that draft. First Send reuses the prepared directory for `createSession`. Closing the draft, choosing a project, or receiving a late `mkdir` after leaving the draft drops the composer's reference and keeps the folder and its files. A failed first Send also leaves the folder on disk.
+
+### Why dismissing a Chat keeps its folder
+
+OpenCode can create or move another session into the prepared directory while the draft is still open. OpenCode 2.2.7 offers no way to reserve it for exclusive deletion. Even a fresh session list can change before a delete runs. Dismissal therefore sends no filesystem delete and schedules no retry on reconnect or reopen. Explicitly deleting a saved session follows the separate rules above.
 
 ### A draft's first send
 
@@ -1470,7 +1473,7 @@ Enter in a draft makes it a session on the spot. `sendMessage` mints the session
 
 The entry says what the composer shows: `sessionCreated` false is the "Creating session…" line (shown once the wait has held 300 ms, so a fast server never flashes it); while the entry exists, Send is disabled and Enter does nothing, so a second message cannot reach OpenCode before the first prompt. The response style rides in the same knowledge sync that `ready` covers, so the first prompt reads it from the session's instructions and the message still appears without waiting for that read. The sidebar lists the session once the server has it, as before #5783; the early busy mark that listed it at once is gone. The entry goes when the request that starts the turn leaves the client (`beforeSend` from `opencodeClient.sendMessage` and `sendCommand` right before their last request, after the context parts ahead of it; before `shellSession`), never when it resolves: a prompt request can resolve only after the directory's services started, long after the agent began answering. A shell command therefore does not hold the composer for its lifetime. A draft is sent once (`sentDraftIds`): a second `sendMessage` with the same draft snapshot is refused at the store, creates nothing and keeps the caller's text.
 
-A rejected `ready` is a definite failure, not an ambiguous one: `optimisticSend` rolls the message back without a confirmation read. The store then reopens the same draft object (same `draftId` and `workDraftId`, so the composer's draft key is unchanged and the sent text returns there), clears the pointer a cold launch would restore, removes a chat's directory, and rejects with `DraftSendError`, which names the session, its directory and whether the server created it. The composer restores the text under the identity the error names: the created session's when it exists, the draft's otherwise, with the text typed meanwhile kept above it. A user who moved to another session or draft meanwhile is left where they are; the created session simply is in the sidebar, and a draft that failed to create stays listed.
+A rejected `ready` is a definite failure, not an ambiguous one: `optimisticSend` rolls the message back without a confirmation read. The store then reopens the same draft object (same `draftId` and `workDraftId`, so the composer's draft key is unchanged and the sent text returns there), clears the pointer a cold launch would restore, and rejects with `DraftSendError`, which names the session, its directory and whether the server created it. The composer restores the text under the identity the error names: the created session's when it exists, the draft's otherwise, with the text typed meanwhile kept above it. A user who moved to another session or draft meanwhile is left where they are; the created session simply is in the sidebar, and a draft that failed to create stays listed.
 
 ### Why the session is selected before the server creates it and not shown from inside the draft
 
