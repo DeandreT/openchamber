@@ -19,7 +19,7 @@ use tokio_tungstenite::tungstenite::Message as WsMessage;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::http::HeaderValue;
 
-use crate::client::{ServerClient, encode_directory, read_json};
+use crate::client::{ServerClient, encode_directory, read_json, read_settings_fields};
 use crate::error::TransportError;
 
 /// The first byte of every control frame (`TERMINAL_WS_CONTROL_TAG_JSON`).
@@ -386,7 +386,16 @@ impl TerminalApi {
         let response = self
             .send(Method::GET, self.client.settings_url(), None, None)
             .await?;
-        let value: Value = read_json(response).await?;
+        let value = read_settings_fields(
+            response,
+            &[
+                "terminalCloseOnExit",
+                "terminalFontSize",
+                "terminalShell",
+                "terminalLoginShells",
+            ],
+        )
+        .await?;
         Ok(parse_settings(&value))
     }
 

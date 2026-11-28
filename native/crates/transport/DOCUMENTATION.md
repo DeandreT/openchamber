@@ -664,6 +664,15 @@ actual-session provider policy.
 
 ## Decisions
 
+### Why project and terminal reads decode selected Settings fields
+
+The server returns the whole Settings object even for a project-only write.
+A stored theme ID can contain an escaped UTF-16 surrogate. Project and terminal
+reads validate the JSON object and decode the fields they use. A registry edit
+needs every property of each project, so a project it cannot represent still
+stops the edit. The save checks the merged response before the caller reloads
+topology.
+
 ### Why native-agent RPC has its own strict adapter
 
 The SDK owns a bounded, versioned plugin protocol layered inside OpenCode RPC.

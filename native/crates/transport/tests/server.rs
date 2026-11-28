@@ -42,6 +42,8 @@ mod prompt_parts;
 mod session_actions;
 #[path = "session_creation/mod.rs"]
 mod session_creation;
+#[path = "settings_projection/mod.rs"]
+mod settings_projection;
 #[path = "system_versions/mod.rs"]
 mod system_versions;
 

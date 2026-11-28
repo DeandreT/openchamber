@@ -1465,6 +1465,21 @@ pub fn encode_directory(directory: &str) -> String {
 pub(crate) async fn read_json<T: DeserializeOwned>(
     response: Response,
 ) -> Result<T, TransportError> {
+    read_json_with(response, |bytes| serde_json::from_slice(bytes)).await
+}
+
+/// Reads the requested fields of a merged Settings response.
+pub(crate) async fn read_settings_fields(
+    response: Response,
+    fields: &[&str],
+) -> Result<Value, TransportError> {
+    read_json_with(response, |bytes| wire::settings_fields(bytes, fields)).await
+}
+
+async fn read_json_with<T>(
+    response: Response,
+    decode: impl FnOnce(&[u8]) -> Result<T, serde_json::Error>,
+) -> Result<T, TransportError> {
     let status = response.status();
     if status.is_redirection() {
         return Err(TransportError::Redirected);
@@ -1491,7 +1506,7 @@ pub(crate) async fn read_json<T: DeserializeOwned>(
         .bytes()
         .await
         .map_err(TransportError::from_request)?;
-    serde_json::from_slice(&bytes).map_err(|error| TransportError::Malformed(error.to_string()))
+    decode(&bytes).map_err(|error| TransportError::Malformed(error.to_string()))
 }
 
 #[cfg(test)]
