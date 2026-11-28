@@ -54,7 +54,7 @@ const createApp = ({
     os: {
       homedir: () => '/home/test',
     },
-    path,
+    path: platform === 'win32' ? path.win32 : path.posix,
     process: {
       env: environment,
       platform,
@@ -65,8 +65,8 @@ const createApp = ({
       address: () => ({ port: 7897 }),
       close: vi.fn(),
     },
-    __dirname: '/opt/openchamber/server',
-    openchamberDataDir: '/tmp/openchamber',
+    __dirname: platform === 'win32' ? 'C:\\openchamber\\server' : '/opt/openchamber/server',
+    openchamberDataDir: platform === 'win32' ? 'C:\\temp\\openchamber' : '/tmp/openchamber',
     modelsDevApiUrl: 'https://models.example.test',
     modelsMetadataCacheTtl: 0,
     readSettingsFromDiskMigrated: vi.fn(),
@@ -99,6 +99,16 @@ afterEach(() => {
 });
 
 describe('OpenChamber desktop host update route', () => {
+  it('refuses an HTTP install on a check-only native package host before looking up or downloading a release', async () => {
+    const desktopUpdater = { installBlocked: 'desktop-host', check: vi.fn() };
+    const { app } = createApp({ environment: { OPENCHAMBER_RUNTIME: 'desktop' }, desktopUpdater });
+    const response = await request(app).post('/api/openchamber/update-install');
+    expect(response.status).toBe(409);
+    expect(response.body.code).toBe('DESKTOP_UPDATE_LOCAL_ONLY');
+    expect(desktopUpdater.check).not.toHaveBeenCalled();
+    expect(childProcess.spawn).not.toHaveBeenCalled();
+  });
+
   it('reports a restart rejection until the user retries installation', async () => {
     const desktopUpdater = {
       check: vi.fn(async () => ({ available: true, currentVersion: '1.17.0', version: '1.17.1' })),
@@ -131,6 +141,8 @@ describe('OpenChamber desktop host update route', () => {
     await request(app).get('/api/openchamber/update-check?appType=web').expect(503, {
       available: false, code: 'DESKTOP_UPDATER_UNAVAILABLE', error: 'The desktop updater is not available.',
     });
+    expect(packageManager.checkForUpdates).not.toHaveBeenCalled();
+    await request(app).get('/api/openchamber/update-check?appType=desktop-native').expect(503);
     expect(packageManager.checkForUpdates).not.toHaveBeenCalled();
     await request(app).get('/api/openchamber/update-check?appType=desktop-electron').expect(200);
     expect(packageManager.checkForUpdates).toHaveBeenCalledOnce();
@@ -572,7 +584,7 @@ describe('OpenChamber web update route on Windows', () => {
     await request(app).post('/api/openchamber/update-install').expect(200);
     await new Promise((resolve) => setTimeout(resolve, 1300));
 
-    const scriptPath = path.join('/tmp/openchamber', 'update-install.cmd');
+    const scriptPath = 'C:\\temp\\openchamber\\update-install.cmd';
     expect(dependencies.fs.writeFileSync).toHaveBeenCalledWith(scriptPath, expect.any(String), 'utf8');
     const script = dependencies.fs.writeFileSync.mock.calls[0][1];
     const lines = script.split('\r\n');
@@ -580,7 +592,7 @@ describe('OpenChamber web update route on Windows', () => {
     // Every preamble line is an echo; none is left to run as a command.
     expect(lines.filter((line) => line.startsWith('currentVersion=') || line.startsWith('restartCommand='))).toEqual([]);
     expect(lines).toContain('echo packageManager=npm');
-    expect(lines).toContain('echo restartCommand=^("C:\\Program Files\\nodejs\\node.exe" "/opt/openchamber/bin/cli.js" serve --port 7897^) ^|^| ^(openchamber serve --port 7897^)');
+    expect(lines).toContain('echo restartCommand=^("C:\\Program Files\\nodejs\\node.exe" "C:\\openchamber\\bin\\cli.js" serve --port 7897^) ^|^| ^(openchamber serve --port 7897^)');
     // The UI password is never part of the script or its log.
     expect(script).not.toContain('pa%');
     // A .cmd shim (npm, pnpm, yarn) must be `call`ed or the script ends there.
@@ -589,7 +601,7 @@ describe('OpenChamber web update route on Windows', () => {
     expect(lines.some((line) => line.startsWith('timeout '))).toBe(false);
     expect(lines).toContain('if %ERRORLEVEL% EQU 0 (');
     expect(lines.at(-2)).toBe('del "%~f0"');
-    expect(lines).toContain('  ("C:\\Program Files\\nodejs\\node.exe" "/opt/openchamber/bin/cli.js" serve --port 7897) || (openchamber serve --port 7897)');
+    expect(lines).toContain('  ("C:\\Program Files\\nodejs\\node.exe" "C:\\openchamber\\bin\\cli.js" serve --port 7897) || (openchamber serve --port 7897)');
 
     // The restarted server reads the password from its environment.
     expect(childProcess.spawn).toHaveBeenCalledWith(

@@ -48,6 +48,9 @@ prompt. Attachments and worktree creation remain separate workflows.
   `managed_host_lifecycle.rs` is the pure state machine between them, and
   `managed_host_view.rs` draws its states. `owned_process.rs` owns process
   identity (PID plus start time), descendant snapshots and signals on Unix.
+  On Linux the host passes its own executable to the bundled server only
+  when they share the installed layout. The server uses its Debian owner
+  for [native update discovery](../../../docs/rust-desktop/ARCHITECTURE.md#persistence-and-rollout).
   Windows delegates process creation and exact FILETIME identity to
   `openchamber-windows-process`, which atomically assigns a suspended child to a
   private non-breakaway kill-on-close job at creation. The supervisor retains this

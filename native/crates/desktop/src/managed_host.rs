@@ -74,6 +74,7 @@ import(pathToFileURL(launch.entry).href)
     apiOnly: false,
     builtInExtensionsDir: launch.builtInExtensionsDir,
     resourcesPath: launch.resourcesPath,
+    nativeDesktopExecutable: launch.nativeDesktopExecutable,
   }))
   .then((started) => {
     handle = started;
@@ -314,6 +315,8 @@ mod windows_tests {
 struct LaunchOptions<'a> {
     entry: &'a Path,
     resources_path: &'a Path,
+    #[cfg(target_os = "linux")]
+    native_desktop_executable: Option<PathBuf>,
     port: u16,
     built_in_extensions_dir: &'a Path,
     nonce: &'a str,
@@ -498,6 +501,11 @@ fn server_launch(
     let options = LaunchOptions {
         entry: &bundle.server_entry(),
         resources_path: &bundle.resources(),
+        // A development bundle override must not claim an installed app's updates.
+        #[cfg(target_os = "linux")]
+        native_desktop_executable: std::env::current_exe()
+            .ok()
+            .filter(|exe| exe.parent() == Some(bundle.root.as_path())),
         port,
         built_in_extensions_dir: &bundle.built_in_extensions(),
         nonce: &nonce,
@@ -947,7 +955,25 @@ mod tests {
             "/opt/oc/resources/server/server/built-in-extensions"
         );
         assert_eq!(options["resourcesPath"], "/opt/oc/resources");
+        assert!(options["nativeDesktopExecutable"].is_null());
         assert_eq!(value(&launch.env, "OPENCHAMBER_OPENCODE_CWD"), None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn the_colocated_bundle_identifies_the_running_executable_for_updates() {
+        let exe = std::env::current_exe().expect("test executable");
+        let bundle = Bundle {
+            root: exe.parent().expect("test executable directory").to_owned(),
+        };
+        let launch = server_launch(&bundle, 4321, "fixture".to_owned(), [], None, None);
+        let options: serde_json::Value = serde_json::from_str(
+            value(&launch.env, LAUNCH_VARIABLE)
+                .and_then(OsStr::to_str)
+                .expect("launch options"),
+        )
+        .expect("bootstrap JSON");
+        assert_eq!(options["nativeDesktopExecutable"], serde_json::json!(exe));
     }
 
     #[test]
