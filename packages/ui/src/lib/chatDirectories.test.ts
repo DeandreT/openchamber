@@ -1,15 +1,16 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { opencodeClient } from '@/lib/opencode/client';
 import { switchRuntimeEndpoint } from '@/lib/runtime-switch';
-import { captureChatDirectoryCleanup, createChatDirectory, deleteChatDirectory, ensureChatsRootDirectory, getChatsRoot, getChatsRootFromDirectory, isChatDirectoryForHome, isChatDirectoryPath, subscribeChatsRoot, warmChatsRootDirectory } from './chatDirectories';
-import { getRuntimeKey } from './runtime-switch';
+import { useSessionUIStore } from '@/sync/session-ui-store';
+import { createChatDirectory, deleteChatDirectory, ensureChatsRootDirectory, getChatsRoot, getChatsRootFromDirectory, isChatDirectoryForHome, isChatDirectoryPath, subscribeChatsRoot, warmChatsRootDirectory } from './chatDirectories';
 
 let runtime = 0;
 const nextRuntime = () => switchRuntimeEndpoint({ apiBaseUrl: 'https://chats.test', runtimeKey: `chats-${++runtime}` });
 let home = spyOn(opencodeClient, 'getFilesystemHomeInfo');
 let mkdir = spyOn(opencodeClient, 'createDirectory');
 let request = spyOn(globalThis, 'fetch');
-const deleteRequests = () => request.mock.calls.filter(([input]) => String(input).includes('/fs/delete'));
+const deleteRequests = () => request.mock.calls.filter(([input]) =>
+  String(input instanceof Request ? input.url : input).endsWith('/api/fs/delete'));
 
 beforeEach(() => {
   nextRuntime();
@@ -18,6 +19,52 @@ beforeEach(() => {
   request = spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}'));
 });
 afterEach(() => { home.mockRestore(); mkdir.mockRestore(); request.mockRestore(); });
+
+describe('leaving an unsent Chat', () => {
+  const initial = useSessionUIStore.getState();
+  beforeEach(() => useSessionUIStore.setState({
+    newSessionDraft: { ...initial.newSessionDraft, open: true, target: 'chat', preparedChatDirectory: null },
+  }));
+  afterEach(() => useSessionUIStore.setState(initial));
+
+  for (const action of ['close', 'switch to project']) {
+    test(`${action} releases the prepared path without deleting it`, async () => {
+      const store = useSessionUIStore.getState();
+      const directory = await store.prepareChatDraftDirectory();
+      expect(directory?.startsWith('/srv/chats/')).toBe(true);
+      if (action === 'close') store.closeNewSessionDraft();
+      else store.setNewSessionDraftTarget({ projectId: 'project', directoryOverride: '/project' });
+
+      expect(useSessionUIStore.getState().newSessionDraft).toMatchObject({
+        open: action !== 'close', preparedChatDirectory: null,
+      });
+      // Both actions return before a fire-and-forget delete would reach fetch.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(deleteRequests()).toHaveLength(0);
+    });
+  }
+
+  test('closing while mkdir is in flight neither adopts nor deletes the late directory', async () => {
+    let started!: () => void;
+    const creating = new Promise<void>(resolve => { started = resolve; });
+    let finish!: () => void;
+    const reply = new Promise<void>(resolve => { finish = resolve; });
+    mkdir.mockImplementationOnce(async path => {
+      started();
+      await reply;
+      return { success: true, path };
+    });
+    const store = useSessionUIStore.getState();
+    const prepared = store.prepareChatDraftDirectory();
+    await creating;
+    store.closeNewSessionDraft();
+    finish();
+
+    expect(await prepared).toBeNull();
+    expect(useSessionUIStore.getState().newSessionDraft).toMatchObject({ open: false, preparedChatDirectory: null });
+    expect(deleteRequests()).toHaveLength(0);
+  });
+});
 
 describe('server-owned chat directories', () => {
   test('creates beneath the relocated root and uses the legacy root only for an older response', async () => {
@@ -50,18 +97,15 @@ describe('server-owned chat directories', () => {
     expect(isChatDirectoryForHome('/other/.config/openchamber/chats/session-a', '/home/user')).toBe(false);
   });
 
-  for (const mode of ['current', 'captured']) {
-    test(`deletes real descendants but never shared roots, lookalikes, or traversal paths on the ${mode} runtime`, async () => {
-      const deleteDirectory = mode === 'captured' ? await captureChatDirectoryCleanup(getRuntimeKey()) : deleteChatDirectory;
-      for (const path of ['/srv/chats', '/home/user/.config/openchamber/chats', '/work/backup/.config/openchamber/chats/project', '/srv/chats/../project']) {
-        await deleteDirectory(path);
-      }
-      expect(deleteRequests()).toHaveLength(0);
-      await deleteDirectory('/srv/chats/day/session-a');
-      await deleteDirectory('/home/user/.config/openchamber/chats/day/session-b');
-      expect(deleteRequests()).toHaveLength(2);
-    });
-  }
+  test('explicit deletion accepts real descendants but never shared roots, lookalikes, or traversal paths', async () => {
+    for (const path of ['/srv/chats', '/home/user/.config/openchamber/chats', '/work/backup/.config/openchamber/chats/project', '/srv/chats/../project']) {
+      await deleteChatDirectory(path);
+    }
+    expect(deleteRequests()).toHaveLength(0);
+    await deleteChatDirectory('/srv/chats/day/session-a');
+    await deleteChatDirectory('/home/user/.config/openchamber/chats/day/session-b');
+    expect(deleteRequests()).toHaveLength(2);
+  });
 
   test('accepts an already deleted directory and reports other deletion failures', async () => {
     request.mockResolvedValue(new Response('', { status: 404 }));
@@ -120,21 +164,6 @@ describe('server-owned chat directories', () => {
     await createChatDirectory();
     expect(mkdir.mock.calls).toHaveLength(1);
     expect(home.mock.calls).toHaveLength(3);
-  });
-
-  test('deletes on the captured runtime only beneath the captured root', async () => {
-    switchRuntimeEndpoint({ apiBaseUrl: 'https://old.test', clientToken: 'old-runtime' });
-    const cleanup = await captureChatDirectoryCleanup(getRuntimeKey());
-    switchRuntimeEndpoint({ apiBaseUrl: 'https://new.test', clientToken: 'new-runtime' });
-    await cleanup('/srv/chats/day/session-a');
-    for (const path of ['/srv/chats', '/srv/chats-other/session-a', '/srv/chats/../project']) {
-      await cleanup(path);
-    }
-
-    const requests = deleteRequests();
-    expect(requests).toHaveLength(1);
-    expect(String(requests[0][0])).toBe('https://old.test/api/fs/delete');
-    expect(new Headers(requests[0][1]?.headers).get('authorization')).toBe('Bearer old-runtime');
   });
 
   test('runtime switch during root lookup cannot delete on the destination runtime', async () => {

@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from "bun:test"
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from "bun:test"
 import type { ModelSelection, Session, SessionStatus } from "@/lib/opencode/model"
 import { opencodeClient } from "@/lib/opencode/client"
 import type { MessagePage } from "@/lib/opencode/client"
@@ -371,6 +371,29 @@ describe("the first message of a draft", () => {
     creation.resolve()
     await retry
     expect(sendCalls).toHaveLength(1)
+  })
+
+  test("a failed first Send reopens the Chat without deleting its prepared directory", async () => {
+    const directory = "/chats/2026-09-05/session-prepared"
+    const draft: NewSessionDraftState = { ...openDraft(14), target: "chat", directoryOverride: null, preparedChatDirectory: directory }
+    const roots = spyOn(opencodeClient, "getFilesystemHomeInfo").mockResolvedValue({ home: "/home/user", chatsRoot: "/chats" })
+    const request = spyOn(globalThis, "fetch")
+    try {
+      useSessionUIStore.setState({ newSessionDraft: draft, currentSessionId: null, currentSessionDirectory: null })
+      opencodeClient.createSession = async (params, requested) => {
+        createSessionCalls.push({ id: params?.id, directory: requested })
+        throw new Error("create failed")
+      }
+      const error = await send("keep the file", "normal", draft).catch((cause: unknown) => cause)
+      expect(error).toBeInstanceOf(DraftSendError)
+      expect(error).toMatchObject({ directory, sessionCreated: false })
+      expect(createSessionCalls.map(call => call.directory)).toEqual([directory])
+      expect(useSessionUIStore.getState().newSessionDraft).toMatchObject({ open: true, draftId: draft.draftId })
+      expect(request.mock.calls.some(([input]) => String(input instanceof Request ? input.url : input).endsWith("/api/fs/delete"))).toBe(false)
+    } finally {
+      request.mockRestore()
+      roots.mockRestore()
+    }
   })
 
   test("a draft that waited for a new worktree reopens on that worktree after a failed creation and can send again", async () => {

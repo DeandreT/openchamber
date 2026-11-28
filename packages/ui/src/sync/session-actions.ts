@@ -1669,8 +1669,8 @@ function isChatDirectoryStillReferenced(directory: string, excludedIds: Readonly
   ))
 }
 
-async function cleanupDeletedChatDirectory(plan: ChatDirectoryCleanupPlan): Promise<void> {
-  if (!plan.directory || !plan.rootDeleted) return
+async function cleanupDeletedChatDirectory(plan: ChatDirectoryCleanupPlan | null): Promise<void> {
+  if (!plan?.directory || !plan.rootDeleted) return
   if (isChatDirectoryStillReferenced(plan.directory, plan.cascadeIds)) return
   try {
     await deleteChatDirectory(plan.directory)
@@ -1680,6 +1680,8 @@ async function cleanupDeletedChatDirectory(plan: ChatDirectoryCleanupPlan): Prom
 }
 
 export type DeleteSessionOptions = {
+  /** A draft may roll back its newly created session, but has no exclusive claim on the folder. */
+  keepChatDirectory?: boolean
   /**
    * Runtime key the deletion is scoped to. Defaults to the active runtime when
    * the action starts; callers may supply a key captured earlier when
@@ -1707,7 +1709,7 @@ export async function deleteSession(sessionId: string, options?: DeleteSessionOp
   const expectedRuntimeKey = options?.expectedRuntimeKey ?? getRuntimeKey()
   if (isStaleRuntime(expectedRuntimeKey)) return false
   const sessionDirectory = getSessionDirectory(sessionId)
-  const chatDirectoryCleanup = planChatDirectoryCleanup(sessionId, getGlobalSessionSnapshot(sessionId), sessionDirectory)
+  const chatDirectoryCleanup = options?.keepChatDirectory ? null : planChatDirectoryCleanup(sessionId, getGlobalSessionSnapshot(sessionId), sessionDirectory)
   try {
     await cleanupReviewMetadataBeforeDelete(sessionId, sessionDirectory, expectedRuntimeKey)
     if (isStaleRuntime(expectedRuntimeKey)) return false

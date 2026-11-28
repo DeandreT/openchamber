@@ -1,7 +1,6 @@
 import { opencodeClient } from '@/lib/opencode/client';
 import { normalizePath } from '@/lib/pathNormalization';
 import { runtimeFetch } from '@/lib/runtime-fetch';
-import { captureRuntimeCleanup } from '@/lib/runtime-cleanup';
 import { getRuntimeKey } from '@/lib/runtime-switch';
 
 export const CHAT_DRAFT_PROJECT_ID = 'openchamber:chats';
@@ -117,14 +116,17 @@ export async function createChatDirectory(now = new Date()): Promise<string> {
   return directory;
 }
 
-async function deleteChatDirectoryWithTransport(directory: string, roots: ChatRoots, fetch: typeof globalThis.fetch): Promise<void> {
+export async function deleteChatDirectory(directory: string): Promise<void> {
   const normalized = normalizePath(directory);
   if (!normalized) return;
+  const runtimeKey = getRuntimeKey();
+  const roots = await getChatRoots();
+  if (getRuntimeKey() !== runtimeKey) throw new Error('Runtime changed while deleting chat directory');
   // A session may own a descendant, never either shared chats root itself.
   const allowedRoots = [roots.configured, roots.legacy, roots.canonicalConfigured, roots.canonicalLegacy];
   if (allowedRoots.includes(normalized)) return;
   if (!allowedRoots.some(root => isWithinRoot(normalized, root))) return;
-  const response = await fetch('/api/fs/delete', {
+  const response = await runtimeFetch('/api/fs/delete', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ path: directory }),
@@ -132,23 +134,4 @@ async function deleteChatDirectoryWithTransport(directory: string, roots: ChatRo
   if (!response.ok && response.status !== 404) {
     throw new Error(`Failed to delete chat directory (${response.status})`);
   }
-}
-
-export async function deleteChatDirectory(directory: string): Promise<void> {
-  if (!normalizePath(directory)) return;
-  const runtimeKey = getRuntimeKey();
-  const roots = await getChatRoots();
-  if (getRuntimeKey() !== runtimeKey) throw new Error('Runtime changed while deleting chat directory');
-  await deleteChatDirectoryWithTransport(directory, roots, runtimeFetch);
-}
-
-export async function captureChatDirectoryCleanup(runtimeKey: string): Promise<(directory: string) => Promise<void>> {
-  const cleanup = await captureRuntimeCleanup(runtimeKey);
-  const roots = await getChatRoots();
-  if (getRuntimeKey() !== runtimeKey) throw new Error('Runtime changed while preparing chat cleanup');
-  return async (directory) => {
-    await cleanup(async ({ fetch }) => {
-      await deleteChatDirectoryWithTransport(directory, roots, fetch);
-    });
-  };
 }

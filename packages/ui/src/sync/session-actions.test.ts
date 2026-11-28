@@ -1027,6 +1027,18 @@ describe("confirmed session removal", () => {
     expect(deletedChatDirectories).toEqual([chatDirectory])
   })
 
+  test("rolling back a first Send removes the created session and keeps its prepared directory", async () => {
+    const root = chatSession("chat-root")
+    globalActiveSessions = [root]
+    const source = createStore({}, { session: [root] })
+    const { deleteSession, setActionRefs } = await import("./session-actions")
+    setActionRefs(createChildStores([[chatDirectory, source]]), () => chatDirectory)
+
+    expect(await deleteSession(root.id, { keepChatDirectory: true })).toBe(true)
+    expect(globalRemovedSessionIds).toContain(root.id)
+    expect(deletedChatDirectories).toEqual([])
+  })
+
   test("keeps the chat directory when the global cache cannot prove it is unused", async () => {
     const root = chatSession("chat-root")
     globalActiveSessions = [root]

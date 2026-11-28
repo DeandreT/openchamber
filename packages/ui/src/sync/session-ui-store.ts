@@ -40,7 +40,7 @@ import { markPendingUserSendAnimation } from "@/lib/userSendAnimation"
 import { prepareUserMessageResume } from "./user-message-resume"
 import { normalizePath } from "@/lib/pathNormalization"
 import { descendingId } from "@/lib/opencode/ids"
-import { CHAT_DRAFT_PROJECT_ID, captureChatDirectoryCleanup as captureChatCleanup, createChatDirectory, deleteChatDirectory, getChatsRoot, getChatsRootFromDirectory, isChatDirectoryPath, resolveChatsRootDirectory, warmChatsRootDirectory } from "@/lib/chatDirectories"
+import { CHAT_DRAFT_PROJECT_ID, createChatDirectory, getChatsRoot, getChatsRootFromDirectory, isChatDirectoryPath, resolveChatsRootDirectory, warmChatsRootDirectory } from "@/lib/chatDirectories"
 import { isSpaceArchiveDirectory } from "@/lib/spaces/space-archives"
 import { isSpaceDirectory } from "@/lib/spaces/space-route"
 import { isSpaceDirectoryClosedToNewSessions } from "@/lib/spaces/spaces-store"
@@ -1215,7 +1215,7 @@ const resolveDraftTargetDirectory = async (draft: NewSessionDraftState): Promise
   if (draft.target === "chat") {
     directory = await store.prepareChatDraftDirectory()
     if (!directory) throw new Error("Failed to prepare chat directory")
-    // The folder is the session's now: closing the draft must not remove it.
+    // First Send consumes this draft's prepared path.
     const currentDraft = useSessionUIStore.getState().newSessionDraft
     if (currentDraft.draftId === draft.draftId) {
       useSessionUIStore.setState({
@@ -1245,19 +1245,13 @@ const resolveDraftCreateDirectory = async (draft: NewSessionDraftState, director
  * Where the draft's session will live, once every wait before its creation
  * is over, for a caller that keeps the draft open until then.
  */
-const resolveDraftSessionDirectory = async (
-  draft: NewSessionDraftState,
-  chatDirectoryCleanup: CapturedChatDirectoryCleanup | null,
-): Promise<string | null | undefined> => {
+const resolveDraftSessionDirectory = async (draft: NewSessionDraftState): Promise<string | null | undefined> => {
   const draftProjectId = draft.selectedProjectId ?? null
   let directory = await resolveDraftTargetDirectory(draft)
   await waitForWorktreeBootstrapIfConfigured(directory, draftProjectId)
   directory = await resolveDraftStartDirectory(directory, draftProjectId)
   const resolved = await resolveCreatableDraftDirectory(draft, directory)
-  if (resolved.status === "aborted") {
-    if (draft.target === "chat") await deletePreparedChatDirectory(directory, chatDirectoryCleanup)
-    throw new Error("Failed to create session")
-  }
+  if (resolved.status === "aborted") throw new Error("Failed to create session")
   return resolved.directory
 }
 
@@ -1348,29 +1342,6 @@ const saveDraftSessionSelection = (sessionId: string, selection: DraftSessionSel
   return effectiveDraftAgent
 }
 
-type CapturedChatDirectoryCleanup = (directory: string) => Promise<void>
-
-/**
- * Capture the folder's owner before preparation can yield to a runtime switch.
- */
-const captureChatDirectoryCleanup = async (
-  target: NewSessionDraftState["target"],
-  expectedRuntimeKey: string,
-): Promise<CapturedChatDirectoryCleanup | null> => {
-  return target === "chat" ? captureChatCleanup(expectedRuntimeKey) : null
-}
-
-/**
- * Only the captured owner may remove a folder prepared by this operation.
- */
-const deletePreparedChatDirectory = async (
-  directory: string | null | undefined,
-  cleanup: CapturedChatDirectoryCleanup | null,
-): Promise<void> => {
-  if (!directory) return
-  await cleanup?.(directory)
-}
-
 export async function materializeOpenDraftSession(
   selection: DraftSessionSelection,
   draftOverride?: NewSessionDraftState,
@@ -1382,14 +1353,8 @@ export async function materializeOpenDraftSession(
     if (getRuntimeKey() !== expectedRuntimeKey) throw new Error("Message was not sent because the runtime changed.")
   }
   assertRuntimeCurrent()
-  const chatDirectoryCleanup = await captureChatDirectoryCleanup(draft.target, expectedRuntimeKey)
+  const directory = await resolveDraftSessionDirectory(draft)
   assertRuntimeCurrent()
-
-  const directory = await resolveDraftSessionDirectory(draft, chatDirectoryCleanup)
-  if (getRuntimeKey() !== expectedRuntimeKey) {
-    if (draft.target === "chat") await deletePreparedChatDirectory(directory, chatDirectoryCleanup)
-    assertRuntimeCurrent()
-  }
   const created = await createSessionAction(
     draft.title,
     directory,
@@ -1400,12 +1365,8 @@ export async function materializeOpenDraftSession(
     undefined,
     expectedRuntimeKey,
   )
-  if (!created?.id) {
-    if (draft.target === "chat") await deletePreparedChatDirectory(directory, chatDirectoryCleanup)
-    assertRuntimeCurrent()
-    throw new Error("Failed to create session")
-  }
   assertRuntimeCurrent()
+  if (!created?.id) throw new Error("Failed to create session")
   useSessionUIStore.getState().closeNewSessionDraft()
 
   const createdDirectory = finishDraftSession(draft, created, directory)
@@ -1946,8 +1907,6 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
     if (existing) return existing
 
     const pending = (async () => {
-      const cleanup = await captureChatDirectoryCleanup("chat", runtimeKey)
-      if (getRuntimeKey() !== runtimeKey) return null
       const directory = await createChatDirectory()
       const current = get().newSessionDraft
       if (
@@ -1956,7 +1915,6 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
         || current.target !== "chat"
         || current.draftId !== draft.draftId
       ) {
-        await deletePreparedChatDirectory(directory, cleanup)
         return null
       }
       set({ newSessionDraft: { ...current, preparedChatDirectory: directory } })
@@ -1973,9 +1931,6 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
   // ---------------------------------------------------------------------------
   closeNewSessionDraft: () => {
     const currentDraft = get().newSessionDraft
-    if (currentDraft.preparedChatDirectory) {
-      void deleteChatDirectory(currentDraft.preparedChatDirectory).catch(() => undefined)
-    }
     if (
       !currentDraft.open
       && currentDraft.selectedProjectId == null
@@ -2017,9 +1972,6 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
   setNewSessionDraftTarget: (target) => {
     if (isVSCodeRuntime() && !isVSCodeWithoutWorkspace() && target.projectId === CHAT_DRAFT_PROJECT_ID) return
     const previousDraft = get().newSessionDraft
-    if (previousDraft.preparedChatDirectory && target.projectId !== CHAT_DRAFT_PROJECT_ID) {
-      void deleteChatDirectory(previousDraft.preparedChatDirectory).catch(() => undefined)
-    }
     let nextDirectory: string | null = null
     set((s) => {
       nextDirectory = normalizePath(target.directoryOverride ?? s.newSessionDraft.directoryOverride)
@@ -2267,9 +2219,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
         sentDraftIds.add(draft.draftId)
         const selection: DraftSessionSelection = { providerID, modelID, agent: trimmedAgent, variant }
         let directory: string | null = null
-        let chatDirectoryCleanup: CapturedChatDirectoryCleanup | null = null
         try {
-          chatDirectoryCleanup = await captureChatDirectoryCleanup(draft.target, capturedRuntimeKey)
           if (getRuntimeKey() !== capturedRuntimeKey) throw new Error("Message was not sent because the runtime changed.")
           // The waits that decide where the session shows, with the draft
           // still open: a worktree being made, a chat folder being prepared.
@@ -2279,7 +2229,6 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
             throw new Error("Message was not sent because the runtime changed.")
           }
         } catch (error) {
-          if (draft.target === "chat") await deletePreparedChatDirectory(directory, chatDirectoryCleanup)
           sentDraftIds.delete(draft.draftId)
           throw error
         }
@@ -2319,7 +2268,7 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
               // the one the server made under another id is not this one: it
               // is empty, so it goes, best effort, before the draft comes back.
               console.error("[session-ui-store] the server created the session under another id", { requested: sessionId, created: created.id })
-              void deleteSessionAction(created.id).catch(() => undefined)
+              void deleteSessionAction(created.id, { expectedRuntimeKey: capturedRuntimeKey, keepChatDirectory: true }).catch(() => undefined)
               throw new Error("Failed to create session")
             }
             resolveSessionCreated(true)
@@ -2408,7 +2357,6 @@ export const useSessionUIStore = create<SessionUIState>()((set, get) => ({
             // for a send that failed before its request is idle.
             markSessionStatus(sessionId, liveDirectory, "idle")
           } else {
-            await deletePreparedChatDirectory(sessionDirectory, chatDirectoryCleanup)
             reopenDraftAfterFailedCreation(draft, sessionId, sessionDirectory, capturedRuntimeKey)
           }
           throw new DraftSendError(sessionId, liveDirectory, sessionCreated, error)
