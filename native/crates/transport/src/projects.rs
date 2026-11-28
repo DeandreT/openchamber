@@ -9,7 +9,7 @@
 use reqwest::Method;
 use serde_json::{Map, Value, json};
 
-use crate::client::{ServerClient, read_json};
+use crate::client::{ServerClient, read_settings_fields};
 use crate::error::TransportError;
 
 /// The stored entries and the active project, as read.
@@ -33,7 +33,12 @@ impl ProjectEntries {
 impl ServerClient {
     /// The settings document's project entries.
     pub async fn project_entries(&self) -> Result<ProjectEntries, TransportError> {
-        let body: Value = self.get_json(self.settings_url(), None).await?;
+        let response = self
+            .get_request(self.settings_url(), None)
+            .send()
+            .await
+            .map_err(TransportError::from_request)?;
+        let body = read_settings_fields(response, &["projects", "activeProjectId"]).await?;
         let entries = match body.get("projects") {
             None | Some(Value::Null) => Vec::new(),
             Some(Value::Array(list)) => list
@@ -72,7 +77,7 @@ impl ServerClient {
             .send()
             .await
             .map_err(TransportError::from_request)?;
-        let _: Value = read_json(response).await?;
+        read_settings_fields(response, &[]).await?;
         Ok(())
     }
 }

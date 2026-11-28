@@ -7,6 +7,56 @@
 use serde::Deserialize;
 use serde_json::Value;
 
+/// Keep complete requested values. Other settings can contain escaped UTF-16
+/// code units that cannot be represented by a Rust `String`.
+pub(crate) fn settings_fields(bytes: &[u8], fields: &[&str]) -> serde_json::Result<Value> {
+    use serde::Deserializer;
+    use serde::de::{Error as _, IgnoredAny, MapAccess, Visitor};
+    use serde_json::value::RawValue;
+
+    // Project metadata is ordinary JSON, including objects whose property names
+    // coincide with serde_json's private raw-value marker.
+    #[derive(Deserialize, serde::Serialize)]
+    #[serde(untagged)]
+    enum SettingValue {
+        Object(std::collections::BTreeMap<String, SettingValue>),
+        Array(Vec<SettingValue>),
+        Scalar(Value),
+    }
+
+    struct Fields<'a>(&'a [&'a str]);
+
+    impl<'de> Visitor<'de> for Fields<'_> {
+        type Value = Value;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            formatter.write_str("a settings object")
+        }
+
+        fn visit_map<M: MapAccess<'de>>(self, mut map: M) -> Result<Value, M::Error> {
+            let mut selected = serde_json::Map::new();
+            while let Some(key) = map.next_key::<&RawValue>()? {
+                // A valid non-scalar key cannot name any of the requested fields.
+                if let Ok(key) = serde_json::from_str::<String>(key.get())
+                    && self.0.contains(&key.as_str())
+                {
+                    let value = map.next_value::<SettingValue>()?;
+                    selected.insert(key, serde_json::to_value(value).map_err(M::Error::custom)?);
+                } else {
+                    map.next_value::<IgnoredAny>()?;
+                }
+            }
+            Ok(Value::Object(selected))
+        }
+    }
+
+    let text = std::str::from_utf8(bytes).map_err(serde_json::Error::custom)?;
+    let mut decoder = serde_json::Deserializer::from_str(text);
+    let selected = decoder.deserialize_map(Fields(fields))?;
+    decoder.end()?;
+    Ok(selected)
+}
+
 /// A cursor-paged list.
 #[derive(Debug, Deserialize)]
 pub(crate) struct Page<T> {

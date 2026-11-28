@@ -13,7 +13,7 @@ openchamber-native-core.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 # Captured JavaScript Number values must survive decimal parsing bit-for-bit.
-serde_json = { workspace = true, features = ["float_roundtrip"] }
+serde_json = { workspace = true, features = ["float_roundtrip", "raw_value"] }
 thiserror.workspace = true
 tokio.workspace = true
 tokio-tungstenite.workspace = true
