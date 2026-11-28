@@ -1514,6 +1514,8 @@ export const settingsDict = {
   'settings.openchamber.visual.section.privacy': 'Prywatność',
   'settings.openchamber.visual.section.sessionAssistance': 'Wsparcie sesji',
   'settings.openchamber.visual.section.reasoning': 'Rozumowanie',
+  'settings.openchamber.visual.field.streamResponses': 'Wyświetlaj odpowiedzi na bieżąco',
+  'settings.openchamber.visual.field.streamResponsesInfo': 'Pokazuj tekst odpowiedzi w miarę jego odbierania. Po wyłączeniu tej opcji odpowiedzi pojawiają się blok po bloku.',
   'settings.openchamber.visual.field.streamingAutoFollow': 'Podążaj za nową treścią podczas streamingu',
   'settings.openchamber.visual.field.streamingAutoFollowAria': 'Automatycznie podążaj za nową treścią podczas streamowania odpowiedzi',
   'settings.openchamber.visual.field.streamingAutoFollowInfo': 'Podczas napływania odpowiedzi widok płynnie podąża za najnowszą treścią. Wyłącz, aby widok pozostał nieruchomy i przewijać ręcznie; wysłanie wiadomości ze środka czatu również nie przesunie wtedy widoku.',

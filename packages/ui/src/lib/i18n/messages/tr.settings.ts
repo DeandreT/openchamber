@@ -2635,6 +2635,8 @@ export const settingsDict = {
   'settings.openchamber.keyboardShortcuts.action.copy_current_session_id.label': 'Session ID\'yi kopyala',
   'settings.openchamber.keyboardShortcuts.action.toggle_work_current_session.label': 'İzle / Tamamlandı olarak işaretle',
   'settings.openchamber.keyboardShortcuts.action.open_multi_run.label': 'Paralel çalıştır',
+  'settings.openchamber.visual.field.streamResponses': 'Yanıtları geldikçe göster',
+  'settings.openchamber.visual.field.streamResponsesInfo': 'Yanıt metnini alınır alınmaz gösterir. Kapalıyken yanıtlar blok blok görünür.',
   'settings.openchamber.visual.field.streamingAutoFollow': 'Streaming sırasında yeni içeriği takip et',
   'settings.openchamber.visual.field.streamingAutoFollowAria': 'Bir yanıt akarken yeni içeriği otomatik olarak takip et',
   'settings.openchamber.visual.field.streamingAutoFollowInfo': 'Bir yanıt akarken görünüm en yeni içeriğe doğru kayar. Görünümün sabit kalması için bunu kapatın ve elle kaydırın; bu durumda sohbetin ortasından mesaj göndermek de görünümü yerinden oynatmaz.',

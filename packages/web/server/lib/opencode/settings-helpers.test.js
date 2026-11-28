@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
@@ -160,8 +160,10 @@ describe('settings helpers', () => {
     try {
       mkdirSync(packDir);
       mkdirSync(extractDir);
-      execFileSync('npm', ['pack', '--silent', '--pack-destination', packDir], {
+      // Windows ships npm as a command script. Keep paths out of the shell command.
+      execSync('npm pack --silent', {
         cwd: packagesWebDir,
+        env: { ...process.env, npm_config_pack_destination: packDir },
         stdio: 'pipe',
       });
 
@@ -176,7 +178,7 @@ describe('settings helpers', () => {
       // Mirror the workspace layout: package-local modules first, then the
       // hoisted root ones.
       const linkModules = (from, to) => {
-        if (existsSync(from)) symlinkSync(from, to, 'dir');
+        if (existsSync(from)) symlinkSync(from, to, process.platform === 'win32' ? 'junction' : 'dir');
       };
       linkModules(join(packagesWebDir, 'node_modules'), join(extractDir, 'package', 'node_modules'));
       linkModules(join(packagesWebDir, '..', '..', 'node_modules'), join(extractDir, 'node_modules'));
@@ -216,6 +218,9 @@ describe('settings helpers', () => {
         inputHistoryScope: 'session',
         inputHistoryLimit: DEFAULT_INPUT_HISTORY_LIMIT,
       });
+      for (const streamResponses of [false, true]) {
+        expect(helpers.sanitizeSettingsUpdate({ streamResponses })).toEqual({ streamResponses });
+      }
     } finally {
       rmSync(tempRoot, { recursive: true, force: true });
     }
@@ -235,6 +240,18 @@ describe('settings helpers', () => {
     expect(helpers.sanitizeSettingsUpdate({ enterToSend: true })).toEqual({ enterToSend: true });
     expect(helpers.sanitizeSettingsUpdate({ enterToSendConfigured: false })).toEqual({ enterToSendConfigured: false });
     expect(helpers.sanitizeSettingsUpdate({ enterToSend: 'true', enterToSendConfigured: 1 })).toEqual({});
+  });
+
+  it('preserves a reply display choice across omitted or invalid updates', () => {
+    const helpers = createTestHelpers();
+    for (const streamResponses of [false, true]) {
+      const saved = helpers.sanitizeSettingsUpdate({ streamResponses });
+      expect(saved).toEqual({ streamResponses });
+      for (const update of [{}, { streamResponses: 'false' }]) {
+        const merged = helpers.mergePersistedSettings(saved, helpers.sanitizeSettingsUpdate(update));
+        expect(helpers.formatSettingsResponse(merged).streamResponses).toBe(streamResponses);
+      }
+    }
   });
 
   it('sanitizes shared sidebar display preferences', () => {
@@ -963,7 +980,7 @@ describe('settings registry gate', () => {
     sidebarPinLists: [{ id: 'l1', name: 'Release' }], sidebarHiddenSections: ['s1'],
     sidebarProjectDisplayMode: 'all', sidebarViewMode: 'timeline', sidebarListSessionGrouping: 'time', sidebarGrouping: 'time', sidebarKeepWorkInPlace: true, sidebarKeepPinnedInPlace: false, sidebarProjectSortOrder: 'manual',
     workStatusPanelEnabled: true, workStatusHiddenSections: ['mcp'], workStatusHiddenSectionsExplicit: true, workStatusSectionOrder: ['mcp', 'session'], workStatusSectionOrderExplicit: true,
-    showReasoningTraces: true, streamingAutoFollowEnabled: true, collapsibleThinkingBlocks: true, expandReasoningWhileStreaming: true, showTextJustificationActivity: true,
+    showReasoningTraces: true, streamingAutoFollowEnabled: true, streamResponses: false, collapsibleThinkingBlocks: true, expandReasoningWhileStreaming: true, showTextJustificationActivity: true,
     chatRenderMode: 'live', activityRenderMode: 'summary', mermaidRenderingMode: 'svg', userMessageRenderingMode: 'markdown', collapsibleUserMessages: true,
     stickyUserHeader: true, promptNavigatorEnabled: true, wideChatLayoutEnabled: true, showSplitAssistantMessageActions: true, showToolFileIcons: true,
     selectionApprovalText: 'Agreed.',

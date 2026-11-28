@@ -2351,6 +2351,8 @@ export const settingsDict = {
   'settings.openchamber.visual.section.sessionActivity': 'セッションアクティビティ',
   'settings.openchamber.visual.section.sessionAssistance': 'セッション支援',
   'settings.openchamber.visual.section.reasoning': '推論',
+  'settings.openchamber.visual.field.streamResponses': '応答を逐次表示',
+  'settings.openchamber.visual.field.streamResponsesInfo': '受信したテキストを順次表示します。オフの場合は、応答をブロック単位で表示します。',
   'settings.openchamber.visual.field.streamingAutoFollow': '応答のストリーミング中に新しい内容を追従',
   'settings.openchamber.visual.field.streamingAutoFollowAria': '応答のストリーミング中に新しい内容へ自動スクロールする',
   'settings.openchamber.visual.field.streamingAutoFollowInfo': '応答の受信中、ビューは常に最新の内容へスクロールします。オフにするとビューは動かず、手動でスクロールできます。その場合、チャットの途中からメッセージを送信してもビューは移動しません。',

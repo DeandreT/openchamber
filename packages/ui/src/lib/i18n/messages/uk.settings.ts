@@ -2318,6 +2318,8 @@ export const settingsDict = {
   "settings.openchamber.visual.section.sessionActivity": "Активність сесії",
   "settings.openchamber.visual.section.sessionAssistance": "Допомога із сесією",
   "settings.openchamber.visual.section.reasoning": "Міркування",
+  "settings.openchamber.visual.field.streamResponses": "Показувати відповіді поступово",
+  "settings.openchamber.visual.field.streamResponsesInfo": "Показує текст відповіді в міру надходження. Якщо вимкнути цю опцію, відповіді з’являтимуться блок за блоком.",
   "settings.openchamber.visual.field.streamingAutoFollow": "Слідкувати за новим вмістом під час стримінгу",
   "settings.openchamber.visual.field.streamingAutoFollowAria": "Автоматично слідкувати за новим вмістом під час стримінгу відповіді",
   "settings.openchamber.visual.field.streamingAutoFollowInfo": "Поки відповідь надходить, вигляд плавно рухається до найновішого вмісту. Вимкніть, щоб вигляд залишався нерухомим і гортати вручну; тоді й надсилання повідомлення з середини чату не зсуватиме вигляд.",

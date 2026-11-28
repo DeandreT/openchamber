@@ -1,4 +1,3 @@
-import { commitStreamedText } from '../../lib/streamTextCommit';
 import type { StreamPhase } from '../types';
 
 // A text part sealed with `time.end` can no longer receive tokens, so the
@@ -16,17 +15,4 @@ export const resolveAssistantTextStreaming = (input: {
         return false;
     }
     return input.streamPhase === 'streaming' || input.streamPhase === 'cooldown';
-};
-
-export const resolveAssistantDisplayText = (input: {
-    textContent: string;
-    throttledTextContent: string;
-    isStreaming: boolean;
-}): string => {
-    // While streaming, reveal whole blocks only: rendering stops at the end of
-    // the last finished block so a shown paragraph never mutates in place.
-    // The held tail lands when its block ends (or with the finalize pass).
-    return input.isStreaming
-        ? commitStreamedText(input.throttledTextContent)
-        : input.textContent;
 };

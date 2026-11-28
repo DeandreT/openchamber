@@ -3,7 +3,7 @@ import { createRequire } from 'node:module';
 
 import { isOverviewFeatureAvailable } from '../overview/feature-flag.js';
 import { isPermissionMode } from '../permission-auto-accept/modes.js';
-import { asNonEmptyString } from '../shared/guards.js';
+import { asNonEmptyString, isBoolean } from '../shared/guards.js';
 import { idleStopSchema } from '../spaces/idle-stop.js';
 import { sshHostSchema } from '../spaces/places/ssh-host.js';
 import { PROVIDER_LOGO_MIMES } from './provider-logo-routes.js';
@@ -627,6 +627,9 @@ export const createSettingsHelpers = (dependencies) => {
     }
     if (typeof candidate.streamingAutoFollowEnabled === 'boolean') {
       result.streamingAutoFollowEnabled = candidate.streamingAutoFollowEnabled;
+    }
+    if (isBoolean(candidate.streamResponses)) {
+      result.streamResponses = candidate.streamResponses;
     }
     if (typeof candidate.expandReasoningWhileStreaming === 'boolean') {
       result.expandReasoningWhileStreaming = candidate.expandReasoningWhileStreaming;

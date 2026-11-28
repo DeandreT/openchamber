@@ -2318,6 +2318,8 @@ export const settingsDict = {
   'settings.openchamber.visual.section.sessionActivity': '会话活动',
   'settings.openchamber.visual.section.sessionAssistance': '会话辅助',
   'settings.openchamber.visual.section.reasoning': '推理',
+  'settings.openchamber.visual.field.streamResponses': '流式显示回复',
+  'settings.openchamber.visual.field.streamResponsesInfo': '收到回复文本时立即显示。关闭后，回复会逐块显示。',
   'settings.openchamber.visual.field.streamingAutoFollow': '流式输出时跟随新内容',
   'settings.openchamber.visual.field.streamingAutoFollowAria': '在回复流式输出时自动跟随新内容',
   'settings.openchamber.visual.field.streamingAutoFollowInfo': '回复流式输出时，视图会持续滚动到最新内容。关闭后视图保持不动，可手动滚动；此时从聊天中间发送消息也不会移动视图。',

@@ -6,6 +6,8 @@ interface UseStreamingTextThrottleInput {
     throttleMs?: number;
     identityKey?: string;
     allowTextReplacement?: boolean;
+    /** Select the visible prefix when a sample is delivered, rather than on each incoming delta. */
+    selectStreamingText?: (text: string) => string;
 }
 
 const DEFAULT_STREAMING_TEXT_THROTTLE_MS = 100;
@@ -15,27 +17,16 @@ export const getStreamingThrottleText = (
     next: string,
     isStreaming: boolean,
     allowTextReplacement: boolean,
+    selectStreamingText?: (text: string) => string,
 ): string => {
-    return isStreaming && !allowTextReplacement && current.length > next.length ? current : next;
+    if (!isStreaming) return next;
+    const visible = selectStreamingText ? selectStreamingText(next) : next;
+    return !allowTextReplacement && current.length > visible.length ? current : visible;
 };
 
 const computeStreamingThrottleDelay = (lastEmitAt: number, now: number, throttleMs: number): number => {
     const elapsed = now - lastEmitAt;
     return Math.max(0, throttleMs - elapsed);
-};
-
-interface StreamingThrottleState {
-    timer: ReturnType<typeof setTimeout> | null;
-    pendingText: string;
-    lastEmitAt: number;
-}
-
-const clearTimer = (state: StreamingThrottleState): void => {
-    if (!state.timer) {
-        return;
-    }
-    clearTimeout(state.timer);
-    state.timer = null;
 };
 
 export const useStreamingTextThrottle = ({
@@ -44,76 +35,34 @@ export const useStreamingTextThrottle = ({
     throttleMs = DEFAULT_STREAMING_TEXT_THROTTLE_MS,
     identityKey,
     allowTextReplacement = false,
+    selectStreamingText,
 }: UseStreamingTextThrottleInput): string => {
-    const [throttledText, setThrottledText] = React.useState(text);
-    const latestTextRef = React.useRef(text);
-    const throttledTextRef = React.useRef(throttledText);
-
-    const stateRef = React.useRef<StreamingThrottleState>({
-        timer: null,
-        pendingText: text,
-        lastEmitAt: 0,
-    });
+    const [sample, setSample] = React.useState(() => ({
+        identityKey,
+        text: getStreamingThrottleText('', text, isStreaming, allowTextReplacement, selectStreamingText),
+    }));
+    const lastEmit = React.useRef({ identityKey, at: 0 });
 
     React.useEffect(() => {
-        latestTextRef.current = text;
-    }, [text]);
-
-    React.useEffect(() => {
-        throttledTextRef.current = throttledText;
-    }, [throttledText]);
-
-    React.useEffect(() => {
-        const state = stateRef.current;
-        clearTimer(state);
-        state.pendingText = latestTextRef.current;
-        state.lastEmitAt = 0;
-        setThrottledText(latestTextRef.current);
-    }, [identityKey]);
-
-    React.useEffect(() => {
-        const state = stateRef.current;
-        state.pendingText = text;
-        const currentThrottled = throttledTextRef.current;
-        const stableText = getStreamingThrottleText(currentThrottled, text, isStreaming, allowTextReplacement);
-
-        if (!isStreaming) {
-            clearTimer(state);
-            state.lastEmitAt = Date.now();
-            setThrottledText(stableText);
-            return;
-        }
-
-        const now = Date.now();
-        const remaining = computeStreamingThrottleDelay(state.lastEmitAt, now, throttleMs);
-
-        if (remaining <= 0) {
-            clearTimer(state);
-            state.lastEmitAt = now;
-            setThrottledText(stableText);
-            return;
-        }
-
-        clearTimer(state);
-        state.timer = setTimeout(() => {
-            state.timer = null;
-            state.lastEmitAt = Date.now();
-            setThrottledText((prev) => {
-                return getStreamingThrottleText(prev, state.pendingText, isStreaming, allowTextReplacement);
+        const emit = () => {
+            lastEmit.current = { identityKey, at: Date.now() };
+            setSample((previous) => {
+                const samePart = previous.identityKey === identityKey;
+                const visible = getStreamingThrottleText(samePart ? previous.text : '', text, isStreaming, allowTextReplacement, selectStreamingText);
+                return samePart && previous.text === visible ? previous : { identityKey, text: visible };
             });
-        }, remaining);
-
-        return () => {
-            clearTimer(state);
         };
-    }, [allowTextReplacement, isStreaming, text, throttleMs]);
+        const remaining = computeStreamingThrottleDelay(lastEmit.current.at, Date.now(), throttleMs);
+        if (!isStreaming || lastEmit.current.identityKey !== identityKey || remaining === 0) {
+            emit();
+            return;
+        }
+        const timer = setTimeout(emit, remaining);
+        return () => clearTimeout(timer);
+    }, [allowTextReplacement, identityKey, isStreaming, selectStreamingText, text, throttleMs]);
 
-    React.useEffect(() => {
-        const state = stateRef.current;
-        return () => {
-            clearTimer(state);
-        };
-    }, []);
-
-    return throttledText;
+    if (!isStreaming) return text;
+    // A recycled row can render its new part before the effect delivers its first sample.
+    if (sample.identityKey !== identityKey) return getStreamingThrottleText('', text, true, allowTextReplacement, selectStreamingText);
+    return sample.text;
 };

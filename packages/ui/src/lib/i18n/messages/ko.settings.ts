@@ -2318,6 +2318,8 @@ export const settingsDict = {
   'settings.openchamber.visual.section.sessionActivity': '세션 활동',
   'settings.openchamber.visual.section.sessionAssistance': '세션 지원',
   'settings.openchamber.visual.section.reasoning': '추론',
+  'settings.openchamber.visual.field.streamResponses': '응답을 실시간으로 표시',
+  'settings.openchamber.visual.field.streamResponsesInfo': '응답 텍스트를 받는 즉시 표시합니다. 끄면 응답이 한 블록씩 표시됩니다.',
   'settings.openchamber.visual.field.streamingAutoFollow': '스트리밍 중 새 내용 따라가기',
   'settings.openchamber.visual.field.streamingAutoFollowAria': '응답 스트리밍 중 새 내용으로 자동 스크롤',
   'settings.openchamber.visual.field.streamingAutoFollowInfo': '응답이 스트리밍되는 동안 화면이 최신 내용으로 계속 이동합니다. 끄면 화면이 고정되어 직접 스크롤할 수 있으며, 채팅 중간에서 메시지를 보내도 화면이 이동하지 않습니다.',

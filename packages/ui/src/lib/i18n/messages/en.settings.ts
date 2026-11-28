@@ -2368,6 +2368,8 @@ export const settingsDict = {
   'settings.openchamber.visual.section.sessionActivity': 'Session activity',
   'settings.openchamber.visual.section.sessionAssistance': 'Session assistance',
   'settings.openchamber.visual.section.reasoning': 'Reasoning',
+  'settings.openchamber.visual.field.streamResponses': 'Stream responses',
+  'settings.openchamber.visual.field.streamResponsesInfo': 'Show reply text as it arrives. When off, replies appear one block at a time.',
   'settings.openchamber.visual.field.streamingAutoFollow': 'Follow new content while streaming',
   'settings.openchamber.visual.field.streamingAutoFollowAria': 'Automatically follow new content while a response streams',
   'settings.openchamber.visual.field.streamingAutoFollowInfo': 'While a reply streams in, the view keeps gliding to the newest content. Turn this off to keep the view still and scroll manually; sending a message while scrolled up then also leaves the view where it is.',
