@@ -1,9 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 
-import {
-    resolveAssistantDisplayText,
-    resolveAssistantTextStreaming,
-} from './assistantTextVisibility';
+import { getStreamingThrottleText } from '../../hooks/useStreamingTextThrottle';
+import { commitStreamedText } from '../../lib/streamTextCommit';
+import { resolveAssistantTextStreaming } from './assistantTextVisibility';
 
 describe('resolveAssistantTextStreaming', () => {
     test('streams live text whose part is not sealed', () => {
@@ -32,23 +31,24 @@ describe('resolveAssistantTextStreaming', () => {
     });
 });
 
-describe('resolveAssistantDisplayText', () => {
+describe('assistant reply samples', () => {
     test('holds the unfinished block while streaming', () => {
         const text = 'line nine, fully written\n\nline ten, still held';
-        expect(resolveAssistantDisplayText({
-            textContent: text,
-            throttledTextContent: text,
-            isStreaming: true,
-        })).toBe('line nine, fully written\n\n');
+        expect(getStreamingThrottleText('', text, true, false, commitStreamedText)).toBe('line nine, fully written\n\n');
+    });
+
+    test('turning partial replies off keeps the visible prefix until the next block is ready', () => {
+        const partial = 'An unfinished';
+        const shown = getStreamingThrottleText('', partial, true, false);
+        expect(shown).toBe(partial);
+        const more = `${partial} paragraph`;
+        expect(getStreamingThrottleText(shown, more, true, false, commitStreamedText)).toBe(partial);
+        expect(getStreamingThrottleText(shown, `${more}.\n\nNext`, true, false, commitStreamedText)).toBe(`${more}.\n\n`);
     });
 
     test('reveals the full text once the part is not streaming', () => {
         const text = 'one\ntwo\nsealed tail without trailing newline';
-        expect(resolveAssistantDisplayText({
-            textContent: text,
-            throttledTextContent: text,
-            isStreaming: false,
-        })).toBe(text);
+        expect(getStreamingThrottleText('one', text, false, false, commitStreamedText)).toBe(text);
+        expect(getStreamingThrottleText('one', text, false, false)).toBe(text);
     });
 });
-

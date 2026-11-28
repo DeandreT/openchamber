@@ -2215,6 +2215,8 @@ export const settingsDict = {
   'settings.openchamber.visual.section.sessionActivity': 'Activité de session',
   'settings.openchamber.visual.section.sessionAssistance': 'Assistance de session',
   'settings.openchamber.visual.section.reasoning': 'Raisonnement',
+  'settings.openchamber.visual.field.streamResponses': 'Afficher les réponses progressivement',
+  'settings.openchamber.visual.field.streamResponsesInfo': 'Affiche le texte dès sa réception. Si cette option est désactivée, les réponses apparaissent bloc par bloc.',
   'settings.openchamber.visual.field.streamingAutoFollow': 'Suivre le nouveau contenu pendant le streaming',
   'settings.openchamber.visual.field.streamingAutoFollowAria': 'Suivre automatiquement le nouveau contenu pendant la diffusion d’une réponse',
   'settings.openchamber.visual.field.streamingAutoFollowInfo': 'Pendant qu’une réponse arrive, la vue glisse vers le contenu le plus récent. Désactivez pour garder la vue immobile et défiler manuellement ; envoyer un message depuis le milieu de la conversation laisse alors aussi la vue en place.',

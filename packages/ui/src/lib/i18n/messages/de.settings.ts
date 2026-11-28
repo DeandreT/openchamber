@@ -2285,6 +2285,8 @@ export const settingsDict = {
   'settings.openchamber.visual.section.sessionActivity': 'Sitzungsaktivität',
   'settings.openchamber.visual.section.sessionAssistance': 'Sitzungshilfe',
   'settings.openchamber.visual.section.reasoning': 'Reasoning',
+  'settings.openchamber.visual.field.streamResponses': 'Antworten fortlaufend anzeigen',
+  'settings.openchamber.visual.field.streamResponsesInfo': 'Zeigt den Text an, sobald er eintrifft. Ist die Option aus, erscheinen Antworten blockweise.',
   'settings.openchamber.visual.field.streamingAutoFollow': 'Neuen Inhalten beim Streaming folgen',
   'settings.openchamber.visual.field.streamingAutoFollowAria': 'Neuen Inhalten automatisch folgen, während eine Antwort gestreamt wird',
   'settings.openchamber.visual.field.streamingAutoFollowInfo': 'Während eine Antwort eintrifft, folgt die Ansicht laufend dem neuesten Inhalt. Deaktivieren, um die Ansicht ruhig zu halten und manuell zu scrollen; das Senden einer Nachricht aus der Mitte des Chats lässt die Ansicht dann ebenfalls an Ort und Stelle.',

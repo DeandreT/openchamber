@@ -2196,6 +2196,8 @@ export const settingsDict = {
   'settings.openchamber.visual.section.sessionActivity': '工作階段活動',
   'settings.openchamber.visual.section.sessionAssistance': '工作階段輔助',
   'settings.openchamber.visual.section.reasoning': '推理',
+  'settings.openchamber.visual.field.streamResponses': '串流顯示回覆',
+  'settings.openchamber.visual.field.streamResponsesInfo': '收到回覆文字時即顯示。關閉後，回覆會逐個區塊顯示。',
   'settings.openchamber.visual.field.streamingAutoFollow': '串流時跟隨新內容',
   'settings.openchamber.visual.field.streamingAutoFollowAria': '回覆串流時自動跟隨新內容',
   'settings.openchamber.visual.field.streamingAutoFollowInfo': '回覆串流時，畫面會持續捲動到最新內容。關閉後畫面保持不動，可手動捲動；此時從聊天中間傳送訊息也不會移動畫面。',

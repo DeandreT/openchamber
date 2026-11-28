@@ -2339,6 +2339,8 @@ export const settingsDict = {
   'settings.openchamber.visual.section.sessionActivity': 'פעילות בהפעלה',
   'settings.openchamber.visual.section.sessionAssistance': 'סיוע בהפעלה',
   'settings.openchamber.visual.section.reasoning': 'חשיבה',
+  'settings.openchamber.visual.field.streamResponses': 'הצגת תשובות בהדרגה',
+  'settings.openchamber.visual.field.streamResponsesInfo': 'טקסט התשובה מוצג ברגע שהוא מתקבל. כשהאפשרות כבויה, התשובה מוצגת בקטעים שלמים.',
   'settings.openchamber.visual.field.streamingAutoFollow': 'מעקב אחר תוכן חדש בזמן הזרמה',
   'settings.openchamber.visual.field.streamingAutoFollowAria': 'מעקב אוטומטי אחר תוכן חדש בזמן שתגובה מוזרמת',
   'settings.openchamber.visual.field.streamingAutoFollowInfo': 'בזמן שתגובה מוזרמת, התצוגה גוללת בעדינות אל התוכן החדש ביותר. כשהאפשרות כבויה, התצוגה נשארת במקומה והגלילה ידנית; שליחת הודעה כשהתצוגה גלולה למעלה גם היא משאירה את התצוגה במקומה.',

@@ -2341,6 +2341,8 @@ export const settingsDict = {
   'settings.openchamber.visual.section.sessionActivity': 'Sessieactiviteit',
   'settings.openchamber.visual.section.sessionAssistance': 'Sessieassistentie',
   'settings.openchamber.visual.section.reasoning': 'Redenering',
+  'settings.openchamber.visual.field.streamResponses': 'Antwoorden tijdens het ontvangen tonen',
+  'settings.openchamber.visual.field.streamResponsesInfo': 'Toon de tekst zodra die binnenkomt. Als dit uitstaat, verschijnen antwoorden blok voor blok.',
   'settings.openchamber.visual.field.streamingAutoFollow': 'Volg nieuwe content tijdens het streamen',
   'settings.openchamber.visual.field.streamingAutoFollowAria': 'Volg automatisch nieuwe content terwijl een antwoord wordt gestreamd',
   'settings.openchamber.visual.field.streamingAutoFollowInfo': 'Terwijl een antwoord binnenstroomt, blijft de weergave naar de nieuwste content glijden. Zet dit uit om de weergave stil te houden en handmatig te scrollen; een bericht versturen terwijl u omhoog hebt gescrold laat de weergave dan ook staan waar die is.',

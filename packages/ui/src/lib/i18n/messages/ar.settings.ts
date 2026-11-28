@@ -2339,6 +2339,8 @@ export const settingsDict = {
   'settings.openchamber.visual.section.sessionActivity': 'نشاط الجلسة',
   'settings.openchamber.visual.section.sessionAssistance': 'مساعدة الجلسة',
   'settings.openchamber.visual.section.reasoning': 'التفكير',
+  'settings.openchamber.visual.field.streamResponses': 'عرض الردود تدريجيًا',
+  'settings.openchamber.visual.field.streamResponsesInfo': 'اعرض نص الرد فور وصوله. عند إيقاف هذا الخيار يظهر الرد على شكل كتل مكتملة.',
   'settings.openchamber.visual.field.streamingAutoFollow': 'متابعة المحتوى الجديد أثناء البث',
   'settings.openchamber.visual.field.streamingAutoFollowAria': 'متابعة المحتوى الجديد تلقائيًا أثناء بث الرد',
   'settings.openchamber.visual.field.streamingAutoFollowInfo': 'أثناء وصول الرد، ينزلق العرض باستمرار إلى أحدث محتوى. عطّل هذا الخيار لإبقاء العرض ثابتًا والتمرير يدويًا؛ وعندها يبقى العرض مكانه أيضًا إذا أرسلت رسالة وأنت في أعلى الصفحة.',

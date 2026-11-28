@@ -2318,6 +2318,8 @@ export const settingsDict = {
   "settings.openchamber.visual.section.sessionActivity": "Actividad de la sesión",
   "settings.openchamber.visual.section.sessionAssistance": "Asistencia de sesión",
   "settings.openchamber.visual.section.reasoning": "Razonamiento",
+  "settings.openchamber.visual.field.streamResponses": "Mostrar las respuestas a medida que llegan",
+  "settings.openchamber.visual.field.streamResponsesInfo": "Muestra el texto en cuanto se recibe. Si se desactiva, las respuestas aparecen por bloques.",
   "settings.openchamber.visual.field.streamingAutoFollow": "Seguir el contenido nuevo durante el streaming",
   "settings.openchamber.visual.field.streamingAutoFollowAria": "Seguir automáticamente el contenido nuevo mientras se transmite una respuesta",
   "settings.openchamber.visual.field.streamingAutoFollowInfo": "Mientras llega una respuesta, la vista se desplaza hacia el contenido más reciente. Desactívalo para mantener la vista quieta y desplazarte manualmente; enviar un mensaje desde la mitad del chat tampoco moverá la vista.",

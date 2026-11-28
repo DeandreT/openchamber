@@ -398,6 +398,13 @@ const SETTINGS_SEARCH_ITEMS: readonly SettingsSearchItem[] = [
     keywords: ['thinking', 'traces', 'collapse', 'expand', 'streaming'],
   },
   {
+    id: 'chat.stream-responses',
+    page: 'chat',
+    titleKey: 'settings.openchamber.visual.field.streamResponses',
+    descriptionKey: 'settings.openchamber.visual.field.streamResponsesInfo',
+    keywords: ['streaming', 'partial replies', 'live text', 'completed blocks'],
+  },
+  {
     id: 'chat.streaming-auto-follow',
     page: 'chat',
     titleKey: 'settings.openchamber.visual.field.streamingAutoFollow',

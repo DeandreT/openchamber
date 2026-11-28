@@ -411,6 +411,9 @@
       "scope": "profile",
       "perSurface": true
     },
+    "streamResponses": {
+      "scope": "profile"
+    },
     "collapsibleThinkingBlocks": {
       "scope": "profile"
     },

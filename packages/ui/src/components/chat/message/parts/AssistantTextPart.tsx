@@ -4,7 +4,9 @@ import type { Part } from '@/lib/opencode/model';
 import { MarkdownRenderer } from '../../MarkdownRenderer';
 import type { StreamPhase, ToolPopupContent } from '../types';
 import { useStreamingTextThrottle } from '../../hooks/useStreamingTextThrottle';
-import { resolveAssistantDisplayText, resolveAssistantTextStreaming } from './assistantTextVisibility';
+import { resolveAssistantTextStreaming } from './assistantTextVisibility';
+import { commitStreamedText } from '../../lib/streamTextCommit';
+import { useUIStore } from '@/stores/useUIStore';
 import { isInvisibleText } from '@/lib/invisibleText';
 import { streamPerfCount, streamPerfObserve } from '@/stores/utils/streamDebug';
 import { GeneratedJsonResultCard } from './GeneratedJsonResultCard';
@@ -13,9 +15,7 @@ import { useGuestLinkRules } from '@/lib/guests/links';
 
 type PartWithText = Part & { text?: string; content?: string; value?: string; time?: { start?: number; end?: number } };
 
-// A streaming reply is read a block at a time (see streamTextCommit.ts); taking
-// new text at most this often lets the blocks finished in between land, and
-// move the chat, together.
+// Both reading modes batch changes to the reply and its scroll position.
 const REPLY_REVEAL_INTERVAL_MS = 400;
 
 interface AssistantTextPartProps {
@@ -33,13 +33,13 @@ interface AssistantTextPartProps {
 
 const AssistantTextPart: React.FC<AssistantTextPartProps> = ({
     part,
+    sessionId,
     messageId,
     streamPhase,
     onShowPopup,
     range,
 }) => {
     // Use part directly from props — parent provides the latest version from the store.
-    // No store subscription here to avoid re-render cascade from unrelated delta events.
     // The extension catalog changes on install or pause, never per delta.
     const guestLinks = useGuestLinkRules();
     const partWithText = part as PartWithText;
@@ -56,23 +56,19 @@ const AssistantTextPart: React.FC<AssistantTextPartProps> = ({
         streamPhase,
         isFinalized,
     });
+    const streamResponses = useUIStore((state) => isStreaming && part.type === 'text' && state.streamResponses);
 
     streamPerfCount('ui.assistant_text_part.render');
     if (isStreaming) {
         streamPerfCount('ui.assistant_text_part.render.streaming');
     }
 
-    const throttledTextContent = useStreamingTextThrottle({
+    const displayTextContent = useStreamingTextThrottle({
         text: textContent,
         isStreaming,
         throttleMs: REPLY_REVEAL_INTERVAL_MS,
-        identityKey: `${messageId}:${part.id ?? 'text'}`,
-    });
-
-    const displayTextContent = resolveAssistantDisplayText({
-        textContent,
-        throttledTextContent,
-        isStreaming,
+        identityKey: `${sessionId ?? ''}:${messageId}:${part.id ?? 'text'}`,
+        selectStreamingText: streamResponses ? undefined : commitStreamedText,
     });
 
     streamPerfObserve('ui.assistant_text_part.display_len', displayTextContent.length);

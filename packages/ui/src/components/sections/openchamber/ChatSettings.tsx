@@ -127,6 +127,8 @@ const MessagesTab: React.FC = () => {
   const showTurnChangedFiles = useUIStore((state) => state.showTurnChangedFiles);
   const setShowTurnChangedFiles = useUIStore((state) => state.setShowTurnChangedFiles);
   const streamingAutoFollowEnabled = useUIStore((state) => state.streamingAutoFollowEnabled);
+  const streamResponses = useUIStore((state) => state.streamResponses);
+  const setStreamResponses = useUIStore((state) => state.setStreamResponses);
   const setStreamingAutoFollowEnabled = useUIStore((state) => state.setStreamingAutoFollowEnabled);
   const wideChatLayoutEnabled = useUIStore((state) => state.wideChatLayoutEnabled);
   const setWideChatLayoutEnabled = useUIStore((state) => state.setWideChatLayoutEnabled);
@@ -238,6 +240,14 @@ const MessagesTab: React.FC = () => {
           label={t('settings.openchamber.visual.field.wideChatLayout')}
           ariaLabel={t('settings.openchamber.visual.field.wideChatLayoutAria')}
           settingsItem="chat.wide-layout"
+        />
+        <SettingsCheckboxRow
+          checked={streamResponses}
+          onChange={setStreamResponses}
+          label={t('settings.openchamber.visual.field.streamResponses')}
+          ariaLabel={t('settings.openchamber.visual.field.streamResponses')}
+          info={t('settings.openchamber.visual.field.streamResponsesInfo')}
+          settingsItem="chat.stream-responses"
         />
         <SettingsCheckboxRow
           checked={streamingAutoFollowEnabled}

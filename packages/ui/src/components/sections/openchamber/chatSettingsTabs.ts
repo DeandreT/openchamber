@@ -22,6 +22,7 @@ const SEARCH_TARGET_TABS = new Map<string, ChatSettingsTab>([
   ['chat.tool-file-icons', 'messages'],
   ['chat.changed-files', 'messages'],
   ['chat.streaming-auto-follow', 'messages'],
+  ['chat.stream-responses', 'messages'],
   ['chat.message-appearance', 'messages'],
   ['chat.wide-layout', 'messages'],
   ['chat.prompt-navigator', 'messages'],

@@ -1012,6 +1012,7 @@ interface UIStore {
   eventStreamHint: string | null;
   showReasoningTraces: boolean;
   streamingAutoFollowEnabled: boolean;
+  streamResponses: boolean;
   sessionRecapEnabled: boolean;
   sessionSuggestionEnabled: boolean;
   /** The "In work" sidebar block, the Track / Done actions, and sessions going in on a sent message. */
@@ -1361,6 +1362,7 @@ interface UIStore {
   setEventStreamStatus: (status: EventStreamStatus, hint?: string | null) => void;
   setShowReasoningTraces: (value: boolean) => void;
   setStreamingAutoFollowEnabled: (value: boolean) => void;
+  setStreamResponses: (value: boolean) => void;
   setSessionRecapEnabled: (value: boolean) => void;
   setSessionSuggestionEnabled: (value: boolean) => void;
   setSessionWorkEnabled: (value: boolean) => void;
@@ -1635,6 +1637,7 @@ export const useUIStore = create<UIStore>()(
         eventStreamHint: null,
         showReasoningTraces: true,
         streamingAutoFollowEnabled: true,
+        streamResponses: false,
         sessionRecapEnabled: true,
         sessionSuggestionEnabled: true,
         sessionWorkEnabled: true,
@@ -2735,6 +2738,7 @@ export const useUIStore = create<UIStore>()(
         setStreamingAutoFollowEnabled: (value) => {
           set({ streamingAutoFollowEnabled: value });
         },
+        setStreamResponses: (value) => set({ streamResponses: value }),
 
         setSessionRecapEnabled: (value) => {
           set({ sessionRecapEnabled: value });
@@ -3951,6 +3955,7 @@ export const useUIStore = create<UIStore>()(
           // Note: isSettingsDialogOpen intentionally NOT persisted
           showReasoningTraces: state.showReasoningTraces,
           streamingAutoFollowEnabled: state.streamingAutoFollowEnabled,
+          streamResponses: state.streamResponses,
           sessionRecapEnabled: state.sessionRecapEnabled,
           sessionSuggestionEnabled: state.sessionSuggestionEnabled,
           sessionWorkEnabled: state.sessionWorkEnabled,
