@@ -472,12 +472,13 @@ export const removeSpace = (spaceId: string, { deleteUnsavedChats = false }: { d
 
 // A deleted space whose chats are on the Archive page: the directory that holds them names it.
 const archiveSchema = z.object({ spaceId: spaceIdSchema, name: z.string(), directory: z.string() });
+const archiveListSchema = z.object({ archives: z.array(archiveSchema), complete: z.boolean().default(true) });
 
 export type SpaceArchive = z.infer<typeof archiveSchema>;
 
-/** The archives of deleted spaces. It reads a file of the host's and runs nothing of the feature. */
-export const listSpaceArchives = async (signal?: AbortSignal): Promise<SpaceArchive[]> =>
-  (await request(`${SPACES_ROUTE}/archives`, z.object({ archives: z.array(archiveSchema) }), { signal })).archives;
+/** The host's archive index, available even with isolated spaces switched off. */
+export const listSpaceArchives = (signal?: AbortSignal) =>
+  request(`${SPACES_ROUTE}/archives`, archiveListSchema, { signal });
 
 // What an apply would do, read while the dialog is open: the work brought out of the space now, and
 // where the space stands for an apply as uncommitted changes. `changedPaths` counts against the

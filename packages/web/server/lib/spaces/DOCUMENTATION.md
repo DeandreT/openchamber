@@ -579,7 +579,7 @@ The user's journey is in "Design" above. Stage 5a built the host's side of it, `
 
 ### Routes
 
-All under `/api/openchamber/spaces`, a namespace of the host's beside `/api/openchamber/tunnel`, on the JSON-body allowlist of `core-routes.js`. A request to the server inside a space is `/api/spaces/<id>/...` and belongs to the dispatcher; nothing here has that shape. While the switch is off every route but the switch answers 404 with `isolated_spaces_off`.
+All under `/api/openchamber/spaces`, a namespace of the host's beside `/api/openchamber/tunnel`, on the JSON-body allowlist of `core-routes.js`. A request to the server inside a space is `/api/spaces/<id>/...` and belongs to the dispatcher; nothing here has that shape. While the switch is off every route but the switch and the archive list answers 404 with `isolated_spaces_off`.
 
 | Route | What it does |
 |---|---|
@@ -596,7 +596,7 @@ All under `/api/openchamber/spaces`, a namespace of the host's beside `/api/open
 | `GET /places/<place>/disk` | Since 5e-4: `{ imageBytes, imagePulling, imageFailure, toolsBytes, spacesBytes, bytesBySpace, freeBytes, freesImage }`, the disk the place's spaces take (`bytesBySpace`: each space's work and home volumes by its id, what deleting it gives back), whether the image is being downloaded and why the last download failed, and what a clean-up would free now. See "Places page". |
 | `POST /places/<place>/clean-up` | Since 5e-4: removes what OpenChamber can make again; `{ freedBytes, kept: [{ kind, reason }], disk }`. 409 `space_preparing` while a space is being made, 409 `image_pulling` while the image is being downloaded. See "Places page". |
 | `POST /places/<place>/image` | Downloads the image ahead of the first space (journey step 0); answers 202 with the disk, `imagePulling` set, while the download goes on. See "Places page". |
-| `GET /archives` | Since 5e-2: `{ archives: [{ spaceId, name, projectDirectory, directory, archivedAt }] }`, which directory holds which deleted space's chats. Reachable with the switch off too, see "Chat archive". |
+| `GET /archives` | `{ archives: [{ spaceId, name, projectDirectory, directory, archivedAt }] }`. An incomplete scan adds `complete: false`. If the host couldn't list the directory and knows no archives, it returns 503 `space_archives_unavailable`. Reachable with the switch off. |
 | `POST /<id>/setup` | Since 5d-4: `{ commands }`. Runs the project's setup commands again in a running space; answers the listed entry once the run began. See "Setup commands". |
 | `GET /<id>/setup` | Since 5d-4: `{ setup, output }`, the setup as the list carries it and the end of the failed command's output, or null. |
 | `GET /idle-stop`, `PUT /idle-stop` | Since 5d-3: the idle stop setting, `{ enabled, hours }`, kept in the host's settings and told to every running space. See "Idle stop". |
@@ -700,6 +700,10 @@ Decision 9 and journey step 7; built in 5e-2, `space-archive.js`, the export in 
 - **Read-only.** An imported chat is a live session of the host's OpenCode: measured on 2026-09-30, a shell sent to one ran on the host. So besides the rule above, `guard`, mounted before every route that acts on a session, refuses with 409 `archived_chat_read_only` any request other than a read that names an archived chat in `/api/session/<id>`, `/api/experimental/session/<id>/...`, `/api/openchamber/sessions/<id>/...`, `/api/message-queue/sessions/<id>`, `/api/goals/objective/<id>` or `/api/permission-auto-accept/sessions/<id>`; `DELETE /api/session/<id>` passes, which is how the user deletes one. The guard also refuses `POST /api/session` whose `directory` lies in the archive, the root or any folder under it, with 409 `archive_directory_read_only`, archived chats or none: the client's draft rule above is one fetch of the archive list away from not knowing the folder, and a chat made there would be a live session beside the archived ones. The id is compared decoded, as the route behind it decodes it. It reads the archive's files at start and runs nothing, so it and `GET /archives` exist with the switch on or off: turning the feature off does not make an archived chat runnable.
 - **A new chat after an archived one.** Opening an archived chat makes the archive's directory the current one in the window. A draft opened then, from the button, the shortcut or the desktop menu, treats that directory as a chat's scratch folder would be treated (`openNewSessionDraft` in `packages/ui/src/sync/session-ui-store.ts`): it opens as a Chat, or on the project the user last chose, never rooted in the archive, where a sent message would have made a live session beside the archived ones. The read-only rule of the chat view applies to a selected chat only, so that draft has its composer.
 - **Not a boundary against the agent.** By the time a chat is archived the space is gone. What a space wrote into its chats is shown as any chat of the space was shown while it lived.
+
+### Why a partial archive list keeps previously confirmed owners
+
+The host scans manifests at startup and updates the index on its own writes. A missing archive directory is empty. An unreadable manifest leaves its owner unknown, even when every manifest is unreadable. The client merges readable owners into what it already knows about this runtime. A complete list replaces that map, including when it is empty. Switching runtimes clears it.
 
 ### Spaces page
 

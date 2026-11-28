@@ -1,12 +1,16 @@
 // The routes over a stand-in journey: the shapes, the statuses per refusal, and the switch.
 
+import fs from 'node:fs';
 import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
 
 import express from 'express';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { SpaceError } from './errors.js';
 import { SPACES_ROUTE, answerFailure, createSwitchController, registerSpaceRoutes } from './routes.js';
+import { createSpaceArchive } from './space-archive.js';
 
 const ID = 'a1b2c3d4e5f6';
 const servers = [];
@@ -16,13 +20,14 @@ afterEach(async () => {
 });
 
 /** An app with the routes over `journey`, or with the feature off when `journey` is null. */
-const serve = async ({ journey, places = [], switchState = { enabled: true }, machinePlace = null, dockerSetup = null } = {}) => {
+const serve = async ({ journey, places = [], switchState = { enabled: true }, machinePlace = null, dockerSetup = null, getArchive } = {}) => {
   const app = express();
   app.use(express.json());
   const calls = [];
   const state = { journey, enabled: switchState.enabled };
   registerSpaceRoutes(app, {
     getJourney: () => state.journey,
+    getArchive,
     getPlaces: () => places,
     getDockerSetup: () => (dockerSetup && state.journey ? { placeId: 'docker', setup: dockerSetup } : null),
     readSwitch: async () => ({ enabled: state.enabled, spaces: state.enabled ? [{ id: ID, name: 'One', state: 'running' }] : [] }),
@@ -79,6 +84,38 @@ const journeyOf = (overrides = {}) => {
 };
 
 describe('space routes', () => {
+  it('distinguishes complete, partial and unavailable archive lists with spaces off', async (context) => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'archive-list-'));
+    context.onTestFinished(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+    const root = path.join(dataDir, 'spaces', 'archive');
+    const owner = { spaceId: ID, name: 'Packing', archivedAt: 1234, projectDirectory: '/project' };
+    const manifest = path.join(root, `${ID}.json`);
+    let archive;
+    const { call } = await serve({ journey: null, getArchive: () => archive });
+    const readAfterRestart = () => {
+      archive = createSpaceArchive({ dataDir, logger: { warn() {} } });
+      return call('GET', `${SPACES_ROUTE}/archives`);
+    };
+
+    expect(await readAfterRestart()).toEqual({ status: 200, body: { archives: [] } });
+    fs.mkdirSync(root, { recursive: true });
+    fs.writeFileSync(manifest, JSON.stringify({ ...owner, version: 1, chats: ['ses_packing'] }));
+    const archives = [{ ...owner, directory: path.join(root, ID) }];
+    expect(await readAfterRestart()).toEqual({ status: 200, body: { archives } });
+
+    fs.writeFileSync(path.join(root, '123456789abc.json'), '{');
+    expect(await readAfterRestart()).toEqual({ status: 200, body: { archives, complete: false } });
+    expect(archive.isArchivedChat('ses_packing')).toBe(true);
+    fs.writeFileSync(manifest, '{}');
+    expect(await readAfterRestart()).toEqual({ status: 200, body: { archives: [], complete: false } });
+
+    fs.renameSync(root, path.join(dataDir, 'held'));
+    fs.writeFileSync(root, 'not a directory');
+    expect(await readAfterRestart()).toEqual({
+      status: 503, body: { code: 'space_archives_unavailable', message: 'The chat archives could not be read.', details: null },
+    });
+  });
+
   it('renames a space task through the user operation and validates title and space identity', async () => {
     const journey = journeyOf();
     const { call, state } = await serve({ journey });

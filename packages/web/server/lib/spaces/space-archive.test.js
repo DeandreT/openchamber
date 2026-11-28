@@ -79,7 +79,7 @@ describe('saving the chats of a space', () => {
     const directory = path.join(dataDir, 'spaces', 'archive', SPACE);
     expect(host.get(CHILD).info).toMatchObject({ parentID: PARENT, location: { directory }, time: { archived: 1234 } });
     expect(fs.statSync(directory).isDirectory()).toBe(true);
-    expect(archive.listArchives()).toEqual([{ spaceId: SPACE, name: 'Fix login', projectDirectory: '/home/me/project', directory, archivedAt: 1234 }]);
+    expect(archive.listArchives()).toEqual({ archives: [{ spaceId: SPACE, name: 'Fix login', projectDirectory: '/home/me/project', directory, archivedAt: 1234 }] });
   });
 
   it('refuses every tool of every agent in an archived chat, in OpenCode itself', async () => {
@@ -124,7 +124,7 @@ describe('saving the chats of a space', () => {
     ] });
     await expect(save()).rejects.toMatchObject({ code: 'chats_not_saved', details: { name: 'Fix login', tooLarge: ['Big one'], failed: 0 } });
     expect(host.size).toBe(0);
-    expect(archive.listArchives()).toEqual([]);
+    expect(archive.listArchives()).toEqual({ archives: [] });
     expect(fs.readdirSync(path.join(dataDir, 'spaces', 'archive'))).toEqual([]);
   });
 
@@ -150,7 +150,7 @@ describe('saving the chats of a space', () => {
     source.listChats = async () => { throw new SpaceError('space_not_running', 'stopped'); };
     await expect(save()).rejects.toMatchObject({ code: 'chats_not_saved', details: { listed: false } });
     expect(await save(true)).toEqual({ saved: 0, tooLarge: [], failed: 0, listed: false });
-    expect(archive.listArchives()).toEqual([]);
+    expect(archive.listArchives()).toEqual({ archives: [] });
 
     const many = Array.from({ length: ARCHIVE_MAX_CHATS + 1 }, (_, index) => ({ info: infoOf(`ses_n${index}`) }));
     await expect(archiveWith({ chats: many }).save()).rejects.toMatchObject({ code: 'chats_not_saved', details: { failed: 1 } });
@@ -212,6 +212,6 @@ describe('an archived chat is read-only', () => {
     const second = archiveWith({ chats: [], dataDir: first.dataDir });
     expect(second.archive.isArchivedChat(PARENT)).toBe(true);
     expect(through(second.archive, 'POST', `/api/session/${PARENT}/prompt`)).toMatchObject({ code: 409 });
-    expect(second.archive.listArchives()).toHaveLength(1);
+    expect(second.archive.listArchives().archives).toHaveLength(1);
   });
 });
