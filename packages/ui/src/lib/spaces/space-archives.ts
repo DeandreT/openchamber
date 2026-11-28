@@ -33,16 +33,16 @@ export const useSpaceArchivesStore = create<SpaceArchivesState>()((set) => ({
 }));
 
 /**
- * Reads the archives again. A read that fails leaves the last answer in place, so a chat known
- * to be archived never reads as live; one a runtime switch overtook is dropped.
+ * A partial list confirms the owners it includes. Only a complete list can remove an owner;
+ * a failed read or one overtaken by a runtime switch leaves the current map alone.
  */
 export const refreshSpaceArchives = (): Promise<void> => {
   if (reading) return reading;
   const started = generation;
   const read = listSpaceArchives()
-    .then((archives) => {
+    .then(({ archives, complete }) => {
       if (started !== generation) return;
-      const byDirectory = new Map<string, SpaceArchive>();
+      const byDirectory = new Map(complete ? null : useSpaceArchivesStore.getState().byDirectory);
       for (const archive of archives) {
         const directory = normalizePath(archive.directory);
         if (directory) byDirectory.set(directory, archive);

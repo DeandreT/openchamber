@@ -75,6 +75,7 @@ const STATUS_BY_CODE = new Map([
   ['invalid_setup_commands', 400],
   ['space_setup_running', 409],
   ['chats_not_saved', 409],
+  ['space_archives_unavailable', 503],
   ['invalid_machine', 400],
   ['place_has_spaces', 409],
 ]);
@@ -245,7 +246,12 @@ export function registerSpaceRoutes(app, { getJourney, getPlaces = () => [], get
 
   // The archives of deleted spaces, for the Archive page: which directory holds which space's chats.
   app.get(`${SPACES_ROUTE}/archives`, (_req, res) => {
-    res.json({ archives: getArchive()?.listArchives() ?? [] });
+    const listing = getArchive()?.listArchives();
+    if (!listing) {
+      answerFailure(res, new SpaceError('space_archives_unavailable', 'The chat archives could not be read.'));
+      return;
+    }
+    res.json(listing);
   });
 
   // The idle stop setting (decision 11): kept in the settings and told to every running space.

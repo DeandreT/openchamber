@@ -71,29 +71,32 @@ export function createSpaceArchive({ dataDir, hostOpenCode, logger = console, no
   const directoryOf = (spaceId) => path.join(root, spaceId);
   const entryFileOf = (spaceId) => path.join(root, `${spaceId}.json`);
 
-  /** Every archive the data directory holds; a file that cannot be read is skipped and logged. */
+  /** The readable manifests and whether this scan accounts for every archive. */
   const readEntries = () => {
-    let names = [];
+    const entries = new Map();
+    let names;
     try {
       names = fs.readdirSync(root);
     } catch (error) {
-      if (error?.code !== 'ENOENT') logger.warn?.(`[spaces] the chat archive could not be read: ${error?.code ?? error?.message ?? error}`);
-      return new Map();
+      if (error?.code === 'ENOENT') return { entries, state: 'complete' };
+      logger.warn?.(`[spaces] the chat archive could not be read: ${error?.code ?? error?.message ?? error}`);
+      return { entries, state: 'unavailable' };
     }
-    const entries = new Map();
+    let state = 'complete';
     for (const name of names) {
       if (!name.endsWith('.json')) continue;
       try {
         const entry = archiveEntrySchema.parse(JSON.parse(fs.readFileSync(path.join(root, name), 'utf8')));
         entries.set(entry.spaceId, entry);
       } catch (error) {
+        state = 'partial';
         logger.warn?.(`[spaces] an archive entry could not be read: ${name}: ${error?.code ?? 'malformed'}`);
       }
     }
-    return entries;
+    return { entries, state };
   };
 
-  const entries = readEntries();
+  const { entries, state: scanState } = readEntries();
   let locked = new Set();
   const relock = () => { locked = new Set([...entries.values()].flatMap((entry) => entry.chats)); };
   relock();
@@ -114,14 +117,18 @@ export function createSpaceArchive({ dataDir, hostOpenCode, logger = console, no
     relock();
   };
 
-  /** The archives, for the Archive page: which directory holds which space's chats. */
-  const listArchives = () => [...entries.values()].map((entry) => ({
-    spaceId: entry.spaceId,
-    name: entry.name,
-    projectDirectory: entry.projectDirectory,
-    directory: directoryOf(entry.spaceId),
-    archivedAt: entry.archivedAt,
-  }));
+  /** A later save can confirm its own archive even if the host couldn't list the directory at startup. */
+  const listArchives = () => {
+    if (scanState === 'unavailable' && entries.size === 0) return null;
+    const archives = Array.from(entries.values(), (entry) => ({
+      spaceId: entry.spaceId,
+      name: entry.name,
+      projectDirectory: entry.projectDirectory,
+      directory: directoryOf(entry.spaceId),
+      archivedAt: entry.archivedAt,
+    }));
+    return scanState === 'complete' ? { archives } : { archives, complete: false };
+  };
 
   const isArchivedChat = (id) => locked.has(id);
 
