@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
+import { afterAll, afterEach, beforeEach, describe, expect, jest, spyOn, test } from 'bun:test';
 import { Window } from 'happy-dom';
 import { act } from 'react';
 import type { RoutingConfig } from '@/lib/routing/routingApi';
@@ -25,18 +25,26 @@ const config: RoutingConfig = {
   minConfidence: 0.8, safetyNet: { enabled: false, threshold: 0.9 }, categories: [category],
 };
 let writes: unknown[];
+let hostConfig: RoutingConfig;
+let nextAcknowledgement: Promise<void> | undefined;
 const fetchSpy = spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
   const request = new Request(input instanceof Request ? input : new URL(input, window.location.href), init);
   const path = new URL(request.url).pathname;
   if (path === '/api/fs/home') return Response.json({ home: '/test' });
   if (path === '/api/config/settings') return Response.json({});
+  if (path === '/api/agent') return Response.json({ data: [] });
   if (path !== '/api/routing') throw new Error(`Unexpected request: ${request.method} ${path}`);
-  const state = { available: true, autoReady: false, tokenPresent: false, jevSource: 'zen-free', builtins: [], config };
-  if (request.method === 'GET') return Response.json(state);
+  const state = { available: true, autoReady: false, tokenPresent: false, jevSource: 'zen-free', builtins: [] };
+  if (request.method === 'GET') return Response.json({ ...state, config: hostConfig });
   expect(request.method).toBe('PUT');
   const body = await request.json();
   writes.push(body);
-  return Response.json({ ...state, config: body.config });
+  hostConfig = body.config;
+  const reply = Response.json({ ...state, config: hostConfig });
+  const acknowledgement = nextAcknowledgement;
+  nextAcknowledgement = undefined;
+  await acknowledgement;
+  return reply;
 });
 const { createRoot } = await import('react-dom/client');
 const { I18nProvider } = await import('@/lib/i18n');
@@ -48,12 +56,18 @@ const initialConfig = useConfigStore.getState();
 const container = document.body.appendChild(document.createElement('div'));
 let root: ReturnType<typeof createRoot>;
 
+const openRouting = () => act(async () => {
+  root.render(<I18nProvider><TooltipProvider><RoutingPage /></TooltipProvider></I18nProvider>);
+});
+
 beforeEach(async () => {
   writes = [];
+  hostConfig = config;
+  nextAcknowledgement = undefined;
   useConfigStore.setState({ providersLoaded: true });
   useRoutingStore.getState().resetForRuntime();
   root = createRoot(container);
-  await act(async () => { root.render(<I18nProvider><TooltipProvider><RoutingPage /></TooltipProvider></I18nProvider>); });
+  await openRouting();
 });
 
 afterEach(async () => {
@@ -68,22 +82,89 @@ async function clickButton(label: RegExp, parent: ParentNode = container) {
   await act(async () => button.click());
 }
 
-async function clearPicker(trigger: RegExp, choice: RegExp) {
+async function openPicker(trigger: RegExp) {
   await clickButton(trigger);
   const sheet = document.querySelector('[role="dialog"]');
   if (!sheet) throw new Error('Missing model picker');
-  await clickButton(choice, sheet);
-  // Leaving Routing flushes the pending edit without waiting for the debounce.
-  await act(async () => root.render(null));
+  return sheet;
 }
 
 test('clearing the fallback saves a null fallback', async () => {
-  await clearPicker(/^original$/, /^Choose a model$/);
+  await clickButton(/^Choose a model$/, await openPicker(/^original$/));
+  // Leaving Routing flushes the pending edit without waiting for the debounce.
+  await act(async () => root.render(null));
   expect(writes).toEqual([{ config: { ...config, fallback: null } }]);
 });
 
 test('choosing Fallback model clears both category overrides', async () => {
   await clickButton(/^Trivial/);
-  await clearPicker(/^override$/, /^Fallback model$/);
+  await clickButton(/^Fallback model$/, await openPicker(/^override$/));
+  await act(async () => root.render(null));
   expect(writes).toEqual([{ config: { ...config, categories: [{ ...category, model: null, variant: null }] } }]);
+});
+
+describe('with a Session Default', () => {
+  const sessionFallback = { model: { providerID: 'fixture', modelID: 'session' }, variant: 'medium' };
+  const advanceSave = () => act(async () => { jest.advanceTimersByTime(1000); });
+  const reread = () => act(async () => { await useRoutingStore.getState().load(); });
+
+  beforeEach(async () => {
+    jest.useFakeTimers();
+    await act(async () => useConfigStore.setState({
+      settingsDefaultModel: 'fixture/session', settingsDefaultVariant: 'medium',
+      providers: [{
+        id: 'fixture', name: 'Fixture', activation: 'enabled', package: 'fixture',
+        models: ['session', 'replacement'].map((id) => ({
+          id, providerID: 'fixture', modelID: id, name: id,
+          enabled: true, status: 'active', variants: [{ id: 'medium' }],
+          capabilities: { tools: true, input: ['text'], output: ['text'] },
+          cost: [], limit: { context: 0, output: 0 }, time: { released: 0 },
+        })),
+      }],
+    }));
+  });
+  afterEach(() => { jest.useRealTimers(); });
+
+  for (const rereadFirst of [false, true]) {
+    test(`clearing stays empty for this visit when the ${rereadFirst ? 'reread' : 'acknowledgement'} arrives first`, async () => {
+      let acknowledge!: () => void;
+      nextAcknowledgement = new Promise<void>((resolve) => { acknowledge = resolve; });
+      const cleared = { ...config, fallback: null };
+      try {
+        await clickButton(/^Choose a model$/, await openPicker(/^original$/));
+        await advanceSave();
+        expect(writes).toEqual([{ config: cleared }]);
+        if (rereadFirst) await reread();
+      } finally {
+        await act(async () => { acknowledge(); });
+      }
+      await advanceSave();
+      await reread();
+      await advanceSave();
+      expect(writes).toEqual([{ config: cleared }]);
+      const row = container.querySelector('[data-settings-item="routing.fallback-model"]');
+      expect(row?.textContent).toContain('Choose a model');
+
+      await act(async () => root.render(null));
+      await openRouting();
+      await advanceSave();
+      expect(writes).toEqual([{ config: cleared }, { config: { ...config, fallback: sessionFallback } }]);
+    });
+  }
+
+  test('picking a model still allows prefill when another client clears the fallback', async () => {
+    const sheet = await openPicker(/^original$/);
+    const replacement = [...sheet.querySelectorAll<HTMLElement>('[role="option"]')]
+      .find((option) => option.textContent?.includes('replacement'));
+    if (!replacement) throw new Error('Missing replacement model');
+    await act(async () => replacement.click());
+    await advanceSave();
+    const picked = { ...config, fallback: { model: { providerID: 'fixture', modelID: 'replacement' }, variant: null } };
+    expect(writes).toEqual([{ config: picked }]);
+
+    hostConfig = { ...picked, fallback: null };
+    await reread();
+    await advanceSave();
+    expect(writes).toEqual([{ config: picked }, { config: { ...config, fallback: sessionFallback } }]);
+  });
 });
