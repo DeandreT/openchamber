@@ -370,6 +370,22 @@ or drafts the user needs to retain. Package signing, installers, updates, SSH an
 deep links belong to the host stage. Keep releases independently launchable until
 those contracts and the feature inventory qualify the replacement.
 
+The native Linux desktop discovers its `.deb` on the organization-managed
+desktop release channel. Apt owns the local installation after approval. The
+bundled server asks dpkg which package owns the running native executable.
+That package's `OpenChamber-Update-Manifest` control field names its
+architecture's native manifest on the existing Stable or Canary mirror. It
+is a filename, never a URL. Electron keeps its own manifests. The native
+publisher must supply the field, publish the archive, then publish the
+manifest with `version` and a `files` entry for
+`<package>_<version without epoch>_<architecture>.deb`, its size and SHA-512.
+A missing field, unreadable manifest or missing entry fails the check.
+
+An HTTP client can check availability; it cannot prepare or install a host
+package. Local download preparation rechecks the offer, verifies the streamed
+bytes and Debian control fields, and returns a private file. Approval, apt
+replacement and restarting the installed app are separate host operations.
+
 ## Contract references
 
 - [Electron host](../../packages/electron/README.md)

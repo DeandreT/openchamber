@@ -1,6 +1,7 @@
 import { publicEnterprisePolicy } from '../enterprise-mode.js';
 import { withUserEnv } from '../injected-env.js';
 import { isOpenCodeOlderThan } from './compatibility.js';
+import { normalizeAppType } from '../update-channel.js';
 
 const SYSTEMD_SERVICE_UNIT_PATTERN = /^[A-Za-z0-9:_.@-]+\.service$/;
 
@@ -79,7 +80,12 @@ export const registerOpenChamberRoutes = (app, dependencies) => {
     getOpenCodeCompatibility,
   } = dependencies;
 
+  const nativePackageHost = desktopUpdater?.updateOwner === 'native-desktop';
   let desktopRestartError = null;
+  const refuseRemoteInstall = (res) => res.status(409).json({
+    code: 'DESKTOP_UPDATE_LOCAL_ONLY',
+    error: 'Update OpenChamber on the computer it runs on.',
+  });
 
   /**
    * The offered release needs a newer OpenCode than this server runs: after
@@ -164,14 +170,16 @@ export const registerOpenChamberRoutes = (app, dependencies) => {
         reportUsage: parseReportUsage(parseString(req.query.reportUsage)),
       };
       let updateInfo;
-      if (process.env.OPENCHAMBER_RUNTIME === 'desktop' && updateRequest.appType === 'web') {
+      const nativeCheck = updateRequest.appType === 'desktop-native';
+      const hostCheck = (nativePackageHost ? normalizeAppType(updateRequest.appType) : updateRequest.appType) === 'web';
+      if (nativeCheck || (process.env.OPENCHAMBER_RUNTIME === 'desktop' && hostCheck)) {
         if (desktopRestartError && req.query.updateStatus === 'true') {
           return res.status(503).json({
             code: 'DESKTOP_UPDATE_RESTART_FAILED',
             error: desktopRestartError,
           });
         }
-        if (typeof desktopUpdater?.check !== 'function') {
+        if ((nativeCheck && !nativePackageHost) || typeof desktopUpdater?.check !== 'function') {
           return res.status(503).json({
             available: false,
             code: 'DESKTOP_UPDATER_UNAVAILABLE',
@@ -180,8 +188,8 @@ export const registerOpenChamberRoutes = (app, dependencies) => {
         }
         updateInfo = {
           ...await desktopUpdater.check(),
-          packageManager: 'electron',
-          updateOwner: 'electron-updater',
+          packageManager: desktopUpdater.packageManager ?? 'electron',
+          updateOwner: desktopUpdater.updateOwner ?? 'electron-updater',
         };
       } else {
         const { checkForUpdates, isUnmanagedInstall } = await import('../package-manager.js');
@@ -235,6 +243,7 @@ export const registerOpenChamberRoutes = (app, dependencies) => {
   app.post('/api/openchamber/update-install', async (_req, res) => {
     try {
       if (process.env.OPENCHAMBER_RUNTIME === 'desktop') {
+        if (desktopUpdater?.installBlocked === 'desktop-host') return refuseRemoteInstall(res);
         if (typeof desktopUpdater?.install !== 'function' || typeof desktopUpdater?.restart !== 'function') {
           return res.status(503).json({
             code: 'DESKTOP_UPDATER_UNAVAILABLE',
@@ -248,10 +257,7 @@ export const registerOpenChamberRoutes = (app, dependencies) => {
           return res.status(400).json({ error: 'No update available' });
         }
         if (updateInfo.installBlocked === 'desktop-host') {
-          return res.status(409).json({
-            code: 'DESKTOP_UPDATE_LOCAL_ONLY',
-            error: 'Update OpenChamber on the computer it runs on.',
-          });
+          return refuseRemoteInstall(res);
         }
 
         res.json({

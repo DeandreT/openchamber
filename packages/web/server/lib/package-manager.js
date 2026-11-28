@@ -6,6 +6,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { fetchUpdateNotes } from './changelog/update-notes.js';
 import { compareVersions } from './version-order.js';
+import { normalizeAppType } from './update-channel.js';
 import { isEnterpriseMode } from './enterprise-mode.js';
 
 import { resolveNpmRegistryRequest } from './opencode/npm-registry-config.js';
@@ -69,11 +70,6 @@ function mapArch(value) {
   if (value === 'arm64' || value === 'aarch64') return 'arm64';
   if (value === 'x64' || value === 'amd64') return 'x64';
   return 'unknown';
-}
-
-function normalizeAppType(value) {
-  if (value === 'web' || value === 'desktop-electron' || value === 'vscode' || value === 'mobile-capacitor') return value;
-  return 'web';
 }
 
 function normalizeDeviceClass(value) {

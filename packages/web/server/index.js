@@ -2730,12 +2730,20 @@ async function main(options = {}) {
   const getDesktopRuntimeConfig = typeof options.getDesktopRuntimeConfig === 'function'
     ? options.getDesktopRuntimeConfig
     : null;
-  const desktopUpdater = options.desktopUpdater
-    && typeof options.desktopUpdater.check === 'function'
+  let desktopUpdater = null;
+  // Only the Linux Rust launcher supplies its executable. Neither query
+  // parameters nor an environment override select the native release reader.
+  if (process.env.OPENCHAMBER_RUNTIME === 'desktop' && options.nativeDesktopExecutable != null) {
+    const { createNativeDebUpdater } = await import('./lib/native-deb-updater.js');
+    desktopUpdater = createNativeDebUpdater({
+      executable: options.nativeDesktopExecutable,
+      readSettings: readSettingsFromDiskMigrated,
+    });
+  } else if (typeof options.desktopUpdater?.check === 'function'
     && typeof options.desktopUpdater.install === 'function'
-    && typeof options.desktopUpdater.restart === 'function'
-    ? options.desktopUpdater
-    : null;
+    && typeof options.desktopUpdater.restart === 'function') {
+    desktopUpdater = options.desktopUpdater;
+  }
 
   console.log(`Starting OpenChamber on port ${port === 0 ? 'auto' : port}`);
 

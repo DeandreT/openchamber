@@ -33,6 +33,8 @@ export interface StartWebUiServerOptions {
   exitOnShutdown?: boolean;
   uiPassword?: string | null;
   desktopUpdater?: DesktopUpdater;
+  /** Running Rust executable, supplied by its own Linux desktop bootstrap. */
+  nativeDesktopExecutable?: string | null;
   /** Physical directory holding the app's built-in extensions. */
   builtInExtensionsDir?: string;
   /** Desktop resources, including the search binary. Electron supplies its own default. */

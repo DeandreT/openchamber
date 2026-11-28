@@ -79,6 +79,12 @@ in that user's sessions. On the fallback path the same rules are merged into
 `OPENCODE_CONFIG_CONTENT` (`appendManagedPermissions`).
 - `packages/web/server/lib/opencode/server-utils-runtime.js`: shared server runtime utilities for OpenCode proxy wiring, OpenCode port/readiness helpers, and snapshot fetchers.
 - `packages/web/server/lib/opencode/openchamber-routes.js`: OpenChamber update and models metadata route registration.
+  A native Linux host gets its package identity from its launch options and
+  the local Debian database. The check route ignores client version and CPU
+  hints for that host; its install route refuses before any download. An
+  explicit `appType=desktop-native` check requires the native host adapter.
+  See
+  [native desktop release ownership](../../../../../docs/rust-desktop/ARCHITECTURE.md#persistence-and-rollout).
 - `packages/web/server/lib/opencode/model-discovery.js`: bounded custom-provider `/models` discovery and optional models.dev enrichment. It accepts only http(s), does not follow redirects, filters transport headers, never returns credentials, and treats models.dev failure as unenriched success. Edit requests may name the provider so the host can fall back to a stored credential when the form leaves the key blank — the key from OpenCode's credential store or, failing that, the provider's stored config entry (`settings.apiKey`, else the first `env` variable name that is set in the server environment) — but only while the form's base URL still matches the saved one, so a changed URL never receives the stored credential; an explicitly entered replacement key wins.
 - `packages/web/server/lib/opencode/pwa-manifest-routes.js`: PWA manifest route registration with recent-session shortcut resolution and short-lived caching.
 - `packages/web/server/lib/opencode/project-icon-routes.js`: project icon upload/read/discovery route registration and icon storage orchestration.
