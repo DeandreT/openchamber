@@ -162,7 +162,10 @@ const CategoryRow: React.FC<{
               <ModelSelector
                 providerId={category.model?.providerID ?? ''}
                 modelId={category.model?.modelID ?? ''}
-                onChange={(providerID, modelID) => onChange({ model: { providerID, modelID }, variant: null })}
+                onChange={(providerID, modelID) => onChange({
+                  model: !providerID && !modelID ? null : { providerID, modelID },
+                  variant: null,
+                })}
                 className={cn(SETTINGS_CUSTOM_TRIGGER_CLASS, 'w-full')}
                 placeholder={t('settings.routing.model.useFallback')}
               />
@@ -393,7 +396,10 @@ export const RoutingPage: React.FC = () => {
                 <ModelSelector
                   providerId={draft.fallback?.model.providerID ?? ''}
                   modelId={draft.fallback?.model.modelID ?? ''}
-                  onChange={(providerID, modelID) => update((config) => ({ ...config, fallback: { model: { providerID, modelID }, variant: null } }))}
+                  onChange={(providerID, modelID) => update((config) => ({
+                    ...config,
+                    fallback: !providerID && !modelID ? null : { model: { providerID, modelID }, variant: null },
+                  }))}
                   className={SETTINGS_CUSTOM_TRIGGER_CLASS}
                   placeholder={t('settings.routing.model.placeholder')}
                 />
