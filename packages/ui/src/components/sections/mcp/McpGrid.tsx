@@ -83,6 +83,7 @@ export const McpGrid: React.FC = () => {
   // server the runtime reports would read as runtime-only, and a configured
   // server would flash as one while its config entry was still loading.
   const configsLoaded = useMcpConfigStore((state) => hasLoadedMcpConfigsForDirectory(state, settingsDirectory));
+  const configError = useMcpConfigStore((state) => state.getReadErrorForDirectory(settingsDirectory));
   const isBlocked = useIntegrationPolicyBlock(settingsDirectory);
   const refreshStatus = useMcpStore((state) => state.refresh);
   const getErrorForDirectory = useMcpStore((state) => state.getErrorForDirectory);
@@ -193,9 +194,17 @@ export const McpGrid: React.FC = () => {
         )}
       />
 
-      {rows.length === 0 ? (
-        <p className="py-6 typography-meta text-muted-foreground">{t('settings.mcp.grid.empty')}</p>
-      ) : filtered.length === 0 ? (
+      {configError !== undefined ? (
+        <div role="alert" className="space-y-1 typography-meta text-[var(--status-error-text)]">
+          <p>{servers.length > 0 ? t('settings.mcp.grid.readFailedCached') : t('settings.mcp.grid.readFailed')}</p>
+          {configError && <p dir="auto" className="oc-ui-start-align break-words">{configError}</p>}
+        </div>
+      ) : rows.length === 0 ? (
+        <p className="py-6 typography-meta text-muted-foreground">
+          {configsLoaded ? t('settings.mcp.grid.empty') : t('common.loading')}
+        </p>
+      ) : null}
+      {rows.length > 0 && filtered.length === 0 ? (
         <p className="py-6 typography-meta text-muted-foreground">{t('settings.mcp.grid.noMatches', { query: query.trim() })}</p>
       ) : null}
 

@@ -29,6 +29,7 @@ import { sessionEvents } from '@/lib/sessionEvents';
 import { useTrackerRegistry } from '@/lib/trackers/registry';
 import { useTrackerAuthStore } from '@/stores/useTrackerAuthStore';
 import { useQuotaStore } from '@/stores/useQuotaStore';
+import { useMcpConfigStore } from '@/stores/useMcpConfigStore';
 import { useMcpStore } from '@/stores/useMcpStore';
 import { useSkillsStore } from '@/stores/useSkillsStore';
 import { useCommandsStore } from '@/stores/useCommandsStore';
@@ -144,6 +145,7 @@ export const resetAppForRuntimeEndpointChange = (detail: RuntimeEndpointChangedD
   // and agent memory. All were cached globally or by directory alone, so they
   // reported the previous instance until something happened to refetch.
   useQuotaStore.getState().resetForRuntimeSwitch();
+  useMcpConfigStore.getState().resetForRuntimeSwitch();
   useMcpStore.getState().resetForRuntimeSwitch();
   useSkillsStore.getState().resetForRuntimeSwitch();
   useAgentMemoryStore.getState().reset();
